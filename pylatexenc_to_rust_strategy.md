@@ -125,7 +125,7 @@ Each parser implements: `parse(latex_walker, token_reader, parsing_state) -> (re
 ### Module Structure
 
 ```
-latexparse/               # Your Rust crate
+techy/                   # Your Rust crate
 ├── src/
 │   ├── lib.rs           # Public API
 │   ├── token/           # Tokenization
@@ -835,6 +835,19 @@ The Rust port should:
 - ✅ Have comprehensive documentation
 - ✅ Have >90% test coverage
 - ✅ Be easy to use for common cases
+
+---
+
+## Future Architectural Considerations
+
+The following architectural proposals are still under discussion and have been moved to [PROPOSALS.md](PROPOSALS.md) for detailed consideration:
+
+1. **Library System Design**: Replacement for `LatexContextDb` with modular libraries, mode-aware definitions, and conflict resolution
+2. **Source Tracking & Provenance**: Rich source location tracking beyond byte spans (files, URLs, synthetic sources)
+3. **Extensibility**: Generic nodes and custom state for language bindings
+4. **TeX Compliance Gap Analysis**: What features are missing for full TeX compliance, and which are intentional limitations
+
+See [PROPOSALS.md](PROPOSALS.md) for detailed designs and discussion.
 
 ---
 

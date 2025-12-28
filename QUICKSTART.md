@@ -89,14 +89,14 @@ techy/
 
 ### Run Tests
 ```bash
-cargo test                  # All tests
+cargo test                 # All tests
 cargo test -- --nocapture  # With output
 cargo test integration     # Integration tests only
 ```
 
 ### Check Code
 ```bash
-cargo check                # Fast compile check
+cargo check               # Fast compile check
 cargo clippy              # Linting
 cargo fmt                 # Format code
 ```
