@@ -1,6 +1,6 @@
 //! Basic usage example for techy.
 
-use techy::{LatexWalker, Node};
+use techy::{Parser, Node};
 
 fn main() {
     // Parse a simple LaTeX document
@@ -17,7 +17,7 @@ And some more text.
 
     println!("Parsing LaTeX source...\n");
 
-    let walker = LatexWalker::new(source.trim().to_string());
+    let walker = Parser::new(source.trim().to_string());
     
     match walker.parse() {
         Ok(ast) => {

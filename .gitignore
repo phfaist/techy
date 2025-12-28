@@ -64,3 +64,7 @@ flamegraph.svg
 *.zip
 *.tar.gz
 *.tar.bz2
+
+
+# Claude config files
+.claude

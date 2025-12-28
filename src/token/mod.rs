@@ -109,7 +109,7 @@ impl fmt::Display for TokenType {
 
 /// A token with source location and whitespace information.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LatexToken {
+pub struct Token {
     /// The type of token.
     pub token_type: TokenType,
     /// The span in the source where this token appears.
@@ -118,7 +118,7 @@ pub struct LatexToken {
     pub pre_space: String,
 }
 
-impl LatexToken {
+impl Token {
     /// Create a new token.
     pub fn new(token_type: TokenType, span: Span, pre_space: String) -> Self {
         Self {
@@ -139,12 +139,12 @@ pub trait TokenReader {
     /// Peek at the next token without consuming it.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn peek_token(&mut self) -> crate::Result<Option<LatexToken>>;
+    fn peek_token(&mut self) -> crate::Result<Option<Token>>;
 
     /// Consume and return the next token.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn next_token(&mut self) -> crate::Result<Option<LatexToken>>;
+    fn next_token(&mut self) -> crate::Result<Option<Token>>;
 
     /// Get the current position in the source.
     fn position(&self) -> usize;

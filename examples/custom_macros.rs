@@ -1,18 +1,18 @@
 //! Example showing how to define and use custom macros.
 
-use techy::{ArgumentSpec, ArgumentsSpec, LatexContextDb, LatexWalker, MacroSpec};
+use techy::{ArgumentSpec, ArgumentStructureSpec, ContextDb, Parser, MacroSpec};
 
 fn main() {
     println!("Custom Macro Definition Example");
     println!("════════════════════════════════\n");
 
     // Create a custom context with additional macros
-    let mut context = LatexContextDb::default();
+    let mut context = ContextDb::default();
 
     // Define a custom macro: \highlight[color]{text}
     context.add_macro(MacroSpec::new(
         "highlight",
-        ArgumentsSpec::new(vec![
+        ArgumentStructureSpec::new(vec![
             ArgumentSpec::Optional,  // [color]
             ArgumentSpec::Mandatory, // {text}
         ]),
@@ -21,7 +21,7 @@ fn main() {
     // Define another custom macro: \todo*[priority]{description}
     context.add_macro(MacroSpec::new(
         "todo",
-        ArgumentsSpec::new(vec![
+        ArgumentStructureSpec::new(vec![
             ArgumentSpec::Star,      // *
             ArgumentSpec::Optional,  // [priority]
             ArgumentSpec::Mandatory, // {description}
@@ -41,7 +41,7 @@ Here is some \highlight[yellow]{important text}.
 Regular \textbf{bold} text still works!
 "#;
 
-    let walker = LatexWalker::with_context(source.trim().to_string(), context);
+    let walker = Parser::with_context(source.trim().to_string(), context);
 
     match walker.parse() {
         Ok(ast) => {

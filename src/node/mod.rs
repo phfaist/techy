@@ -110,7 +110,7 @@ pub struct MacroNode {
     /// The specification for this macro, if known.
     pub spec: Option<Arc<MacroSpec>>,
     /// Parsed arguments.
-    pub args: ParsedArguments,
+    pub args: Arguments,
     /// Whitespace after the macro.
     pub post_space: String,
 }
@@ -124,7 +124,7 @@ pub struct EnvironmentNode {
     /// The specification for this environment, if known.
     pub spec: Option<Arc<EnvironmentSpec>>,
     /// Arguments to \begin{env}.
-    pub args: ParsedArguments,
+    pub args: Arguments,
     /// The body content between \begin and \end.
     pub body: NodeList,
 }
@@ -167,19 +167,19 @@ pub struct SpecialsNode {
     /// The specification for this special, if known.
     pub spec: Option<Arc<SpecialsSpec>>,
     /// Parsed arguments (if the special takes arguments).
-    pub args: Option<ParsedArguments>,
+    pub args: Option<Arguments>,
 }
 
 /// Parsed arguments for a macro, environment, or special.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedArguments {
+pub struct Arguments {
     /// Named arguments with their values.
     pub args: Vec<(String, ArgumentValue)>,
     /// Span covering all arguments.
     pub span: Span,
 }
 
-impl ParsedArguments {
+impl Arguments {
     /// Create empty parsed arguments.
     pub fn empty(span: Span) -> Self {
         Self {
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_parsed_arguments() {
-        let args = ParsedArguments::empty(Span::new(0, 0));
+        let args = Arguments::empty(Span::new(0, 0));
         assert!(args.is_empty());
         assert_eq!(args.len(), 0);
     }

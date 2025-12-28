@@ -1,10 +1,10 @@
 //! Integration tests for techy.
 
-use techy::{LatexWalker, Node};
+use techy::{Parser, Node};
 
 #[test]
 fn test_parse_empty() {
-    let walker = LatexWalker::new("".to_string());
+    let walker = Parser::new("".to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     let ast = result.unwrap();
@@ -13,7 +13,7 @@ fn test_parse_empty() {
 
 #[test]
 fn test_parse_plain_text() {
-    let walker = LatexWalker::new("Hello world".to_string());
+    let walker = Parser::new("Hello world".to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     
@@ -28,7 +28,7 @@ fn test_parse_plain_text() {
 
 #[test]
 fn test_parse_macro() {
-    let walker = LatexWalker::new(r"\textbf".to_string());
+    let walker = Parser::new(r"\textbf".to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     
@@ -44,7 +44,7 @@ fn test_parse_macro() {
 
 #[test]
 fn test_parse_group() {
-    let walker = LatexWalker::new("{hello}".to_string());
+    let walker = Parser::new("{hello}".to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     
@@ -59,7 +59,7 @@ fn test_parse_group() {
 
 #[test]
 fn test_parse_comment() {
-    let walker = LatexWalker::new("% comment\n".to_string());
+    let walker = Parser::new("% comment\n".to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     
@@ -80,7 +80,7 @@ Hello \textbf{world}!
 {grouped text}
 "#;
     
-    let walker = LatexWalker::new(source.trim().to_string());
+    let walker = Parser::new(source.trim().to_string());
     let result = walker.parse();
     assert!(result.is_ok());
     
@@ -90,19 +90,19 @@ Hello \textbf{world}!
 
 #[test]
 fn test_parse_unmatched_brace() {
-    let walker = LatexWalker::new("{unclosed".to_string());
+    let walker = Parser::new("{unclosed".to_string());
     let result = walker.parse();
     assert!(result.is_err());
 }
 
 #[test]
 fn test_custom_macro() {
-    use techy::{LatexContextDb, MacroSpec};
+    use techy::{ContextDb, MacroSpec};
     
-    let mut context = LatexContextDb::new();
+    let mut context = ContextDb::new();
     context.add_macro(MacroSpec::simple("mycmd", "{"));
     
-    let walker = LatexWalker::with_context(r"\mycmd".to_string(), context);
+    let walker = Parser::with_context(r"\mycmd".to_string(), context);
     let result = walker.parse();
     assert!(result.is_ok());
     

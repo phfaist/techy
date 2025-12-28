@@ -37,11 +37,11 @@ Install Rust from: https://rustup.rs/
 Create a file `my_parser.rs`:
 
 ```rust
-use techy::LatexWalker;
+use techy::Parser;
 
 fn main() {
     let source = r"\textbf{Hello} world!";
-    let walker = LatexWalker::new(source.to_string());
+    let walker = Parser::new(source.to_string());
     
     match walker.parse() {
         Ok(ast) => {

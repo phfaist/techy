@@ -1,6 +1,6 @@
 //! Parsing state and context management.
 
-use crate::spec::LatexContextDb;
+use crate::spec::ContextDb;
 
 /// The parsing state tracks context information during parsing.
 #[derive(Clone)]
@@ -8,16 +8,16 @@ pub struct ParsingState<'ctx> {
     /// Are we currently in math mode?
     pub in_math_mode: bool,
 
-    /// The LaTeX context (known macros/environments).
-    pub latex_context: &'ctx LatexContextDb,
+    /// The context database (known macros/environments).
+    pub context: &'ctx ContextDb,
 }
 
 impl<'ctx> ParsingState<'ctx> {
     /// Create a new parsing state with the given context.
-    pub fn new(latex_context: &'ctx LatexContextDb) -> Self {
+    pub fn new(context: &'ctx ContextDb) -> Self {
         Self {
             in_math_mode: false,
-            latex_context,
+            context,
         }
     }
 
@@ -25,22 +25,22 @@ impl<'ctx> ParsingState<'ctx> {
     pub fn sub_state(&self) -> Self {
         Self {
             in_math_mode: self.in_math_mode,
-            latex_context: self.latex_context,
+            context: self.context,
         }
     }
 
     /// Apply a state delta to create a new state.
-    pub fn apply_delta(&self, delta: &StateDelta) -> Self {
+    pub fn apply_delta(&self, delta: &ParsingStateDelta) -> Self {
         let mut new_state = self.sub_state();
 
         match delta {
-            StateDelta::EnterMathMode => {
+            ParsingStateDelta::EnterMathMode => {
                 new_state.in_math_mode = true;
             }
-            StateDelta::ExitMathMode => {
+            ParsingStateDelta::ExitMathMode => {
                 new_state.in_math_mode = false;
             }
-            StateDelta::SetMathMode(value) => {
+            ParsingStateDelta::SetMathMode(value) => {
                 new_state.in_math_mode = *value;
             }
         }
@@ -57,10 +57,10 @@ impl<'ctx> ParsingState<'ctx> {
 
 /// Represents a change to the parsing state.
 ///
-/// State deltas are returned by parsers to indicate how the parsing
+/// Parsing state deltas are returned by parsers to indicate how the parsing
 /// state should change after parsing a construct.
 #[derive(Debug, Clone, PartialEq)]
-pub enum StateDelta {
+pub enum ParsingStateDelta {
     /// Enter math mode.
     EnterMathMode,
 
@@ -74,30 +74,30 @@ pub enum StateDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::LatexContextDb;
+    use crate::spec::ContextDb;
 
     #[test]
     fn test_parsing_state_creation() {
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx);
         assert!(!state.in_math_mode);
     }
 
     #[test]
     fn test_state_delta_application() {
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx);
 
-        let new_state = state.apply_delta(&StateDelta::EnterMathMode);
+        let new_state = state.apply_delta(&ParsingStateDelta::EnterMathMode);
         assert!(new_state.in_math_mode);
 
-        let state2 = new_state.apply_delta(&StateDelta::ExitMathMode);
+        let state2 = new_state.apply_delta(&ParsingStateDelta::ExitMathMode);
         assert!(!state2.in_math_mode);
     }
 
     #[test]
     fn test_with_math_mode() {
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx).with_math_mode(true);
         assert!(state.in_math_mode);
     }

@@ -9,11 +9,11 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use techy::LatexWalker;
+//! use techy::Parser;
 //!
 //! let source = r"\textbf{Hello} \emph{world}!";
-//! let walker = LatexWalker::new(source.to_string());
-//! let ast = walker.parse().unwrap();
+//! let parser = Parser::new(source.to_string());
+//! let ast = parser.parse().unwrap();
 //!
 //! println!("Parsed {} nodes", ast.nodes.len());
 //! ```
@@ -37,27 +37,27 @@
 //!
 //! - [`token`]: Token types and tokenization
 //! - [`node`]: AST node definitions
-//! - [`parser`]: Parser implementations
+//! - [`parser`]: High-level parsing API
+//! - [`parsing`]: Low-level parser implementations
 //! - [`spec`]: Macro/environment specifications for extensibility
 //! - [`state`]: Parsing state and context management
-//! - [`walker`]: High-level parsing API
 //! - [`error`]: Error types
 
 pub mod error;
 pub mod node;
 pub mod parser;
+pub mod parsing;
 pub mod spec;
 pub mod state;
 pub mod token;
-pub mod walker;
 
 // Re-export main types for convenience
 pub use error::{ParseError, Result};
-pub use node::{Node, NodeList};
-pub use spec::{ArgumentSpec, ArgumentsSpec, EnvironmentSpec, LatexContextDb, MacroSpec};
-pub use state::ParsingState;
-pub use token::{LatexToken, Span, TokenType};
-pub use walker::LatexWalker;
+pub use node::{Arguments, Node, NodeList};
+pub use parser::Parser;
+pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
+pub use state::{ParsingState, ParsingStateDelta};
+pub use token::{Span, Token, TokenType};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,16 +69,16 @@ mod tests {
     #[test]
     fn test_basic_parsing() {
         let source = r"Hello world";
-        let walker = LatexWalker::new(source.to_string());
-        let result = walker.parse();
+        let parser = Parser::new(source.to_string());
+        let result = parser.parse();
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_macro_parsing() {
         let source = r"\textbf{bold text}";
-        let walker = LatexWalker::new(source.to_string());
-        let result = walker.parse();
+        let parser = Parser::new(source.to_string());
+        let result = parser.parse();
         assert!(result.is_ok());
     }
 }

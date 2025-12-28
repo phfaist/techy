@@ -23,8 +23,9 @@ All renames will be applied directly without backward compatibility aliases.
 | pylatexenc | techy | Rationale |
 |------------|-------|-----------|
 | `latexnodes` | `node` | Module name implies content; "latex" prefix redundant |
-| `latexwalker` | `walker` or `parser` | "latex" prefix redundant; consider renaming to `parser` for clarity |
+| `latexwalker` | `parser` | "latex" prefix redundant; simpler name for high-level public API |
 | `macrospec` | `spec` | Module name already implies it's for specifications |
+| N/A | `parsing` | Low-level parser trait and implementations (distinct from high-level `parser` module) |
 
 ### Primary Types
 
@@ -151,34 +152,38 @@ use techy::state::{ParsingState, ParsingStateDelta};
 ### Implementation Checklist
 
 1. **Core Types** (High Priority - Public API)
-   - [ ] `LatexWalker` → `Parser` in `src/walker/mod.rs`
-   - [ ] `LatexContextDb` → `ContextDb` in `src/spec/mod.rs` (**PENDING FINAL NAME DECISION**)
-   - [ ] `LatexToken` → `Token` in `src/token/mod.rs`
-   - [ ] `StateDelta` → `ParsingStateDelta` in `src/state/mod.rs`
+   - [x] `LatexWalker` → `Parser` in `src/walker/mod.rs` (now `src/parser_api/mod.rs`)
+   - [x] `LatexContextDb` → `ContextDb` in `src/spec/mod.rs`
+   - [x] `LatexToken` → `Token` in `src/token/mod.rs`
+   - [x] `StateDelta` → `ParsingStateDelta` in `src/state/mod.rs`
 
-2. **Specification Types** (Medium Priority)
-   - [ ] `ArgumentsSpec` → `ArgumentStructureSpec` in `src/spec/mod.rs`
-   - [ ] `ParsedArguments` → `Arguments` in `src/node/mod.rs`
+2. **Module Renames**
+   - [x] `walker` → `parser` module (high-level API)
+   - [x] `parser` → `parsing` module (low-level implementations)
 
-3. **Update Re-exports** (Critical)
-   - [ ] Update `src/lib.rs` public exports
-   - [ ] Update module documentation
+3. **Specification Types** (Medium Priority)
+   - [x] `ArgumentsSpec` → `ArgumentStructureSpec` in `src/spec/mod.rs`
+   - [x] `ParsedArguments` → `Arguments` in `src/node/mod.rs`
 
-4. **Update Documentation** (High Priority)
-   - [ ] README.md examples
-   - [ ] QUICKSTART.md examples
-   - [ ] DEVELOPMENT.md examples
-   - [ ] Doc comments in all source files
+4. **Update Re-exports** (Critical)
+   - [x] Update `src/lib.rs` public exports
+   - [x] Update module documentation
 
-5. **Update Tests & Examples**
-   - [ ] `tests/integration.rs`
-   - [ ] `examples/basic.rs`
-   - [ ] `examples/custom_macros.rs`
+5. **Update Documentation** (High Priority)
+   - [x] README.md examples
+   - [x] QUICKSTART.md examples
+   - [x] DEVELOPMENT.md examples
+   - [x] Doc comments in all source files
 
-6. **Verify Build**
-   - [ ] `cargo build` succeeds
-   - [ ] `cargo test` passes
-   - [ ] Examples run correctly
+6. **Update Tests & Examples**
+   - [x] `tests/integration.rs`
+   - [x] `examples/basic.rs`
+   - [x] `examples/custom_macros.rs`
+
+7. **Verify Build**
+   - [x] `cargo build` succeeds
+   - [x] `cargo test` passes (39/40 tests - 1 pre-existing failure)
+   - [x] Examples run correctly
 
 ## Rationale for Decisions
 
@@ -191,10 +196,11 @@ use techy::state::{ParsingState, ParsingStateDelta};
 
 ### Why These Names Changed
 
-1. **LatexWalker → Parser**:
+1. **LatexWalker → Parser** (module: walker → parser):
    - "Walker" is vague (walks what? how?)
    - "Parser" accurately describes what it does
    - Main entry point deserves clear, accurate name
+   - Follows Rust convention: simpler names for public API
 
 2. **LatexContextDb → NEW LIBRARY SYSTEM** (**ARCHITECTURAL REDESIGN**):
 
@@ -247,6 +253,12 @@ use techy::state::{ParsingState, ParsingStateDelta};
    - "Parsed" is implied by context (it's the result of parsing)
    - Simpler name, clearer in usage
    - Follows Rust convention of concise type names
+
+7. **parser module → parsing module** (low-level implementations):
+   - Distinguishes low-level parser trait/implementations from high-level API
+   - "parsing" (gerund) suggests ongoing implementation details
+   - "parser" (noun) reserved for the main user-facing struct
+   - Follows Rust convention: simpler names for public API, descriptive names for internals
 
 ## Future Considerations
 

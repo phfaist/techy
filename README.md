@@ -28,10 +28,10 @@ techy = "0.1"
 Then parse some LaTeX:
 
 ```rust
-use techy::LatexWalker;
+use techy::Parser;
 
 let source = r"\textbf{Hello} \emph{world}!";
-let walker = LatexWalker::new(source.to_string());
+let walker = Parser::new(source.to_string());
 let ast = walker.parse().unwrap();
 
 println!("Parsed {} nodes", ast.nodes.len());
@@ -58,23 +58,23 @@ The parser follows a three-stage pipeline:
 ### Basic Parsing
 
 ```rust
-use techy::LatexWalker;
+use techy::Parser;
 
-let walker = LatexWalker::new(r"\section{Introduction}".to_string());
+let walker = Parser::new(r"\section{Introduction}".to_string());
 let ast = walker.parse()?;
 ```
 
 ### Custom Macros
 
 ```rust
-use techy::{LatexWalker, LatexContextDb, MacroSpec};
+use techy::{Parser, ContextDb, MacroSpec};
 
-let mut context = LatexContextDb::default();
+let mut context = ContextDb::default();
 
 // Define a custom macro: \highlight[color]{text}
 context.add_macro(MacroSpec::simple("highlight", "[{"));
 
-let walker = LatexWalker::with_context(
+let walker = Parser::with_context(
     r"\highlight[yellow]{important text}".to_string(),
     context
 );
@@ -85,9 +85,9 @@ let ast = walker.parse()?;
 ### Traversing the AST
 
 ```rust
-use techy::{LatexWalker, Node};
+use techy::{Parser, Node};
 
-let walker = LatexWalker::new(source.to_string());
+let walker = Parser::new(source.to_string());
 let ast = walker.parse()?;
 
 for node in &ast.nodes {

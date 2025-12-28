@@ -2,7 +2,7 @@
 
 use super::{ParseResult, Parser};
 use crate::error::ParseError;
-use crate::node::{CharsNode, CommentNode, GroupNode, MacroNode, Node, NodeList, ParsedArguments};
+use crate::node::{CharsNode, CommentNode, GroupNode, MacroNode, Node, NodeList, Arguments};
 use crate::state::ParsingState;
 use crate::token::{Span, TokenReader, TokenType};
 
@@ -56,7 +56,7 @@ impl GeneralNodesParser {
     }
 
     /// Check if we should stop parsing based on the current token.
-    fn should_stop(&self, token: &crate::token::LatexToken) -> bool {
+    fn should_stop(&self, token: &crate::token::Token) -> bool {
         match &token.token_type {
             TokenType::BraceClose if self.stop_on_brace_close => true,
             TokenType::EndEnvironment(name) => {
@@ -162,7 +162,7 @@ impl Parser for GeneralNodesParser {
 
                 TokenType::Macro(name) => {
                     // Look up macro specification
-                    let spec = state.latex_context.get_macro(&name);
+                    let spec = state.context.get_macro(&name);
 
                     // TODO: Parse arguments based on spec
                     // For now, just create macro with no arguments
@@ -170,7 +170,7 @@ impl Parser for GeneralNodesParser {
                         span: token.span,
                         name,
                         spec,
-                        args: ParsedArguments::empty(token.span),
+                        args: Arguments::empty(token.span),
                         post_space: String::new(),
                     })
                 }
@@ -212,14 +212,14 @@ impl Parser for GeneralNodesParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::LatexContextDb;
+    use crate::spec::ContextDb;
     use crate::token::StringTokenReader;
 
     #[test]
     fn test_parse_simple_text() {
         let source = "hello world".to_string();
         let mut reader = StringTokenReader::new(source.clone());
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx);
 
         let parser = GeneralNodesParser::new();
@@ -234,7 +234,7 @@ mod tests {
     fn test_parse_with_braces() {
         let source = "{hello}".to_string();
         let mut reader = StringTokenReader::new(source.clone());
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx);
 
         let parser = GeneralNodesParser::new();
@@ -247,7 +247,7 @@ mod tests {
     fn test_parse_max_nodes() {
         let source = "one two three".to_string();
         let mut reader = StringTokenReader::new(source.clone());
-        let ctx = LatexContextDb::new();
+        let ctx = ContextDb::new();
         let state = ParsingState::new(&ctx);
 
         let parser = GeneralNodesParser::new().with_max_nodes(1);

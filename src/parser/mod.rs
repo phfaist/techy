@@ -1,133 +1,116 @@
-//! Parser implementations for LaTeX constructs.
+//! High-level parsing API.
 //!
-//! This module contains the parsing logic. Parsers are responsible for
-//! reading tokens and building AST nodes.
-
-pub mod general;
+//! The `Parser` provides the main entry point for parsing LaTeX-like documents.
 
 use crate::error::Result;
-use crate::node::Node;
-use crate::state::{ParsingState, StateDelta};
-use crate::token::TokenReader;
+use crate::node::NodeList;
+use crate::parsing::{general::GeneralNodesParser, Parser as ParserTrait};
+use crate::spec::ContextDb;
+use crate::state::ParsingState;
+use crate::token::StringTokenReader;
 
-/// Result type for parsers.
-pub type ParseResult<T> = Result<(T, Option<StateDelta>)>;
-
-/// Base trait for all parsers.
-pub trait Parser {
-    /// The type of value this parser produces.
-    type Output;
-
-    /// Parse from the token stream.
-    ///
-    /// Returns the parsed value and an optional state delta indicating
-    /// how the parsing state should change after this parse.
-    fn parse<'ctx>(
-        &self,
-        source: &str,
-        token_reader: &mut dyn TokenReader,
-        state: &ParsingState<'ctx>,
-    ) -> ParseResult<Self::Output>;
+/// High-level LaTeX-like markup parser.
+///
+/// This is the main interface for parsing LaTeX-like documents. It manages
+/// the source string, token reader, and parsing context.
+///
+/// # Example
+///
+/// ```
+/// use techy::Parser;
+///
+/// let source = r"\textbf{Hello} world!";
+/// let parser = Parser::new(source.to_string());
+/// let ast = parser.parse().unwrap();
+///
+/// println!("Parsed {} nodes", ast.nodes.len());
+/// ```
+pub struct Parser {
+    /// The source code.
+    source: String,
+    /// The context database (known macros/environments).
+    context: ContextDb,
 }
 
-/// A parser that parses a single node.
-pub struct SingleNodeParser;
+impl Parser {
+    /// Create a new parser with default context.
+    ///
+    /// The default context includes standard LaTeX macros and environments.
+    pub fn new(source: String) -> Self {
+        Self::with_context(source, ContextDb::default())
+    }
 
-impl Parser for SingleNodeParser {
-    type Output = Node;
+    /// Create a new parser with a custom context.
+    pub fn with_context(source: String, context: ContextDb) -> Self {
+        Self { source, context }
+    }
 
-    fn parse<'ctx>(
-        &self,
-        source: &str,
-        token_reader: &mut dyn TokenReader,
-        state: &ParsingState<'ctx>,
-    ) -> ParseResult<Self::Output> {
-        use crate::token::TokenType;
-        use crate::node::*;
-        use crate::error::ParseError;
+    /// Parse the entire document.
+    ///
+    /// Returns a `NodeList` containing all the parsed nodes.
+    pub fn parse(&self) -> Result<NodeList> {
+        let mut token_reader = StringTokenReader::new(self.source.clone());
+        let state = ParsingState::new(&self.context);
 
-        let token = token_reader
-            .next_token()?
-            .ok_or_else(|| ParseError::UnexpectedEndOfInput(token_reader.position()))?;
+        let parser = GeneralNodesParser::new();
+        let (nodelist, _) = parser.parse(&self.source, &mut token_reader, &state)?;
 
-        let node = match token.token_type {
-            TokenType::Char(chars) => Node::Chars(CharsNode {
-                span: token.span,
-                chars,
-            }),
+        Ok(nodelist)
+    }
 
-            TokenType::Comment(comment) => Node::Comment(CommentNode {
-                span: token.span,
-                comment,
-                post_space: String::new(),
-            }),
+    /// Get the source code.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
 
-            TokenType::BraceOpen => {
-                // Parse group contents
-                let parser = general::GeneralNodesParser::until_brace_close();
-                let (nodelist, _) = parser.parse(source, token_reader, state)?;
-                
-                // Consume closing brace
-                if let Some(close_token) = token_reader.next_token()? {
-                    if !matches!(close_token.token_type, TokenType::BraceClose) {
-                        return Err(ParseError::UnexpectedToken {
-                            span: close_token.span,
-                            expected: "closing brace".to_string(),
-                            found: format!("{}", close_token.token_type),
-                        });
-                    }
-                }
-
-                Node::Group(GroupNode {
-                    span: token.span,
-                    nodelist,
-                })
-            }
-
-            TokenType::Macro(name) => {
-                // Look up macro specification
-                let spec = state.latex_context.get_macro(&name);
-                
-                // For now, create macro with no arguments
-                // TODO: Parse arguments based on spec
-                Node::Macro(MacroNode {
-                    span: token.span,
-                    name,
-                    spec,
-                    args: ParsedArguments::empty(token.span),
-                    post_space: String::new(),
-                })
-            }
-
-            _ => {
-                return Err(ParseError::UnexpectedToken {
-                    span: token.span,
-                    expected: "node".to_string(),
-                    found: format!("{}", token.token_type),
-                });
-            }
-        };
-
-        Ok((node, None))
+    /// Get the context database.
+    pub fn context(&self) -> &ContextDb {
+        &self.context
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::LatexContextDb;
-    use crate::token::StringTokenReader;
 
     #[test]
-    fn test_single_node_parser() {
-        let source = "hello".to_string();
-        let mut reader = StringTokenReader::new(source.clone());
-        let ctx = LatexContextDb::new();
-        let state = ParsingState::new(&ctx);
-
-        let parser = SingleNodeParser;
-        let result = parser.parse(&source, &mut reader, &state);
-
+    fn test_parse_simple() {
+        let parser = Parser::new("Hello world".to_string());
+        let result = parser.parse();
         assert!(result.is_ok());
+
+        let nodelist = result.unwrap();
+        assert!(!nodelist.is_empty());
+    }
+
+    #[test]
+    fn test_parse_with_macro() {
+        let parser = Parser::new(r"\textbf{bold}".to_string());
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_with_groups() {
+        let parser = Parser::new("{hello} {world}".to_string());
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_custom_context() {
+        let mut context = ContextDb::new();
+        use crate::spec::MacroSpec;
+        context.add_macro(MacroSpec::simple("mycmd", "{"));
+
+        let parser = Parser::with_context(r"\mycmd{test}".to_string(), context);
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_source_accessor() {
+        let parser = Parser::new("test".to_string());
+        assert_eq!(parser.source(), "test");
     }
 }

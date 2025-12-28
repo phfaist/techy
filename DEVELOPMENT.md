@@ -22,7 +22,7 @@ techy/
 │   │   ├── mod.rs          # Parser trait and base implementations
 │   │   └── general.rs      # GeneralNodesParser
 │   └── walker/             # High-level API
-│       └── mod.rs          # LatexWalker
+│       └── mod.rs          # Parser
 ├── examples/               # Usage examples
 ├── tests/                  # Integration tests
 └── benches/                # Performance benchmarks
@@ -93,7 +93,7 @@ cargo test --doc
 - [x] MacroSpec
 - [x] EnvironmentSpec
 - [x] SpecialsSpec
-- [x] LatexContextDb
+- [x] ContextDb
 - [x] Default LaTeX definitions
 
 ### Phase 4: Argument Parsing ⏳
@@ -230,7 +230,7 @@ use proptest::prelude::*;
 proptest! {
     #[test]
     fn test_parse_doesnt_crash(s in "\\PC*") {
-        let walker = LatexWalker::new(s);
+        let walker = Parser::new(s);
         let _ = walker.parse(); // Shouldn't panic
     }
 }

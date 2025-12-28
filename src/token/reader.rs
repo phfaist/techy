@@ -1,13 +1,13 @@
 //! Token reader implementation for string sources.
 
-use super::{LatexToken, Span, TokenReader, TokenType};
+use super::{Token, Span, TokenReader, TokenType};
 use crate::error::{ParseError, Result};
 
 /// A token reader that reads from a string.
 pub struct StringTokenReader {
     source: String,
     position: usize,
-    peeked: Option<Option<LatexToken>>,
+    peeked: Option<Option<Token>>,
 }
 
 impl StringTokenReader {
@@ -21,7 +21,7 @@ impl StringTokenReader {
     }
 
     /// Read the next token from the source.
-    fn read_token(&mut self) -> Result<Option<LatexToken>> {
+    fn read_token(&mut self) -> Result<Option<Token>> {
         // Skip whitespace and track it
         let pre_space = self.consume_whitespace();
         
@@ -36,7 +36,7 @@ impl StringTokenReader {
             '\\' => self.read_escape_sequence(start, pre_space),
             '{' => {
                 self.position += 1;
-                Ok(Some(LatexToken::new(
+                Ok(Some(Token::new(
                     TokenType::BraceOpen,
                     Span::new(start, self.position),
                     pre_space,
@@ -44,7 +44,7 @@ impl StringTokenReader {
             }
             '}' => {
                 self.position += 1;
-                Ok(Some(LatexToken::new(
+                Ok(Some(Token::new(
                     TokenType::BraceClose,
                     Span::new(start, self.position),
                     pre_space,
@@ -52,7 +52,7 @@ impl StringTokenReader {
             }
             '[' => {
                 self.position += 1;
-                Ok(Some(LatexToken::new(
+                Ok(Some(Token::new(
                     TokenType::BracketOpen,
                     Span::new(start, self.position),
                     pre_space,
@@ -60,7 +60,7 @@ impl StringTokenReader {
             }
             ']' => {
                 self.position += 1;
-                Ok(Some(LatexToken::new(
+                Ok(Some(Token::new(
                     TokenType::BracketClose,
                     Span::new(start, self.position),
                     pre_space,
@@ -71,7 +71,7 @@ impl StringTokenReader {
             '&' | '~' | '#' => {
                 // Special characters
                 self.position += 1;
-                Ok(Some(LatexToken::new(
+                Ok(Some(Token::new(
                     TokenType::Specials(ch.to_string()),
                     Span::new(start, self.position),
                     pre_space,
@@ -102,7 +102,7 @@ impl StringTokenReader {
     }
 
     /// Read an escape sequence (backslash followed by command).
-    fn read_escape_sequence(&mut self, start: usize, pre_space: String) -> Result<Option<LatexToken>> {
+    fn read_escape_sequence(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
         self.position += 1; // Skip backslash
 
         if self.position >= self.source.len() {
@@ -121,7 +121,7 @@ impl StringTokenReader {
                 ']' => TokenType::MathModeDisplay,
                 _ => unreachable!(),
             };
-            return Ok(Some(LatexToken::new(
+            return Ok(Some(Token::new(
                 token_type,
                 Span::new(start, self.position),
                 pre_space,
@@ -149,7 +149,7 @@ impl StringTokenReader {
             return self.read_environment_delimiter(cmd_name, start, pre_space);
         }
 
-        Ok(Some(LatexToken::new(
+        Ok(Some(Token::new(
             TokenType::Macro(cmd_name),
             Span::new(start, self.position),
             pre_space,
@@ -162,7 +162,7 @@ impl StringTokenReader {
         cmd: String,
         start: usize,
         pre_space: String,
-    ) -> Result<Option<LatexToken>> {
+    ) -> Result<Option<Token>> {
         // Skip whitespace
         while self.position < self.source.len() {
             match self.source.chars().nth(self.position) {
@@ -174,7 +174,7 @@ impl StringTokenReader {
         // Expect opening brace
         if self.position >= self.source.len() || self.current_char()? != '{' {
             // Treat as regular macro if no brace follows
-            return Ok(Some(LatexToken::new(
+            return Ok(Some(Token::new(
                 TokenType::Macro(cmd),
                 Span::new(start, self.position),
                 pre_space,
@@ -207,7 +207,7 @@ impl StringTokenReader {
             TokenType::EndEnvironment(env_name)
         };
 
-        Ok(Some(LatexToken::new(
+        Ok(Some(Token::new(
             token_type,
             Span::new(start, self.position),
             pre_space,
@@ -215,19 +215,19 @@ impl StringTokenReader {
     }
 
     /// Read math mode delimiter ($).
-    fn read_math_delimiter(&mut self, start: usize, pre_space: String) -> Result<Option<LatexToken>> {
+    fn read_math_delimiter(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
         self.position += 1;
 
         // Check for double $$
         if self.position < self.source.len() && self.current_char()? == '$' {
             self.position += 1;
-            Ok(Some(LatexToken::new(
+            Ok(Some(Token::new(
                 TokenType::MathModeDisplay,
                 Span::new(start, self.position),
                 pre_space,
             )))
         } else {
-            Ok(Some(LatexToken::new(
+            Ok(Some(Token::new(
                 TokenType::MathModeInline,
                 Span::new(start, self.position),
                 pre_space,
@@ -236,7 +236,7 @@ impl StringTokenReader {
     }
 
     /// Read a comment (% to end of line).
-    fn read_comment(&mut self, start: usize, pre_space: String) -> Result<Option<LatexToken>> {
+    fn read_comment(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
         self.position += 1; // Skip %
 
         let comment_start = self.position;
@@ -255,7 +255,7 @@ impl StringTokenReader {
             self.position += 1;
         }
 
-        Ok(Some(LatexToken::new(
+        Ok(Some(Token::new(
             TokenType::Comment(comment),
             Span::new(start, self.position),
             pre_space,
@@ -263,7 +263,7 @@ impl StringTokenReader {
     }
 
     /// Read regular characters (not special).
-    fn read_chars(&mut self, start: usize, pre_space: String) -> Result<Option<LatexToken>> {
+    fn read_chars(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
         let char_start = self.position;
         
         while self.position < self.source.len() {
@@ -277,7 +277,7 @@ impl StringTokenReader {
 
         let chars = self.source[char_start..self.position].to_string();
 
-        Ok(Some(LatexToken::new(
+        Ok(Some(Token::new(
             TokenType::Char(chars),
             Span::new(start, self.position),
             pre_space,
@@ -286,14 +286,14 @@ impl StringTokenReader {
 }
 
 impl TokenReader for StringTokenReader {
-    fn peek_token(&mut self) -> Result<Option<LatexToken>> {
+    fn peek_token(&mut self) -> Result<Option<Token>> {
         if self.peeked.is_none() {
             self.peeked = Some(self.read_token()?);
         }
         Ok(self.peeked.clone().flatten())
     }
 
-    fn next_token(&mut self) -> Result<Option<LatexToken>> {
+    fn next_token(&mut self) -> Result<Option<Token>> {
         if let Some(peeked) = self.peeked.take() {
             Ok(peeked)
         } else {

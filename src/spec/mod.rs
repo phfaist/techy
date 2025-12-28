@@ -2,7 +2,7 @@
 //!
 //! This module provides the extensibility mechanism for the parser. You can
 //! define custom macros, environments, and special characters by creating
-//! specifications and adding them to a `LatexContextDb`.
+//! specifications and adding them to a `ContextDb`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,12 +13,12 @@ pub struct MacroSpec {
     /// The macro name (without backslash).
     pub name: String,
     /// How to parse the macro's arguments.
-    pub args_spec: ArgumentsSpec,
+    pub args_spec: ArgumentStructureSpec,
 }
 
 impl MacroSpec {
     /// Create a new macro specification.
-    pub fn new(name: impl Into<String>, args_spec: ArgumentsSpec) -> Self {
+    pub fn new(name: impl Into<String>, args_spec: ArgumentStructureSpec) -> Self {
         Self {
             name: name.into(),
             args_spec,
@@ -34,7 +34,7 @@ impl MacroSpec {
     ///
     /// Example: `"*[{"` means optional star, optional argument, mandatory argument.
     pub fn simple(name: impl Into<String>, spec: impl Into<String>) -> Self {
-        Self::new(name, ArgumentsSpec::parse(spec.into()))
+        Self::new(name, ArgumentStructureSpec::parse(spec.into()))
     }
 }
 
@@ -44,12 +44,12 @@ pub struct EnvironmentSpec {
     /// The environment name.
     pub name: String,
     /// How to parse arguments after \begin{name}.
-    pub args_spec: ArgumentsSpec,
+    pub args_spec: ArgumentStructureSpec,
 }
 
 impl EnvironmentSpec {
     /// Create a new environment specification.
-    pub fn new(name: impl Into<String>, args_spec: ArgumentsSpec) -> Self {
+    pub fn new(name: impl Into<String>, args_spec: ArgumentStructureSpec) -> Self {
         Self {
             name: name.into(),
             args_spec,
@@ -58,7 +58,7 @@ impl EnvironmentSpec {
 
     /// Create an environment with a simple argument spec string.
     pub fn simple(name: impl Into<String>, spec: impl Into<String>) -> Self {
-        Self::new(name, ArgumentsSpec::parse(spec.into()))
+        Self::new(name, ArgumentStructureSpec::parse(spec.into()))
     }
 }
 
@@ -68,7 +68,7 @@ pub struct SpecialsSpec {
     /// The special character(s).
     pub chars: String,
     /// Optional argument specification if this special takes arguments.
-    pub args_spec: Option<ArgumentsSpec>,
+    pub args_spec: Option<ArgumentStructureSpec>,
 }
 
 impl SpecialsSpec {
@@ -81,7 +81,7 @@ impl SpecialsSpec {
     }
 
     /// Create a specials specification with arguments.
-    pub fn with_args(chars: impl Into<String>, args_spec: ArgumentsSpec) -> Self {
+    pub fn with_args(chars: impl Into<String>, args_spec: ArgumentStructureSpec) -> Self {
         Self {
             chars: chars.into(),
             args_spec: Some(args_spec),
@@ -91,12 +91,12 @@ impl SpecialsSpec {
 
 /// Specification for how to parse arguments.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ArgumentsSpec {
+pub struct ArgumentStructureSpec {
     /// List of argument specifications.
     pub arguments: Vec<ArgumentSpec>,
 }
 
-impl ArgumentsSpec {
+impl ArgumentStructureSpec {
     /// Create a new arguments specification.
     pub fn new(arguments: Vec<ArgumentSpec>) -> Self {
         Self { arguments }
@@ -150,13 +150,13 @@ pub enum ArgumentSpec {
 ///
 /// This stores all the macro, environment, and specials specifications
 /// that the parser knows about.
-pub struct LatexContextDb {
+pub struct ContextDb {
     macros: HashMap<String, Arc<MacroSpec>>,
     environments: HashMap<String, Arc<EnvironmentSpec>>,
     specials: HashMap<String, Arc<SpecialsSpec>>,
 }
 
-impl LatexContextDb {
+impl ContextDb {
     /// Create a new empty context database.
     pub fn new() -> Self {
         Self {
@@ -246,7 +246,7 @@ impl LatexContextDb {
     }
 }
 
-impl Default for LatexContextDb {
+impl Default for ContextDb {
     fn default() -> Self {
         Self::default()
     }
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_arguments_spec_parse() {
-        let spec = ArgumentsSpec::parse("*[{".to_string());
+        let spec = ArgumentStructureSpec::parse("*[{".to_string());
         assert_eq!(spec.arguments.len(), 3);
         assert_eq!(spec.arguments[0], ArgumentSpec::Star);
         assert_eq!(spec.arguments[1], ArgumentSpec::Optional);
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_context_db() {
-        let mut db = LatexContextDb::new();
+        let mut db = ContextDb::new();
         db.add_macro(MacroSpec::simple("test", "{"));
 
         assert!(db.get_macro("test").is_some());
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_default_context() {
-        let db = LatexContextDb::default();
+        let db = ContextDb::default();
         assert!(db.get_macro("textbf").is_some());
         assert!(db.get_environment("equation").is_some());
     }
