@@ -1,0 +1,66 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (uncomment if this is an application)
+# For libraries, typically uncommitted to allow flexible dependency resolution
+Cargo.lock
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.history/
+*.code-workspace
+
+# Rust-analyzer
+rust-project.json
+
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.Trash-*
+.directory
+.fuse_hidden*
+
+# Generated documentation
+/doc/
+
+# Test coverage
+*.profraw
+*.profdata
+tarpaulin-report.html
+lcov.info
+/coverage/
+
+# Benchmark results
+/benches/results/
+criterion/
+
+# Fuzzing artifacts
+/fuzz/corpus/
+/fuzz/artifacts/
+
+# Profiling data
+perf.data*
+flamegraph.svg
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+
+# Distribution
+*.zip
+*.tar.gz
+*.tar.bz2
