@@ -56,7 +56,7 @@ pub mod token;
 pub use error::{ParseError, Result};
 pub use node::{Arguments, Node, NodeList};
 pub use parser::Parser;
-pub use source::Span;
+pub use source::{SourceLocation, Span};
 pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
 pub use state::{ParsingState, ParsingStateDelta};
 pub use token::{Token, TokenType};

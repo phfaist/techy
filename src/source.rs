@@ -1,48 +1,73 @@
 //! Source location tracking for parsed content.
 //!
 //! This module provides types for tracking positions and ranges in source text.
-//! A `Span` represents a contiguous range in the source and is used throughout
-//! the library to associate tokens, AST nodes, and errors with their original
-//! source locations.
+//! The `SourceLocation` trait defines the interface for source location information,
+//! and `Span` is the default concrete implementation representing byte offsets.
 
-/// A span representing a range in the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Span {
-    /// Starting byte position (inclusive).
-    pub start: usize,
-    /// Ending byte position (exclusive).
-    pub end: usize,
+use std::borrow::Cow;
+
+/// Trait for types that represent a location or range in source text.
+///
+/// This allows different parser implementations to store additional
+/// source location information beyond simple byte offsets.
+pub trait SourceLocation: std::fmt::Debug + Clone {
+    /// Get the starting byte position (inclusive).
+    fn start(&self) -> usize;
+
+    /// Get the ending byte position (exclusive).
+    fn end(&self) -> usize;
+
+    /// Get the length of the location in bytes.
+    fn len(&self) -> usize {
+        self.end() - self.start()
+    }
+
+    /// Check if the location is empty.
+    fn is_empty(&self) -> bool {
+        self.start() >= self.end()
+    }
+
+    /// Get the text content at this location in the source.
+    fn content(&self) -> Cow<'_, str>;
+
+    /// Where the content was obtained from (e.g., file name, URL, information
+    /// about how it was auto-generated, etc.).
+    fn source_name(&self) -> Cow<'_, str>;
+
+    /// Get a formatted string describing this location.
+    ///
+    /// For simple spans, this might be "position 130–145" or
+    /// "line 10, column 15".
+    /// For extended implementations, this might include file paths,
+    /// line/column numbers, or other context.
+    fn formatted_location(&self) -> String;
 }
 
-impl Span {
-    /// Create a new span.
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
 
-    /// Get the length of the span.
-    pub fn len(&self) -> usize {
-        self.end - self.start
+#[derive(Debug, Clone, Copy, Hash)]
+pub struct SimpleStringSourceLocation {
+    start: usize;
+    end: usize;
+    content: String;
+}
+impl SourceLocation for SimpleStringSourceLocation {
+    fn start(&self) -> usize {
+        self.start
     }
-
-    /// Check if the span is empty.
-    pub fn is_empty(&self) -> bool {
-        self.start >= self.end
+    fn end(&self) -> usize {
+        self.end
     }
-
-    /// Get the text this span refers to in the source.
-    pub fn text<'a>(&self, source: &'a str) -> &'a str {
-        &source[self.start..self.end]
+    fn content(&self) -> &str {
+        Cow::Borrowed(content)
     }
-
-    /// Extend this span to include another span.
-    pub fn extend(&self, other: Span) -> Span {
-        Span {
-            start: self.start.min(other.start),
-            end: self.end.max(other.end),
-        }
+    fn source_name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("<no source information>")
+    }
+    fn formatted_location(&self) -> String {
+        format!("pos {}–{}", self.start, self.end)
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -50,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_span_creation() {
-        let span = Span::new(0, 5);
+        let span = SimpleStringSourceLocation { 0, 5, "dummy content" };
         assert_eq!(span.start, 0);
         assert_eq!(span.end, 5);
         assert_eq!(span.len(), 5);
@@ -58,17 +83,7 @@ mod tests {
 
     #[test]
     fn test_span_text() {
-        let source = "Hello world";
-        let span = Span::new(0, 5);
-        assert_eq!(span.text(source), "Hello");
-    }
-
-    #[test]
-    fn test_span_extend() {
-        let span1 = Span::new(0, 5);
-        let span2 = Span::new(3, 10);
-        let extended = span1.extend(span2);
-        assert_eq!(extended.start, 0);
-        assert_eq!(extended.end, 10);
+        let span = SimpleStringSourceLocation { 0, 5, source };
+        assert_eq!(span.text(), "Hello");
     }
 }
