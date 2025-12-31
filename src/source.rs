@@ -254,6 +254,62 @@ impl<'src> SourceLocationAnalyzer<'src> {
         Some((line, col))
     }
 
+    /// Format a position with line/column information if available.
+    ///
+    /// Returns a string like "@ (line 3, col 5)" or "@ char pos 42" if
+    /// line/column information is not available.
+    /// If origin is provided, appends " [origin]" to the output.
+    fn format_pos(&mut self, index: usize, origin: Option<&str>) -> String {
+        let pos_str = if let Some((line, col)) = self.get_line_col(index) {
+            format!("@ (line {}, col {})", line, col)
+        } else {
+            format!("@ char pos {}", index)
+        };
+
+        if let Some(origin) = origin {
+            format!("{} [{}]", pos_str, origin)
+        } else {
+            pos_str
+        }
+    }
+
+    /// Format a traceback showing open blocks.
+    ///
+    /// Takes a list of pairs where each pair contains a `SourceLocation` and
+    /// a description string. Only the `start` position of each `SourceLocation`
+    /// is used for formatting.
+    ///
+    /// Returns a formatted string with the "Open blocks:" header followed by
+    /// each block with its position information. Returns an empty string if
+    /// the list is empty.
+    ///
+    /// # Example output
+    /// ```text
+    /// Open blocks:
+    ///   @ (line 8, col 1): environment 'document'
+    ///   @ (line 5, col 3): macro '\section'
+    /// ```
+    pub fn format_traceback(&mut self, open_blocks: &[(SourceLocation<'src>, String)]) -> String {
+        if open_blocks.is_empty() {
+            return String::new();
+        }
+
+        let mut result = String::from("Open blocks:");
+        for (loc, what) in open_blocks.iter() {
+            result.push_str("\n  ");
+            let origin = if !loc.source.origin.is_empty() {
+                Some(loc.source.origin.as_str())
+            } else {
+                None
+            };
+            result.push_str(&self.format_pos(loc.start(), origin));
+            result.push_str(": ");
+            result.push_str(what);
+        }
+
+        result
+    }
+
 }
 
 #[cfg(test)]
@@ -396,5 +452,72 @@ mod tests {
         // Valid positions should work
         assert_eq!(analyzer.get_line_col(0), Some((1, 1)));
         assert_eq!(analyzer.get_line_col(4), Some((1, 5)));
+    }
+
+    #[test]
+    fn test_format_traceback_single_block() {
+        let source = Source::new("Hello\nWorld\nTest".to_string());
+        let mut analyzer = source.make_analyzer();
+
+        let open_blocks = vec![
+            (source.make_pos(6, 11), "environment 'document'".to_string()),
+        ];
+
+        let traceback = analyzer.format_traceback(&open_blocks);
+        assert_eq!(traceback, "Open blocks:\n  @ (line 2, col 1): environment 'document'");
+    }
+
+    #[test]
+    fn test_format_traceback_multiple_open_blocks() {
+        let source = Source::new("Hello\nWorld\nTest\nMore".to_string());
+        let mut analyzer = source.make_analyzer();
+
+        let open_blocks = vec![
+            (source.make_pos(12, 16), "macro '\\textbf'".to_string()),
+            (source.make_pos(6, 11), "environment 'document'".to_string()),
+            (source.make_pos(0, 5), "macro '\\section'".to_string()),
+        ];
+
+        let traceback = analyzer.format_traceback(&open_blocks);
+        assert_eq!(traceback, "Open blocks:\n  @ (line 3, col 1): macro '\\textbf'\n  @ (line 2, col 1): environment 'document'\n  @ (line 1, col 1): macro '\\section'");
+    }
+
+    #[test]
+    fn test_format_traceback_empty_open_blocks() {
+        let source = Source::new("Hello".to_string());
+        let mut analyzer = source.make_analyzer();
+
+        let open_blocks: Vec<(SourceLocation, String)> = vec![];
+        let traceback = analyzer.format_traceback(&open_blocks);
+        assert_eq!(traceback, "");
+    }
+
+    #[test]
+    fn test_format_traceback_with_origin() {
+        let source = Source::new("Hello\nWorld\nTest".to_string())
+            .with_origin("test.tex".to_string());
+        let mut analyzer = source.make_analyzer();
+
+        let open_blocks = vec![
+            (source.make_pos(6, 11), "environment 'document'".to_string()),
+        ];
+
+        let traceback = analyzer.format_traceback(&open_blocks);
+        assert_eq!(traceback, "Open blocks:\n  @ (line 2, col 1) [test.tex]: environment 'document'");
+    }
+
+    #[test]
+    fn test_format_traceback_multiple_blocks_with_origin() {
+        let source = Source::new("Hello\nWorld\nTest\nMore".to_string())
+            .with_origin("myfile.tex".to_string());
+        let mut analyzer = source.make_analyzer();
+
+        let open_blocks = vec![
+            (source.make_pos(12, 16), "macro '\\textbf'".to_string()),
+            (source.make_pos(6, 11), "environment 'document'".to_string()),
+        ];
+
+        let traceback = analyzer.format_traceback(&open_blocks);
+        assert_eq!(traceback, "Open blocks:\n  @ (line 3, col 1) [myfile.tex]: macro '\\textbf'\n  @ (line 2, col 1) [myfile.tex]: environment 'document'");
     }
 }
