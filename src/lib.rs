@@ -62,7 +62,7 @@ pub mod source;
 //pub use error::{ParseError, Result};
 //pub use node::{Arguments, Node, NodeList};
 //pub use parser::Parser;
-pub use source::{Source, SourceLocation, SourceLocationDetails};
+pub use source::{Source, SourceLocation, SourceLocationAnalyzer};
 //pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
 //pub use state::{ParsingState, ParsingStateDelta};
 //pub use token::{Token, TokenType};

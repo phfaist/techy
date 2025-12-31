@@ -1,13 +1,13 @@
 //! Error types for the LaTeX parser.
 
 use thiserror::Error;
-use crate::source::{SourceLocation, SourceLocationDetails};
+use crate::source::SourceLocationDetails;
 
 /// Result type alias for parser operations.
-pub type Result<T> = std::result::Result<T, ParseError>;
+pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 
 /// Errors that can occur during parsing.
-#[derive(Error, Debug, Clone, PartialEq)]
+#[derive(Error, Debug, Clone)]
 pub enum ParseError<'src> {
     /// Unexpected end of input while parsing.
     #[error("unexpected end of input")]
