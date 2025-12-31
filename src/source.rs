@@ -138,6 +138,15 @@ impl<'src> SourceLocation<'src> {
     }
 }
 
+impl<'src> PartialEq for SourceLocation<'src> {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare source by pointer equality (same Source object)
+        std::ptr::eq(self.source, other.source)
+            && self.start == other.start
+            && self.end == other.end
+    }
+}
+
 /// Detailed location information including line/column data.
 ///
 /// This struct caches computed line start positions up to the end

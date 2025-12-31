@@ -1,10 +1,16 @@
 //! # techy
 //!
-//! A fast, extensible LaTeX parser for Rust.
+//! A fast, extensible LaTeX-like code parser for Rust.
 //!
 //! This library provides a parser for LaTeX-like markup languages. It builds an
-//! Abstract Syntax Tree (AST) from LaTeX source code, allowing you to analyze,
-//! transform, or convert LaTeX documents.
+//! Abstract Syntax Tree (AST) with a syntax inspired by LaTeX, allowing you
+//! to analyze, transform, or convert documents in this LaTeX-like language.
+//! The latex-like language includes constructs such as macros, environments,
+//! special active characters, inline math. The parser should be usable for
+//! most LaTeX documents that contain content only.
+//!
+//! The latex-like language syntax forms the basis of the
+//! [`FLM` (Flexible Latex-like Markup) project](https://github.com/phfaist/flm).
 //!
 //! ## Quick Start
 //!

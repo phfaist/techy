@@ -7,7 +7,7 @@ pub mod reader;
 
 pub use reader::StringTokenReader;
 
-use crate::source::Span;
+use crate::source::SourceLocation;
 use std::fmt;
 
 /// Types of tokens in LaTeX.
