@@ -2,9 +2,9 @@
 //!
 //! The `Parser` provides the main entry point for parsing LaTeX-like documents.
 
+use crate::constructs::{general::GeneralNodesParser, Parser as ParserTrait};
 use crate::error::Result;
 use crate::node::NodeList;
-use crate::parsing::{general::GeneralNodesParser, Parser as ParserTrait};
 use crate::spec::ContextDb;
 use crate::state::ParsingState;
 use crate::token::StringTokenReader;

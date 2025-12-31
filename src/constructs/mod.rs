@@ -1,7 +1,8 @@
-//! Low-level parser implementations for LaTeX constructs.
+//! Parsers for individual LaTeX constructs.
 //!
-//! This module contains the low-level parsing logic and trait definitions.
-//! Parsers are responsible for reading tokens and building AST nodes.
+//! This module contains parsers for individual LaTeX constructs such as macros,
+//! environments, groups, and other language elements. Each parser is responsible
+//! for reading tokens and building the corresponding AST nodes.
 //!
 //! For the high-level parsing API, see the [`parser`](crate::parser) module.
 

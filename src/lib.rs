@@ -38,15 +38,15 @@
 //! - [`token`]: Token types and tokenization
 //! - [`node`]: AST node definitions
 //! - [`parser`]: High-level parsing API
-//! - [`parsing`]: Low-level parser implementations
+//! - [`constructs`]: Parsers for individual LaTeX constructs
 //! - [`spec`]: Macro/environment specifications for extensibility
 //! - [`state`]: Parsing state and context management
 //! - [`error`]: Error types
 
+pub mod constructs;
 pub mod error;
 pub mod node;
 pub mod parser;
-pub mod parsing;
 pub mod spec;
 pub mod state;
 pub mod token;
