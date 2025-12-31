@@ -189,4 +189,7 @@ MIT License - see LICENSE file for details.
 
 ## Acknowledgments
 
-This library is a port of [pylatexenc](https://github.com/phfaist/pylatexenc) by Philippe Faist. The architecture and design patterns are heavily inspired by that excellent library.
+This library is a rust port of my existing
+[pylatexenc](https://github.com/phfaist/pylatexenc) library, with many
+improvements.
+The architecture and design patterns are heavily inspired by that library.
