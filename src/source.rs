@@ -13,17 +13,24 @@
 pub struct Source {
     /// The source content.
     content: String,
+    /// The source origin (e.g., file name)
+    origin: String,
 }
 
 impl Source {
     /// Create a new source from a string.
-    pub fn new(content: String) -> Self {
-        Self { content }
+    pub fn new(content: String, origin: String) -> Self {
+        Self { content, origin }
     }
 
     /// Get the source content.
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// Get the source origin (file name, url, or other origin information)
+    pub fn origin(&self) -> &str {
+        &self.origin
     }
 
     /// Get detailed location information for a source location.
@@ -245,13 +252,13 @@ mod tests {
 
     #[test]
     fn test_source_creation() {
-        let source = Source::new("Hello\nWorld\n".to_string());
+        let source = Source::new("Hello\nWorld\n".to_string(), "test".to_string());
         assert_eq!(source.content(), "Hello\nWorld\n");
     }
 
     #[test]
     fn test_source_location_content() {
-        let source = Source::new("Hello World".to_string());
+        let source = Source::new("Hello World".to_string(), "test".to_string());
         let loc = SourceLocation::new(&source, 0, 5);
 
         assert_eq!(loc.start(), 0);
@@ -263,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_location_details_single_line() {
-        let source = Source::new("Hello World".to_string());
+        let source = Source::new("Hello World".to_string(), "test".to_string());
         let loc = SourceLocation::new(&source, 0, 5);
         let details = loc.details();
 
@@ -276,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_location_details_multiline() {
-        let source = Source::new("Hello\nWorld\nTest".to_string());
+        let source = Source::new("Hello\nWorld\nTest".to_string(), "test".to_string());
         let loc = SourceLocation::new(&source, 3, 9);
         let details = loc.details();
 
@@ -293,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_empty_location() {
-        let source = Source::new("Hello".to_string());
+        let source = Source::new("Hello".to_string(), "test".to_string());
         let loc = SourceLocation::new(&source, 3, 3);
 
         assert!(loc.is_empty());
@@ -302,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_other_details_reuses_line_info() {
-        let source = Source::new("Line1\nLine2\nLine3\nLine4".to_string());
+        let source = Source::new("Line1\nLine2\nLine3\nLine4".to_string(), "test".to_string());
         let loc1 = SourceLocation::new(&source, 0, 10); // Spans first two lines
         let details1 = loc1.details();
 
@@ -326,7 +333,7 @@ mod tests {
     #[test]
     fn test_lazy_line_computation() {
         // Large source that we don't want to process all upfront
-        let source = Source::new("a\n".repeat(1000));
+        let source = Source::new("a\n".repeat(1000), "test".to_string());
         let loc = SourceLocation::new(&source, 0, 5);
 
         // Creating location doesn't compute any line info yet

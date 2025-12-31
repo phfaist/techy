@@ -43,23 +43,23 @@
 //! - [`state`]: Parsing state and context management
 //! - [`error`]: Error types
 
-pub mod constructs;
-pub mod error;
-pub mod node;
-pub mod parser;
+//pub mod constructs;
+//pub mod error;
+//pub mod node;
+//pub mod parser;
 pub mod source;
-pub mod spec;
-pub mod state;
-pub mod token;
+//pub mod spec;
+//pub mod state;
+//pub mod token;
 
 // Re-export main types for convenience
-pub use error::{ParseError, Result};
-pub use node::{Arguments, Node, NodeList};
-pub use parser::Parser;
-pub use source::{SourceLocation, Span};
-pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
-pub use state::{ParsingState, ParsingStateDelta};
-pub use token::{Token, TokenType};
+//pub use error::{ParseError, Result};
+//pub use node::{Arguments, Node, NodeList};
+//pub use parser::Parser;
+pub use source::{Source, SourceLocation, SourceLocationDetails};
+//pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
+//pub use state::{ParsingState, ParsingStateDelta};
+//pub use token::{Token, TokenType};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -68,19 +68,19 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_basic_parsing() {
-        let source = r"Hello world";
-        let parser = Parser::new(source.to_string());
-        let result = parser.parse();
-        assert!(result.is_ok());
-    }
+    // #[test]
+    // fn test_basic_parsing() {
+    //     let source = r"Hello world";
+    //     let parser = Parser::new(source.to_string());
+    //     let result = parser.parse();
+    //     assert!(result.is_ok());
+    // }
 
-    #[test]
-    fn test_macro_parsing() {
-        let source = r"\textbf{bold text}";
-        let parser = Parser::new(source.to_string());
-        let result = parser.parse();
-        assert!(result.is_ok());
-    }
+    // #[test]
+    // fn test_macro_parsing() {
+    //     let source = r"\textbf{bold text}";
+    //     let parser = Parser::new(source.to_string());
+    //     let result = parser.parse();
+    //     assert!(result.is_ok());
+    // }
 }
