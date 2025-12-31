@@ -8,28 +8,29 @@ pub mod reader;
 pub use reader::StringTokenReader;
 
 use crate::source::SourceLocation;
+use crate::spec::SpecialsSpecBase;
 use std::fmt;
 
 /// Types of tokens in LaTeX.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     /// Regular characters (text content).
-    Char(String),
+    Char { chars: String },
 
     /// A macro/command (e.g., `\textbf`).
-    Macro(String),
+    Macro { macro_name: String, post_space: String },
 
     /// Beginning of an environment (e.g., `\begin{equation}`).
-    BeginEnvironment(String),
+    BeginEnvironment { environment_name: String },
 
     /// End of an environment (e.g., `\end{equation}`).
-    EndEnvironment(String),
+    EndEnvironment { environment_name: String },
 
     /// Inline math mode delimiter (`$` or `\(` `\)`).
-    MathModeInline,
+    MathModeInline { delimiter: String },
 
     /// Display math mode delimiter (`$$` or `\[` `\]`).
-    MathModeDisplay,
+    MathModeDisplay { delimiter: String },
 
     /// A comment (starting with `%`).
     Comment(String),
@@ -47,7 +48,7 @@ pub enum TokenType {
     BracketClose,
 
     /// Special characters with meaning in LaTeX (e.g., `&`, `~`, `#`).
-    Specials(String),
+    Specials { specials_chars: String, specials_spec: Box<SpecialsSpecBase> },
 }
 
 impl fmt::Display for TokenType {
@@ -74,25 +75,20 @@ impl fmt::Display for TokenType {
 pub struct Token {
     /// The type of token.
     pub token_type: TokenType,
-    /// The span in the source where this token appears.
-    pub span: Span,
+    /// The source location where this token appears.
+    pub pos: SourceLocation,
     /// Whitespace that appeared before this token.
     pub pre_space: String,
 }
 
 impl Token {
     /// Create a new token.
-    pub fn new(token_type: TokenType, span: Span, pre_space: String) -> Self {
+    pub fn new(token_type: TokenType, pos: SourceLocation, pre_space: String) -> Self {
         Self {
             token_type,
-            span,
+            pos,
             pre_space,
         }
-    }
-
-    /// Get the text content of this token from the source.
-    pub fn text<'a>(&self, source: &'a str) -> &'a str {
-        self.span.text(source)
     }
 }
 

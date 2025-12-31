@@ -71,6 +71,7 @@ pub struct SpecialsSpec {
     pub args_spec: Option<ArgumentStructureSpec>,
 }
 
+// need to turn this to a trait (note its use in Token type)
 impl SpecialsSpec {
     /// Create a new specials specification without arguments.
     pub fn new(chars: impl Into<String>) -> Self {

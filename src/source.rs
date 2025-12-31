@@ -5,6 +5,10 @@
 //! it to provide location information. Line/column computation is lazy and only
 //! performed when needed (e.g., for error reporting).
 
+
+// PHF REVIEWED ✅
+
+
 /// A source string with utilities for position tracking.
 ///
 /// Stores the source content. Line/column information is computed on-demand
@@ -74,10 +78,14 @@ impl Source {
         self.column_number_offset
     }
 
+    pub fn make_pos(&self, start: usize, end: usize) -> SourceLocation {
+        SourceLocation { source: &self, start, end }
+    }
+
     /// Get detailed location information for a source location.
     ///
     /// This computes line/column information on-demand.
-    pub fn get_location_details<'src>(
+    pub fn get_pos_details<'src>(
         &'src self,
         location: SourceLocation<'src>,
     ) -> SourceLocationDetails<'src> {
@@ -89,7 +97,7 @@ impl Source {
 ///
 /// References a `Source` object and stores byte positions.
 /// Line/column information is computed lazily via `details()`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)] // implements PartialEq manually
 pub struct SourceLocation<'src> {
     /// Reference to the source.
     source: &'src Source,
@@ -100,10 +108,10 @@ pub struct SourceLocation<'src> {
 }
 
 impl<'src> SourceLocation<'src> {
-    /// Create a new source location.
-    pub fn new(source: &'src Source, start: usize, end: usize) -> Self {
-        Self { source, start, end }
-    }
+    // /// Create a new source location.
+    // pub fn new(source: &'src Source, start: usize, end: usize) -> Self {
+    //     Self { source, start, end }
+    // }
 
     /// Get the starting byte position (inclusive).
     pub fn start(&self) -> usize {
@@ -134,7 +142,7 @@ impl<'src> SourceLocation<'src> {
     ///
     /// This computes line numbers on-demand.
     pub fn details(&self) -> SourceLocationDetails<'src> {
-        self.source.get_location_details(*self)
+        self.source.get_pos_details(*self)
     }
 }
 
@@ -212,7 +220,7 @@ impl<'src> SourceLocationDetails<'src> {
     /// Get the (line, column) for a byte position using cached line starts.
     ///
     /// Lines and columns use the offsets configured in the Source.
-    /// Returns (usize::MAX, usize::MAX) if position exceeds cached line information.
+    /// Returns (usize::MAX, usize::MAX) if position exceeds cached line information or source content length.
     fn get_line_col(&self, pos: usize) -> (usize, usize) {
         if pos > self.source.content.len() ||
            pos >= self.line_starts_computed_end {
@@ -332,7 +340,7 @@ mod tests {
     #[test]
     fn test_source_location_content() {
         let source = Source::new("Hello World".to_string());
-        let loc = SourceLocation::new(&source, 0, 5);
+        let loc = source.make_pos(0, 5);
 
         assert_eq!(loc.start(), 0);
         assert_eq!(loc.end(), 5);
@@ -344,7 +352,7 @@ mod tests {
     #[test]
     fn test_location_details_single_line() {
         let source = Source::new("Hello World".to_string());
-        let loc = SourceLocation::new(&source, 0, 5); // 'H' to ' '
+        let loc = source.make_pos(0, 5); // 'H' to ' '
         let details = loc.details();
 
         assert_eq!(details.start_line(), 1);
@@ -357,7 +365,7 @@ mod tests {
     #[test]
     fn test_location_details_multiline_line_starts() {
         let source = Source::new("Hello\nWorld\nTest".to_string());
-        let loc = SourceLocation::new(&source, 3, 13);
+        let loc = source.make_pos(3, 13);
         let details = loc.details();
 
         // Starts at second 'l' in "Hello" (line 1, col 4) and ends at 'e' in "Test" (line 3, col 2)
@@ -367,7 +375,7 @@ mod tests {
     #[test]
     fn test_location_details_multiline() {
         let source = Source::new("Hello\nWorld\nTest".to_string());
-        let loc = SourceLocation::new(&source, 3, 9);
+        let loc = source.make_pos(3, 9);
         let details = loc.details();
 
         // Starts at second 'l' in "Hello" (line 1, col 4) and ends at 'l' in "World" (line 2, col 4)
@@ -385,7 +393,7 @@ mod tests {
     #[test]
     fn test_empty_location() {
         let source = Source::new("Hello".to_string());
-        let loc = SourceLocation::new(&source, 3, 3);
+        let loc = source.make_pos(3, 3);
 
         assert!(loc.is_empty());
         assert_eq!(loc.len(), 0);
@@ -394,7 +402,7 @@ mod tests {
     #[test]
     fn test_other_details_reuses_line_info() {
         let source = Source::new("Line1\nLine2\nLine3\nLine4".to_string());
-        let loc1 = SourceLocation::new(&source, 0, 10); // Spans first two lines
+        let loc1 = source.make_pos(0, 10); // Spans first two lines
         let details1 = loc1.details();
 
         // Check line info
@@ -404,7 +412,7 @@ mod tests {
         assert_eq!(details1.end_line_col(), (2, 5) );
 
         // Create details for another location using cached info
-        let loc2 = SourceLocation::new(&source, 6, 15); // Spans lines 2-3
+        let loc2 = source.make_pos(6, 15); // Spans lines 2-3
         let details2 = details1.other_details(loc2);
 
         assert_eq!(details2.start_line(), 2);
@@ -421,7 +429,7 @@ mod tests {
     fn test_lazy_line_computation() {
         // Large source that we don't want to process all upfront
         let source = Source::new("a\n".repeat(1000));
-        let loc = SourceLocation::new(&source, 0, 5);
+        let loc = source.make_pos(0, 5);
 
         // Creating location doesn't compute any line info yet
         assert_eq!(loc.start(), 0);
@@ -436,7 +444,7 @@ mod tests {
     #[test]
     fn test_origin_in_formatted_location() {
         let source = Source::new("Hello World".to_string()).with_origin("test.tex".to_string());
-        let loc = SourceLocation::new(&source, 0, 5);
+        let loc = source.make_pos(0, 5);
         let details = loc.details();
 
         assert_eq!(details.formatted_location(),
@@ -447,7 +455,7 @@ mod tests {
     fn test_zero_indexed_offsets() {
         let source = Source::new("Hello\nWorld".to_string())
             .with_line_column_number_offsets(0, 0);
-        let loc = SourceLocation::new(&source, 0, 5);
+        let loc = source.make_pos(0, 5);
         let details = loc.details();
 
         // First line is line 0, first column is column 0
@@ -462,7 +470,7 @@ mod tests {
         let source = Source::new("Hello\nWorld".to_string())
             .with_origin("snippet".to_string())
             .with_line_column_number_offsets(10, 5);
-        let loc = SourceLocation::new(&source, 6, 11); // "World"
+        let loc = source.make_pos(6, 11); // "World"
         let details = loc.details();
 
         // Second line with offset 10 = line 11, first col with offset 5 = col 5
