@@ -24,7 +24,7 @@ All core naming decisions have been correctly implemented:
 | `ArgumentStructureSpec` (not `ArgumentsSpec`) | `src/spec/mod.rs` ✓ | ✅ Correct |
 | `Arguments` (not `ParsedArguments`) | `src/node/mod.rs` ✓ | ✅ Correct |
 | Module `parser` (high-level API) | `src/parser/mod.rs` ✓ | ✅ Correct |
-| Module `parsing` (low-level impl) | `src/parsing/mod.rs` ✓ | ✅ Correct |
+| Module `constructs` (construct parsers) | `src/constructs/mod.rs` ✓ | ✅ Correct |
 
 **Node names** - All kept as designed:
 - `MacroNode`, `EnvironmentNode`, `CharsNode`, `GroupNode`, `CommentNode`, `MathNode`, `SpecialsNode` ✓
@@ -56,7 +56,7 @@ src/
 │   └── mod.rs          ✓ ParsingState, ParsingStateDelta
 ├── parser/             ✓ High-level API
 │   └── mod.rs          ✓ Parser struct (main entry point)
-└── parsing/            ✓ Low-level implementations
+└── constructs/         ✓ Construct parsers
     ├── mod.rs          ✓ Parser trait
     └── general.rs      ✓ GeneralNodesParser
 ```
@@ -361,36 +361,25 @@ pub enum ArgumentValue {
 
 ---
 
-### 3. **Module Naming: `parser` vs `parsing`**
+### 3. **Module Naming: `parser` vs `constructs`** ✅ RESOLVED
+
+**Decision Made:** Module renamed from `parsing` → `constructs`
 
 **Current Implementation:**
 - `src/parser/mod.rs` - High-level API (Parser struct)
-- `src/parsing/mod.rs` - Low-level trait & implementations
+- `src/constructs/mod.rs` - Parsers for individual constructs (Parser trait + implementations)
 
-**NAMING_STRATEGY.md says:**
-- ✓ `parser` module = high-level public API
-- ✓ `parsing` module = low-level implementations
+**Rationale:**
+- `constructs` clearly describes content: parsers for individual LaTeX constructs
+- Distinct from `parser` - no confusion
+- Semantic: "construct" is well-understood in language parsing
+- Natural organization: `constructs/macro.rs`, `constructs/environment.rs`, etc.
 
-**But pylatexenc_to_rust_strategy.md shows:**
-```
-├── parser/
-│   ├── mod.rs       # Parser trait
-│   ├── general.rs   # GeneralNodesParser
-│   ├── macro.rs     # MacroCallParser
-```
-
-All in one `parser` module.
-
-**Clarification Needed:**
-Is the split into `parser` and `parsing` modules intentional and final? Or should we consolidate?
-
-**Current Split Pros:**
-- Clear separation of concerns
-- High-level users never see low-level trait
-
-**Current Split Cons:**
-- More modules to navigate
-- Slight inconsistency with strategy doc
+**Benefits:**
+- ✅ Clear separation of concerns
+- ✅ High-level users never see low-level trait
+- ✅ Semantically accurate naming
+- ✅ No confusion between `parser` and `constructs`
 
 ---
 

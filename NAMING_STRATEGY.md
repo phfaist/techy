@@ -25,7 +25,7 @@ All renames will be applied directly without backward compatibility aliases.
 | `latexnodes` | `node` | Module name implies content; "latex" prefix redundant |
 | `latexwalker` | `parser` | "latex" prefix redundant; simpler name for high-level public API |
 | `macrospec` | `spec` | Module name already implies it's for specifications |
-| N/A | `parsing` | Low-level parser trait and implementations (distinct from high-level `parser` module) |
+| N/A | `constructs` | Parsers for individual LaTeX constructs (distinct from high-level `parser` module) |
 
 ### Primary Types
 
@@ -254,10 +254,11 @@ use techy::state::{ParsingState, ParsingStateDelta};
    - Simpler name, clearer in usage
    - Follows Rust convention of concise type names
 
-7. **parser module → parsing module** (low-level implementations):
-   - Distinguishes low-level parser trait/implementations from high-level API
-   - "parsing" (gerund) suggests ongoing implementation details
-   - "parser" (noun) reserved for the main user-facing struct
+7. **parser module vs constructs module**:
+   - `parser` = high-level user-facing API (Parser struct - main entry point)
+   - `constructs` = low-level parsers for individual LaTeX constructs (trait + implementations)
+   - Distinguishes low-level implementations from high-level API
+   - "constructs" clearly describes content: parsers for macros, environments, groups, etc.
    - Follows Rust convention: simpler names for public API, descriptive names for internals
 
 ## Future Considerations

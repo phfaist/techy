@@ -17,12 +17,12 @@ techy/
 │   ├── spec/               # Specifications
 │   │   └── mod.rs          # MacroSpec, EnvironmentSpec, etc.
 │   ├── state/              # Parsing state
-│   │   └── mod.rs          # ParsingState and StateDelta
-│   ├── parser/             # Parsing logic
-│   │   ├── mod.rs          # Parser trait and base implementations
-│   │   └── general.rs      # GeneralNodesParser
-│   └── walker/             # High-level API
-│       └── mod.rs          # Parser
+│   │   └── mod.rs          # ParsingState and ParsingStateDelta
+│   ├── parser/             # High-level parsing API
+│   │   └── mod.rs          # Parser struct (main entry point)
+│   └── constructs/         # Parsers for individual constructs
+│       ├── mod.rs          # Parser trait and base implementations
+│       └── general.rs      # GeneralNodesParser
 ├── examples/               # Usage examples
 ├── tests/                  # Integration tests
 └── benches/                # Performance benchmarks
@@ -168,12 +168,12 @@ pub enum TokenType {
 Create a new parser or extend existing ones:
 
 ```rust
-// In src/parser/mynew.rs
+// In src/constructs/mynew.rs
 pub struct MyNewParser;
 
 impl Parser for MyNewParser {
     type Output = MyNewNode;
-    
+
     fn parse<'ctx>(
         &self,
         source: &str,

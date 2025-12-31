@@ -7,11 +7,11 @@
 ## Key Architecture
 
 ```
-token → parsing → node (AST)
+token → constructs → node (AST)
 ```
 
 - **token**: Tokenization (Token, Span, TokenType, TokenReader)
-- **parsing**: Low-level parser implementations (traits + impls)
+- **constructs**: Parsers for individual constructs (Parser trait + implementations)
 - **parser**: High-level API (`Parser` struct - the main entry point)
 - **node**: AST types (Node, NodeList, CharsNode, MacroNode, etc.)
 - **spec**: Extensibility (MacroSpec, EnvironmentSpec, ContextDb)
@@ -30,7 +30,7 @@ Key naming rules:
 
 **Module organization**:
 - `parser` module = high-level public API (`Parser` struct)
-- `parsing` module = low-level implementations (traits, parsers)
+- `constructs` module = parsers for individual LaTeX constructs (traits, parsers)
 - Node names keep simple forms: `MacroNode`, `EnvironmentNode` (already generic enough)
 
 ## Current Implementation Status
@@ -128,7 +128,8 @@ cargo test <name>    # Specific test
 - [NAMING_STRATEGY.md](NAMING_STRATEGY.md) - Naming conventions & rationale
 - [README.md](README.md) - User-facing docs
 - [src/lib.rs](src/lib.rs) - Public API exports
-- [src/parser/mod.rs](src/parser/mod.rs) - Main Parser struct
+- [src/parser/mod.rs](src/parser/mod.rs) - Main Parser struct (high-level API)
+- [src/constructs/mod.rs](src/constructs/mod.rs) - Parser trait and construct parsers
 - [src/node/mod.rs](src/node/mod.rs) - AST node definitions
 - [src/spec/mod.rs](src/spec/mod.rs) - Extensibility system
 

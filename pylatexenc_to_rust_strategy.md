@@ -129,33 +129,22 @@ techy/                   # Your Rust crate
 ├── src/
 │   ├── lib.rs           # Public API
 │   ├── token/           # Tokenization
-│   │   ├── mod.rs
-│   │   ├── token.rs     # LatexToken enum
+│   │   ├── mod.rs       # Token types and Span
 │   │   └── reader.rs    # TokenReader trait + impls
 │   ├── node/            # AST nodes
-│   │   ├── mod.rs
-│   │   ├── base.rs      # LatexNode trait
-│   │   ├── types.rs     # Concrete node types
-│   │   └── visitor.rs   # Visitor pattern for traversal
-│   ├── parser/          # Parsing logic
-│   │   ├── mod.rs
-│   │   ├── base.rs      # Parser trait
+│   │   └── mod.rs       # Node types and AST structures
+│   ├── parser/          # High-level parsing API
+│   │   └── mod.rs       # Parser struct (main entry point)
+│   ├── constructs/      # Parsers for individual constructs
+│   │   ├── mod.rs       # Parser trait
 │   │   ├── general.rs   # GeneralNodesParser
-│   │   ├── macro.rs     # MacroCallParser
-│   │   ├── env.rs       # EnvironmentCallParser
-│   │   └── args.rs      # Argument parsers
-│   ├── spec/            # Specifications (macrospec)
-│   │   ├── mod.rs
-│   │   ├── macro_spec.rs
-│   │   ├── env_spec.rs
-│   │   ├── special_spec.rs
-│   │   └── context.rs   # LatexContextDb
+│   │   ├── macro.rs     # MacroCallParser (future)
+│   │   ├── env.rs       # EnvironmentCallParser (future)
+│   │   └── args.rs      # Argument parsers (future)
+│   ├── spec/            # Specifications
+│   │   └── mod.rs       # MacroSpec, EnvironmentSpec, ContextDb
 │   ├── state/           # Parsing state
-│   │   ├── mod.rs
-│   │   ├── parsing_state.rs
-│   │   └── delta.rs     # State changes
-│   ├── walker/          # High-level API
-│   │   └── mod.rs       # LatexWalker
+│   │   └── mod.rs       # ParsingState and ParsingStateDelta
 │   └── error.rs         # Error types
 ```
 

@@ -368,7 +368,7 @@ where
 
 ### Modules
 - `parser` - High-level parsing API (main entry point)
-- `parsing` - Low-level parser trait and implementations
+- `constructs` - Parsers for individual LaTeX constructs
 - `node` - AST node types
 - `spec` - Macro/environment/specials specifications
 - `state` - Parsing state management
@@ -415,7 +415,7 @@ pub trait TokenReader { ... }
 pub struct StringTokenReader { ... }
 pub enum TokenType { ... }
 
-// Parsing (in parsing module)
+// Parsing (in constructs module)
 pub trait Parsing { ... }  // low-level parser trait
 pub trait DynParsing<N, S> { ... }
 pub struct ParsingRegistry<N, S> { ... }
@@ -451,7 +451,7 @@ use techy::{Parser, ExtensibleParser};
 use techy::node::Node;
 use techy::state::ParsingState;
 use techy::spec::Context;
-use techy::parsing::Parsing;
+use techy::constructs::Parsing;
 
 // Define custom types...
 type MyParser = ExtensibleParser<MyNode, MyState, MyContext>;

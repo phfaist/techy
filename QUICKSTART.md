@@ -74,10 +74,10 @@ techy/
 │   ├── error.rs           # Error types
 │   ├── token/             # Tokenization
 │   ├── node/              # AST nodes
-│   ├── parser/            # Parsing logic
+│   ├── parser/            # High-level API
+│   ├── constructs/        # Construct parsers
 │   ├── spec/              # Macro/env specifications
-│   ├── state/             # Parsing state
-│   └── walker/            # High-level API
+│   └── state/             # Parsing state
 ├── examples/              # Usage examples
 ├── tests/                 # Integration tests
 ├── README.md              # Main documentation
@@ -182,8 +182,8 @@ Check TODO.md to see what's done and what's planned.
 
 The library is in active development. Priority areas:
 
-1. Argument parsing (see `src/parser/`)
-2. Environment parsing
+1. Argument parsing (see `src/constructs/args.rs`)
+2. Environment parsing (see `src/constructs/env.rs`)
 3. More tests
 4. Better error messages
 

@@ -582,14 +582,14 @@ pub trait Parsing {
 ### Enhanced for Full Extensibility
 
 ```rust
-/// Enhanced parsing trait (in the `parsing` module)
+/// Enhanced parsing trait (in the `constructs` module)
 pub trait Parsing {
     /// Output type (must be a Node)
     type Output: Node;
-    
+
     /// Parsing state type
     type State: ParsingState;
-    
+
     /// Parse with given state
     fn parse<'s>(
         &self,
@@ -597,12 +597,12 @@ pub trait Parsing {
         token_reader: &mut dyn TokenReader,
         state: &Self::State,
     ) -> ParseResult<Self::Output>;
-    
+
     /// Optional: Check if this parser can handle the next token
     fn can_parse(&self, token: &Token, state: &Self::State) -> bool {
         true  // Default: try to parse
     }
-    
+
     /// Optional: Priority when multiple parsers can handle a token
     fn priority(&self) -> i32 {
         0  // Default priority

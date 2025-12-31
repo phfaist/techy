@@ -3,6 +3,7 @@
 ## High Priority
 
 - [ ] **Argument Parsing**: Implement full argument parsing based on ArgumentSpec
+  - [ ] Create `constructs/args.rs` for argument parsers
   - [ ] Mandatory arguments `{...}`
   - [ ] Optional arguments `[...]`
   - [ ] Star arguments `*`
@@ -10,6 +11,7 @@
   - [ ] Named argument access
 
 - [ ] **Environment Parsing**: Complete environment support
+  - [ ] Create `constructs/env.rs` for environment parser
   - [ ] Parse environment body
   - [ ] Handle environment arguments
   - [ ] Validate begin/end matching

@@ -141,13 +141,13 @@ Hello world
 
 See `TODO.md` for the full list, but priorities are:
 
-1. **Argument parsing** (`src/parser/` - create `args.rs`)
+1. **Argument parsing** (`src/constructs/` - create `args.rs`)
    - Parse `{...}` mandatory arguments
    - Parse `[...]` optional arguments
    - Parse `*` star arguments
-   - Attach to `ParsedArguments`
+   - Attach to `Arguments`
 
-2. **Environment bodies** (`src/parser/` - create `env.rs`)
+2. **Environment bodies** (`src/constructs/` - create `env.rs`)
    - Parse content between `\begin{}` and `\end{}`
    - Validate matching environment names
    - Handle nested environments
