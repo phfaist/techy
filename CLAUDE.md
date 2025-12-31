@@ -10,7 +10,8 @@
 token → constructs → node (AST)
 ```
 
-- **token**: Tokenization (Token, Span, TokenType, TokenReader)
+- **source**: Source location tracking (Source, SourceLocation, SourceLocationDetails)
+- **token**: Tokenization (Token, TokenType, TokenReader)
 - **constructs**: Parsers for individual constructs (Parser trait + implementations)
 - **parser**: High-level API (`Parser` struct - the main entry point)
 - **node**: AST types (Node, NodeList, CharsNode, MacroNode, etc.)
@@ -77,10 +78,14 @@ Key design patterns:
 Parser              // Entry point (was LatexWalker)
 ContextDb           // Database of macro/env specs (was LatexContextDb)
 
+// Source Location
+Source              // Owns source content, lazy line/column computation
+SourceLocation<'src> // Lightweight reference to source + byte positions
+SourceLocationDetails<'src> // Computed line/column information
+
 // Tokens
-Token               // A token (was LatexToken)
+Token               // A token
 TokenType           // Token variants
-Span                // Source location
 
 // AST Nodes
 Node                // Enum of all node types
