@@ -316,3 +316,39 @@ This provides an optimal balance:
 - ✅ Maintains clarity with established terms (`MacroNode`, etc.)
 - ✅ Simplifies where appropriate (`Arguments`)
 - 🔄 `LatexContextDb` → Complete redesign as library system (not just renamed)
+
+---
+
+## Module Rename History
+
+### `parsing` → `constructs` (December 2025)
+
+**Problem:** The `parsing` module name was too similar to `parser`, causing confusion:
+- `parser/` - High-level API (Parser struct)
+- `parsing/` - Low-level implementations (Parser trait + individual parsers)
+
+**Solution:** Renamed to `constructs`
+
+**Rationale:**
+1. **Semantically accurate** - Contains parsers for individual LaTeX constructs (macros, environments, groups, etc.)
+2. **Clear distinction** - No confusion between `parser::Parser` and `constructs::Parser` (trait)
+3. **Future-proof** - Natural organization as more parsers are added:
+   - `constructs/macro.rs` - MacroCallParser
+   - `constructs/env.rs` - EnvironmentParser
+   - `constructs/args.rs` - ArgumentParser
+   - `constructs/verbatim.rs` - VerbatimParser
+4. **Industry terminology** - LaTeX documentation talks about "constructs"
+
+**Current module structure:**
+```
+src/
+├── parser/         # High-level parsing API (Parser struct)
+└── constructs/     # Parsers for individual constructs (Parser trait + implementations)
+    ├── mod.rs      # Parser trait
+    ├── general.rs  # GeneralNodesParser
+    ├── macro.rs    # MacroCallParser (future)
+    ├── env.rs      # EnvironmentCallParser (future)
+    └── args.rs     # Argument parsers (future)
+```
+
+**Files updated:** All strategy documents (11 .md files) were updated to reflect this change. See git history for details.
