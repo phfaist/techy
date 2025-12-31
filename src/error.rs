@@ -1,7 +1,7 @@
 //! Error types for the LaTeX parser.
 
 use thiserror::Error;
-use crate::token::Span;
+use crate::source::Span;
 
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, ParseError>;

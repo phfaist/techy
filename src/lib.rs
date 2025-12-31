@@ -47,6 +47,7 @@ pub mod constructs;
 pub mod error;
 pub mod node;
 pub mod parser;
+pub mod source;
 pub mod spec;
 pub mod state;
 pub mod token;
@@ -55,9 +56,10 @@ pub mod token;
 pub use error::{ParseError, Result};
 pub use node::{Arguments, Node, NodeList};
 pub use parser::Parser;
+pub use source::Span;
 pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
 pub use state::{ParsingState, ParsingStateDelta};
-pub use token::{Span, Token, TokenType};
+pub use token::{Token, TokenType};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

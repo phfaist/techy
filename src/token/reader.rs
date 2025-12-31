@@ -1,7 +1,8 @@
 //! Token reader implementation for string sources.
 
-use super::{Token, Span, TokenReader, TokenType};
+use super::{Token, TokenReader, TokenType};
 use crate::error::{ParseError, Result};
+use crate::source::Span;
 
 /// A token reader that reads from a string.
 pub struct StringTokenReader {

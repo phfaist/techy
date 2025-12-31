@@ -1,7 +1,7 @@
 //! AST node types for representing parsed LaTeX.
 
+use crate::source::Span;
 use crate::spec::{EnvironmentSpec, MacroSpec, SpecialsSpec};
-use crate::token::Span;
 use std::sync::Arc;
 
 /// Base trait for all LaTeX nodes.

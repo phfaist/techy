@@ -3,8 +3,9 @@
 use super::{ParseResult, Parser};
 use crate::error::ParseError;
 use crate::node::{CharsNode, CommentNode, GroupNode, MacroNode, Node, NodeList, Arguments};
+use crate::source::Span;
 use crate::state::ParsingState;
-use crate::token::{Span, TokenReader, TokenType};
+use crate::token::{TokenReader, TokenType};
 
 /// Parser for a sequence of nodes.
 ///
