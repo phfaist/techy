@@ -152,6 +152,8 @@ pub struct SourceLocationDetails<'src> {
     /// Line start positions computed up to the end position.
     /// Each element is the byte position where a line starts.
     line_starts: Vec<usize>,
+    /// Remember location until which we computed line starts
+    line_starts_computed_end: usize,
 }
 
 impl<'src> SourceLocationDetails<'src> {
@@ -159,26 +161,43 @@ impl<'src> SourceLocationDetails<'src> {
     ///
     /// Computes line starts up to the location's end position.
     fn new(source: &'src Source, location: SourceLocation<'src>) -> Self {
-        let line_starts = Self::compute_line_starts_up_to(&source.content, location.end);
-        Self {
+        Self::new_with_partial_line_starts(
             source,
             location,
-            line_starts,
-        }
+            usize::max(location.start, location.end),
+            &vec![0],
+            0,
+        )
     }
+    fn new_with_partial_line_starts(
+        source: &'src Source,
+        location: SourceLocation<'src>,
+        line_starts_up_to: usize,
+        old_line_starts: &Vec<usize>,
+        old_line_starts_computed_end: usize,
+    ) -> Self {
+        // Clone the line_starts we've already computed
+        let mut line_starts = old_line_starts.clone();
 
-    /// Compute line start positions up to a given byte position.
-    fn compute_line_starts_up_to(content: &str, up_to: usize) -> Vec<usize> {
-        let mut line_starts = vec![0];
-        for (i, ch) in content.char_indices() {
-            if i >= up_to {
-                break;
-            }
-            if ch == '\n' {
-                line_starts.push(i + 1);
+        let line_starts_computed_end = line_starts_up_to + 1;
+
+        // Extend if the new location goes beyond what we've computed
+        if line_starts_computed_end > old_line_starts_computed_end {
+            let start_from = old_line_starts_computed_end;
+            for (i, ch) in source.content[start_from..].char_indices() {
+                let abs_pos = start_from + i;
+                if abs_pos >= line_starts_computed_end {
+                    break;
+                }
+                if ch == '\n' {
+                    line_starts.push(abs_pos + 1);
+                }
             }
         }
-        line_starts
+
+        SourceLocationDetails {
+            source, location, line_starts, line_starts_computed_end
+        }
     }
 
     /// Get the (line, column) for a byte position using cached line starts.
@@ -186,14 +205,8 @@ impl<'src> SourceLocationDetails<'src> {
     /// Lines and columns use the offsets configured in the Source.
     /// Returns (usize::MAX, usize::MAX) if position exceeds cached line information.
     fn get_line_col(&self, pos: usize) -> (usize, usize) {
-        if pos > self.source.content.len() {
-            return (usize::MAX, usize::MAX);
-        }
-
-        // Check if position is beyond what we've cached
-        let last_cached = self.line_starts.last().copied().unwrap_or(0);
-        if pos >= last_cached && !self.line_starts.is_empty() {
-            // Position exceeds cached line information
+        if pos > self.source.content.len() ||
+           pos >= self.line_starts_computed_end {
             return (usize::MAX, usize::MAX);
         }
 
@@ -284,28 +297,15 @@ impl<'src> SourceLocationDetails<'src> {
     /// new location is near the current one, as it reuses already-computed
     /// line start positions.
     pub fn other_details(&self, location: SourceLocation<'src>) -> SourceLocationDetails<'src> {
-        // Clone the line_starts we've already computed
-        let mut line_starts = self.line_starts.clone();
-
-        // Extend if the new location goes beyond what we've computed
-        if location.end > self.line_starts.last().copied().unwrap_or(0) {
-            let start_from = self.line_starts.last().copied().unwrap_or(0);
-            for (i, ch) in self.source.content[start_from..].char_indices() {
-                let abs_pos = start_from + i;
-                if abs_pos >= location.end {
-                    break;
-                }
-                if ch == '\n' {
-                    line_starts.push(abs_pos + 1);
-                }
-            }
-        }
-
-        SourceLocationDetails {
-            source: self.source,
-            location,
-            line_starts,
-        }
+        let new_line_starts_computed_end =
+            usize::max(location.start, location.end);        
+        Self::new_with_partial_line_starts(
+            self.source,
+            location, 
+            new_line_starts_computed_end,
+            &self.line_starts,
+            self.line_starts_computed_end,
+        )
     }
 }
 
@@ -335,14 +335,24 @@ mod tests {
     #[test]
     fn test_location_details_single_line() {
         let source = Source::new("Hello World".to_string());
-        let loc = SourceLocation::new(&source, 0, 5);
+        let loc = SourceLocation::new(&source, 0, 5); // 'H' to ' '
         let details = loc.details();
 
         assert_eq!(details.start_line(), 1);
         assert_eq!(details.start_line_col(), (1, 1));
         assert_eq!(details.end_line(), 1);
-        assert_eq!(details.end_line_col(), (1, 5));
-        assert_eq!(details.formatted_location(), "line 1, columns 1–5");
+        assert_eq!(details.end_line_col(), (1, 6));
+        assert_eq!(details.formatted_location(), "line 1, columns 1–6");
+    }
+
+    #[test]
+    fn test_location_details_multiline_line_starts() {
+        let source = Source::new("Hello\nWorld\nTest".to_string());
+        let loc = SourceLocation::new(&source, 3, 13);
+        let details = loc.details();
+
+        // Starts at second 'l' in "Hello" (line 1, col 4) and ends at 'e' in "Test" (line 3, col 2)
+        assert_eq!(details.line_starts, vec![0, 6, 6+6, ]);
     }
 
     #[test]
@@ -351,15 +361,16 @@ mod tests {
         let loc = SourceLocation::new(&source, 3, 9);
         let details = loc.details();
 
-        // Starts at 'l' in "Hello" (line 1, col 4) and ends at 'r' in "World" (line 2, col 3)
+        // Starts at second 'l' in "Hello" (line 1, col 4) and ends at 'l' in "World" (line 2, col 4)
         assert_eq!(details.start_line(), 1);
         assert_eq!(details.start_line_col(), (1, 4));
         assert_eq!(details.end_line(), 2);
-        assert_eq!(details.end_line_col(), (2, 3));
+        assert_eq!(details.end_line_col(), (2, 4));
         assert_eq!(
             details.formatted_location(),
-            "line 1, column 4 to line 2, column 3"
+            "line 1, column 4 to line 2, column 4"
         );
+        assert_eq!(details.line_starts, vec![0, 6, ]);
     }
 
     #[test]
@@ -379,7 +390,9 @@ mod tests {
 
         // Check line info
         assert_eq!(details1.start_line(), 1);
+        assert_eq!(details1.start_line_col(), (1, 1));
         assert_eq!(details1.end_line(), 2);
+        assert_eq!(details1.end_line_col(), (2, 5) );
 
         // Create details for another location using cached info
         let loc2 = SourceLocation::new(&source, 6, 15); // Spans lines 2-3
@@ -388,9 +401,10 @@ mod tests {
         assert_eq!(details2.start_line(), 2);
         assert_eq!(details2.start_line_col(), (2, 1));
         assert_eq!(details2.end_line(), 3);
+        assert_eq!(details2.end_line_col(), (3, 4));
         assert_eq!(
             details2.formatted_location(),
-            "line 2, column 1 to line 3, column 3"
+            "line 2, column 1 to line 3, column 4"
         );
     }
 
@@ -416,7 +430,8 @@ mod tests {
         let loc = SourceLocation::new(&source, 0, 5);
         let details = loc.details();
 
-        assert_eq!(details.formatted_location(), "test.tex: line 1, columns 1–5");
+        assert_eq!(details.formatted_location(),
+                   "test.tex: line 1, columns 1–6");
     }
 
     #[test]
