@@ -50,7 +50,7 @@
 //! - [`error`]: Error types
 
 //pub mod constructs;
-//pub mod error;
+pub mod error;
 //pub mod node;
 //pub mod parser;
 pub mod source;

@@ -106,6 +106,10 @@ pub struct SourceLocation<'src> {
 
 impl<'src> SourceLocation<'src> {
 
+    pub fn source(&self) -> &'src Source {
+        self.source
+    }
+
     /// Get the starting byte position (inclusive).
     pub fn start(&self) -> usize {
         self.start
