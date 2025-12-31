@@ -15,12 +15,43 @@ pub struct Source {
     content: String,
     /// The source origin (e.g., file name)
     origin: String,
+    /// Line number offset (default: 1 for 1-indexed, or 0 for 0-indexed)
+    line_number_offset: usize,
+    /// Column number offset (default: 1 for 1-indexed, or 0 for 0-indexed)
+    column_number_offset: usize,
 }
 
 impl Source {
-    /// Create a new source from a string.
-    pub fn new(content: String, origin: String) -> Self {
-        Self { content, origin }
+    /// Create a new source from a string with default settings.
+    ///
+    /// Defaults: origin = "", line_number_offset = 1, column_number_offset = 1
+    pub fn new(content: String) -> Self {
+        Self {
+            content,
+            origin: String::new(),
+            line_number_offset: 1,
+            column_number_offset: 1,
+        }
+    }
+
+    /// Set the origin (e.g., file name, URL) for this source.
+    pub fn with_origin(mut self, origin: String) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// Set the line and column number offsets.
+    ///
+    /// Default offsets are (1, 1) for 1-indexed line/column numbers.
+    /// Use (0, 0) for 0-indexed line/column numbers.
+    pub fn with_line_column_number_offsets(
+        mut self,
+        line_number_offset: usize,
+        column_number_offset: usize,
+    ) -> Self {
+        self.line_number_offset = line_number_offset;
+        self.column_number_offset = column_number_offset;
+        self
     }
 
     /// Get the source content.
@@ -31,6 +62,16 @@ impl Source {
     /// Get the source origin (file name, url, or other origin information)
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    /// Get the line number offset.
+    pub fn line_number_offset(&self) -> usize {
+        self.line_number_offset
+    }
+
+    /// Get the column number offset.
+    pub fn column_number_offset(&self) -> usize {
+        self.column_number_offset
     }
 
     /// Get detailed location information for a source location.
@@ -142,7 +183,7 @@ impl<'src> SourceLocationDetails<'src> {
 
     /// Get the (line, column) for a byte position using cached line starts.
     ///
-    /// Lines and columns are 1-indexed.
+    /// Lines and columns use the offsets configured in the Source.
     /// Returns (usize::MAX, usize::MAX) if position exceeds cached line information.
     fn get_line_col(&self, pos: usize) -> (usize, usize) {
         if pos > self.source.content.len() {
@@ -162,28 +203,37 @@ impl<'src> SourceLocationDetails<'src> {
             Err(idx) => idx.saturating_sub(1),
         };
 
-        let line = line_idx + 1; // 1-indexed
-        let col = pos - self.line_starts[line_idx] + 1; // 1-indexed
+        // Compute 0-based line/col, then add offsets
+        let line = line_idx + self.source.line_number_offset;
+        let col = (pos - self.line_starts[line_idx]) + self.source.column_number_offset;
 
         (line, col)
     }
 
-    /// Get the starting (line, column) position (1-indexed).
+    /// Get the starting (line, column) position.
+    ///
+    /// Uses the offsets configured in the Source (default: 1-indexed).
     pub fn start_line_col(&self) -> (usize, usize) {
         self.get_line_col(self.location.start)
     }
 
-    /// Get the starting line number (1-indexed).
+    /// Get the starting line number.
+    ///
+    /// Uses the line offset configured in the Source (default: 1-indexed).
     pub fn start_line(&self) -> usize {
         self.get_line_col(self.location.start).0
     }
 
-    /// Get the ending (line, column) position (1-indexed).
+    /// Get the ending (line, column) position.
+    ///
+    /// Uses the offsets configured in the Source (default: 1-indexed).
     pub fn end_line_col(&self) -> (usize, usize) {
         self.get_line_col(self.location.end)
     }
 
-    /// Get the ending line number (1-indexed).
+    /// Get the ending line number.
+    ///
+    /// Uses the line offset configured in the Source (default: 1-indexed).
     pub fn end_line(&self) -> usize {
         self.get_line_col(self.location.end).0
     }
@@ -191,26 +241,39 @@ impl<'src> SourceLocationDetails<'src> {
     /// Get a formatted string describing this location.
     ///
     /// Returns a human-readable description like "line 10, column 15"
-    /// or "line 5, columns 3–18".
+    /// or "line 5, columns 3–18". Includes origin information if set.
     pub fn formatted_location(&self) -> String {
         let (start_line, start_col) = self.get_line_col(self.location.start);
         let (end_line, end_col) = self.get_line_col(self.location.end);
 
+        // Build origin prefix if available
+        let origin_prefix = if !self.source.origin.is_empty() {
+            format!("{}: ", self.source.origin)
+        } else {
+            String::new()
+        };
+
         // Check if line info is available (not usize::MAX)
         if start_line == usize::MAX || end_line == usize::MAX {
-            return format!("position {}–{}", self.location.start, self.location.end);
+            return format!(
+                "{}position {}–{}",
+                origin_prefix, self.location.start, self.location.end
+            );
         }
 
         if start_line == end_line {
             if start_col == end_col {
-                format!("line {}, column {}", start_line, start_col)
+                format!("{}line {}, column {}", origin_prefix, start_line, start_col)
             } else {
-                format!("line {}, columns {}–{}", start_line, start_col, end_col)
+                format!(
+                    "{}line {}, columns {}–{}",
+                    origin_prefix, start_line, start_col, end_col
+                )
             }
         } else {
             format!(
-                "line {}, column {} to line {}, column {}",
-                start_line, start_col, end_line, end_col
+                "{}line {}, column {} to line {}, column {}",
+                origin_prefix, start_line, start_col, end_line, end_col
             )
         }
     }
@@ -252,13 +315,14 @@ mod tests {
 
     #[test]
     fn test_source_creation() {
-        let source = Source::new("Hello\nWorld\n".to_string(), "test".to_string());
+        let source = Source::new("Hello\nWorld\n".to_string()).with_origin("test".to_string());
         assert_eq!(source.content(), "Hello\nWorld\n");
+        assert_eq!(source.origin(), "test");
     }
 
     #[test]
     fn test_source_location_content() {
-        let source = Source::new("Hello World".to_string(), "test".to_string());
+        let source = Source::new("Hello World".to_string());
         let loc = SourceLocation::new(&source, 0, 5);
 
         assert_eq!(loc.start(), 0);
@@ -270,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_location_details_single_line() {
-        let source = Source::new("Hello World".to_string(), "test".to_string());
+        let source = Source::new("Hello World".to_string());
         let loc = SourceLocation::new(&source, 0, 5);
         let details = loc.details();
 
@@ -283,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_location_details_multiline() {
-        let source = Source::new("Hello\nWorld\nTest".to_string(), "test".to_string());
+        let source = Source::new("Hello\nWorld\nTest".to_string());
         let loc = SourceLocation::new(&source, 3, 9);
         let details = loc.details();
 
@@ -300,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_empty_location() {
-        let source = Source::new("Hello".to_string(), "test".to_string());
+        let source = Source::new("Hello".to_string());
         let loc = SourceLocation::new(&source, 3, 3);
 
         assert!(loc.is_empty());
@@ -309,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_other_details_reuses_line_info() {
-        let source = Source::new("Line1\nLine2\nLine3\nLine4".to_string(), "test".to_string());
+        let source = Source::new("Line1\nLine2\nLine3\nLine4".to_string());
         let loc1 = SourceLocation::new(&source, 0, 10); // Spans first two lines
         let details1 = loc1.details();
 
@@ -333,7 +397,7 @@ mod tests {
     #[test]
     fn test_lazy_line_computation() {
         // Large source that we don't want to process all upfront
-        let source = Source::new("a\n".repeat(1000), "test".to_string());
+        let source = Source::new("a\n".repeat(1000));
         let loc = SourceLocation::new(&source, 0, 5);
 
         // Creating location doesn't compute any line info yet
@@ -344,5 +408,45 @@ mod tests {
         let details = loc.details();
         assert_eq!(details.start_line(), 1);
         // Line info was only computed up to position 5, not the entire 2000-char string
+    }
+
+    #[test]
+    fn test_origin_in_formatted_location() {
+        let source = Source::new("Hello World".to_string()).with_origin("test.tex".to_string());
+        let loc = SourceLocation::new(&source, 0, 5);
+        let details = loc.details();
+
+        assert_eq!(details.formatted_location(), "test.tex: line 1, columns 1–5");
+    }
+
+    #[test]
+    fn test_zero_indexed_offsets() {
+        let source = Source::new("Hello\nWorld".to_string())
+            .with_line_column_number_offsets(0, 0);
+        let loc = SourceLocation::new(&source, 0, 5);
+        let details = loc.details();
+
+        // First line is line 0, first column is column 0
+        assert_eq!(details.start_line(), 0);
+        assert_eq!(details.start_line_col(), (0, 0));
+        assert_eq!(details.end_line(), 0);
+        assert_eq!(details.end_line_col(), (0, 5));
+    }
+
+    #[test]
+    fn test_custom_offsets() {
+        let source = Source::new("Hello\nWorld".to_string())
+            .with_origin("snippet".to_string())
+            .with_line_column_number_offsets(10, 5);
+        let loc = SourceLocation::new(&source, 6, 11); // "World"
+        let details = loc.details();
+
+        // Second line with offset 10 = line 11, first col with offset 5 = col 5
+        assert_eq!(details.start_line(), 11);
+        assert_eq!(details.start_line_col(), (11, 5));
+        assert_eq!(
+            details.formatted_location(),
+            "snippet: line 11, columns 5–10"
+        );
     }
 }
