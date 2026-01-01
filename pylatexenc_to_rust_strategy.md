@@ -4,6 +4,13 @@
 
 The pylatexenc library is a sophisticated LaTeX parser that has evolved through 3 major versions. Your focus modules (`latexnodes`, `macrospec`, `latexwalker`) form the core parsing engine. The library architecture is well-suited for a Rust port, as it emphasizes type safety, clear separation of concerns, and extensibility through trait-like patterns.
 
+- Original pylatexenc code located at https://github.com/phfaist/pylatexenc
+
+IMPORTANT: This document contains the initial analysis of the python module and
+the initial suggestions for a porting strategy to rust.  The strategy has evolved
+since, including in parallel md files and in the code base itself, and not all
+changes are represented in this document.
+
 ## Current Architecture Overview
 
 ### Module Structure (v3.0)

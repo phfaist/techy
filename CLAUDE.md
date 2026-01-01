@@ -4,6 +4,8 @@
 
 **techy** is a Rust port of Python's `pylatexenc` library for parsing LaTeX-like markup languages. It builds an Abstract Syntax Tree (AST) from LaTeX source code.
 
+Original python project is at: https://github.com/phfaist/pylatexenc
+
 ## Key Architecture
 
 ```
@@ -36,7 +38,10 @@ Key naming rules:
 
 ## Current Implementation Status
 
-✅ **Complete:**
+✅ **Fairly mature:**
+- Source location classes
+
+⏳ **Reviewing design choices from Claude's minimal code:**
 - Basic tokenization
 - Text/chars parsing
 - Macro recognition
@@ -44,28 +49,27 @@ Key naming rules:
 - Specification system (MacroSpec, EnvironmentSpec)
 - Core naming migration complete
 
-⏳ **In Progress:**
+📋 **Planned/TODO:**
 - Argument parsing
 - Environment parsing
 - Math mode handling
-
-📋 **Planned:**
 - Verbatim content parsing
+
 
 ## pylatexenc → Rust Strategy
 
 **Read [pylatexenc_to_rust_strategy.md](pylatexenc_to_rust_strategy.md) for detailed architecture!**
 
 Key improvements over Python:
-1. **Type safety**: Enums instead of isinstance() checks
+1. **Type safety**: Enums instead of isinstance() checks - TO BE REVIEWED
 2. **Memory safety**: Lifetimes prevent dangling refs, Arc for shared specs
 3. **Performance**: Zero-cost abstractions, stack allocation, &str slices
 4. **Error handling**: Result<T,E> instead of exceptions
-5. **Pattern matching**: Exhaustive token/node matching
+5. **Pattern matching**: Exhaustive token/node matching - TO BE REVIEWED
 
 Key design patterns:
-- **Node-based AST**: CharsNode, MacroNode, EnvironmentNode, etc.
-- **Spec system**: Define custom macros/environments via ContextDb
+- **Node-based AST**: CharsNode, MacroNode, EnvironmentNode, etc. - TO BE REVIEWED
+- **Spec system**: Define custom macros/environments via ContextDb - TO BE REVIEWED
 - **Parser traits**: Everything parsed by specialized parser objects
 - **State deltas**: Immutable state transformations
 - **Token reader**: Abstraction over token streams
@@ -107,6 +111,9 @@ Arguments           // Parsed macro/env args (was ParsedArguments)
 ```
 
 ### Common Usage
+
+- TO BE REVIEWED
+
 ```rust
 // Basic parsing
 let parser = Parser::new(source.to_string());
@@ -133,10 +140,10 @@ cargo test <name>    # Specific test
 - [NAMING_STRATEGY.md](NAMING_STRATEGY.md) - Naming conventions & rationale
 - [README.md](README.md) - User-facing docs
 - [src/lib.rs](src/lib.rs) - Public API exports
-- [src/parser/mod.rs](src/parser/mod.rs) - Main Parser struct (high-level API)
+- [src/parser/mod.rs](src/parser/mod.rs) - Main Parser struct (high-level API) - TO BE REVIEWED
 - [src/constructs/mod.rs](src/constructs/mod.rs) - Parser trait and construct parsers
-- [src/node/mod.rs](src/node/mod.rs) - AST node definitions
-- [src/spec/mod.rs](src/spec/mod.rs) - Extensibility system
+- [src/node/mod.rs](src/node/mod.rs) - AST node definitions - TO BE REVIEWED
+- [src/spec/mod.rs](src/spec/mod.rs) - Extensibility system - TO BE REVIEWED
 
 ## Design Philosophy
 
@@ -155,6 +162,10 @@ cargo test <name>    # Specific test
 4. **Add tests** for new functionality
 5. **Keep it simple**: No over-engineering or premature optimization
 6. **Document public APIs** with examples
+7. **Ask before taking design decisions** as I (the user) want a high degree of
+   control and discussion put in design decisions.
+8. **Keep in mind that most of the code base is likely to change significantly** as
+   I (the user) am progressing through files individually, reviewing them one by one with significant changes. The changes aim to granularily review design decisions and ultimately implement a library that is as powerful and extensible as the original pylatexenc project.
 
 ## Future Architectural Considerations
 

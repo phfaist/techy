@@ -14,10 +14,10 @@ use crate::state::{ParsingState, ParsingStateDelta};
 use crate::token::TokenReader;
 
 /// Result type for parsers.
-pub type ParseResult<T> = Result<(T, Option<ParsingStateDelta>)>;
+pub type ConstructParseResult<T> = Result<(T, Option<ParsingStateDelta>)>;
 
-/// Base trait for all parsers.
-pub trait Parser {
+/// Base trait for all construct parsers.
+pub trait ConstructParser {
     /// The type of value this parser produces.
     type Output;
 

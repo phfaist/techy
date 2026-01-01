@@ -3,20 +3,173 @@
 //! This module defines the token types that make up LaTeX syntax and provides
 //! traits for reading tokens from a source.
 
-pub mod reader;
+//pub mod reader;
 
-pub use reader::StringTokenReader;
+use log::warn;
 
 use crate::source::SourceLocation;
-use crate::spec::SpecialsSpecBase;
-use crate::state::ParsingState;
+
 use std::fmt;
+
+
+#[inline]
+fn read_prefix_allowed_chars(allowed : & 'a str, s : & 'b str)
+-> (& 'b str, int) {
+    let match_len = s.char_indices()
+        .find(|(_, c)| !allowed.contains(*c))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let prefix = &s[..match_len]; // Zero-copy slice into original string
+    return (prefix, match_len);
+}
+
+
+enum TokenCachedPrefixType {
+    GroupOpen,
+    GroupClose,
+    Specials,
+}
+
+pub struct TokenizationState {
+    whitespace_chars: String,
+    forbidden_characters: String,
+
+    enable_groups: bool,
+    group_delimiters: Vec<(String, String)>,
+
+    enable_macros: bool,
+    macro_escape_char: char,
+    macro_alpha_chars: String,
+
+    enable_environments: bool,
+
+    enable_specials: bool,
+    specials_strings: Vec<String>,
+
+    enable_comments: bool,
+    comment_chars: String,
+
+    enable_multi_newline_paragraphs: bool,
+
+    cached_prefix_strings_to_test: Vec<(&str,TokenCachedPrefixType)>,
+}
+
+impl Default for TokenizationState {
+    fn default() -> Self {
+        let mut ts = Self {
+            // Standard LaTeX whitespace: space, tab, newline, carriage return
+            whitespace_chars: " \t\n".to_string(),
+
+            // Forbidden characters - weird ascii space chars, maybe forbid entire
+            // nonprintable range other than \t and \n?
+            forbidden_characters: "\r\v\b".to_string(),
+
+            // Groups enabled with standard braces
+            enable_groups: true,
+            group_delimiters: vec![("{".to_string(), "}".to_string())],
+
+            // Macros enabled with backslash and standard alphabetic chars
+            enable_macros: true,
+            macro_escape_char: '\\',
+            macro_alpha_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string(),
+
+            // Environments enabled (requires macros)
+            enable_environments: true,
+
+            // Specials enabled with standard LaTeX special chars
+            enable_specials: true,
+            specials_strings: vec![],
+
+            // Comments enabled with %
+            enable_comments: true,
+            comment_chars: "%".to_string(),
+
+            // Multi-newline paragraph breaks enabled
+            enable_multi_newline_paragraphs: true,
+        }
+        ts.update_cached_strings();
+        ts
+    }
+}
+
+impl TokenizationState {
+
+    fn cached_prefix_strings_to_test(&mut self) {
+        ...;
+    }
+
+    // Getters for read-only access
+    pub fn whitespace_chars(&self) -> &str {
+        &self.whitespace_chars
+    }
+
+    pub fn forbidden_characters(&self) -> &str {
+        &self.forbidden_characters
+    }
+
+    pub fn enable_groups(&self) -> bool {
+        self.enable_groups
+    }
+
+    pub fn group_delimiters(&self) -> &[(String, String)] {
+        &self.group_delimiters
+    }
+
+    pub fn enable_macros(&self) -> bool {
+        self.enable_macros
+    }
+
+    pub fn macro_escape_char(&self) -> char {
+        self.macro_escape_char
+    }
+
+    pub fn macro_alpha_chars(&self) -> &str {
+        &self.macro_alpha_chars
+    }
+
+    pub fn enable_environments(&self) -> bool {
+        self.enable_environments
+    }
+
+    pub fn enable_specials(&self) -> bool {
+        self.enable_specials
+    }
+
+    pub fn specials_strings(&self) -> &[String] {
+        &self.specials_strings
+    }
+
+    pub fn enable_comments(&self) -> bool {
+        self.enable_comments
+    }
+
+    pub fn comment_chars(&self) -> &str {
+        &self.comment_chars
+    }
+
+    pub fn enable_multi_newline_paragraphs(&self) -> bool {
+        self.enable_multi_newline_paragraphs
+    }
+
+
+    fn read_macro_alpha_chars_prefix(&self, s: &str) -> (&str, usize) {
+        let allowed = self.macro_alpha_chars();
+        read_prefix_allowed_chars(allowed, s)
+    }
+
+    fn read_whitespace(&self, s: &str) -> (&str, usize) {
+        let allowed = self.whitespace_chars();
+        read_prefix_allowed_chars(allowed, s)
+    }
+}
+
+
 
 /// Types of tokens in LaTeX.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenType<'lib> {
-    /// Regular characters (text content).
-    Char { chars: String },
+pub enum TokenType {
+    /// Regular character(s) (text content).
+    Char { content: String },
 
     /// A macro/command (e.g., `\textbf`).
     Macro { macro_name: String, post_space: String },
@@ -27,46 +180,60 @@ pub enum TokenType<'lib> {
     /// End of an environment (e.g., `\end{equation}`).
     EndEnvironment { environment_name: String },
 
-    /// Inline math mode delimiter (`$` or `\(` `\)`).
-    MathModeInline { delimiter: String },
+    /// A comment (typically starting with `%`).
+    Comment { comment: String, post_space: String },
 
-    /// Display math mode delimiter (`$$` or `\[` `\]`).
-    MathModeDisplay { delimiter: String },
+    /// Typically an opening brace `{`
+    GroupOpen { delimiter: String },
 
-    /// A comment (starting with `%`).
-    Comment(String),
+    /// Typically a closing brace `}`.
+    GroupClose { delimiter: String },
 
-    /// Opening brace `{`.
-    BraceOpen,
-
-    /// Closing brace `}`.
-    BraceClose,
-
-    /// Opening bracket `[`.
-    BracketOpen,
-
-    /// Closing bracket `]`.
-    BracketClose,
+    /// Paragraph break marker (space with multiple newlines, from first
+    /// newline to final space after final newline), with possible pre_space
+    /// before first newline.
+    NewlinesParagraphBreak { space_chars: String },
 
     /// Special characters with meaning in LaTeX (e.g., `&`, `~`, `#`).
-    Specials { specials_chars: String, specials_spec: dyn Box<SpecialsSpecBase> },
+    Specials { specials_chars: String },
 }
 
 impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenType::Char(s) => write!(f, "Char({})", s),
-            TokenType::Macro(s) => write!(f, "Macro(\\{})", s),
-            TokenType::BeginEnvironment(s) => write!(f, "BeginEnvironment({})", s),
-            TokenType::EndEnvironment(s) => write!(f, "EndEnvironment({})", s),
-            TokenType::MathModeInline => write!(f, "MathModeInline"),
-            TokenType::MathModeDisplay => write!(f, "MathModeDisplay"),
-            TokenType::Comment(s) => write!(f, "Comment({})", s),
-            TokenType::BraceOpen => write!(f, "BraceOpen"),
-            TokenType::BraceClose => write!(f, "BraceClose"),
-            TokenType::BracketOpen => write!(f, "BracketOpen"),
-            TokenType::BracketClose => write!(f, "BracketClose"),
-            TokenType::Specials(s) => write!(f, "Specials({})", s),
+            TokenType::Char { chars } => write!(f, "Char(‘{}’)", chars),
+            TokenType::Macro { macro_name, post_space } => {
+                if post_space.is_empty() {
+                    write!(f, "Macro(\\{})", macro_name)
+                } else {
+                    write!(f, "Macro(\\{}, post_space={:?})", macro_name, post_space)
+                }
+            }
+            TokenType::BeginEnvironment { environment_name } => {
+                write!(f, "BeginEnvironment(‘{}’)", environment_name)
+            }
+            TokenType::EndEnvironment { environment_name } => {
+                write!(f, "EndEnvironment(‘{}’)", environment_name)
+            }
+            TokenType::Comment { comment, post_space } => {
+                if post_space.is_empty() {
+                    write!(f, "Comment(‘{}’)", comment)
+                } else {
+                    write!(f, "Comment(‘{}’, post_space={:?})", comment, post_space)
+                }
+            }
+            TokenType::BraceOpen { delimiter } => {
+                write!(f, "BraceOpen(‘{}’)", delimiter)
+            }
+            TokenType::BraceClose { delimiter } => {
+                write!(f, "BraceClose(‘{}’)", delimiter)
+            }
+            TokenType::NewlinesParagraphBreak { space_chars } => {
+                write!(f, "NewlinesParagraphBreak({:?})", space_chars)
+            }
+            TokenType::Specials { specials_chars } => {
+                write!(f, "Specials(‘{}’)", specials_chars)
+            }
         }
     }
 }
@@ -99,20 +266,20 @@ pub trait TokenReader {
     /// Peek at the next token without consuming it.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn peek_token(&mut self, &parsing_state : ParsingState)
+    fn peek_token(&mut self, &tok_state : TokenizationState)
      -> crate::Result<Option<Token>>;
 
     /// Consume and return the next token.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn next_token(&mut self, &parsing_state : ParsingState)
+    fn next_token(&mut self, &tok_state : TokenizationState)
      -> crate::Result<Option<Token>>;
 
     /// Get the current position in the source.
-    fn position(&self, &parsing_state : ParsingState) -> usize;
+    fn position(&self, &tok_state : TokenizationState) -> usize;
 
     /// Check if we're at the end of input.
-    fn is_at_end(&self, &parsing_state : ParsingState) -> bool;
+    fn is_at_end(&self, &tok_state : TokenizationState) -> bool;
 }
 
 #[cfg(test)]
@@ -121,7 +288,16 @@ mod tests {
 
     #[test]
     fn test_token_display() {
-        let token_type = TokenType::Macro("textbf".to_string());
+        let token_type = TokenType::Macro {
+            macro_name: "textbf".to_string(),
+            post_space: String::new(),
+        };
         assert_eq!(format!("{}", token_type), "Macro(\\textbf)");
+
+        let token_type_with_space = TokenType::Macro {
+            macro_name: "textbf".to_string(),
+            post_space: " ".to_string(),
+        };
+        assert_eq!(format!("{}", token_type_with_space), "Macro(\\textbf, post_space=\" \")");
     }
 }

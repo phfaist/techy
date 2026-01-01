@@ -56,7 +56,7 @@ pub mod error;
 pub mod source;
 //pub mod spec;
 //pub mod state;
-//pub mod token;
+pub mod token;
 
 // Re-export main types for convenience
 //pub use error::{ParseError, Result};

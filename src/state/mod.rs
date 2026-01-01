@@ -1,5 +1,10 @@
 //! Parsing state and context management.
 
+
+
+
+
+
 use crate::spec::ContextDb;
 
 /// The parsing state tracks context information during parsing.
@@ -60,16 +65,20 @@ impl<'ctx> ParsingState<'ctx> {
 /// Parsing state deltas are returned by parsers to indicate how the parsing
 /// state should change after parsing a construct.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParsingStateDelta {
+pub struct ParsingStateDelta {
+    /// Update parsing state attributes
+    UpdateParsingState {
+        attributes: 
+    },
+
     /// Enter math mode.
     EnterMathMode,
 
     /// Exit math mode.
     ExitMathMode,
 
-    /// Set math mode to a specific value.
-    SetMathMode(bool),
 }
+
 
 #[cfg(test)]
 mod tests {
