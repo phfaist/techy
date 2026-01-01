@@ -24,15 +24,16 @@ fn read_prefix_allowed_chars(allowed : & 'a str, s : & 'b str)
 }
 
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum TokenCachedPrefixType {
     GroupOpen,
     GroupClose,
-    Specials,
+    Special,
+    ForbiddenSpecial,
 }
 
 pub struct TokenizationState {
     whitespace_chars: String,
-    forbidden_characters: String,
 
     enable_groups: bool,
     group_delimiters: Vec<(String, String)>,
@@ -51,7 +52,13 @@ pub struct TokenizationState {
 
     enable_multi_newline_paragraphs: bool,
 
-    cached_prefix_strings_to_test: Vec<(&str,TokenCachedPrefixType)>,
+    forbidden_characters: String,
+    forbidden_specials: Vec<String>,
+
+    // Cached data for fast prefix matching - parallel arrays
+    // Stores owned copies sorted by decreasing length for greedy matching
+    cached_prefix_strings: Vec<String>,
+    cached_prefix_types: Vec<TokenCachedPrefixType>,
 }
 
 impl Default for TokenizationState {
@@ -59,10 +66,6 @@ impl Default for TokenizationState {
         let mut ts = Self {
             // Standard LaTeX whitespace: space, tab, newline, carriage return
             whitespace_chars: " \t\n".to_string(),
-
-            // Forbidden characters - weird ascii space chars, maybe forbid entire
-            // nonprintable range other than \t and \n?
-            forbidden_characters: "\r\v\b".to_string(),
 
             // Groups enabled with standard braces
             enable_groups: true,
@@ -84,18 +87,71 @@ impl Default for TokenizationState {
             enable_comments: true,
             comment_chars: "%".to_string(),
 
+            // Forbidden characters - weird ascii space chars, maybe forbid entire
+            // nonprintable range other than \t and \n?
+            forbidden_characters: "\r\v\b".to_string(),
+            forbidden_specials: vec![],
+
             // Multi-newline paragraph breaks enabled
             enable_multi_newline_paragraphs: true,
-        }
-        ts.update_cached_strings();
+
+            // Will be populated by update_cached_prefix_strings_to_test()
+            cached_prefix_strings: vec![],
+            cached_prefix_types: vec![],
+        };
+        ts.update_cached_prefix_strings_to_test();
         ts
     }
 }
 
 impl TokenizationState {
 
-    fn cached_prefix_strings_to_test(&mut self) {
-        ...;
+    fn update_cached_prefix_strings_to_test(&mut self) {
+        use std::collections::HashSet;
+
+        let mut items: Vec<(String, TokenCachedPrefixType)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        // Helper to add unique items
+        let mut add_unique = |s: &str, typ: TokenCachedPrefixType| {
+            if !s.is_empty() && !seen.contains(s) {
+                seen.insert(s.to_string());
+                items.push((s.to_string(), typ));
+            }
+        };
+
+        // Add group open delimiters
+        if self.enable_groups {
+            for (open, _close) in &self.group_delimiters {
+                add_unique(open, TokenCachedPrefixType::GroupOpen);
+            }
+        }
+
+        // Add group close delimiters
+        if self.enable_groups {
+            for (_open, close) in &self.group_delimiters {
+                add_unique(close, TokenCachedPrefixType::GroupClose);
+            }
+        }
+
+        // Add special strings
+        if self.enable_specials {
+            for special in &self.specials_strings {
+                add_unique(special, TokenCachedPrefixType::Special);
+            }
+        }
+
+        // Add forbidden specials
+        for forbidden in &self.forbidden_specials {
+            add_unique(forbidden, TokenCachedPrefixType::ForbiddenSpecial);
+        }
+
+        // Sort by length (descending) - longer strings first to match greedily
+        items.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+        // Split into parallel arrays for better cache locality
+        self.cached_prefix_strings = items.iter().map(|(s, _)| s.clone()).collect();
+        self.cached_prefix_types = items.iter().map(|(_, t)| *t).collect();
     }
 
     // Getters for read-only access
