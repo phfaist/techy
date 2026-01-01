@@ -6,6 +6,18 @@ use crate::source::SourceLocation;
 /// Result type alias for parser operations.
 pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 
+
+
+/// Error during tokenization -- mostly an internal error that will
+/// be "updated" to a different error by the parser
+#[derive(Error, Debug, Clone)]
+#[error("{message}")]
+pub struct TokenizerError<'src> {
+    pub message: String,
+    pub pos: SourceLocation<'src>,
+}
+
+
 /// Errors that can occur during parsing.
 #[derive(Error, Debug, Clone)]
 pub enum ParseError<'src> {
@@ -56,11 +68,6 @@ pub enum ParseError<'src> {
     // /// Math mode error.
     // #[error("math mode error: {message}")]
     // MathModeError { message: String, pos: SourceLocation<'src> },
-
-    /// Error during tokenization -- mostly an internal error that will
-    /// be "updated" to a different error by the parser
-    #[error("{message}")]
-    TokenizerError { message: String, pos: SourceLocation<'src> },
 
     /// Generic syntax error error with custom message.
     #[error("{message}")]

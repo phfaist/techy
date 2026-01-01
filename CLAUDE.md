@@ -166,6 +166,7 @@ cargo test <name>    # Specific test
    control and discussion put in design decisions.
 8. **Keep in mind that most of the code base is likely to change significantly** as
    I (the user) am progressing through files individually, reviewing them one by one with significant changes. The changes aim to granularily review design decisions and ultimately implement a library that is as powerful and extensible as the original pylatexenc project.
+9. **Never undo my code edits** before confirming my intent on these edits in the first place.
 
 ## Future Architectural Considerations
 
