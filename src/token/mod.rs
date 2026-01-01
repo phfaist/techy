@@ -29,7 +29,6 @@ enum TokenCachedPrefixType {
     GroupOpen,
     GroupClose,
     Special,
-    ForbiddenSpecial,
 }
 
 pub struct TokenizationState {
@@ -120,16 +119,10 @@ impl TokenizationState {
             }
         };
 
-        // Add group open delimiters
+        // Add group open & close delimiters
         if self.enable_groups {
-            for (open, _close) in &self.group_delimiters {
+            for (open, close) in &self.group_delimiters {
                 add_unique(open, TokenCachedPrefixType::GroupOpen);
-            }
-        }
-
-        // Add group close delimiters
-        if self.enable_groups {
-            for (_open, close) in &self.group_delimiters {
                 add_unique(close, TokenCachedPrefixType::GroupClose);
             }
         }
@@ -139,11 +132,6 @@ impl TokenizationState {
             for special in &self.specials_strings {
                 add_unique(special, TokenCachedPrefixType::Special);
             }
-        }
-
-        // Add forbidden specials
-        for forbidden in &self.forbidden_specials {
-            add_unique(forbidden, TokenCachedPrefixType::ForbiddenSpecial);
         }
 
         // Sort by length (descending) - longer strings first to match greedily
@@ -216,6 +204,132 @@ impl TokenizationState {
     fn read_whitespace(&self, s: &str) -> (&str, usize) {
         let allowed = self.whitespace_chars();
         read_prefix_allowed_chars(allowed, s)
+    }
+
+    /// Create a derived tokenization state with modified fields.
+    /// Only updates the cached prefix list if fields affecting it are changed.
+    pub fn derive(&self) -> TokenizationStateBuilder {
+        TokenizationStateBuilder {
+            base: self.clone(),
+            cache_needs_update: false,
+        }
+    }
+}
+
+/// Builder for creating derived TokenizationState objects.
+struct TokenizationStateBuilder {
+    base: TokenizationState,
+    cache_needs_update: bool,
+}
+
+impl TokenizationStateBuilder {
+    pub fn whitespace_chars(mut self, value: String) -> Self {
+        self.base.whitespace_chars = value;
+        self
+    }
+
+    pub fn forbidden_characters(mut self, value: String) -> Self {
+        self.base.forbidden_characters = value;
+        self
+    }
+
+    pub fn enable_groups(mut self, value: bool) -> Self {
+        if self.base.enable_groups != value {
+            self.base.enable_groups = value;
+            self.cache_needs_update = true;
+        }
+        self
+    }
+
+    pub fn group_delimiters(mut self, value: Vec<(String, String)>) -> Self {
+        self.base.group_delimiters = value;
+        self.cache_needs_update = true;
+        self
+    }
+
+    pub fn enable_macros(mut self, value: bool) -> Self {
+        self.base.enable_macros = value;
+        self
+    }
+
+    pub fn macro_escape_char(mut self, value: char) -> Self {
+        self.base.macro_escape_char = value;
+        self
+    }
+
+    pub fn macro_alpha_chars(mut self, value: String) -> Self {
+        self.base.macro_alpha_chars = value;
+        self
+    }
+
+    pub fn enable_environments(mut self, value: bool) -> Self {
+        self.base.enable_environments = value;
+        self
+    }
+
+    pub fn enable_specials(mut self, value: bool) -> Self {
+        if self.base.enable_specials != value {
+            self.base.enable_specials = value;
+            self.cache_needs_update = true;
+        }
+        self
+    }
+
+    pub fn specials_strings(mut self, value: Vec<String>) -> Self {
+        self.base.specials_strings = value;
+        self.cache_needs_update = true;
+        self
+    }
+
+    pub fn enable_comments(mut self, value: bool) -> Self {
+        self.base.enable_comments = value;
+        self
+    }
+
+    pub fn comment_chars(mut self, value: String) -> Self {
+        self.base.comment_chars = value;
+        self
+    }
+
+    pub fn enable_multi_newline_paragraphs(mut self, value: bool) -> Self {
+        self.base.enable_multi_newline_paragraphs = value;
+        self
+    }
+
+    pub fn forbidden_specials(mut self, value: Vec<String>) -> Self {
+        self.base.forbidden_specials = value;
+        self
+    }
+
+    /// Build the final TokenizationState, updating cache only if needed.
+    pub fn build(mut self) -> TokenizationState {
+        if self.cache_needs_update {
+            self.base.update_cached_prefix_strings_to_test();
+        }
+        self.base
+    }
+}
+
+impl Clone for TokenizationState {
+    fn clone(&self) -> Self {
+        Self {
+            whitespace_chars: self.whitespace_chars.clone(),
+            enable_groups: self.enable_groups,
+            group_delimiters: self.group_delimiters.clone(),
+            enable_macros: self.enable_macros,
+            macro_escape_char: self.macro_escape_char,
+            macro_alpha_chars: self.macro_alpha_chars.clone(),
+            enable_environments: self.enable_environments,
+            enable_specials: self.enable_specials,
+            specials_strings: self.specials_strings.clone(),
+            enable_comments: self.enable_comments,
+            comment_chars: self.comment_chars.clone(),
+            enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
+            forbidden_characters: self.forbidden_characters.clone(),
+            forbidden_specials: self.forbidden_specials.clone(),
+            cached_prefix_strings: self.cached_prefix_strings.clone(),
+            cached_prefix_types: self.cached_prefix_types.clone(),
+        }
     }
 }
 
