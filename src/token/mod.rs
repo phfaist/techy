@@ -9,11 +9,12 @@ pub use reader::StringTokenReader;
 
 use crate::source::SourceLocation;
 use crate::spec::SpecialsSpecBase;
+use crate::state::ParsingState;
 use std::fmt;
 
 /// Types of tokens in LaTeX.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenType {
+pub enum TokenType<'lib> {
     /// Regular characters (text content).
     Char { chars: String },
 
@@ -48,7 +49,7 @@ pub enum TokenType {
     BracketClose,
 
     /// Special characters with meaning in LaTeX (e.g., `&`, `~`, `#`).
-    Specials { specials_chars: String, specials_spec: Box<SpecialsSpecBase> },
+    Specials { specials_chars: String, specials_spec: dyn Box<SpecialsSpecBase> },
 }
 
 impl fmt::Display for TokenType {
@@ -83,7 +84,8 @@ pub struct Token {
 
 impl Token {
     /// Create a new token.
-    pub fn new(token_type: TokenType, pos: SourceLocation, pre_space: String) -> Self {
+    pub fn new(token_type: TokenType, pos: SourceLocation, pre_space: String)
+    -> Self {
         Self {
             token_type,
             pos,
@@ -97,18 +99,20 @@ pub trait TokenReader {
     /// Peek at the next token without consuming it.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn peek_token(&mut self) -> crate::Result<Option<Token>>;
+    fn peek_token(&mut self, &parsing_state : ParsingState)
+     -> crate::Result<Option<Token>>;
 
     /// Consume and return the next token.
     ///
     /// Returns `Ok(None)` if at end of input.
-    fn next_token(&mut self) -> crate::Result<Option<Token>>;
+    fn next_token(&mut self, &parsing_state : ParsingState)
+     -> crate::Result<Option<Token>>;
 
     /// Get the current position in the source.
-    fn position(&self) -> usize;
+    fn position(&self, &parsing_state : ParsingState) -> usize;
 
     /// Check if we're at the end of input.
-    fn is_at_end(&self) -> bool;
+    fn is_at_end(&self, &parsing_state : ParsingState) -> bool;
 }
 
 #[cfg(test)]
