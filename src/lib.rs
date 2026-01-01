@@ -59,7 +59,7 @@ pub mod source;
 pub mod token;
 
 // Re-export main types for convenience
-//pub use error::{ParseError, Result};
+pub use error::{ParseError, Result};
 //pub use node::{Arguments, Node, NodeList};
 //pub use parser::Parser;
 pub use source::{Source, SourceLocation, SourceLocationAnalyzer};

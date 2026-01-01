@@ -57,9 +57,14 @@ pub enum ParseError<'src> {
     // #[error("math mode error: {message}")]
     // MathModeError { message: String, pos: SourceLocation<'src> },
 
-    /// Generic parse error with custom message.
-    #[error("parse error: {message}")]
-    Generic { message: String, pos: SourceLocation<'src> },
+    /// Error during tokenization -- mostly an internal error that will
+    /// be "updated" to a different error by the parser
+    #[error("{message}")]
+    TokenizerError { message: String, pos: SourceLocation<'src> },
+
+    /// Generic syntax error error with custom message.
+    #[error("{message}")]
+    SyntaxError { message: String, pos: SourceLocation<'src> },
 }
 
 impl<'src> ParseError<'src> {
@@ -76,7 +81,7 @@ impl<'src> ParseError<'src> {
             //ParseError::InvalidArgumentSpec(_) => None,
             // ParseError::MissingArgument { pos, .. } => pos,
             //ParseError::MathModeError { pos, .. } => pos,
-            ParseError::Generic { pos, .. } => pos,
+            ParseError::SyntaxError { pos, .. } => pos,
         }
     }
 
@@ -127,7 +132,7 @@ mod tests {
     fn test_error_formatting() {
         let source = Source::new("Hello\n\\unknown\nworld".to_string());
         let pos = source.make_pos(6, 14);
-        let error = ParseError::Generic {
+        let error = ParseError::SyntaxError {
             message: "unknown".to_string(),
             pos,
         };
@@ -140,7 +145,7 @@ mod tests {
     fn test_pos_extraction() {
         let source = Source::new("Hello\nWorld\nTest".to_string());
         let pos = source.make_pos(10, 15);
-        let error = ParseError::Generic {
+        let error = ParseError::SyntaxError {
             message: "test".to_string(),
             pos,
         };
@@ -155,7 +160,7 @@ mod tests {
         let source = Source::new("Hello\n\\unknown\nworld".to_string())
             .with_origin("test.tex".to_string());
         let pos = source.make_pos(6, 14);
-        let error = ParseError::Generic {
+        let error = ParseError::SyntaxError {
             message: "unknown".to_string(),
             pos,
         };

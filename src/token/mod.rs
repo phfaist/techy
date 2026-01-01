@@ -12,6 +12,13 @@ use crate::source::SourceLocation;
 use std::fmt;
 
 
+// // to move elsewhere
+// pub trait LanguageSpecification {
+//     //type Token;
+// }
+
+
+
 #[inline]
 fn read_prefix_allowed_chars(allowed : & 'a str, s : & 'b str)
 -> (& 'b str, int) {
@@ -431,26 +438,76 @@ impl Token {
     }
 }
 
+pub type Result<'src, T> = std::Result<T, ParseError<'src>::TokenizerError>;
+
 /// Trait for reading tokens from a source.
-pub trait TokenReader {
-    /// Peek at the next token without consuming it.
+///
+/// A token reader transforms input characters into tokens and maintains an internal
+/// position pointer. This trait mirrors the API of pylatexenc's LatexTokenReaderBase.
+///
+/// Token readers should at minimum implement:
+/// - `peek_token()` - parse token without advancing position
+/// - `move_to_token()` - rewind to a specific token's position
+/// - `move_past_token()` - advance past a specific token
+/// - `cur_pos()` - get current position
+///
+/// Parsers can obtain character-level access to input stream (effectively bypassing
+/// tokenization) by suitable choices in TokenizationState (no space chars, disable
+/// macros, environments, specials, groups, etc.).
+pub trait TokenReader<'src>
+{
+    /// Move the internal position pointer to the position of the given token.
     ///
-    /// Returns `Ok(None)` if at end of input.
-    fn peek_token(&mut self, &tok_state : TokenizationState)
-     -> crate::Result<Option<Token>>;
-
-    /// Consume and return the next token.
+    /// After calling this, `peek_token()` or `next_token()` should read the given
+    /// token again.
     ///
-    /// Returns `Ok(None)` if at end of input.
-    fn next_token(&mut self, &tok_state : TokenizationState)
-     -> crate::Result<Option<Token>>;
+    /// If `rewind_pre_space` is true, the position is set to include the whitespace
+    /// that precedes the token; if false, the position is set to the actual token
+    /// after the preceding whitespace.
+    fn move_to_token(&mut self, tok: &Token, rewind_pre_space: bool);
 
-    /// Get the current position in the source.
-    fn position(&self, &tok_state : TokenizationState) -> usize;
+    /// Move the internal position pointer immediately past the given token.
+    ///
+    /// After calling this, `peek_token()` or `next_token()` should return the
+    /// token that follows `tok` in the input stream.
+    ///
+    /// If `fastforward_post_space` is true, any whitespace that follows the token
+    /// (for macro and comment tokens) is also skipped.
+    fn move_past_token(&mut self, tok: &Token, fastforward_post_space: bool);
 
-    /// Check if we're at the end of input.
-    fn is_at_end(&self, &tok_state : TokenizationState) -> bool;
+    /// Parse a single token at the current position without advancing the position.
+    ///
+    /// The internal position pointer is not updated. Subsequent calls with the same
+    /// parsing state should return the same token.
+    ///
+    /// Returns `Err` with an end-of-stream error if there are no remaining tokens.
+    fn peek_token(&mut self, tok_state: &TokenizationState) -> Result<Token>;
+
+    /// Convenience method that calls `peek_token()` but returns `Ok(None)` instead
+    /// of an error on end-of-stream.
+    fn peek_token_or_none(&mut self, tok_state: &TokenizationState)
+        -> Result<Option<Token>>
+    {
+        match self.peek_token(tok_state) {
+            Ok(tok) => Ok(Some(tok)),
+            Err(e) if e.is_end_of_stream() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Parse a token at the current position and advance the position past it.
+    ///
+    /// Same as `peek_token()`, but also updates the internal position pointer.
+    fn next_token(&mut self, tok_state: &TokenizationState) -> Result<Token> {
+        let tok = self.peek_token(tok_state)?;
+        self.move_past_token(&tok, true);
+        Ok(tok)
+    }
+
+    /// Return the current internal position pointer's state.
+    fn cur_pos(&self) -> SourceLocation<'src>;
 }
+
 
 #[cfg(test)]
 mod tests {
