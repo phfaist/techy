@@ -1,320 +1,244 @@
 //! Token reader implementation for string sources.
 
 use super::{Token, TokenReader, TokenType};
-use crate::error::{ParseError, Result};
-use crate::source::Span;
+use crate::source::Source;
 
 /// A token reader that reads from a string.
-pub struct StringTokenReader {
-    source: String,
+pub struct StringTokenReader<'src, LS: LanguageSpecification>> {
+    source: & 'src LS::Source,
     position: usize,
-    peeked: Option<Option<Token>>,
 }
 
-impl StringTokenReader {
+
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TokenPrefixType {
+    GroupOpen,
+    GroupClose,
+    // if ambiguous (exists as open or close delimiter/might depend on context):
+    GroupOpenOrClose,
+}
+
+
+
+
+/// Helper function to read a prefix of matching characters from a string.
+#[inline]
+fn read_prefix_matching_chars<'a, 'b>(matching_chars: &'a str, s: &'b str) -> (&'b str, usize) {
+    let match_bytes_len = s
+        .char_indices()
+        .find(|(_, c)| !matching_chars.contains(*c))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let prefix = &s[..match_bytes_len]; // Zero-copy slice into original string
+    (prefix, match_bytes_len)
+}
+
+
+
+
+impl StringTokenReader<'src, LS: LanguageSpecification> {
     /// Create a new token reader for the given source.
-    pub fn new(source: String) -> Self {
+    pub fn new(source: & 'src LS::Source) -> Self {
         Self {
             source,
             position: 0,
-            peeked: None,
+            tolerant_parsing: false,
         }
     }
+    pub fn with_tolerant_parsing(mut self, bool tolerant_parsing) -> Self {
+        self.tolerant_parsing = tolerant_parsing
+        self
+    }
 
-    /// Read the next token from the source.
-    fn read_token(&mut self) -> Result<Option<Token>> {
-        // Skip whitespace and track it
-        let pre_space = self.consume_whitespace();
-        
-        if self.position >= self.source.len() {
+    fn jump_to_position(&mut self, usize position) {
+        self.position = position;
+    }
+
+
+    ................
+    fn detect_whitespace<'a>(&self, s: &'a str) -> TokenReaderResult<(&'a str, usize)> {
+        if !self.whitespace.enable_whitespace_handling {
+            return Ok(("", 0));
+        }
+        let allowed = self.whitespace.whitespace_chars();
+        Ok(read_prefix_matching_chars(allowed, s))
+    }
+
+    fn detect_macro<'a>(&self, s: &'a str) -> TokenReaderResult<Option<(&'a str, usize)>> {
+        if ! self.macros.enable_macros {
             return Ok(None);
         }
+        match s.chars().next() {
+            Some(c) if c == self.data.macros.macro_escape_char => {
+                // indeed a macro.
+                if s.len() <= 1 {
+                    // string ends before macro name!
+                    Err(TokenizerError::new(
+                        "Expected macro name, got end of string",
 
-        let start = self.position;
-        let ch = self.current_char()?;
+                        Token::new()
+                    ))
+                }
+                let allowed = self.data.macros.macro_alpha_chars();
+                let alpha = read_prefix_matching_chars(allowed, &s[1..])
+                if alpha.len() {
+                    let end = 1 + alpha.len()
+                    Some(&s[:end], end)
+                } else {
 
-        match ch {
-            '\\' => self.read_escape_sequence(start, pre_space),
-            '{' => {
-                self.position += 1;
-                Ok(Some(Token::new(
-                    TokenType::BraceOpen,
-                    Span::new(start, self.position),
-                    pre_space,
-                )))
-            }
-            '}' => {
-                self.position += 1;
-                Ok(Some(Token::new(
-                    TokenType::BraceClose,
-                    Span::new(start, self.position),
-                    pre_space,
-                )))
-            }
-            '[' => {
-                self.position += 1;
-                Ok(Some(Token::new(
-                    TokenType::BracketOpen,
-                    Span::new(start, self.position),
-                    pre_space,
-                )))
-            }
-            ']' => {
-                self.position += 1;
-                Ok(Some(Token::new(
-                    TokenType::BracketClose,
-                    Span::new(start, self.position),
-                    pre_space,
-                )))
-            }
-            '$' => self.read_math_delimiter(start, pre_space),
-            '%' => self.read_comment(start, pre_space),
-            '&' | '~' | '#' => {
-                // Special characters
-                self.position += 1;
-                Ok(Some(Token::new(
-                    TokenType::Specials(ch.to_string()),
-                    Span::new(start, self.position),
-                    pre_space,
-                )))
-            }
-            _ => self.read_chars(start, pre_space),
-        }
-    }
-
-    /// Consume and return whitespace.
-    fn consume_whitespace(&mut self) -> String {
-        let start = self.position;
-        while self.position < self.source.len() {
-            match self.source.chars().nth(self.position) {
-                Some(ch) if ch.is_whitespace() => self.position += 1,
-                _ => break,
-            }
-        }
-        self.source[start..self.position].to_string()
-    }
-
-    /// Get current character.
-    fn current_char(&self) -> Result<char> {
-        self.source
-            .chars()
-            .nth(self.position)
-            .ok_or_else(|| ParseError::UnexpectedEndOfInput(self.position))
-    }
-
-    /// Read an escape sequence (backslash followed by command).
-    fn read_escape_sequence(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
-        self.position += 1; // Skip backslash
-
-        if self.position >= self.source.len() {
-            return Err(ParseError::UnexpectedEndOfInput(self.position));
-        }
-
-        let ch = self.current_char()?;
-
-        // Check for special escape sequences
-        if ch == '(' || ch == ')' || ch == '[' || ch == ']' {
-            self.position += 1;
-            let token_type = match ch {
-                '(' => TokenType::MathModeInline,
-                ')' => TokenType::MathModeInline,
-                '[' => TokenType::MathModeDisplay,
-                ']' => TokenType::MathModeDisplay,
-                _ => unreachable!(),
-            };
-            return Ok(Some(Token::new(
-                token_type,
-                Span::new(start, self.position),
-                pre_space,
-            )));
-        }
-
-        // Read command name (alphanumeric characters)
-        let cmd_start = self.position;
-        if ch.is_alphabetic() {
-            while self.position < self.source.len() {
-                match self.source.chars().nth(self.position) {
-                    Some(c) if c.is_alphabetic() => self.position += 1,
-                    _ => break,
                 }
             }
-        } else {
-            // Single non-alphabetic character after backslash
-            self.position += 1;
+            Some(_) => {
+                None
+            }
+            None => {
+                // This is impossible normally, since the tokenizer/parser wouldn't call
+                // detect_macro() if we're already at the end of the token stream.
+                None
+            }
         }
-
-        let cmd_name = self.source[cmd_start..self.position].to_string();
-
-        // Check for \begin{...} and \end{...}
-        if cmd_name == "begin" || cmd_name == "end" {
-            return self.read_environment_delimiter(cmd_name, start, pre_space);
-        }
-
-        Ok(Some(Token::new(
-            TokenType::Macro(cmd_name),
-            Span::new(start, self.position),
-            pre_space,
-        )))
     }
 
-    /// Read \begin{name} or \end{name}.
-    fn read_environment_delimiter(
-        &mut self,
-        cmd: String,
-        start: usize,
-        pre_space: String,
-    ) -> Result<Option<Token>> {
-        // Skip whitespace
-        while self.position < self.source.len() {
-            match self.source.chars().nth(self.position) {
-                Some(ch) if ch.is_whitespace() => self.position += 1,
-                _ => break,
+    fn detect_delimiters_prefix<'a>(&self, s : &'a str)
+     -> Option<(&'a str, usize, TokenPrefixType)> {
+        if ! self.groups.enable_groups {
+            return None;
+        }
+        match cached_prefix_strings.iter().find(|&x| s.starts_with(x.0)) {
+            Some((delim, dtype)) => {
+                Some(delim, delim.len(), dtype)
+            }
+            None => {
+                None
+            }
+        }
+    }
+
+    fn detect_comment_start<'a>(&self, s : &'a str) -> Option<(&'a str, usize)> {
+        if ! self.comments.enable_comments {
+            return None
+        }
+        if s.starts_with(self.comments.comment_start) {
+            let length = self.comments.comment_start.len();
+            return Some((s[:length], length))
+        }
+        None
+    }
+
+    fn detect_multi_newline_paragraphs_in_whitespace(&self, ws : &'a str) -> Option<(usize, usize)> {
+        const NEWLINE : char = '\n';
+
+        if ! self.multi_newline_paragraphs.enable_multi_newline_paragraphs {
+            return None;
+        }
+
+        // Count newlines and track positions
+        let mut first_newline_pos = None;
+        let mut last_newline_pos = None;
+        let mut newline_count = 0;
+
+        for (i, ch) in ws.char_indices() {
+            if ch == NEWLINE {
+                if first_newline_pos.is_none() {
+                    first_newline_pos = Some(i);
+                }
+                last_newline_pos = Some(i);
+                newline_count += 1;
             }
         }
 
-        // Expect opening brace
-        if self.position >= self.source.len() || self.current_char()? != '{' {
-            // Treat as regular macro if no brace follows
+        if newline_count >= 2 {
+            // Return range from first newline to one past the last newline
+            let start = first_newline_pos.unwrap();
+            let end = last_newline_pos.unwrap() + NEWLINE.len_utf8();
+            Some((start, end))
+        } else {
+            None
+        }
+    }
+
+    fn detect_forbidden(&self, s: &'a str) -> Option<(&'a str, usize)> {
+        let forbidden = self.forbidden.forbidden_characters();
+        let (prefix, len) = read_prefix_matching_chars(forbidden, s);
+        if len > 0 {
+            Some((prefix, len))
+        } else {
+            None
+        }
+    }
+
+
+
+
+
+}
+
+
+impl TokenReader<'src, LS: LanguageSpecification>
+for StringTokenReader<'src, LS: LanguageSpecification> {
+
+    pub fn cur_pos(&self) -> LS::SourceLocation<'src>
+    {
+        self.source.make_pos(self.position, self.position)
+    }
+
+
+    pub fn move_to_token(&mut self, tok: &Token<'src>, rewind_pre_space: bool) {
+        if rewind_pre_space {
+            self.jump_to_position( tok.pos.start - tok.pre_space.len() );
+        } else {
+            self.jump_to_position( tok.pos.start );
+        }
+    }
+
+    pub fn move_past_token(&mut self, tok: &Token<'src>, fastforward_post_space: bool) {
+        if !fastforward_post_space {
+            self.jump_to_position( tok.pos.end );
+        } else {
+            let post_space_len = match tok.get_post_space() {
+                Some(s) => s.len(),
+                None => 0
+            };
+            self.jump_to_position( tok.pos.end + post_space_len );
+        }
+    }
+
+    pub fn peek_token(&mut self, parsing_state: &LS::ParsingState)
+     -> Result<'src, Option<Token<'src>>> {
+        // Returns `Err` if there is an error fetching tokens (IO error, whatever).
+        // Returns `Ok(None)` if we reached the end of stream.
+        // This behavior is similar to pylatexenc's peek_token_or_none().
+
+        let (pre_space, pre_space_len) = self.impl_detect_whitespace(parsing_state);
+        
+        if let Some((paranls_start, paranls_end)) =
+            self.impl_detect_multi_newline_paragraphs_in_whitespace(pre_space) {
+            // there is actually a new paragraph separator (multiple newlines)
             return Ok(Some(Token::new(
-                TokenType::Macro(cmd),
-                Span::new(start, self.position),
-                pre_space,
-            )));
-        }
-
-        self.position += 1; // Skip {
-
-        // Read environment name
-        let env_start = self.position;
-        while self.position < self.source.len() {
-            match self.source.chars().nth(self.position) {
-                Some('}') => break,
-                Some(_) => self.position += 1,
-                None => return Err(ParseError::UnexpectedEndOfInput(self.position)),
-            }
-        }
-
-        let env_name = self.source[env_start..self.position].to_string();
-        
-        if self.position >= self.source.len() {
-            return Err(ParseError::UnexpectedEndOfInput(self.position));
-        }
-
-        self.position += 1; // Skip }
-
-        let token_type = if cmd == "begin" {
-            TokenType::BeginEnvironment(env_name)
-        } else {
-            TokenType::EndEnvironment(env_name)
-        };
-
-        Ok(Some(Token::new(
-            token_type,
-            Span::new(start, self.position),
-            pre_space,
-        )))
-    }
-
-    /// Read math mode delimiter ($).
-    fn read_math_delimiter(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
-        self.position += 1;
-
-        // Check for double $$
-        if self.position < self.source.len() && self.current_char()? == '$' {
-            self.position += 1;
-            Ok(Some(Token::new(
-                TokenType::MathModeDisplay,
-                Span::new(start, self.position),
-                pre_space,
-            )))
-        } else {
-            Ok(Some(Token::new(
-                TokenType::MathModeInline,
-                Span::new(start, self.position),
-                pre_space,
+                TokenType::NewlinesParagraphBreak(pre_space[paranls_start:paranls_end]),
+                self.source.make_pos(self.position + paranls_start,
+                                     self.position + paranls_end),
+                pre_space[:paranls_start],
             )))
         }
-    }
 
-    /// Read a comment (% to end of line).
-    fn read_comment(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
-        self.position += 1; // Skip %
-
-        let comment_start = self.position;
-        while self.position < self.source.len() {
-            match self.source.chars().nth(self.position) {
-                Some('\n') => break,
-                Some(_) => self.position += 1,
-                None => break,
-            }
+        // read pre_space, no new paragraph at this point
+        // is there anything left to read?
+        if self.position >= self.source.content.len() {
+            return Ok(None)
         }
 
-        let comment = self.source[comment_start..self.position].to_string();
 
-        // Consume the newline
-        if self.position < self.source.len() {
-            self.position += 1;
-        }
 
-        Ok(Some(Token::new(
-            TokenType::Comment(comment),
-            Span::new(start, self.position),
-            pre_space,
-        )))
-    }
-
-    /// Read regular characters (not special).
-    fn read_chars(&mut self, start: usize, pre_space: String) -> Result<Option<Token>> {
-        let char_start = self.position;
-        
-        while self.position < self.source.len() {
-            match self.source.chars().nth(self.position) {
-                Some(ch) if is_special_char(ch) => break,
-                Some(ch) if ch.is_whitespace() => break,
-                Some(_) => self.position += 1,
-                None => break,
-            }
-        }
-
-        let chars = self.source[char_start..self.position].to_string();
-
-        Ok(Some(Token::new(
-            TokenType::Char(chars),
-            Span::new(start, self.position),
-            pre_space,
-        )))
     }
 }
 
-impl TokenReader for StringTokenReader {
-    fn peek_token(&mut self) -> Result<Option<Token>> {
-        if self.peeked.is_none() {
-            self.peeked = Some(self.read_token()?);
-        }
-        Ok(self.peeked.clone().flatten())
-    }
 
-    fn next_token(&mut self) -> Result<Option<Token>> {
-        if let Some(peeked) = self.peeked.take() {
-            Ok(peeked)
-        } else {
-            self.read_token()
-        }
-    }
 
-    fn position(&self) -> usize {
-        self.position
-    }
 
-    fn is_at_end(&self) -> bool {
-        self.position >= self.source.len()
-    }
-}
 
-/// Check if a character is special in LaTeX.
-fn is_special_char(ch: char) -> bool {
-    matches!(ch, '\\' | '{' | '}' | '[' | ']' | '$' | '%' | '&' | '~' | '#')
-}
+
 
 #[cfg(test)]
 mod tests {

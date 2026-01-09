@@ -52,7 +52,7 @@
 //pub mod constructs;
 pub mod error;
 //pub mod node;
-//pub mod parser;
+pub mod parser;
 pub mod source;
 //pub mod spec;
 //pub mod state;

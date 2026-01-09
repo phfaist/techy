@@ -8,6 +8,8 @@
 
 // PHF REVIEWED ✅
 
+// LATER TODO: Allow Source not to have to keep in memory its entire content
+
 
 use log::warn;
 
@@ -17,32 +19,33 @@ use log::warn;
 /// Stores the source content. Line/column information is computed on-demand
 /// rather than cached upfront.
 #[derive(Debug, Clone)]
-pub struct Source {
+pub struct Source<SourceOrigin : Default+Debug+Clone> {
     /// The source content.
     content: String,
     /// The source origin (e.g., file name)
-    origin: String,
+    origin: SourceOrigin,
     /// Line number offset (default: 1 for 1-indexed, or 0 for 0-indexed)
     line_number_offset: usize,
     /// Column number offset (default: 1 for 1-indexed, or 0 for 0-indexed)
     column_number_offset: usize,
 }
 
-impl Source {
+impl Source<SourceOrigin> {
     /// Create a new source from a string with default settings.
     ///
-    /// Defaults: origin = "", line_number_offset = 1, column_number_offset = 1
+    /// Defaults: origin = (SourceOrigin default),
+    /// line_number_offset = 1, column_number_offset = 1
     pub fn new(content: String) -> Self {
         Self {
             content,
-            origin: String::new(),
+            origin: SourceOrigin::default(),
             line_number_offset: 1,
             column_number_offset: 1,
         }
     }
 
     /// Set the origin (e.g., file name, URL) for this source.
-    pub fn with_origin(mut self, origin: String) -> Self {
+    pub fn with_origin(mut self, origin : SourceOrigin) -> Self {
         self.origin = origin;
         self
     }
@@ -123,11 +126,6 @@ impl<'src> SourceLocation<'src> {
     /// Get the length of the location in bytes.
     pub fn len(&self) -> usize {
         self.end - self.start
-    }
-
-    /// Check if the location is empty.
-    pub fn is_empty(&self) -> bool {
-        self.start >= self.end
     }
 
     /// Get the content at this location.
@@ -336,7 +334,6 @@ mod tests {
         assert_eq!(loc.end(), 5);
         assert_eq!(loc.len(), 5);
         assert_eq!(loc.content(), "Hello");
-        assert!(!loc.is_empty());
     }
 
     #[test]
@@ -388,7 +385,6 @@ mod tests {
         let source = Source::new("Hello".to_string());
         let loc = source.make_pos(3, 3);
 
-        assert!(loc.is_empty());
         assert_eq!(loc.len(), 0);
     }
 

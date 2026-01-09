@@ -10,10 +10,8 @@
 //! - [`tokenreader`] - Token reader trait (`TokenReader`)
 
 mod token;
-mod tokenizationstate;
 mod tokenreader;
 
 // Re-export public types
 pub use token::{Token, TokenType};
-pub use tokenizationstate::{TokenizationState, TokenizationStateBuilder};
 pub use tokenreader::TokenReader;

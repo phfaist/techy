@@ -1,4 +1,4 @@
-//! Token types for LaTeX-like markup languages.
+//! Token types
 
 use std::fmt;
 use crate::source::SourceLocation;
@@ -30,6 +30,11 @@ pub enum TokenType {
     /// Paragraph break marker (space with multiple newlines, from first
     /// newline to final space after final newline), with possible pre_space
     /// before first newline.
+    ///
+    /// This is a special type of token because of the way it is parsed, and
+    /// because of its special visual structure (vertically separated blocks
+    /// of content).  E.g. whitespace is allowed between the two newlines, 
+    /// etc.
     NewlinesParagraphBreak { space_chars: String },
 
     /// Special characters with meaning in LaTeX (e.g., `&`, `~`, `#`).
@@ -94,6 +99,14 @@ impl<'src> Token<'src> {
             token_type,
             pos,
             pre_space,
+        }
+    }
+
+    pub fn get_post_space(&self) -> Option<&str> {
+        match &self.token_type {
+            TokenType::Macro { post_space, .. } => Some(post_space.as_str()),
+            TokenType::Comment { post_space, .. } => Some(post_space.as_str()),
+            _ => None,
         }
     }
 }

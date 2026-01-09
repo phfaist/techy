@@ -156,17 +156,19 @@ cargo test <name>    # Specific test
 
 ## When Helping
 
-1. **Always check naming strategy** before suggesting names
-2. **Prefer existing patterns** from pylatexenc_to_rust_strategy.md
-3. **Use Result<T,E>** consistently, never panic in lib code
-4. **Add tests** for new functionality
-5. **Keep it simple**: No over-engineering or premature optimization
-6. **Document public APIs** with examples
-7. **Ask before taking design decisions** as I (the user) want a high degree of
+1. **Ask before taking design decisions** as I (the user) want a high degree of
    control and discussion put in design decisions.
-8. **Keep in mind that most of the code base is likely to change significantly** as
+2. **Keep in mind that most of the code base is likely to change significantly** as
    I (the user) am progressing through files individually, reviewing them one by one with significant changes. The changes aim to granularily review design decisions and ultimately implement a library that is as powerful and extensible as the original pylatexenc project.
-9. **Never undo my code edits** before confirming my intent on these edits in the first place.
+3. **Never undo my code edits** before confirming my intent on these edits in the first
+   place. Do NOT remove any code that appears useless before asking.
+4. **Use Result<T,E>** consistently, never panic in lib code
+5. **Always check naming strategy** before suggesting names
+6. **Prefer existing patterns** from pylatexenc_to_rust_strategy.md, along with NAMING_STRATEGY.md and PARSING_STRATEGY.md files.
+7. **Add tests** for new functionality
+8. **Keep it simple**: No over-engineering or premature optimization
+9. **Document public APIs** with examples
+
 
 ## Future Architectural Considerations
 

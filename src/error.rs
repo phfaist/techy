@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 use crate::source::SourceLocation;
+use crate::token::Token;
 
 /// Result type alias for parser operations.
 pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
@@ -13,10 +14,10 @@ pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 #[derive(Error, Debug, Clone)]
 #[error("{message}")]
 pub struct TokenizerError<'src> {
-    pub message: String,
-    pub pos: SourceLocation<'src>,
+    pub message : String,
+    pub pos : SourceLocation<'src>,
+    pub recovery_token : Option<Token<'src>>,
 }
-
 
 /// Errors that can occur during parsing.
 #[derive(Error, Debug, Clone)]
