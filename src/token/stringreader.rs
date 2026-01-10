@@ -2,24 +2,7 @@
 
 use super::{Token, TokenReader, TokenType};
 use crate::source::Source;
-
-/// A token reader that reads from a string.
-pub struct StringTokenReader<'src, LS: LanguageSpecification>> {
-    source: & 'src LS::Source,
-    position: usize,
-}
-
-
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TokenPrefixType {
-    GroupOpen,
-    GroupClose,
-    // if ambiguous (exists as open or close delimiter/might depend on context):
-    GroupOpenOrClose,
-}
-
-
+use crate::token::tokenreader::Result;
 
 
 /// Helper function to read a prefix of matching characters from a string.
@@ -34,50 +17,63 @@ fn read_prefix_matching_chars<'a, 'b>(matching_chars: &'a str, s: &'b str) -> (&
     (prefix, match_bytes_len)
 }
 
+trait SourceTokenParserImplementation<'src> : 'src {
 
+    type Source;
+    type ParsingState;
 
-
-impl StringTokenReader<'src, LS: LanguageSpecification> {
-    /// Create a new token reader for the given source.
-    pub fn new(source: & 'src LS::Source) -> Self {
-        Self {
-            source,
-            position: 0,
-            tolerant_parsing: false,
-        }
-    }
-    pub fn with_tolerant_parsing(mut self, bool tolerant_parsing) -> Self {
-        self.tolerant_parsing = tolerant_parsing
-        self
-    }
-
-    fn jump_to_position(&mut self, usize position) {
-        self.position = position;
-    }
-
-
-    ................
-    fn detect_whitespace<'a>(&self, s: &'a str) -> TokenReaderResult<(&'a str, usize)> {
-        if !self.whitespace.enable_whitespace_handling {
+    fn tolerant_parsing(&self) -> bool;
+    fn source(&self) -> & Source;
+    fn position(&self) -> usize;
+    
+    fn detect_whitespace(
+        &self,
+        parsing_state : & ParsingState,
+    ) -> TokenReader::Result {
+        if ! parsing_state.whitespace().whitespace_handling_enabled() {
             return Ok(("", 0));
         }
-        let allowed = self.whitespace.whitespace_chars();
-        Ok(read_prefix_matching_chars(allowed, s))
+        let allowed = parsing_state.whitespace().whitespace_chars();
+        Ok(read_prefix_matching_chars(allowed, self.source().content[self.position()..]))
     }
 
-    fn detect_macro<'a>(&self, s: &'a str) -> TokenReaderResult<Option<(&'a str, usize)>> {
-        if ! self.macros.enable_macros {
+    fn detect_macro<'a>(
+        &self,
+        token_reader : & TokenReader,
+        parsing_state : & LS::ParsingState
+    ) -> Result<Option<(&'a str, usize)>> {
+        if ! parsing_state.macros().macros_enabled() {
             return Ok(None);
         }
+        let s = self.source().content[self.position()..];
         match s.chars().next() {
-            Some(c) if c == self.data.macros.macro_escape_char => {
+            Some(c) if c == parsing_state.macros().macro_escape_char() => {
                 // indeed a macro.
                 if s.len() <= 1 {
                     // string ends before macro name!
+                    let recovery_token = if self.tolerant_parsing() {
+                        let recovery_src = self.source.make_generated_source(
+                            "",
+                            "recovery token" // what
+                            // refer to POS in original string??
+                            self.position(), self.position(),
+                        );
+                        Token::new(
+                            TokenType::Char(''),
+                            recovery_src.make_pos(0,0), // FIXME: pos in original string????
+                            pre_space,
+                        )
+                    } else {
+                        None
+                    };
                     Err(TokenizerError::new(
-                        "Expected macro name, got end of string",
-
-                        Token::new()
+                        ("Expected macro name after ‘"
+                         + parsing_state.macros().macro_escape_char()
+                         + "’ but reached end of string"),
+                        ErrorTypeInfo::new(
+                            "token_end_of_stream_immediately_after_escape_character"
+                        ),
+                        recovery_token,
                     ))
                 }
                 let allowed = self.data.macros.macro_alpha_chars();
@@ -167,16 +163,46 @@ impl StringTokenReader<'src, LS: LanguageSpecification> {
             None
         }
     }
+}
 
 
 
+
+
+
+/// A token reader that reads from a source string.
+pub struct SourceTokenReader<'src, LS: LanguageSpecification>> {
+    source: & 'src LS::Source,
+    position: usize,
+}
+
+
+
+impl SourceTokenReader<'src, LS: LanguageSpecification> {
+    /// Create a new token reader for the given source.
+    pub fn new(source: & 'src LS::Source) -> Self {
+        Self {
+            source,
+            position: 0,
+            tolerant_parsing: false,
+        }
+    }
+    pub fn with_tolerant_parsing(mut self, bool tolerant_parsing) -> Self {
+        self.tolerant_parsing = tolerant_parsing
+        self
+    }
+
+    fn jump_to_position(&mut self, usize position) {
+        self.position = position;
+    }
 
 
 }
 
 
-impl TokenReader<'src, LS: LanguageSpecification>
-for StringTokenReader<'src, LS: LanguageSpecification> {
+impl TokenReader<'src> for StringTokenReader<'src, LS: LanguageSpecification> {
+
+    type LS = LS;
 
     pub fn cur_pos(&self) -> LS::SourceLocation<'src>
     {

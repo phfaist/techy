@@ -13,13 +13,16 @@
 
 use log::warn;
 
+pub trait SourceOrigin : Default + Debug + Clone {
+    fn from_description(what : String) -> Self;
+};
 
 /// A source string with utilities for position tracking.
 ///
 /// Stores the source content. Line/column information is computed on-demand
 /// rather than cached upfront.
 #[derive(Debug, Clone)]
-pub struct Source<SourceOrigin : Default+Debug+Clone> {
+pub struct Source<SourceOrigin : SourceOrigin> {
     /// The source content.
     content: String,
     /// The source origin (e.g., file name)
@@ -28,6 +31,8 @@ pub struct Source<SourceOrigin : Default+Debug+Clone> {
     line_number_offset: usize,
     /// Column number offset (default: 1 for 1-indexed, or 0 for 0-indexed)
     column_number_offset: usize,
+
+    parent_source : Option<& Source<SourceOrigin>>, ...........
 }
 
 impl Source<SourceOrigin> {
@@ -41,6 +46,7 @@ impl Source<SourceOrigin> {
             origin: SourceOrigin::default(),
             line_number_offset: 1,
             column_number_offset: 1,
+            parent_source: None,
         }
     }
 
@@ -92,19 +98,49 @@ impl Source<SourceOrigin> {
         SourceLocationAnalyzer::new(self)
     }
 
+    pub fn make_generated_source(
+        &self,
+        content : String,
+        what : String,
+    ) -> Self {
+        Self {
+            content,
+            origin: SourceOrigin::from_description(what),
+            ..Self::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceLocationVia<'src, SourceOrigin : SourceOrigin> {
+    /// An explanation for why there is an intermediate "source" representing
+    /// the node or token (e.g. file input, automatically generated, node
+    /// processed/replaced, macro expanded, etc.)
+    what : String,
+    /// The new source, if applicable (e.g. input file)
+    pos : SourceLocation<'src, SourceOrigin>,
 }
 
 /// A location or range in source text.
 ///
 /// References a `Source` object and stores byte positions.
-#[derive(Debug, Clone, Copy)] // implements PartialEq manually
-pub struct SourceLocation<'src> {
+#[derive(Debug, Clone)] // implements PartialEq manually
+pub struct SourceLocation<'src, SourceOrigin : SourceOrigin> {
     /// Reference to the source.
     source: &'src Source,
-    /// Starting byte position (inclusive).
+    /// Starting byte position (inclusive) in the source which resulted
+    /// in the parsing of the given token or node.  Note that
+    /// source.content[start..end] might not be the verbatim code
+    /// represented by the considered node or token, as they might have
+    /// been generated automatically or processed from the source (e.g.
+    /// performed some kind of macro replacement).
     start: usize,
-    /// Ending byte position (exclusive).
+    /// Ending byte position (exclusive) in the source which resulted
+    /// in the parsing of the given token or node.
     end: usize,
+    /// Steps that will help trace the location through steps of \include,
+    /// auto-generated content, processing, macro expansion, etc.
+    via: [ SourceLocationVia ],
 }
 
 impl<'src> SourceLocation<'src> {
@@ -123,13 +159,17 @@ impl<'src> SourceLocation<'src> {
         self.end
     }
 
+    pub fn via(&self) -> & [SourceLocationVia] {
+        &self.via
+    }
+
     /// Get the length of the location in bytes.
     pub fn len(&self) -> usize {
         self.end - self.start
     }
 
     /// Get the content at this location.
-    pub fn content(&self) -> &'src str {
+    pub fn original_content(&self) -> &'src str {
         &self.source.content[self.start..self.end]
     }
 }
@@ -140,6 +180,7 @@ impl<'src> PartialEq for SourceLocation<'src> {
         std::ptr::eq(self.source, other.source)
             && self.start == other.start
             && self.end == other.end
+            && self.via == other.via
     }
 }
 
@@ -321,7 +362,7 @@ mod tests {
     #[test]
     fn test_source_creation() {
         let source = Source::new("Hello\nWorld\n".to_string()).with_origin("test".to_string());
-        assert_eq!(source.content(), "Hello\nWorld\n");
+        assert_eq!(source.original_content(), "Hello\nWorld\n");
         assert_eq!(source.origin(), "test");
     }
 
@@ -333,7 +374,7 @@ mod tests {
         assert_eq!(loc.start(), 0);
         assert_eq!(loc.end(), 5);
         assert_eq!(loc.len(), 5);
-        assert_eq!(loc.content(), "Hello");
+        assert_eq!(loc.original_content(), "Hello");
     }
 
     #[test]

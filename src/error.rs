@@ -8,6 +8,15 @@ use crate::token::Token;
 pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 
 
+pub struct ErrorTypeInfo {
+    pub what : String;
+}
+impl ErrorTypeInfo {
+    pub new(s : String) {
+        ErrorTypeInfo { what, }
+    }
+}
+
 
 /// Error during tokenization -- mostly an internal error that will
 /// be "updated" to a different error by the parser
@@ -16,6 +25,10 @@ pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 pub struct TokenizerError<'src> {
     pub message : String,
     pub pos : SourceLocation<'src>,
+    pub error_type_info : ErrorTypeInfo,
+    /// If the recovery_token is set, then the parser MAY continue, pretending that
+    /// this token was peeked.  The parser must call move_past_token() with the
+    /// recovery token as argument before attempting to read other tokens.
     pub recovery_token : Option<Token<'src>>,
 }
 
