@@ -55,7 +55,7 @@ pub mod error;
 pub mod parser;
 pub mod source;
 //pub mod spec;
-//pub mod state;
+pub mod state;
 pub mod token;
 
 // Re-export main types for convenience

@@ -17,44 +17,46 @@ fn read_prefix_matching_chars<'a, 'b>(matching_chars: &'a str, s: &'b str) -> (&
     (prefix, match_bytes_len)
 }
 
-trait SourceTokenParserImplementation<'src> : 'src {
+pub trait SourceTokenParserImplementation<'src> : 'src {
 
     type Source;
     type ParsingState;
+    type Result;
 
     fn tolerant_parsing(&self) -> bool;
-    fn source(&self) -> & Source;
+    fn source_content(&self) -> & Source;
     fn position(&self) -> usize;
     
     fn detect_whitespace(
         &self,
         parsing_state : & ParsingState,
-    ) -> TokenReader::Result {
+    ) -> Self::Result {
         if ! parsing_state.whitespace().whitespace_handling_enabled() {
             return Ok(("", 0));
         }
         let allowed = parsing_state.whitespace().whitespace_chars();
-        Ok(read_prefix_matching_chars(allowed, self.source().content[self.position()..]))
+        Ok(read_prefix_matching_chars(allowed, self.source_content()[self.position()..]))
     }
 
-    fn detect_macro<'a>(
+    fn detect_macro(
         &self,
-        token_reader : & TokenReader,
-        parsing_state : & LS::ParsingState
-    ) -> Result<Option<(&'a str, usize)>> {
-        if ! parsing_state.macros().macros_enabled() {
+        parsing_state : & ParsingState
+    ) -> Self::Result<Option<(&str, usize)>> {
+        let ps_macros = parsing_state.macros();
+        if ! ps_macros.macros_enabled() {
             return Ok(None);
         }
-        let s = self.source().content[self.position()..];
+        let s = self.source_content()[self.position()..];
+        let macro_escape_char = ps_macros.macro_escape_char();
         match s.chars().next() {
-            Some(c) if c == parsing_state.macros().macro_escape_char() => {
+            Some(c) if c == macro_escape_char => {
                 // indeed a macro.
-                if s.len() <= 1 {
+                if s.len() < 2 { // macro needs at least one char for the macro name
                     // string ends before macro name!
                     let recovery_token = if self.tolerant_parsing() {
                         let recovery_src = self.source.make_generated_source(
-                            "",
-                            "recovery token" // what
+                            String::from(macro_escape_char),
+                            "recovery token".to_string() // what
                             // refer to POS in original string??
                             self.position(), self.position(),
                         );
@@ -67,8 +69,7 @@ trait SourceTokenParserImplementation<'src> : 'src {
                         None
                     };
                     Err(TokenizerError::new(
-                        ("Expected macro name after ‘"
-                         + parsing_state.macros().macro_escape_char()
+                        ("Expected macro name after ‘" + macro_escape_char
                          + "’ but reached end of string"),
                         ErrorTypeInfo::new(
                             "token_end_of_stream_immediately_after_escape_character"
@@ -76,57 +77,71 @@ trait SourceTokenParserImplementation<'src> : 'src {
                         recovery_token,
                     ))
                 }
-                let allowed = self.data.macros.macro_alpha_chars();
+                let allowed = ps_macros.macro_alpha_chars();
                 let alpha = read_prefix_matching_chars(allowed, &s[1..])
                 if alpha.len() {
                     let end = 1 + alpha.len()
-                    Some(&s[:end], end)
+                    Ok(Some(&s[1:end], end))
                 } else {
-
+                    // the macro name is the next char, whatever it is (also not alpha)
+                    // but it's only one char long.
+                    Ok(Some(&s[1:2], 2))
                 }
             }
             Some(_) => {
-                None
+                Ok(None)
             }
             None => {
                 // This is impossible normally, since the tokenizer/parser wouldn't call
                 // detect_macro() if we're already at the end of the token stream.
-                None
+                Ok(None)
             }
         }
     }
 
-    fn detect_delimiters_prefix<'a>(&self, s : &'a str)
-     -> Option<(&'a str, usize, TokenPrefixType)> {
-        if ! self.groups.enable_groups {
-            return None;
+    fn detect_delimiters_prefix(
+        &self,
+        parsing_state : & ParsingState
+    ) -> Self::Result<Option<(&str, usize, TokenPrefixType)>> {
+        if ! parsing_state.groups().groups_enabled() {
+            return Ok(None);
         }
+        let s = self.source_content()[self.position()..];
         match cached_prefix_strings.iter().find(|&x| s.starts_with(x.0)) {
             Some((delim, dtype)) => {
-                Some(delim, delim.len(), dtype)
+                Ok(Some(delim, delim.len(), dtype))
             }
             None => {
-                None
+                Ok(None)
             }
         }
     }
 
-    fn detect_comment_start<'a>(&self, s : &'a str) -> Option<(&'a str, usize)> {
-        if ! self.comments.enable_comments {
-            return None
+    fn detect_comment_start(
+        &self,
+        parsing_state : & ParsingState
+    ) -> Self::Result<Option<(&str, usize)>> {
+        let ps_comments = parsing_state.comments();
+        if ! ps_comments.comments_enabled() {
+            return Ok(None)
         }
-        if s.starts_with(self.comments.comment_start) {
-            let length = self.comments.comment_start.len();
-            return Some((s[:length], length))
+        let comment_start = ps_comments.comment_start();
+        if s.starts_with(comment_start) {
+            let length = comment_start.len();
+            return Ok(Some((s[:length], length)))
         }
-        None
+        Ok(None)
     }
 
-    fn detect_multi_newline_paragraphs_in_whitespace(&self, ws : &'a str) -> Option<(usize, usize)> {
+    fn detect_multi_newline_paragraphs_in_whitespace(
+        &self,
+        parsing_state : & ParsingState
+    ) -> Self::Result<Option<(usize, usize)>> {
+
         const NEWLINE : char = '\n';
 
-        if ! self.multi_newline_paragraphs.enable_multi_newline_paragraphs {
-            return None;
+        if ! parsing_state.multi_newline_paragraphs().multi_newline_paragraphs_enabled() {
+            return Ok(None);
         }
 
         // Count newlines and track positions
@@ -148,14 +163,18 @@ trait SourceTokenParserImplementation<'src> : 'src {
             // Return range from first newline to one past the last newline
             let start = first_newline_pos.unwrap();
             let end = last_newline_pos.unwrap() + NEWLINE.len_utf8();
-            Some((start, end))
+            Ok(Some((start, end)))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn detect_forbidden(&self, s: &'a str) -> Option<(&'a str, usize)> {
-        let forbidden = self.forbidden.forbidden_characters();
+    // should directly return an error if a forbidden character is encountered! ???
+    fn detect_forbidden(
+        &self,
+        parsing_state : & ParsingState
+    ) -> Self::Result<Option<(&'a str, usize)>> {
+        let forbidden = parsing_state.forbidden().forbidden_characters();
         let (prefix, len) = read_prefix_matching_chars(forbidden, s);
         if len > 0 {
             Some((prefix, len))

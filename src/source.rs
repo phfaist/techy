@@ -15,7 +15,7 @@ use log::warn;
 
 pub trait SourceOrigin : Default + Debug + Clone {
     fn from_description(what : String) -> Self;
-};
+}
 
 /// A source string with utilities for position tracking.
 ///
@@ -35,7 +35,7 @@ pub struct Source<SourceOrigin : SourceOrigin> {
     parent_source : Option<& Source<SourceOrigin>>, ...........
 }
 
-impl Source<SourceOrigin> {
+impl<SourceOrigin : SourceOrigin> Source<SourceOrigin> {
     /// Create a new source from a string with default settings.
     ///
     /// Defaults: origin = (SourceOrigin default),
@@ -106,7 +106,7 @@ impl Source<SourceOrigin> {
         Self {
             content,
             origin: SourceOrigin::from_description(what),
-            ..Self::default(),
+            ..Self::default()
         }
     }
 }

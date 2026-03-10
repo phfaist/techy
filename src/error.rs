@@ -9,10 +9,10 @@ pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
 
 
 pub struct ErrorTypeInfo {
-    pub what : String;
+    pub what : String,
 }
 impl ErrorTypeInfo {
-    pub new(s : String) {
+    pub fn new(s : String) {
         ErrorTypeInfo { what, }
     }
 }
