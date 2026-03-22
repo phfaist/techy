@@ -6,7 +6,6 @@
 //! performed when needed (e.g., for error reporting).
 
 
-// PHF REVIEWED ✅
 
 // LATER TODO: Allow Source not to have to keep in memory its entire content
 

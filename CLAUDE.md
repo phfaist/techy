@@ -39,9 +39,10 @@ Key naming rules:
 ## Current Implementation Status
 
 ✅ **Fairly mature:**
-- Source location classes
+- nothing yet!
 
 ⏳ **Reviewing design choices from Claude's minimal code:**
+- Source location classes
 - Basic tokenization
 - Text/chars parsing
 - Macro recognition
