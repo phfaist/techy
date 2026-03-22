@@ -32,11 +32,11 @@ FLMEnvironment                         (long-lived, reusable across parses)
  +---> ParserSession<'env>             (transient, exists during one parse)
  |      borrows: &'env FLMEnvironment
  |      creates: Arc<Source> for each source
- |      builds: NodeStore (mutable)
+ |      builds: NodeTree (mutable)
  |      consumed by .finish() to produce:
  |
  +---> ParseResult<'env>              (immutable result of one parse)
- |      owns: NodeStore
+ |      owns: NodeTree
  |      borrows: &'env FLMEnvironment
  |      (sources are owned by Arc in each node's SourceSpan)
  |
@@ -71,7 +71,7 @@ via `Arc<Source>`.
 ```rust
 pub struct ParseResult<'env> {
     env: &'env FLMEnvironment,
-    nodes: NodeStore,
+    nodes: NodeTree,
     root: NodeIndex,
 }
 ```
@@ -110,7 +110,7 @@ tree structure — all through method calls on a Copy type.
 
 ## Node Representation
 
-### NodeStore — flat, immutable node storage
+### NodeTree — flat, immutable node storage
 
 The AST is stored as a flat `Vec<NodeData>`. This is cache-friendly, avoids
 per-node heap allocation, and makes the tree trivially serializable. Tree
@@ -128,10 +128,10 @@ struct NodeData {
 }
 ```
 
-After parsing, the NodeStore is frozen (moved from `ParserSession` into
+After parsing, the NodeTree is frozen (moved from `ParserSession` into
 `ParseResult`). No mutation is possible through `NodeRef`.
 
-Node indices are internal to the `NodeStore` and only resolved through
+Node indices are internal to the `NodeTree` and only resolved through
 `NodeRef`, which always has access to the `ParseResult`. Rust's borrow
 checker enforces that `NodeRef` cannot outlive `ParseResult`, so indices
 are always valid when accessed.
@@ -435,7 +435,7 @@ an O(n) traversal but only needed for diagnostics, not hot paths.
 
 Rust's `Weak<T>` (non-owning companion to `Arc<T>`) is the standard tool
 for breaking cycles. It's not applicable here because nodes live in a flat
-`Vec<NodeData>` inside `NodeStore`, not behind individual `Arc`s — there's
+`Vec<NodeData>` inside `NodeTree`, not behind individual `Arc`s — there's
 no `Arc<NodeData>` to create a `Weak` to. The layered reference graph is
 a simpler and more robust solution.
 
@@ -448,8 +448,8 @@ source ownership is a direct consequence of this requirement.
 
 ### Key properties
 
-- **Immutable trees**: The `NodeStore` in a `ParseResult` is immutable.
-  Transformations produce a new `ParseResult` with a new `NodeStore`.
+- **Immutable trees**: The `NodeTree` in a `ParseResult` is immutable.
+  Transformations produce a new `ParseResult` with a new `NodeTree`.
 - **Self-contained nodes**: Because `SourceSpan`, specs, and parsing state
   are all `Arc`-wrapped, nodes copied from an old tree into a new tree
   carry all their context with them. No dependency on the original
@@ -470,7 +470,7 @@ under design.
 
 ## Mutation During Parsing vs. Immutability After
 
-During parsing, the `ParserSession` builds the `NodeStore` mutably and
+During parsing, the `ParserSession` builds the `NodeTree` mutably and
 creates `Arc<Source>` instances as sources are loaded or synthesized.
 
 After parsing, `ParserSession.finish()` consumes the session and produces
@@ -513,6 +513,105 @@ let result2 = env.parse(other_input)?;
 
 ---
 
+## Generics and User Customizability
+
+### Principle
+
+Many types presented in this document with concrete types should in practice
+be **generic**, allowing users to customize the parser and AST for their
+specific use case. This is a core design goal: techy is a toolkit for
+LaTeX-like languages, not a fixed LaTeX parser.
+
+### Generic shared pointer type
+
+The document uses `Arc<T>` throughout, but users who don't need thread
+safety should be able to use `Rc<T>` instead (avoiding atomic operations).
+The shared pointer type should be generic, abstracted behind a trait:
+
+```rust
+pub trait SharedPointer: Clone {
+    type Pointer<T>: Clone + Deref<Target = T>;
+    fn new<T>(value: T) -> Self::Pointer<T>;
+}
+
+// Provided implementations
+pub struct UseArc;
+impl SharedPointer for UseArc {
+    type Pointer<T> = Arc<T>;
+    fn new<T>(value: T) -> Arc<T> { Arc::new(value) }
+}
+
+pub struct UseRc;
+impl SharedPointer for UseRc {
+    type Pointer<T> = Rc<T>;
+    fn new<T>(value: T) -> Rc<T> { Rc::new(value) }
+}
+```
+
+Types that hold shared pointers are then parameterized:
+
+```rust
+pub struct SourceSpan<P: SharedPointer = UseArc> {
+    source: P::Pointer<Source>,
+    start: usize,
+    end: usize,
+}
+```
+
+The default (`UseArc`) means most users don't need to think about it.
+Single-threaded users opt into `UseRc` for a small performance gain.
+
+### Generic node data
+
+The `NodeKind` enum and `NodeData` struct should be generic, allowing users
+to:
+
+- **Add custom node variants** for language-specific constructs beyond
+  what techy provides out of the box.
+- **Attach custom data** to nodes (e.g., semantic annotations, type
+  information, rendering hints).
+- **Use custom spec types** for domain-specific macro/environment
+  definitions.
+
+The exact mechanism (trait-based, enum extension, generic associated types)
+is still under design. The key constraint is that the flat `Vec<NodeData>`
+storage and `NodeRef` proxy must remain efficient regardless of the
+customization.
+
+### Other generic candidates
+
+The following types are also candidates for generics, to be evaluated
+during implementation:
+
+- **`Source`**: Generic over content backing (`SourceContent` trait —
+  already planned).
+- **`ParsingState`**: Users may need custom state fields for
+  domain-specific parsing context.
+- **`MacroSpec` / `EnvironmentSpec`**: Users may need custom spec
+  fields or behavior.
+- **`FLMEnvironment`**: Parameterized over the above generics.
+- **`ParseResult`**, **`NodeRef`**: Inherit generic parameters from
+  the types they contain.
+
+### Trade-off: ergonomics vs flexibility
+
+Heavy use of generics can make type signatures unwieldy. Mitigation
+strategies:
+
+- **Defaults on all generic parameters** — most users never specify them.
+- **Type aliases** for common configurations (e.g., `type StdParseResult =
+  ParseResult<UseArc, StdNodeKind, ...>`).
+- **Trait bounds kept minimal** — only require what's actually needed at
+  each point.
+- **Turbofish avoidance** — design APIs so type inference resolves
+  parameters naturally from context.
+
+The goal is that a user who doesn't need customization writes the same code
+as if no generics existed, while a user who needs custom node types or
+`Rc` instead of `Arc` can opt in without forking the library.
+
+---
+
 ## Design Decisions Summary
 
 | Concern | Decision | Rationale |
@@ -529,6 +628,8 @@ let result2 = env.parse(other_input)?;
 | Lifetime parameters | `ParseResult<'env>`, `NodeRef<'pr>` | Minimal; no lifetime on node data itself |
 | Provenance tracking | `SourceProvenance` enum with `SourceSpan` back-references | Chains form a tree for error reporting |
 | Post-processing | Immutable trees; transforms produce new trees | `Arc` sharing avoids copies; specific APIs TBD |
+| Generics | Core types generic over shared pointer, node kind, specs, state | User customizability without forking; defaults keep simple cases simple |
+| Shared pointer | Generic trait (`Arc` default, `Rc` opt-in) | Users who don't need thread safety avoid atomic overhead |
 | Future huge files | `SourceContent` trait, mmap deferred | Trait boundary in place; no parser changes needed later |
 
 ---
