@@ -73,7 +73,7 @@ Derived from your stated goals and the decided parts of the existing documents:
    per-node and per-kind ext types supplied by `Lang` (§L4), orthogonal to structural identity.
 
 6. **Zero mandatory dependencies.** Hand-written `Display`/`Error` impls instead of `thiserror`;
-   `log` behind a cargo feature. **[DECISION 5]**
+   no `log` — library conditions flow through the diagnostics sink instead. **[DECISION 5 — decided]**
 
 7. **`Result` everywhere, panics never**, with first-class tolerant parsing (recovery tokens,
    diagnostics sink) rather than a bolted-on flag.
@@ -787,8 +787,11 @@ A short `DECISIONS.md` log (date, decision, alternatives, why) would prevent the
    levels 1+2 as stated requirements constraining `ArgsLayout`. **No core `MathNode`** (math =
    group types + preset state ext). (Design: §L3/§L4. Rationale: §4b.)
 4. **Defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias for now. (§5)
-5. **Zero mandatory dependencies:** hand-written errors (drop `thiserror`), `log` behind a
-   feature flag.
+5. ✅ **DECIDED (July 2026): zero mandatory dependencies.** Drop `thiserror` (hand-written
+   `Display`/`Error` impls — our errors need bespoke span/provenance rendering anyway, so the
+   derive only covered the trivial part) and drop `log` entirely (library conditions surface
+   through the diagnostics sink / `ParseResult`, not a logging side channel; can be reintroduced
+   later as an optional feature if internal tracing proves useful).
 6. **Library resolution = ordered stack with lexical shadowing** (no `ConflictStrategy`,
    no built-in mode tables; mode-awareness via `SpecLookup` receiving the state). (§L3)
 7. **Rebuild `src/` layer-by-layer** per §9 rather than repairing the current tree in place
