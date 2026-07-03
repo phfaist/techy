@@ -20,14 +20,16 @@
 //! foundation; S1, the mutually-recursive core (whose modules are topics, not dependency
 //! ranks); and S2, the presets. It is being rebuilt phase by phase:
 //!
-//! - [`source`] (S0) — source content, `Arc`-based spans, provenance, pluggable resolution,
-//!   lazy line/column analysis. **Implemented (Phase 1).**
+//! - [`source`] (S0) — source content, plain byte [`Span`]s, `Arc`-based [`SourceSpan`]s,
+//!   provenance, pluggable resolution, lazy line/column analysis. **Implemented (Phase 1).**
 //! - [`error`] — span-based diagnostics and the tolerant-parsing policy.
 //!   **Implemented (Phase 1).**
-//! - [`token`] — zero-copy tokens, tokenization rules, the standard rules-driven reader
-//!   (S0); the `TokenReader<L>` trait follows in Phase 3. **Implemented (Phase 2).**
-//! - `state` (S1) — parsing state and reified state deltas. *Phase 3.*
-//! - `spec` + `library` (S1) — callable specs and definition libraries. *Phase 4.*
+//! - [`token`] (S1) — zero-copy tokens, tokenization rules, the `TokenReader<L>` trait and
+//!   the standard state-driven reader. **Implemented (Phases 2–3).**
+//! - [`state`] (S1) — the `Lang` trait, parsing state, and reified state deltas.
+//!   **Implemented (Phase 3).**
+//! - [`spec`] + `library` (S1) — callable specs and definition libraries. *Phase 4*
+//!   (the `CallableSpec` trait declaration already exists — `Specials` tokens carry specs).
 //! - `node` (S1) — the flat, immutable node tree. *Phase 5.*
 //! - `constructs` + `engine` (S1) — construct parsers and the high-level API. *Phase 6.*
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
@@ -54,22 +56,27 @@ extern crate alloc;
 
 pub mod error;
 pub mod source;
+pub mod spec;
+pub mod state;
 pub mod token;
 
-// The remaining modules of the previous exploratory implementation (`state`, `parser`,
-// `constructs`, `node`, `spec`) are kept in the tree as a quarry but are not compiled;
-// they are rebuilt phase-by-phase per ARCHITECTURE.md §9.
+// The remaining modules of the previous exploratory implementation (`parser`,
+// `constructs`, `node`) are kept in the tree as a quarry but are not compiled; they are
+// rebuilt phase-by-phase per ARCHITECTURE.md §9 (superseded `state`/`spec` quarry files
+// are kept alongside the new modules as `*_JUNK._rs`).
 
 // Re-export the public API of the implemented topics.
 pub use error::{format_position, format_traceback, Diagnostic, Diagnostics, Recovery, Severity};
 pub use source::{
     LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
-    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
+    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span,
 };
+pub use spec::CallableSpec;
+pub use state::{Lang, ParsingState, ParsingStateDelta, StateData, TokenRulesOverrides};
 pub use token::{
-    CommentRules, GroupType, GroupTypeId, MacroRules, PrefixTable, Span, StdTokenReader, Token,
-    TokenError, TokenErrorKind, TokenKind, TokenRecovery, TokenResult, TokenRules,
-    WhitespaceRules,
+    skip_whitespace, CommandRule, CommentRule, GroupType, GroupTypeId, PrefixTable,
+    SpecialsMatch, StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader,
+    TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
 };
 
 /// Library version

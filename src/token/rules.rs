@@ -1,12 +1,18 @@
 //! Tokenization rules — the plain data that drives [`StdTokenReader`](super::StdTokenReader).
 //!
-//! `TokenRules` is S0 data *defined* here in the token topic and *stored* in the parsing
-//! state (`StateData<L>`, Phase 3). Everything that can vary during a parse — delimiters,
-//! escape chars, enabled features — is a plain value in these structs, changed only through
-//! reified state deltas at the transition choke point (ARCHITECTURE.md §state). There are no
-//! privileged language concepts here: no default `\`, `{}`, `%`, or `$` — the familiar LaTeX
-//! values are supplied by the latexlike preset (Phase 7), which is also why none of these
-//! types implement `Default`.
+//! `TokenRules` is defined here in the token topic and *stored* in the parsing state
+//! ([`StateData<L>`](crate::state::StateData)). Everything that can vary during a parse —
+//! delimiters, escape characters, enabled features — is a plain value in these structs,
+//! changed only through reified state deltas at the transition choke point
+//! (ARCHITECTURE.md §state). There are no privileged language concepts here: no default
+//! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset
+//! (Phase 7), which is also why none of these types implement `Default`.
+//!
+//! The one deliberate omission: **specials trigger strings are not enumerated here.**
+//! Their recognition is delegated to the language via `Lang::scan_specials` (see
+//! [`specials`](super::SpecialsMatch)), because trigger sets can be large and
+//! library-driven. Everything else — commands, comments, groups, whitespace — is rules
+//! data.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -63,53 +69,70 @@ pub struct WhitespaceRules {
     pub chars: String,
 }
 
-/// Macro-recognition rules. Absent = the escape character is an ordinary content character.
+/// One command syntax: an escape character introducing a named invocation (`\textbf`,
+/// `\&`). Several rules may coexist (distinct escape characters; earlier entries win on
+/// conflict); an empty [`TokenRules::commands`] disables command recognition entirely.
+///
+/// "Command" is the token-level term (TeX lineage: control sequence). It is deliberately
+/// *not* "macro": at the token level `\begin` is a command exactly like `\foobar` — which
+/// names are macros, environments, or anything else is decided at parse time by the preset
+/// (terminology stack: command → callable → macro/environment; NAMING_STRATEGY.md).
+///
+/// A future syntax-kind extension (e.g. `@MARKER@`-style commands without an escape
+/// character) would grow an enum inside this struct; flat escape-char form only, for now.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MacroRules {
-    /// The escape character introducing a macro invocation (`\` in LaTeX).
+pub struct CommandRule {
+    /// The escape character introducing the command (`\` in LaTeX).
     pub escape_char: char,
-    /// Characters that form multi-character macro names. A name starts with any character;
-    /// only if the first character is in this set does the name extend greedily over further
-    /// characters of the set (`\textbf` vs. the single-character `\&`).
+    /// Characters that form multi-character command names. A name starts with any
+    /// character; only if the first character is in this set does the name extend greedily
+    /// over further characters of the set (`\textbf` vs. the single-character `\&`). Only
+    /// multi-character (name-chars) commands consume post-space.
     pub name_chars: String,
 }
 
-/// Comment-recognition rules. Absent = comment-start delimiters are ordinary content.
+/// One comment syntax: a start delimiter, with the comment running to the end of the line.
+/// Several rules may coexist (longest matching start wins); an empty
+/// [`TokenRules::comments`] disables comment recognition.
+///
+/// The terminator is implicitly `'\n'` (or end of input) — independent of
+/// [`WhitespaceRules`], so comments work even with whitespace handling disabled. A future
+/// extension may add per-rule terminators (block comments à la `/* … */`); end-of-line
+/// only, for now.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommentRules {
-    /// Comment-start delimiter strings (`%` in LaTeX). Matched longest-first. The token
-    /// covers only the delimiter — reading the comment's content to end-of-line is the
-    /// comment construct parser's job (Phase 6), per the minimal-token principle.
-    pub starts: Vec<String>,
+pub struct CommentRule {
+    /// The comment-start delimiter string (`%` in LaTeX).
+    pub start: String,
 }
 
 /// The complete data driving standard tokenization, stored in the parsing state.
 ///
-/// [`StdTokenReader`](super::StdTokenReader) is 100% driven by this data (plus the derived
-/// [`PrefixTable`](super::PrefixTable)); anyone needing genuinely different tokenization
-/// *behavior* implements the `TokenReader` trait instead (Phase 3).
+/// [`StdTokenReader`](super::StdTokenReader) is driven by this data (plus the derived
+/// [`PrefixTable`](super::PrefixTable) and the `Lang::scan_specials` hook); anyone needing
+/// genuinely different tokenization *behavior* implements the
+/// [`TokenReader`](super::TokenReader) trait instead.
 ///
 /// Detection priority at a given position: paragraph break (within leading whitespace) →
-/// group delimiters (expected close first, then longest match) → macro escape → comment
-/// starts → specials → forbidden-character check → content characters.
+/// group delimiters (expected close first, then longest match) → command escape characters
+/// → comment starts → specials scan → forbidden-character check → single content
+/// character.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenRules {
     /// Whitespace handling; `None` disables it entirely.
     pub whitespace: Option<WhitespaceRules>,
-    /// Macro recognition; `None` disables it.
-    pub macros: Option<MacroRules>,
+    /// Whether a whitespace run containing two or more newlines forms a paragraph break.
+    /// Gates both `ParagraphBreak` tokens and the no-double-newline rule of whitespace
+    /// skipping (pre-space and post-space never consume a newline belonging to a
+    /// `\n\s*\n` sequence). Only meaningful when whitespace handling is enabled.
+    pub double_newline_paragraphs: bool,
     /// The group types recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`, `\(…\)`, …
     /// — all just group types; math is not a core concept). On delimiter conflicts,
     /// earlier entries win (see [`PrefixTable`](super::PrefixTable)).
     pub group_types: Vec<GroupType>,
-    /// Comment recognition; `None` disables it.
-    pub comments: Option<CommentRules>,
-    /// Whether two or more newlines within one whitespace run form a `ParagraphBreak`
-    /// token. Only meaningful when whitespace handling is enabled.
-    pub paragraph_breaks: bool,
-    /// Specials *strings* (e.g. `~`, `&`, `#`); matched longest-first. Only the strings
-    /// live here — their semantics live in libraries (Phase 4).
-    pub specials: Vec<String>,
+    /// Command syntaxes; empty = no command recognition.
+    pub commands: Vec<CommandRule>,
+    /// Comment syntaxes; empty = no comment recognition.
+    pub comments: Vec<CommentRule>,
     /// Characters that may not appear as content; encountering one yields a recoverable
     /// [`TokenError`](super::TokenError).
     pub forbidden_chars: String,

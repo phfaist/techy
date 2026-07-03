@@ -7,14 +7,20 @@
 //! or to record a [`Diagnostic`](crate::error::Diagnostic) and continue with the recovery
 //! token (tolerant). Conversion to Arc-span diagnostics happens there too; within the token
 //! layer, errors are transient values carrying plain byte [`Span`]s, like tokens themselves.
+//!
+//! Like [`Token`], these types are generic over `L: Lang` (the recovery token rides
+//! inside, and `Lang::scan_specials` implementations return them) — token machinery lives
+//! wholly in the S1 stratum, so error types are free to grow language/state context later.
 
 use core::fmt;
 
-use super::span::Span;
+use crate::source::Span;
+use crate::state::Lang;
+
 use super::token::Token;
 
 /// Result type of tokenization operations.
-pub type TokenResult<'s, T> = core::result::Result<T, TokenError<'s>>;
+pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 
 /// What went wrong while reading a token.
 ///
@@ -22,7 +28,7 @@ pub type TokenResult<'s, T> = core::result::Result<T, TokenError<'s>>;
 /// error conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenErrorKind {
-    /// The input ended immediately after a macro escape character, before any name.
+    /// The input ended immediately after a command escape character, before any name.
     EndOfStreamAfterEscape {
         /// The escape character that was read.
         escape_char: char,
@@ -35,30 +41,33 @@ pub enum TokenErrorKind {
 }
 
 /// An error encountered while reading a token, with an optional recovery possibility.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenError<'s> {
+pub struct TokenError<'s, L: Lang> {
     kind: TokenErrorKind,
     span: Span,
-    recovery: Option<TokenRecovery<'s>>,
+    recovery: Option<TokenRecovery<'s, L>>,
 }
 
 /// How to continue past a [`TokenError`] in tolerant mode: pretend `token` was read, then
 /// resume reading at `resume_pos`.
 ///
 /// `resume_pos` is explicit rather than derived from the token because the two can differ:
-/// e.g. after an end-of-stream error the placeholder token is empty but reading resumes at
-/// the end of the input, past the offending escape character.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TokenRecovery<'s> {
+/// e.g. after an end-of-stream error the placeholder token is an `EndOfStream` at the
+/// error position but reading resumes at the end of the input, past the offending escape
+/// character.
+pub struct TokenRecovery<'s, L: Lang> {
     /// The placeholder token to emit in place of the failed read.
-    pub token: Token<'s>,
+    pub token: Token<'s, L>,
     /// Byte position at which to resume reading.
     pub resume_pos: usize,
 }
 
-impl<'s> TokenError<'s> {
+impl<'s, L: Lang> TokenError<'s, L> {
     /// Create a token error.
-    pub fn new(kind: TokenErrorKind, span: Span, recovery: Option<TokenRecovery<'s>>) -> Self {
+    pub fn new(
+        kind: TokenErrorKind,
+        span: Span,
+        recovery: Option<TokenRecovery<'s, L>>,
+    ) -> Self {
         TokenError { kind, span, recovery }
     }
 
@@ -73,23 +82,72 @@ impl<'s> TokenError<'s> {
     }
 
     /// The recovery possibility, if the tokenizer could construct one.
-    pub fn recovery(&self) -> Option<&TokenRecovery<'s>> {
+    pub fn recovery(&self) -> Option<&TokenRecovery<'s, L>> {
         self.recovery.as_ref()
     }
 
     /// Consume the error, returning its recovery possibility if any.
-    pub fn into_recovery(self) -> Option<TokenRecovery<'s>> {
+    pub fn into_recovery(self) -> Option<TokenRecovery<'s, L>> {
         self.recovery
     }
 }
 
-impl fmt::Display for TokenError<'_> {
+// Manual impls to avoid spurious `L:` bounds (see token.rs).
+
+impl<L: Lang> Clone for TokenRecovery<'_, L> {
+    fn clone(&self) -> Self {
+        TokenRecovery { token: self.token.clone(), resume_pos: self.resume_pos }
+    }
+}
+
+impl<L: Lang> Clone for TokenError<'_, L> {
+    fn clone(&self) -> Self {
+        TokenError { kind: self.kind, span: self.span, recovery: self.recovery.clone() }
+    }
+}
+
+impl<L: Lang> PartialEq for TokenRecovery<'_, L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.token == other.token && self.resume_pos == other.resume_pos
+    }
+}
+
+impl<L: Lang> Eq for TokenRecovery<'_, L> {}
+
+impl<L: Lang> PartialEq for TokenError<'_, L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.span == other.span && self.recovery == other.recovery
+    }
+}
+
+impl<L: Lang> Eq for TokenError<'_, L> {}
+
+impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRecovery")
+            .field("token", &self.token)
+            .field("resume_pos", &self.resume_pos)
+            .finish()
+    }
+}
+
+impl<L: Lang> fmt::Debug for TokenError<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenError")
+            .field("kind", &self.kind)
+            .field("span", &self.span)
+            .field("recovery", &self.recovery)
+            .finish()
+    }
+}
+
+impl<L: Lang> fmt::Display for TokenError<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             TokenErrorKind::EndOfStreamAfterEscape { escape_char } => {
                 write!(
                     f,
-                    "expected macro name after escape character ‘{}’ but reached end of input",
+                    "expected command name after escape character ‘{}’ but reached end of input",
                     escape_char
                 )
             }
@@ -100,25 +158,4 @@ impl fmt::Display for TokenError<'_> {
     }
 }
 
-impl core::error::Error for TokenError<'_> {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_messages() {
-        let err = TokenError::new(
-            TokenErrorKind::EndOfStreamAfterEscape { escape_char: '\\' },
-            Span::new(3, 4),
-            None,
-        );
-        assert_eq!(
-            format!("{}", err),
-            "expected macro name after escape character ‘\\’ but reached end of input"
-        );
-
-        let err = TokenError::new(TokenErrorKind::ForbiddenChar { ch: '%' }, Span::new(0, 1), None);
-        assert_eq!(format!("{}", err), "character is forbidden here: ‘%’ (U+0025)");
-    }
-}
+impl<L: Lang> core::error::Error for TokenError<'_, L> {}

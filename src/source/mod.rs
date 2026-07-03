@@ -49,9 +49,11 @@ mod resolver;
 // type, and the submodule is private (everything is re-exported here).
 #[allow(clippy::module_inception)]
 mod source;
+mod span;
 
 pub use content::{SourceContent, SourceCursor};
 pub use line_index::LineIndex;
 pub use origin::SourceOrigin;
 pub use resolver::{MapResolver, NoResolver, ResolveError, SourceResolver};
 pub use source::{ProvenanceChain, Source, SourceProvenance, SourceSpan};
+pub use span::Span;

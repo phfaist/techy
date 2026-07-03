@@ -1,33 +1,42 @@
 //! The token types: [`Token`] and [`TokenKind`].
 
+use alloc::sync::Arc;
 use core::fmt;
 
-use super::rules::GroupTypeId;
-use super::span::Span;
+use crate::source::Span;
+use crate::spec::CallableSpec;
+use crate::state::Lang;
 
-/// What a token *is* — structural and minimal: it identifies what to parse next, nothing
-/// more. Closed core enum per the naming rule (`…Kind`), exhaustively matchable.
+use super::rules::GroupTypeId;
+
+/// What a token *is* — structural and minimal: it identifies *what to parse next*.
 ///
-/// Notably there is **no begin/end-environment token**: `\begin` is an ordinary macro
-/// token, and environment recognition is a construct-parser concern (the latexlike preset
-/// registers `\begin`/`\end` specs). This is a deliberate departure from pylatexenc.
-/// Likewise a comment token covers only the comment-*start* delimiter; the comment's
-/// content is read by the comment construct parser.
+/// Design invariants (DESIGN_RATIONALE.md §3.2):
+///
+/// - **No invocation-form knowledge.** There is no macro/environment/specials taxonomy
+///   here and no `CallableTypeId`: `\begin` tokenizes as a [`Command`](TokenKind::Command)
+///   exactly like `\foobar`; which names are macros or environments is decided at parse
+///   time by the preset. (Terminology: *command* is the token-level syntactic form;
+///   *callable* the parse-level concept; *macro*/*environment* preset-level flavors.)
+/// - **Single-character content tokens.** [`Char`](TokenKind::Char) covers exactly one
+///   character: a token is an atomic unit, and construct parsers may need char-by-char
+///   reading (e.g. tabular preambles). Chars accumulate into nodes at the node level.
+/// - **Two callable-trigger kinds, by mechanism.** [`Command`](TokenKind::Command) is
+///   recognized from [`CommandRule`](super::CommandRule) *data*;
+///   [`Specials`](TokenKind::Specials) is recognized by the `Lang::scan_specials` *hook*
+///   and already carries its resolved spec.
+/// - **Whole-comment tokens.** A [`Comment`](TokenKind::Comment) covers delimiter and
+///   content (the parser does not care about comment interiors).
+/// - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** (idempotent) instead of
+///   an `Option` — its `pre_space` reports final whitespace so it can land in the node
+///   tree.
 ///
 /// The `'s` lifetime borrows the current source unit's content and is ephemeral — it never
 /// enters the AST (nodes store Arc-based [`SourceSpan`](crate::source::SourceSpan)s).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenKind<'s> {
-    /// A run of ordinary content characters, maximal up to the next whitespace or
-    /// potential token start. Never contains whitespace (whitespace between tokens is
-    /// `pre_space`; whitespace-only *nodes* are a nodes-parser concern, Phase 6).
-    Chars(&'s str),
-    /// A macro invocation: escape character followed by the macro name. The name is either
-    /// a greedy run of name characters or a single non-name character (`\textbf` / `\&`).
-    Macro {
-        /// The macro name, without the escape character.
-        name: &'s str,
-    },
+pub enum TokenKind<'s, L: Lang> {
+    /// A single ordinary content character. With whitespace handling disabled, whitespace
+    /// characters appear as ordinary `Char` tokens too.
+    Char(char),
     /// An opening group delimiter (`{`, `[`, `$`, `\(`, … — whatever the rules declare).
     GroupOpen {
         /// The delimiter as matched.
@@ -42,22 +51,46 @@ pub enum TokenKind<'s> {
         /// Which registered group type it closes.
         group_type: GroupTypeId,
     },
-    /// A comment-start delimiter (`%`). Only the delimiter — the comment content up to
-    /// end-of-line is the comment construct parser's business.
-    CommentStart {
-        /// The delimiter as matched.
-        delim: &'s str,
+    /// A command: escape character followed by a name (`\textbf`, `\&`, `\begin`).
+    /// Recognition is pure [`CommandRule`](super::CommandRule) data; resolution to a spec
+    /// happens at parse time (preset lookup) — deliberately *not* during tokenization.
+    Command {
+        /// The command name, without the escape character.
+        name: &'s str,
+        /// Syntactic whitespace consumed after a multi-character name (the whitespace
+        /// that terminates the name is part of the invocation syntax, not content).
+        /// Empty for single-character names (`\&`). Trailing sub-range of `span`.
+        post_space: Span,
     },
-    /// A specials string (`~`, `&`, `#`, …). Semantics live in libraries (Phase 4);
-    /// the tokenizer only recognizes the string.
+    /// A specials trigger (`~`, `&`, `---`, …), recognized *and resolved* by the
+    /// `Lang::scan_specials` hook — recognition is a lookup, so the token carries the
+    /// resulting spec (never absent; unknown-name fallback is the scan's business).
     Specials {
-        /// The specials string as matched.
-        chars: &'s str,
+        /// The specials name (usually the matched string itself).
+        name: &'s str,
+        /// The resolved behavior spec.
+        spec: Arc<dyn CallableSpec<L>>,
+    },
+    /// A whole comment: start delimiter plus content, up to (not including) the
+    /// terminating newline.
+    Comment {
+        /// The comment text after the start delimiter, without the newline.
+        content: &'s str,
+        /// Syntactic whitespace consumed after the content: the terminating newline plus
+        /// following indentation — unless that whitespace run forms a paragraph break, in
+        /// which case the comment takes no post-space and a `ParagraphBreak` token
+        /// follows. Trailing sub-range of `span`.
+        post_space: Span,
     },
     /// A paragraph break: a whitespace run containing two or more newlines. The token's
     /// span runs from the first through the last newline (whitespace between them
     /// included); the content is recoverable from the span.
     ParagraphBreak,
+    /// End of the token stream. Terminal and idempotent: every further read at the end
+    /// yields it again. Its `pre_space` carries the final whitespace of the input (with
+    /// no paragraph break — a trailing `…\n\n` yields its `ParagraphBreak` token first),
+    /// so trailing whitespace reaches the node tree like any other whitespace.
+    EndOfStream,
 }
 
 /// A token, with its byte [`Span`] and surrounding-whitespace information.
@@ -65,69 +98,184 @@ pub enum TokenKind<'s> {
 /// Span conventions (pylatexenc-compatible):
 ///
 /// - `pre_space` is the whitespace immediately *before* the token; it lies **outside**
-///   `span`, ending exactly at `span.start`.
-/// - `post_space` is the whitespace consumed *after* the token — non-empty only for
-///   [`TokenKind::Macro`] tokens with multi-character (name-chars) names, and never
-///   reaching into a paragraph break. It is a trailing sub-range **inside** `span`
-///   (so `span.end` is past the post-space); for all other kinds it is the empty span
-///   at `span.end`.
+///   `span`, ending exactly at `span.start`. Pre-space is *content* whitespace: it belongs
+///   to the document flow (whitespace-only chars nodes, Phase 6).
+/// - Post-space, where a kind has it ([`Command`](TokenKind::Command),
+///   [`Comment`](TokenKind::Comment) — see [`Token::post_space`]), is *syntactic*
+///   whitespace consumed by the construct and ignored as content. It is a trailing
+///   sub-range **inside** `span` (so `span.end` is past it), and never crosses a paragraph
+///   break.
 ///
 /// These are *token*-level conventions; node span semantics are a separate, deliberately
 /// decoupled contract (ARCHITECTURE.md §nodes) — tokens are transient engine internals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Token<'s> {
+///
+/// Tokens are `Clone` but not `Copy` (a [`Specials`](TokenKind::Specials) token holds an
+/// `Arc`); they are transient, `'s`-bound values internal to a parse.
+pub struct Token<'s, L: Lang> {
     /// What the token is.
-    pub kind: TokenKind<'s>,
+    pub kind: TokenKind<'s, L>,
     /// The token's byte range (see span conventions above).
     pub span: Span,
     /// Whitespace immediately preceding the token (empty span at `span.start` if none).
     pub pre_space: Span,
-    /// Whitespace consumed after the token (empty span at `span.end` if none).
-    pub post_space: Span,
 }
 
-impl<'s> Token<'s> {
-    /// Create a token with no post-space.
-    pub fn new(kind: TokenKind<'s>, span: Span, pre_space: Span) -> Token<'s> {
-        Token { kind, span, pre_space, post_space: Span::empty(span.end) }
+impl<'s, L: Lang> Token<'s, L> {
+    /// Create a token.
+    pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
+        Token { kind, span, pre_space }
+    }
+
+    /// The token's post-space: syntactic whitespace consumed after the token proper.
+    /// Non-empty only for [`Command`](TokenKind::Command) and
+    /// [`Comment`](TokenKind::Comment) kinds; for all others, the empty span at
+    /// `span.end`.
+    pub fn post_space(&self) -> Span {
+        match &self.kind {
+            TokenKind::Command { post_space, .. } | TokenKind::Comment { post_space, .. } => {
+                *post_space
+            }
+            _ => Span::empty(self.span.end),
+        }
     }
 }
 
-impl fmt::Display for TokenKind<'_> {
+// Manual impls: derives would demand `L: Clone/Debug/PartialEq` bounds although no `L`
+// value is stored (only `Arc<dyn CallableSpec<L>>`).
+
+impl<L: Lang> Clone for TokenKind<'_, L> {
+    fn clone(&self) -> Self {
+        match self {
+            TokenKind::Char(c) => TokenKind::Char(*c),
+            TokenKind::GroupOpen { delim, group_type } => {
+                TokenKind::GroupOpen { delim, group_type: *group_type }
+            }
+            TokenKind::GroupClose { delim, group_type } => {
+                TokenKind::GroupClose { delim, group_type: *group_type }
+            }
+            TokenKind::Command { name, post_space } => {
+                TokenKind::Command { name, post_space: *post_space }
+            }
+            TokenKind::Specials { name, spec } => {
+                TokenKind::Specials { name, spec: Arc::clone(spec) }
+            }
+            TokenKind::Comment { content, post_space } => {
+                TokenKind::Comment { content, post_space: *post_space }
+            }
+            TokenKind::ParagraphBreak => TokenKind::ParagraphBreak,
+            TokenKind::EndOfStream => TokenKind::EndOfStream,
+        }
+    }
+}
+
+impl<L: Lang> Clone for Token<'_, L> {
+    fn clone(&self) -> Self {
+        Token { kind: self.kind.clone(), span: self.span, pre_space: self.pre_space }
+    }
+}
+
+/// Equality note: two `Specials` kinds are equal when their names match and they carry
+/// *the same* spec (`Arc` pointer identity) — specs are shared behavior objects without
+/// their own equality.
+impl<L: Lang> PartialEq for TokenKind<'_, L> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TokenKind::Char(a), TokenKind::Char(b)) => a == b,
+            (
+                TokenKind::GroupOpen { delim: d1, group_type: g1 },
+                TokenKind::GroupOpen { delim: d2, group_type: g2 },
+            ) => d1 == d2 && g1 == g2,
+            (
+                TokenKind::GroupClose { delim: d1, group_type: g1 },
+                TokenKind::GroupClose { delim: d2, group_type: g2 },
+            ) => d1 == d2 && g1 == g2,
+            (
+                TokenKind::Command { name: n1, post_space: p1 },
+                TokenKind::Command { name: n2, post_space: p2 },
+            ) => n1 == n2 && p1 == p2,
+            (
+                TokenKind::Specials { name: n1, spec: s1 },
+                TokenKind::Specials { name: n2, spec: s2 },
+            ) => n1 == n2 && Arc::ptr_eq(s1, s2),
+            (
+                TokenKind::Comment { content: c1, post_space: p1 },
+                TokenKind::Comment { content: c2, post_space: p2 },
+            ) => c1 == c2 && p1 == p2,
+            (TokenKind::ParagraphBreak, TokenKind::ParagraphBreak) => true,
+            (TokenKind::EndOfStream, TokenKind::EndOfStream) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<L: Lang> Eq for TokenKind<'_, L> {}
+
+impl<L: Lang> PartialEq for Token<'_, L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.span == other.span && self.pre_space == other.pre_space
+    }
+}
+
+impl<L: Lang> Eq for Token<'_, L> {}
+
+impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenKind::Chars(content) => write!(f, "Chars({:?})", content),
-            TokenKind::Macro { name } => write!(f, "Macro({:?})", name),
+            TokenKind::Char(c) => f.debug_tuple("Char").field(c).finish(),
+            TokenKind::GroupOpen { delim, group_type } => f
+                .debug_struct("GroupOpen")
+                .field("delim", delim)
+                .field("group_type", group_type)
+                .finish(),
+            TokenKind::GroupClose { delim, group_type } => f
+                .debug_struct("GroupClose")
+                .field("delim", delim)
+                .field("group_type", group_type)
+                .finish(),
+            TokenKind::Command { name, post_space } => f
+                .debug_struct("Command")
+                .field("name", name)
+                .field("post_space", post_space)
+                .finish(),
+            TokenKind::Specials { name, spec } => {
+                f.debug_struct("Specials").field("name", name).field("spec", spec).finish()
+            }
+            TokenKind::Comment { content, post_space } => f
+                .debug_struct("Comment")
+                .field("content", content)
+                .field("post_space", post_space)
+                .finish(),
+            TokenKind::ParagraphBreak => write!(f, "ParagraphBreak"),
+            TokenKind::EndOfStream => write!(f, "EndOfStream"),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for Token<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Token")
+            .field("kind", &self.kind)
+            .field("span", &self.span)
+            .field("pre_space", &self.pre_space)
+            .finish()
+    }
+}
+
+impl<L: Lang> fmt::Display for TokenKind<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKind::Char(c) => write!(f, "Char({:?})", c),
             TokenKind::GroupOpen { delim, group_type } => {
                 write!(f, "GroupOpen({:?}, {:?})", delim, group_type)
             }
             TokenKind::GroupClose { delim, group_type } => {
                 write!(f, "GroupClose({:?}, {:?})", delim, group_type)
             }
-            TokenKind::CommentStart { delim } => write!(f, "CommentStart({:?})", delim),
-            TokenKind::Specials { chars } => write!(f, "Specials({:?})", chars),
+            TokenKind::Command { name, .. } => write!(f, "Command({:?})", name),
+            TokenKind::Specials { name, .. } => write!(f, "Specials({:?})", name),
+            TokenKind::Comment { content, .. } => write!(f, "Comment({:?})", content),
             TokenKind::ParagraphBreak => write!(f, "ParagraphBreak"),
+            TokenKind::EndOfStream => write!(f, "EndOfStream"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn token_new_has_empty_post_space() {
-        let token = Token::new(TokenKind::Chars("abc"), Span::new(2, 5), Span::empty(2));
-        assert_eq!(token.post_space, Span::empty(5));
-        assert!(token.post_space.is_empty());
-    }
-
-    #[test]
-    fn token_kind_display() {
-        assert_eq!(
-            format!("{}", TokenKind::Macro { name: "textbf" }),
-            "Macro(\"textbf\")"
-        );
-        assert_eq!(format!("{}", TokenKind::ParagraphBreak), "ParagraphBreak");
     }
 }

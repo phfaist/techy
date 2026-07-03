@@ -117,11 +117,10 @@ mod tests {
     fn rules_with_groups(group_types: Vec<GroupType>) -> TokenRules {
         TokenRules {
             whitespace: None,
-            macros: None,
+            double_newline_paragraphs: false,
             group_types,
-            comments: None,
-            paragraph_breaks: false,
-            specials: Vec::new(),
+            commands: Vec::new(),
+            comments: Vec::new(),
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }

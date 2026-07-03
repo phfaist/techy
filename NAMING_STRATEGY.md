@@ -25,19 +25,34 @@ of earlier revisions lives in git.
 
 ## Current Authoritative Names (July 2026)
 
-### Modules / layers (ARCHITECTURE.md §3)
+### Modules / strata (ARCHITECTURE.md §3 — modules are topics, not dependency ranks)
 
-| Layer | Module | Contents |
+| Stratum | Module | Contents |
 |---|---|---|
-| L7 | `presets` (`techy::latexlike`) | `Latexlike` lang, LaTeX-flavored helpers |
-| L6 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
-| L5 | `constructs` | `ConstructParser` trait + standard construct parsers |
-| L4 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, `TextContent`, ext payloads |
-| L3 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack` |
-| L2 | `state` | `ParsingState<L>`, `StateData`, `TokenRules`, `ParsingStateDelta` |
-| L1 | `token` | `Token<'s>`, `TokenKind`, `TokenReader`, `StdTokenReader` |
-| L0 | `source` | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` |
-| — | `error` | span-based diagnostics, recovery tokens |
+| S2 | `latexlike` preset | `Latexlike` lang, LaTeX-flavored helpers |
+| S1 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
+| S1 | `constructs` | `ConstructParser` trait + standard construct parsers |
+| S1 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, ext payloads |
+| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack` |
+| S1 | `state` | `Lang`, `ParsingState<L>`, `StateData`, `ParsingStateDelta` |
+| S1 | `token` | `Token<'s, L>`, `TokenKind`, `TokenRules`, `TokenReader`, `StdTokenReader` |
+| S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` |
+| S0 | `error` | span-based diagnostics; `TextContent` (Phase 5) |
+
+### The command → callable → macro/environment terminology stack
+
+Each term is scoped to its stratum; using one at the wrong level is a naming bug:
+
+- **Command** — *token-level syntactic form*: escape char + name (`TokenKind::Command`,
+  `CommandRule`). TeX lineage ("control sequence"). `\begin` is a command; so is `\foobar`.
+  Not "escape" (a future `@MARKER@`-style syntax would have no escape character; and
+  "escape token" wrongly suggests escaped-character semantics). Not "macro" (that is a
+  preset concept).
+- **Callable** — *parse-level concept* (Decision 3): anything invocable, resolved to a
+  `CallableSpec` with a `CallableTypeId` invocation form. Both command and specials tokens
+  parse into `Callable` nodes.
+- **Macro / environment / specials** — *preset-level invocation flavors*: the latexlike
+  preset's registered `CallableTypeId`s. "`\begin` is a command but not a macro."
 
 ### Core types
 
@@ -52,13 +67,15 @@ of earlier revisions lives in git.
 | State change value | `ParsingStateDelta<L>` | overrides-struct + `L::Event`s; a value, not a closure |
 | State transition | `ParsingState::derived()` | the sole constructor of non-initial states |
 | Transition customizer | `Lang::finalize_transition` | the choke-point hook |
-| Byte range | `Span` | `Copy`, no `Arc`; transient parsing use |
+| Byte range | `Span` (in `source`) | `Copy`, no `Arc`; transient parsing use |
 | Arc-carrying range | `SourceSpan` | replaces lifetime-bound source locations in nodes/errors |
-| Tokens | `Token<'s>`, `TokenKind<'s>` | `…Kind` per the registry rule |
-| Token reading | `TokenReader<'s, L>` (trait, Phase 3), `StdTokenReader` | trait = behavior extension point |
-| Tokenization rule facets | `WhitespaceRules`, `MacroRules`, `CommentRules`, `GroupType` | sub-structs of `TokenRules`; each `Option` = feature disabled |
+| Tokens | `Token<'s, L>`, `TokenKind<'s, L>` | `…Kind` per the registry rule; `Clone`, not `Copy` (`Specials` carries an `Arc`) |
+| Token reading | `TokenReader<'s, L>` (trait), `StdTokenReader` | trait = behavior extension point; peek idempotent per (position, state instance) |
+| Tokenization rule facets | `WhitespaceRules`, `CommandRule`, `CommentRule`, `GroupType` | sub-structs of `TokenRules`; `Option`/empty-`Vec` = feature disabled |
+| Whitespace primitive | `skip_whitespace` | one function for pre-space and all post-space; never consumes a `\n\s*\n` newline |
+| Specials scan | `Lang::scan_specials` → `SpecialsMatch<'s, L>`; `Lang::specials_trigger_chars` → `TriggerChars` | recognition = resolution (name + spec in one call) |
 | Derived delimiter table | `PrefixTable`, `PrefixEntry` | built from `TokenRules`, cached per parsing state |
-| Token-level errors | `TokenError<'s>`, `TokenErrorKind`, `TokenRecovery<'s>`, `TokenResult<'s, T>` | transient `Span`-based; `TokenResult` not `TokResult` (clarity over brevity) |
+| Token-level errors | `TokenError<'s, L>`, `TokenErrorKind`, `TokenRecovery<'s, L>`, `TokenResult<'s, L, T>` | transient `Span`-based; `TokenResult` not `TokResult` (clarity over brevity) |
 | Callable behavior | `CallableSpec<L>` (trait), `StdCallableSpec` | de-keyed: no name, no invocation form |
 | Invocation-form registry | `CallableTypeId` | interned in `Language`, like `GroupTypeId` |
 | Argument/slot structure | `ArgumentStructureSpec`, `SlotStructureSpec` | args configure; slots hold content regions |
@@ -102,6 +119,13 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `LanguageSpecification` | `Lang` | too long for a parameter appearing everywhere |
 | `FLMEnvironment` | `Language<L>` | fatal collision with LaTeX environments |
 | `TokenType` | `TokenKind` | registry naming rule (`…Kind` = closed enum) |
+| `TokenKind::Macro`, `MacroRules` | `TokenKind::Command`, `CommandRule` | token level knows syntactic forms, not preset flavors; "command" scales to non-escape syntaxes (July 2026 token review) |
+| `TokenKind::Chars(&str)` (maximal runs) | `TokenKind::Char(char)` | tokens are atomic units; construct parsers may need char-by-char reading |
+| `TokenKind::CommentStart`, `CommentRules` | `TokenKind::Comment` (whole comment), `CommentRule` | parser has no business inside comment content |
+| `TokenKind::Specials { chars }` + `TokenRules::specials` list | `TokenKind::Specials { name, spec }` via `Lang::scan_specials` | recognition = resolution; trigger sets are library-driven |
+| `TokenRules::paragraph_breaks` | `TokenRules::double_newline_paragraphs` | pylatexenc's flag name; gates both the token and the skip rule |
+| uniform `Token::post_space` field | per-variant `post_space` + `Token::post_space()` accessor | post-space is a per-kind syntactic fact (commands, comments only) |
+| `peek → Ok(None)` at EOF | `TokenKind::EndOfStream` token | terminal + idempotent; `pre_space` reports final whitespace |
 | `StringTokenReader` | `StdTokenReader` | driven by `TokenRules` data, not tied to `String` input |
 | `TokenizerError` | `TokenError` + `TokenErrorKind` | names the failing *thing* (a token), structured kind instead of string tags (Phase 2) |
 | `StateDelta` (trait) / `StandardDelta` (enum) | `ParsingStateDelta<L>` (struct of optional overrides + events) | deltas are reified values; no apply/trait machinery |

@@ -1,39 +1,44 @@
 //! Tokenization: zero-copy tokens, tokenization rules, and the standard token reader.
 //!
-//! This topic module spans two strata (ARCHITECTURE.md §3 — module = topic, not stratum):
+//! The whole token topic lives in the **S1 core stratum** (ARCHITECTURE.md §3): tokens are
+//! generic over `L: Lang` (a `Specials` token carries its resolved spec), the reader reads
+//! the full [`ParsingState<L>`](crate::state::ParsingState), and token errors are free to
+//! grow language/state context. The only tokenization-adjacent S0 type is the plain byte
+//! range [`Span`](crate::source::Span), which lives in the source topic.
 //!
-//! - **S0 (Lang-free), implemented here in Phase 2:** [`Span`], [`Token`]/[`TokenKind`],
-//!   [`TokenRules`] and its derived [`PrefixTable`], the token-level error/recovery types
-//!   ([`TokenError`], [`TokenRecovery`]), and the concrete scanning core inside
-//!   [`StdTokenReader`]. All of it is driven by `&TokenRules` data and testable without
-//!   inventing a language.
-//! - **S1, arriving in Phase 3:** the `TokenReader<'s, L>` *trait* — the behavior extension
-//!   point for genuinely different tokenization (catcode-like schemes). Its `peek`
-//!   deliberately receives the full `ParsingState<L>` rather than `&TokenRules`, because a
-//!   custom reader keeps its tables in `L::StateExt`; defining the trait against
-//!   `&TokenRules` now would sever that escape hatch, so the trait waits for
-//!   `ParsingState<L>`. [`StdTokenReader`]'s inherent API is already shaped to match it.
+//! # Design highlights (DESIGN_RATIONALE.md §3.2)
 //!
-//! # Design highlights
-//!
-//! - **Tokens are structural and minimal**: they identify *what to parse next*, nothing
-//!   more. No begin/end-environment tokens, and comment tokens cover only the start
-//!   delimiter — deliberate departures from pylatexenc (DESIGN_RATIONALE.md §3.2).
-//! - **Zero-copy, ephemeral tokens**: `Token<'s>` borrows the current source unit's
-//!   content; `pre_space`/`post_space` are [`Span`]s, not `String`s. The `'s` lifetime
-//!   never enters the AST.
-//! - **Data-driven tokenization**: [`StdTokenReader`] has no language knowledge; every
-//!   behavior comes from [`TokenRules`] (stored in the parsing state from Phase 3 on).
-//!   `$…$` vs `$$…$$` disambiguation is data too ([`TokenRules::expecting_group_close`]).
+//! - **Tokens are structural and minimal — and single-character for content**: a token is
+//!   an atomic unit identifying *what to parse next*. [`TokenKind::Char`] covers exactly
+//!   one character (construct parsers may need char-by-char reading); chars accumulate
+//!   into nodes at the node level.
+//! - **No invocation forms at the token level**: no macro/environment/specials taxonomy,
+//!   no `CallableTypeId`, no begin/end-environment tokens. `\begin` is a
+//!   [`Command`](TokenKind::Command) like any other; what its name *means* is decided at
+//!   parse time by the preset.
+//! - **Two callable-trigger token kinds, split by mechanism**:
+//!   [`Command`](TokenKind::Command) is recognized from [`CommandRule`] *data* in the
+//!   rules; [`Specials`](TokenKind::Specials) is recognized by the `Lang::scan_specials`
+//!   *hook* (recognition = resolution: the token carries the spec), gated by the state's
+//!   cached [`TriggerChars`] filter.
+//! - **Syntactic vs. content whitespace**: `pre_space` (on every token) is content
+//!   whitespace belonging to the document flow; post-space (only on
+//!   [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)) is whitespace
+//!   consumed by the construct's syntax and ignored as content. One primitive,
+//!   [`skip_whitespace`], enforces the paragraph rule everywhere: skipped whitespace
+//!   never consumes a newline of a `\n\s*\n` sequence.
+//! - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** whose `pre_space`
+//!   reports final whitespace; `peek` never returns an `Option`.
 //! - **Tolerant parsing hooks**: recoverable conditions yield a [`TokenError`] carrying a
-//!   [`TokenRecovery`] (placeholder token + resume position); the strict/tolerant decision
-//!   belongs to the session's [`Recovery`](crate::error::Recovery) policy, not the reader.
+//!   [`TokenRecovery`] (placeholder token + resume position); the strict/tolerant
+//!   decision belongs to the session's [`Recovery`](crate::error::Recovery) policy
+//!   (Phase 6), not the reader.
 
 mod error;
 mod prefix_table;
 mod reader;
 mod rules;
-mod span;
+mod specials;
 // The submodule sharing the parent's name is deliberate: `Token` is this topic's anchor
 // type, and the submodule is private (everything is re-exported here).
 #[allow(clippy::module_inception)]
@@ -41,7 +46,7 @@ mod token;
 
 pub use error::{TokenError, TokenErrorKind, TokenRecovery, TokenResult};
 pub use prefix_table::{PrefixEntry, PrefixTable};
-pub use reader::StdTokenReader;
-pub use rules::{CommentRules, GroupType, GroupTypeId, MacroRules, TokenRules, WhitespaceRules};
-pub use span::Span;
+pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
+pub use rules::{CommandRule, CommentRule, GroupType, GroupTypeId, TokenRules, WhitespaceRules};
+pub use specials::{SpecialsMatch, TriggerChars};
 pub use token::{Token, TokenKind};

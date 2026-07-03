@@ -212,86 +212,178 @@ implement mmap until a real need.
 
 ### 3.2 Tokens and tokenization
 
-**Tokens are minimal and structural** — DECIDED (user, PARSING_STRATEGY.md, Jan 2026).
-A token identifies *what to parse next* (macro name, group open/close, comment start, specials
-candidate, chars, paragraph break) and nothing more. Notably there is **no
-`BeginEnvironment(name)` token** — `\begin` is an ordinary macro token, and environment
-recognition is a construct-parser concern (preset registers `\begin`/`\end` specs). This is a
-deliberate departure from pylatexenc, whose tokenizer bakes in environment syntax.
+**Tokens are minimal and structural** — DECIDED (user, PARSING_STRATEGY.md, Jan 2026;
+sharpened by the July 2026 token-design review). A token identifies *what to parse next*
+(single char, group open/close, command, specials, comment, paragraph break, end of
+stream) and nothing more. Notably there is **no `BeginEnvironment(name)` token** —
+`\begin` is an ordinary command token, and environment recognition is a construct-parser
+concern (preset registers `\begin`/`\end` specs). This is a deliberate departure from
+pylatexenc, whose tokenizer bakes in environment syntax.
 *Rationale:* keeps the tokenizer language-agnostic (§2.3) and moves all semantics to the
-spec/parser layer where it is extensible.
+spec/parser layer where it is extensible. ("Minimal" bounds *language knowledge*, not token
+extent: a whole-comment token is fine because comment interiors carry no structure the
+parser cares about — see the review entry below.)
 
-**Zero-copy tokens with ephemeral lifetime** — DECIDED (implemented July 2026, Phase 2).
-`Token<'s>` holds `TokenKind<'s>` with `&'s str` slices plus `Span`s; `pre_space` is a `Span`,
-not a `String` (the earlier WIP allocated a `String` per token for whitespace — pure waste).
-The `'s` lifetime never enters the AST.
+**The token-design review: final token model** — DECIDED (user-led, three-round discussion,
+July 2026; implemented in the merged Phase 3). Supersedes the four Phase-2 PROPOSED entries
+that previously stood here (uniform `post_space`; maximal-run `Chars`; `Ok(None)` at EOF —
+each recorded below as rejected) and moves the token topic wholly into S1.
+Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
+`Char(char)` | `GroupOpen`/`GroupClose` | `Command { name, post_space }` |
+`Specials { name, spec: Arc<dyn CallableSpec<L>> }` | `Comment { content, post_space }` |
+`ParagraphBreak` | `EndOfStream`. The decisions, each with the argument that carried it:
+
+- **No invocation forms at the token level.** No macro/environment/specials taxonomy and no
+  `CallableTypeId` on tokens: `\begin` is a `Command` exactly like `\foobar`; which names
+  are macros or environments is resolution *output*, assigned at parse time by the preset.
+  Dropping the type id from tokens dissolved the "token says MACRO, node says ENVIRONMENT"
+  wart outright. Terminology stack: *command* (token-level syntactic form; TeX lineage) →
+  *callable* (parse-level concept, Decision 3) → *macro*/*environment*/*specials*
+  (preset-level invocation flavors). "Command" over "escape": a future non-escape command
+  syntax (`@MARKER@`-style, a possible `CommandRule` extension) would make "escape" a
+  misnomer, and "escape token" wrongly connotes escaped-character semantics (`\&` as
+  literal `&`).
+- **Single-character `Char` tokens** (reverses Phase 2's maximal runs). A token is an
+  atomic unit of parsed thing, and construct parsers may need char-by-char reading
+  (tabular preambles); with runs, a parser wanting one char must split a token or reach
+  into its middle. Deletes the conservative stop-set machinery and its "two adjacent
+  `Chars` tokens" wart; restores pylatexenc parity. Chars accumulate into nodes at the
+  node level, so no downstream cost.
+- **Two callable-trigger kinds, split by production mechanism.** `Command` is recognized
+  from `CommandRule { escape_char, name_chars }` *data* (several rules may coexist;
+  earlier-entry wins on escape-char conflict); `Specials` is recognized by the
+  `Lang::scan_specials` *hook*. The split is honest: one mechanism is delta-changeable
+  rules data on the hot path (`\makeatletter` changes `name_chars` via generic
+  `TokenRulesOverrides`), the other is open-ended, library-driven recognition. The escape
+  fires unconditionally — `\undefinedname` is a `Command` token; unknown names resolve at
+  parse time to per-form fallback specs — whereas specials fire only on recognized
+  strings. `\foobar␣` is **one token** (not a bare `\` trigger token): the scan must read
+  the name anyway, peek-level stop conditions (`\end`) need it, and bare triggers would
+  leave name bytes covered by no token.
+- **Specials: recognition = resolution, owned by the preset.** Specials trigger sets can be
+  large and change with library pushes (pylatexenc defers them to the latex context for
+  the same reason), so they are *not* enumerated in `TokenRules`. `Lang::scan_specials`
+  returns a `SpecialsMatch` carrying name **and** spec in one call — scanning/lookup
+  normalization or scoping mismatches are impossible by construction, and unknown-name
+  fallback is the scan's own business (a `Specials` token's spec is never absent). It is a
+  `Lang` hook (the `finalize_transition` precedent), *not* a per-library protocol and
+  *not* a swappable dyn object in the state: the hook receives the state, so it can
+  dispatch on `ext` and pushed libraries — everything a swapped object could express,
+  without a state field. Hot-path guard: `Lang::specials_trigger_chars(&StateData)`
+  reports possible first characters (`TriggerChars`; `Any` = conservative fallback for
+  dynamic scanners), cached per state instance like the `PrefixTable` and consulted before
+  any dyn call. The scan returns `TokenResult`, so scanner errors participate in the
+  recovery-token protocol.
+- **Syntactic vs. content whitespace** — the principle that decides every whitespace
+  placement question: *pre-space is content whitespace* (belongs to the document flow;
+  becomes whitespace chars nodes, §3.5), *post-space is syntactic whitespace* (consumed by
+  the construct's syntax, ignored as content, reproduced verbatim in recomposition).
+  Post-space exists only where *tokenization syntax* consumes whitespace — multi-character
+  `Command` names (whitespace terminates the name) and `Comment`s (the newline terminates
+  the content) — and is stored **in those variants**, not as a uniform `Token` field
+  (`Token::post_space()` accessor serves `move_past`'s `skip_post_space` flag). Groups
+  never have post-space (space after `}` is content); specials and single-char commands
+  (`\&`) neither. Spec-driven whitespace swallowing beyond this is a parse-level concern
+  recorded on nodes.
+- **One whitespace primitive: `skip_whitespace`.** With
+  `TokenRules::double_newline_paragraphs` set (name follows pylatexenc's
+  `enable_double_newline_paragraphs`), skipped whitespace never contains `\n\s*\n` nor
+  consumes a newline belonging to such a sequence — skipping stops *before* the sequence's
+  first newline. Used identically for pre-space, command post-space, and comment
+  post-space, so "post-space never crosses a paragraph break" holds everywhere by
+  construction, and the paragraph-break token is detectable exactly where skipping
+  stopped. The flag gates both the skip rule and `ParagraphBreak` emission — one
+  phenomenon, one flag.
+- **Whole-`Comment` tokens** (reverses Phase 2's delimiter-only `CommentStart`). The
+  parser has no business inside comment content, so granular comment tokenization bought
+  nothing; candidates for granularity (block/nested comments) are served by a future
+  per-rule terminator extension of `CommentRule` or the `TokenReader` escape hatch.
+  `CommentRule { start }` mirrors `CommandRule` (several syntaxes; longest start wins);
+  the terminator is end-of-line implicitly, independent of `WhitespaceRules`. Corner
+  pinned: `a% c\n\nb` — the comment's terminating newline belongs to a `\n\s*\n` sequence,
+  so the comment takes **no** post-space and the `ParagraphBreak` survives as its own
+  token (TeX-observable behavior: the blank line still yields `\par`). Consequence:
+  `CommentParser` is vestigial — comment nodes come straight from tokens.
+- **Terminal `EndOfStream` token; `peek` never returns an `Option`.** `EndOfStream` is
+  idempotent and its `pre_space` carries the input's final whitespace, so trailing
+  whitespace reaches the node tree through the ordinary token path — the nodes parser
+  never reaches around the reader into raw content (which a custom `TokenReader` might not
+  meaningfully expose). Also serves as the recovery placeholder for a dangling escape at
+  EOF (Phase 2 used an empty `Chars` token — impossible once `Chars` became `Char(char)`).
+- **The token topic is wholly S1; tokens are generic over `L`.** `Specials` carries
+  `Arc<dyn CallableSpec<L>>` (tokens are `Clone`, not `Copy`), and `TokenError<'s, L>` may
+  grow state context. Tokens remain transient `'s`-bound engine internals; the genericity
+  never enters the AST. `Span` — a generic byte range used by errors and cursors
+  independently of tokenization — moved to the source topic (S0). This supersedes the
+  Phase-2-era "scanning core is S0" stratum split (§3.11's consequence bullet, revised);
+  the S0-testability property was traded for the freedom to keep state context in token
+  machinery, and a trivial test `Lang` restores testability at negligible cost.
+
+*Rejected along the way (three-round arc: maximal abstraction → whitespace-as-token →
+this hybrid):*
+- *Unified `Callable` token kind absorbing Command and Specials* — hid that the two are
+  produced by different mechanisms (rules data vs. preset hook) and dragged
+  `CallableTypeId` into tokens.
+- *`CallableTypeId` on tokens / on `CommandRule`* — invocation form is resolution output,
+  not tokenization output. (Follow-up noted in §6: with several `CommandRule`s, the
+  parse-time lookup needs the escape char for disambiguation — pass the token.)
+- *Whitespace as its own token* — killed by parser ergonomics: every construct parser's
+  peek grows a "maybe whitespace first" case; the pre/post-space encoding localizes that
+  cost in the tokenizer. (For fairness: it would have bought a token-span partition
+  invariant, flag-free `move_past`/`move_to`, and a field-free `EndOfStream`.)
+- *Uniform `post_space: Span` on every token* (Phase 2) — post-space is a per-kind
+  syntactic fact; the WIP's variant-embedded instinct was right, and the uniform field's
+  only justification (the `skip_post_space` flag) is served by an accessor.
+- *Bare `\` trigger tokens with parser-side name scanning* — the scan reads the name
+  anyway; name bytes would belong to no token; stop-condition checks would re-scan per
+  peek.
+- *Per-library trigger declarations with core-legislated shadowing* (`TriggerDecl` lists,
+  cross-library longest-vs-innermost rules, first-char merge protocol) — preset-owned
+  scanning made the entire mechanism evaporate from the core.
+- *An empty-`Chars` EOF sentinel carrying final whitespace* — incoherent once `Chars`
+  became `Char(char)`; the dedicated kind is the honest form.
+- *Spec-carrying `Command` tokens* — commands need no lookup at token time; data-only
+  tokens keep peeks cheap and the token stream fully `dbg!`-able.
+
+**Zero-copy tokens with ephemeral lifetime** — DECIDED (implemented July 2026, Phase 2;
+upheld through the token redesign).
+`Token<'s, L>` holds `&'s str` slices plus `Span`s; `pre_space`/post-space are `Span`s, not
+`String`s. The `'s` lifetime never enters the AST.
 *Revisit if:* a streaming token source can't expose stable slices (then the `SourceContent`
 boundary is the place to solve it, not the token type).
 
-**`TokenReader` is the behavior extension point for tokenization** — DECIDED in shape
-(user, PARSING_STRATEGY.md; API refined July 2026).
-The provided `StdTokenReader` is 100% driven by `TokenRules` data; anyone needing genuinely
-different tokenization *behavior* (catcode-like schemes, non-textual sources) implements the
-trait. The peek/move_past/move_to protocol (with `rewind_pre_space` / `skip_post_space` flags)
-follows pylatexenc's proven `LatexTokenReaderBase` design.
-Salvage note: the WIP `detect_*` decomposition and the cached sorted delimiter-prefix table
-(with open/close ambiguity merging, e.g. `$` both opening and closing) are good and should be
-ported into `StdTokenReader`. *(Done, Phase 2: `detect_*` private methods on `StdTokenReader`;
-merging lives in `PrefixTable::for_rules`.)*
-Stratum note (July 2026): the trait deliberately takes `&ParsingState<L>`, not `&TokenRules`
-— a catcode-like reader keeps its tables in `L::StateExt`; see §3.11.
-Phase-split note (July 2026, Phase 2): consequently the *trait definition* waits for Phase 3,
-when `ParsingState<L>` exists — defining it against `&TokenRules` now would sever the escape
-hatch and cause planned churn. Phase 2 ships the S0 half only: `StdTokenReader` with inherent
-methods `peek(&mut self, &TokenRules, &PrefixTable)` / `next` / `move_past` / `move_to` /
-`pos`, shaped so that the Phase 3 trait impl merely reads rules + cached table from the state
-and forwards.
+**`TokenReader` is the behavior extension point for tokenization** — DECIDED (user,
+PARSING_STRATEGY.md; trait landed July 2026, Phase 3).
+`StdTokenReader` is driven by the parsing state (rules data + cached tables + the
+`scan_specials` hook); anyone needing genuinely different tokenization *behavior*
+(catcode-like schemes, non-textual sources) implements the trait. `peek` deliberately
+receives `&ParsingState<L>`, not `&TokenRules` — a catcode-like reader keeps its tables in
+`L::StateExt` (§3.11). The peek/move_past/move_to protocol with `skip_post_space` /
+`rewind_pre_space` flags follows pylatexenc's proven `LatexTokenReaderBase` design; the
+flags are not vestigial (`\verb`-style parsers reposition before swallowed post-space).
+**Peek idempotence contract:** repeated peeks at one position with the *same state
+instance* return the same result; implementations may memoize keyed on (position, `Arc`
+identity) — sound because states are immutable and `derived()` always mints a new `Arc`. A
+different state, however trivially derived, voids the obligation. (`StdTokenReader` does
+not memoize yet — no premature optimization; the contract permits it.)
 
-**Token span conventions; uniform `post_space` field** — PROPOSED (Phase 2 implementation,
-July 2026). The ARCHITECTURE.md token sketch showed only `pre_space`, but the decided
-`skip_post_space` flag on `move_past` needs post-space information on the token, so `Token`
-carries a uniform `post_space: Span` (the WIP had put it inside the macro/comment variants).
-Conventions, pylatexenc-compatible: `pre_space` lies *outside* `span` (ending at
-`span.start`); `post_space` is a trailing sub-range *inside* `span` (`span.end` is past it).
-Post-space is consumed only by macro tokens with multi-character (name-chars) names — not by
-single-char macros like `\&` — and never crosses a paragraph break (whitespace containing 2+
-newlines contributes no post-space at all, matching pylatexenc's "put back" rule; unlike
-pylatexenc, the cut applies only when `paragraph_breaks` is enabled, for consistency).
-These are token-level conventions; node span semantics are a separate contract (§3.5).
-
-**`Chars` tokens are maximal runs, never containing whitespace** — PROPOSED (Phase 2
-implementation, July 2026). pylatexenc emits one `char` token per character; zero-copy slices
-make maximal runs free, so a `Chars` token extends from its first character up to (not
-including) the next character that could start any other token kind (whitespace, escape char,
-a delimiter/comment/specials first char, forbidden char). The stop set is conservative
-(first-character based): a run may end at a char whose full match then fails, yielding two
-adjacent `Chars` tokens — harmless, since chars accumulate into one node at the node level
-anyway (Phase 6). Whitespace between tokens is always `pre_space`; with whitespace handling
-disabled (`TokenRules::whitespace = None`), whitespace chars are ordinary content and runs
-can contain them (character-level access mode).
-
-**Ambiguous group delimiters resolved by data: `expecting_group_close`** — PROPOSED (Phase 2
-implementation, July 2026). `$…$`-style group types make one string both opener and closer
-(and `$$` vs `$` overlap); pylatexenc resolves this with privileged math-mode state
-(`in_math_mode` + `math_mode_delimiter` checked before longest-match). De-privileged into
-plain data: `TokenRules::expecting_group_close: Option<GroupTypeId>` names the group type
-whose *close* delimiter takes precedence over all other matches; a group construct parser
-sets it (via a state delta) when entering an ambiguously-delimited group. Otherwise the
-longest `PrefixTable` match wins, read as an *open* when the string is ambiguous — and a
-close-only string tokenizes as `GroupClose` even where syntactically wrong ("it's not the
-tokenizer's job to report syntax errors", pylatexenc). Priority order overall: paragraph
-break → expected group close → longest delimiter → macro escape → comment starts → specials
-→ forbidden check → chars. Groups precede macros so escape-led delimiters like `\(` win over
-macro interpretation. Reproduces pylatexenc's `$\zeta$$\gamma$` / `$$…$$` behaviors exactly
-(ported tests).
-
-**End of stream: `peek` returns `Ok(None)`; trailing whitespace stays untokenized** —
-PROPOSED (Phase 2 implementation, July 2026). pylatexenc raises `LatexWalkerEndOfStream`
-carrying `final_space`; techy's `peek` simply returns `Ok(None)` when only whitespace (with
-no paragraph break — a trailing `…\n\n` still yields its `ParagraphBreak` token first)
-remains. The final whitespace is not covered by any token; the nodes parser (Phase 6) can
-recover it from `pos()..content.len()` when materializing the trailing whitespace chars node
-required by the sibling-span partition invariant.
+**Ambiguous group delimiters resolved by data: `expecting_group_close`** — DECIDED
+(Phase 2, upheld; now read from the state's cached table). `$…$`-style group types make one
+string both opener and closer (and `$$` vs `$` overlap); pylatexenc resolves this with
+privileged math-mode state (`in_math_mode` + `math_mode_delimiter` checked before
+longest-match). De-privileged into plain data: `TokenRules::expecting_group_close:
+Option<GroupTypeId>` names the group type whose *close* delimiter takes precedence over all
+other matches; a group construct parser sets it (via a state delta) when entering an
+ambiguously-delimited group. Otherwise the longest `PrefixTable` match wins, read as an
+*open* when the string is ambiguous — and a close-only string tokenizes as `GroupClose`
+even where syntactically wrong ("it's not the tokenizer's job to report syntax errors",
+pylatexenc). **Priority order overall:** paragraph break → expected group close → longest
+delimiter → command escapes → comment starts → specials scan → forbidden check → `Char`.
+Groups precede commands so escape-led delimiters like `\(` win over command
+interpretation; comments precede the specials scan, so a trigger string starting with a
+comment delimiter is shadowed (deliberate: deterministic rules data wins over hook
+behavior). Reproduces pylatexenc's `$\zeta$$\gamma$` / `$$…$$` behaviors exactly (ported
+tests).
 
 ### 3.3 Parsing state and deltas
 
@@ -348,6 +440,28 @@ surface, so C keeps B's door open, not vice versa); a closure-shaped delta (not
 mergeable/inspectable/propagatable).
 *Revisit if:* a preset genuinely needs swappable state storage (re-evaluate B behind getters —
 C→B is the intended one-way door).
+Implementation notes (Phase 3, July 2026): the derived caches (`PrefixTable`,
+`TriggerChars`) are built **eagerly** when a state is frozen, not `OnceLock`-lazily as the
+ARCHITECTURE sketch had it — the crate is `no_std` (`core` has no `OnceLock`; `OnceCell`
+would cost `Sync`), and both derivations are cheap relative to a transition; revisit only if
+transition cost ever shows up in profiles. `TokenRulesOverrides` collections are replaced
+wholesale, not merged — "current group types plus one" is built by the party holding the
+current state; merge semantics inside the override would smuggle policy into the choke
+point. One honest cost of the specials-scan hook (recorded for fairness): `dbg!(state)` no
+longer shows *all* tokenizer behavior — specials recognition sits behind the hook. It
+remains true that tokenization is a pure function of the state (libraries live in the
+state; a push is a transition), so the Option C argument itself is unharmed.
+
+**Token-level language hooks live on `Lang`, next to `finalize_transition`** — DECIDED
+(July 2026, token-design review). `Lang::scan_specials` and `Lang::specials_trigger_chars`
+follow the same pattern as the transition customizer: static hooks with working defaults,
+receiving the state (or, for the trigger-chars derivation, the `StateData` mid-freeze).
+*Rationale:* the hook receives the state and can therefore dispatch on `ext` and pushed
+libraries — everything a swappable scanner object stored in `StateData` could express,
+without adding a state field, dyn indirection, and a delta story for swapping it.
+*Rejected:* an `Arc<dyn SpecialsScan>` field in `StateData`; per-library trigger
+declarations with core-legislated cross-library shadowing (see §3.2 — the preset owns its
+scan; the core legislates nothing about trigger precedence).
 
 ### 3.4 Specs and libraries
 
@@ -540,13 +654,15 @@ machinery, which stays DAG-shaped even where signatures are mutually recursive �
 tokenizer runs against a hardcoded `TokenRules`). Within S1 the useful distinction is by
 *role* — data / contracts / standard machinery / orchestration — not by rank.
 Consequences worth pinning:
-- `TokenRules` and `PrefixTable` are *defined* in the token topic (S0) and merely *stored* by
-  `ParsingState`; the scanning core is Lang-free and testable standalone.
-- The `TokenReader<L>` trait is S1 and keeps `&ParsingState<L>` (not `&TokenRules`) in `peek`:
+- `TokenRules` and `PrefixTable` are *defined* in the token topic and merely *stored*/cached
+  by `ParsingState`. *(Revised July 2026, token-design review: the token topic is wholly
+  **S1** — tokens are generic over `L` (`Specials` carries its spec) and token errors may
+  grow state context; the earlier "scanning core is S0" split is superseded, and `Span`
+  moved to the source topic. S0-testability was traded for state-context freedom; a trivial
+  test `Lang` restores it at negligible cost. See §3.2.)*
+- The `TokenReader<L>` trait keeps `&ParsingState<L>` (not `&TokenRules`) in `peek`:
   it is the documented catcode escape hatch, and such a reader keeps its tables in
   `L::StateExt`; narrowing to the rules would sever the escape hatch from language state.
-  `Token` (S0 data) and `TokenReader` (S1 contract) share `token/` — module = topic, the
-  concrete case showing "modules as ranks" was untenable.
 - `Lang` and `NodeExtTypes` are defined in the core next to the state types
   (`finalize_transition` names `StateData`/`ParsingState`, fixing their home); `NodeExtTypes`
   does not move into `node/` despite its meaning being a node concern — that would recreate a
@@ -599,7 +715,20 @@ holding the full argument.
 - **Byte-level `Read`/`BufRead` streaming** (SOURCE_ARCHITECTURE.md) — the parser needs
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
 - **Tokenizer-level environment recognition (`\begin{…}` tokens)** (§3.2) — bakes language
-  semantics into the tokenizer; `\begin` is an ordinary macro, environments are a parser concern.
+  semantics into the tokenizer; `\begin` is an ordinary command, environments are a parser concern.
+- **Invocation-form ids (`CallableTypeId`) on tokens** (§3.2) — invocation form is
+  resolution output, not tokenization output; carrying it on tokens re-creates the
+  "token says MACRO, node says ENVIRONMENT" wart.
+- **Whitespace as its own token kind** (§3.2) — every construct parser's peek grows a
+  "maybe whitespace first" case; pre/post-space spans localize the cost in the tokenizer.
+- **Uniform `post_space` field on `Token`** (§3.2) — post-space is a per-kind syntactic
+  fact (commands, comments); an accessor serves `move_past`, the field taxed every token.
+- **Maximal-run `Chars` tokens** (§3.2) — a token is an atomic unit; run-splitting
+  machinery (conservative stop sets) bought speed the node level didn't need and cost
+  char-by-char construct parsing.
+- **Specials trigger strings enumerated in `TokenRules`** (§3.2, §3.3) — trigger sets can
+  be large and library-driven; recognition belongs to the preset (`Lang::scan_specials`,
+  name + spec in one call), guarded by the cached `TriggerChars` filter.
 - **A strict dependency ladder through the crate's middle (the old L2–L6 layering)** (§3.11) —
   the middle is a strongly-connected component by intention (each cycle edge is a decided
   feature); enforce the three real rules (Lang-free foundation, preset line, acyclic runtime
@@ -630,7 +759,17 @@ Current list — remove entries as they are settled (move the outcome into §3):
 1. **`SpecLookup` semantics and behavior** (§3.4): deferred from ARCHITECTURE.md
    decision 6 (the no-`ConflictStrategy`/shadowing part is decided). To be discussed before
    Phase 4. (Decision points 1–7 are otherwise signed off, July 2026; §3 entries marked
-   PROPOSED become DECIDED as they land.)
+   PROPOSED become DECIDED as they land.) Two items feed in from the token-design review
+   (July 2026): (a) the parse-time command lookup — with several `CommandRule`s, the name
+   alone cannot disambiguate which escape syntax fired; pass the token (or its escape
+   char, recoverable from the span) to the lookup; (b) per-`CallableTypeId` fallback
+   singletons back both unknown commands and the specials scan's never-absent-spec
+   guarantee.
+1b. **Precompiled-table merging (`PrefixTable`++)**: detection consults several per-state
+   structures (group-delimiter `PrefixTable`, specials `TriggerChars`, per-rule command
+   escape and comment-start checks). Worth evaluating a single merged first-character /
+   prefix table per state once the hot loop can be profiled (noted July 2026, user
+   request; also flagged in ARCHITECTURE.md §token). Not a design blocker.
 2. **`ArgsLayout` / children encoding in flat `NodeData`**: how macro arguments vs environment
    body vs group contents share the `children: Range<u32>` mechanism — deliberately deferred to
    Phase 5 implementation, where real cases will inform it.

@@ -105,16 +105,20 @@ Full argument: DESIGN_RATIONALE.md §3.11.)*
 ```
 S2  presets      latexlike (module; §8); later: flm (separate crate)
 S1  core         ONE mutually-recursive stratum, organized as topic modules:
-                   Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · spec/ + library/
+                   Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · token/ (Token<'s, L>,
+                   TokenRules, TokenReader, StdTokenReader) · spec/ + library/
                    · node/ (NodeTree, NodeKind) · constructs/ (ConstructParser + std parsers)
                    · engine/ (Language<L>, ParserSession, ParseResult, NodeRef)
                  Modules are topics for navigation, NOT dependency ranks.
 S0  foundation   Lang-free true DAG:
                    source/ (Source, SourceSpan, SourceProvenance, SourceResolver, cursor,
-                   LineIndex) · error.rs (span-based diagnostics, recovery) · token data
-                   (Span, Token<'s>, TokenKind, TokenRules, PrefixTable, scanning core)
-                   · TextContent
+                   LineIndex, plain byte-range Span) · error.rs (span-based diagnostics,
+                   recovery) · TextContent
 ```
+
+*(Revised after the July 2026 token-design review: the token topic is wholly S1 — tokens
+are generic over `L` (a `Specials` token carries its resolved spec) and token errors may
+grow state context; `Span` moved to the source topic. See DESIGN_RATIONALE.md §3.2.)*
 
 Three enforced rules replace "each layer depends only on lower ones" — each mechanically
 checkable, unlike the old ladder (which the design violated by intention):
@@ -136,11 +140,10 @@ mutually recursive — stubs bridge the knot (Phase 2's tokenizer runs against a
 `TokenRules` precisely because the scanning core is knot-free).
 
 Within S1 the useful distinction is not vertical but by **role**: plain data (`StateData`,
-`NodeKind`, …); contracts (the dyn extension-point traits — `TokenReader`, `SpecLookup`,
-`CallableSpec`, `ConstructParser`, `SourceResolver` — plus `Lang`); standard machinery
-(`StdTokenReader`, `Library`, `NodesParser`, …); orchestration (`Language`, `ParserSession`).
-A module may span strata: `token/` holds S0 data *and* the S1 `TokenReader<L>` contract —
-module = topic.
+`NodeKind`, `TokenRules`, …); contracts (the dyn extension-point traits — `TokenReader`,
+`SpecLookup`, `CallableSpec`, `ConstructParser`, `SourceResolver` — plus `Lang`); standard
+machinery (`StdTokenReader`, `Library`, `NodesParser`, …); orchestration (`Language`,
+`ParserSession`). Module = topic, not stratum.
 
 The rest of this section walks the topics bottom-up; the former layer labels survive only as
 section names (§source, §token, §state, §specs, §nodes, §constructs, §engine).
@@ -150,7 +153,9 @@ section names (§source, §token, §state, §specs, §nodes, §constructs, §eng
 Exactly as decided in March: `Arc<Source>`-based `SourceSpan`, provenance enum
 (`Primary` / `Resolved` / `Synthesized`) with `triggered_at: SourceSpan` back-references,
 `SourceResolver` trait (`NoResolver` ZST default), `SourceContent` trait over the backing
-storage, cursor with mark/rewind, standalone lazy `LineIndex`.
+storage, cursor with mark/rewind, standalone lazy `LineIndex`. Also home of the plain
+byte-range `Span` (`Copy`, no `Arc`; moved here from the token topic, July 2026 — it is
+used by errors and cursors independently of tokenization).
 
 One correction to the current `source.rs`: the per-location `via: [SourceLocationVia]` chain is
 removed. Provenance belongs on `Source` (one hop per synthesized/included source), not on every
@@ -175,64 +180,81 @@ to be decided. Note that `Weak<T>`, Rust's usual cycle-breaker, is not applicabl
 nodes live in a flat `Vec<NodeData>`, not behind per-node `Arc`s, so there is nothing to point
 a `Weak` at.
 
-### token (S0 scanning core; S1 reader contract)
+### token (S1)  *(reworked July 2026 — token-design review, DESIGN_RATIONALE.md §3.2)*
 
-Tokens are **transient, span-based, zero-copy**:
+Tokens are **transient, span-based, zero-copy**, and generic over `L: Lang`
+(`Clone`, not `Copy` — a `Specials` token carries an `Arc`):
 
 ```rust
-/// Plain byte range within one Source. Copy. Used everywhere during parsing.
-pub struct Span { pub start: usize, pub end: usize }
-
-pub struct Token<'s> {
-    pub kind: TokenKind<'s>,
-    pub span: Span,
-    pub pre_space: Span,      // whitespace before the token — a span, not a String
+pub struct Token<'s, L: Lang> {
+    pub kind: TokenKind<'s, L>,
+    pub span: Span,           // includes post_space where the kind has one
+    pub pre_space: Span,      // content whitespace before the token — a span, not a String
 }
 
-pub enum TokenKind<'s> {
-    Chars(&'s str),
-    Macro { name: &'s str },
+pub enum TokenKind<'s, L: Lang> {
+    Char(char),                                             // single character — never runs
     GroupOpen  { delim: &'s str, group_type: GroupTypeId },
     GroupClose { delim: &'s str, group_type: GroupTypeId },
-    CommentStart { delim: &'s str },
-    Specials { chars: &'s str },
-    ParagraphBreak,           // multi-newline; content recoverable from span
+    Command    { name: &'s str, post_space: Span },         // \foobar␣ — rules-data driven
+    Specials   { name: &'s str, spec: Arc<dyn CallableSpec<L>> },  // scan-hook driven
+    Comment    { content: &'s str, post_space: Span },      // whole comment, sans newline
+    ParagraphBreak,           // \n\s*\n run; span = first..last newline
+    EndOfStream,              // terminal, idempotent; pre_space = final whitespace
 }
 ```
 
-Key points, confirming PARSING_STRATEGY.md decisions:
+Key points:
 
-- Tokens are **structural and minimal**: they identify *what to parse next*, nothing more.
-  No `BeginEnvironment(name)` token — `\begin` is just a macro token; environment recognition
-  is a construct-parser concern (the latexlike preset registers `\begin`/`\end` specs).
-  This is a deliberate departure from pylatexenc and stays.
-- The `'s` lifetime is ephemeral (borrows the current source unit's content); it never enters
-  the AST. Nodes store `SourceSpan` (Arc-based).
-- `TokenReader<L>` is a trait — the extension point for genuinely different tokenization
-  *behavior*. The provided `StdTokenReader` is driven entirely by `TokenRules` data from the
-  parsing state (§4). Signature sketch:
+- Tokens are **structural and minimal**, and carry **no invocation forms**: no
+  macro/environment/specials taxonomy and no `CallableTypeId` at the token level. `\begin`
+  is a `Command` like `\foobar`; environment recognition is entirely a parse-time preset
+  concern. Terminology stack: **command** (token-level syntactic form) → **callable**
+  (parse-level concept) → **macro/environment/specials** (preset-level invocation flavors).
+- **Two callable-trigger kinds, split by production mechanism.** `Command` is recognized
+  from `CommandRule { escape_char, name_chars }` *data* (delta-changeable; fires
+  unconditionally — unknown names resolve at parse time to fallback specs; no lookup at
+  token time). `Specials` is recognized by the `Lang::scan_specials` *hook* — recognition
+  *is* resolution: the `SpecialsMatch` returns name **and** spec together, so
+  scanning/lookup mismatches are impossible. The hook is gated by the state-cached
+  `TriggerChars` first-character filter (`Lang::specials_trigger_chars`).
+- **Syntactic vs. content whitespace.** `pre_space` (every token) is *content* whitespace —
+  it belongs to the document flow. Post-space exists only where tokenization syntax
+  consumes whitespace — multi-character `Command` names and `Comment` line ends — and is
+  stored in those variants (`Token::post_space()` accessor). One primitive,
+  `skip_whitespace`, enforces the paragraph rule for pre- and post-space alike: skipped
+  whitespace never consumes a newline of a `\n\s*\n` sequence
+  (`TokenRules::double_newline_paragraphs`).
+- `peek` always returns a token: `EndOfStream` is terminal and idempotent, and its
+  `pre_space` reports trailing whitespace so it reaches the node tree without the nodes
+  parser touching raw content.
+- The `'s` lifetime is ephemeral (borrows the current source unit's content); it never
+  enters the AST. Nodes store `SourceSpan` (Arc-based).
+- `TokenReader<L>` is the extension point for genuinely different tokenization *behavior*
+  (catcode-like schemes keep their tables in `L::StateExt`, which only the full state
+  exposes — hence `peek(&mut self, &ParsingState<L>)`, never `&TokenRules`):
 
 ```rust
 pub trait TokenReader<'s, L: Lang> {
-    fn peek(&mut self, state: &ParsingState<L>) -> TokResult<'s, Option<Token<'s>>>;
-    fn move_past(&mut self, tok: &Token<'s>, skip_post_space: bool);
-    fn move_to(&mut self, tok: &Token<'s>, rewind_pre_space: bool);
+    fn peek(&mut self, state: &ParsingState<L>) -> TokenResult<'s, L, Token<'s, L>>;
+    fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool);
+    fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool);
     fn pos(&self) -> usize;
+    // provided: next() = peek + move_past
 }
 ```
 
-  (`next` = provided method: peek + move_past, as in the current WIP — keep.)
+  Contract: `peek` is idempotent per (position, state *instance*); implementations may
+  memoize on `Arc` pointer identity (states are immutable). A different state — even one
+  derived with an empty delta — voids the obligation.
 
-**Stratum split within this topic** (July 2026): `Span`, `Token`, `TokenKind`, `TokenRules`,
-the derived `PrefixTable`, and the concrete `detect_*` scanning core are **S0** — Lang-free,
-driven by `&TokenRules` (+ prefix table), testable without inventing a language (exactly what
-Phase 2 builds). The `TokenReader<L>` *trait* is **S1**: `peek` deliberately receives
-`&ParsingState<L>`, not `&TokenRules`, because the trait is the documented escape hatch for
-catcode-like tokenization (§8 non-goals), and such a reader keeps its tables in `L::StateExt`
-— which only the full state exposes. Narrowing the parameter to the rules would quietly sever
-the escape hatch from language-specific state. `StdTokenReader` implements the trait by
-reading the state's rules and forwarding to the S0 scanning core. Both halves live in the
-`token/` module — module = topic, not stratum (§3).
+**[FUTURE REVIEW — precompiled-table merging.]** Detection currently consults several
+per-state structures: the `PrefixTable` (group delimiters), the `TriggerChars` filter
+(specials), and per-rule checks for command escapes and comment starts. It may be worth
+merging the starting characters of comments, group delimiters, and known specials/commands
+into one precompiled table per state. Deliberately not done yet — revisit when the nodes
+parser exists and the hot loop can be profiled (noted July 2026, user request; also
+DESIGN_RATIONALE.md §6).
 
 ### state (S1) — parsing state  *(Decision 1 — RESOLVED, July 2026)*
 
@@ -243,24 +265,26 @@ existence is `derived()`.
 
 ```rust
 pub struct ParsingState<L: Lang> {
-    data: StateData<L>,                    // private — getters are the public surface
-    prefix_table: OnceLock<PrefixTable>,   // per-instance derived caches, built lazily
+    data: StateData<L>,          // private — getters are the public surface
+    prefix_table: PrefixTable,   // derived caches, rebuilt when a state is frozen
+    trigger_chars: TriggerChars, //   (eager, not OnceLock-lazy: no_std — see DESIGN_RATIONALE §3.3)
 }
 
 pub struct StateData<L: Lang> {
     pub rules: TokenRules,          // tokenization rules — plain stored data
-    pub libraries: LibraryStack<L>, // definitions visible here (extendable mid-parse: \newcommand)
+    pub libraries: LibraryStack<L>, // definitions visible here (extendable mid-parse: \newcommand) [Phase 4]
     pub ext: L::StateExt,           // language-specific state (e.g. FLM's math mode)
 }
 
 pub struct TokenRules {
     pub whitespace: Option<WhitespaceRules>,   // None = whitespace handling disabled
-    pub macros: Option<MacroRules>,            // escape char, name chars
+    pub double_newline_paragraphs: bool,       // \n\s*\n = paragraph break (token + skip rule)
     pub group_types: Vec<GroupType>,           // {…}, […], $…$, $$…$$, \[…\] — all just group types
-    pub comments: Option<CommentRules>,        // start delimiter(s)
-    pub paragraph_breaks: bool,
-    pub specials: Vec<String>,                 // specials *strings* only; semantics live in libraries
+    pub commands: Vec<CommandRule>,            // escape-char syntaxes; empty = disabled
+    pub comments: Vec<CommentRule>,            // start delimiters (to end of line); empty = disabled
     pub forbidden_chars: String,
+    pub expecting_group_close: Option<GroupTypeId>,  // ambiguous-delimiter disambiguator
+    // NB: no specials strings — specials recognition is the Lang::scan_specials hook (§token)
 }
 ```
 
@@ -541,14 +565,15 @@ loop (`NodesParser`, pylatexenc's `LatexGeneralNodesParser` + nodes collector):
 loop:
   tok = tokens.peek(state)
   match tok.kind:
-    Chars           -> accumulate chars node (incl. whitespace-only chars nodes, §nodes)
+    Char            -> accumulate chars node (whitespace-only chars nodes from pre_space, §nodes)
     ParagraphBreak  -> own node (representation: preset decision, §nodes)
     GroupOpen(t)    -> GroupParser(t)                  (delimiters from state.rules)
-    CommentStart    -> CommentParser
-    Macro(name)     -> libraries.lookup(CT_MACRO, name, state)     (unknown -> fallback singleton)
-                         -> spec.invocation_parser().parse(cx)
-    Specials(s)     -> libraries.lookup(CT_SPECIALS, s, state) -> …
+    Comment         -> comment node built directly from the token (whole-comment tokens)
+    Command(name)   -> parse-time preset lookup (Lang-level; typically via libraries;
+                       unknown -> fallback singleton) -> spec.invocation_parser().parse(cx)
+    Specials(spec)  -> spec.invocation_parser().parse(cx)   (spec already on the token)
     GroupClose(t)   -> stop condition / error
+    EndOfStream     -> materialize trailing-whitespace chars node from pre_space; stop
   returned delta -> state.derived(&delta) -> new Arc<ParsingState> for subsequent siblings
 ```
 
@@ -559,11 +584,12 @@ nuclear option — (d) a custom `TokenReader` or a custom nodes parser. Determin
 priority races.
 
 Standard construct parsers to implement (mirroring pylatexenc's `latexnodes.parsers`):
-`NodesParser` (with stop conditions), `GroupParser`, `CommentParser`,
+`NodesParser` (with stop conditions), `GroupParser`,
 `CallableInvocationParser` (the default built from argument+slot structure specs; environments
 arrive via the preset's `\begin`/`\end` specs), `ArgumentsParser` (+ std argument types),
 `SlotsParser` (separators/terminators with invocation-name back-reference), `DelimitedParser`,
-`VerbatimParser`, `ExpressionParser` (single node).
+`VerbatimParser`, `ExpressionParser` (single node). (No `CommentParser`: whole-comment
+tokens made it vestigial — comment nodes come straight from tokens.)
 
 ### engine (S1) — orchestration
 
@@ -574,12 +600,19 @@ Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally
 pub trait Lang: Sized {                 // the compile-time bundle (was: LanguageSpecification)
     type StateExt:  Clone + Debug + Default;
     type Event:     Clone + Debug;      // semantic transition events (e.g. FLM's EnterMath)
-    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§nodes)
+    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§nodes) [Phase 5]
     type SourceOrigin: …;
 
     /// Transition customizer — the choke-point hook of §state. Default: empty.
     fn finalize_transition(new: &mut StateData<Self>, prev: &ParsingState<Self>,
                            events: &[Self::Event]) {}
+
+    /// Specials scan (§token): recognition + resolution in one call — the match carries
+    /// name AND spec. Typically dispatches to the state's libraries. Default: no specials.
+    fn scan_specials<'s>(state: &ParsingState<Self>, content: &'s str, pos: usize)
+        -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> { Ok(None) }
+    /// Hot-path filter for scan_specials, cached per state (§token). Default: none.
+    fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars { … }
 }
 
 pub struct Language<L: Lang> {          // the runtime bundle (was: FLMEnvironment)
@@ -790,6 +823,11 @@ Keep all existing decisions (no `Latex` prefixes, `ArgumentStructureSpec`, `Argu
 | Registry naming rule | `…Kind` = closed core enum; `…TypeId` = open `Language`-interned registry | — |
 | Node textual payload | `TextContent` (`Spanned` / `Owned`) | owned-`String` fields, pure-span content |
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, … (bundled as `Lang::NodeExts`) | `GroupExt` (too vague), `NodeGroupExt` (wrong parse) |
+| Token-level command syntax | `TokenKind::Command`, `CommandRule` | `Macro` token kind, `MacroRules` ("command" per TeX lineage; scales to future non-escape syntaxes, unlike "escape") |
+| Comment syntax rule | `CommentRule` (start string; end-of-line terminated) | `CommentRules` |
+| Paragraph-break flag | `TokenRules::double_newline_paragraphs` | `paragraph_breaks` (pylatexenc's flag name adopted) |
+| Specials recognition | `Lang::scan_specials` → `SpecialsMatch` (name + spec); `TriggerChars` filter | `TokenRules::specials` string list |
+| Whitespace primitive | `skip_whitespace` (never consumes a `\n\s*\n` newline) | per-call-site inline logic |
 
 The high-level entry point is `Language::parse()`; whether a convenience `Parser` struct still
 exists on top is a bikeshed we can defer.
@@ -854,9 +892,22 @@ hardcoded `TokenRules` value).
   conventions; maximal-run `Chars` tokens; `TokenRules::expecting_group_close` as the
   data-driven `$…$`/`$$…$$` disambiguator; `peek` → `Ok(None)` at EOF with trailing
   whitespace untokenized) recorded in DESIGN_RATIONALE.md §3.2/§3.8.
-- **Phase 3 — `state`.** `ParsingState<L>` + `StateData`/`TokenRules`, `ParsingStateDelta` +
-  `derived()` + `Lang::finalize_transition`, `Lang` trait with a test-only minimal lang
-  (exercising events and a finalize customizer, including the override-policy idioms).
+  **Superseded in part (July 2026):** the Phase-2 token *model* (maximal-run `Chars`,
+  `Macro`/`Specials`/`CommentStart` kinds, uniform `post_space`, `Ok(None)` at EOF, S0
+  scanning core) was reworked in Phase 3 following the token-design review —
+  DESIGN_RATIONALE.md §3.2. The scanning machinery (prefix table, group logic, recovery,
+  span conventions, test corpus) carried over.
+- **Phase 3 — `state` + token rework (merged).** — ✅ done, July 2026. Ships `Lang` (with
+  the `scan_specials`/`specials_trigger_chars` token hooks; `NodeExts` waits for Phase 5),
+  `ParsingState`/`StateData` (rules + ext; `libraries` waits for Phase 4),
+  `ParsingStateDelta` + `TokenRulesOverrides` + `derived()` + `Lang::finalize_transition`
+  (test langs exercising events and the pure-normalization override idiom), and the
+  reworked token module per §token: S1 `Token<'s, L>` with
+  `Char`/`Command`/`Specials`/`Comment`/`ParagraphBreak`/`EndOfStream`, `CommandRule`/
+  `CommentRule`, the `skip_whitespace` primitive, the `TokenReader<L>` trait +
+  `StdTokenReader`, and the `CallableSpec<L>` trait declaration (stub; fleshed out in
+  Phase 4). Derived caches built eagerly at freeze (no_std — DESIGN_RATIONALE.md §3.3);
+  `Span` relocated to `source`.
 - **Phase 4 — `spec` + `library`.** `CallableSpec` (de-keyed), `StdCallableSpec`,
   `ArgumentStructureSpec` + `SlotStructureSpec`, `CallableTypeId` interning,
   `Library`/`LibraryStack`/`SpecLookup` + per-type unknown-fallback policy.
@@ -938,9 +989,10 @@ not obvious.
 8. **DECIDED (July 2026): three strata + three rules replace the strict L0–L7 layer ladder.**
    S0 Lang-free foundation / S1 single mutually-recursive core stratum (modules are topics,
    not dependency ranks) / S2 presets; rules: no `Lang` in S0, no preset in S1, acyclic
-   runtime ownership graph. Consequences: `TokenRules` + `PrefixTable` + the scanning core
-   are S0, defined in the token topic; the `TokenReader<L>` trait is S1 and keeps its
+   runtime ownership graph. Consequences: the `TokenReader<L>` trait is S1 and keeps its
    `&ParsingState<L>` parameter (escape-hatch access to `L::StateExt`); `Lang` +
    `NodeExtTypes` are defined in the core next to the state types, not in `engine/` or
    `node/`; `Language<L>` participates only by seeding the initial state. (Design: §3.
-   Rationale: DESIGN_RATIONALE.md §3.11.)
+   Rationale: DESIGN_RATIONALE.md §3.11.) *Revised July 2026: the token topic — originally
+   split S0 data / S1 trait — moved wholly to S1, and `Span` to the source topic
+   (token-design review; DESIGN_RATIONALE.md §3.2).*
