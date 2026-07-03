@@ -55,7 +55,10 @@ of earlier revisions lives in git.
 | Byte range | `Span` | `Copy`, no `Arc`; transient parsing use |
 | Arc-carrying range | `SourceSpan` | replaces lifetime-bound source locations in nodes/errors |
 | Tokens | `Token<'s>`, `TokenKind<'s>` | `…Kind` per the registry rule |
-| Token reading | `TokenReader<'s, L>` (trait), `StdTokenReader` | trait = behavior extension point |
+| Token reading | `TokenReader<'s, L>` (trait, Phase 3), `StdTokenReader` | trait = behavior extension point |
+| Tokenization rule facets | `WhitespaceRules`, `MacroRules`, `CommentRules`, `GroupType` | sub-structs of `TokenRules`; each `Option` = feature disabled |
+| Derived delimiter table | `PrefixTable`, `PrefixEntry` | built from `TokenRules`, cached per parsing state |
+| Token-level errors | `TokenError<'s>`, `TokenErrorKind`, `TokenRecovery<'s>`, `TokenResult<'s, T>` | transient `Span`-based; `TokenResult` not `TokResult` (clarity over brevity) |
 | Callable behavior | `CallableSpec<L>` (trait), `StdCallableSpec` | de-keyed: no name, no invocation form |
 | Invocation-form registry | `CallableTypeId` | interned in `Language`, like `GroupTypeId` |
 | Argument/slot structure | `ArgumentStructureSpec`, `SlotStructureSpec` | args configure; slots hold content regions |
@@ -100,6 +103,7 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `FLMEnvironment` | `Language<L>` | fatal collision with LaTeX environments |
 | `TokenType` | `TokenKind` | registry naming rule (`…Kind` = closed enum) |
 | `StringTokenReader` | `StdTokenReader` | driven by `TokenRules` data, not tied to `String` input |
+| `TokenizerError` | `TokenError` + `TokenErrorKind` | names the failing *thing* (a token), structured kind instead of string tags (Phase 2) |
 | `StateDelta` (trait) / `StandardDelta` (enum) | `ParsingStateDelta<L>` (struct of optional overrides + events) | deltas are reified values; no apply/trait machinery |
 | `TokenizationState` / per-facet state traits | `TokenRules` stored in `StateData<L>` | materialized state + transition choke point (Decision 1) |
 | `Node` enum with `MacroNode`, `EnvironmentNode`, `SpecialsNode` variants | `NodeKind::Callable` + `CallableTypeId` | Macro/Environment/Specials differ by invocation form, not parsed shape (Decision 3) |

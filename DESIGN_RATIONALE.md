@@ -221,9 +221,9 @@ deliberate departure from pylatexenc, whose tokenizer bakes in environment synta
 *Rationale:* keeps the tokenizer language-agnostic (§2.3) and moves all semantics to the
 spec/parser layer where it is extensible.
 
-**Zero-copy tokens with ephemeral lifetime** — PROPOSED (July 2026).
+**Zero-copy tokens with ephemeral lifetime** — DECIDED (implemented July 2026, Phase 2).
 `Token<'s>` holds `TokenKind<'s>` with `&'s str` slices plus `Span`s; `pre_space` is a `Span`,
-not a `String` (the current WIP allocates a `String` per token for whitespace — pure waste).
+not a `String` (the earlier WIP allocated a `String` per token for whitespace — pure waste).
 The `'s` lifetime never enters the AST.
 *Revisit if:* a streaming token source can't expose stable slices (then the `SourceContent`
 boundary is the place to solve it, not the token type).
@@ -236,9 +236,62 @@ trait. The peek/move_past/move_to protocol (with `rewind_pre_space` / `skip_post
 follows pylatexenc's proven `LatexTokenReaderBase` design.
 Salvage note: the WIP `detect_*` decomposition and the cached sorted delimiter-prefix table
 (with open/close ambiguity merging, e.g. `$` both opening and closing) are good and should be
-ported into `StdTokenReader`.
+ported into `StdTokenReader`. *(Done, Phase 2: `detect_*` private methods on `StdTokenReader`;
+merging lives in `PrefixTable::for_rules`.)*
 Stratum note (July 2026): the trait deliberately takes `&ParsingState<L>`, not `&TokenRules`
 — a catcode-like reader keeps its tables in `L::StateExt`; see §3.11.
+Phase-split note (July 2026, Phase 2): consequently the *trait definition* waits for Phase 3,
+when `ParsingState<L>` exists — defining it against `&TokenRules` now would sever the escape
+hatch and cause planned churn. Phase 2 ships the S0 half only: `StdTokenReader` with inherent
+methods `peek(&mut self, &TokenRules, &PrefixTable)` / `next` / `move_past` / `move_to` /
+`pos`, shaped so that the Phase 3 trait impl merely reads rules + cached table from the state
+and forwards.
+
+**Token span conventions; uniform `post_space` field** — PROPOSED (Phase 2 implementation,
+July 2026). The ARCHITECTURE.md token sketch showed only `pre_space`, but the decided
+`skip_post_space` flag on `move_past` needs post-space information on the token, so `Token`
+carries a uniform `post_space: Span` (the WIP had put it inside the macro/comment variants).
+Conventions, pylatexenc-compatible: `pre_space` lies *outside* `span` (ending at
+`span.start`); `post_space` is a trailing sub-range *inside* `span` (`span.end` is past it).
+Post-space is consumed only by macro tokens with multi-character (name-chars) names — not by
+single-char macros like `\&` — and never crosses a paragraph break (whitespace containing 2+
+newlines contributes no post-space at all, matching pylatexenc's "put back" rule; unlike
+pylatexenc, the cut applies only when `paragraph_breaks` is enabled, for consistency).
+These are token-level conventions; node span semantics are a separate contract (§3.5).
+
+**`Chars` tokens are maximal runs, never containing whitespace** — PROPOSED (Phase 2
+implementation, July 2026). pylatexenc emits one `char` token per character; zero-copy slices
+make maximal runs free, so a `Chars` token extends from its first character up to (not
+including) the next character that could start any other token kind (whitespace, escape char,
+a delimiter/comment/specials first char, forbidden char). The stop set is conservative
+(first-character based): a run may end at a char whose full match then fails, yielding two
+adjacent `Chars` tokens — harmless, since chars accumulate into one node at the node level
+anyway (Phase 6). Whitespace between tokens is always `pre_space`; with whitespace handling
+disabled (`TokenRules::whitespace = None`), whitespace chars are ordinary content and runs
+can contain them (character-level access mode).
+
+**Ambiguous group delimiters resolved by data: `expecting_group_close`** — PROPOSED (Phase 2
+implementation, July 2026). `$…$`-style group types make one string both opener and closer
+(and `$$` vs `$` overlap); pylatexenc resolves this with privileged math-mode state
+(`in_math_mode` + `math_mode_delimiter` checked before longest-match). De-privileged into
+plain data: `TokenRules::expecting_group_close: Option<GroupTypeId>` names the group type
+whose *close* delimiter takes precedence over all other matches; a group construct parser
+sets it (via a state delta) when entering an ambiguously-delimited group. Otherwise the
+longest `PrefixTable` match wins, read as an *open* when the string is ambiguous — and a
+close-only string tokenizes as `GroupClose` even where syntactically wrong ("it's not the
+tokenizer's job to report syntax errors", pylatexenc). Priority order overall: paragraph
+break → expected group close → longest delimiter → macro escape → comment starts → specials
+→ forbidden check → chars. Groups precede macros so escape-led delimiters like `\(` win over
+macro interpretation. Reproduces pylatexenc's `$\zeta$$\gamma$` / `$$…$$` behaviors exactly
+(ported tests).
+
+**End of stream: `peek` returns `Ok(None)`; trailing whitespace stays untokenized** —
+PROPOSED (Phase 2 implementation, July 2026). pylatexenc raises `LatexWalkerEndOfStream`
+carrying `final_space`; techy's `peek` simply returns `Ok(None)` when only whitespace (with
+no paragraph break — a trailing `…\n\n` still yields its `ParagraphBreak` token first)
+remains. The final whitespace is not covered by any token; the nodes parser (Phase 6) can
+recover it from `pos()..content.len()` when materializing the trailing whitespace chars node
+required by the sibling-span partition invariant.
 
 ### 3.3 Parsing state and deltas
 
@@ -398,6 +451,15 @@ Phase 1 ships the token-independent parts: `Diagnostic`/`Diagnostics`/`Severity`
 Phase 2 next to `Token<'s>`, where it can be designed against a real tokenizer.
 *Rejected:* a token-agnostic `TokenError<R>` placeholder in Phase 1 (designing the type blind,
 then reshaping it in Phase 2 anyway).
+*Landed (Phase 2, July 2026):* `TokenError<'s>` = structured `TokenErrorKind` (closed enum:
+end-of-stream-after-escape, forbidden-char — replaces pylatexenc's stringly `error_type_info`)
++ byte `Span` + `Option<TokenRecovery<'s>>`, where `TokenRecovery` = placeholder token + an
+explicit `resume_pos` (the two can differ: after end-of-stream-after-escape the placeholder is
+an empty chars token but reading resumes at end of input, per pylatexenc). Token-level errors
+carry plain `Span`s, not `SourceSpan`s — they are transient like tokens; the session converts
+whatever it reports into Arc-span `Diagnostic`s (Phase 6). The reader itself is policy-free:
+it always returns `Err` with the recovery attached, and the session's `Recovery` policy
+decides (the WIP's per-reader `tolerant_parsing` flag is superseded).
 
 ### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
 

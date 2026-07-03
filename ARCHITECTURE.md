@@ -842,6 +842,18 @@ hardcoded `TokenRules` value).
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
   driven by a hardcoded-for-now `TokenRules` value; delimiter prefix table; exhaustive tokenizer
   tests (port pylatexenc's tokenizer test cases).
+  — ✅ done, July 2026 (S0 half). Ships `Span`, `Token<'s>`/`TokenKind<'s>`, `TokenRules`
+  (+ `WhitespaceRules`/`MacroRules`/`CommentRules`/`GroupType`/`GroupTypeId`), the derived
+  `PrefixTable` (WIP open/close-ambiguity merging salvaged), `TokenError`/`TokenRecovery`
+  (recovery tokens, reader policy-free), and `StdTokenReader` with the `detect_*` scanning
+  core; pylatexenc's tokenizer test suite ported/adapted (~30 tests). The `TokenReader<L>`
+  *trait* moves to Phase 3 with `ParsingState<L>` — defining it against `&TokenRules` now
+  would sever the catcode escape hatch (§token stratum split); `StdTokenReader`'s inherent
+  `peek(&mut self, &TokenRules, &PrefixTable)` API is shaped to become the trait impl.
+  Implementation decisions (uniform `post_space: Span` on `Token` with pylatexenc span
+  conventions; maximal-run `Chars` tokens; `TokenRules::expecting_group_close` as the
+  data-driven `$…$`/`$$…$$` disambiguator; `peek` → `Ok(None)` at EOF with trailing
+  whitespace untokenized) recorded in DESIGN_RATIONALE.md §3.2/§3.8.
 - **Phase 3 — `state`.** `ParsingState<L>` + `StateData`/`TokenRules`, `ParsingStateDelta` +
   `derived()` + `Lang::finalize_transition`, `Lang` trait with a test-only minimal lang
   (exercising events and a finalize customizer, including the override-policy idioms).

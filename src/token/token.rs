@@ -1,112 +1,112 @@
-//! Token types
+//! The token types: [`Token`] and [`TokenKind`].
 
-use std::fmt;
-use crate::source::SourceLocation;
+use core::fmt;
 
-/// Types of tokens in LaTeX.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenType {
-    /// Regular character(s) (text content).
-    Char { content: String },
+use super::rules::GroupTypeId;
+use super::span::Span;
 
-    /// A macro/command (e.g., `\textbf`).
-    Macro { macro_name: String, post_space: String },
-
-    /// Beginning of an environment (e.g., `\begin{equation}`).
-    BeginEnvironment { environment_name: String },
-
-    /// End of an environment (e.g., `\end{equation}`).
-    EndEnvironment { environment_name: String },
-
-    /// A comment (typically starting with `%`).
-    Comment { comment: String, post_space: String },
-
-    /// Typically an opening brace `{`
-    GroupOpen { delimiter: String },
-
-    /// Typically a closing brace `}`.
-    GroupClose { delimiter: String },
-
-    /// Paragraph break marker (space with multiple newlines, from first
-    /// newline to final space after final newline), with possible pre_space
-    /// before first newline.
-    ///
-    /// This is a special type of token because of the way it is parsed, and
-    /// because of its special visual structure (vertically separated blocks
-    /// of content).  E.g. whitespace is allowed between the two newlines, 
-    /// etc.
-    NewlinesParagraphBreak { space_chars: String },
-
-    /// Special characters with meaning in LaTeX (e.g., `&`, `~`, `#`).
-    Specials { specials_chars: String },
+/// What a token *is* — structural and minimal: it identifies what to parse next, nothing
+/// more. Closed core enum per the naming rule (`…Kind`), exhaustively matchable.
+///
+/// Notably there is **no begin/end-environment token**: `\begin` is an ordinary macro
+/// token, and environment recognition is a construct-parser concern (the latexlike preset
+/// registers `\begin`/`\end` specs). This is a deliberate departure from pylatexenc.
+/// Likewise a comment token covers only the comment-*start* delimiter; the comment's
+/// content is read by the comment construct parser.
+///
+/// The `'s` lifetime borrows the current source unit's content and is ephemeral — it never
+/// enters the AST (nodes store Arc-based [`SourceSpan`](crate::source::SourceSpan)s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind<'s> {
+    /// A run of ordinary content characters, maximal up to the next whitespace or
+    /// potential token start. Never contains whitespace (whitespace between tokens is
+    /// `pre_space`; whitespace-only *nodes* are a nodes-parser concern, Phase 6).
+    Chars(&'s str),
+    /// A macro invocation: escape character followed by the macro name. The name is either
+    /// a greedy run of name characters or a single non-name character (`\textbf` / `\&`).
+    Macro {
+        /// The macro name, without the escape character.
+        name: &'s str,
+    },
+    /// An opening group delimiter (`{`, `[`, `$`, `\(`, … — whatever the rules declare).
+    GroupOpen {
+        /// The delimiter as matched.
+        delim: &'s str,
+        /// Which registered group type it opens.
+        group_type: GroupTypeId,
+    },
+    /// A closing group delimiter.
+    GroupClose {
+        /// The delimiter as matched.
+        delim: &'s str,
+        /// Which registered group type it closes.
+        group_type: GroupTypeId,
+    },
+    /// A comment-start delimiter (`%`). Only the delimiter — the comment content up to
+    /// end-of-line is the comment construct parser's business.
+    CommentStart {
+        /// The delimiter as matched.
+        delim: &'s str,
+    },
+    /// A specials string (`~`, `&`, `#`, …). Semantics live in libraries (Phase 4);
+    /// the tokenizer only recognizes the string.
+    Specials {
+        /// The specials string as matched.
+        chars: &'s str,
+    },
+    /// A paragraph break: a whitespace run containing two or more newlines. The token's
+    /// span runs from the first through the last newline (whitespace between them
+    /// included); the content is recoverable from the span.
+    ParagraphBreak,
 }
 
-impl fmt::Display for TokenType {
+/// A token, with its byte [`Span`] and surrounding-whitespace information.
+///
+/// Span conventions (pylatexenc-compatible):
+///
+/// - `pre_space` is the whitespace immediately *before* the token; it lies **outside**
+///   `span`, ending exactly at `span.start`.
+/// - `post_space` is the whitespace consumed *after* the token — non-empty only for
+///   [`TokenKind::Macro`] tokens with multi-character (name-chars) names, and never
+///   reaching into a paragraph break. It is a trailing sub-range **inside** `span`
+///   (so `span.end` is past the post-space); for all other kinds it is the empty span
+///   at `span.end`.
+///
+/// These are *token*-level conventions; node span semantics are a separate, deliberately
+/// decoupled contract (ARCHITECTURE.md §nodes) — tokens are transient engine internals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token<'s> {
+    /// What the token is.
+    pub kind: TokenKind<'s>,
+    /// The token's byte range (see span conventions above).
+    pub span: Span,
+    /// Whitespace immediately preceding the token (empty span at `span.start` if none).
+    pub pre_space: Span,
+    /// Whitespace consumed after the token (empty span at `span.end` if none).
+    pub post_space: Span,
+}
+
+impl<'s> Token<'s> {
+    /// Create a token with no post-space.
+    pub fn new(kind: TokenKind<'s>, span: Span, pre_space: Span) -> Token<'s> {
+        Token { kind, span, pre_space, post_space: Span::empty(span.end) }
+    }
+}
+
+impl fmt::Display for TokenKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenType::Char { content } => write!(f, "Char('{}')", content),
-            TokenType::Macro { macro_name, post_space } => {
-                if post_space.is_empty() {
-                    write!(f, "Macro(\\{})", macro_name)
-                } else {
-                    write!(f, "Macro(\\{}, post_space={:?})", macro_name, post_space)
-                }
+            TokenKind::Chars(content) => write!(f, "Chars({:?})", content),
+            TokenKind::Macro { name } => write!(f, "Macro({:?})", name),
+            TokenKind::GroupOpen { delim, group_type } => {
+                write!(f, "GroupOpen({:?}, {:?})", delim, group_type)
             }
-            TokenType::BeginEnvironment { environment_name } => {
-                write!(f, "BeginEnvironment('{}')", environment_name)
+            TokenKind::GroupClose { delim, group_type } => {
+                write!(f, "GroupClose({:?}, {:?})", delim, group_type)
             }
-            TokenType::EndEnvironment { environment_name } => {
-                write!(f, "EndEnvironment('{}')", environment_name)
-            }
-            TokenType::Comment { comment, post_space } => {
-                if post_space.is_empty() {
-                    write!(f, "Comment('{}')", comment)
-                } else {
-                    write!(f, "Comment('{}', post_space={:?})", comment, post_space)
-                }
-            }
-            TokenType::GroupOpen { delimiter } => {
-                write!(f, "GroupOpen('{}')", delimiter)
-            }
-            TokenType::GroupClose { delimiter } => {
-                write!(f, "GroupClose('{}')", delimiter)
-            }
-            TokenType::NewlinesParagraphBreak { space_chars } => {
-                write!(f, "NewlinesParagraphBreak({:?})", space_chars)
-            }
-            TokenType::Specials { specials_chars } => {
-                write!(f, "Specials('{}')", specials_chars)
-            }
-        }
-    }
-}
-
-/// A token with source location and whitespace information.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Token<'src> {
-    /// The type of token.
-    pub token_type: TokenType,
-    /// The source location where this token appears.
-    pub pos: SourceLocation<'src>,
-    /// Whitespace that appeared before this token.
-    pub pre_space: String,
-}
-
-impl<'src> Token<'src> {
-    /// Create a new token.
-    pub fn new(token_type: TokenType, pos: SourceLocation<'src>, pre_space: String) -> Self {
-        Self {
-            token_type,
-            pos,
-            pre_space,
-        }
-    }
-
-    pub fn get_post_space(&self) -> Option<&str> {
-        match &self.token_type {
-            TokenType::Macro { post_space, .. } => Some(post_space.as_str()),
-            TokenType::Comment { post_space, .. } => Some(post_space.as_str()),
-            _ => None,
+            TokenKind::CommentStart { delim } => write!(f, "CommentStart({:?})", delim),
+            TokenKind::Specials { chars } => write!(f, "Specials({:?})", chars),
+            TokenKind::ParagraphBreak => write!(f, "ParagraphBreak"),
         }
     }
 }
@@ -116,20 +116,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_token_display() {
-        let token_type = TokenType::Macro {
-            macro_name: "textbf".to_string(),
-            post_space: String::new(),
-        };
-        assert_eq!(format!("{}", token_type), "Macro(\\textbf)");
+    fn token_new_has_empty_post_space() {
+        let token = Token::new(TokenKind::Chars("abc"), Span::new(2, 5), Span::empty(2));
+        assert_eq!(token.post_space, Span::empty(5));
+        assert!(token.post_space.is_empty());
+    }
 
-        let token_type_with_space = TokenType::Macro {
-            macro_name: "textbf".to_string(),
-            post_space: " ".to_string(),
-        };
+    #[test]
+    fn token_kind_display() {
         assert_eq!(
-            format!("{}", token_type_with_space),
-            "Macro(\\textbf, post_space=\" \")"
+            format!("{}", TokenKind::Macro { name: "textbf" }),
+            "Macro(\"textbf\")"
         );
+        assert_eq!(format!("{}", TokenKind::ParagraphBreak), "ParagraphBreak");
     }
 }

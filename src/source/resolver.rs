@@ -15,8 +15,9 @@ use super::source::{Source, SourceSpan};
 /// Resolves an external reference (e.g. a file name from an `\input`-like construct) to a
 /// new [`Source`].
 ///
-/// Implementations create the source with [`SourceProvenance::Resolved`]
-/// (`super::SourceProvenance::Resolved`) pointing back at `triggered_at` — the constructor
+/// Implementations create the source with
+/// [`SourceProvenance::Resolved`](super::SourceProvenance::Resolved)
+/// pointing back at `triggered_at` — the constructor
 /// [`Source::resolved`] does this. A resolver that knows where the content was obtained from
 /// (conventionally a URL) attaches it via [`Source::with_origin`]. The parser is generic
 /// over the resolver; [`NoResolver`] is the zero-sized, zero-cost default for builds that
