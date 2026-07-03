@@ -9,12 +9,16 @@ Decision points that need explicit sign-off are marked **[DECISION n]** and coll
 
 **All decision points (1–7) were discussed and RESOLVED, July 2026.**
 Decision 1 (parsing-state design): materialized state + transition choke point ("Option C");
-see §L2 for the design and §4 for the recorded rationale. Decision 3 (node representation):
-unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see §L3/§L4 for the design
+see §state for the design and §4 for the recorded rationale. Decision 3 (node representation):
+unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see §specs/§nodes for the design
 and §4b for the recorded rationale. Decisions 2 (`Lang` + `Language<L>` naming), 4 (defer
-`Rc`/`Arc` genericity), 5 (zero mandatory dependencies), and 7 (rebuild layer-by-layer) were
+`Rc`/`Arc` genericity), 5 (zero mandatory dependencies), and 7 (rebuild phase-by-phase) were
 accepted as proposed. Decision 6: no `ConflictStrategy` is accepted; the exact `SpecLookup`
 semantics and behavior remain **to be discussed (deferred)**.
+
+**Revised July 2026:** the strict L0–L7 layer ladder originally used to present §3 was
+replaced by a three-strata dependency model (S0 foundation / S1 core / S2 presets) with three
+enforced rules — see §3 and DESIGN_RATIONALE.md §3.11 (decision 8 in §11).
 
 ---
 
@@ -43,7 +47,7 @@ parsing-state trait experiment (`state/mod.rs` + `parsingstatedatatrait.rs` macr
 argue below, a dead end — see §4.
 
 **Recommendation: treat the current `src/` as a quarry, not a foundation.** Rebuild
-layer-by-layer with each layer compiling and tested before the next. (§9.)
+phase-by-phase with each phase compiling and tested before the next. (§9.)
 
 ---
 
@@ -53,7 +57,7 @@ Derived from your stated goals and the decided parts of the existing documents:
 
 1. **Data-driven where possible, trait-driven where necessary.** Anything that can vary *during a
    parse* (delimiters, escape chars, enabled features) is plain stored data in the parsing state,
-   changed only through reified deltas at a single transition choke point (§L2). Traits are
+   changed only through reified deltas at a single transition choke point (§state). Traits are
    reserved for genuine *behavior* extension points: token readers, construct parsers, spec
    lookup, source resolution, and the per-language transition customizer.
    This single principle resolves most of the "how generic should X be" questions.
@@ -66,14 +70,14 @@ Derived from your stated goals and the decided parts of the existing documents:
    LaTeX behavior lives in a *preset* (§8).
 
 4. **Zero-copy by default; logical content is first-class.** Tokens reference source content by
-   byte spans. Node *textual content* is `TextContent` (§L4): span-backed when it came from
+   byte spans. Node *textual content* is `TextContent` (§nodes): span-backed when it came from
    parsing, owned when synthesized or normalized — the span is provenance, not the content's
    storage. Identity-bearing data (callable names) is always owned.
 
 5. **Closed structural core, open payloads.** The engine knows a small fixed set of *structural*
    shapes (chars, group, callable invocation, comment, list) — no `Custom` variant, no
    open-ended node trait objects. Semantics attach through specs; custom data attaches through
-   per-node and per-kind ext types supplied by `Lang` (§L4), orthogonal to structural identity.
+   per-node and per-kind ext types supplied by `Lang` (§nodes), orthogonal to structural identity.
 
 6. **Zero mandatory dependencies; `no_std`-friendly core.** Hand-written `Display`/`Error`
    impls instead of `thiserror`; no `log` — library conditions flow through the diagnostics
@@ -88,24 +92,60 @@ Derived from your stated goals and the decided parts of the existing documents:
 
 ---
 
-## 3. The layered architecture
+## 3. The architecture: three strata, three rules
 
-Strict layering; each layer depends only on lower ones. Arrows in the ownership graph only point
-downward (this is also the Arc-cycle-prevention invariant from SOURCE_ARCHITECTURE.md).
+*(Revised July 2026. An earlier draft presented a strict L0–L7 layer ladder here; review showed
+its middle "layers" form one strongly-connected component **by design** — every cycle edge is a
+decided feature: state stores libraries (`\newcommand`); lookup takes the state (mode-aware
+`SpecLookup`); specs carry their invocation parser (the pylatexenc escape hatch); parsers build
+nodes and derive states; nodes record their parse-time state and spec. No renumbering can make
+that region a DAG, so the ladder was replaced by the strata below, whose boundaries are real.
+Full argument: DESIGN_RATIONALE.md §3.11.)*
 
 ```
-L7  presets/           latexlike preset; later: flm (separate crate)
-L6  engine/            Language<L>, ParserSession, ParseResult, NodeRef
-L5  constructs/        ConstructParser trait + standard construct parsers
-L4  node/              NodeTree (flat), NodeKind<L>, CallableData, TextContent, ext payloads
-L3  spec/ + library/   CallableSpec (de-keyed), StdCallableSpec, CallableTypeId, Library, LibraryStack
-L2  state/             ParsingState<L>: stored TokenRules + libraries + L::StateExt; derived() + deltas
-L1  token/             Token<'s> (span-based), TokenReader trait, StdTokenReader
-L0  source/            Source, SourceSpan, SourceProvenance, SourceResolver, cursor, LineIndex
-    error.rs           spans-based diagnostics, recovery tokens
+S2  presets      latexlike (module; §8); later: flm (separate crate)
+S1  core         ONE mutually-recursive stratum, organized as topic modules:
+                   Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · spec/ + library/
+                   · node/ (NodeTree, NodeKind) · constructs/ (ConstructParser + std parsers)
+                   · engine/ (Language<L>, ParserSession, ParseResult, NodeRef)
+                 Modules are topics for navigation, NOT dependency ranks.
+S0  foundation   Lang-free true DAG:
+                   source/ (Source, SourceSpan, SourceProvenance, SourceResolver, cursor,
+                   LineIndex) · error.rs (span-based diagnostics, recovery) · token data
+                   (Span, Token<'s>, TokenKind, TokenRules, PrefixTable, scanning core)
+                   · TextContent
 ```
 
-### L0 — source (adopt SOURCE_ARCHITECTURE.md)
+Three enforced rules replace "each layer depends only on lower ones" — each mechanically
+checkable, unlike the old ladder (which the design violated by intention):
+
+1. **S0 never names `Lang`.** (Checkable by imports.) S0 is the part testable without inventing
+   a language, and where the zero-copy/no_std discipline bites hardest.
+2. **S1 never names a preset.** (Checkable by imports.) The boundary behind principle 3.
+3. **The runtime ownership graph is acyclic.** (Checkable by inspecting struct fields.)
+   nodes → {states, specs, sources}; states → specs; specs → parsers; sources → sources;
+   no runtime value references nodes. This generalizes the Arc-cycle-prevention invariant of
+   §source and is what the old "arrows point downward" rule was really about.
+
+The disentangling insight: the ladder conflated three different graphs. The **type/signature
+graph** is cyclic inside S1 — harmlessly: traits are just signatures, `dyn` references are how
+a recursive knot is tied, and cross-module cycles within one crate are idiomatic Rust. The
+**runtime ownership graph** must stay acyclic (rule 3). The **build order** (§9) is a
+topological order over *concrete machinery*, which stays DAG-shaped even where signatures are
+mutually recursive — stubs bridge the knot (Phase 2's tokenizer runs against a hardcoded
+`TokenRules` precisely because the scanning core is knot-free).
+
+Within S1 the useful distinction is not vertical but by **role**: plain data (`StateData`,
+`NodeKind`, …); contracts (the dyn extension-point traits — `TokenReader`, `SpecLookup`,
+`CallableSpec`, `ConstructParser`, `SourceResolver` — plus `Lang`); standard machinery
+(`StdTokenReader`, `Library`, `NodesParser`, …); orchestration (`Language`, `ParserSession`).
+A module may span strata: `token/` holds S0 data *and* the S1 `TokenReader<L>` contract —
+module = topic.
+
+The rest of this section walks the topics bottom-up; the former layer labels survive only as
+section names (§source, §token, §state, §specs, §nodes, §constructs, §engine).
+
+### source (S0) — adopt SOURCE_ARCHITECTURE.md
 
 Exactly as decided in March: `Arc<Source>`-based `SourceSpan`, provenance enum
 (`Primary` / `Resolved` / `Synthesized`) with `triggered_at: SourceSpan` back-references,
@@ -135,7 +175,7 @@ to be decided. Note that `Weak<T>`, Rust's usual cycle-breaker, is not applicabl
 nodes live in a flat `Vec<NodeData>`, not behind per-node `Arc`s, so there is nothing to point
 a `Weak` at.
 
-### L1 — token
+### token (S0 scanning core; S1 reader contract)
 
 Tokens are **transient, span-based, zero-copy**:
 
@@ -183,7 +223,18 @@ pub trait TokenReader<'s, L: Lang> {
 
   (`next` = provided method: peek + move_past, as in the current WIP — keep.)
 
-### L2 — parsing state  *(Decision 1 — RESOLVED, July 2026)*
+**Stratum split within this topic** (July 2026): `Span`, `Token`, `TokenKind`, `TokenRules`,
+the derived `PrefixTable`, and the concrete `detect_*` scanning core are **S0** — Lang-free,
+driven by `&TokenRules` (+ prefix table), testable without inventing a language (exactly what
+Phase 2 builds). The `TokenReader<L>` *trait* is **S1**: `peek` deliberately receives
+`&ParsingState<L>`, not `&TokenRules`, because the trait is the documented escape hatch for
+catcode-like tokenization (§8 non-goals), and such a reader keeps its tables in `L::StateExt`
+— which only the full state exposes. Narrowing the parameter to the rules would quietly sever
+the escape hatch from language-specific state. `StdTokenReader` implements the trait by
+reading the state's rules and forwarding to the S0 scanning core. Both halves live in the
+`token/` module — module = topic, not stratum (§3).
+
+### state (S1) — parsing state  *(Decision 1 — RESOLVED, July 2026)*
 
 Parsing state is **materialized data behind a single transition choke point** ("Option C" of
 the design discussion recorded in §4). All stored fields are private; the public read surface
@@ -212,6 +263,9 @@ pub struct TokenRules {
     pub forbidden_chars: String,
 }
 ```
+
+(`TokenRules` is S0 data, *defined* in the token topic and merely *stored* here — shown for
+context.)
 
 **Deltas are reified override values** — pylatexenc's "changed kwargs", typed — and double as
 the argument of the copy-with-style transition:
@@ -277,7 +331,7 @@ Properties, roughly in decreasing order of importance:
   a new one only at transitions, so nodes record their parse-time state
   (SOURCE_ARCHITECTURE.md decision, kept). No `TypeId` maps, no `dyn Any`.
 
-### L3 — specs and libraries  *(updated per Decision 3 resolution — §4b)*
+### specs (S1) — specs and libraries  *(updated per Decision 3 resolution — §4b)*
 
 The **callable** concept from PARSING_STRATEGY.md, unified and **de-keyed**: a spec records
 *callable behavior*, not the form or name under which it is invoked. The invocation form is an
@@ -296,7 +350,7 @@ pub trait CallableSpec<L: Lang> {
     /// specs; overriding it is the full-takeover escape hatch (\verb, tabular preambles,
     /// FLM constructs) — pylatexenc's most valuable extensibility property, preserved.
     fn invocation_parser(&self) -> &dyn ConstructParser<L, Output = NodeId>;
-    /// Optional recomposition hook (§L4 level 2) for constructs whose custom parser
+    /// Optional recomposition hook (§nodes level 2) for constructs whose custom parser
     /// records per-instance syntax the default recomposer cannot infer.
     // fn recompose(&self, …) -> …   — default covers declaratively-specced callables
 }
@@ -314,8 +368,8 @@ machinery underneath is shared, so nothing breaks structurally either way.
 
 The core ships one standard implementation (`StdCallableSpec`: the two structure specs +
 optional parser override). The familiar `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` names
-survive as constructor helpers in the preset layer — "macro" and "environment" are invocation
-forms, not core concepts.
+survive as constructor helpers in the preset stratum (S2) — "macro" and "environment" are
+invocation forms, not core concepts.
 
 **Libraries** (supersedes `ContextDb`, per PROPOSALS.md but simplified):
 
@@ -332,7 +386,7 @@ pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, inner
 
 - **Keys are `(CallableTypeId, name)`, many-to-one**: several names may map to one shared
   behavior spec (flyweight). Library keys hold the *normalized* name; the node records the
-  *invocation spelling* (§L4) — the right split given de-keyed specs.
+  *invocation spelling* (§nodes) — the right split given de-keyed specs.
 - Resolution: ordered stack, innermost/last-added wins (lexical shadowing — matches
   `\newcommand` semantics and group-local definitions). No `ConflictStrategy` enum: shadowing
   *is* the semantic; an optional lint pass can warn on shadowing if wanted. **[DECISION 6 —
@@ -350,7 +404,7 @@ pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, inner
   `ParsingStateDelta::push_libraries`; popping happens naturally because the previous
   `Arc<ParsingState>` is restored when the group ends.
 
-### L4 — nodes  *(Decision 3 — RESOLVED, July 2026; evolution recorded in §4b)*
+### nodes (S1)  *(Decision 3 — RESOLVED, July 2026; evolution recorded in §4b)*
 
 Flat, frozen, index-based storage (SOURCE_ARCHITECTURE.md), with a **unified callable kind**
 and a **two-tier ext system**:
@@ -377,7 +431,7 @@ pub enum NodeKind<L: Lang> {
 pub struct CallableData<L: Lang> {
     pub callable_type: CallableTypeId,   // invocation form: latexlike MACRO / ENVIRONMENT / SPECIALS
     pub name: Box<str>,                  // invocation spelling; identity ⇒ always owned
-    pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None (§L3 fallback)
+    pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None (§specs fallback)
     pub args: ArgsLayout,                // spec-slot refs + presence + per-instance syntax choices
     pub slots: SlotsLayout,              // 0..n content regions (environment body = 1 slot)
     pub post_space: TextContent,         // reproduced verbatim in recomposition
@@ -461,7 +515,7 @@ fabricating sources). The concrete transformation/visitor APIs are deliberately 
 undesigned (post-Phase-6); post-processing may equally produce non-tree outputs (HTML, JSON,
 analysis results) by walking the tree via `NodeRef`.
 
-### L5 — construct parsers
+### constructs (S1) — construct parsers
 
 The single most important trait in the system. To avoid pylatexenc's three-argument threading
 (`walker, token_reader, parsing_state`), everything a parser needs rides in one context:
@@ -487,8 +541,8 @@ loop (`NodesParser`, pylatexenc's `LatexGeneralNodesParser` + nodes collector):
 loop:
   tok = tokens.peek(state)
   match tok.kind:
-    Chars           -> accumulate chars node (incl. whitespace-only chars nodes, §L4)
-    ParagraphBreak  -> own node (representation: preset decision, §L4)
+    Chars           -> accumulate chars node (incl. whitespace-only chars nodes, §nodes)
+    ParagraphBreak  -> own node (representation: preset decision, §nodes)
     GroupOpen(t)    -> GroupParser(t)                  (delimiters from state.rules)
     CommentStart    -> CommentParser
     Macro(name)     -> libraries.lookup(CT_MACRO, name, state)     (unknown -> fallback singleton)
@@ -511,7 +565,7 @@ arrive via the preset's `\begin`/`\end` specs), `ArgumentsParser` (+ std argumen
 `SlotsParser` (separators/terminators with invocation-name back-reference), `DelimitedParser`,
 `VerbatimParser`, `ExpressionParser` (single node).
 
-### L6 — engine
+### engine (S1) — orchestration
 
 Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally with
 `EnvironmentSpec`/`EnvironmentNode`. **[DECISION 2 — decided, July 2026]**:
@@ -520,10 +574,10 @@ Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally
 pub trait Lang: Sized {                 // the compile-time bundle (was: LanguageSpecification)
     type StateExt:  Clone + Debug + Default;
     type Event:     Clone + Debug;      // semantic transition events (e.g. FLM's EnterMath)
-    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§L4)
+    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§nodes)
     type SourceOrigin: …;
 
-    /// Transition customizer — the choke-point hook of §L2. Default: empty.
+    /// Transition customizer — the choke-point hook of §state. Default: empty.
     fn finalize_transition(new: &mut StateData<Self>, prev: &ParsingState<Self>,
                            events: &[Self::Event]) {}
 }
@@ -537,6 +591,17 @@ impl<L: Lang> Language<L> {
     pub fn session(&self) -> ParserSession<'_, L>;    // advanced path
 }
 ```
+
+**Stratum note** (July 2026): the `Lang` trait and its bound-trait `NodeExtTypes` are
+*documented* here as the compile-time bundle, but their *definitions* live in the S1 core next
+to the state types — `finalize_transition` names `StateData`/`ParsingState`, which fixes their
+home; and `NodeExtTypes` stays with `Lang` rather than in `node/`, even though its meaning is
+a node concern (moving it there would recreate a cycle for cosmetics). Only `Language<L>` —
+the runtime bundle — is genuinely an orchestration type. Its content reaches the lower topics
+by **seeding, not dependency**: at session start it constructs the initial
+`Arc<ParsingState<L>>` from its defaults (default `TokenRules`, base libraries, default
+`StateExt`); from then on the token loop reads the materialized state and never consults
+`Language`.
 
 “Define a language once, parse many documents in it” — `Language<L>` owns no per-parse state.
 `ParserSession` (transient) builds the `NodeTree`, creates `Arc<Source>`s (resolver,
@@ -567,7 +632,7 @@ lets sources be freed only when the last `SourceSpan` in any tree drops.
 
 ## 4. How Decision 1 was resolved (facet traits → A → B → C)
 
-Recorded so the reasoning survives; the resulting design is §L2. Four candidates were compared
+Recorded so the reasoning survives; the resulting design is §state. Four candidates were compared
 (discussion of July 2026):
 
 **Per-facet traits (the WIP in `src/state/`)** — each tokenization facet behind its own trait
@@ -610,7 +675,7 @@ A simplification fell out of the follow-up `copy_with` discussion: there is **no
 (`ParsingStateDelta<L>`, a struct of optional overrides + events) *is* the argument of
 `derived()`; standard changes and semantic events travel in one mergeable, inspectable value.
 The change-description must remain a *value* (not a closure, not a direct constructor call)
-because producer and scope-decider differ — see the producer/scope split in §L2.
+because producer and scope-decider differ — see the producer/scope split in §state.
 
 What survives from the WIP `src/state/`: the cached sorted delimiter-prefix table
 (`cached_prefix_strings`, with the open/close-ambiguity merging — good work, keep it), the
@@ -621,7 +686,7 @@ recovery-token mechanism.
 
 ## 4b. How Decision 3 was resolved (`Custom` variant → unified `Callable` + two-tier ext)
 
-Recorded so the reasoning survives; the resulting design is §L3/§L4 (discussion of July 2026).
+Recorded so the reasoning survives; the resulting design is §specs/§nodes (discussion of July 2026).
 
 - The original proposal — closed structural enum + `Custom(L::NodeData)` variant — conflated
   two needs: *extra per-instance data on a node that IS structurally a group/macro/…* (the
@@ -659,9 +724,9 @@ Recorded so the reasoning survives; the resulting design is §L3/§L4 (discussio
 
 Generic (via the single `L: Lang`):
 - `StateExt` — language-specific parsing state (math mode etc.). Typed, no `Any`.
-- `Event` — semantic transition events, consumed by `Lang::finalize_transition` (§L2).
+- `Event` — semantic transition events, consumed by `Lang::finalize_transition` (§state).
 - `NodeExts` — bundle of node ext types: uniform `NodeExt` (every node) plus per-kind
-  `CharsNodeExt` / `GroupNodeExt` / `CallableNodeExt` / `CommentNodeExt` / `ListNodeExt` (§L4).
+  `CharsNodeExt` / `GroupNodeExt` / `CallableNodeExt` / `CommentNodeExt` / `ListNodeExt` (§nodes).
 - `SourceOrigin` — origin metadata type.
 
 Defaults: `Lang` for the latexlike preset is a ZST (`Latexlike`), and type aliases
@@ -731,7 +796,7 @@ exists on top is a bikeshed we can defer.
 
 ---
 
-## 8. The latexlike preset (L7)
+## 8. The latexlike preset (S2)
 
 A module (`techy::latexlike`), not a separate crate, providing:
 
@@ -756,14 +821,17 @@ catcode-like tokenization.
 
 ## 9. Implementation phases
 
-Each phase ends with `cargo build && cargo test` green and that layer documented. No phase
-starts until the previous layer's API is discussed and settled.
+Each phase ends with `cargo build && cargo test` green and that topic documented. No phase
+starts until the previous phase's API is discussed and settled. The phase sequence is a build
+order over *concrete machinery* (the third graph of §3) — DAG-shaped even where S1 signatures
+are mutually recursive; stubs bridge the knot (e.g. Phase 2's tokenizer runs against a
+hardcoded `TokenRules` value).
 
 - **Phase 0 — decisions & doc hygiene.** Resolve [DECISION 1–7] — ✅ done, July 2026
   (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10) —
   ✅ done, July 2026 (stale docs archived to `docs/archive/`; `NAMING_STRATEGY.md`
   rewritten per §7).
-- **Phase 1 — `source` + `error`.** Rewrite per §L0; port the good tests from current
+- **Phase 1 — `source` + `error`.** Rewrite per §source; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
   — ✅ done, July 2026. Origin type = plain defaulted parameter `Source<O: SourceOrigin>`
   with default `Option<String>` (`L::SourceOrigin` plugs in at Phase 3+); crate made
@@ -785,7 +853,7 @@ starts until the previous layer's API is discussed and settled.
   `materialize()`.
 - **Phase 6 — `constructs` + `engine`.** `ParseContext`, `NodesParser`, group/comment/callable
   parsers, `ArgumentsParser` + `SlotsParser`, `Language<L>`/`ParserSession`/`ParseResult`;
-  pin down the whitespace/span invariants of §L4; end-to-end tests on real LaTeX snippets.
+  pin down the whitespace/span invariants of §nodes; end-to-end tests on real LaTeX snippets.
 - **Phase 7 — `latexlike` preset.** Environments via `\begin`/`\end` specs, math group types +
   mode-aware lookup, verbatim, std library; tolerant-parsing behavior tests; port a slice of
   pylatexenc's walker test suite as acceptance tests.
@@ -807,7 +875,7 @@ Too many overlapping documents; several are stale or superseded. Proposal:
 `DEVELOPMENT.md`, `PARSING_STRATEGY.md` (its decisions are absorbed here),
 `pylatexenc_to_rust_strategy.md` and `PROPOSALS.md` (keep accessible as pylatexenc feature
 inventory + TeX gap analysis); `SOURCE_ARCHITECTURE.md` — ✅ archived July 2026, its surviving
-content folded into §L0/§L4/§L6 here and DESIGN_RATIONALE.md §3.1/§3.5 (superseded parts: the
+content folded into §source/§nodes/§engine here and DESIGN_RATIONALE.md §3.1/§3.5 (superseded parts: the
 `SharedPointer` GAT by Decision 4, `FLMEnvironment` naming by Decision 2, its open-ended
 generic-node-data sketch by Decision 3's ext system).
 
@@ -824,7 +892,7 @@ the `DECISIONS.md` idea originally proposed here). New design discussions should
    overrides-struct (+ `L::Event`s) as the reified change value; `derived()` as the sole
    constructor of non-initial states; `Lang::finalize_transition` as the customizer for
    cross-cutting rules. Replaces the per-facet trait + macro design in `src/state/`.
-   (Design: §L2. Rationale, including rejected Options A and B: §4.)
+   (Design: §state. Rationale, including rejected Options A and B: §4.)
 2. **RESOLVED (July 2026): naming.** `Lang` trait + `Language<L>` runtime object (dropping
    `FLMEnvironment` and `LanguageSpecification`). (§7)
 3. **RESOLVED (July 2026): unified `Callable` node kind + two-tier ext + `TextContent`
@@ -834,7 +902,7 @@ the `DECISIONS.md` idea originally proposed here). New design discussions should
    names, `TextContent` content, `post_space` kept; args/slots as two named concepts over
    shared machinery; whitespace-as-chars-nodes + exact sibling-span partition; recomposition
    levels 1+2 as stated requirements constraining `ArgsLayout`. **No core `MathNode`** (math =
-   group types + preset state ext). (Design: §L3/§L4. Rationale: §4b.)
+   group types + preset state ext). (Design: §specs/§nodes. Rationale: §4b.)
 4. **RESOLVED (July 2026): defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias
    for now. (§5)
 5. ✅ **DECIDED (July 2026): zero mandatory dependencies.** Drop `thiserror` (hand-written
@@ -845,7 +913,16 @@ the `DECISIONS.md` idea originally proposed here). New design discussions should
 6. **RESOLVED IN PART (July 2026): no `ConflictStrategy`** — library resolution = ordered
    stack with lexical shadowing, no built-in mode tables. **Deferred:** the `SpecLookup`
    semantics and behavior (including mode-awareness via the state argument) are to be
-   discussed. (§L3)
-7. **RESOLVED (July 2026): rebuild `src/` layer-by-layer** per §9 rather than repairing the
+   discussed. (§specs)
+7. **RESOLVED (July 2026): rebuild `src/` phase-by-phase** per §9 rather than repairing the
    current tree in place (salvaging: prefix-table logic, `detect_*` decomposition, recovery
    tokens, source tests, line-index logic).
+8. **DECIDED (July 2026): three strata + three rules replace the strict L0–L7 layer ladder.**
+   S0 Lang-free foundation / S1 single mutually-recursive core stratum (modules are topics,
+   not dependency ranks) / S2 presets; rules: no `Lang` in S0, no preset in S1, acyclic
+   runtime ownership graph. Consequences: `TokenRules` + `PrefixTable` + the scanning core
+   are S0, defined in the token topic; the `TokenReader<L>` trait is S1 and keeps its
+   `&ParsingState<L>` parameter (escape-hatch access to `L::StateExt`); `Lang` +
+   `NodeExtTypes` are defined in the core next to the state types, not in `engine/` or
+   `node/`; `Language<L>` participates only by seeding the initial state. (Design: §3.
+   Rationale: DESIGN_RATIONALE.md §3.11.)

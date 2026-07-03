@@ -149,7 +149,8 @@ hop per *source*, forming a provenance tree walkable for error reports. The WIP 
 per-location `via: [SourceLocationVia]` vector paid per-token/per-node cost for information
 that is constant per source. Removing it also structurally prevents Arc cycles: the invariant
 is *source types never reference node types* (reference graph strictly layered:
-nodes → sources/specs/state; sources → sources).
+nodes → sources/specs/state; sources → sources) — generalized in July 2026 to the crate-wide
+acyclic-runtime-ownership rule (§3.11, rule 3).
 *Revisit if:* a use case needs per-node provenance distinct from its source's provenance
 (e.g. token-level macro-expansion tracing à la TeX).
 
@@ -179,8 +180,9 @@ lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
 **default origin simplified to an optional URL string** — REVISED (user, July 2026).
 `Source<O: SourceOrigin = Option<String>>` takes the origin type as a plain, defaulted type
 parameter; `SourceSpan`/`SourceProvenance`/`SourceResolver`/`Diagnostic` carry the same
-parameter. When `Lang` arrives (Phase 3+), higher layers plug `L::SourceOrigin` into this
-parameter — L0 never depends on `Lang`, preserving the strict layering of ARCHITECTURE.md §3.
+parameter. When `Lang` arrives (Phase 3+), the S1 core plugs `L::SourceOrigin` into this
+parameter — the source topic never depends on `Lang`, per the Lang-free-foundation rule
+(S0; ARCHITECTURE.md §3, rule 1).
 The `SourceOrigin` trait provides only `label()` (diagnostics display) on top of
 `Debug + Clone + Default`. The default origin type is `Option<String>`: conventionally the
 URL the content was obtained from, `None` when unknown or when the content was synthesized.
@@ -235,6 +237,8 @@ follows pylatexenc's proven `LatexTokenReaderBase` design.
 Salvage note: the WIP `detect_*` decomposition and the cached sorted delimiter-prefix table
 (with open/close ambiguity merging, e.g. `$` both opening and closing) are good and should be
 ported into `StdTokenReader`.
+Stratum note (July 2026): the trait deliberately takes `&ParsingState<L>`, not `&TokenRules`
+— a catcode-like reader keeps its tables in `L::StateExt`; see §3.11.
 
 ### 3.3 Parsing state and deltas
 
@@ -270,7 +274,7 @@ state (definitions pushed inside `{…}`) pops naturally by restoring the previo
 scope — whether a delta applies to following siblings or dies with the group.
 
 **Settings are stored data; dependent settings recomputed at transitions (Option C)** — DECIDED
-(user-led, July 2026; ARCHITECTURE.md §L2/§4, Decision 1 RESOLVED).
+(user-led, July 2026; ARCHITECTURE.md §state/§4, Decision 1 RESOLVED).
 Every effective setting is a plain field — no getters compute values on read. Cross-cutting or
 derived settings (e.g. escape char = `#` in math mode) are recomputed by a single
 `Lang::finalize_transition(new, prev, events)` hook that runs when a new state is built. The
@@ -445,6 +449,56 @@ Decided conventions (NAMING_STRATEGY.md, Dec 2025, still in force):
 When naming something new: check NAMING_STRATEGY.md, then ask "does this collide with or
 shadow an existing concept in LaTeX terminology or in this codebase?"
 
+### 3.11 Crate organization and dependency model
+
+**Three strata + three rules replace the strict L0–L7 layer ladder** — DECIDED (user-led,
+July 2026; ARCHITECTURE.md §3 revised accordingly).
+S0 *foundation* (Lang-free, a true DAG: source, error/diagnostics, `Span`/`Token`/`TokenKind`,
+`TokenRules` + `PrefixTable` + the concrete scanning core, `TextContent`); S1 *core* (a single
+mutually-recursive stratum: `Lang` + `NodeExtTypes`, state, spec/library, node, constructs,
+engine — modules are topics for navigation, not dependency ranks); S2 *presets*. Three
+enforced rules: (1) S0 never names `Lang` (import-checkable); (2) S1 never names a preset
+(import-checkable); (3) the runtime ownership graph is acyclic — nodes → {states, specs,
+sources}; states → specs; specs → parsers; sources → sources; no runtime value references
+nodes (field-inspection-checkable).
+*Rationale:* the discussion started from "`Language<L>` is listed at L6 but its information is
+needed at L1/L2" (answer: `Language` only *seeds* the initial `ParsingState`; the hot loop
+reads materialized state) and ended with the decisive observation that the middle layers form
+a strongly-connected component **by intention** — every cycle edge is itself a decided
+feature: state stores libraries (`\newcommand`), lookup takes the state (mode-aware
+`SpecLookup`), specs carry their invocation parser (the pylatexenc escape hatch), parsers
+build nodes and derive states, nodes record their parse-time state and spec. Hence no
+renumbering could restore a DAG, and "L3 shall not use L5" was a law the design already
+violated deliberately. The confusion dissolves once three graphs the ladder conflated are
+separated: the *type/signature* graph (cyclic inside S1, harmless — traits are signatures,
+`dyn` references tie the knot, cross-module cycles within one crate are idiomatic Rust); the
+*runtime ownership* graph (must stay acyclic — rule 3, generalizing §3.1's
+sources-never-reference-nodes invariant); and the *build order* (§9 phases sequence concrete
+machinery, which stays DAG-shaped even where signatures are mutually recursive — Phase 2's
+tokenizer runs against a hardcoded `TokenRules`). Within S1 the useful distinction is by
+*role* — data / contracts / standard machinery / orchestration — not by rank.
+Consequences worth pinning:
+- `TokenRules` and `PrefixTable` are *defined* in the token topic (S0) and merely *stored* by
+  `ParsingState`; the scanning core is Lang-free and testable standalone.
+- The `TokenReader<L>` trait is S1 and keeps `&ParsingState<L>` (not `&TokenRules`) in `peek`:
+  it is the documented catcode escape hatch, and such a reader keeps its tables in
+  `L::StateExt`; narrowing to the rules would sever the escape hatch from language state.
+  `Token` (S0 data) and `TokenReader` (S1 contract) share `token/` — module = topic, the
+  concrete case showing "modules as ranks" was untenable.
+- `Lang` and `NodeExtTypes` are defined in the core next to the state types
+  (`finalize_transition` names `StateData`/`ParsingState`, fixing their home); `NodeExtTypes`
+  does not move into `node/` despite its meaning being a node concern — that would recreate a
+  cycle for cosmetics.
+- `Language<L>` contributes at exactly one moment: seeding the initial state (default rules,
+  base libraries, default ext) at session start.
+*Rejected:* renumbering/reshuffling layers (no assignment makes an SCC a DAG); collapsing
+everything into one stratum (loses the two boundaries that are real and checkable: the
+Lang-free line and the preset line); moving `TokenReader` "up a layer" away from `Token`
+(the trait/impl split by rank served no invariant and read as unnatural); narrowing the
+`TokenReader` contract to `&TokenRules` to keep it "L1" (see above).
+*Revisit if:* the crate is ever split into multiple crates — crate boundaries force true
+DAGs; S0 is the natural split candidate, while S1 cannot be split along topic lines.
+
 ---
 
 ## 4. Rejected patterns — do not reintroduce
@@ -484,6 +538,10 @@ holding the full argument.
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
 - **Tokenizer-level environment recognition (`\begin{…}` tokens)** (§3.2) — bakes language
   semantics into the tokenizer; `\begin` is an ordinary macro, environments are a parser concern.
+- **A strict dependency ladder through the crate's middle (the old L2–L6 layering)** (§3.11) —
+  the middle is a strongly-connected component by intention (each cycle edge is a decided
+  feature); enforce the three real rules (Lang-free foundation, preset line, acyclic runtime
+  ownership) instead of a fictional ranking.
 
 ---
 
