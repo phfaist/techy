@@ -127,12 +127,13 @@ name-plus-kind enum was dropped as too rigid — see DESIGN_RATIONALE.md.)*
 **Arc-cycle prevention is structural, not a discipline.** `Source`, `SourceSpan`, and
 `SourceProvenance` may reference other sources, never nodes; the reference graph is strictly
 layered (nodes → sources/specs/state; sources → sources), so cycles are impossible by type
-definition — verifiable by inspecting the fields of the source types. If a use case ever needs
-"which node triggered this source", store the triggering node's **span** (a `SourceSpan` points
-to a `Source`, no cycle) and recover the node by searching the tree for spans covering that
-location — O(n), acceptable because it's diagnostics-only. Note that `Weak<T>`, Rust's usual
-cycle-breaker, is not applicable here anyway: nodes live in a flat `Vec<NodeData>`, not behind
-per-node `Arc`s, so there is nothing to point a `Weak` at.
+definition — verifiable by inspecting the fields of the source types. "Which node triggered
+this source" is tracked at a higher level: `ParserSession` keeps a **synthetic-source
+registry** tracking the synthesized/resolved sources it creates and the nodes that created
+them. General direction decided; how the registry refers to nodes and its exact lifecycle are
+to be decided. Note that `Weak<T>`, Rust's usual cycle-breaker, is not applicable here anyway:
+nodes live in a flat `Vec<NodeData>`, not behind per-node `Arc`s, so there is nothing to point
+a `Weak` at.
 
 ### L1 — token
 

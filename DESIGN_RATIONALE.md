@@ -153,6 +153,15 @@ nodes → sources/specs/state; sources → sources).
 *Revisit if:* a use case needs per-node provenance distinct from its source's provenance
 (e.g. token-level macro-expansion tracing à la TeX).
 
+**Source→triggering-node mapping lives in a session-owned registry** — general direction
+DECIDED, details OPEN (July 2026).
+The reverse question "which node triggered this synthesized/resolved source" is answered by a
+higher-level registry owned by `ParserSession`, keeping track of the synthetic sources and the
+nodes that created them. How the registry refers to nodes, and its exact lifecycle, are to be
+decided (not plain `NodeId`s).
+*Rejected:* recovering the node by O(n) span search over the tree — works, but an implicit,
+lossy lookup where an explicit owned mapping is cheap and direct.
+
 **Line/column is a lazy, standalone utility** — DECIDED (March 2026, refined July 2026).
 The parser works purely in byte offsets; `LineIndex` computes line starts lazily and only for
 display (errors, diagnostics). The lazy-extension logic and traceback formatting in the current
