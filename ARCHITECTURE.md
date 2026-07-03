@@ -879,7 +879,7 @@ hardcoded `TokenRules` value).
 
 Too many overlapping documents; several are stale or superseded. Proposal:
 
-**Keep, as living documents:** `ARCHITECTURE.md` (this file),
+**Keep, as living documents:** `ARCHITECTURE.md` (this file), `DESIGN_RATIONALE.md`,
 `NAMING_STRATEGY.md` (✅ updated per §7, July 2026), `CLAUDE.md`, `README.md`.
 
 **Archive to `docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,
@@ -894,6 +894,12 @@ generic-node-data sketch by Decision 3's ext system).
 Decision rationale is tracked in [DESIGN_RATIONALE.md](DESIGN_RATIONALE.md) — a living log of
 the arguments, rejected alternatives, and open questions behind each decision (it supersedes
 the `DECISIONS.md` idea originally proposed here). New design discussions should append there.
+
+Do not pollute ARCHITECTURE.md and source files with detailed changes following design decisions,
+especially not at this stage with frequent design decision changes.  Design change rationales
+go in DESIGN_RATIONALE.md.  Only mention a design change in rust source/code-level doc
+or in ARCHITECTURE.md if there is a clear reason to do so, e.g., to note a pitfall that is
+not obvious.
 
 ---
 
