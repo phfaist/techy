@@ -124,6 +124,16 @@ unknown or when the content was synthesized (every source additionally carries a
 `SourceProvenance` recording *how* it entered the parse). *(Revised July 2026: an earlier
 name-plus-kind enum was dropped as too rigid — see DESIGN_RATIONALE.md.)*
 
+**Arc-cycle prevention is structural, not a discipline.** `Source`, `SourceSpan`, and
+`SourceProvenance` may reference other sources, never nodes; the reference graph is strictly
+layered (nodes → sources/specs/state; sources → sources), so cycles are impossible by type
+definition — verifiable by inspecting the fields of the source types. If a use case ever needs
+"which node triggered this source", store the triggering node's **span** (a `SourceSpan` points
+to a `Source`, no cycle) and recover the node by searching the tree for spans covering that
+location — O(n), acceptable because it's diagnostics-only. Note that `Weak<T>`, Rust's usual
+cycle-breaker, is not applicable here anyway: nodes live in a flat `Vec<NodeData>`, not behind
+per-node `Arc`s, so there is nothing to point a `Weak` at.
+
 ### L1 — token
 
 Tokens are **transient, span-based, zero-copy**:
@@ -446,7 +456,9 @@ Access is only through `NodeRef<'pr>` proxies as designed in March (Copy, resolv
 `body()`, …). Trees are immutable after `ParserSession::finish()`; transformations build new
 trees (Arc-shared sources/specs/states make mixed-origin trees free — including *synthetic*
 callables and chars nodes, which owned names and `TextContent::Owned` make possible without
-fabricating sources).
+fabricating sources). The concrete transformation/visitor APIs are deliberately still
+undesigned (post-Phase-6); post-processing may equally produce non-tree outputs (HTML, JSON,
+analysis results) by walking the tree via `NodeRef`.
 
 ### L5 — construct parsers
 
@@ -528,6 +540,14 @@ impl<L: Lang> Language<L> {
 “Define a language once, parse many documents in it” — `Language<L>` owns no per-parse state.
 `ParserSession` (transient) builds the `NodeTree`, creates `Arc<Source>`s (resolver,
 synthesized sources), collects diagnostics; `finish()` freezes into `ParseResult`.
+
+**Ownership/lifetime model** (March 2026, kept): `Language<L>` is long-lived and user-controlled;
+`ParserSession<'env>` borrows it for one parse; `ParseResult<'env>` owns the frozen `NodeTree`
+and borrows the `Language` (so registry/spec lookups stay available during AST analysis);
+`NodeRef<'pr>` borrows the result. Lifetime parameters stop at these proxy/result types — node
+data itself carries **none** (Arc-wrapped spans, specs, and states make nodes self-contained),
+which is precisely what lets transformed trees outlive the `ParseResult` they came from, and
+lets sources be freed only when the last `SourceSpan` in any tree drops.
 
 ### Errors and tolerant parsing
 
@@ -654,7 +674,10 @@ Deliberately **not** generic (for now):
   a cargo feature) is mechanical. **[DECISION 4 — decided, July 2026]**
 - Spec types — extensibility comes from `CallableSpec` being a trait; no need for `Lang` to name
   concrete spec types.
-- Content backing stays behind the already-planned `SourceContent` trait (mmap deferred).
+- Content backing stays behind the already-planned `SourceContent` trait (mmap deferred; the
+  feasibility notes — page-level residency, sequential-access fit with the cursor's
+  forward-scan-plus-small-backtracks pattern — are preserved in
+  `docs/archive/SOURCE_ARCHITECTURE.md`).
 
 ---
 
@@ -776,14 +799,16 @@ starts until the previous layer's API is discussed and settled.
 Too many overlapping documents; several are stale or superseded. Proposal:
 
 **Keep, as living documents:** `ARCHITECTURE.md` (this file),
-`NAMING_STRATEGY.md` (✅ updated per §7, July 2026), `SOURCE_ARCHITECTURE.md` (referenced
-by §L0; eventually folded into `ARCHITECTURE.md`), `CLAUDE.md`, `README.md`.
+`NAMING_STRATEGY.md` (✅ updated per §7, July 2026), `CLAUDE.md`, `README.md`.
 
 **Archive to `docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,
 `TRAIT_ARCHITECTURE_QUICKREF.md`, `ALIGNMENT_AUDIT.md`, `PROJECT_SUMMARY.md`, `QUICKSTART.md`,
 `DEVELOPMENT.md`, `PARSING_STRATEGY.md` (its decisions are absorbed here),
 `pylatexenc_to_rust_strategy.md` and `PROPOSALS.md` (keep accessible as pylatexenc feature
-inventory + TeX gap analysis).
+inventory + TeX gap analysis); `SOURCE_ARCHITECTURE.md` — ✅ archived July 2026, its surviving
+content folded into §L0/§L4/§L6 here and DESIGN_RATIONALE.md §3.1/§3.5 (superseded parts: the
+`SharedPointer` GAT by Decision 4, `FLMEnvironment` naming by Decision 2, its open-ended
+generic-node-data sketch by Decision 3's ext system).
 
 Decision rationale is tracked in [DESIGN_RATIONALE.md](DESIGN_RATIONALE.md) — a living log of
 the arguments, rejected alternatives, and open questions behind each decision (it supersedes
