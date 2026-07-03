@@ -36,95 +36,6 @@ Key naming rules:
 - `constructs` module = parsers for individual LaTeX constructs (traits, parsers)
 - Node names keep simple forms: `MacroNode`, `EnvironmentNode` (already generic enough)
 
-## Current Implementation Status
-
-✅ **Fairly mature:**
-- nothing yet!
-
-⏳ **Reviewing design choices from Claude's minimal code:**
-- Source location classes
-- Basic tokenization
-- Text/chars parsing
-- Macro recognition
-- Groups `{...}` and comments
-- Specification system (MacroSpec, EnvironmentSpec)
-- Core naming migration complete
-
-📋 **Planned/TODO:**
-- Argument parsing
-- Environment parsing
-- Math mode handling
-- Verbatim content parsing
-
-
-## pylatexenc → Rust Strategy
-
-**Read [pylatexenc_to_rust_strategy.md](pylatexenc_to_rust_strategy.md) for detailed architecture!**
-
-Key improvements over Python:
-1. **Type safety**: Enums instead of isinstance() checks - TO BE REVIEWED
-2. **Memory safety**: Lifetimes prevent dangling refs, Arc for shared specs
-3. **Performance**: Zero-cost abstractions, stack allocation, &str slices
-4. **Error handling**: Result<T,E> instead of exceptions
-5. **Pattern matching**: Exhaustive token/node matching - TO BE REVIEWED
-
-Key design patterns:
-- **Node-based AST**: CharsNode, MacroNode, EnvironmentNode, etc. - TO BE REVIEWED
-- **Spec system**: Define custom macros/environments via ContextDb - TO BE REVIEWED
-- **Parser traits**: Everything parsed by specialized parser objects
-- **State deltas**: Immutable state transformations
-- **Token reader**: Abstraction over token streams
-
-## Quick Reference
-
-### Main Types
-```rust
-// High-level API
-Parser              // Entry point (was LatexWalker)
-ContextDb           // Database of macro/env specs (was LatexContextDb)
-
-// Source Location
-Source              // Owns source content, lazy line/column computation
-SourceLocation<'src> // Lightweight reference to source + byte positions
-SourceLocationDetails<'src> // Computed line/column information
-
-// Tokens
-Token               // A token
-TokenType           // Token variants
-
-// AST Nodes
-Node                // Enum of all node types
-NodeList            // Vec of nodes + span
-CharsNode, MacroNode, EnvironmentNode, GroupNode, etc.
-
-// Specs (extensibility)
-MacroSpec           // Define custom macros
-EnvironmentSpec     // Define custom environments
-ArgumentStructureSpec  // Argument patterns (was ArgumentsSpec)
-ArgumentSpec        // Individual argument
-
-// State
-ParsingState        // Parsing context
-ParsingStateDelta   // State transitions (was StateDelta)
-
-// Parsed results
-Arguments           // Parsed macro/env args (was ParsedArguments)
-```
-
-### Common Usage
-
-- TO BE REVIEWED
-
-```rust
-// Basic parsing
-let parser = Parser::new(source.to_string());
-let ast = parser.parse()?;
-
-// Custom macros
-let mut context = ContextDb::default();
-context.add_macro(MacroSpec::simple("highlight", "[{"));
-let parser = Parser::with_context(source, context);
-```
 
 ## Development Workflow
 
@@ -137,14 +48,8 @@ cargo test <name>    # Specific test
 
 ## Important Files
 
-- [pylatexenc_to_rust_strategy.md](pylatexenc_to_rust_strategy.md) - Complete architecture analysis & migration plan
-- [NAMING_STRATEGY.md](NAMING_STRATEGY.md) - Naming conventions & rationale
-- [README.md](README.md) - User-facing docs
-- [src/lib.rs](src/lib.rs) - Public API exports
-- [src/parser/mod.rs](src/parser/mod.rs) - Main Parser struct (high-level API) - TO BE REVIEWED
-- [src/constructs/mod.rs](src/constructs/mod.rs) - Parser trait and construct parsers
-- [src/node/mod.rs](src/node/mod.rs) - AST node definitions - TO BE REVIEWED
-- [src/spec/mod.rs](src/spec/mod.rs) - Extensibility system - TO BE REVIEWED
+- [ARCHITECTURE_PLAN.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
+- [DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
 
 ## Design Philosophy
 
@@ -152,7 +57,7 @@ cargo test <name>    # Specific test
 2. **Rust-first**: Leverage ownership, lifetimes, zero-cost abstractions
 3. **Extensibility**: Easy custom macros/environments via specs
 4. **Type safety**: Compiler catches errors Python couldn't
-5. **Performance**: 5-10x faster than Python target
+5. **Performance**: faster than Python target
 6. **Generic**: "techy" not "latex" - works for LaTeX-like languages
 
 ## When Helping
@@ -165,16 +70,8 @@ cargo test <name>    # Specific test
    place. Do NOT remove any code that appears useless before asking.
 4. **Use Result<T,E>** consistently, never panic in lib code
 5. **Always check naming strategy** before suggesting names
-6. **Prefer existing patterns** from pylatexenc_to_rust_strategy.md, along with NAMING_STRATEGY.md and PARSING_STRATEGY.md files.
+6. **Prefer existing patterns** from ARCHITECTURE_PLAN.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in docs/archive/ and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
 7. **Add tests** for new functionality
 8. **Keep it simple**: No over-engineering or premature optimization
 9. **Document public APIs** with examples
 
-
-## Future Architectural Considerations
-
-See bottom of [pylatexenc_to_rust_strategy.md](pylatexenc_to_rust_strategy.md) and PROPOSALS.md:
-- Library system redesign (replacing ContextDb)
-- Source tracking & provenance
-- Generic nodes & custom state for language bindings
-- TeX compliance gap analysis

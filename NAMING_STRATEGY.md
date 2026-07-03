@@ -233,7 +233,7 @@ use techy::state::{ParsingState, ParsingStateDelta};
    - `DefinitionResolver` - Resolves definition lookups
    - `SyntaxResolver` - Resolves syntax definitions
 
-   See `pylatexenc_to_rust_strategy.md` for detailed design.
+   See `docs/archive/pylatexenc_to_rust_strategy.md` for detailed design.
 
 3. **LatexToken → Token**:
    - "Latex" prefix redundant in a markup-generic library
@@ -296,7 +296,7 @@ Or use trait-based approach with syntax-specific implementations.
    - Not a simple rename - complete redesign of definition management
    - New types: `Library`, `LibrarySet`/`LibraryResolver`, `ModeContext`
    - Support for: mode-specific definitions, library composition, conflict resolution
-   - See detailed design in `pylatexenc_to_rust_strategy.md`
+   - See detailed design in `docs/archive/pylatexenc_to_rust_strategy.md`
 3. `LatexToken` → `Token` ✓ **DECIDED**
 4. `StateDelta` → `ParsingStateDelta` ✓ **DECIDED**
 5. `ArgumentsSpec` → `ArgumentStructureSpec` ✓ **DECIDED**

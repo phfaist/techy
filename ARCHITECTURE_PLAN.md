@@ -7,11 +7,14 @@ this document reflects the newer proposal; nothing here is final until discussed
 
 Decision points that need explicit sign-off are marked **[DECISION n]** and collected at the end.
 
-**Decisions 1 and 3 were discussed and RESOLVED, July 2026.**
+**All decision points (1–7) were discussed and RESOLVED, July 2026.**
 Decision 1 (parsing-state design): materialized state + transition choke point ("Option C");
 see §L2 for the design and §4 for the recorded rationale. Decision 3 (node representation):
 unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see §L3/§L4 for the design
-and §4b for the recorded rationale. The remaining decision points are still open.
+and §4b for the recorded rationale. Decisions 2 (`Lang` + `Language<L>` naming), 4 (defer
+`Rc`/`Arc` genericity), 5 (zero mandatory dependencies), and 7 (rebuild layer-by-layer) were
+accepted as proposed. Decision 6: no `ConflictStrategy` is accepted; the exact `SpecLookup`
+semantics and behavior remain **to be discussed (deferred)**.
 
 ---
 
@@ -313,7 +316,9 @@ pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, inner
   *invocation spelling* (§L4) — the right split given de-keyed specs.
 - Resolution: ordered stack, innermost/last-added wins (lexical shadowing — matches
   `\newcommand` semantics and group-local definitions). No `ConflictStrategy` enum: shadowing
-  *is* the semantic; an optional lint pass can warn on shadowing if wanted.
+  *is* the semantic; an optional lint pass can warn on shadowing if wanted. **[DECISION 6 —
+  decided, July 2026: no `ConflictStrategy`. The `SpecLookup` semantics and behavior are to
+  be discussed (deferred).]**
 - **Unknown callables**: per-`CallableTypeId` fallback policy on the stack, returning a
   **shared singleton** spec — possible precisely because specs are de-keyed (nothing
   instance-specific lives in them). Consequence: a callable node's spec is **never `None`**.
@@ -488,7 +493,7 @@ arrive via the preset's `\begin`/`\end` specs), `ArgumentsParser` (+ std argumen
 ### L6 — engine
 
 Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally with
-`EnvironmentSpec`/`EnvironmentNode`. Proposed **[DECISION 2]**:
+`EnvironmentSpec`/`EnvironmentNode`. **[DECISION 2 — decided, July 2026]**:
 
 ```rust
 pub trait Lang: Sized {                 // the compile-time bundle (was: LanguageSpecification)
@@ -638,7 +643,7 @@ Deliberately **not** generic (for now):
   would infect every signature in the crate for a micro-optimization (uncontended atomic clones
   are ~1ns, and Arcs are cloned once per node, not per byte). Proposal: use `Arc` behind an
   internal alias `pub(crate) type Shared<T> = Arc<T>` so a later swap (or a later GAT layer, or
-  a cargo feature) is mechanical. **[DECISION 4]**
+  a cargo feature) is mechanical. **[DECISION 4 — decided, July 2026]**
 - Spec types — extensibility comes from `CallableSpec` being a trait; no need for `Lang` to name
   concrete spec types.
 - Content backing stays behind the already-planned `SourceContent` trait (mmap deferred).
@@ -722,7 +727,8 @@ catcode-like tokenization.
 Each phase ends with `cargo build && cargo test` green and that layer documented. No phase
 starts until the previous layer's API is discussed and settled.
 
-- **Phase 0 — decisions & doc hygiene.** Resolve [DECISION 1–6]. Consolidate documents (§10).
+- **Phase 0 — decisions & doc hygiene.** Resolve [DECISION 1–7] — ✅ done, July 2026
+  (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10).
 - **Phase 1 — `source` + `error`.** Rewrite per §L0; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
@@ -763,8 +769,9 @@ by §L0; eventually folded into `ARCHITECTURE.md`), `CLAUDE.md`, `README.md`, `T
 `pylatexenc_to_rust_strategy.md` and `PROPOSALS.md` (keep accessible as pylatexenc feature
 inventory + TeX gap analysis).
 
-A short `DECISIONS.md` log (date, decision, alternatives, why) would prevent the next
-"coming back after a while" from requiring this level of archaeology.
+Decision rationale is tracked in [DESIGN_RATIONALE.md](DESIGN_RATIONALE.md) — a living log of
+the arguments, rejected alternatives, and open questions behind each decision (it supersedes
+the `DECISIONS.md` idea originally proposed here). New design discussions should append there.
 
 ---
 
@@ -776,8 +783,8 @@ A short `DECISIONS.md` log (date, decision, alternatives, why) would prevent the
    constructor of non-initial states; `Lang::finalize_transition` as the customizer for
    cross-cutting rules. Replaces the per-facet trait + macro design in `src/state/`.
    (Design: §L2. Rationale, including rejected Options A and B: §4.)
-2. **Naming:** `Lang` trait + `Language<L>` runtime object (dropping `FLMEnvironment` and
-   `LanguageSpecification`). (§7)
+2. **RESOLVED (July 2026): naming.** `Lang` trait + `Language<L>` runtime object (dropping
+   `FLMEnvironment` and `LanguageSpecification`). (§7)
 3. **RESOLVED (July 2026): unified `Callable` node kind + two-tier ext + `TextContent`
    ("Option F").** Closed structural `NodeKind<L>` (`Chars`/`Group`/`Callable`/`Comment`/
    `List`, no `Custom`); Macro/Environment/Specials merged into `Callable` with interned
@@ -786,14 +793,17 @@ A short `DECISIONS.md` log (date, decision, alternatives, why) would prevent the
    shared machinery; whitespace-as-chars-nodes + exact sibling-span partition; recomposition
    levels 1+2 as stated requirements constraining `ArgsLayout`. **No core `MathNode`** (math =
    group types + preset state ext). (Design: §L3/§L4. Rationale: §4b.)
-4. **Defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias for now. (§5)
+4. **RESOLVED (July 2026): defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias
+   for now. (§5)
 5. ✅ **DECIDED (July 2026): zero mandatory dependencies.** Drop `thiserror` (hand-written
    `Display`/`Error` impls — our errors need bespoke span/provenance rendering anyway, so the
    derive only covered the trivial part) and drop `log` entirely (library conditions surface
    through the diagnostics sink / `ParseResult`, not a logging side channel; can be reintroduced
    later as an optional feature if internal tracing proves useful).
-6. **Library resolution = ordered stack with lexical shadowing** (no `ConflictStrategy`,
-   no built-in mode tables; mode-awareness via `SpecLookup` receiving the state). (§L3)
-7. **Rebuild `src/` layer-by-layer** per §9 rather than repairing the current tree in place
-   (salvaging: prefix-table logic, `detect_*` decomposition, recovery tokens, source tests,
-   line-index logic).
+6. **RESOLVED IN PART (July 2026): no `ConflictStrategy`** — library resolution = ordered
+   stack with lexical shadowing, no built-in mode tables. **Deferred:** the `SpecLookup`
+   semantics and behavior (including mode-awareness via the state argument) are to be
+   discussed. (§L3)
+7. **RESOLVED (July 2026): rebuild `src/` layer-by-layer** per §9 rather than repairing the
+   current tree in place (salvaging: prefix-table logic, `detect_*` decomposition, recovery
+   tokens, source tests, line-index logic).
