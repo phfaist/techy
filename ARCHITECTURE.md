@@ -728,7 +728,9 @@ Each phase ends with `cargo build && cargo test` green and that layer documented
 starts until the previous layer's API is discussed and settled.
 
 - **Phase 0 — decisions & doc hygiene.** Resolve [DECISION 1–7] — ✅ done, July 2026
-  (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10).
+  (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10) —
+  ✅ done, July 2026 (stale docs archived to `docs/archive/`; `NAMING_STRATEGY.md`
+  rewritten per §7).
 - **Phase 1 — `source` + `error`.** Rewrite per §L0; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
@@ -760,7 +762,7 @@ starts until the previous layer's API is discussed and settled.
 Too many overlapping documents; several are stale or superseded. Proposal:
 
 **Keep, as living documents:** `ARCHITECTURE.md` (this file),
-`NAMING_STRATEGY.md` (update per §7), `SOURCE_ARCHITECTURE.md` (referenced
+`NAMING_STRATEGY.md` (✅ updated per §7, July 2026), `SOURCE_ARCHITECTURE.md` (referenced
 by §L0; eventually folded into `ARCHITECTURE.md`), `CLAUDE.md`, `README.md`.
 
 **Archive to `docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,

@@ -1,354 +1,121 @@
-# Naming Strategy: pylatexenc → techy
+# Naming Strategy for techy
 
-This document outlines the renaming strategy for moving away from LaTeX-specific terminology to more generic, purpose-focused names. The goal is to make `techy` applicable to any LaTeX-like markup language, not just LaTeX itself.
-
-## Status
-
-**Implementation Status**: IMMEDIATE - No migration needed (library not yet public)
-
-All renames will be applied directly without backward compatibility aliases.
+Living document recording the naming rules and the current authoritative names for the
+`techy` crate. **Last updated July 2026** to incorporate the resolved decisions of
+[ARCHITECTURE.md](ARCHITECTURE.md) §7 (which this document must stay consistent with).
+Superseded names and the reasons they changed are collected at the end; the full history
+of earlier revisions lives in git.
 
 ## Design Principles
 
-1. **Generic over Specific**: Prefer terms that describe structure/purpose rather than LaTeX-specific concepts
-2. **Consistency**: Use the same naming pattern across similar concepts
-3. **Clarity**: Names should be self-explanatory and specific enough to avoid ambiguity
-4. **Brevity**: Avoid redundant prefixes when the module/context makes it clear
-5. **Distinctiveness**: Names should be sufficiently specific to avoid confusion with unrelated concepts
-
-## Core Naming Changes
-
-### Module-Level Changes
-
-| pylatexenc | techy | Rationale |
-|------------|-------|-----------|
-| `latexnodes` | `node` | Module name implies content; "latex" prefix redundant |
-| `latexwalker` | `parser` | "latex" prefix redundant; simpler name for high-level public API |
-| `macrospec` | `spec` | Module name already implies it's for specifications |
-| N/A | `constructs` | Parsers for individual LaTeX constructs (distinct from high-level `parser` module) |
-
-### Primary Types
-
-#### Node Types
-
-| pylatexenc | Current techy | Final techy | Decision |
-|------------|---------------|-------------|----------|
-| `LatexNode` | `Node` | `Node` ✓ | **KEEP** - Already correct |
-| `LatexNodeList` | `NodeList` | `NodeList` ✓ | **KEEP** - Already correct |
-| `LatexCharsNode` | `CharsNode` | `CharsNode` ✓ | **KEEP** - Already correct |
-| `LatexMacroNode` | `MacroNode` | `MacroNode` ✓ | **KEEP** - "Macro" well-understood in markup languages |
-| `LatexEnvironmentNode` | `EnvironmentNode` | `EnvironmentNode` ✓ | **KEEP** - Clear and descriptive |
-| `LatexGroupNode` | `GroupNode` | `GroupNode` ✓ | **KEEP** - Already correct |
-| `LatexCommentNode` | `CommentNode` | `CommentNode` ✓ | **KEEP** - Already correct |
-| `LatexMathNode` | `MathNode` | `MathNode` ✓ | **KEEP** - Math is inherently LaTeX-like |
-| `LatexSpecialsNode` | `SpecialsNode` | `SpecialsNode` ✓ | **KEEP** - Already correct |
-
-**Decision**: All node names are good as-is. No changes needed.
-
-#### Context & State Types
-
-| pylatexenc | Current techy | Final techy | Decision |
-|------------|---------------|-------------|----------|
-| `LatexWalker` | `LatexWalker` | `Parser` | **RENAME** - More descriptive; "Walker" is too vague |
-| `LatexContextDb` | `LatexContextDb` | `ContextDb` | **RENAME** - Remove "Latex" prefix; **UNDER DISCUSSION** - name may not be specific enough |
-| `ParsingState` | `ParsingState` | `ParsingState` ✓ | **KEEP** - Already correct |
-| `ParsingStateDelta` | `StateDelta` | `ParsingStateDelta` | **RENAME** - "StateDelta" not specific enough; needs to clearly reference ParsingState |
-
-**Decisions**:
-- `Parser`: More accurate than "Walker" - this is the main parsing entry point
-- `ContextDb`: Remove "Latex" prefix for now. **OPEN QUESTION**: Is "Context" specific enough for a database of known markup constructs (macros/environments/specials) with defined syntax and semantics?
-- `ParsingStateDelta`: Specificity important - clarifies it's a delta for `ParsingState`, not just any state
-
-#### Specification Types
-
-| pylatexenc | Current techy | Final techy | Decision |
-|------------|---------------|-------------|----------|
-| `MacroSpec` | `MacroSpec` | `MacroSpec` ✓ | **KEEP** - "Macro" widely understood |
-| `EnvironmentSpec` | `EnvironmentSpec` | `EnvironmentSpec` ✓ | **KEEP** - Clear and descriptive |
-| `SpecialsSpec` | `SpecialsSpec` | `SpecialsSpec` ✓ | **KEEP** - Already good |
-| `ArgumentsSpec` | `ArgumentsSpec` | `ArgumentStructureSpec` | **RENAME** - Too similar to `ArgumentSpec`; "Structure" clarifies it defines the structure of arguments |
-| `ArgumentSpec` | `ArgumentSpec` | `ArgumentSpec` ✓ | **KEEP** - Clear for individual argument |
-
-**Decisions**:
-- `ArgumentStructureSpec`: Avoids confusion with singular `ArgumentSpec`. Clearly indicates this defines the structure/pattern of multiple arguments.
-
-#### Token Types
-
-| pylatexenc | Current techy | Final techy | Decision |
-|------------|---------------|-------------|----------|
-| `LatexToken` | `LatexToken` | `Token` | **RENAME** - Remove "Latex" prefix |
-| `LatexTokenReader` | `TokenReader` | `TokenReader` ✓ | **KEEP** - Already correct (trait) |
-| `StringTokenReader` | `StringTokenReader` | `StringTokenReader` ✓ | **KEEP** - Already correct |
-| `TokenType` | `TokenType` | `TokenType` ✓ | **KEEP** - Already correct |
-
-**Decision**: `Token` is appropriately generic.
-
-#### Parsed Results
-
-| pylatexenc | Current techy | Final techy | Decision |
-|------------|---------------|-------------|----------|
-| `ParsedArguments` | `ParsedArguments` | `Arguments` | **RENAME** - "Parsed" is implied by context; simpler is better |
-| `ParsedMacroArgs` | N/A | N/A | Legacy pylatexenc - not needed |
-
-**Decision**: `Arguments` is cleaner and context makes it clear they're parsed.
-
-## Final Naming Decisions
-
-All changes will be implemented immediately (no migration phase needed):
-
-```rust
-// Core API Types
-pub struct Parser { ... }                    // was: LatexWalker
-pub struct ContextDb { ... }                 // was: LatexContextDb (UNDER DISCUSSION)
-pub struct Token { ... }                     // was: LatexToken
-
-// Node Types (all kept as-is)
-pub enum Node { ... }                        // was: LatexNode
-pub struct NodeList { ... }                  // was: LatexNodeList
-pub struct MacroNode { ... }                 // was: LatexMacroNode
-pub struct EnvironmentNode { ... }           // was: LatexEnvironmentNode
-pub struct MathNode { ... }                  // was: LatexMathNode
-// ... etc (all node types keep current names)
-
-// Specification Types
-pub struct MacroSpec { ... }                 // kept as-is
-pub struct EnvironmentSpec { ... }           // kept as-is
-pub struct SpecialsSpec { ... }              // kept as-is
-pub struct ArgumentStructureSpec { ... }     // was: ArgumentsSpec
-pub struct ArgumentSpec { ... }              // kept as-is
-
-// State Types
-pub struct ParsingState { ... }              // kept as-is
-pub enum ParsingStateDelta { ... }           // was: StateDelta
-
-// Parsed Results
-pub struct Arguments { ... }                 // was: ParsedArguments
-```
-
-## Import Path Examples
-
-### Before (Current)
-
-```rust
-use techy::{LatexWalker, LatexContextDb, LatexToken};
-use techy::node::{Node, MacroNode, EnvironmentNode};
-use techy::spec::{MacroSpec, ArgumentsSpec, ArgumentSpec};
-use techy::state::{ParsingState, StateDelta};
-```
-
-### After (Final)
-
-```rust
-use techy::{Parser, ContextDb, Token};
-use techy::node::{Node, MacroNode, EnvironmentNode, Arguments};
-use techy::spec::{MacroSpec, ArgumentStructureSpec, ArgumentSpec};
-use techy::state::{ParsingState, ParsingStateDelta};
-```
-
-## Implementation Strategy
-
-**No Migration Needed** - Library is not yet public, so we can rename immediately.
-
-### Implementation Checklist
-
-1. **Core Types** (High Priority - Public API)
-   - [x] `LatexWalker` → `Parser` in `src/walker/mod.rs` (now `src/parser_api/mod.rs`)
-   - [x] `LatexContextDb` → `ContextDb` in `src/spec/mod.rs`
-   - [x] `LatexToken` → `Token` in `src/token/mod.rs`
-   - [x] `StateDelta` → `ParsingStateDelta` in `src/state/mod.rs`
-
-2. **Module Renames**
-   - [x] `walker` → `parser` module (high-level API)
-   - [x] `parser` → `parsing` module (low-level implementations)
-
-3. **Specification Types** (Medium Priority)
-   - [x] `ArgumentsSpec` → `ArgumentStructureSpec` in `src/spec/mod.rs`
-   - [x] `ParsedArguments` → `Arguments` in `src/node/mod.rs`
-
-4. **Update Re-exports** (Critical)
-   - [x] Update `src/lib.rs` public exports
-   - [x] Update module documentation
-
-5. **Update Documentation** (High Priority)
-   - [x] README.md examples
-   - [x] QUICKSTART.md examples
-   - [x] DEVELOPMENT.md examples
-   - [x] Doc comments in all source files
-
-6. **Update Tests & Examples**
-   - [x] `tests/integration.rs`
-   - [x] `examples/basic.rs`
-   - [x] `examples/custom_macros.rs`
-
-7. **Verify Build**
-   - [x] `cargo build` succeeds
-   - [x] `cargo test` passes (39/40 tests - 1 pre-existing failure)
-   - [x] Examples run correctly
-
-## Rationale for Decisions
-
-### Why These Names Were Kept
-
-1. **MacroNode**: "Macro" is widely understood in markup/template languages (not just LaTeX)
-2. **EnvironmentNode**: "Environment" is clear and generic (cf. HTML/XML environments)
-3. **MathNode**: Math notation is inherently LaTeX-like; no clearer generic alternative
-4. **MacroSpec / EnvironmentSpec / SpecialsSpec**: Already appropriately generic
-
-### Why These Names Changed
-
-1. **LatexWalker → Parser** (module: walker → parser):
-   - "Walker" is vague (walks what? how?)
-   - "Parser" accurately describes what it does
-   - Main entry point deserves clear, accurate name
-   - Follows Rust convention: simpler names for public API
-
-2. **LatexContextDb → NEW LIBRARY SYSTEM** (**ARCHITECTURAL REDESIGN**):
-
-   **DECISION**: Don't just rename `LatexContextDb` - supersede it with a more powerful library system.
-
-   **Problems with pylatexenc's LatexContextDb**:
-   - Flat namespace - no organization or modularity
-   - No mode-specific definitions (text vs math mode)
-   - No conflict resolution between different definition sources
-   - No clear library composition or load order
-   - Difficult to manage standard vs user definitions
-
-   **New Design: Library System**
-
-   Core concepts:
-   - **`Library`**: A collection of macro/environment/specials definitions
-   - **`LibrarySet`**: Multiple libraries with defined load order and resolution rules
-   - **Mode-specific definitions**: Separate definitions for text mode vs math mode
-   - **Name resolution**: Clear rules for handling conflicts
-   - **Composability**: Easy to combine standard + user libraries
-
-   Key types in the new system:
-   - `Library` - A single library of definitions
-   - `LibrarySet` or `LibraryResolver` - Manages multiple libraries with resolution
-   - `ModeContext` - Text mode vs Math mode (affects which definitions apply)
-
-   **Naming candidates for the resolver/manager**:
-   - `LibrarySet` - Set of libraries with resolution
-   - `LibraryResolver` - Resolves definitions across libraries
-   - `DefinitionResolver` - Resolves definition lookups
-   - `SyntaxResolver` - Resolves syntax definitions
-
-   See `docs/archive/pylatexenc_to_rust_strategy.md` for detailed design.
-
-3. **LatexToken → Token**:
-   - "Latex" prefix redundant in a markup-generic library
-   - "Token" is universally understood in parsing contexts
-
-4. **StateDelta → ParsingStateDelta**:
-   - "StateDelta" too vague - delta of what state?
-   - Specificity prevents confusion with other potential state deltas
-   - Clear connection to `ParsingState`
-
-5. **ArgumentsSpec → ArgumentStructureSpec**:
-   - Too similar to `ArgumentSpec` (only one letter difference!)
-   - "Structure" clarifies this defines the structure/pattern of multiple arguments
-   - Reduces cognitive load and naming collisions
-
-6. **ParsedArguments → Arguments**:
-   - "Parsed" is implied by context (it's the result of parsing)
-   - Simpler name, clearer in usage
-   - Follows Rust convention of concise type names
-
-7. **parser module vs constructs module**:
-   - `parser` = high-level user-facing API (Parser struct - main entry point)
-   - `constructs` = low-level parsers for individual LaTeX constructs (trait + implementations)
-   - Distinguishes low-level implementations from high-level API
-   - "constructs" clearly describes content: parsers for macros, environments, groups, etc.
-   - Follows Rust convention: simpler names for public API, descriptive names for internals
-
-## Future Considerations
-
-### If Supporting Non-LaTeX Syntaxes
-
-If `techy` later supports radically different syntaxes (Markdown, etc.), consider:
-
-```rust
-// Syntax-specific nodes
-pub enum Node {
-    // Generic
-    Chars(CharsNode),
-    Group(GroupNode),
-    Comment(CommentNode),
-
-    // LaTeX-specific
-    Macro(MacroNode),      // or Command
-    Environment(EnvironmentNode),  // or Block
-    Math(MathNode),
-
-    // Future: Markdown-specific
-    // Heading(HeadingNode),
-    // Link(LinkNode),
-}
-```
-
-Or use trait-based approach with syntax-specific implementations.
-
-## Summary
-
-**Changes to implement:**
-1. `LatexWalker` → `Parser` ✓ **DECIDED**
-2. `LatexContextDb` → **NEW LIBRARY SYSTEM** 🔄 **ARCHITECTURAL REDESIGN**
-   - Not a simple rename - complete redesign of definition management
-   - New types: `Library`, `LibrarySet`/`LibraryResolver`, `ModeContext`
-   - Support for: mode-specific definitions, library composition, conflict resolution
-   - See detailed design in `docs/archive/pylatexenc_to_rust_strategy.md`
-3. `LatexToken` → `Token` ✓ **DECIDED**
-4. `StateDelta` → `ParsingStateDelta` ✓ **DECIDED**
-5. `ArgumentsSpec` → `ArgumentStructureSpec` ✓ **DECIDED**
-6. `ParsedArguments` → `Arguments` ✓ **DECIDED**
-
-**Kept as-is:**
-- All node type names (`MacroNode`, `EnvironmentNode`, `MathNode`, etc.)
-- Individual spec names (`MacroSpec`, `EnvironmentSpec`, `SpecialsSpec`)
-- `ArgumentSpec` (individual argument specification)
-- `ParsingState`
-- `NodeList`, `Node`, and other already-generic types
-
-This provides an optimal balance:
-- ✅ Removes "LaTeX" coupling from core API
-- ✅ Increases specificity where needed (`ParsingStateDelta`)
-- ✅ Reduces naming confusion (`ArgumentStructureSpec` vs `ArgumentSpec`)
-- ✅ Maintains clarity with established terms (`MacroNode`, etc.)
-- ✅ Simplifies where appropriate (`Arguments`)
-- 🔄 `LatexContextDb` → Complete redesign as library system (not just renamed)
-
----
+1. **Generic over specific** — no `Latex` prefixes anywhere (`Token`, not `LatexToken`;
+   `Parser`-family names, not `LatexWalker`). The library targets LaTeX-*like* languages;
+   the familiar LaTeX behavior is a *preset*, and LaTeX-flavored names live there.
+2. **Specificity matters** — `ParsingStateDelta`, not `StateDelta` (delta of *what*?).
+3. **Clarity over brevity** — `ArgumentStructureSpec`, not `ArgumentsSpec` (one letter away
+   from `ArgumentSpec` is not enough distance).
+4. **Context determines names** — `Arguments`, not `ParsedArguments` (in a parser's output,
+   "parsed" is implied).
+5. **Registry naming rule** (systematic across the crate):
+   `…Kind` = closed core enum, exhaustively matchable (`TokenKind`, `NodeKind`);
+   `…TypeId` = open registry, interned in `Language`, preset-registered
+   (`GroupTypeId`, `CallableTypeId`).
+6. **Transitions read as adjectives** — `ParsingState::derived()` per Rust's
+   `to_uppercase` convention: signals a *transition* producing a new value, not a field copy.
+
+## Current Authoritative Names (July 2026)
+
+### Modules / layers (ARCHITECTURE.md §3)
+
+| Layer | Module | Contents |
+|---|---|---|
+| L7 | `presets` (`techy::latexlike`) | `Latexlike` lang, LaTeX-flavored helpers |
+| L6 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
+| L5 | `constructs` | `ConstructParser` trait + standard construct parsers |
+| L4 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, `TextContent`, ext payloads |
+| L3 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack` |
+| L2 | `state` | `ParsingState<L>`, `StateData`, `TokenRules`, `ParsingStateDelta` |
+| L1 | `token` | `Token<'s>`, `TokenKind`, `TokenReader`, `StdTokenReader` |
+| L0 | `source` | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` |
+| — | `error` | span-based diagnostics, recovery tokens |
+
+### Core types
+
+| Concept | Name | Notes |
+|---|---|---|
+| Compile-time type bundle | `Lang` (trait) | one generic parameter everywhere: `L: Lang` |
+| Runtime config bundle | `Language<L>` | "define a language once, parse many documents" |
+| High-level entry point | `Language::parse()` | a convenience `Parser` struct on top is a deferred bikeshed |
+| Parse session / result | `ParserSession`, `ParseResult` | session is transient; `finish()` freezes |
+| Parsing state | `ParsingState<L>` over private `StateData<L>` | getters are the public surface |
+| Tokenization data | `TokenRules` | plain stored data inside `StateData` |
+| State change value | `ParsingStateDelta<L>` | overrides-struct + `L::Event`s; a value, not a closure |
+| State transition | `ParsingState::derived()` | the sole constructor of non-initial states |
+| Transition customizer | `Lang::finalize_transition` | the choke-point hook |
+| Byte range | `Span` | `Copy`, no `Arc`; transient parsing use |
+| Arc-carrying range | `SourceSpan` | replaces lifetime-bound source locations in nodes/errors |
+| Tokens | `Token<'s>`, `TokenKind<'s>` | `…Kind` per the registry rule |
+| Token reading | `TokenReader<'s, L>` (trait), `StdTokenReader` | trait = behavior extension point |
+| Callable behavior | `CallableSpec<L>` (trait), `StdCallableSpec` | de-keyed: no name, no invocation form |
+| Invocation-form registry | `CallableTypeId` | interned in `Language`, like `GroupTypeId` |
+| Argument/slot structure | `ArgumentStructureSpec`, `SlotStructureSpec` | args configure; slots hold content regions |
+| Parsed argument values | `Arguments` / `ArgsLayout`, `SlotsLayout` | context makes "parsed" obvious |
+| Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
+| Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
+| Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
+| Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
+| Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
+| Callable payload | `CallableData<L>` | invocation form + spelling + spec + args/slots |
+| Node textual payload | `TextContent` (`Spanned` / `Owned`) | logical content first-class; span = provenance |
+| Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, `CommentNodeExt`, `ListNodeExt`; bundled as `Lang::NodeExts: NodeExtTypes` | `SimpleLang` defaults them all to `()` |
+| Source model | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `SourceContent`, `LineIndex` | per SOURCE_ARCHITECTURE.md |
+
+### Preset-layer names (`techy::latexlike`)
+
+"Macro", "environment", and "specials" are **invocation forms, not core concepts**. The
+familiar names survive in the preset layer only:
+
+- `Latexlike` — ZST implementing `Lang`.
+- `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — constructor helpers producing
+  `StdCallableSpec`s.
+- `MACRO` / `ENVIRONMENT` / `SPECIALS` — the preset's registered `CallableTypeId`s.
+- `NodeRef` accessor sugar (`as_math()`-style environment/macro views over `Callable` nodes).
+
+Type aliases (`type LatexParseResult = ParseResult<Latexlike>` …) keep simple usage
+generics-free.
+
+## Superseded Names
+
+Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN_RATIONALE.md.
+
+| Old name | Superseded by | Why |
+|---|---|---|
+| `LatexWalker` → `Parser` struct | `Language::parse()` entry point | "walker" vague; whether a convenience `Parser` struct remains is deferred |
+| `LatexContextDb` / `ContextDb` | `Library`, `LibraryStack`, `SpecLookup` | flat namespace → ordered stack with lexical shadowing |
+| `LibrarySet`, `LibraryResolver`, `ModeContext` | `LibraryStack` + state-aware `SpecLookup` | hard-coded mode tables rejected (no privileged modes); `ConflictStrategy` dropped — shadowing *is* the semantic |
+| `LanguageSpecification` | `Lang` | too long for a parameter appearing everywhere |
+| `FLMEnvironment` | `Language<L>` | fatal collision with LaTeX environments |
+| `TokenType` | `TokenKind` | registry naming rule (`…Kind` = closed enum) |
+| `StringTokenReader` | `StdTokenReader` | driven by `TokenRules` data, not tied to `String` input |
+| `StateDelta` (trait) / `StandardDelta` (enum) | `ParsingStateDelta<L>` (struct of optional overrides + events) | deltas are reified values; no apply/trait machinery |
+| `TokenizationState` / per-facet state traits | `TokenRules` stored in `StateData<L>` | materialized state + transition choke point (Decision 1) |
+| `Node` enum with `MacroNode`, `EnvironmentNode`, `SpecialsNode` variants | `NodeKind::Callable` + `CallableTypeId` | Macro/Environment/Specials differ by invocation form, not parsed shape (Decision 3) |
+| `MathNode` | `Group` with math `GroupTypeId` + preset state ext | no privileged math mode in the core |
+| `CharsNode`, `GroupNode`, `CommentNode`, `NodeList` (struct-per-type) | `NodeKind::{Chars, Group, Comment, List}` in flat `NodeTree` | flat index-based storage, `NodeRef` proxies |
+| `ParsedArguments` | `Arguments` | "parsed" implied by context (Dec 2025) |
+| `ArgumentsSpec` | `ArgumentStructureSpec` | too close to `ArgumentSpec` (Dec 2025) |
+| `Parser` trait (in `constructs`) | `ConstructParser` | avoids clash with high-level parser type |
+| `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
+| "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; open registry ⇒ `…TypeId` |
+| `GroupExt`, `NodeGroupExt` | `GroupNodeExt` (etc.) | `GroupExt` too vague; `NodeGroupExt` parses wrong |
+| `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md §3 |
+| `apply()` / `copy_with()` | `ParsingState::derived()` | adjective form; signals a transition |
 
 ## Module Rename History
 
-### `parsing` → `constructs` (December 2025)
-
-**Problem:** The `parsing` module name was too similar to `parser`, causing confusion:
-- `parser/` - High-level API (Parser struct)
-- `parsing/` - Low-level implementations (Parser trait + individual parsers)
-
-**Solution:** Renamed to `constructs`
-
-**Rationale:**
-1. **Semantically accurate** - Contains parsers for individual LaTeX constructs (macros, environments, groups, etc.)
-2. **Clear distinction** - No confusion between `parser::Parser` and `constructs::Parser` (trait)
-3. **Future-proof** - Natural organization as more parsers are added:
-   - `constructs/macro.rs` - MacroCallParser
-   - `constructs/env.rs` - EnvironmentParser
-   - `constructs/args.rs` - ArgumentParser
-   - `constructs/verbatim.rs` - VerbatimParser
-4. **Industry terminology** - LaTeX documentation talks about "constructs"
-
-**Current module structure:**
-```
-src/
-├── parser/         # High-level parsing API (Parser struct)
-└── constructs/     # Parsers for individual constructs (Parser trait + implementations)
-    ├── mod.rs      # Parser trait
-    ├── general.rs  # GeneralNodesParser
-    ├── macro.rs    # MacroCallParser (future)
-    ├── env.rs      # EnvironmentCallParser (future)
-    └── args.rs     # Argument parsers (future)
-```
-
-**Files updated:** All strategy documents (11 .md files) were updated to reflect this change. See git history for details.
+- **`parsing` → `constructs`** (Dec 2025): `parsing` was too close to `parser`;
+  "constructs" describes the content — parsers for individual constructs. The name and
+  rationale carry over unchanged into the L5 layer.
+- **`walker` → `parser` → `engine`** (Dec 2025, then July 2026): the high-level API module
+  was first renamed from `walker` to `parser`; the July 2026 architecture places the
+  high-level machinery (`Language<L>`, `ParserSession`) in `engine` instead.
