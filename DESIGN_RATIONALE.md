@@ -1,14 +1,14 @@
 # Design Rationale & Decision Log
 
-**Status: LIVING DOCUMENT.** Companion to [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md).
+**Status: LIVING DOCUMENT.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Where ARCHITECTURE_PLAN.md says *what* the architecture is, this document records *why* — the
+Where ARCHITECTURE.md says *what* the architecture is, this document records *why* — the
 arguments, trade-offs, and rejected alternatives behind each decision, plus questions still
 open. Its purpose is to let a future session (human or agent) pick up design work without
 re-deriving or accidentally re-litigating settled arguments, and without mistaking open
 questions for settled ones.
 
-This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE_PLAN.md §10.
+This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10.
 
 ---
 
@@ -24,7 +24,7 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE_PLAN.md
 - When a discussion produces a new decision or overturns an old one, **append or amend an entry
   here in the same session** — with date, rationale, and the alternatives considered. An
   undocumented decision will be re-argued from scratch in six months.
-- Documentation precedence when documents conflict: this file and ARCHITECTURE_PLAN.md >
+- Documentation precedence when documents conflict: this file and ARCHITECTURE.md >
   SOURCE_ARCHITECTURE.md > NAMING_STRATEGY.md > everything in `docs/archive/`. Newer beats
   older; user-authored beats generated.
 
@@ -47,7 +47,7 @@ These are the fixed points everything else serves (user-stated, July 2026):
 2. **Extensibility** — custom parsers, token readers, specs, node payloads without forking.
 3. **FLM target** — the [FLM project](https://github.com/phfaist/flm) will be redesigned on top
    of this library. Every core design must pass the "can FLM do X through public extension
-   points?" test (see ARCHITECTURE_PLAN.md §6 for the fit check).
+   points?" test (see ARCHITECTURE.md §6 for the fit check).
 4. **Low footprint** — minimal dependencies, small compiled artifact.
 5. **No-compromise quality** — clean logical structure preferred over expedient shortcuts;
    clean slate, no pylatexenc backwards-compatibility baggage.
@@ -195,7 +195,7 @@ ported into `StdTokenReader`.
 
 **Tokenization config is plain data (`TokenRules`), not per-facet traits** — PROPOSED
 (July 2026), **reverses the user's most recent code experiment — needs explicit sign-off**
-(ARCHITECTURE_PLAN.md DECISION 1).
+(ARCHITECTURE.md DECISION 1).
 The WIP `src/state/` gave each facet (whitespace, groups, macros, comments, …) its own trait +
 macro-generated data struct, composed via 9 associated types. The decisive argument against:
 **it contradicts the delta system** — these values must change *mid-parse* (math library adds a
@@ -225,7 +225,7 @@ state (definitions pushed inside `{…}`) pops naturally by restoring the previo
 scope — whether a delta applies to following siblings or dies with the group.
 
 **Settings are stored data; dependent settings recomputed at transitions (Option C)** — DECIDED
-(user-led, July 2026; ARCHITECTURE_PLAN.md §L2/§4, Decision 1 RESOLVED).
+(user-led, July 2026; ARCHITECTURE.md §L2/§4, Decision 1 RESOLVED).
 Every effective setting is a plain field — no getters compute values on read. Cross-cutting or
 derived settings (e.g. escape char = `#` in math mode) are recomputed by a single
 `Lang::finalize_transition(new, prev, events)` hook that runs when a new state is built. The
@@ -259,7 +259,7 @@ richer constructs.
 *Rationale:* specs are data + optional behavior, matching §2.1.
 
 **Library stack with lexical shadowing; no `ConflictStrategy`** — DECIDED (July 2026,
-ARCHITECTURE_PLAN.md DECISION 6).
+ARCHITECTURE.md DECISION 6).
 Ordered stack, innermost/last wins. Shadowing *is* the intended semantic (`\newcommand`
 redefinition, group-local definitions), so a configurable conflict policy (PROPOSALS.md's
 `FirstWins`/`LastWins`/`Error`) solves a non-problem while complicating resolution; an optional
@@ -283,7 +283,7 @@ inside `ParserSession`; `finish()` consumes the session, so there is no mutable/
 conflict by design.
 
 **Closed `NodeKind<L>` enum + `Custom(L::NodeData)` variant** — PROPOSED (July 2026,
-ARCHITECTURE_PLAN.md DECISION 3). See §2.4 for the principle.
+ARCHITECTURE.md DECISION 3). See §2.4 for the principle.
 *Rejected:* `trait Node` + `Box<dyn Node>` + `as_any()` downcasting + `clone_box()` (the
 generated TRAIT_BASED_ARCHITECTURE.md design) — loses exhaustive matching, adds per-node
 boxing, makes serialization and flat storage impossible, and reintroduces runtime type errors
@@ -311,7 +311,7 @@ transient; results are frozen.
 
 ### 3.7 Generics strategy
 
-**Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE_PLAN.md DECISION 4).
+**Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
 The `SharedPointer` GAT sketched in SOURCE_ARCHITECTURE.md would infect nearly every signature
 in the crate to save ~1ns uncontended atomic increments that happen once per node, not per
 byte. Use `Arc` behind an internal alias (`pub(crate) type Shared<T> = Arc<T>`) so a later swap
@@ -444,7 +444,7 @@ Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 
 
 Current list — remove entries as they are settled (move the outcome into §3):
 
-1. **`SpecLookup` semantics and behavior** (§3.4): deferred from ARCHITECTURE_PLAN.md
+1. **`SpecLookup` semantics and behavior** (§3.4): deferred from ARCHITECTURE.md
    decision 6 (the no-`ConflictStrategy`/shadowing part is decided). To be discussed before
    Phase 4. (Decision points 1–7 are otherwise signed off, July 2026; §3 entries marked
    PROPOSED become DECIDED as they land.)

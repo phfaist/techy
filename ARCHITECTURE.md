@@ -759,8 +759,8 @@ starts until the previous layer's API is discussed and settled.
 
 Too many overlapping documents; several are stale or superseded. Proposal:
 
-**Keep, as living documents:** `ARCHITECTURE_PLAN.md` (this file → becomes `ARCHITECTURE.md`
-once decisions land), `NAMING_STRATEGY.md` (update per §7), `SOURCE_ARCHITECTURE.md` (referenced
+**Keep, as living documents:** `ARCHITECTURE.md` (this file),
+`NAMING_STRATEGY.md` (update per §7), `SOURCE_ARCHITECTURE.md` (referenced
 by §L0; eventually folded into `ARCHITECTURE.md`), `CLAUDE.md`, `README.md`.
 
 **Archive to `docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,

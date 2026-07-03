@@ -48,7 +48,7 @@ cargo test <name>    # Specific test
 
 ## Important Files
 
-- [ARCHITECTURE_PLAN.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
+- [ARCHITECTURE.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
 - [DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
 
 ## Design Philosophy
@@ -70,7 +70,7 @@ cargo test <name>    # Specific test
    place. Do NOT remove any code that appears useless before asking.
 4. **Use Result<T,E>** consistently, never panic in lib code
 5. **Always check naming strategy** before suggesting names
-6. **Prefer existing patterns** from ARCHITECTURE_PLAN.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in docs/archive/ and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
+6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in docs/archive/ and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
 7. **Add tests** for new functionality
 8. **Keep it simple**: No over-engineering or premature optimization
 9. **Document public APIs** with examples
