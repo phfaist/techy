@@ -1,141 +1,113 @@
-//! Error types for the LaTeX parser.
+//! Span-based diagnostics and the tolerant-parsing policy.
+//!
+//! Diagnostics carry Arc-based [`SourceSpan`]s, so they are self-contained and outlive the
+//! parse that produced them — no `'src` lifetime spreads through error signatures. Library
+//! conditions are reported through diagnostics (accumulated by the parser session, available
+//! on the parse result), never through a logging side channel (ARCHITECTURE.md Decision 5).
+//!
+//! The token-level error type carrying a recovery token (`TokenError`) lives with `Token` in
+//! the token layer (Phase 2); the [`Recovery`] policy that governs it is defined here.
 
-use thiserror::Error;
-use crate::source::SourceLocation;
-use crate::token::Token;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::fmt;
 
-/// Result type alias for parser operations.
-pub type Result<'src, T> = std::result::Result<T, ParseError<'src>>;
+use crate::source::{SourceOrigin, SourceProvenance, SourceSpan};
 
-
-pub struct ErrorTypeInfo {
-    pub what : String,
+/// How severe a [`Diagnostic`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// Informational note.
+    Note,
+    /// Something suspicious that did not prevent parsing.
+    Warning,
+    /// A genuine error (in tolerant mode, recorded instead of aborting the parse).
+    Error,
 }
-impl ErrorTypeInfo {
-    pub fn new(s : String) {
-        ErrorTypeInfo { what, }
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Severity::Note => "note",
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+        })
     }
 }
 
-
-/// Error during tokenization -- mostly an internal error that will
-/// be "updated" to a different error by the parser
-#[derive(Error, Debug, Clone)]
-#[error("{message}")]
-pub struct TokenizerError<'src> {
-    pub message : String,
-    pub pos : SourceLocation<'src>,
-    pub error_type_info : ErrorTypeInfo,
-    /// If the recovery_token is set, then the parser MAY continue, pretending that
-    /// this token was peeked.  The parser must call move_past_token() with the
-    /// recovery token as argument before attempting to read other tokens.
-    pub recovery_token : Option<Token<'src>>,
+/// A single condition reported during parsing, anchored to a source location.
+#[derive(Debug, Clone)]
+pub struct Diagnostic<O: SourceOrigin = Option<String>> {
+    severity: Severity,
+    message: String,
+    span: SourceSpan<O>,
 }
 
-/// Errors that can occur during parsing.
-#[derive(Error, Debug, Clone)]
-pub enum ParseError<'src> {
-    /// Unexpected end of input while parsing.
-    #[error("unexpected end of input")]
-    UnexpectedEndOfInput { pos: SourceLocation<'src> },
-
-    // /// Encountered an unexpected token.
-    // #[error("unexpected token, expected {expected}, found {found}")]
-    // UnexpectedToken {
-    //     pos: SourceLocation<'src>,
-    //     expected: String,
-    //     found: String,
-    // },
-
-    // /// Expected a macro but found something else.
-    // #[error("expected macro")]
-    // ExpectedMacro { pos: SourceLocation<'src> },
-
-    // /// Unknown macro encountered.
-    // #[error("unknown macro '\\{name}'")]
-    // UnknownMacro { name: String, pos: SourceLocation<'src> },
-
-    // /// Unknown environment encountered.
-    // #[error("unknown environment '{name}'")]
-    // UnknownEnvironment { name: String, pos: SourceLocation<'src> },
-
-    // /// Mismatched environment (begin/end don't match).
-    // #[error("environment mismatch, expected \\end{{{expected}}}, found \\end{{{found}}}")]
-    // UnmatchedEnvironment {
-    //     expected: String,
-    //     found: String,
-    //     pos: SourceLocation<'src>,
-    // },
-
-    // /// Unmatched brace (opening or closing).
-    // #[error("unmatched {brace_type} brace")]
-    // UnmatchedBrace { brace_type: String, pos: SourceLocation<'src> },
-
-    // /// Invalid argument specification.
-    // #[error("invalid argument specification: {0}.  At {pos:?}")]
-    // InvalidArgumentSpec { ..... pos: SourceLocation },
-
-    // /// Missing required argument.
-    // #[error("missing required argument for {construct}")]
-    // MissingArgument { construct: String, pos: SourceLocation<'src> },
-
-    // /// Math mode error.
-    // #[error("math mode error: {message}")]
-    // MathModeError { message: String, pos: SourceLocation<'src> },
-
-    /// Generic syntax error error with custom message.
-    #[error("{message}")]
-    SyntaxError { message: String, pos: SourceLocation<'src> },
-}
-
-impl<'src> ParseError<'src> {
-    /// Get the pos where the error occurred, if available.
-    pub fn pos(&self) -> &SourceLocation<'src> {
-        match self {
-            ParseError::UnexpectedEndOfInput { pos, .. } => pos,
-            // ParseError::UnexpectedToken { pos, .. } => pos,
-            // ParseError::ExpectedMacro { pos, .. } => pos,
-            // ParseError::UnknownMacro { pos, .. } => pos,
-            // ParseError::UnknownEnvironment { pos, .. } => pos,
-            // ParseError::UnmatchedEnvironment { pos, .. } => pos,
-            // ParseError::UnmatchedBrace { pos, .. } => pos,
-            //ParseError::InvalidArgumentSpec(_) => None,
-            // ParseError::MissingArgument { pos, .. } => pos,
-            //ParseError::MathModeError { pos, .. } => pos,
-            ParseError::SyntaxError { pos, .. } => pos,
-        }
+impl<O: SourceOrigin> Diagnostic<O> {
+    /// Create a diagnostic.
+    pub fn new(severity: Severity, message: impl Into<String>, span: SourceSpan<O>) -> Self {
+        Diagnostic { severity, message: message.into(), span }
     }
 
-    /// Create a formatted error message with source context.
-    pub fn format(&self) -> String {
-        use crate::source::Source;
+    /// Create an error-severity diagnostic.
+    pub fn error(message: impl Into<String>, span: SourceSpan<O>) -> Self {
+        Diagnostic::new(Severity::Error, message, span)
+    }
 
-        let mut msg = format!("{}", self);
+    /// Create a warning-severity diagnostic.
+    pub fn warning(message: impl Into<String>, span: SourceSpan<O>) -> Self {
+        Diagnostic::new(Severity::Warning, message, span)
+    }
 
-        let pos = self.pos();
+    /// Create a note-severity diagnostic.
+    pub fn note(message: impl Into<String>, span: SourceSpan<O>) -> Self {
+        Diagnostic::new(Severity::Note, message, span)
+    }
 
-        // Get the source from the position and create an analyzer
-        let source: &Source = pos.source();
-        let mut analyzer = source.make_analyzer();
+    /// The severity of this diagnostic.
+    pub fn severity(&self) -> Severity {
+        self.severity
+    }
 
-        // Format the position with line/column info
-        let origin = if !source.origin().is_empty() {
-            Some(source.origin())
-        } else {
-            None
-        };
+    /// The diagnostic message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 
-        if let Some((line, col)) = analyzer.get_line_col(pos.start()) {
-            if let Some(origin) = origin {
-                msg.push_str(&format!("\n  at: @ (line {}, col {}) [{}]", line, col, origin));
-            } else {
-                msg.push_str(&format!("\n  at: @ (line {}, col {})", line, col));
-            }
-        } else {
-            if let Some(origin) = origin {
-                msg.push_str(&format!("\n  at: @ char pos {} [{}]", pos.start(), origin));
-            } else {
-                msg.push_str(&format!("\n  at: @ char pos {}", pos.start()));
+    /// Where in the source the condition occurred.
+    pub fn span(&self) -> &SourceSpan<O> {
+        &self.span
+    }
+
+    /// Render a human-readable multi-line report: message, position (line/column via
+    /// [`LineIndex`](crate::source::LineIndex), origin label), and the source's provenance
+    /// chain (`included from …` / `synthesized from …`).
+    pub fn render(&self) -> String {
+        let mut msg = self.to_string();
+        msg.push_str("\n  at: ");
+        msg.push_str(&format_position(&self.span));
+
+        let mut provenance = self.span.source().provenance();
+        loop {
+            match provenance {
+                SourceProvenance::Primary => break,
+                SourceProvenance::Resolved { reference, triggered_at } => {
+                    msg.push_str(&format!(
+                        "\n  included from {} ({})",
+                        format_position(triggered_at),
+                        reference,
+                    ));
+                    provenance = triggered_at.source().provenance();
+                }
+                SourceProvenance::Synthesized { description, triggered_at } => {
+                    msg.push_str(&format!(
+                        "\n  synthesized from {} ({})",
+                        format_position(triggered_at),
+                        description,
+                    ));
+                    provenance = triggered_at.source().provenance();
+                }
             }
         }
 
@@ -143,51 +115,313 @@ impl<'src> ParseError<'src> {
     }
 }
 
+impl<O: SourceOrigin> fmt::Display for Diagnostic<O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.severity, self.message)
+    }
+}
+
+/// An ordered collection of [`Diagnostic`]s, as accumulated over one parse.
+#[derive(Debug, Clone)]
+pub struct Diagnostics<O: SourceOrigin = Option<String>> {
+    items: Vec<Diagnostic<O>>,
+}
+
+impl<O: SourceOrigin> Diagnostics<O> {
+    /// Create an empty collection.
+    pub fn new() -> Self {
+        Diagnostics { items: Vec::new() }
+    }
+
+    /// Append a diagnostic.
+    pub fn push(&mut self, diagnostic: Diagnostic<O>) {
+        self.items.push(diagnostic);
+    }
+
+    /// Number of diagnostics recorded.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Whether no diagnostics were recorded.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Whether any recorded diagnostic has [`Severity::Error`].
+    pub fn has_errors(&self) -> bool {
+        self.items.iter().any(|d| d.severity == Severity::Error)
+    }
+
+    /// Iterate over the diagnostics in the order they were recorded.
+    pub fn iter(&self) -> core::slice::Iter<'_, Diagnostic<O>> {
+        self.items.iter()
+    }
+
+    /// The diagnostics as a slice.
+    pub fn as_slice(&self) -> &[Diagnostic<O>] {
+        &self.items
+    }
+}
+
+impl<O: SourceOrigin> Default for Diagnostics<O> {
+    fn default() -> Self {
+        Diagnostics::new()
+    }
+}
+
+impl<O: SourceOrigin> IntoIterator for Diagnostics<O> {
+    type Item = Diagnostic<O>;
+    type IntoIter = alloc::vec::IntoIter<Diagnostic<O>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
+    type Item = &'a Diagnostic<O>;
+    type IntoIter = core::slice::Iter<'a, Diagnostic<O>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+/// Tolerant-parsing policy: what to do when an error carries a recovery possibility.
+///
+/// Under `Strict`, the parse aborts on the first error. Under `Tolerant`, a diagnostic is
+/// recorded and parsing continues with the error's recovery token where one is available
+/// (the recovery-token mechanism itself arrives with the token layer, Phase 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// Abort on the first error.
+    Strict,
+    /// Record a diagnostic and continue whenever recovery is possible.
+    Tolerant,
+}
+
+/// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
+/// back to `@ char pos 42` when line information is unavailable (huge sources, see
+/// [`LineIndex`](crate::source::LineIndex)). The `[origin]` part is omitted when the
+/// source's origin has no label.
+pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
+    let source = span.source();
+    let mut line_index = source.line_index();
+
+    let pos_str = match line_index.line_col(span.start()) {
+        Some((line, col)) => format!("@ (line {}, col {})", line, col),
+        None => format!("@ char pos {}", span.start()),
+    };
+
+    match source.origin().label() {
+        Some(label) => format!("{} [{}]", pos_str, label),
+        None => pos_str,
+    }
+}
+
+/// Format a traceback showing open blocks (innermost first), one line per block, using each
+/// block's own source for position and origin information.
+///
+/// Returns an empty string if `open_blocks` is empty.
+///
+/// # Example output
+///
+/// ```text
+/// Open blocks:
+///   @ (line 8, col 1): environment 'document'
+///   @ (line 5, col 3): macro '\section'
+/// ```
+pub fn format_traceback<O: SourceOrigin>(open_blocks: &[(SourceSpan<O>, String)]) -> String {
+    if open_blocks.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::from("Open blocks:");
+    for (span, what) in open_blocks {
+        result.push_str("\n  ");
+        result.push_str(&format_position(span));
+        result.push_str(": ");
+        result.push_str(what);
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::source::Source;
+    use std::sync::Arc;
 
-    #[test]
-    fn test_error_formatting() {
-        let source = Source::new("Hello\n\\unknown\nworld".to_string());
-        let pos = source.make_pos(6, 14);
-        let error = ParseError::SyntaxError {
-            message: "unknown".to_string(),
-            pos,
-        };
+    fn origin(url: &str) -> Option<String> {
+        Some(url.to_string())
+    }
 
-        let formatted = error.format();
-        assert!(formatted.contains("line 2"));
+    fn arc_source(content: &str) -> Arc<Source> {
+        Arc::new(Source::new(content))
     }
 
     #[test]
-    fn test_pos_extraction() {
-        let source = Source::new("Hello\nWorld\nTest".to_string());
-        let pos = source.make_pos(10, 15);
-        let error = ParseError::SyntaxError {
-            message: "test".to_string(),
-            pos,
-        };
+    fn diagnostic_render_includes_line_info() {
+        let source = arc_source("Hello\n\\unknown\nworld");
+        let span = SourceSpan::new(&source, 6..14);
+        let diagnostic = Diagnostic::error("unknown macro", span);
 
-        let extracted_pos = error.pos();
-        assert_eq!(extracted_pos.start(), 10);
-        assert_eq!(extracted_pos.end(), 15);
+        let rendered = diagnostic.render();
+        assert!(rendered.contains("error: unknown macro"));
+        assert!(rendered.contains("line 2"));
     }
 
     #[test]
-    fn test_error_formatting_with_origin() {
-        let source = Source::new("Hello\n\\unknown\nworld".to_string())
-            .with_origin("test.tex".to_string());
-        let pos = source.make_pos(6, 14);
-        let error = ParseError::SyntaxError {
-            message: "unknown".to_string(),
-            pos,
-        };
+    fn diagnostic_span_accessors() {
+        let source = arc_source("Hello\nWorld\nTest");
+        let span = SourceSpan::new(&source, 10..15);
+        let diagnostic = Diagnostic::error("test", span);
 
-        let formatted = error.format();
-        assert!(formatted.contains("line 2"));
-        assert!(formatted.contains("[test.tex]"));
+        assert_eq!(diagnostic.span().start(), 10);
+        assert_eq!(diagnostic.span().end(), 15);
+        assert_eq!(diagnostic.severity(), Severity::Error);
+        assert_eq!(diagnostic.message(), "test");
     }
+
+    #[test]
+    fn diagnostic_render_with_origin() {
+        let source: Arc<Source> = Arc::new(
+            Source::new("Hello\n\\unknown\nworld").with_origin(origin("test.tex")),
+        );
+        let span = SourceSpan::new(&source, 6..14);
+        let diagnostic = Diagnostic::error("unknown macro", span);
+
+        let rendered = diagnostic.render();
+        assert!(rendered.contains("line 2"));
+        assert!(rendered.contains("[test.tex]"));
+    }
+
+    #[test]
+    fn diagnostic_render_walks_provenance_chain() {
+        let document: Arc<Source> = Arc::new(
+            Source::new(r"\input{main.tex}").with_origin(origin("document.tex")),
+        );
+        let main: Arc<Source> = Arc::new(Source::resolved(
+            "\\mycommand\n",
+            "main.tex",
+            SourceSpan::entire(&document),
+        ));
+        let expanded: Arc<Source> = Arc::new(Source::synthesized(
+            "expansion text",
+            "macro expansion",
+            SourceSpan::new(&main, 0..10),
+        ));
+
+        let diagnostic = Diagnostic::error("boom", SourceSpan::new(&expanded, 0..9));
+        let rendered = diagnostic.render();
+
+        assert!(rendered.contains("error: boom"));
+        assert!(rendered.contains("synthesized from"));
+        assert!(rendered.contains("(macro expansion)"));
+        assert!(rendered.contains("included from"));
+        assert!(rendered.contains("(main.tex)"));
+        assert!(rendered.contains("[document.tex]"));
+    }
+
+    #[test]
+    fn diagnostics_collection() {
+        let source = arc_source("Hello");
+        let mut diagnostics: Diagnostics = Diagnostics::new();
+        assert!(diagnostics.is_empty());
+        assert!(!diagnostics.has_errors());
+
+        diagnostics.push(Diagnostic::warning("odd", SourceSpan::new(&source, 0..1)));
+        assert!(!diagnostics.has_errors());
+
+        diagnostics.push(Diagnostic::error("bad", SourceSpan::new(&source, 1..2)));
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.has_errors());
+
+        let severities: Vec<Severity> = diagnostics.iter().map(|d| d.severity()).collect();
+        assert_eq!(severities, vec![Severity::Warning, Severity::Error]);
+    }
+
+    #[test]
+    fn format_traceback_single_block() {
+        let source = arc_source("Hello\nWorld\nTest");
+
+        let open_blocks =
+            vec![(SourceSpan::new(&source, 6..11), "environment 'document'".to_string())];
+
+        let traceback = format_traceback(&open_blocks);
+        assert_eq!(traceback, "Open blocks:\n  @ (line 2, col 1): environment 'document'");
+    }
+
+    #[test]
+    fn format_traceback_multiple_open_blocks() {
+        let source = arc_source("Hello\nWorld\nTest\nMore");
+
+        let open_blocks = vec![
+            (SourceSpan::new(&source, 12..16), "macro '\\textbf'".to_string()),
+            (SourceSpan::new(&source, 6..11), "environment 'document'".to_string()),
+            (SourceSpan::new(&source, 0..5), "macro '\\section'".to_string()),
+        ];
+
+        let traceback = format_traceback(&open_blocks);
+        assert_eq!(
+            traceback,
+            "Open blocks:\n  @ (line 3, col 1): macro '\\textbf'\n  @ (line 2, col 1): environment 'document'\n  @ (line 1, col 1): macro '\\section'"
+        );
+    }
+
+    #[test]
+    fn format_traceback_empty_open_blocks() {
+        let open_blocks: Vec<(SourceSpan, String)> = vec![];
+        assert_eq!(format_traceback(&open_blocks), "");
+    }
+
+    #[test]
+    fn format_traceback_with_origin() {
+        let source: Arc<Source> = Arc::new(
+            Source::new("Hello\nWorld\nTest").with_origin(origin("test.tex")),
+        );
+
+        let open_blocks =
+            vec![(SourceSpan::new(&source, 6..11), "environment 'document'".to_string())];
+
+        let traceback = format_traceback(&open_blocks);
+        assert_eq!(
+            traceback,
+            "Open blocks:\n  @ (line 2, col 1) [test.tex]: environment 'document'"
+        );
+    }
+
+    #[test]
+    fn format_traceback_multiple_blocks_with_origin() {
+        let source: Arc<Source> = Arc::new(
+            Source::new("Hello\nWorld\nTest\nMore").with_origin(origin("myfile.tex")),
+        );
+
+        let open_blocks = vec![
+            (SourceSpan::new(&source, 12..16), "macro '\\textbf'".to_string()),
+            (SourceSpan::new(&source, 6..11), "environment 'document'".to_string()),
+        ];
+
+        let traceback = format_traceback(&open_blocks);
+        assert_eq!(
+            traceback,
+            "Open blocks:\n  @ (line 3, col 1) [myfile.tex]: macro '\\textbf'\n  @ (line 2, col 1) [myfile.tex]: environment 'document'"
+        );
+    }
+
+    #[test]
+    fn format_position_char_pos_fallback() {
+        // A source too large for line indexing falls back to raw byte positions.
+        let content = "a\n".repeat(DEFAULT_MAX_TEST_LEN);
+        let source = arc_source(&content);
+        let span = SourceSpan::new(&source, 42..43);
+
+        let formatted = format_position(&span);
+        assert_eq!(formatted, "@ char pos 42");
+    }
+
+    // Exceeds LineIndex's default max scan length of 100_000 bytes ("a\n" is 2 bytes).
+    const DEFAULT_MAX_TEST_LEN: usize = 60_000;
 }

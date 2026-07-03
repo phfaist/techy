@@ -161,7 +161,42 @@ display (errors, diagnostics). The lazy-extension logic and traceback formatting
 **Pluggable content resolution** — DECIDED (March 2026).
 `SourceResolver` trait for `\input`-like lookups; `NoResolver` is a ZST so a no-I/O build pays
 nothing. `SourceContent` trait abstracts backing storage so mmap can arrive later without
-parser changes (DEFERRED until a real need).
+parser changes (DEFERRED until a real need). No file-system resolver is shipped (no_std
+policy, §3.9): an embedder implements `SourceResolver` on its side, where the I/O capability
+lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
+
+**Origin genericity without `Lang` (Phase 1)** — DECIDED (user, July 2026, Phase 1 kickoff);
+**default origin simplified to an optional URL string** — REVISED (user, July 2026).
+`Source<O: SourceOrigin = Option<String>>` takes the origin type as a plain, defaulted type
+parameter; `SourceSpan`/`SourceProvenance`/`SourceResolver`/`Diagnostic` carry the same
+parameter. When `Lang` arrives (Phase 3+), higher layers plug `L::SourceOrigin` into this
+parameter — L0 never depends on `Lang`, preserving the strict layering of ARCHITECTURE.md §3.
+The `SourceOrigin` trait provides only `label()` (diagnostics display) on top of
+`Debug + Clone + Default`. The default origin type is `Option<String>`: conventionally the
+URL the content was obtained from, `None` when unknown or when the content was synthesized.
+The division of labor: origin is optional *display metadata about where content was
+obtained*; `SourceProvenance` — which every source carries — is the *structural* record of
+how it entered the parse, and it (not the origin) holds synthesis descriptions and
+resolution references. One inference consequence of the defaulted parameter: bare
+`Source::new(…)` cannot infer `O`, so simple usage annotates (`let src: Arc<Source> = …`)
+until the Phase-3+ type aliases make it moot.
+*Rejected:* a concrete-now/genericize-in-Phase-3 approach (would retrofit a type parameter
+through every L0 signature later). Also rejected, in the July 2026 revision: the first-cut
+`StdSourceOrigin` enum (`Unknown` / `Named { name, kind: File | Snippet | Resolved |
+Synthesized | Other }`). Its kind taxonomy was too detailed and too rigid for the intended
+generality (where does content fetched from a database fall?), it partially duplicated
+provenance (`SourceOriginKind::Resolved` vs `SourceProvenance::Resolved` answered the same
+question twice), and the `File` kind clashed with the no_std policy (§3.9). The trait's
+`synthesized()`/`resolved()` origin constructors went with it: generic machinery no longer
+*mints* origins — a source starts with the default ("unknown") origin, and a creator that
+actually knows a URL attaches it via `with_origin`.
+
+**`SourceContent` is a trait boundary, not (yet) a `Source` parameter** — DECIDED (user,
+July 2026, Phase 1 kickoff). The trait exists (implemented by `str` and `String`) and
+`SourceCursor<'s, C: SourceContent + ?Sized = str>` is generic over it, but `Source` stores a
+concrete `String`, with all content access behind methods so the backing can later become
+generic (mmap) without changing the public API. Explicitly: keep the enabling pattern, do not
+implement mmap until a real need.
 
 ### 3.2 Tokens and tokenization
 
@@ -343,9 +378,17 @@ on the session and remain available on `ParseResult` even for successful toleran
 editors), not an afterthought flag; and a diagnostics sink is the API-honest replacement for
 logging side channels (see §3.9).
 
-### 3.9 Dependencies — **OPEN**
+**Recovery mechanism split across phases** — DECIDED (user, July 2026, Phase 1 kickoff).
+Phase 1 ships the token-independent parts: `Diagnostic`/`Diagnostics`/`Severity` and the
+`Recovery` policy enum (strict/tolerant). `TokenError { …, recovery: Option<Token> }` lands in
+Phase 2 next to `Token<'s>`, where it can be designed against a real tokenizer.
+*Rejected:* a token-agnostic `TokenError<R>` placeholder in Phase 1 (designing the type blind,
+then reshaping it in Phase 2 anyway).
 
-**Absolute minimal mandatory dependencies** — Drop `thiserror` and `log` dependencies.
+### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
+
+**Absolute minimal mandatory dependencies** — `thiserror` and `log` removed from `Cargo.toml`
+(July 2026). The considerations that led there:
 
 - **`thiserror`.** It generates exactly the `Display`/`Error` impls one would write by hand —
   zero runtime difference either way. The trade is: dropping it removes a proc-macro dependency
@@ -364,6 +407,16 @@ logging side channels (see §3.9).
   need appears. This half is nearly free.
 - Not under discussion: heavier deps. Nothing in the design needs regex, serde (could be an
   optional feature later), or unicode tables beyond `char` methods.
+
+**`no_std`-friendly, alloc-only** — DECIDED (user, July 2026). The library must build without
+`std`; allocation is fine (`#![cfg_attr(not(test), no_std)]` + `extern crate alloc` in
+`lib.rs`; tests keep `std` for convenience). Consequences: no I/O anywhere in the library —
+the file-reading `FileResolver` was removed (an embedder implements `SourceResolver` where
+the I/O capability lives), and the `File` origin kind fell with it (see §3.1); `alloc`
+collections only (`MapResolver` uses `BTreeMap`, not `HashMap`); error types implement
+`core::error::Error`, which sets MSRV 1.81 (`rust-version` in `Cargo.toml`); `Arc` comes
+from `alloc::sync`, so targets must support atomics. A plain `cargo build` compiles the
+library with `no_std` active and thus guards the policy without a bare-metal CI target.
 
 
 ### 3.10 Naming

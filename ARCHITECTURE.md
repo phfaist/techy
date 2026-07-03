@@ -75,8 +75,13 @@ Derived from your stated goals and the decided parts of the existing documents:
    open-ended node trait objects. Semantics attach through specs; custom data attaches through
    per-node and per-kind ext types supplied by `Lang` (§L4), orthogonal to structural identity.
 
-6. **Zero mandatory dependencies.** Hand-written `Display`/`Error` impls instead of `thiserror`;
-   no `log` — library conditions flow through the diagnostics sink instead. **[DECISION 5 — decided]**
+6. **Zero mandatory dependencies; `no_std`-friendly core.** Hand-written `Display`/`Error`
+   impls instead of `thiserror`; no `log` — library conditions flow through the diagnostics
+   sink instead. **[DECISION 5 — decided]** The library builds with `core` + `alloc` only
+   (`#![no_std]`; `Arc` requires a target with atomics): no file I/O, no `std`-only
+   collections, `core::error::Error` (MSRV 1.81). Anything needing an OS capability — e.g.
+   reading files for `\input`-like resolution — lives on the embedder's side behind a trait
+   (`SourceResolver`). **[decided July 2026]**
 
 7. **`Result` everywhere, panics never**, with first-class tolerant parsing (recovery tokens,
    diagnostics sink) rather than a bolted-on flag.
@@ -114,7 +119,10 @@ location — that is both cheaper and structurally cycle-free. The existing
 and traceback formatting are worth keeping).
 
 `Source` is generic over `L::SourceOrigin` only through the `Lang` parameter; the default origin
-type is a small enum (name string + kind), not a bare `String`.
+type is `Option<String>` — conventionally the URL the content was obtained from, `None` when
+unknown or when the content was synthesized (every source additionally carries a
+`SourceProvenance` recording *how* it entered the parse). *(Revised July 2026: an earlier
+name-plus-kind enum was dropped as too rigid — see DESIGN_RATIONALE.md.)*
 
 ### L1 — token
 
@@ -733,6 +741,12 @@ starts until the previous layer's API is discussed and settled.
   rewritten per §7).
 - **Phase 1 — `source` + `error`.** Rewrite per §L0; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
+  — ✅ done, July 2026. Origin type = plain defaulted parameter `Source<O: SourceOrigin>`
+  with default `Option<String>` (`L::SourceOrigin` plugs in at Phase 3+); crate made
+  `no_std`-friendly (core + alloc only, no file-backed resolver, principle 6);
+  `SourceContent` kept as an enabling boundary
+  (no mmap, `Source` stores `String`); diagnostics + `Recovery` policy landed here while
+  `TokenError`/recovery tokens move to Phase 2 with `Token`. See DESIGN_RATIONALE.md §3.1/§3.8.
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
   driven by a hardcoded-for-now `TokenRules` value; delimiter prefix table; exhaustive tokenizer
   tests (port pylatexenc's tokenizer test cases).

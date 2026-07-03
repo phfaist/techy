@@ -68,7 +68,10 @@ of earlier revisions lives in git.
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + args/slots |
 | Node textual payload | `TextContent` (`Spanned` / `Owned`) | logical content first-class; span = provenance |
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, `CommentNodeExt`, `ListNodeExt`; bundled as `Lang::NodeExts: NodeExtTypes` | `SimpleLang` defaults them all to `()` |
-| Source model | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `SourceContent`, `LineIndex` | per SOURCE_ARCHITECTURE.md |
+| Source model | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `SourceContent`, `SourceCursor`, `LineIndex` | per SOURCE_ARCHITECTURE.md |
+| Origin metadata | `SourceOrigin` (trait); default impl on `Option<String>` | no named `Std…` type: the default origin is a plain optional URL string (July 2026 revision) |
+| Resolvers | `NoResolver` (ZST default), `MapResolver`, `ResolveError` | per SOURCE_ARCHITECTURE.md; no `FileResolver` — file I/O lives with the embedder (no_std policy) |
+| Diagnostics | `Diagnostic`, `Diagnostics`, `Severity`, `Recovery` | span-based; `Recovery` = tolerant-parsing policy (strict/tolerant) |
 
 ### Preset-layer names (`techy::latexlike`)
 

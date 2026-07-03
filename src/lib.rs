@@ -1,92 +1,68 @@
 //! # techy
 //!
-//! A fast, extensible LaTeX-like code parser for Rust.
+//! A fast, extensible parser toolkit for LaTeX-like markup languages.
 //!
-//! This library provides a parser for LaTeX-like markup languages. It builds an
-//! Abstract Syntax Tree (AST) with a syntax inspired by LaTeX, allowing you
-//! to analyze, transform, or convert documents in this LaTeX-like language.
-//! The latex-like language includes constructs such as macros, environments,
-//! special active characters, inline math. The parser should be usable for
-//! most LaTeX documents that contain content only.
+//! techy builds an Abstract Syntax Tree (AST) from LaTeX-like source code, allowing you to
+//! analyze, transform, or convert documents. The engine has no privileged language concepts
+//! (no built-in math mode, `{`/`}`, `%`, or `\`); the familiar LaTeX behavior is provided by
+//! a preset, and custom LaTeX-like languages are defined with the same machinery.
 //!
-//! The latex-like language syntax forms the basis of the
-//! [`FLM` (Flexible Latex-like Markup) project](https://github.com/phfaist/flm).
+//! ## no_std
 //!
-//! ## Quick Start
-//!
-//! ```rust
-//! use techy::Parser;
-//!
-//! let source = r"\textbf{Hello} \emph{world}!";
-//! let parser = Parser::new(source.to_string());
-//! let ast = parser.parse().unwrap();
-//!
-//! println!("Parsed {} nodes", ast.nodes.len());
-//! ```
-//!
-//! ## Features
-//!
-//! - **Fast**: Zero-copy parsing where possible, efficient memory usage
-//! - **Extensible**: Define custom macros, environments, and special characters
-//! - **Type-safe**: Leverages Rust's type system for correctness
-//! - **Flexible**: Support for standard LaTeX and custom LaTeX-like languages
+//! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
+//! as `Arc`, so the target must support atomics). Consequently the library performs no I/O
+//! of its own — content lookup for `\input`-like constructs is delegated to the embedder via
+//! the [`SourceResolver`] trait.
 //!
 //! ## Architecture
 //!
-//! The parser follows a three-stage pipeline:
+//! The crate is built in strict layers (see `ARCHITECTURE.md`); each layer depends only on
+//! lower ones. The layers are being rebuilt bottom-up, phase by phase:
 //!
-//! 1. **Tokenization** (`token` module): Break source into tokens
-//! 2. **Parsing** (`parser` module): Build AST from tokens
-//! 3. **Processing** (`node` module): Traverse and manipulate AST
+//! - [`source`] (L0) — source content, `Arc`-based spans, provenance, pluggable resolution,
+//!   lazy line/column analysis. **Implemented (Phase 1).**
+//! - [`error`] — span-based diagnostics and the tolerant-parsing policy.
+//!   **Implemented (Phase 1).**
+//! - `token` (L1) — zero-copy tokenization. *Phase 2.*
+//! - `state` (L2) — parsing state and reified state deltas. *Phase 3.*
+//! - `spec` + `library` (L3) — callable specs and definition libraries. *Phase 4.*
+//! - `node` (L4) — the flat, immutable node tree. *Phase 5.*
+//! - `constructs` + `engine` (L5/L6) — construct parsers and the high-level API. *Phase 6.*
+//! - `latexlike` preset (L7) — the familiar LaTeX behavior. *Phase 7.*
 //!
-//! ## Modules
+//! ## Quick start (what exists today)
 //!
-//! - [`token`]: Token types and tokenization
-//! - [`node`]: AST node definitions
-//! - [`parser`]: High-level parsing API
-//! - [`constructs`]: Parsers for individual LaTeX constructs
-//! - [`spec`]: Macro/environment specifications for extensibility
-//! - [`state`]: Parsing state and context management
-//! - [`error`]: Error types
+//! ```rust
+//! use std::sync::Arc;
+//! use techy::source::{Source, SourceSpan};
+//!
+//! let source: Arc<Source> = Arc::new(Source::new(r"Hello \world{}!"));
+//! let span = SourceSpan::new(&source, 6..12);
+//! assert_eq!(span.content(), r"\world");
+//!
+//! // Line/column information is computed lazily, for display only:
+//! let mut line_index = source.line_index();
+//! assert_eq!(line_index.line_col(span.start()), Some((1, 7)));
+//! ```
 
-//pub mod constructs;
+// no_std-friendly, alloc-only (see ARCHITECTURE.md); tests build with std for convenience.
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
 pub mod error;
-//pub mod node;
-pub mod parser;
 pub mod source;
-//pub mod spec;
-pub mod state;
-pub mod token;
 
-// Re-export main types for convenience
-pub use error::{ParseError, Result};
-//pub use node::{Arguments, Node, NodeList};
-//pub use parser::Parser;
-pub use source::{Source, SourceLocation, SourceLocationAnalyzer};
-//pub use spec::{ArgumentSpec, ArgumentStructureSpec, ContextDb, EnvironmentSpec, MacroSpec};
-//pub use state::{ParsingState, ParsingStateDelta};
-//pub use token::{Token, TokenType};
+// The remaining modules of the previous exploratory implementation (`token`, `state`,
+// `parser`, `constructs`, `node`, `spec`) are kept in the tree as a quarry but are not
+// compiled; they are rebuilt layer-by-layer per ARCHITECTURE.md §9.
+
+// Re-export the public API of the implemented layers.
+pub use error::{format_position, format_traceback, Diagnostic, Diagnostics, Recovery, Severity};
+pub use source::{
+    LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
+    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
+};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // #[test]
-    // fn test_basic_parsing() {
-    //     let source = r"Hello world";
-    //     let parser = Parser::new(source.to_string());
-    //     let result = parser.parse();
-    //     assert!(result.is_ok());
-    // }
-
-    // #[test]
-    // fn test_macro_parsing() {
-    //     let source = r"\textbf{bold text}";
-    //     let parser = Parser::new(source.to_string());
-    //     let result = parser.parse();
-    //     assert!(result.is_ok());
-    // }
-}

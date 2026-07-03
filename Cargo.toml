@@ -2,6 +2,8 @@
 name = "techy"
 version = "0.1.0"
 edition = "2021"
+# core::error::Error (used for no_std-friendly error types) stabilized in 1.81.
+rust-version = "1.81"
 authors = ["Philippe Faist"]
 description = "A fast, extensible LaTeX parser for Rust"
 license = "MIT"
@@ -9,9 +11,9 @@ repository = "https://github.com/yourusername/techy"
 keywords = ["latex", "parser", "tex"]
 categories = ["parser-implementations", "text-processing"]
 
+# Zero mandatory dependencies (ARCHITECTURE.md, Decision 5):
+# hand-written Display/Error impls; library conditions flow through diagnostics, not logging.
 [dependencies]
-thiserror = "1.0"
-log = "0.4"
 
 [dev-dependencies]
 criterion = "0.5"
