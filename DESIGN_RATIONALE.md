@@ -480,14 +480,56 @@ Ordered stack, innermost/last wins. Shadowing *is* the intended semantic (`\newc
 redefinition, group-local definitions), so a configurable conflict policy (PROPOSALS.md's
 `FirstWins`/`LastWins`/`Error`) solves a non-problem while complicating resolution; an optional
 lint can warn on shadowing if ever wanted.
-*Deferred:* the `SpecLookup` semantics and behavior are to be discussed (see §6).
 
-**Mode-aware lookup without built-in modes** — PROPOSED (July 2026; part of the deferred
-`SpecLookup` discussion, see §6).
-`SpecLookup::lookup()` receives `&ParsingState<L>`; a preset's implementation may dispatch on
-`state.ext` (FLM resolving `\vec` differently in math mode). The core `Library` ignores the
-state. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which contradicted
-§2.3.
+**`SpecLookup` receives a `CallableQuery` (query struct), not bare `(ct, name)`** — DECIDED
+(July 2026, Phase 4 design session; closes the deferred half of DECISION 6 / open question
+§6.1). `lookup(&CallableQuery, &ParsingState<L>) -> Option<Arc<dyn CallableSpec<L>>>`, where
+the query carries `callable_type`, `name`, a `CallableSyntax` (`Command { escape_char }` /
+`Specials` / `Other`), and `token: Option<&Token>`.
+*Why a syntax field:* with several `CommandRule`s in scope, `\foo` and `#foo` both tokenize as
+`Command { name: "foo" }`, and the escape character is **not** recoverable from the token alone
+— a token carries spans and borrowed substrings, not access to the source content behind them.
+So the syntax context must be explicit data on the query.
+*Why the token too (and why `Option`):* lookups may want `pre_space`/span context (user
+request); it is optional because specials resolution happens *inside* the scan hook before any
+token exists, and synthesized invocations never have one. The struct form absorbs future
+context fields without dyn-trait signature churn.
+*Rejected:* bare `(ct, name, state)` (forces presets to multiply `CallableTypeId`s to encode
+syntax); a mandatory `&Token` parameter (lifetime noise on a dyn trait, and inconsistent —
+sometimes there is no token).
+*Mode-awareness*, as proposed: the `&ParsingState<L>` parameter lets a preset's lookup dispatch
+on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
+token alike. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which
+contradicted §2.3.
+
+**Unknown-callable fallbacks are built into `LibraryStack`; its own `SpecLookup` impl is
+stack-only** — DECIDED (July 2026, Phase 4 design session; open question §6.1(b)).
+The per-`CallableTypeId` fallback singletons live in a map on `LibraryStack`, consulted only by
+`resolve()` after the whole stack misses (`lookup()` never consults them). De-keyed specs make
+the singletons shareable — "unknown `\foo`" costs no per-instance allocation, and a callable
+node's spec is never `None` for any type whose preset registered a fallback (`resolve()` still
+returns `Option` for types without one).
+*Pitfall that fixed the shape:* `LibraryStack` implements `SpecLookup` for nesting, but with
+**stack-only** semantics — if a nested stack's fallbacks answered, an inner fallback would
+preempt an *outer* stack's real definitions. Fallback policy belongs to the outermost resolver
+alone.
+*Storage note:* `Library` keys are nested `BTreeMap`s — the crate is `no_std` and `alloc` has
+no `HashMap`; also sidesteps the tuple-key `Borrow` problem. Revisit only if profiling flags
+lookup cost.
+
+**Phase 4 ships structure-spec skeletons; `invocation_parser()` waits for Phase 6** — DECIDED
+(July 2026, Phase 4 design session).
+`ArgumentStructureSpec`/`SlotStructureSpec` exist so `CallableSpec` has its declarative surface
+and libraries hold real specs, but deliberately minimal: starter `ArgumentKind`
+(`Mandatory`/`Optional` by `GroupTypeId`, `Star` marker), name-only `SlotSpec`. The argument
+kinds, acceptance semantics (LaTeX's single-token mandatory args), and slot
+separators/terminators (invocation-name back-reference) are pinned down in Phase 6, where
+`ArgumentsParser`/`SlotsParser` make the requirements concrete — same stub-bridging pattern as
+Phase 3's `CallableSpec` declaration. `invocation_parser()` (and the custom-parser override on
+`StdCallableSpec`) also waits for Phase 6's `ConstructParser`/`ParseContext`/`NodeId` rather
+than inventing a throwaway signature. `CallableSpec`'s default `arguments()`/`slots()` return
+the *neutral callable* (no arguments, no slots) — the semantically correct default for fallback
+singletons and simple specials like `~`, not an arbitrary one.
 
 ### 3.5 Nodes and AST
 
@@ -756,15 +798,9 @@ Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 
 
 Current list — remove entries as they are settled (move the outcome into §3):
 
-1. **`SpecLookup` semantics and behavior** (§3.4): deferred from ARCHITECTURE.md
-   decision 6 (the no-`ConflictStrategy`/shadowing part is decided). To be discussed before
-   Phase 4. (Decision points 1–7 are otherwise signed off, July 2026; §3 entries marked
-   PROPOSED become DECIDED as they land.) Two items feed in from the token-design review
-   (July 2026): (a) the parse-time command lookup — with several `CommandRule`s, the name
-   alone cannot disambiguate which escape syntax fired; pass the token (or its escape
-   char, recoverable from the span) to the lookup; (b) per-`CallableTypeId` fallback
-   singletons back both unknown commands and the specials scan's never-absent-spec
-   guarantee.
+1. ~~**`SpecLookup` semantics and behavior**~~ — settled July 2026 (Phase 4 design
+   session): `CallableQuery`-based lookup with explicit `CallableSyntax` + optional token,
+   and stack-built-in per-`CallableTypeId` fallbacks. Outcome moved to §3.4.
 1b. **Precompiled-table merging (`PrefixTable`++)**: detection consults several per-state
    structures (group-delimiter `PrefixTable`, specials `TriggerChars`, per-rule command
    escape and comment-start checks). Worth evaluating a single merged first-character /

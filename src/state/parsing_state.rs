@@ -2,6 +2,7 @@
 
 use core::fmt;
 
+use crate::library::LibraryStack;
 use crate::token::{PrefixTable, TokenRules, TriggerChars};
 
 use super::delta::ParsingStateDelta;
@@ -10,11 +11,12 @@ use super::lang::Lang;
 /// The plain stored settings of a parsing state — the data that deltas override and
 /// [`Lang::finalize_transition`] may rewrite. Fields are public *here* (the customizer
 /// needs full access); the outer [`ParsingState`] exposes them read-only.
-///
-/// `libraries` (the definitions visible in this state) arrives with Phase 4.
 pub struct StateData<L: Lang> {
     /// Tokenization rules — plain stored data (defined in the token topic).
     pub rules: TokenRules,
+    /// The definitions visible in this state (extendable mid-parse via
+    /// [`push_library`](super::ParsingStateDelta::push_library) — `\newcommand`).
+    pub libraries: LibraryStack<L>,
     /// Language-specific state (e.g. a math-mode flag).
     pub ext: L::StateExt,
 }
@@ -65,6 +67,11 @@ impl<L: Lang> ParsingState<L> {
         &self.data.rules
     }
 
+    /// The definitions visible in this state.
+    pub fn libraries(&self) -> &LibraryStack<L> {
+        &self.data.libraries
+    }
+
     /// The language-specific state extension.
     pub fn ext(&self) -> &L::StateExt {
         &self.data.ext
@@ -93,13 +100,21 @@ impl<L: Lang> ParsingState<L> {
 
 impl<L: Lang> Clone for StateData<L> {
     fn clone(&self) -> Self {
-        StateData { rules: self.rules.clone(), ext: self.ext.clone() }
+        StateData {
+            rules: self.rules.clone(),
+            libraries: self.libraries.clone(),
+            ext: self.ext.clone(),
+        }
     }
 }
 
 impl<L: Lang> fmt::Debug for StateData<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StateData").field("rules", &self.rules).field("ext", &self.ext).finish()
+        f.debug_struct("StateData")
+            .field("rules", &self.rules)
+            .field("libraries", &self.libraries)
+            .field("ext", &self.ext)
+            .finish()
     }
 }
 
@@ -119,6 +134,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
         // behavior (the Option C debuggability promise).
         f.debug_struct("ParsingState")
             .field("rules", &self.data.rules)
+            .field("libraries", &self.data.libraries)
             .field("ext", &self.data.ext)
             .finish_non_exhaustive()
     }
@@ -127,6 +143,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::LibraryStack;
     use crate::state::TokenRulesOverrides;
     use crate::token::{CommandRule, GroupType, GroupTypeId, WhitespaceRules};
     use alloc::string::String;
@@ -165,7 +182,7 @@ mod tests {
     #[test]
     fn derived_applies_overrides_and_keeps_the_rest() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             double_newline_paragraphs: Some(false),
@@ -184,7 +201,7 @@ mod tests {
     #[test]
     fn derived_rebuilds_prefix_table() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
         assert!(state.prefix_table().match_at("[x").is_none());
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -203,7 +220,7 @@ mod tests {
     #[test]
     fn empty_delta_is_a_clean_copy() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
         let derived = state.derived(&ParsingStateDelta::new());
         assert_eq!(derived.rules(), state.rules());
     }
@@ -254,7 +271,7 @@ mod tests {
     #[test]
     fn finalize_centralizes_cross_cutting_rules() {
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
 
         let in_math = state.derived(&ParsingStateDelta::new().event(MathEvent::EnterMath));
         assert!(in_math.ext().in_math);
@@ -275,7 +292,7 @@ mod tests {
         // transition — an explicit escape-char override is clobbered. That trade-off is
         // the customizer author's documented choice (ARCHITECTURE.md §state).
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
 
         let mut custom = base_rules().commands;
         custom[0].escape_char = '@';
@@ -290,7 +307,7 @@ mod tests {
     #[test]
     fn ext_replacement_via_delta() {
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
         let derived = state.derived(&ParsingStateDelta::new().ext(MathState { in_math: true }));
         assert!(derived.ext().in_math);
         // finalize also ran on the replaced ext:

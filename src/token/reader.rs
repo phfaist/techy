@@ -398,6 +398,7 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::LibraryStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
     use crate::token::{CommentRule, GroupType, GroupTypeId, SpecialsMatch, TriggerChars};
@@ -451,7 +452,7 @@ mod tests {
     }
 
     fn state(rules: TokenRules) -> ParsingState<TestLang> {
-        ParsingState::new(StateData { rules, ext: () })
+        ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
     }
 
     /// Rules with the given group type's close delimiter expected (as the group parser
@@ -1030,7 +1031,7 @@ mod tests {
     }
 
     fn specials_state(rules: TokenRules) -> ParsingState<SpecialsLang> {
-        ParsingState::new(StateData { rules, ext: () })
+        ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
     }
 
     #[test]
@@ -1091,7 +1092,7 @@ mod tests {
             }
         }
         let st: ParsingState<PanickyLang> =
-            ParsingState::new(StateData { rules: latex_rules(), ext: () });
+            ParsingState::new(StateData { rules: latex_rules(), libraries: LibraryStack::new(), ext: () });
         let mut tr = StdTokenReader::new("x");
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
     }

@@ -28,8 +28,10 @@
 //!   the standard state-driven reader. **Implemented (Phases 2–3).**
 //! - [`state`] (S1) — the `Lang` trait, parsing state, and reified state deltas.
 //!   **Implemented (Phase 3).**
-//! - [`spec`] + `library` (S1) — callable specs and definition libraries. *Phase 4*
-//!   (the `CallableSpec` trait declaration already exists — `Specials` tokens carry specs).
+//! - [`spec`] + [`library`] (S1) — de-keyed callable specs (argument/slot structures)
+//!   and definition libraries (query-based lookup, lexical shadowing, per-type
+//!   unknown-callable fallbacks). **Implemented (Phase 4)**; the structure specs and the
+//!   `invocation_parser()` escape hatch grow with their consumers in Phase 6.
 //! - `node` (S1) — the flat, immutable node tree. *Phase 5.*
 //! - `constructs` + `engine` (S1) — construct parsers and the high-level API. *Phase 6.*
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
@@ -55,6 +57,7 @@
 extern crate alloc;
 
 pub mod error;
+pub mod library;
 pub mod source;
 pub mod spec;
 pub mod state;
@@ -71,7 +74,11 @@ pub use source::{
     LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
     SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span,
 };
-pub use spec::CallableSpec;
+pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
+pub use spec::{
+    ArgumentKind, ArgumentSpec, ArgumentStructureSpec, CallableSpec, CallableTypeId, SlotSpec,
+    SlotStructureSpec, StdCallableSpec,
+};
 pub use state::{Lang, ParsingState, ParsingStateDelta, StateData, TokenRulesOverrides};
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, GroupType, GroupTypeId, PrefixTable,

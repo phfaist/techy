@@ -33,7 +33,7 @@ of earlier revisions lives in git.
 | S1 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
 | S1 | `constructs` | `ConstructParser` trait + standard construct parsers |
 | S1 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, ext payloads |
-| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack` |
+| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack`, `CallableQuery` |
 | S1 | `state` | `Lang`, `ParsingState<L>`, `StateData`, `ParsingStateDelta` |
 | S1 | `token` | `Token<'s, L>`, `TokenKind`, `TokenRules`, `TokenReader`, `StdTokenReader` |
 | S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` |
@@ -81,6 +81,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Argument/slot structure | `ArgumentStructureSpec`, `SlotStructureSpec` | args configure; slots hold content regions |
 | Parsed argument values | `Arguments` / `ArgsLayout`, `SlotsLayout` | context makes "parsed" obvious |
 | Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
+| Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
 | Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
 | Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |

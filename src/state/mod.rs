@@ -2,10 +2,11 @@
 //!
 //! This implements ARCHITECTURE.md §state ("Option C", Decision 1):
 //!
-//! - [`ParsingState<L>`] holds [`StateData<L>`] (the plain stored settings: [`TokenRules`]
-//!   plus the language-specific `L::StateExt`) behind a getter-only public surface,
-//!   together with per-instance derived caches (the delimiter [`PrefixTable`] and the
-//!   specials [`TriggerChars`] set).
+//! - [`ParsingState<L>`] holds [`StateData<L>`] (the plain stored settings:
+//!   [`TokenRules`](crate::token::TokenRules) plus the language-specific `L::StateExt`)
+//!   behind a getter-only public surface, together with per-instance derived caches (the
+//!   delimiter [`PrefixTable`](crate::token::PrefixTable) and the specials
+//!   [`TriggerChars`](crate::token::TriggerChars) set).
 //! - [`ParsingStateDelta<L>`] is the reified change value — typed optional overrides
 //!   ([`TokenRulesOverrides`]) plus semantic `L::Event`s. Deltas are data, not closures:
 //!   mergeable, inspectable, and applicable by a *caller* to a base state the producer
@@ -20,8 +21,12 @@
 //!   tokenization delegated to the language rather than enumerated as rules data
 //!   (DESIGN_RATIONALE.md §3.2).
 //!
-//! `LibraryStack` (definitions visible in a state) and `push_libraries` on the delta
-//! arrive with Phase 4; `Lang::NodeExts` with Phase 5.
+//! The state also stores the definitions visible at this point of the parse
+//! ([`LibraryStack`](crate::library::LibraryStack), Phase 4): construct parsers extend
+//! definitions mid-parse by returning a delta with
+//! [`push_library`](ParsingStateDelta::push_library) (`\newcommand`), and scopes revert
+//! structurally when the caller drops the derived state. `Lang::NodeExts` arrives with
+//! Phase 5.
 
 mod delta;
 mod lang;

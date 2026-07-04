@@ -13,8 +13,8 @@ see §state for the design and §4 for the recorded rationale. Decision 3 (node 
 unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see §specs/§nodes for the design
 and §4b for the recorded rationale. Decisions 2 (`Lang` + `Language<L>` naming), 4 (defer
 `Rc`/`Arc` genericity), 5 (zero mandatory dependencies), and 7 (rebuild phase-by-phase) were
-accepted as proposed. Decision 6: no `ConflictStrategy` is accepted; the exact `SpecLookup`
-semantics and behavior remain **to be discussed (deferred)**.
+accepted as proposed. Decision 6: no `ConflictStrategy` is accepted; the deferred `SpecLookup`
+semantics were settled in the Phase 4 design session (July 2026) — see §specs.
 
 **Revised July 2026:** the strict L0–L7 layer ladder originally used to present §3 was
 replaced by a three-strata dependency model (S0 foundation / S1 core / S2 presets) with three
@@ -398,14 +398,22 @@ invocation forms, not core concepts.
 **Libraries** (supersedes `ContextDb`, per PROPOSALS.md but simplified):
 
 ```rust
+pub struct CallableQuery<'a, 's, L: Lang> {   // decided July 2026 (Phase 4) — see below
+    pub callable_type: CallableTypeId,
+    pub name: &'a str,
+    pub syntax: CallableSyntax,               // Command { escape_char } / Specials / Other
+    pub token: Option<&'a Token<'s, L>>,      // when one exists (pre_space/span context)
+}
+
 pub trait SpecLookup<L: Lang> {
-    fn lookup(&self, ct: CallableTypeId, name: &str, state: &ParsingState<L>)
+    fn lookup(&self, query: &CallableQuery<'_, '_, L>, state: &ParsingState<L>)
         -> Option<Arc<dyn CallableSpec<L>>>;
 }
 
-pub struct Library<L: Lang> { /* name; HashMap<(CallableTypeId, Box<str>), Arc<dyn CallableSpec<L>>> */ }
+pub struct Library<L: Lang> { /* name; nested BTreeMaps: CallableTypeId → name → Arc<dyn CallableSpec<L>> */ }
 
-pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, innermost first */ }
+pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, innermost last;
+                                      per-CallableTypeId fallback map behind resolve() */ }
 ```
 
 - **Keys are `(CallableTypeId, name)`, many-to-one**: several names may map to one shared
@@ -414,11 +422,15 @@ pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, inner
 - Resolution: ordered stack, innermost/last-added wins (lexical shadowing — matches
   `\newcommand` semantics and group-local definitions). No `ConflictStrategy` enum: shadowing
   *is* the semantic; an optional lint pass can warn on shadowing if wanted. **[DECISION 6 —
-  decided, July 2026: no `ConflictStrategy`. The `SpecLookup` semantics and behavior are to
-  be discussed (deferred).]**
-- **Unknown callables**: per-`CallableTypeId` fallback policy on the stack, returning a
-  **shared singleton** spec — possible precisely because specs are de-keyed (nothing
-  instance-specific lives in them). Consequence: a callable node's spec is **never `None`**.
+  decided, July 2026: no `ConflictStrategy`. The deferred `SpecLookup` semantics were settled
+  in the Phase 4 design session (July 2026): `CallableQuery`-based lookup as sketched above —
+  rationale in DESIGN_RATIONALE.md §3.4.]**
+- **Unknown callables**: per-`CallableTypeId` fallback policy built into `LibraryStack`
+  (consulted by `resolve()` only, after the stack misses; the stack's own `SpecLookup` impl is
+  stack-only so nested fallbacks cannot preempt outer definitions), returning a **shared
+  singleton** spec — possible precisely because specs are de-keyed (nothing instance-specific
+  lives in them). Consequence: a callable node's spec is **never `None`** for any callable
+  type whose preset registered a fallback.
 - **Mode-aware lookup without privileged modes**: `lookup()` receives `&ParsingState<L>`, so a
   preset's `SpecLookup` implementation may dispatch on `state.ext` (e.g. FLM resolving `\vec`
   differently in math mode). The core `Library` type ignores the state. This replaces
@@ -911,6 +923,14 @@ hardcoded `TokenRules` value).
 - **Phase 4 — `spec` + `library`.** `CallableSpec` (de-keyed), `StdCallableSpec`,
   `ArgumentStructureSpec` + `SlotStructureSpec`, `CallableTypeId` interning,
   `Library`/`LibraryStack`/`SpecLookup` + per-type unknown-fallback policy.
+  — ✅ done, July 2026. The deferred `SpecLookup` semantics were settled first
+  (`CallableQuery` with `CallableSyntax` + optional token; fallbacks built into
+  `LibraryStack`; DESIGN_RATIONALE.md §3.4). `StateData.libraries` +
+  `ParsingStateDelta::push_libraries` landed with it. Deliberately deferred to Phase 6,
+  with their consumers: the full argument-kind inventory and slot
+  separators/terminators (Phase 4 ships skeletons), `invocation_parser()`, and
+  `CallableTypeId` *interning* (ids are direct-constructed like `GroupTypeId` until
+  `Language<L>` exists).
 - **Phase 5 — `node`.** Flat `NodeTree`, `NodeKind<L>`/`CallableData`, `TextContent`, ext
   bundle (`NodeExtTypes`, `SimpleLang`), `NodeRef`, builder used by the session;
   `materialize()`.
@@ -979,10 +999,12 @@ not obvious.
    derive only covered the trivial part) and drop `log` entirely (library conditions surface
    through the diagnostics sink / `ParseResult`, not a logging side channel; can be reintroduced
    later as an optional feature if internal tracing proves useful).
-6. **RESOLVED IN PART (July 2026): no `ConflictStrategy`** — library resolution = ordered
-   stack with lexical shadowing, no built-in mode tables. **Deferred:** the `SpecLookup`
-   semantics and behavior (including mode-awareness via the state argument) are to be
-   discussed. (§specs)
+6. **RESOLVED (July 2026): no `ConflictStrategy`** — library resolution = ordered
+   stack with lexical shadowing, no built-in mode tables. The deferred `SpecLookup`
+   semantics were settled in the Phase 4 design session (July 2026): `CallableQuery`-based
+   lookup (explicit `CallableSyntax`, optional token, mode-awareness via the state
+   argument) with per-`CallableTypeId` fallbacks built into `LibraryStack`.
+   (§specs; rationale in DESIGN_RATIONALE.md §3.4.)
 7. **RESOLVED (July 2026): rebuild `src/` phase-by-phase** per §9 rather than repairing the
    current tree in place (salvaging: prefix-table logic, `detect_*` decomposition, recovery
    tokens, source tests, line-index logic).

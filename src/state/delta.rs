@@ -1,9 +1,11 @@
 //! [`ParsingStateDelta`] and [`TokenRulesOverrides`]: reified state changes.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::library::SpecLookup;
 use crate::token::{CommandRule, CommentRule, GroupType, GroupTypeId, TokenRules, WhitespaceRules};
 
 use super::lang::Lang;
@@ -70,10 +72,14 @@ impl TokenRulesOverrides {
 /// group). Standard overrides and semantic events travel together so one transition (and
 /// one `finalize_transition` run) covers both.
 ///
-/// `push_libraries` arrives with Phase 4.
 pub struct ParsingStateDelta<L: Lang> {
     /// Overrides of the stored token rules; every field optional.
     pub rules: TokenRulesOverrides,
+    /// Lookups to push onto the state's library stack, in order (the last one pushed
+    /// ends up innermost). This is how definitions extend mid-parse (`\newcommand`);
+    /// scope reversion is structural — the caller keeps the previous
+    /// `Arc<ParsingState>` (ARCHITECTURE.md §specs).
+    pub push_libraries: Vec<Arc<dyn SpecLookup<L>>>,
     /// Whole-value replacement of the language-specific state extension; generic code
     /// leaves this `None` (presets prefer events + `finalize_transition`).
     pub ext: Option<L::StateExt>,
@@ -84,12 +90,23 @@ pub struct ParsingStateDelta<L: Lang> {
 impl<L: Lang> ParsingStateDelta<L> {
     /// An empty delta (deriving with it yields an equivalent state).
     pub fn new() -> ParsingStateDelta<L> {
-        ParsingStateDelta { rules: TokenRulesOverrides::default(), ext: None, events: Vec::new() }
+        ParsingStateDelta {
+            rules: TokenRulesOverrides::default(),
+            push_libraries: Vec::new(),
+            ext: None,
+            events: Vec::new(),
+        }
     }
 
     /// Set the token-rules overrides.
     pub fn rules(mut self, rules: TokenRulesOverrides) -> Self {
         self.rules = rules;
+        self
+    }
+
+    /// Push a lookup onto the state's library stack (innermost = pushed last).
+    pub fn push_library(mut self, lookup: Arc<dyn SpecLookup<L>>) -> Self {
+        self.push_libraries.push(lookup);
         self
     }
 
@@ -109,6 +126,9 @@ impl<L: Lang> ParsingStateDelta<L> {
     /// `derived()`, before `finalize_transition` runs.
     pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) {
         self.rules.apply(&mut data.rules);
+        for lookup in &self.push_libraries {
+            data.libraries.push(lookup.clone());
+        }
         if let Some(ext) = &self.ext {
             data.ext = ext.clone();
         }
@@ -127,6 +147,7 @@ impl<L: Lang> Clone for ParsingStateDelta<L> {
     fn clone(&self) -> Self {
         ParsingStateDelta {
             rules: self.rules.clone(),
+            push_libraries: self.push_libraries.clone(),
             ext: self.ext.clone(),
             events: self.events.clone(),
         }
@@ -137,6 +158,7 @@ impl<L: Lang> fmt::Debug for ParsingStateDelta<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsingStateDelta")
             .field("rules", &self.rules)
+            .field("push_libraries", &self.push_libraries)
             .field("ext", &self.ext)
             .field("events", &self.events)
             .finish()
