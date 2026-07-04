@@ -32,7 +32,10 @@
 //!   and definition libraries (query-based lookup, lexical shadowing, per-type
 //!   unknown-callable fallbacks). **Implemented (Phase 4)**; the structure specs and the
 //!   `invocation_parser()` escape hatch grow with their consumers in Phase 6.
-//! - `node` (S1) — the flat, immutable node tree. *Phase 5.*
+//! - [`node`] (S1) — the flat, immutable node tree: closed structural [`NodeKind`],
+//!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy access.
+//!   **Implemented (Phase 5)**; the whitespace/span invariants and the concrete
+//!   `ArgsLayout` syntax records grow with the parsers in Phase 6.
 //! - `constructs` + `engine` (S1) — construct parsers and the high-level API. *Phase 6.*
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
 //!
@@ -58,28 +61,36 @@ extern crate alloc;
 
 pub mod error;
 pub mod library;
+pub mod node;
 pub mod source;
 pub mod spec;
 pub mod state;
 pub mod token;
 
 // The remaining modules of the previous exploratory implementation (`parser`,
-// `constructs`, `node`) are kept in the tree as a quarry but are not compiled; they are
-// rebuilt phase-by-phase per ARCHITECTURE.md §9 (superseded `state`/`spec` quarry files
-// are kept alongside the new modules as `*_JUNK._rs`).
+// `constructs`) are kept in the tree as a quarry but are not compiled; they are
+// rebuilt phase-by-phase per ARCHITECTURE.md §9 (superseded quarry files are kept
+// alongside the new modules as `*_JUNK._rs`).
 
 // Re-export the public API of the implemented topics.
 pub use error::{format_position, format_traceback, Diagnostic, Diagnostics, Recovery, Severity};
 pub use source::{
     LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
-    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span,
+    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
+pub use node::{
+    ArgLayout, ArgsLayout, BuildId, CallableData, NodeData, NodeId, NodeKind, NodeRef, NodeTree,
+    NodeTreeBuilder, SlotLayout, SlotsLayout,
+};
 pub use spec::{
     ArgumentKind, ArgumentSpec, ArgumentStructureSpec, CallableSpec, CallableTypeId, SlotSpec,
     SlotStructureSpec, StdCallableSpec,
 };
-pub use state::{Lang, ParsingState, ParsingStateDelta, StateData, TokenRulesOverrides};
+pub use state::{
+    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
+    TokenRulesOverrides,
+};
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, GroupType, GroupTypeId, PrefixTable,
     SpecialsMatch, StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader,

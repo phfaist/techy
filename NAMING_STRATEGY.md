@@ -32,12 +32,12 @@ of earlier revisions lives in git.
 | S2 | `latexlike` preset | `Latexlike` lang, LaTeX-flavored helpers |
 | S1 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
 | S1 | `constructs` | `ConstructParser` trait + standard construct parsers |
-| S1 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, ext payloads |
+| S1 | `node` | `NodeTree`, `NodeKind<L>`, `CallableData`, `NodeRef`, `NodeTreeBuilder`, layouts, ext aliases |
 | S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `CallableTypeId`, `Library`, `LibraryStack`, `CallableQuery` |
 | S1 | `state` | `Lang`, `ParsingState<L>`, `StateData`, `ParsingStateDelta` |
 | S1 | `token` | `Token<'s, L>`, `TokenKind`, `TokenRules`, `TokenReader`, `StdTokenReader` |
-| S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` |
-| S0 | `error` | span-based diagnostics; `TextContent` (Phase 5) |
+| S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex`, `TextContent` |
+| S0 | `error` | span-based diagnostics |
 
 ### The command → callable → macro/environment terminology stack
 
@@ -84,7 +84,9 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
 | Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
-| Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
+| Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeId`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
+| Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
+| Invocation layout | `ArgsLayout` (`ArgLayout` entries), `SlotsLayout` (`SlotLayout`) | presence + child offsets + per-instance syntax |
 | Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + args/slots |
 | Node textual payload | `TextContent` (`Spanned` / `Owned`) | logical content first-class; span = provenance |

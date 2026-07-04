@@ -329,6 +329,7 @@ mod tests {
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
     }
 
     fn min_rules() -> TokenRules {
@@ -516,6 +517,7 @@ mod tests {
         type StateExt = MathState;
         type Event = ();
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
     }
 
     #[test]

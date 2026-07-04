@@ -934,6 +934,15 @@ hardcoded `TokenRules` value).
 - **Phase 5 — `node`.** Flat `NodeTree`, `NodeKind<L>`/`CallableData`, `TextContent`, ext
   bundle (`NodeExtTypes`, `SimpleLang`), `NodeRef`, builder used by the session;
   `materialize()`.
+  — ✅ done, July 2026. The deferred args/slots ↔ children encoding was settled first
+  (**one node per region**: one child per present argument, one `List` child per slot;
+  presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout` —
+  DESIGN_RATIONALE.md §3.5). Ships the topic as designed, plus: node spans stay mandatory
+  (synthetic-node span representation deferred to the transform API, post-Phase-6); a
+  *staging* `NodeTreeBuilder` whose `finish()` lays siblings out contiguously breadth-first
+  (direct arena emission can't — §3.5); `TextContent` housed in the source topic (S0), no
+  `PartialEq` on it or on node types yet. `ArgsLayout` syntax records and possible `Comment`
+  recomposition fields grow with their consumers in Phase 6 (DESIGN_RATIONALE.md §6.5).
 - **Phase 6 — `constructs` + `engine`.** `ParseContext`, `NodesParser`, group/comment/callable
   parsers, `ArgumentsParser` + `SlotsParser`, `Language<L>`/`ParserSession`/`ParseResult`;
   pin down the whitespace/span invariants of §nodes; end-to-end tests on real LaTeX snippets.

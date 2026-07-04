@@ -169,15 +169,11 @@ mod tests {
         }
     }
 
-    // --- a minimal lang: no customization at all -------------------------------------
+    // --- a minimal lang: no customization at all (the SimpleLang shortcut) -----------
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct PlainLang;
-    impl Lang for PlainLang {
-        type StateExt = ();
-        type Event = ();
-        type SourceOrigin = Option<String>;
-    }
+    impl crate::state::SimpleLang for PlainLang {}
 
     #[test]
     fn derived_applies_overrides_and_keeps_the_rest() {
@@ -249,6 +245,7 @@ mod tests {
         type StateExt = MathState;
         type Event = MathEvent;
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
 
         fn finalize_transition(
             new: &mut StateData<Self>,

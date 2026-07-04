@@ -17,6 +17,8 @@
 //! - [`SourceContent`] abstracts the backing storage (in-memory strings today; the trait
 //!   boundary is what will later allow memory-mapped files without parser changes).
 //! - [`SourceCursor`] provides forward scanning with mark/rewind over source content.
+//! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
+//!   owned when synthesized or normalized. Node payloads carry it (Phase 5).
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
 //!   purely in byte offsets.
 //!
@@ -50,6 +52,7 @@ mod resolver;
 #[allow(clippy::module_inception)]
 mod source;
 mod span;
+mod text_content;
 
 pub use content::{SourceContent, SourceCursor};
 pub use line_index::LineIndex;
@@ -57,3 +60,4 @@ pub use origin::SourceOrigin;
 pub use resolver::{MapResolver, NoResolver, ResolveError, SourceResolver};
 pub use source::{ProvenanceChain, Source, SourceProvenance, SourceSpan};
 pub use span::Span;
+pub use text_content::TextContent;

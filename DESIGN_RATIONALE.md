@@ -102,11 +102,12 @@ it to a preset's `StateExt`, `NodeData`, or library definitions.
 ### 2.4 Closed structural core, open payloads
 
 The set of *structural shapes* (chars, group, callable invocation, comment, list) is a closed
-enum; extensibility lives in payloads (`Custom(L::NodeData)`), specs (trait objects chosen at
-definition time), and state extensions. Rationale: exhaustive pattern matching and
-serializability are user priorities; `Box<dyn Node>` + downcasting sacrifices both to gain a
-kind of openness nobody needs (new *structure* is rare; new *semantics* is common, and
-semantics attach to payloads and specs).
+enum; extensibility lives in payloads (the two-tier ext system of `Lang::NodeExts` — no
+`Custom` variant; ARCHITECTURE.md Decision 3), specs (trait objects chosen at definition
+time), and state extensions. Rationale: exhaustive pattern matching and serializability are
+user priorities; `Box<dyn Node>` + downcasting sacrifices both to gain a kind of openness
+nobody needs (new *structure* is rare; new *semantics* is common, and semantics attach to
+payloads and specs).
 
 ### 2.5 Zero-copy by default
 
@@ -540,18 +541,78 @@ guarantees a `NodeRef` can't outlive the tree its index points into. Mutation ha
 inside `ParserSession`; `finish()` consumes the session, so there is no mutable/immutable
 conflict by design.
 
-**Closed `NodeKind<L>` enum + `Custom(L::NodeData)` variant** — PROPOSED (July 2026,
-ARCHITECTURE.md DECISION 3). See §2.4 for the principle.
+**Closed `NodeKind<L>`, unified `Callable` kind, two-tier ext, no `Custom` variant
+("Option F")** — DECIDED (ARCHITECTURE.md Decision 3, July 2026; implemented July 2026,
+Phase 5). The structural taxonomy is `Chars`/`Group`/`Callable`/`Comment`/`List`;
+macro/environment/specials are invocation *forms* (`CallableTypeId` on `CallableData`), not
+node kinds; custom data rides in the two-tier ext bundle (`Lang::NodeExts: NodeExtTypes` —
+uniform `NodeExt` + per-kind `<Kind>NodeExt`, all bounded `Clone + Debug + Default`; the
+`Default` gives builders their no-ext value, mirroring `StateExt`). `NodeExtTypes` is defined
+next to `Lang` in the state topic, not in `node/` (moving it would recreate a module cycle for
+cosmetics); `SimpleLang` + blanket impl provides the all-defaults shortcut. The full
+resolution argument (why `Custom` died, de-keyed specs, owned names, `TextContent`) is
+recorded in ARCHITECTURE.md §4b and is not duplicated here.
 *Rejected:* `trait Node` + `Box<dyn Node>` + `as_any()` downcasting + `clone_box()` (the
 generated TRAIT_BASED_ARCHITECTURE.md design) — loses exhaustive matching, adds per-node
 boxing, makes serialization and flat storage impossible, and reintroduces runtime type errors
 that the type system should prevent.
 
-**No core `MathNode`** — PROPOSED (July 2026, consequence of §2.3).
+**No core `MathNode`** — DECIDED (July 2026, consequence of §2.3 and Decision 3).
 `$…$` parses as a `Group` with a `$`-delimited `GroupTypeId` under a math-mode state extension;
 the latexlike preset provides accessor helpers so ergonomics don't suffer.
-*Revisit if:* preset-level ergonomics prove genuinely painful in practice — the fallback is a
-preset-defined `Custom` node, still not a core variant.
+*Revisit if:* preset-level ergonomics prove genuinely painful in practice — the fallback is
+preset-defined ext data on the `Group` kind, still not a core variant.
+
+**Args/slots ↔ children encoding: one node per region** — DECIDED (user, July 2026, Phase 5
+design session; was open question §6.2). A `Callable` node's children range holds one node per
+*present* argument (the argument's natural node — typically a `Group`; a `List` wrapper only if
+an argument kind ever yields several nodes), followed by one `List` node per slot (an
+environment body = one `List` child; an empty body is an empty `List` — a region that exists,
+unlike an absent optional argument). `ArgsLayout` maps spec-argument index →
+`Absent` / `Present { child offset }` / `Marker { spelling }`; `SlotsLayout` maps slot → child
+offset. Per-instance syntax choices the spec doesn't determine (today the marker spelling;
+delimiter alternatives, verbatim fences, and slot separators arrive with Phase 6's parsers)
+are recorded **in the layouts as `TextContent`**, not in ext types — the level-2 recomposition
+requirement must not depend on `Lang` cooperation.
+*Rationale:* matches pylatexenc's proven argnlist shape (one node per argument, `None` when
+absent); every region has node identity and its own span ("what is the span of `\frac`'s 2nd
+argument" is answerable); generic child traversal visits meaningful units; layouts stay small.
+*Rejected:* flattening region contents directly into the children range with `(offset, len)`
+layout entries — regions lose node identity (no span, no ext attachment point) and visitors
+see argument content and body content indistinguishably mixed; separate `Vec<NodeId>` lists
+inside `CallableData` — duplicates the children mechanism, exempts callables from the
+flat-tree contiguity invariant, and costs per-callable allocations.
+
+**Node spans stay mandatory; synthetic-node representation deferred** — DECIDED (user,
+July 2026, Phase 5 design session). `NodeData.span: SourceSpan` is non-optional: parse-produced
+nodes always have a real span, and level-1 recomposition (span → verbatim text) is
+unconditionally available. How *transform-created* nodes represent provenance (empty span
+anchored at the insertion point, a `Synthesized`-provenance source, a detached variant, …) is
+decided together with the transform/visitor API, post-Phase-6.
+*Rejected:* `Option<SourceSpan>` now — every span consumer grows a `None` case that no
+Phase-5/6 code path can produce, and `TextContent::Spanned` would be unresolvable on span-less
+nodes (forcing an awkward "span-less ⇒ all content owned" side invariant).
+
+**Staging builder with breadth-first flatten** — DECIDED (July 2026, Phase 5).
+`NodeTreeBuilder` stages nodes bottom-up with explicit child-id lists; `finish(root)` lays the
+tree out breadth-first (root at index 0, each node's children appended as one contiguous
+block). Child ids must already be staged — cycles are unrepresentable by construction — and
+each node is claimed as a child at most once; staged nodes unreachable from the root are
+silently dropped (parsers may abandon speculatively built nodes on tolerant-recovery paths).
+*Rationale:* `children: Range<u32>` requires *sibling*-contiguous storage, and no direct
+arena-emission order provides it — recursive descent gives subtree-contiguous layouts
+(`G(c1(d1,d2), c2(e1))` emits `d1,d2,c1,e1,c2,G` post-order; `c1` and `c2` are not adjacent).
+Staging + flatten is O(n) with one transient copy, and keeps the builder API free of layout
+obligations.
+
+**`TextContent` is S0 and lives in the source topic; no `PartialEq` on node types yet** —
+DECIDED (July 2026, Phase 5). Home: `source/text_content.rs` — its `Spanned` variant is a
+`Span` into a source, and materialization is a source-content operation; the node topic (S1)
+merely uses it. No `PartialEq` on `TextContent`: logical-text equality of a `Spanned` value
+requires the source content, so a structural `==` would be a footgun (`Spanned(2..4)` vs
+`Owned("ab")` may denote the same text); comparisons go through resolved `&str` (node-level
+accessors). Node/layout types likewise ship without `PartialEq` until golden-test needs make
+the right equality concrete (Phase 6/7).
 
 ### 3.6 Construct parsers, dispatch, engine
 
@@ -806,13 +867,20 @@ Current list — remove entries as they are settled (move the outcome into §3):
    escape and comment-start checks). Worth evaluating a single merged first-character /
    prefix table per state once the hot loop can be profiled (noted July 2026, user
    request; also flagged in ARCHITECTURE.md §token). Not a design blocker.
-2. **`ArgsLayout` / children encoding in flat `NodeData`**: how macro arguments vs environment
-   body vs group contents share the `children: Range<u32>` mechanism — deliberately deferred to
-   Phase 5 implementation, where real cases will inform it.
+2. ~~**`ArgsLayout` / children encoding in flat `NodeData`**~~ — settled July 2026 (Phase 5
+   design session): one node per region (one child per present argument, one `List` child per
+   slot), with presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout`.
+   Outcome moved to §3.5.
 3. **Top-level convenience API**: does a thin `Parser` facade exist above `Language::parse()`,
    or is `Language` the entry point? Bikeshed; defer to Phase 6.
 4. **`CompactString`**: plain `String` initially; whether a small-string optimization ever pays
    for delimiter/specials storage is a profiling question, not a design question.
+5. **`Comment` node recomposition fields**: level-2 recomposition of a comment needs its start
+   delimiter (several `CommentRule`s may coexist) and its syntactic post-space, which the
+   decided `Comment { content, ext }` shape does not store (level 1 is covered — the node span
+   includes both). Decide with the whitespace/span invariants in Phase 6 whether `Comment`
+   grows per-instance syntax fields (the callable `post_space` precedent) or the recomposer
+   reads them from the span.
 
 ---
 

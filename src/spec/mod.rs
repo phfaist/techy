@@ -38,6 +38,7 @@ mod tests {
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
     }
 
     #[test]

@@ -421,6 +421,7 @@ mod tests {
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
     }
 
     /// Hardcoded LaTeX-flavored rules; the real defaults arrive with the latexlike
@@ -1005,6 +1006,7 @@ mod tests {
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
+        type NodeExts = ();
 
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
             TriggerChars::Only("~&-".into())
@@ -1080,6 +1082,7 @@ mod tests {
             type StateExt = ();
             type Event = ();
             type SourceOrigin = Option<String>;
+            type NodeExts = ();
             fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
                 TriggerChars::Only("~".into())
             }

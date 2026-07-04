@@ -25,13 +25,15 @@
 //! ([`LibraryStack`](crate::library::LibraryStack), Phase 4): construct parsers extend
 //! definitions mid-parse by returning a delta with
 //! [`push_library`](ParsingStateDelta::push_library) (`\newcommand`), and scopes revert
-//! structurally when the caller drops the derived state. `Lang::NodeExts` arrives with
-//! Phase 5.
+//! structurally when the caller drops the derived state.
+//!
+//! [`Lang::NodeExts`] selects the node extension type bundle ([`NodeExtTypes`], Phase 5);
+//! [`SimpleLang`] is the all-defaults shortcut for languages with no customization.
 
 mod delta;
 mod lang;
 mod parsing_state;
 
 pub use delta::{ParsingStateDelta, TokenRulesOverrides};
-pub use lang::Lang;
+pub use lang::{Lang, NodeExtTypes, SimpleLang};
 pub use parsing_state::{ParsingState, StateData};
