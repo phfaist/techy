@@ -28,8 +28,8 @@ token → constructs → node (AST)
 Key naming rules:
 - **No "Latex" prefixes**: Use `Token` not `LatexToken`, `Parser` not `LatexWalker`
 - **Specificity matters**: `ParsingStateDelta` not `StateDelta` (too vague)
-- **Clarity over brevity**: `ArgumentStructureSpec` not `ArgumentsSpec` (distinguishes from `ArgumentSpec`)
-- **Context determines names**: `Arguments` not `ParsedArguments` (context makes "parsed" obvious)
+- **Clarity over brevity**: `ParsedArguments` not `Arguments` (the spec-side `ArgumentSpec`/`ArgumentParserSpec` vocabulary coexists in scope — revised July 2026)
+- **Context determines names** — but only when no sibling vocabulary competes in the same scope (see NAMING_STRATEGY.md principles 3–4)
 
 **Module organization**:
 - `parser` module = high-level public API (`Parser` struct)

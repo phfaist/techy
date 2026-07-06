@@ -531,6 +531,61 @@ Phase 3's `CallableSpec` declaration. `invocation_parser()` (and the custom-pars
 than inventing a throwaway signature. `CallableSpec`'s default `arguments()`/`slots()` return
 the *neutral callable* (no arguments, no slots) — the semantically correct default for fallback
 singletons and simple specials like `~`, not an arbitrary one.
+*(Amended July 2026, current-level review: the skeleton `ArgumentKind` and the
+`ArgumentStructureSpec`/`SlotStructureSpec` wrappers are superseded by the pylatexenc-shaped
+argument model — see the two entries below. The neutral-callable defaults and the Phase 6
+deferral of `parse_invocation()` stand.)*
+
+**Argument model rebuilt on pylatexenc's `LatexArgumentSpec`: an argument *is* a parser** —
+DECIDED (user, July 2026, current-level review session; implements report
+2026-07-05 §5.1/§5.2, R1/R2). `ArgumentSpec<L>` = `{ parser: ArgumentParserSpec<L>,
+name: Option<Box<str>>, parsing_state_delta: Option<ParsingStateDelta<L>> }`.
+`ArgumentParserSpec` keeps the standard delimited forms as *data* variants (`Group` — with
+LaTeX's single-expression fallback acceptance, Phase 6 notes Q3 Option A —, `OptionalGroup`,
+`Marker`) and adds `Custom(Arc<dyn ArgumentParser<L>>)` as the mid-granularity behavior
+escape hatch (chars-only args, comma lists, verbatim args, FLM argument types — without
+taking over the whole invocation). `SlotSpec<L>` likewise gains `name` +
+`parsing_state_delta` (pylatexenc's `make_body_parsing_state_delta`: verbatim/math bodies).
+The `ArgumentParser` trait is a reserved marker until Phase 6 supplies `ParseContext` for
+its parse method.
+*Rationale:* pylatexenc's whole argument ecosystem hangs off this slot, and "just write a
+custom invocation parser" is the expensive path the declarative surface exists to avoid; the
+hybrid (data variants + `Custom`) keeps introspection/recomposition-by-data for the common
+forms where pylatexenc's parser-objects-everywhere loses them.
+*Costs accepted:* spec types become generic over `L`; no `PartialEq` on spec types (dyn
+parser, state delta) — consistent with node types.
+*Rejected:* closed `ArgumentKind` enum (a closed *architecture*, not just a closed starter
+inventory — real regression vs. pylatexenc); every-argument-is-an-opaque-parser
+(pylatexenc-pure — loses declarative introspection).
+*Revisit if:* the data-variant inventory grows unwieldy (fold variants into shipped standard
+`ArgumentParser` impls instead).
+
+**`ArgumentStructureSpec`/`SlotStructureSpec` wrappers dropped; `CallableSpec` exposes
+`&[Arc<ArgumentSpec<L>>]` / `&[Arc<SlotSpec<L>>]`** — DECIDED (July 2026, same session).
+The elements are `Arc`-shared so parsed nodes can record which spec each argument was parsed
+against (see §3.5), mirroring pylatexenc's `arguments_spec_list`. Empty-slice defaults work
+for generic `L` where the former `static NONE: ArgumentStructureSpec` cannot (no generic
+statics; `Vec` is not const-promotable).
+*Revisit if:* structure-level (not per-item) spec fields materialize in Phase 6 — e.g. a
+slot-separator field that belongs to no single slot; then a wrapper returns.
+
+**`CallableTypeId` and `GroupTypeId` are closed per-`Lang` associated types** — DECIDED
+(user, July 2026, current-level review session; replaces the open interned-id registry
+design). `Lang::CallableTypeId: Copy + Ord + Hash + Debug` (Ord: library map keys),
+`Lang::GroupTypeId: Copy + Eq + Hash + Debug`; a real language defines small enums,
+`SimpleLang` defaults both to `u32`. The planned `Language<L>` interning machinery for these
+ids is deleted from Phase 6 scope.
+*Rationale:* invocation forms and group-type identities are static per language definition —
+nobody registers a new *form* at runtime (new *callables*, yes — via libraries; new
+*delimiter spellings*, yes — `GroupType` values in the state's token rules; only the
+identity vocabulary is fixed). Closed enums give exhaustive matching in preset code, make
+cross-language id mixing a type error, and remove meaningless raw `u32`s ("open IDs floating
+around").
+*Rejected:* keeping the open ids for symmetry — the symmetry was spurious: token *rules* are
+runtime state; type *identities* are not.
+*Revisit if:* a genuine runtime-registration need for group/callable types appears (e.g.
+catcode-style schemes minting new group types mid-parse) — then that language can use an
+integer id type; the associated-type design accommodates it without core changes.
 
 ### 3.5 Nodes and AST
 
@@ -582,6 +637,65 @@ layout entries — regions lose node identity (no span, no ext attachment point)
 see argument content and body content indistinguishably mixed; separate `Vec<NodeId>` lists
 inside `CallableData` — duplicates the children mechanism, exempts callables from the
 flat-tree contiguity invariant, and costs per-callable allocations.
+*(Amended July 2026, current-level review: the record types `ArgsLayout`/`SlotsLayout` are
+superseded by `ParsedArguments`/`ParsedSlots` — see below. The one-node-per-region encoding
+itself stands, with one change: provided markers are ordinary `Chars` child nodes.)*
+
+**`ParsedArguments`/`ParsedSlots` replace `ArgsLayout`/`SlotsLayout` (pylatexenc's
+`ParsedArguments` pattern)** — DECIDED (user, July 2026, current-level review session).
+`ParsedArguments<L>` holds one `ParsedArgument<L>` per spec'd argument:
+`{ spec: Arc<ArgumentSpec<L>>, child: Option<u32>, pre_space: TextContent,
+ext: ArgumentExt<L> }`; `ParsedSlots<L>` holds `ParsedSlot<L> { spec: Arc<SlotSpec<L>>,
+child: u32 }`. Key points, each argued in the session:
+- **Self-describing records.** Every entry carries the `Arc`'d spec it was parsed against —
+  pylatexenc keeps `arguments_spec_list` next to `argnlist` for exactly this: a custom
+  invocation parser may produce an argument structure the callable spec didn't declare
+  (`\newcommand`-alikes), and the record must stand alone.
+- **Presence lives *inside* the entry** (`child: Option<u32>`), not as
+  `Vec<Option<ParsedArgument>>`: absent optionals keep their spec, so by-name lookup
+  distinguishes "not provided" from "no such argument". This zips pylatexenc's two parallel
+  lists into one array-of-structs; the user's sketched `Vec<Option<…>>` shape is preserved
+  one level down.
+- **Provided markers are `Chars` nodes** (pylatexenc's `LatexOptionalCharsMarkerParser`
+  returns a chars node for `*`): every provided argument has a node, and the three-way
+  `Absent`/`Present`/`Marker` layout enum disappears.
+- **No stored name→index map**: lookup scans the entries' spec names (argument counts are
+  tiny; the specs are the single source of truth). Add a cache only if profiling ever says
+  so.
+- **Content access is computed, not stored** (pylatexenc's `get_content_nodelist()` /
+  `get_content_as_chars()` are accessors): the group node's children *are* the content, and
+  stored copies would diverge under transforms. The extraction-view API is the Phase 7 work
+  package (report R7). What *is* stored: the new `ArgumentExt` slot in the
+  `Lang::NodeExts` bundle, for extensions caching derived data per argument (e.g.
+  `{ref_domain, ref_key}` from a `fig:Abc` argument) — populated by custom argument parsers
+  or the Phase 6 finalize hook (report R3).
+- **Per-instance syntax records** (Q3 Option A): `pre_space` per argument now; slot
+  terminator/separator records arrive with `SlotsParser` (Phase 6).
+*Rejected:* parallel `specs`/`args` vectors (pylatexenc-literal — an unenforced
+length/pointer-consistency invariant and a redundant `Arc` when the spec also sits in the
+entry); "layout" as a name (opaque — nobody could say what it referred to).
+*Revisit if:* an argument form that is "provided" yet produces no node appears — then
+presence needs a flag separate from `child`.
+
+**Group nodes store their delimiters: `NodeKind::Group(Box<GroupData<L>>)`** — DECIDED
+(user, July 2026, current-level review session; follows pylatexenc's
+`LatexGroupNode.delimiters`). `GroupData<L>` = `{ group_type: Option<L::GroupTypeId>,
+open: TextContent, close: TextContent, ext }`.
+*Rationale:* a `Group` whose delimiters were only recoverable through the `Language`
+registry violated the already-stated rule that recomposability must not depend on `Lang`
+cooperation (marker spellings were stored on the node for exactly that reason) — detached
+and synthesized groups couldn't recompose; delimiter-sensitive consumers (pylatexenc's
+double-group unwrap compares `delimiters[0]`) need the strings directly. `TextContent`, not
+`Box<str>`: span-backed zero-copy when parsed, owned when synthesized; empty `close` on
+tolerant "close never found" recovery. `group_type` is **kept alongside** the strings as the
+typed identity ("is this a math group?" without string comparison; `$…$` vs `$$…$$` share
+spellings, not identity) and is `Option` so *internal synthesized groups* — structural
+groups corresponding to no language group type — are representable (user amendment). Boxed
+for the same reason `CallableData` is: `Chars` must keep dominating the enum size.
+*Rejected:* delimiters-only (pylatexenc-pure — group classification degenerates to string
+comparison); registry-only (the inconsistency above).
+*Revisit if:* per-group-node allocation shows up in profiles (then consider inlining a
+small-string delimiter pair).
 
 **Node spans stay mandatory; synthetic-node representation deferred** — DECIDED (user,
 July 2026, Phase 5 design session). `NodeData.span: SourceSpan` is non-optional: parse-produced
@@ -714,12 +828,17 @@ library with `no_std` active and thus guards the policy without a bare-metal CI 
 
 ### 3.10 Naming
 
-Decided conventions (NAMING_STRATEGY.md, Dec 2025, still in force):
+Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 2026):
 
 - **No `Latex` prefixes** — the library is markup-generic (`Token`, not `LatexToken`).
 - **Specificity over brevity** where confusion is possible: `ParsingStateDelta` not
-  `StateDelta`; `ArgumentStructureSpec` not `ArgumentsSpec` (one letter from `ArgumentSpec`).
-- **Context makes qualifiers redundant**: `Arguments`, not `ParsedArguments`.
+  `StateDelta`.
+- **Context makes qualifiers redundant — unless sibling vocabulary competes in scope**:
+  Dec 2025 chose `Arguments` over `ParsedArguments`; reversed July 2026 (current-level
+  review) because the spec-side `ArgumentSpec`/`ArgumentParserSpec` vocabulary now coexists
+  wherever the parsed records appear, and pylatexenc parity favors `ParsedArguments`.
+  (`ArgumentStructureSpec` — the old clarity-over-brevity example — was dropped with the
+  argument-model rebuild, §3.4.)
 - **Collision avoidance beats tradition**: `Language<L>` replaces March's `FLMEnvironment`
   (fatal collision with `EnvironmentSpec`/`EnvironmentNode`); `ConstructParser` avoids clashing
   with any high-level `Parser` type; `Lang` replaces `LanguageSpecification` (too long for a

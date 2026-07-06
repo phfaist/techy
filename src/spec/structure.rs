@@ -1,12 +1,17 @@
-//! Argument and slot structure specs: the declarative description of a callable's
-//! invocation shape.
+//! Argument and slot specs: the declarative description of a callable's invocation shape.
 //!
-//! **Phase 4 skeleton.** These types exist so [`CallableSpec`](super::CallableSpec) can
-//! expose its structure and libraries can hold real specs; the set of argument kinds and
-//! the slot separator/terminator machinery (including the invocation-name back-reference
-//! that makes `\end{align}` match the `align` that opened) grow in Phase 6, when
-//! `ArgumentsParser`/`SlotsParser` make the requirements concrete (ARCHITECTURE.md §specs;
-//! decision recorded in DESIGN_RATIONALE.md §3.4).
+//! **Modeled on pylatexenc's `LatexArgumentSpec`** (decided July 2026, replacing the
+//! Phase 4 `ArgumentKind` skeleton): an argument *is* a parser, optionally named, and may
+//! request a modified parsing state for its own extent. The standard delimited forms stay
+//! introspectable *data* ([`ArgumentParserSpec`]'s closed variants — declarative
+//! recomposition and terse spec construction), while [`ArgumentParserSpec::Custom`]
+//! carries pylatexenc's mid-granularity extension point: chars-only arguments
+//! (`\label{...}`), comma-separated lists (`\cite{a,b}`), verbatim arguments, FLM's
+//! bespoke argument types — without taking over the whole invocation.
+//!
+//! The slot separator/terminator machinery (including the invocation-name back-reference
+//! that makes `\end{align}` match the `align` that opened) grows in Phase 6, when
+//! `ArgumentsParser`/`SlotsParser` make the requirements concrete (ARCHITECTURE.md §specs).
 //!
 //! **Arguments vs. slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
 //! `\item[label]`); slots contain *content regions* (an environment's body). A macro has
@@ -15,85 +20,213 @@
 //! underneath is shared.
 
 use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::sync::Arc;
+use core::fmt;
 
-use crate::token::GroupTypeId;
+use crate::state::{Lang, ParsingStateDelta};
 
-/// The kind of a single argument: how it is delimited and whether it may be absent.
+/// A custom argument parser: the behavior extension point of [`ArgumentParserSpec`],
+/// pylatexenc's "any `LatexParserBase` instance as `LatexArgumentSpec.parser`".
 ///
-/// Starter set (Phase 4); more kinds (verbatim-delimited, single-token forms, …) arrive
-/// with `ArgumentsParser` in Phase 6, which also pins down the exact acceptance semantics
-/// (e.g. the LaTeX rule that a mandatory `{…}` argument also accepts a single token).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArgumentKind {
-    /// A required argument delimited by the given group type (LaTeX: `{…}`).
-    Mandatory {
+/// **Phase 6 grows the actual parse entry point** (it needs `ParseContext`); until then
+/// the trait reserves the slot so spec-facing types are final. An implementation parses
+/// one argument region and stages its node (or reports the argument absent); the standard
+/// invocation path records the result in the node's
+/// [`ParsedArguments`](crate::node::ParsedArguments) like any other argument.
+pub trait ArgumentParser<L: Lang>: fmt::Debug {}
+
+/// How a single argument is parsed: the standard delimited forms as data, or a custom
+/// parser (pylatexenc's `'{'` / `'['` / `'*'` shorthands and `parser=` escape hatch).
+///
+/// The starter inventory covers LaTeX's common forms; more data variants (embellishments,
+/// char-delimited `r`/`d` forms, verbatim) arrive with their consumers (Phase 6/7).
+pub enum ArgumentParserSpec<L: Lang> {
+    /// A mandatory argument delimited by the given group type (LaTeX: `{…}`) — **or**,
+    /// failing that, a single expression: one content character (`\frac12`) or one full
+    /// nested invocation (`\frac1\alpha`); the LaTeX acceptance rule, pylatexenc's
+    /// standard `'{'` argument (Phase 6 notes, Q3 Option A).
+    Group {
         /// The group type delimiting the argument.
-        group_type: GroupTypeId,
+        group_type: L::GroupTypeId,
     },
-    /// An argument delimited by the given group type that may be absent (LaTeX: `[…]`).
-    Optional {
+    /// An argument delimited by the given group type, present only when its open
+    /// delimiter is next after skippable whitespace (LaTeX: `[…]`).
+    OptionalGroup {
         /// The group type delimiting the argument.
-        group_type: GroupTypeId,
+        group_type: L::GroupTypeId,
     },
-    /// An optional literal marker (LaTeX: the `*` of starred variants). Presence is
-    /// per-instance data, recorded in the node's `ArgsLayout` (Phase 5).
-    Star {
+    /// An optional literal marker (LaTeX: the `*` of starred variants). When present it
+    /// parses as a `Chars` node holding the marker text (pylatexenc behavior); absence is
+    /// recorded in the node's [`ParsedArguments`](crate::node::ParsedArguments).
+    Marker {
         /// The literal marker text (`"*"` in LaTeX).
         marker: Box<str>,
     },
+    /// A custom parser — see [`ArgumentParser`].
+    Custom(Arc<dyn ArgumentParser<L>>),
 }
 
-/// One argument in a callable's argument structure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArgumentSpec {
-    /// How the argument is delimited ([`ArgumentKind`]).
-    pub kind: ArgumentKind,
-    /// Optional name for by-name access to parsed arguments (pylatexenc's `argname`).
+/// One argument accepted by a callable (pylatexenc's `LatexArgumentSpec`).
+pub struct ArgumentSpec<L: Lang> {
+    /// How the argument is parsed ([`ArgumentParserSpec`]).
+    pub parser: ArgumentParserSpec<L>,
+    /// Optional name for by-name access to parsed arguments (pylatexenc's `argname`):
+    /// more future-proof than positions — inserting an optional argument renumbers
+    /// positions, names stay valid.
     pub name: Option<Box<str>>,
+    /// Parse this argument under a modified state (pylatexenc's `parsing_state_delta`):
+    /// `\text{…}` leaves math mode for its argument, `\href`'s URL argument disables
+    /// specials. Applied via `derived()` around the argument's extent and reverted
+    /// structurally.
+    pub parsing_state_delta: Option<ParsingStateDelta<L>>,
 }
 
-impl ArgumentSpec {
-    /// An unnamed argument of the given kind.
-    pub fn new(kind: ArgumentKind) -> ArgumentSpec {
-        ArgumentSpec { kind, name: None }
+impl<L: Lang> ArgumentSpec<L> {
+    /// An unnamed argument with the given parser and no state delta.
+    pub fn new(parser: ArgumentParserSpec<L>) -> ArgumentSpec<L> {
+        ArgumentSpec { parser, name: None, parsing_state_delta: None }
+    }
+
+    /// A mandatory group-delimited argument (LaTeX `{…}`).
+    pub fn group(group_type: L::GroupTypeId) -> ArgumentSpec<L> {
+        ArgumentSpec::new(ArgumentParserSpec::Group { group_type })
+    }
+
+    /// An optional group-delimited argument (LaTeX `[…]`).
+    pub fn optional_group(group_type: L::GroupTypeId) -> ArgumentSpec<L> {
+        ArgumentSpec::new(ArgumentParserSpec::OptionalGroup { group_type })
+    }
+
+    /// An optional literal marker argument (LaTeX `*`).
+    pub fn marker(marker: impl Into<Box<str>>) -> ArgumentSpec<L> {
+        ArgumentSpec::new(ArgumentParserSpec::Marker { marker: marker.into() })
     }
 
     /// Attach a name for by-name access.
-    pub fn named(mut self, name: impl Into<Box<str>>) -> ArgumentSpec {
+    pub fn named(mut self, name: impl Into<Box<str>>) -> ArgumentSpec<L> {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Parse the argument under the state derived through `delta`.
+    pub fn with_state_delta(mut self, delta: ParsingStateDelta<L>) -> ArgumentSpec<L> {
+        self.parsing_state_delta = Some(delta);
         self
     }
 }
 
-/// The argument structure of a callable: an ordered list of [`ArgumentSpec`]s.
-///
-/// The default is *no arguments* — the neutral element, suitable for simple callables
-/// (`~`-style specials) and unknown-callable fallback specs.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ArgumentStructureSpec {
-    /// The arguments, in invocation order.
-    pub arguments: Vec<ArgumentSpec>,
-}
-
 /// One content region of a callable.
 ///
-/// **Phase 4 skeleton:** identification only. Separators and terminators — where
-/// terminator patterns may reference the invocation name (`\end{align}` must match the
-/// `align` that opened; a `---` fence closes with `---`) — arrive with `SlotsParser`
-/// (Phase 6).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SlotSpec {
+/// Separators and terminators — where terminator patterns may reference the invocation
+/// name (`\end{align}` must match the `align` that opened; a `---` fence closes with
+/// `---`) — arrive with `SlotsParser` (Phase 6).
+pub struct SlotSpec<L: Lang> {
     /// Optional name for by-name access to parsed slots.
     pub name: Option<Box<str>>,
+    /// Parse this slot's content under a modified state (pylatexenc's
+    /// `make_body_parsing_state_delta`): verbatim environments, `\begin{align}` bodies in
+    /// math mode, FLM's block-level environments. Applied via `derived()` around the
+    /// slot's extent and reverted structurally.
+    pub parsing_state_delta: Option<ParsingStateDelta<L>>,
 }
 
-/// The slot structure of a callable: an ordered list of [`SlotSpec`]s.
-///
-/// The default is *no slots* (macro-shaped); an environment-shaped callable has exactly
-/// one (its body).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SlotStructureSpec {
-    /// The content regions, in source order.
-    pub slots: Vec<SlotSpec>,
+impl<L: Lang> SlotSpec<L> {
+    /// An unnamed slot with no state delta.
+    pub fn new() -> SlotSpec<L> {
+        SlotSpec { name: None, parsing_state_delta: None }
+    }
+
+    /// Attach a name for by-name access.
+    pub fn named(mut self, name: impl Into<Box<str>>) -> SlotSpec<L> {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Parse the slot's content under the state derived through `delta`.
+    pub fn with_state_delta(mut self, delta: ParsingStateDelta<L>) -> SlotSpec<L> {
+        self.parsing_state_delta = Some(delta);
+        self
+    }
+}
+
+impl<L: Lang> Default for SlotSpec<L> {
+    fn default() -> Self {
+        SlotSpec::new()
+    }
+}
+
+// Manual impls: derives would demand `L:` bounds although only associated types (already
+// bounded in `Lang`) and `Arc`s are stored. No `PartialEq`: a spec may carry a custom
+// parser (behavior has no structural equality) and a state delta.
+
+impl<L: Lang> Clone for ArgumentParserSpec<L> {
+    fn clone(&self) -> Self {
+        match self {
+            ArgumentParserSpec::Group { group_type } => {
+                ArgumentParserSpec::Group { group_type: *group_type }
+            }
+            ArgumentParserSpec::OptionalGroup { group_type } => {
+                ArgumentParserSpec::OptionalGroup { group_type: *group_type }
+            }
+            ArgumentParserSpec::Marker { marker } => {
+                ArgumentParserSpec::Marker { marker: marker.clone() }
+            }
+            ArgumentParserSpec::Custom(parser) => ArgumentParserSpec::Custom(Arc::clone(parser)),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ArgumentParserSpec<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArgumentParserSpec::Group { group_type } => {
+                f.debug_struct("Group").field("group_type", group_type).finish()
+            }
+            ArgumentParserSpec::OptionalGroup { group_type } => {
+                f.debug_struct("OptionalGroup").field("group_type", group_type).finish()
+            }
+            ArgumentParserSpec::Marker { marker } => {
+                f.debug_struct("Marker").field("marker", marker).finish()
+            }
+            ArgumentParserSpec::Custom(parser) => f.debug_tuple("Custom").field(parser).finish(),
+        }
+    }
+}
+
+impl<L: Lang> Clone for ArgumentSpec<L> {
+    fn clone(&self) -> Self {
+        ArgumentSpec {
+            parser: self.parser.clone(),
+            name: self.name.clone(),
+            parsing_state_delta: self.parsing_state_delta.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ArgumentSpec<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArgumentSpec")
+            .field("parser", &self.parser)
+            .field("name", &self.name)
+            .field("parsing_state_delta", &self.parsing_state_delta)
+            .finish()
+    }
+}
+
+impl<L: Lang> Clone for SlotSpec<L> {
+    fn clone(&self) -> Self {
+        SlotSpec {
+            name: self.name.clone(),
+            parsing_state_delta: self.parsing_state_delta.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for SlotSpec<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SlotSpec")
+            .field("name", &self.name)
+            .field("parsing_state_delta", &self.parsing_state_delta)
+            .finish()
+    }
 }

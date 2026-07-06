@@ -7,8 +7,6 @@ use crate::source::Span;
 use crate::spec::CallableSpec;
 use crate::state::Lang;
 
-use super::rules::GroupTypeId;
-
 /// What a token *is* — structural and minimal: it identifies *what to parse next*.
 ///
 /// Design invariants (DESIGN_RATIONALE.md §3.2):
@@ -41,15 +39,15 @@ pub enum TokenKind<'s, L: Lang> {
     GroupOpen {
         /// The delimiter as matched.
         delim: &'s str,
-        /// Which registered group type it opens.
-        group_type: GroupTypeId,
+        /// Which group type it opens.
+        group_type: L::GroupTypeId,
     },
     /// A closing group delimiter.
     GroupClose {
         /// The delimiter as matched.
         delim: &'s str,
-        /// Which registered group type it closes.
-        group_type: GroupTypeId,
+        /// Which group type it closes.
+        group_type: L::GroupTypeId,
     },
     /// A command: escape character followed by a name (`\textbf`, `\&`, `\begin`).
     /// Recognition is pure [`CommandRule`](super::CommandRule) data; resolution to a spec

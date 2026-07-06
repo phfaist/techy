@@ -8,6 +8,10 @@
 //! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset
 //! (Phase 7), which is also why none of these types implement `Default`.
 //!
+//! Group-type *identity* is the language's business: [`Lang::GroupTypeId`] is a closed
+//! per-language type (typically an enum; decided July 2026). What varies at runtime is
+//! which *delimiter strings* map to those identities — the [`GroupType`] values here.
+//!
 //! The one deliberate omission: **specials trigger strings are not enumerated here.**
 //! Their recognition is delegated to the language via `Lang::scan_specials` (see
 //! [`specials`](super::SpecialsMatch)), because trigger sets can be large and
@@ -18,42 +22,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Identifier of a group *type* — a registered pairing of open/close delimiters
-/// (`{…}`, `[…]`, `$…$`, …). Open registry per the naming rule (`…TypeId`, not `…Kind`):
-/// group types are preset-/user-registered, not a closed core enum.
-///
-/// Interning machinery arrives with `Language<L>` (Phase 6); until then ids are constructed
-/// directly.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GroupTypeId(u32);
-
-impl GroupTypeId {
-    /// Create a group type id from a raw index.
-    pub const fn new(index: u32) -> GroupTypeId {
-        GroupTypeId(index)
-    }
-
-    /// The raw index of this id.
-    pub const fn index(&self) -> u32 {
-        self.0
-    }
-}
-
-impl fmt::Debug for GroupTypeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GroupTypeId({})", self.0)
-    }
-}
+use crate::state::Lang;
 
 /// One group type usable in the current parsing state: its id and delimiter pair.
 ///
 /// Open and close delimiters are arbitrary non-empty strings; several group types may share
 /// delimiter strings (`$…$` and `$$…$$`), including the same string for open and close.
 /// The [`PrefixTable`](super::PrefixTable) resolves the resulting matching ambiguities.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupType {
+pub struct GroupType<L: Lang> {
     /// The group type's identity, recorded in `GroupOpen`/`GroupClose` tokens.
-    pub id: GroupTypeId,
+    pub id: L::GroupTypeId,
     /// Opening delimiter (e.g. `{`).
     pub open: String,
     /// Closing delimiter (e.g. `}`).
@@ -116,8 +94,7 @@ pub struct CommentRule {
 /// group delimiters (expected close first, then longest match) → command escape characters
 /// → comment starts → specials scan → forbidden-character check → single content
 /// character.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenRules {
+pub struct TokenRules<L: Lang> {
     /// Whitespace handling; `None` disables it entirely.
     pub whitespace: Option<WhitespaceRules>,
     /// Whether a whitespace run containing two or more newlines forms a paragraph break.
@@ -128,7 +105,7 @@ pub struct TokenRules {
     /// The group types recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`, `\(…\)`, …
     /// — all just group types; math is not a core concept). On delimiter conflicts,
     /// earlier entries win (see [`PrefixTable`](super::PrefixTable)).
-    pub group_types: Vec<GroupType>,
+    pub group_types: Vec<GroupType<L>>,
     /// Command syntaxes; empty = no command recognition.
     pub commands: Vec<CommandRule>,
     /// Comment syntaxes; empty = no comment recognition.
@@ -142,5 +119,74 @@ pub struct TokenRules {
     /// inside a `$…$` group this field names the `$…$` type, so a following `$$` tokenizes
     /// as close-`$` (then open-`$`) rather than as a `$$` delimiter. Generalizes
     /// pylatexenc's `math_mode_delimiter` without privileging math.
-    pub expecting_group_close: Option<GroupTypeId>,
+    pub expecting_group_close: Option<L::GroupTypeId>,
 }
+
+// Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: PartialEq` although only
+// the `Lang::GroupTypeId` associated type (already bounded) is stored.
+
+impl<L: Lang> Clone for GroupType<L> {
+    fn clone(&self) -> Self {
+        GroupType { id: self.id, open: self.open.clone(), close: self.close.clone() }
+    }
+}
+
+impl<L: Lang> fmt::Debug for GroupType<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GroupType")
+            .field("id", &self.id)
+            .field("open", &self.open)
+            .field("close", &self.close)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for GroupType<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.open == other.open && self.close == other.close
+    }
+}
+
+impl<L: Lang> Eq for GroupType<L> {}
+
+impl<L: Lang> Clone for TokenRules<L> {
+    fn clone(&self) -> Self {
+        TokenRules {
+            whitespace: self.whitespace.clone(),
+            double_newline_paragraphs: self.double_newline_paragraphs,
+            group_types: self.group_types.clone(),
+            commands: self.commands.clone(),
+            comments: self.comments.clone(),
+            forbidden_chars: self.forbidden_chars.clone(),
+            expecting_group_close: self.expecting_group_close,
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for TokenRules<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRules")
+            .field("whitespace", &self.whitespace)
+            .field("double_newline_paragraphs", &self.double_newline_paragraphs)
+            .field("group_types", &self.group_types)
+            .field("commands", &self.commands)
+            .field("comments", &self.comments)
+            .field("forbidden_chars", &self.forbidden_chars)
+            .field("expecting_group_close", &self.expecting_group_close)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for TokenRules<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.whitespace == other.whitespace
+            && self.double_newline_paragraphs == other.double_newline_paragraphs
+            && self.group_types == other.group_types
+            && self.commands == other.commands
+            && self.comments == other.comments
+            && self.forbidden_chars == other.forbidden_chars
+            && self.expecting_group_close == other.expecting_group_close
+    }
+}
+
+impl<L: Lang> Eq for TokenRules<L> {}

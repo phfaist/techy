@@ -4,12 +4,11 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::source::SourceSpan;
-use crate::spec::{CallableSpec, CallableTypeId};
+use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState};
-use crate::token::GroupTypeId;
 
-use super::kind::{CallableData, NodeKind};
-use super::layout::{ArgLayout, ArgsLayout, SlotsLayout};
+use super::arguments::{ParsedArguments, ParsedSlots};
+use super::kind::{CallableData, GroupData, NodeKind};
 use super::tree::{NodeData, NodeId, NodeTree};
 use super::NodeExt;
 
@@ -138,12 +137,26 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         }
     }
 
-    /// A `Group` node's group type.
-    pub fn group_type(&self) -> Option<GroupTypeId> {
+    /// A `Group` node's full payload (delimiters, group type, ext).
+    pub fn group(&self) -> Option<&'t GroupData<L>> {
         match self.kind() {
-            NodeKind::Group { group_type, .. } => Some(*group_type),
+            NodeKind::Group(data) => Some(data),
             _ => None,
         }
+    }
+
+    /// A `Group` node's group type. `None` for non-groups *and* for synthesized groups
+    /// without a language group type — consult [`group()`](NodeRef::group) to
+    /// distinguish.
+    pub fn group_type(&self) -> Option<L::GroupTypeId> {
+        self.group().and_then(|data| data.group_type)
+    }
+
+    /// A `Group` node's delimiters, as logical text.
+    pub fn group_delimiters(&self) -> Option<(&'t str, &'t str)> {
+        self.group().map(|data| {
+            (data.open.resolve(self.source_content()), data.close.resolve(self.source_content()))
+        })
     }
 
     // --- callable accessors -------------------------------------------------------------
@@ -157,7 +170,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     }
 
     /// A `Callable` node's invocation form.
-    pub fn callable_type(&self) -> Option<CallableTypeId> {
+    pub fn callable_type(&self) -> Option<L::CallableTypeId> {
         self.callable().map(|data| data.callable_type)
     }
 
@@ -176,32 +189,29 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         self.callable().map(|data| data.post_space.resolve(self.source_content()))
     }
 
-    /// A `Callable` node's argument layout.
-    pub fn args_layout(&self) -> Option<&'t ArgsLayout> {
-        self.callable().map(|data| &data.args)
+    /// A `Callable` node's parsed-arguments record.
+    pub fn arguments(&self) -> Option<&'t ParsedArguments<L>> {
+        self.callable().map(|data| &data.arguments)
     }
 
-    /// A `Callable` node's slot layout.
-    pub fn slots_layout(&self) -> Option<&'t SlotsLayout> {
+    /// A `Callable` node's parsed-slots record.
+    pub fn slots(&self) -> Option<&'t ParsedSlots<L>> {
         self.callable().map(|data| &data.slots)
     }
 
-    /// The node of spec-argument `i`, when this is a callable and the argument is
-    /// present *as a node* (`None` for absent optionals and content-free markers —
-    /// consult [`args_layout`](NodeRef::args_layout) to distinguish).
+    /// The node of argument `i`, when this is a callable and the argument was provided
+    /// (`None` for absent optionals — consult [`arguments`](NodeRef::arguments) to
+    /// distinguish). The node is the entire argument, delimiters included.
     pub fn argument(&self, i: usize) -> Option<NodeRef<'t, L>> {
-        let child = self.callable()?.args.get(i)?.child()?;
+        let child = self.callable()?.arguments.get(i)?.child?;
         self.child(child as usize)
     }
 
-    /// A callable's argument entries with their resolved nodes, in spec order.
-    pub fn arguments(&self) -> impl Iterator<Item = (&'t ArgLayout, Option<NodeRef<'t, L>>)> {
-        let this = *self;
-        self.callable()
-            .map(|data| data.args.args.as_slice())
-            .unwrap_or(&[])
-            .iter()
-            .map(move |arg| (arg, arg.child().and_then(|c| this.child(c as usize))))
+    /// The node of the argument named `name`, when this is a callable and that argument
+    /// was provided.
+    pub fn argument_named(&self, name: &str) -> Option<NodeRef<'t, L>> {
+        let child = self.callable()?.arguments.get_named(name)?.child?;
+        self.child(child as usize)
     }
 
     /// The `List` node holding slot `i`'s content, when this is a callable with such a

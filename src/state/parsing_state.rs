@@ -13,7 +13,7 @@ use super::lang::Lang;
 /// needs full access); the outer [`ParsingState`] exposes them read-only.
 pub struct StateData<L: Lang> {
     /// Tokenization rules — plain stored data (defined in the token topic).
-    pub rules: TokenRules,
+    pub rules: TokenRules<L>,
     /// The definitions visible in this state (extendable mid-parse via
     /// [`push_library`](super::ParsingStateDelta::push_library) — `\newcommand`).
     pub libraries: LibraryStack<L>,
@@ -38,7 +38,7 @@ pub struct StateData<L: Lang> {
 /// only if profiling shows transition cost matters.
 pub struct ParsingState<L: Lang> {
     data: StateData<L>,
-    prefix_table: PrefixTable,
+    prefix_table: PrefixTable<L>,
     trigger_chars: TriggerChars,
 }
 
@@ -63,7 +63,7 @@ impl<L: Lang> ParsingState<L> {
     }
 
     /// The tokenization rules in effect.
-    pub fn rules(&self) -> &TokenRules {
+    pub fn rules(&self) -> &TokenRules<L> {
         &self.data.rules
     }
 
@@ -78,7 +78,7 @@ impl<L: Lang> ParsingState<L> {
     }
 
     /// The delimiter-matching table derived from [`rules().group_types`](TokenRules).
-    pub fn prefix_table(&self) -> &PrefixTable {
+    pub fn prefix_table(&self) -> &PrefixTable<L> {
         &self.prefix_table
     }
 
@@ -145,17 +145,17 @@ mod tests {
     use super::*;
     use crate::library::LibraryStack;
     use crate::state::TokenRulesOverrides;
-    use crate::token::{CommandRule, GroupType, GroupTypeId, WhitespaceRules};
+    use crate::token::{CommandRule, GroupType, WhitespaceRules};
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    fn base_rules() -> TokenRules {
+    fn base_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
             double_newline_paragraphs: true,
             group_types: vec![GroupType {
-                id: GroupTypeId::new(0),
+                id: 0,
                 open: "{".into(),
                 close: "}".into(),
             }],
@@ -202,7 +202,7 @@ mod tests {
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             group_types: Some(vec![GroupType {
-                id: GroupTypeId::new(1),
+                id: 1,
                 open: "[".into(),
                 close: "]".into(),
             }]),
@@ -242,6 +242,8 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct MathLang;
     impl Lang for MathLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = MathState;
         type Event = MathEvent;
         type SourceOrigin = Option<String>;
@@ -291,7 +293,7 @@ mod tests {
         let state: ParsingState<MathLang> =
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
 
-        let mut custom = base_rules().commands;
+        let mut custom = base_rules::<MathLang>().commands;
         custom[0].escape_char = '@';
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             commands: Some(custom),

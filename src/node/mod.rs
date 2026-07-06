@@ -11,26 +11,30 @@
 //!   is a preset concept). Custom data rides in the two-tier ext system
 //!   ([`NodeExtTypes`] bundle, `Lang::NodeExts`), orthogonal
 //!   to structural identity.
-//! - [`CallableData`] records the **invocation facts** (form, spelling, layout,
-//!   post-space); shared behavior lives in the spec, context in the recorded parsing
-//!   state (the division-of-labor rule).
+//! - [`GroupData`] records a group's delimiters *on the node* (pylatexenc's
+//!   `delimiters`), alongside its optional typed identity.
+//! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
+//!   arguments/slots, post-space); shared behavior lives in the spec, context in the
+//!   recorded parsing state (the division-of-labor rule).
 //! - **One node per region** (Phase 5 design session, DESIGN_RATIONALE.md §3.5): a
-//!   callable's children are one node per *present* argument followed by one `List` node
-//!   per slot; [`ArgsLayout`]/[`SlotsLayout`] map spec positions to child offsets and
-//!   record per-instance syntax choices.
+//!   callable's children are one node per *provided* argument followed by one `List`
+//!   node per slot; [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments`
+//!   pattern, July 2026) map each region to its child offset, record which
+//!   [`ArgumentSpec`](crate::spec::ArgumentSpec) it was parsed against, and hold
+//!   per-instance syntax records.
 //! - Node textual payloads are [`TextContent`](crate::source::TextContent) (span-backed
 //!   or owned); [`NodeTree::materialize`] produces an all-owned copy. Names are always
 //!   owned (identity vs. content ownership rule).
 
+mod arguments;
 mod builder;
 mod kind;
-mod layout;
 mod node_ref;
 mod tree;
 
+pub use arguments::{ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots};
 pub use builder::{BuildId, NodeTreeBuilder};
-pub use kind::{CallableData, NodeKind};
-pub use layout::{ArgLayout, ArgsLayout, SlotLayout, SlotsLayout};
+pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::NodeRef;
 pub use tree::{NodeData, NodeId, NodeTree};
 
@@ -48,15 +52,17 @@ pub type CallableNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::CallableN
 pub type CommentNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::CommentNodeExt;
 /// The `List` (tier-2) node ext type of a language.
 pub type ListNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ListNodeExt;
+/// The parsed-argument ext type of a language (attached to [`ParsedArgument`] records).
+pub type ArgumentExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ArgumentExt;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::library::LibraryStack;
     use crate::source::{Source, SourceSpan, Span, TextContent};
-    use crate::spec::{CallableSpec, CallableTypeId, StdCallableSpec};
-    use crate::state::{ParsingState, SimpleLang, StateData};
-    use crate::token::{GroupType, GroupTypeId, TokenRules};
+    use crate::spec::{ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
+    use crate::state::{Lang, ParsingState, SimpleLang, StateData};
+    use crate::token::{GroupType, TokenRules};
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -65,12 +71,13 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl SimpleLang for PlainLang {}
+    impl SimpleLang for PlainLang {} // GroupTypeId / CallableTypeId = u32
 
-    const GT_BRACE: GroupTypeId = GroupTypeId::new(0);
-    const CT_MACRO: CallableTypeId = CallableTypeId::new(0);
+    const GT_BRACE: u32 = 0;
+    const CT_MACRO: u32 = 0;
+    const CT_ENVIRONMENT: u32 = 1;
 
-    fn min_rules() -> TokenRules {
+    fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
@@ -82,7 +89,7 @@ mod tests {
         }
     }
 
-    fn state<L: Lang<StateExt = ()>>() -> Arc<ParsingState<L>> {
+    fn state<L: Lang<StateExt = (), GroupTypeId = u32>>() -> Arc<ParsingState<L>> {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
             libraries: LibraryStack::new(),
@@ -92,6 +99,18 @@ mod tests {
 
     fn spanned(source: &Arc<Source>, range: Range<usize>) -> SourceSpan {
         SourceSpan::new(source, range)
+    }
+
+    fn brace_group<L: Lang<GroupTypeId = u32>>(open: Range<usize>, close: Range<usize>) -> GroupData<L> {
+        GroupData::new(
+            GT_BRACE,
+            TextContent::Spanned(Span::new(open.start, open.end)),
+            TextContent::Spanned(Span::new(close.start, close.end)),
+        )
+    }
+
+    fn brace_arg_spec<L: Lang<GroupTypeId = u32>>() -> Arc<ArgumentSpec<L>> {
+        Arc::new(ArgumentSpec::group(GT_BRACE))
     }
 
     /// Builds the running example: `x\frac{a}{b} % note` as
@@ -105,22 +124,35 @@ mod tests {
 
         let a_chars =
             b.add(NodeKind::chars(Span::new(7, 8)), spanned(&source, 7..8), st.clone(), vec![]);
-        let a_group =
-            b.add(NodeKind::group(GT_BRACE), spanned(&source, 6..9), st.clone(), vec![a_chars]);
+        let a_group = b.add(
+            NodeKind::group(brace_group(6..7, 8..9)),
+            spanned(&source, 6..9),
+            st.clone(),
+            vec![a_chars],
+        );
         let b_chars =
             b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]);
-        let b_group =
-            b.add(NodeKind::group(GT_BRACE), spanned(&source, 9..12), st.clone(), vec![b_chars]);
+        let b_group = b.add(
+            NodeKind::group(brace_group(9..10, 11..12)),
+            spanned(&source, 9..12),
+            st.clone(),
+            vec![b_chars],
+        );
 
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::default());
+        let arg_specs = [brace_arg_spec(), brace_arg_spec()];
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(arg_specs.to_vec(), vec![]));
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
                 name: "frac".into(),
                 spec,
-                args: vec![ArgLayout::Present { child: 0 }, ArgLayout::Present { child: 1 }]
-                    .into(),
-                slots: SlotsLayout::empty(),
+                arguments: vec![
+                    ParsedArgument::provided(arg_specs[0].clone(), 0),
+                    ParsedArgument::provided(arg_specs[1].clone(), 1),
+                ]
+                .into(),
+                slots: ParsedSlots::empty(),
                 post_space: TextContent::Spanned(Span::new(12, 13)),
                 ext: (),
             }),
@@ -180,6 +212,7 @@ mod tests {
         let arg0 = frac.argument(0).unwrap();
         assert!(arg0.is_group());
         assert_eq!(arg0.group_type(), Some(GT_BRACE));
+        assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         assert_eq!(arg0.span_content(), "{a}");
         assert_eq!(arg0.child(0).unwrap().chars(), Some("a"));
 
@@ -187,67 +220,86 @@ mod tests {
         assert_eq!(arg1.span_content(), "{b}");
 
         assert!(frac.argument(2).is_none());
-        assert_eq!(frac.args_layout().unwrap().len(), 2);
-
-        let args: Vec<_> = frac.arguments().collect();
+        let args = frac.arguments().unwrap();
         assert_eq!(args.len(), 2);
-        assert!(args.iter().all(|(layout, node)| layout.is_present() && node.is_some()));
+        assert!(args.iter().all(|arg| arg.is_provided()));
+        // Every parsed argument knows the spec it was parsed against:
+        assert!(args.iter().all(|arg| Arc::strong_count(&arg.spec) >= 2));
 
         // Non-callables answer None everywhere:
         let x = tree.root().child(0).unwrap();
         assert!(x.argument(0).is_none());
         assert!(x.name().is_none());
-        assert_eq!(x.arguments().count(), 0);
+        assert!(x.arguments().is_none());
     }
 
     #[test]
-    fn absent_and_marker_arguments() {
-        // \section*{title}-shaped: star marker present, optional arg absent, one group arg.
+    fn absent_marker_and_named_arguments() {
+        // \section*{t}-shaped: star marker provided (a Chars node — pylatexenc behavior),
+        // optional arg absent, one group arg. All argument specs are named.
         let source: Arc<Source> = Arc::new(Source::new(r"\section*{t}"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
+        let star =
+            b.add(NodeKind::chars(Span::new(8, 9)), spanned(&source, 8..9), st.clone(), vec![]);
         let t = b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]);
-        let title = b.add(NodeKind::group(GT_BRACE), spanned(&source, 9..12), st.clone(), vec![t]);
+        let title = b.add(
+            NodeKind::group(brace_group(9..10, 11..12)),
+            spanned(&source, 9..12),
+            st.clone(),
+            vec![t],
+        );
 
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::default());
+        let star_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::marker("*").named("star"));
+        let placement_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::optional_group(GT_BRACE).named("placement"));
+        let title_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::group(GT_BRACE).named("title"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(
+            vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
+            vec![],
+        ));
         let section = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
                 name: "section".into(),
                 spec,
-                args: vec![
-                    ArgLayout::Marker { text: TextContent::Spanned(Span::new(8, 9)) },
-                    ArgLayout::Absent,
-                    ArgLayout::Present { child: 0 },
+                arguments: vec![
+                    ParsedArgument::provided(star_spec, 0),
+                    ParsedArgument::absent(placement_spec),
+                    ParsedArgument::provided(title_spec, 1),
                 ]
                 .into(),
-                slots: SlotsLayout::empty(),
+                slots: ParsedSlots::empty(),
                 post_space: TextContent::empty(),
                 ext: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
-            vec![title],
+            vec![star, title],
         );
         let tree = b.finish(section);
 
         let node = tree.root();
-        // Marker and absent arguments have no node; the group argument maps to child 0.
-        assert!(node.argument(0).is_none());
+        // The provided marker is an ordinary Chars child node; the absent optional has
+        // an entry but no node.
+        assert_eq!(node.argument(0).unwrap().chars(), Some("*"));
         assert!(node.argument(1).is_none());
         assert_eq!(node.argument(2).unwrap().span_content(), "{t}");
 
-        let layout = node.args_layout().unwrap();
-        assert!(layout.get(0).unwrap().is_present());
-        assert!(!layout.get(1).unwrap().is_present());
-        assert_eq!(layout.get(2).unwrap().child(), Some(0));
-        match layout.get(0).unwrap() {
-            ArgLayout::Marker { text } => {
-                assert_eq!(text.resolve(node.span().source().content()), "*")
-            }
-            other => panic!("expected marker, got {:?}", other),
-        }
+        let args = node.arguments().unwrap();
+        assert!(args.get(0).unwrap().is_provided());
+        assert!(!args.get(1).unwrap().is_provided());
+        assert_eq!(args.get(2).unwrap().child, Some(1));
+
+        // By-name access — absent arguments keep their spec, so "absent" and "no such
+        // argument" stay distinguishable:
+        assert_eq!(node.argument_named("title").unwrap().span_content(), "{t}");
+        assert!(node.argument_named("placement").is_none());
+        assert!(!args.get_named("placement").unwrap().is_provided());
+        assert!(args.get_named("nonsense").is_none());
     }
 
     #[test]
@@ -260,14 +312,16 @@ mod tests {
         let hi = b.add(NodeKind::chars(Span::new(10, 12)), spanned(&source, 10..12), st.clone(), vec![]);
         let body = b.add(NodeKind::list(), spanned(&source, 10..12), st.clone(), vec![hi]);
 
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::default());
+        let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![], vec![slot_spec.clone()]));
         let env = b.add(
             NodeKind::callable(CallableData {
-                callable_type: CallableTypeId::new(1),
+                callable_type: CT_ENVIRONMENT,
                 name: "it".into(),
                 spec,
-                args: ArgsLayout::empty(),
-                slots: vec![SlotLayout { child: 0 }].into(),
+                arguments: ParsedArguments::empty(),
+                slots: vec![ParsedSlot::new(slot_spec, 0)].into(),
                 post_space: TextContent::empty(),
                 ext: (),
             }),
@@ -284,7 +338,9 @@ mod tests {
         assert_eq!(body.child(0).unwrap().chars(), Some("hi"));
         assert_eq!(node.slot(0).unwrap().id(), body.id());
         assert!(node.slot(1).is_none());
-        assert_eq!(node.slots_layout().unwrap().len(), 1);
+        let slots = node.slots().unwrap();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots.get_named("body").unwrap().child, 0);
     }
 
     #[test]
@@ -331,13 +387,21 @@ mod tests {
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
         assert_eq!(root.child(1).unwrap().post_space(), Some(" "));
         assert_eq!(root.child(2).unwrap().comment(), Some(" note"));
+        assert_eq!(root.child(1).unwrap().argument(0).unwrap().group_delimiters(), Some(("{", "}")));
         // …but stored owned:
         for node in owned.iter() {
             match node.kind() {
                 NodeKind::Chars { content, .. } | NodeKind::Comment { content, .. } => {
                     assert!(content.is_owned())
                 }
-                NodeKind::Callable(data) => assert!(data.post_space.is_owned()),
+                NodeKind::Group(data) => {
+                    assert!(data.open.is_owned());
+                    assert!(data.close.is_owned());
+                }
+                NodeKind::Callable(data) => {
+                    assert!(data.post_space.is_owned());
+                    assert!(data.arguments.iter().all(|arg| arg.pre_space.is_owned()));
+                }
                 _ => {}
             }
         }
@@ -348,6 +412,28 @@ mod tests {
         }
         // Spans (provenance) survive materialization:
         assert_eq!(owned.root().child(1).unwrap().span_content(), r"\frac{a}{b} ");
+    }
+
+    #[test]
+    fn synthesized_groups_may_have_no_group_type() {
+        // Internal synthetic groups (not produced by tokenization) carry delimiters but
+        // no language group type.
+        let source: Arc<Source> = Arc::new(Source::new("y"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let y = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
+        let g = b.add(
+            NodeKind::group(GroupData::untyped(TextContent::from("{"), TextContent::from("}"))),
+            spanned(&source, 0..1),
+            st.clone(),
+            vec![y],
+        );
+        let tree = b.finish(g);
+
+        let group = tree.root();
+        assert!(group.is_group());
+        assert_eq!(group.group_type(), None);
+        assert_eq!(group.group_delimiters(), Some(("{", "}")));
     }
 
     // --- ext plumbing ---------------------------------------------------------------
@@ -365,11 +451,14 @@ mod tests {
         type CallableNodeExt = ();
         type CommentNodeExt = ();
         type ListNodeExt = ();
+        type ArgumentExt = ();
     }
 
     #[derive(Debug, Clone, Copy)]
     struct ExtLang;
     impl Lang for ExtLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;

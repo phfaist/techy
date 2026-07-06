@@ -69,7 +69,7 @@ pub trait TokenReader<'s, L: Lang> {
 /// skipping stops right *before* the first newline of a paragraph break. This one
 /// primitive serves pre-space, command post-space, and comment post-space, which is what
 /// makes "post-space never crosses a paragraph break" hold everywhere by construction.
-pub fn skip_whitespace(content: &str, pos: usize, rules: &TokenRules) -> usize {
+pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>) -> usize {
     let Some(ws) = &rules.whitespace else {
         return pos;
     };
@@ -215,7 +215,7 @@ impl<'s> StdTokenReader<'s> {
         &self,
         pos: usize,
         pre_space: Span,
-        rules: &TokenRules,
+        rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
         if !rules.double_newline_paragraphs {
             return None;
@@ -291,7 +291,7 @@ impl<'s> StdTokenReader<'s> {
         &self,
         pos: usize,
         pre_space: Span,
-        rules: &TokenRules,
+        rules: &TokenRules<L>,
         rule: &CommandRule,
     ) -> TokenResult<'s, L, Token<'s, L>> {
         let s = self.content;
@@ -343,7 +343,7 @@ impl<'s> StdTokenReader<'s> {
         &self,
         pos: usize,
         pre_space: Span,
-        rules: &TokenRules,
+        rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
         let s = self.content;
         let rest = &s[pos..];
@@ -401,23 +401,26 @@ mod tests {
     use crate::library::LibraryStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
-    use crate::token::{CommentRule, GroupType, GroupTypeId, SpecialsMatch, TriggerChars};
+    use crate::token::{CommentRule, GroupType, SpecialsMatch, TriggerChars};
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    // Group type ids used by the hardcoded latexlike-flavored test rules.
-    const BRACES: GroupTypeId = GroupTypeId::new(0);
-    const BRACKETS: GroupTypeId = GroupTypeId::new(1);
-    const MATH_INLINE: GroupTypeId = GroupTypeId::new(2);
-    const MATH_DISPLAY: GroupTypeId = GroupTypeId::new(3);
-    const MATH_INLINE_PAREN: GroupTypeId = GroupTypeId::new(4);
-    const MATH_DISPLAY_BRACKET: GroupTypeId = GroupTypeId::new(5);
+    // Group type ids used by the hardcoded latexlike-flavored test rules (the test langs
+    // use the SimpleLang-style `u32` id space).
+    const BRACES: u32 = 0;
+    const BRACKETS: u32 = 1;
+    const MATH_INLINE: u32 = 2;
+    const MATH_DISPLAY: u32 = 3;
+    const MATH_INLINE_PAREN: u32 = 4;
+    const MATH_DISPLAY_BRACKET: u32 = 5;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct TestLang;
     impl Lang for TestLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
@@ -425,8 +428,8 @@ mod tests {
     }
 
     /// Hardcoded LaTeX-flavored rules; the real defaults arrive with the latexlike
-    /// preset (Phase 7).
-    fn latex_rules() -> TokenRules {
+    /// preset (Phase 7). Generic so the several test langs of this module can share it.
+    fn latex_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() }),
             double_newline_paragraphs: true,
@@ -448,17 +451,17 @@ mod tests {
         }
     }
 
-    fn group(id: GroupTypeId, open: &str, close: &str) -> GroupType {
+    fn group<L: Lang<GroupTypeId = u32>>(id: u32, open: &str, close: &str) -> GroupType<L> {
         GroupType { id, open: open.into(), close: close.into() }
     }
 
-    fn state(rules: TokenRules) -> ParsingState<TestLang> {
+    fn state(rules: TokenRules<TestLang>) -> ParsingState<TestLang> {
         ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
     }
 
     /// Rules with the given group type's close delimiter expected (as the group parser
     /// sets up when entering an ambiguously-delimited group).
-    fn expecting_close(id: GroupTypeId) -> ParsingState<TestLang> {
+    fn expecting_close(id: u32) -> ParsingState<TestLang> {
         state(TokenRules { expecting_group_close: Some(id), ..latex_rules() })
     }
 
@@ -1003,6 +1006,8 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct SpecialsLang;
     impl Lang for SpecialsLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
@@ -1032,7 +1037,7 @@ mod tests {
         }
     }
 
-    fn specials_state(rules: TokenRules) -> ParsingState<SpecialsLang> {
+    fn specials_state(rules: TokenRules<SpecialsLang>) -> ParsingState<SpecialsLang> {
         ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
     }
 
@@ -1079,6 +1084,8 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct PanickyLang;
         impl Lang for PanickyLang {
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
             type StateExt = ();
             type Event = ();
             type SourceOrigin = Option<String>;
@@ -1354,17 +1361,18 @@ mod tests {
 
     #[test]
     fn skip_whitespace_never_consumes_paragraph_newlines() {
-        let rules = latex_rules();
+        let rules: TokenRules<TestLang> = latex_rules();
         // Plain run (lone newline included): consumed fully.
         assert_eq!(skip_whitespace("  \n x", 0, &rules), 4);
         // Run holding a \n\s*\n sequence: stops before its first newline.
         assert_eq!(skip_whitespace("   \n  \n x", 0, &rules), 3);
         assert_eq!(skip_whitespace("\n\nx", 0, &rules), 0);
         // Flag off: everything is consumable.
-        let no_par = TokenRules { double_newline_paragraphs: false, ..latex_rules() };
+        let no_par: TokenRules<TestLang> =
+            TokenRules { double_newline_paragraphs: false, ..latex_rules() };
         assert_eq!(skip_whitespace("   \n  \n x", 0, &no_par), 8);
         // Whitespace handling disabled: nothing is skipped.
-        let no_ws = TokenRules { whitespace: None, ..latex_rules() };
+        let no_ws: TokenRules<TestLang> = TokenRules { whitespace: None, ..latex_rules() };
         assert_eq!(skip_whitespace("  x", 0, &no_ws), 0);
     }
 }

@@ -8,6 +8,7 @@
 
 use alloc::string::String;
 use core::fmt;
+use core::hash::Hash;
 
 use crate::source::SourceOrigin;
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
@@ -41,6 +42,11 @@ pub trait NodeExtTypes {
     type CommentNodeExt: Clone + fmt::Debug + Default;
     /// Tier 2: ext of `List` nodes.
     type ListNodeExt: Clone + fmt::Debug + Default;
+    /// Ext of a *parsed argument* record (not a node kind): language/extension data
+    /// attached to one argument of one invocation — e.g. a reference-parsing extension
+    /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
+    /// derives from, instead of re-parsing the argument node (decided July 2026).
+    type ArgumentExt: Clone + fmt::Debug + Default;
 }
 
 /// The no-ext bundle: every ext type is `()`.
@@ -51,6 +57,7 @@ impl NodeExtTypes for () {
     type CallableNodeExt = ();
     type CommentNodeExt = ();
     type ListNodeExt = ();
+    type ArgumentExt = ();
 }
 
 /// The compile-time type bundle of a language definition. Every core type takes one
@@ -60,6 +67,23 @@ impl NodeExtTypes for () {
 /// working defaults (no transition customization, no specials). The latexlike preset
 /// (Phase 7) and FLM are the intended full implementors.
 pub trait Lang: Sized {
+    /// Identifier of a group *type* — a pairing of open/close delimiters (`{…}`, `[…]`,
+    /// `$…$`, …). **Closed per language** (decided July 2026): a language's group types
+    /// are known when the `Lang` is written, so this is typically a small enum — typed
+    /// answers to "is this a math group?" without string comparison or a registry.
+    /// The *delimiter strings* mapped to a type remain runtime data
+    /// ([`GroupType`](crate::token::GroupType) values in the state's token rules); only
+    /// the identity vocabulary is fixed. [`SimpleLang`] defaults this to `u32` for
+    /// quick-start and test languages.
+    type GroupTypeId: Copy + Eq + Hash + fmt::Debug;
+
+    /// Identifier of a callable *type* — an invocation form (the latexlike preset:
+    /// macro / environment / specials). **Closed per language** (decided July 2026):
+    /// new invocation *forms* are never registered at runtime (new *callables* are —
+    /// via libraries), so this is a per-language enum, not an open id. `Ord` because
+    /// libraries key their maps by it. [`SimpleLang`] defaults this to `u32`.
+    type CallableTypeId: Copy + Ord + Hash + fmt::Debug;
+
     /// Language-specific parsing state (e.g. a math-mode flag). Typed — no `Any` maps;
     /// `()` for languages without extra state.
     type StateExt: Clone + fmt::Debug + Default;
@@ -124,15 +148,20 @@ pub trait Lang: Sized {
 }
 
 /// All-defaults language marker: `impl SimpleLang for MyLang {}` yields a [`Lang`] with
-/// every associated type defaulted (`StateExt`/`Event`/`NodeExts` = `()`, `SourceOrigin` =
-/// `Option<String>`) and the default method behavior — the workaround for associated-type
-/// defaults being unstable.
+/// every associated type defaulted (`StateExt`/`Event`/`NodeExts` = `()`,
+/// `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`) and the
+/// default method behavior — the workaround for associated-type defaults being unstable.
+///
+/// The `u32` type ids are the quick-start escape from declaring id enums; a real language
+/// definition should implement [`Lang`] directly and give both ids closed enum types.
 ///
 /// A language needing *any* customization implements [`Lang`] directly instead (the
 /// blanket impl makes the two mutually exclusive).
 pub trait SimpleLang: Sized {}
 
 impl<T: SimpleLang> Lang for T {
+    type GroupTypeId = u32;
+    type CallableTypeId = u32;
     type StateExt = ();
     type Event = ();
     type SourceOrigin = Option<String>;

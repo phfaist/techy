@@ -5,8 +5,11 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
 
-use super::rules::{GroupTypeId, TokenRules};
+use crate::state::Lang;
+
+use super::rules::TokenRules;
 
 /// One delimiter string and the group types it may open and/or close.
 ///
@@ -15,26 +18,25 @@ use super::rules::{GroupTypeId, TokenRules};
 /// ambiguity merging); [`StdTokenReader`](super::StdTokenReader) resolves the direction:
 /// an expected close (per [`TokenRules::expecting_group_close`]) wins, otherwise the open
 /// interpretation does.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrefixEntry {
+pub struct PrefixEntry<L: Lang> {
     delim: String,
-    open: Option<GroupTypeId>,
-    close: Option<GroupTypeId>,
+    open: Option<L::GroupTypeId>,
+    close: Option<L::GroupTypeId>,
 }
 
-impl PrefixEntry {
+impl<L: Lang> PrefixEntry<L> {
     /// The delimiter string.
     pub fn delim(&self) -> &str {
         &self.delim
     }
 
     /// The group type this string opens, if any.
-    pub fn open(&self) -> Option<GroupTypeId> {
+    pub fn open(&self) -> Option<L::GroupTypeId> {
         self.open
     }
 
     /// The group type this string closes, if any.
-    pub fn close(&self) -> Option<GroupTypeId> {
+    pub fn close(&self) -> Option<L::GroupTypeId> {
         self.close
     }
 }
@@ -44,18 +46,17 @@ impl PrefixEntry {
 /// Entries are sorted longest-first so matching is greedy (`$$` before `$`); entries of
 /// equal length keep the [`TokenRules::group_types`] order. When two group types claim the
 /// same delimiter string in the same direction, the earlier entry wins.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrefixTable {
-    entries: Vec<PrefixEntry>,
+pub struct PrefixTable<L: Lang> {
+    entries: Vec<PrefixEntry<L>>,
     first_chars: String,
 }
 
-impl PrefixTable {
+impl<L: Lang> PrefixTable<L> {
     /// Build the table for the group types of `rules`. Empty delimiter strings are ignored.
-    pub fn for_rules(rules: &TokenRules) -> PrefixTable {
-        let mut entries: Vec<PrefixEntry> = Vec::new();
+    pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
+        let mut entries: Vec<PrefixEntry<L>> = Vec::new();
 
-        let mut add = |delim: &str, id: GroupTypeId, is_open: bool| {
+        let mut add = |delim: &str, id: L::GroupTypeId, is_open: bool| {
             if delim.is_empty() {
                 return;
             }
@@ -93,7 +94,7 @@ impl PrefixTable {
     }
 
     /// The longest entry whose delimiter is a prefix of `rest`, if any.
-    pub fn match_at(&self, rest: &str) -> Option<&PrefixEntry> {
+    pub fn match_at(&self, rest: &str) -> Option<&PrefixEntry<L>> {
         self.entries.iter().find(|e| rest.starts_with(e.delim.as_str()))
     }
 
@@ -104,17 +105,74 @@ impl PrefixTable {
     }
 
     /// The entries, longest delimiter first.
-    pub fn entries(&self) -> &[PrefixEntry] {
+    pub fn entries(&self) -> &[PrefixEntry<L>] {
         &self.entries
     }
 }
 
+// Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: PartialEq` although only
+// the `Lang::GroupTypeId` associated type (already bounded) is stored.
+
+impl<L: Lang> Clone for PrefixEntry<L> {
+    fn clone(&self) -> Self {
+        PrefixEntry { delim: self.delim.clone(), open: self.open, close: self.close }
+    }
+}
+
+impl<L: Lang> fmt::Debug for PrefixEntry<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrefixEntry")
+            .field("delim", &self.delim)
+            .field("open", &self.open)
+            .field("close", &self.close)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for PrefixEntry<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.delim == other.delim && self.open == other.open && self.close == other.close
+    }
+}
+
+impl<L: Lang> Eq for PrefixEntry<L> {}
+
+impl<L: Lang> Clone for PrefixTable<L> {
+    fn clone(&self) -> Self {
+        PrefixTable { entries: self.entries.clone(), first_chars: self.first_chars.clone() }
+    }
+}
+
+impl<L: Lang> fmt::Debug for PrefixTable<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrefixTable")
+            .field("entries", &self.entries)
+            .field("first_chars", &self.first_chars)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for PrefixTable<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries && self.first_chars == other.first_chars
+    }
+}
+
+impl<L: Lang> Eq for PrefixTable<L> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::SimpleLang;
     use crate::token::rules::GroupType;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
-    fn rules_with_groups(group_types: Vec<GroupType>) -> TokenRules {
+    #[derive(Debug, Clone, Copy)]
+    struct PlainLang;
+    impl SimpleLang for PlainLang {} // GroupTypeId = u32
+
+    fn rules_with_groups(group_types: Vec<GroupType<PlainLang>>) -> TokenRules<PlainLang> {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
@@ -126,8 +184,8 @@ mod tests {
         }
     }
 
-    fn group(id: u32, open: &str, close: &str) -> GroupType {
-        GroupType { id: GroupTypeId::new(id), open: open.into(), close: close.into() }
+    fn group(id: u32, open: &str, close: &str) -> GroupType<PlainLang> {
+        GroupType { id, open: open.into(), close: close.into() }
     }
 
     #[test]
@@ -136,13 +194,13 @@ mod tests {
 
         let open = table.match_at("{x").unwrap();
         assert_eq!(open.delim(), "{");
-        assert_eq!(open.open(), Some(GroupTypeId::new(0)));
+        assert_eq!(open.open(), Some(0));
         assert_eq!(open.close(), None);
 
         let close = table.match_at("} y").unwrap();
         assert_eq!(close.delim(), "}");
         assert_eq!(close.open(), None);
-        assert_eq!(close.close(), Some(GroupTypeId::new(0)));
+        assert_eq!(close.close(), Some(0));
 
         assert!(table.match_at("plain").is_none());
     }
@@ -152,8 +210,8 @@ mod tests {
         // `$…$`: the same string opens and closes one group type.
         let table = PrefixTable::for_rules(&rules_with_groups(vec![group(2, "$", "$")]));
         let entry = table.match_at("$x").unwrap();
-        assert_eq!(entry.open(), Some(GroupTypeId::new(2)));
-        assert_eq!(entry.close(), Some(GroupTypeId::new(2)));
+        assert_eq!(entry.open(), Some(2));
+        assert_eq!(entry.close(), Some(2));
     }
 
     #[test]
@@ -173,7 +231,7 @@ mod tests {
             group(7, "{", "}"),
         ]));
         let entry = table.match_at("{").unwrap();
-        assert_eq!(entry.open(), Some(GroupTypeId::new(0)));
+        assert_eq!(entry.open(), Some(0));
     }
 
     #[test]

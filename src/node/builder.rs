@@ -18,7 +18,6 @@ use crate::source::{SourceSpan, TextContent};
 use crate::state::{Lang, ParsingState};
 
 use super::kind::NodeKind;
-use super::layout::ArgLayout;
 use super::tree::{NodeData, NodeTree};
 use super::NodeExt;
 
@@ -59,8 +58,8 @@ struct Staged<L: Lang> {
 /// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
 /// - Each staged node is used as a child at most once, and the root must not be anyone's
 ///   child.
-/// - A `Callable` kind's `ArgsLayout`/`SlotsLayout` child offsets must index into the
-///   node's child list.
+/// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` child offsets must index into
+///   the node's child list.
 /// - Debug builds additionally check the `TextContent` invariant: `Spanned` ranges must
 ///   lie inside the node's own source content, on `char` boundaries.
 ///
@@ -77,8 +76,9 @@ impl<L: Lang> NodeTreeBuilder<L> {
     }
 
     /// Stage a node with the default uniform ext. `children` are the node's structural
-    /// children in order (for a `Callable`: one node per present argument, then one
-    /// `List` node per slot — the layout offsets index this list).
+    /// children in order (for a `Callable`: one node per provided argument, then one
+    /// `List` node per slot — the `ParsedArguments`/`ParsedSlots` offsets index this
+    /// list).
     pub fn add(
         &mut self,
         kind: NodeKind<L>,
@@ -108,17 +108,17 @@ impl<L: Lang> NodeTreeBuilder<L> {
             staged.claimed = true;
         }
         if let NodeKind::Callable(data) = &kind {
-            for arg in &data.args.args {
-                if let ArgLayout::Present { child } = arg {
+            for arg in data.arguments.iter() {
+                if let Some(child) = arg.child {
                     assert!(
-                        (*child as usize) < children.len(),
+                        (child as usize) < children.len(),
                         "argument child offset {} out of bounds ({} children)",
                         child,
                         children.len()
                     );
                 }
             }
-            for slot in &data.slots.slots {
+            for slot in data.slots.iter() {
                 assert!(
                     (slot.child as usize) < children.len(),
                     "slot child offset {} out of bounds ({} children)",
@@ -216,13 +216,15 @@ fn debug_assert_spanned_contents<L: Lang>(kind: &NodeKind<L>, span: &SourceSpan<
             NodeKind::Comment { content: text, .. } => check(text, "comment content"),
             NodeKind::Callable(data) => {
                 check(&data.post_space, "callable post_space");
-                for arg in &data.args.args {
-                    if let ArgLayout::Marker { text } = arg {
-                        check(text, "argument marker");
-                    }
+                for arg in data.arguments.iter() {
+                    check(&arg.pre_space, "argument pre_space");
                 }
             }
-            NodeKind::Group { .. } | NodeKind::List { .. } => {}
+            NodeKind::Group(data) => {
+                check(&data.open, "group open delimiter");
+                check(&data.close, "group close delimiter");
+            }
+            NodeKind::List { .. } => {}
         }
     }
 }

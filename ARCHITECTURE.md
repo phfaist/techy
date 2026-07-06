@@ -358,18 +358,23 @@ Properties, roughly in decreasing order of importance:
 ### specs (S1) — specs and libraries  *(updated per Decision 3 resolution — §4b)*
 
 The **callable** concept from PARSING_STRATEGY.md, unified and **de-keyed**: a spec records
-*callable behavior*, not the form or name under which it is invoked. The invocation form is an
-interned **`CallableTypeId`**, registered in `Language` exactly like `GroupTypeId`; the
-latexlike preset registers `MACRO`, `ENVIRONMENT`, `SPECIALS`. Naming rule, systematic across
-the crate: `…Kind` = closed core enum, exhaustively matchable (`TokenKind`, `NodeKind`);
-`…TypeId` = open, `Language`-interned, preset-registered (`GroupTypeId`, `CallableTypeId`).
+*callable behavior*, not the form or name under which it is invoked. The invocation form is
+**`Lang::CallableTypeId`** — a closed per-language associated type (amended July 2026,
+current-level review; formerly an open id interned in `Language`), like `Lang::GroupTypeId`;
+the latexlike preset's enum has `MACRO`, `ENVIRONMENT`, `SPECIALS` variants. Naming rule,
+systematic across the crate: `…Kind` = closed core enum, exhaustively matchable (`TokenKind`,
+`NodeKind`); `…TypeId` = per-language id type on `Lang` (`GroupTypeId`, `CallableTypeId`).
 
 ```rust
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and
 /// no invocation form; one spec may back several names (\emph and \textit can share).
 pub trait CallableSpec<L: Lang> {
-    fn arguments(&self) -> &ArgumentStructureSpec;
-    fn slots(&self) -> &SlotStructureSpec;
+    // (amended July 2026: an argument IS a parser — pylatexenc's LatexArgumentSpec.
+    // ArgumentSpec<L> = { parser: ArgumentParserSpec<L>, name, parsing_state_delta };
+    // SlotSpec<L> = { name, parsing_state_delta }. Arc-shared so parsed nodes record
+    // which spec each argument was parsed against. See DESIGN_RATIONALE §3.4.)
+    fn arguments(&self) -> &[Arc<ArgumentSpec<L>>];
+    fn slots(&self) -> &[Arc<SlotSpec<L>>];
     /// Parser consuming the invocation. The default is built from the two structure
     /// specs; overriding it is the full-takeover escape hatch (\verb, tabular preambles,
     /// FLM constructs) — pylatexenc's most valuable extensibility property, preserved.
@@ -380,9 +385,9 @@ pub trait CallableSpec<L: Lang> {
 }
 ```
 
-**Arguments vs. slots.** All callables can have both. *Arguments* configure (parsed per
-`ArgumentStructureSpec`: mandatory / optional / star / verbatim-delimited / …); *slots* contain
-content regions (`SlotStructureSpec`: separators and terminators, where terminator patterns may
+**Arguments vs. slots.** All callables can have both. *Arguments* configure (each
+`ArgumentSpec` carries its parser: group-delimited / optional / marker / custom / …); *slots*
+contain content regions (separators and terminators, where terminator patterns may
 reference the invocation name — `\end{align}` must match the `align` that opened; a `---` fence
 closes with `---`). A macro has no slots; an environment has exactly one (its body); specials
 usually have none but may have any number (a fence-block construct with `+++` separators is
@@ -458,18 +463,21 @@ pub struct NodeData<L: Lang> {
 
 pub enum NodeKind<L: Lang> {
     Chars    { content: TextContent, ext: L::CharsNodeExt },
-    Group    { group_type: GroupTypeId, ext: L::GroupNodeExt },
+    // amended July 2026: delimiters stored on the node (pylatexenc's `delimiters`);
+    // group_type: Option<L::GroupTypeId> (None = internal synthesized group).
+    Group(Box<GroupData<L>>),
     Callable(Box<CallableData<L>>),   // boxed: Chars dominates the vec; keeps the enum small
     Comment  { content: TextContent, ext: L::CommentNodeExt },  // text sans delimiter/newline
     List     { ext: L::ListNodeExt },
 }
 
 pub struct CallableData<L: Lang> {
-    pub callable_type: CallableTypeId,   // invocation form: latexlike MACRO / ENVIRONMENT / SPECIALS
+    pub callable_type: L::CallableTypeId, // invocation form: latexlike MACRO / ENVIRONMENT / SPECIALS
     pub name: Box<str>,                  // invocation spelling; identity ⇒ always owned
     pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None (§specs fallback)
-    pub args: ArgsLayout,                // spec-slot refs + presence + per-instance syntax choices
-    pub slots: SlotsLayout,              // 0..n content regions (environment body = 1 slot)
+    pub arguments: ParsedArguments<L>,   // pylatexenc pattern (July 2026): entries carry their
+                                         // Arc'd ArgumentSpec + presence/child + syntax + ext
+    pub slots: ParsedSlots<L>,           // 0..n content regions (environment body = 1 slot)
     pub post_space: TextContent,         // reproduced verbatim in recomposition
     pub ext: L::CallableNodeExt,         // tier 2: per-kind, per-instance parse results
 }
@@ -529,7 +537,7 @@ case.
   specials-type callable (PARSING_STRATEGY.md contemplated `"\n\n"` as specials) is a preset
   decision, phase 7.
 
-**Recomposition requirement** (constrains `ArgsLayout`):
+**Recomposition requirement** (constrains `ParsedArguments` — formerly `ArgsLayout`):
 - *Level 1 — verbatim:* a node's own `SourceSpan` → exact original text. Never needs an
   external lookup (the Arc travels with the node); works for detached and mixed-origin trees.
 - *Level 2 — Lang-aware quasi-equivalent:* recompose from `(callable_type, name, args, slots,
@@ -539,8 +547,8 @@ case.
   criterion — licenses e.g. inserting a separating space where required). Consequence: **the
   invocation parser must record per-instance syntax choices the spec doesn't determine**
   (optional-arg presence, matched delimiter alternative, chosen verbatim fence, star) — in
-  `ArgsLayout`, as `TextContent` where textual, *not* in ext: recomposability must not depend
-  on Lang cooperation. Exotic custom parsers use the `CallableSpec::recompose()` hook.
+  `ParsedArguments`/`GroupData`, as `TextContent` where textual, *not* in ext: recomposability
+  must not depend on Lang cooperation (group delimiters therefore live on the node, July 2026). Exotic custom parsers use the `CallableSpec::recompose()` hook.
 
 Access is only through `NodeRef<'pr>` proxies as designed in March (Copy, resolves indices,
 `span_content()`, `children()`, `parsing_state()`, `name()`, `arguments()`, `slots()`,
@@ -564,7 +572,7 @@ pub struct ParseContext<'a, 's, L: Lang> {
 }
 
 pub trait ConstructParser<L: Lang> {
-    type Output;                                  // NodeId, ArgsLayout, () …
+    type Output;                                  // NodeId, ParsedArguments, () …
     fn parse<'s>(&self, cx: &mut ParseContext<'_, 's, L>)
         -> ParseResult<(Self::Output, Option<ParsingStateDelta<L>>)>;
 }
@@ -818,7 +826,8 @@ FLM-defined).
 
 ## 7. Naming (deltas to NAMING_STRATEGY.md)
 
-Keep all existing decisions (no `Latex` prefixes, `ArgumentStructureSpec`, `Arguments`, …), plus:
+Keep all existing decisions (no `Latex` prefixes, …; note July 2026 revisions: `ParsedArguments`
+over `Arguments`, spec argument lists over `ArgumentStructureSpec` — NAMING_STRATEGY.md), plus:
 
 | Concept | Name | Replaces |
 |---|---|---|
@@ -930,7 +939,10 @@ hardcoded `TokenRules` value).
   with their consumers: the full argument-kind inventory and slot
   separators/terminators (Phase 4 ships skeletons), `invocation_parser()`, and
   `CallableTypeId` *interning* (ids are direct-constructed like `GroupTypeId` until
-  `Language<L>` exists).
+  `Language<L>` exists). *(Amended July 2026, current-level review: `ArgumentKind` and the
+  structure-spec wrappers replaced by the pylatexenc-shaped `ArgumentSpec<L>` model; both
+  `…TypeId`s became closed `Lang` associated types — interning cancelled. DESIGN_RATIONALE
+  §3.4.)*
 - **Phase 5 — `node`.** Flat `NodeTree`, `NodeKind<L>`/`CallableData`, `TextContent`, ext
   bundle (`NodeExtTypes`, `SimpleLang`), `NodeRef`, builder used by the session;
   `materialize()`.
@@ -941,8 +953,11 @@ hardcoded `TokenRules` value).
   (synthetic-node span representation deferred to the transform API, post-Phase-6); a
   *staging* `NodeTreeBuilder` whose `finish()` lays siblings out contiguously breadth-first
   (direct arena emission can't — §3.5); `TextContent` housed in the source topic (S0), no
-  `PartialEq` on it or on node types yet. `ArgsLayout` syntax records and possible `Comment`
+  `PartialEq` on it or on node types yet. Per-instance syntax records and possible `Comment`
   recomposition fields grow with their consumers in Phase 6 (DESIGN_RATIONALE.md §6.5).
+  *(Amended July 2026, current-level review: `ArgsLayout`/`SlotsLayout` replaced by
+  pylatexenc-shaped `ParsedArguments`/`ParsedSlots`; `Group` grew a boxed `GroupData` with
+  on-node delimiters. DESIGN_RATIONALE §3.5.)*
 - **Phase 6 — `constructs` + `engine`.** `ParseContext`, `NodesParser`, group/comment/callable
   parsers, `ArgumentsParser` + `SlotsParser`, `Language<L>`/`ParserSession`/`ParseResult`;
   pin down the whitespace/span invariants of §nodes; end-to-end tests on real LaTeX snippets.
@@ -995,11 +1010,11 @@ not obvious.
    `FLMEnvironment` and `LanguageSpecification`). (§7)
 3. **RESOLVED (July 2026): unified `Callable` node kind + two-tier ext + `TextContent`
    ("Option F").** Closed structural `NodeKind<L>` (`Chars`/`Group`/`Callable`/`Comment`/
-   `List`, no `Custom`); Macro/Environment/Specials merged into `Callable` with interned
-   `CallableTypeId`; de-keyed specs, never-`None` via per-type fallback singletons; owned
-   names, `TextContent` content, `post_space` kept; args/slots as two named concepts over
-   shared machinery; whitespace-as-chars-nodes + exact sibling-span partition; recomposition
-   levels 1+2 as stated requirements constraining `ArgsLayout`. **No core `MathNode`** (math =
+   `List`, no `Custom`); Macro/Environment/Specials merged into `Callable` with a
+   `Lang::CallableTypeId` invocation form; de-keyed specs, never-`None` via per-type fallback
+   singletons; owned names, `TextContent` content, `post_space` kept; args/slots as two named
+   concepts over shared machinery; whitespace-as-chars-nodes + exact sibling-span partition;
+   recomposition levels 1+2 as stated requirements constraining `ParsedArguments`. **No core `MathNode`** (math =
    group types + preset state ext). (Design: §specs/§nodes. Rationale: §4b.)
 4. **RESOLVED (July 2026): defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias
    for now. (§5)

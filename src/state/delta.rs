@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::library::SpecLookup;
-use crate::token::{CommandRule, CommentRule, GroupType, GroupTypeId, TokenRules, WhitespaceRules};
+use crate::token::{CommandRule, CommentRule, GroupType, TokenRules, WhitespaceRules};
 
 use super::lang::Lang;
 use super::parsing_state::StateData;
@@ -19,14 +19,13 @@ use super::parsing_state::StateData;
 /// types plus one more" is built by the party that can see the current state (typically
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
 /// override itself would smuggle policy into the choke point.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TokenRulesOverrides {
+pub struct TokenRulesOverrides<L: Lang> {
     /// Override whitespace handling (`Some(None)` disables it).
     pub whitespace: Option<Option<WhitespaceRules>>,
     /// Override the paragraph-break flag.
     pub double_newline_paragraphs: Option<bool>,
     /// Replace the recognizable group types.
-    pub group_types: Option<Vec<GroupType>>,
+    pub group_types: Option<Vec<GroupType<L>>>,
     /// Replace the command syntaxes.
     pub commands: Option<Vec<CommandRule>>,
     /// Replace the comment syntaxes.
@@ -34,12 +33,12 @@ pub struct TokenRulesOverrides {
     /// Replace the forbidden-character set.
     pub forbidden_chars: Option<String>,
     /// Override the expected group close (`Some(None)` clears it).
-    pub expecting_group_close: Option<Option<GroupTypeId>>,
+    pub expecting_group_close: Option<Option<L::GroupTypeId>>,
 }
 
-impl TokenRulesOverrides {
+impl<L: Lang> TokenRulesOverrides<L> {
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
-    pub fn apply(&self, rules: &mut TokenRules) {
+    pub fn apply(&self, rules: &mut TokenRules<L>) {
         if let Some(v) = &self.whitespace {
             rules.whitespace = v.clone();
         }
@@ -74,7 +73,7 @@ impl TokenRulesOverrides {
 ///
 pub struct ParsingStateDelta<L: Lang> {
     /// Overrides of the stored token rules; every field optional.
-    pub rules: TokenRulesOverrides,
+    pub rules: TokenRulesOverrides<L>,
     /// Lookups to push onto the state's library stack, in order (the last one pushed
     /// ends up innermost). This is how definitions extend mid-parse (`\newcommand`);
     /// scope reversion is structural — the caller keeps the previous
@@ -99,7 +98,7 @@ impl<L: Lang> ParsingStateDelta<L> {
     }
 
     /// Set the token-rules overrides.
-    pub fn rules(mut self, rules: TokenRulesOverrides) -> Self {
+    pub fn rules(mut self, rules: TokenRulesOverrides<L>) -> Self {
         self.rules = rules;
         self
     }
@@ -142,6 +141,62 @@ impl<L: Lang> Default for ParsingStateDelta<L> {
 }
 
 // Manual impls to avoid spurious `L:` bounds (associated types are bounded in `Lang`).
+
+impl<L: Lang> Default for TokenRulesOverrides<L> {
+    fn default() -> Self {
+        TokenRulesOverrides {
+            whitespace: None,
+            double_newline_paragraphs: None,
+            group_types: None,
+            commands: None,
+            comments: None,
+            forbidden_chars: None,
+            expecting_group_close: None,
+        }
+    }
+}
+
+impl<L: Lang> Clone for TokenRulesOverrides<L> {
+    fn clone(&self) -> Self {
+        TokenRulesOverrides {
+            whitespace: self.whitespace.clone(),
+            double_newline_paragraphs: self.double_newline_paragraphs,
+            group_types: self.group_types.clone(),
+            commands: self.commands.clone(),
+            comments: self.comments.clone(),
+            forbidden_chars: self.forbidden_chars.clone(),
+            expecting_group_close: self.expecting_group_close,
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRulesOverrides")
+            .field("whitespace", &self.whitespace)
+            .field("double_newline_paragraphs", &self.double_newline_paragraphs)
+            .field("group_types", &self.group_types)
+            .field("commands", &self.commands)
+            .field("comments", &self.comments)
+            .field("forbidden_chars", &self.forbidden_chars)
+            .field("expecting_group_close", &self.expecting_group_close)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.whitespace == other.whitespace
+            && self.double_newline_paragraphs == other.double_newline_paragraphs
+            && self.group_types == other.group_types
+            && self.commands == other.commands
+            && self.comments == other.comments
+            && self.forbidden_chars == other.forbidden_chars
+            && self.expecting_group_close == other.expecting_group_close
+    }
+}
+
+impl<L: Lang> Eq for TokenRulesOverrides<L> {}
 
 impl<L: Lang> Clone for ParsingStateDelta<L> {
     fn clone(&self) -> Self {

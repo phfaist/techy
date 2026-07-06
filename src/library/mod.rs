@@ -8,12 +8,12 @@
 //!   triggering token — plus the current [`ParsingState`], so a preset's implementation
 //!   can be mode-aware (dispatch on `state.ext()`) without the core privileging any mode.
 //! - [`Library`] is the standard data-driven implementation: a plain map keyed by
-//!   `(CallableTypeId, normalized name)`, many-to-one to shared specs (flyweight). It
+//!   `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs (flyweight). It
 //!   ignores the query's syntax/token context and the state.
 //! - [`LibraryStack`] is the ordered stack stored in the parsing state
 //!   ([`StateData::libraries`](crate::state::StateData)): innermost/last-pushed wins
 //!   (lexical shadowing — `\newcommand` semantics; no `ConflictStrategy`), plus the
-//!   per-[`CallableTypeId`] unknown-callable fallback singletons behind
+//!   per-callable-type unknown-callable fallback singletons behind
 //!   [`resolve()`](LibraryStack::resolve).
 //!
 //! Extending definitions mid-parse = pushing a library via
@@ -27,7 +27,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::spec::{CallableSpec, CallableTypeId};
+use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState};
 use crate::token::Token;
 
@@ -60,8 +60,8 @@ pub enum CallableSyntax {
 /// it is `None` where no token exists yet (specials scan, synthesized invocations). Plain
 /// libraries ignore everything but `callable_type` and `name`.
 pub struct CallableQuery<'a, 's, L: Lang> {
-    /// The invocation form being resolved (e.g. the preset's `MACRO`).
-    pub callable_type: CallableTypeId,
+    /// The invocation form being resolved (e.g. the preset's macro form).
+    pub callable_type: L::CallableTypeId,
     /// The name to resolve. Libraries store *normalized* names; normalization is the
     /// caller's (preset's) business — the core matches exactly.
     pub name: &'a str,
@@ -74,7 +74,7 @@ pub struct CallableQuery<'a, 's, L: Lang> {
 impl<'a, 's, L: Lang> CallableQuery<'a, 's, L> {
     /// A query without token context.
     pub fn new(
-        callable_type: CallableTypeId,
+        callable_type: L::CallableTypeId,
         name: &'a str,
         syntax: CallableSyntax,
     ) -> CallableQuery<'a, 's, L> {
@@ -128,7 +128,7 @@ pub trait SpecLookup<L: Lang>: fmt::Debug {
 
 /// A named collection of callable definitions: the standard data-driven [`SpecLookup`].
 ///
-/// Keys are `(CallableTypeId, normalized name)`, **many-to-one**: several names may map
+/// Keys are `(Lang::CallableTypeId, normalized name)`, **many-to-one**: several names may map
 /// to one shared spec (flyweight — `\emph` and `\textit` can share an `Arc`). Within one
 /// library, inserting an existing key replaces the previous spec.
 ///
@@ -136,8 +136,11 @@ pub trait SpecLookup<L: Lang>: fmt::Debug {
 /// only if profiling flags lookup cost.)
 pub struct Library<L: Lang> {
     name: Box<str>,
-    specs: BTreeMap<CallableTypeId, BTreeMap<Box<str>, Arc<dyn CallableSpec<L>>>>,
+    specs: BTreeMap<L::CallableTypeId, SpecsByName<L>>,
 }
+
+/// The per-callable-type name map of a [`Library`].
+type SpecsByName<L> = BTreeMap<Box<str>, Arc<dyn CallableSpec<L>>>;
 
 impl<L: Lang> Library<L> {
     /// An empty library. The name identifies the library in diagnostics and debugging.
@@ -154,7 +157,7 @@ impl<L: Lang> Library<L> {
     /// Returns the spec previously defined under that key, if any.
     pub fn insert(
         &mut self,
-        callable_type: CallableTypeId,
+        callable_type: L::CallableTypeId,
         name: impl Into<Box<str>>,
         spec: Arc<dyn CallableSpec<L>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
@@ -164,7 +167,7 @@ impl<L: Lang> Library<L> {
     /// The spec defined under `(callable_type, name)`, if any.
     pub fn get(
         &self,
-        callable_type: CallableTypeId,
+        callable_type: L::CallableTypeId,
         name: &str,
     ) -> Option<&Arc<dyn CallableSpec<L>>> {
         self.specs.get(&callable_type)?.get(name)
@@ -207,7 +210,7 @@ impl<L: Lang> fmt::Debug for Library<L> {
 /// fallbacks are consulted only by [`resolve()`](LibraryStack::resolve), after the whole
 /// stack has missed; a fallback spec is a shared singleton (possible because specs are
 /// de-keyed), so "unknown `\foo`" costs no per-instance allocation and a callable node's
-/// spec can be guaranteed never-`None` for every `CallableTypeId` whose preset registered
+/// spec can be guaranteed never-`None` for every callable type whose preset registered
 /// a fallback.
 ///
 /// `LibraryStack` itself implements [`SpecLookup`] with **stack-only** semantics
@@ -217,7 +220,7 @@ impl<L: Lang> fmt::Debug for Library<L> {
 pub struct LibraryStack<L: Lang> {
     /// Outermost first; lookups iterate in reverse.
     stack: Vec<Arc<dyn SpecLookup<L>>>,
-    fallbacks: BTreeMap<CallableTypeId, Arc<dyn CallableSpec<L>>>,
+    fallbacks: BTreeMap<L::CallableTypeId, Arc<dyn CallableSpec<L>>>,
 }
 
 impl<L: Lang> LibraryStack<L> {
@@ -235,14 +238,14 @@ impl<L: Lang> LibraryStack<L> {
     /// shared singleton). Returns the previously registered fallback, if any.
     pub fn set_fallback(
         &mut self,
-        callable_type: CallableTypeId,
+        callable_type: L::CallableTypeId,
         spec: Arc<dyn CallableSpec<L>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
         self.fallbacks.insert(callable_type, spec)
     }
 
     /// The registered fallback for `callable_type`, if any.
-    pub fn fallback(&self, callable_type: CallableTypeId) -> Option<&Arc<dyn CallableSpec<L>>> {
+    pub fn fallback(&self, callable_type: L::CallableTypeId) -> Option<&Arc<dyn CallableSpec<L>>> {
         self.fallbacks.get(&callable_type)
     }
 
@@ -320,19 +323,21 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    const MACRO: CallableTypeId = CallableTypeId::new(0);
-    const ENVIRONMENT: CallableTypeId = CallableTypeId::new(1);
+    const MACRO: u32 = 0;
+    const ENVIRONMENT: u32 = 1;
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
     impl Lang for PlainLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
     }
 
-    fn min_rules() -> TokenRules {
+    fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
@@ -514,6 +519,8 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct MathLang;
     impl Lang for MathLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
         type StateExt = MathState;
         type Event = ();
         type SourceOrigin = Option<String>;
