@@ -8,9 +8,13 @@
 //! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset
 //! (Phase 7), which is also why none of these types implement `Default`.
 //!
-//! Group-type *identity* is the language's business: [`Lang::GroupTypeId`] is a closed
-//! per-language type (typically an enum; decided July 2026). What varies at runtime is
-//! which *delimiter strings* map to those identities — the [`GroupType`] values here.
+//! Group *classes* are the language's business: [`Lang::GroupTypeId`] is a closed
+//! per-language classification (typically an enum — the latexlike preset: content vs.
+//! math groups; revised July 2026), fully detached from delimiter spellings. Which
+//! *delimiter pairs* exist, and which class each belongs to, is runtime data — the
+//! [`GroupRule`] values here. Any construct parser may mint a new rule mid-parse via a
+//! state delta (an optional-argument parser momentarily declaring `[`…`]` group
+//! delimiters, a custom spec declaring `<`…`>`).
 //!
 //! The one deliberate omission: **specials trigger strings are not enumerated here.**
 //! Their recognition is delegated to the language via `Lang::scan_specials` (see
@@ -19,19 +23,26 @@
 //! data.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::state::Lang;
 
-/// One group type usable in the current parsing state: its id and delimiter pair.
+/// One group syntax usable in the current parsing state: a delimiter pair and the
+/// language-native class ([`Lang::GroupTypeId`]) of the groups it delimits.
 ///
-/// Open and close delimiters are arbitrary non-empty strings; several group types may share
+/// Open and close delimiters are arbitrary non-empty strings; several rules may share
 /// delimiter strings (`$…$` and `$$…$$`), including the same string for open and close.
 /// The [`PrefixTable`](super::PrefixTable) resolves the resulting matching ambiguities.
-pub struct GroupType<L: Lang> {
-    /// The group type's identity, recorded in `GroupOpen`/`GroupClose` tokens.
-    pub id: L::GroupTypeId,
+///
+/// Rules are held behind `Arc` in [`TokenRules::groups`]: the tokenizer's resolution of
+/// *which* rule matched travels with the emitted
+/// [`GroupOpen`](super::TokenKind::GroupOpen) token, so parsers never re-derive it.
+pub struct GroupRule<L: Lang> {
+    /// The class of the groups this rule delimits (e.g. the latexlike preset's
+    /// content-group vs. math-group distinction) — detached from the spellings below.
+    pub group_type: L::GroupTypeId,
     /// Opening delimiter (e.g. `{`).
     pub open: String,
     /// Closing delimiter (e.g. `}`).
@@ -102,10 +113,10 @@ pub struct TokenRules<L: Lang> {
     /// skipping (pre-space and post-space never consume a newline belonging to a
     /// `\n\s*\n` sequence). Only meaningful when whitespace handling is enabled.
     pub double_newline_paragraphs: bool,
-    /// The group types recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`, `\(…\)`, …
-    /// — all just group types; math is not a core concept). On delimiter conflicts,
-    /// earlier entries win (see [`PrefixTable`](super::PrefixTable)).
-    pub group_types: Vec<GroupType<L>>,
+    /// The group delimiter rules recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`,
+    /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
+    /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
+    pub groups: Vec<Arc<GroupRule<L>>>,
     /// Command syntaxes; empty = no command recognition.
     pub commands: Vec<CommandRule>,
     /// Comment syntaxes; empty = no comment recognition.
@@ -113,52 +124,58 @@ pub struct TokenRules<L: Lang> {
     /// Characters that may not appear as content; encountering one yields a recoverable
     /// [`TokenError`](super::TokenError).
     pub forbidden_chars: String,
-    /// The group type whose *close* delimiter takes precedence over all other delimiter
+    /// The group rule whose *close* delimiter takes precedence over all other delimiter
     /// matches — set (via a state delta) by the group construct parser upon entering a
     /// group whose delimiters are ambiguous. This is how `$…$` inside `$$…$$` resolves:
-    /// inside a `$…$` group this field names the `$…$` type, so a following `$$` tokenizes
-    /// as close-`$` (then open-`$`) rather than as a `$$` delimiter. Generalizes
-    /// pylatexenc's `math_mode_delimiter` without privileging math.
-    pub expecting_group_close: Option<L::GroupTypeId>,
+    /// inside a `$…$` group this field holds the `$…$` rule, so a following `$$`
+    /// tokenizes as close-`$` (then open-`$`) rather than as a `$$` delimiter.
+    /// Generalizes pylatexenc's `math_mode_delimiter` without privileging math.
+    pub expecting_group_close: Option<Arc<GroupRule<L>>>,
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: PartialEq` although only
 // the `Lang::GroupTypeId` associated type (already bounded) is stored.
 
-impl<L: Lang> Clone for GroupType<L> {
+impl<L: Lang> Clone for GroupRule<L> {
     fn clone(&self) -> Self {
-        GroupType { id: self.id, open: self.open.clone(), close: self.close.clone() }
+        GroupRule {
+            group_type: self.group_type,
+            open: self.open.clone(),
+            close: self.close.clone(),
+        }
     }
 }
 
-impl<L: Lang> fmt::Debug for GroupType<L> {
+impl<L: Lang> fmt::Debug for GroupRule<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GroupType")
-            .field("id", &self.id)
+        f.debug_struct("GroupRule")
+            .field("group_type", &self.group_type)
             .field("open", &self.open)
             .field("close", &self.close)
             .finish()
     }
 }
 
-impl<L: Lang> PartialEq for GroupType<L> {
+impl<L: Lang> PartialEq for GroupRule<L> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.open == other.open && self.close == other.close
+        self.group_type == other.group_type
+            && self.open == other.open
+            && self.close == other.close
     }
 }
 
-impl<L: Lang> Eq for GroupType<L> {}
+impl<L: Lang> Eq for GroupRule<L> {}
 
 impl<L: Lang> Clone for TokenRules<L> {
     fn clone(&self) -> Self {
         TokenRules {
             whitespace: self.whitespace.clone(),
             double_newline_paragraphs: self.double_newline_paragraphs,
-            group_types: self.group_types.clone(),
+            groups: self.groups.clone(),
             commands: self.commands.clone(),
             comments: self.comments.clone(),
             forbidden_chars: self.forbidden_chars.clone(),
-            expecting_group_close: self.expecting_group_close,
+            expecting_group_close: self.expecting_group_close.clone(),
         }
     }
 }
@@ -168,7 +185,7 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
         f.debug_struct("TokenRules")
             .field("whitespace", &self.whitespace)
             .field("double_newline_paragraphs", &self.double_newline_paragraphs)
-            .field("group_types", &self.group_types)
+            .field("groups", &self.groups)
             .field("commands", &self.commands)
             .field("comments", &self.comments)
             .field("forbidden_chars", &self.forbidden_chars)
@@ -181,7 +198,7 @@ impl<L: Lang> PartialEq for TokenRules<L> {
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
             && self.double_newline_paragraphs == other.double_newline_paragraphs
-            && self.group_types == other.group_types
+            && self.groups == other.groups
             && self.commands == other.commands
             && self.comments == other.comments
             && self.forbidden_chars == other.forbidden_chars

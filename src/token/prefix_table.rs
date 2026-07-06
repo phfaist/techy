@@ -4,24 +4,25 @@
 //! so the hot token-reading path scans a small pre-sorted table.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::state::Lang;
 
-use super::rules::TokenRules;
+use super::rules::{GroupRule, TokenRules};
 
-/// One delimiter string and the group types it may open and/or close.
+/// One delimiter string and the group rules it may open and/or close.
 ///
-/// A single string may be both an opener and a closer — of the same group type (`$…$`) or
-/// of different ones. The table merges those into one entry (the WIP's "open-or-close"
+/// A single string may be both an opener and a closer — of the same rule (`$…$`) or of
+/// different ones. The table merges those into one entry (the WIP's "open-or-close"
 /// ambiguity merging); [`StdTokenReader`](super::StdTokenReader) resolves the direction:
 /// an expected close (per [`TokenRules::expecting_group_close`]) wins, otherwise the open
 /// interpretation does.
 pub struct PrefixEntry<L: Lang> {
     delim: String,
-    open: Option<L::GroupTypeId>,
-    close: Option<L::GroupTypeId>,
+    open: Option<Arc<GroupRule<L>>>,
+    close: Option<Arc<GroupRule<L>>>,
 }
 
 impl<L: Lang> PrefixEntry<L> {
@@ -30,33 +31,33 @@ impl<L: Lang> PrefixEntry<L> {
         &self.delim
     }
 
-    /// The group type this string opens, if any.
-    pub fn open(&self) -> Option<L::GroupTypeId> {
-        self.open
+    /// The group rule this string opens, if any.
+    pub fn open(&self) -> Option<&Arc<GroupRule<L>>> {
+        self.open.as_ref()
     }
 
-    /// The group type this string closes, if any.
-    pub fn close(&self) -> Option<L::GroupTypeId> {
-        self.close
+    /// The group rule this string closes, if any.
+    pub fn close(&self) -> Option<&Arc<GroupRule<L>>> {
+        self.close.as_ref()
     }
 }
 
 /// Sorted delimiter-matching table derived from a [`TokenRules`] value.
 ///
 /// Entries are sorted longest-first so matching is greedy (`$$` before `$`); entries of
-/// equal length keep the [`TokenRules::group_types`] order. When two group types claim the
-/// same delimiter string in the same direction, the earlier entry wins.
+/// equal length keep the [`TokenRules::groups`] order. When two rules claim the same
+/// delimiter string in the same direction, the earlier entry wins.
 pub struct PrefixTable<L: Lang> {
     entries: Vec<PrefixEntry<L>>,
     first_chars: String,
 }
 
 impl<L: Lang> PrefixTable<L> {
-    /// Build the table for the group types of `rules`. Empty delimiter strings are ignored.
+    /// Build the table for the group rules of `rules`. Empty delimiter strings are ignored.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
 
-        let mut add = |delim: &str, id: L::GroupTypeId, is_open: bool| {
+        let mut add = |delim: &str, rule: &Arc<GroupRule<L>>, is_open: bool| {
             if delim.is_empty() {
                 return;
             }
@@ -69,14 +70,14 @@ impl<L: Lang> PrefixTable<L> {
             };
             let slot = if is_open { &mut entry.open } else { &mut entry.close };
             if slot.is_none() {
-                *slot = Some(id);
+                *slot = Some(Arc::clone(rule));
             }
-            // An occupied slot is left alone: earlier group types win.
+            // An occupied slot is left alone: earlier rules win.
         };
 
-        for group_type in &rules.group_types {
-            add(&group_type.open, group_type.id, true);
-            add(&group_type.close, group_type.id, false);
+        for rule in &rules.groups {
+            add(&rule.open, rule, true);
+            add(&rule.close, rule, false);
         }
 
         // Longest first, for greedy matching; stable, so equal lengths keep declaration order.
@@ -111,11 +112,15 @@ impl<L: Lang> PrefixTable<L> {
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: PartialEq` although only
-// the `Lang::GroupTypeId` associated type (already bounded) is stored.
+// `Arc`-shared rules (whose contents are bounded via `Lang`) are stored.
 
 impl<L: Lang> Clone for PrefixEntry<L> {
     fn clone(&self) -> Self {
-        PrefixEntry { delim: self.delim.clone(), open: self.open, close: self.close }
+        PrefixEntry {
+            delim: self.delim.clone(),
+            open: self.open.clone(),
+            close: self.close.clone(),
+        }
     }
 }
 
@@ -164,7 +169,6 @@ impl<L: Lang> Eq for PrefixTable<L> {}
 mod tests {
     use super::*;
     use crate::state::SimpleLang;
-    use crate::token::rules::GroupType;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -172,11 +176,11 @@ mod tests {
     struct PlainLang;
     impl SimpleLang for PlainLang {} // GroupTypeId = u32
 
-    fn rules_with_groups(group_types: Vec<GroupType<PlainLang>>) -> TokenRules<PlainLang> {
+    fn rules_with_groups(groups: Vec<Arc<GroupRule<PlainLang>>>) -> TokenRules<PlainLang> {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
-            group_types,
+            groups,
             commands: Vec::new(),
             comments: Vec::new(),
             forbidden_chars: String::new(),
@@ -184,34 +188,36 @@ mod tests {
         }
     }
 
-    fn group(id: u32, open: &str, close: &str) -> GroupType<PlainLang> {
-        GroupType { id, open: open.into(), close: close.into() }
+    fn group(group_type: u32, open: &str, close: &str) -> Arc<GroupRule<PlainLang>> {
+        Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
     }
 
     #[test]
     fn braces_directional_entries() {
-        let table = PrefixTable::for_rules(&rules_with_groups(vec![group(0, "{", "}")]));
+        let rule = group(0, "{", "}");
+        let table = PrefixTable::for_rules(&rules_with_groups(vec![rule.clone()]));
 
         let open = table.match_at("{x").unwrap();
         assert_eq!(open.delim(), "{");
-        assert_eq!(open.open(), Some(0));
+        assert_eq!(open.open(), Some(&rule));
         assert_eq!(open.close(), None);
 
         let close = table.match_at("} y").unwrap();
         assert_eq!(close.delim(), "}");
         assert_eq!(close.open(), None);
-        assert_eq!(close.close(), Some(0));
+        assert_eq!(close.close(), Some(&rule));
 
         assert!(table.match_at("plain").is_none());
     }
 
     #[test]
     fn same_string_open_and_close_merges() {
-        // `$…$`: the same string opens and closes one group type.
-        let table = PrefixTable::for_rules(&rules_with_groups(vec![group(2, "$", "$")]));
+        // `$…$`: the same string opens and closes one rule.
+        let rule = group(2, "$", "$");
+        let table = PrefixTable::for_rules(&rules_with_groups(vec![rule.clone()]));
         let entry = table.match_at("$x").unwrap();
-        assert_eq!(entry.open(), Some(2));
-        assert_eq!(entry.close(), Some(2));
+        assert_eq!(entry.open(), Some(&rule));
+        assert_eq!(entry.close(), Some(&rule));
     }
 
     #[test]
@@ -225,13 +231,14 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_claims_earlier_group_type_wins() {
+    fn conflicting_claims_earlier_rule_wins() {
+        let first = group(0, "{", "}");
         let table = PrefixTable::for_rules(&rules_with_groups(vec![
-            group(0, "{", "}"),
+            first.clone(),
             group(7, "{", "}"),
         ]));
         let entry = table.match_at("{").unwrap();
-        assert_eq!(entry.open(), Some(0));
+        assert_eq!(entry.open(), Some(&first));
     }
 
     #[test]

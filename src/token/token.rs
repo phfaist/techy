@@ -7,6 +7,8 @@ use crate::source::Span;
 use crate::spec::CallableSpec;
 use crate::state::Lang;
 
+use super::rules::GroupRule;
+
 /// What a token *is* — structural and minimal: it identifies *what to parse next*.
 ///
 /// Design invariants (DESIGN_RATIONALE.md §3.2):
@@ -39,15 +41,18 @@ pub enum TokenKind<'s, L: Lang> {
     GroupOpen {
         /// The delimiter as matched.
         delim: &'s str,
-        /// Which group type it opens.
-        group_type: L::GroupTypeId,
+        /// The [`GroupRule`] that matched, as resolved by the tokenizer's priority order
+        /// (expected close first, then longest match, earlier rules winning ties). It
+        /// travels with the token — same principle as [`Specials`](TokenKind::Specials)
+        /// carrying its resolved spec — so the parser learns the close delimiter to
+        /// expect and the group's class without re-deriving the match.
+        rule: Arc<GroupRule<L>>,
     },
-    /// A closing group delimiter.
+    /// A closing group delimiter. Carries only the matched string: the parser knows
+    /// which close it expects (it entered the group), and a stray close needs no more.
     GroupClose {
         /// The delimiter as matched.
         delim: &'s str,
-        /// Which group type it closes.
-        group_type: L::GroupTypeId,
     },
     /// A command: escape character followed by a name (`\textbf`, `\&`, `\begin`).
     /// Recognition is pure [`CommandRule`](super::CommandRule) data; resolution to a spec
@@ -145,12 +150,10 @@ impl<L: Lang> Clone for TokenKind<'_, L> {
     fn clone(&self) -> Self {
         match self {
             TokenKind::Char(c) => TokenKind::Char(*c),
-            TokenKind::GroupOpen { delim, group_type } => {
-                TokenKind::GroupOpen { delim, group_type: *group_type }
+            TokenKind::GroupOpen { delim, rule } => {
+                TokenKind::GroupOpen { delim, rule: Arc::clone(rule) }
             }
-            TokenKind::GroupClose { delim, group_type } => {
-                TokenKind::GroupClose { delim, group_type: *group_type }
-            }
+            TokenKind::GroupClose { delim } => TokenKind::GroupClose { delim },
             TokenKind::Command { name, post_space } => {
                 TokenKind::Command { name, post_space: *post_space }
             }
@@ -174,19 +177,19 @@ impl<L: Lang> Clone for Token<'_, L> {
 
 /// Equality note: two `Specials` kinds are equal when their names match and they carry
 /// *the same* spec (`Arc` pointer identity) — specs are shared behavior objects without
-/// their own equality.
+/// their own equality. `GroupOpen` rules, by contrast, are plain data and compare
+/// structurally.
 impl<L: Lang> PartialEq for TokenKind<'_, L> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (TokenKind::Char(a), TokenKind::Char(b)) => a == b,
             (
-                TokenKind::GroupOpen { delim: d1, group_type: g1 },
-                TokenKind::GroupOpen { delim: d2, group_type: g2 },
-            ) => d1 == d2 && g1 == g2,
-            (
-                TokenKind::GroupClose { delim: d1, group_type: g1 },
-                TokenKind::GroupClose { delim: d2, group_type: g2 },
-            ) => d1 == d2 && g1 == g2,
+                TokenKind::GroupOpen { delim: d1, rule: r1 },
+                TokenKind::GroupOpen { delim: d2, rule: r2 },
+            ) => d1 == d2 && r1 == r2,
+            (TokenKind::GroupClose { delim: d1 }, TokenKind::GroupClose { delim: d2 }) => {
+                d1 == d2
+            }
             (
                 TokenKind::Command { name: n1, post_space: p1 },
                 TokenKind::Command { name: n2, post_space: p2 },
@@ -220,16 +223,14 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TokenKind::Char(c) => f.debug_tuple("Char").field(c).finish(),
-            TokenKind::GroupOpen { delim, group_type } => f
+            TokenKind::GroupOpen { delim, rule } => f
                 .debug_struct("GroupOpen")
                 .field("delim", delim)
-                .field("group_type", group_type)
+                .field("rule", rule)
                 .finish(),
-            TokenKind::GroupClose { delim, group_type } => f
-                .debug_struct("GroupClose")
-                .field("delim", delim)
-                .field("group_type", group_type)
-                .finish(),
+            TokenKind::GroupClose { delim } => {
+                f.debug_struct("GroupClose").field("delim", delim).finish()
+            }
             TokenKind::Command { name, post_space } => f
                 .debug_struct("Command")
                 .field("name", name)
@@ -263,12 +264,10 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TokenKind::Char(c) => write!(f, "Char({:?})", c),
-            TokenKind::GroupOpen { delim, group_type } => {
-                write!(f, "GroupOpen({:?}, {:?})", delim, group_type)
+            TokenKind::GroupOpen { delim, rule } => {
+                write!(f, "GroupOpen({:?}, {:?})", delim, rule.group_type)
             }
-            TokenKind::GroupClose { delim, group_type } => {
-                write!(f, "GroupClose({:?}, {:?})", delim, group_type)
-            }
+            TokenKind::GroupClose { delim } => write!(f, "GroupClose({:?})", delim),
             TokenKind::Command { name, .. } => write!(f, "Command({:?})", name),
             TokenKind::Specials { name, .. } => write!(f, "Specials({:?})", name),
             TokenKind::Comment { content, .. } => write!(f, "Comment({:?})", content),

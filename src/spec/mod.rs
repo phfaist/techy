@@ -10,10 +10,12 @@
 //!
 //! The declarative surface is the [`ArgumentSpec`]/[`SlotSpec`] lists exposed by the
 //! spec (arguments *configure*; slots hold *content regions*), with [`StdCallableSpec`]
-//! as the standard implementation. An argument **is a parser** ([`ArgumentParserSpec`]):
-//! standard delimited forms as data, [`ArgumentParser`] customs as the mid-granularity
-//! escape hatch. Argument/slot parsing (`ArgumentsParser`/`SlotsParser`) and the
-//! `parse_invocation()` full-takeover hatch arrive in Phase 6 (DESIGN_RATIONALE.md §3.4).
+//! as the standard implementation. An argument **is a parser**: every argument routes to
+//! an [`ArgumentParser`] object, with the standard forms (delimited group, optional
+//! group, literal marker, …) provided by the preset — the core has no privileged
+//! argument shapes (revised July 2026). Argument/slot parsing
+//! (`ArgumentsParser`/`SlotsParser`) and the `parse_invocation()` full-takeover hatch
+//! arrive in Phase 6 (DESIGN_RATIONALE.md §3.4).
 //!
 //! Definition lookup — [`Library`](crate::library::Library) and friends — lives in the
 //! neighboring [`library`](crate::library) topic.
@@ -22,7 +24,7 @@ mod callable;
 mod structure;
 
 pub use callable::{CallableSpec, StdCallableSpec};
-pub use structure::{ArgumentParser, ArgumentParserSpec, ArgumentSpec, SlotSpec};
+pub use structure::{ArgumentParser, ArgumentSpec, SlotSpec};
 
 #[cfg(test)]
 mod tests {
@@ -43,8 +45,15 @@ mod tests {
         type NodeExts = ();
     }
 
-    const BRACES: u32 = 0;
-    const BRACKETS: u32 = 1;
+    /// Stand-in for the preset-provided standard argument parsers (delimited group,
+    /// optional group, marker, …).
+    #[derive(Debug)]
+    struct StubParser;
+    impl<L: Lang> ArgumentParser<L> for StubParser {}
+
+    fn stub() -> Arc<dyn ArgumentParser<PlainLang>> {
+        Arc::new(StubParser)
+    }
 
     #[test]
     fn default_trait_methods_are_the_neutral_callable() {
@@ -59,12 +68,13 @@ mod tests {
 
     #[test]
     fn std_callable_spec_exposes_its_structures() {
-        // \section*[placement]{title}-shaped, with a body slot for good measure.
+        // \section*[placement]{title}-shaped, with a body slot for good measure (the
+        // stubs stand in for the preset's marker / optional-group / group parsers).
         let spec = StdCallableSpec::new(
             vec![
-                Arc::new(ArgumentSpec::marker("*")),
-                Arc::new(ArgumentSpec::optional_group(BRACKETS).named("placement")),
-                Arc::new(ArgumentSpec::group(BRACES)),
+                Arc::new(ArgumentSpec::new(stub())),
+                Arc::new(ArgumentSpec::new(stub()).named("placement")),
+                Arc::new(ArgumentSpec::new(stub())),
             ],
             vec![Arc::new(SlotSpec::new().named("body"))],
         );
@@ -72,25 +82,22 @@ mod tests {
         let dyn_spec: &dyn CallableSpec<PlainLang> = &spec;
         assert_eq!(dyn_spec.arguments().len(), 3);
         assert_eq!(dyn_spec.arguments()[1].name.as_deref(), Some("placement"));
-        assert!(matches!(
-            dyn_spec.arguments()[2].parser,
-            ArgumentParserSpec::Group { group_type: BRACES }
-        ));
         assert_eq!(dyn_spec.slots().len(), 1);
         assert_eq!(dyn_spec.slots()[0].name.as_deref(), Some("body"));
     }
 
     #[test]
-    fn custom_argument_parsers_and_state_deltas_have_a_slot() {
-        // The pylatexenc mid-granularity extension point: a custom argument parser and a
-        // per-argument parsing-state delta, declared without a custom invocation parser.
+    fn argument_parsers_and_state_deltas_have_a_slot() {
+        // The pylatexenc mid-granularity extension point: a bespoke argument parser and
+        // a per-argument parsing-state delta, declared without a custom invocation
+        // parser.
         #[derive(Debug)]
         struct CharsOnly;
         impl ArgumentParser<PlainLang> for CharsOnly {}
 
         let spec: StdCallableSpec<PlainLang> = StdCallableSpec::new(
             vec![Arc::new(
-                ArgumentSpec::new(ArgumentParserSpec::Custom(Arc::new(CharsOnly)))
+                ArgumentSpec::new(Arc::new(CharsOnly))
                     .named("label")
                     .with_state_delta(crate::state::ParsingStateDelta::new()),
             )],
@@ -98,7 +105,6 @@ mod tests {
         );
 
         let arg = &spec.arguments[0];
-        assert!(matches!(arg.parser, ArgumentParserSpec::Custom(_)));
         assert!(arg.parsing_state_delta.is_some());
         // Specs stay debuggable through the dyn parser.
         let dump = alloc::format!("{:?}", spec);

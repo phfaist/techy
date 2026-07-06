@@ -137,7 +137,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         }
     }
 
-    /// A `Group` node's full payload (delimiters, group type, ext).
+    /// A `Group` node's full payload (delimiters, group class, ext).
     pub fn group(&self) -> Option<&'t GroupData<L>> {
         match self.kind() {
             NodeKind::Group(data) => Some(data),
@@ -145,8 +145,8 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         }
     }
 
-    /// A `Group` node's group type. `None` for non-groups *and* for synthesized groups
-    /// without a language group type — consult [`group()`](NodeRef::group) to
+    /// A `Group` node's class. `None` for non-groups *and* for synthesized groups
+    /// without a language group class — consult [`group()`](NodeRef::group) to
     /// distinguish.
     pub fn group_type(&self) -> Option<L::GroupTypeId> {
         self.group().and_then(|data| data.group_type)

@@ -117,7 +117,13 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, '_, L> {
 /// resolving `\vec` differently in math mode); the standard [`Library`] is a plain map
 /// that ignores both. Returning `None` means "not defined here" — unknown-callable
 /// policy lives in [`LibraryStack::resolve`], not in individual lookups.
-pub trait SpecLookup<L: Lang>: fmt::Debug {
+///
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
+/// 2026; see [`CallableSpec`]'s note): `lookup` takes `&self`, so a stateful
+/// implementation (a memo cache, a database connection) needs interior mutability
+/// regardless — under this contract that means `Mutex`/`RwLock`, not `RefCell`
+/// (DESIGN_RATIONALE.md).
+pub trait SpecLookup<L: Lang>: fmt::Debug + Send + Sync {
     /// Resolve `query` in this lookup, or `None` if it is not defined here.
     fn lookup(
         &self,
@@ -341,7 +347,7 @@ mod tests {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
-            group_types: vec![],
+            groups: vec![],
             commands: vec![],
             comments: vec![],
             forbidden_chars: String::new(),

@@ -21,10 +21,11 @@ of earlier revisions lives in git.
    scope (see the `ParsedArguments` reversal under principle 3).
 5. **Id naming rule** (systematic across the crate):
    `…Kind` = closed core enum, exhaustively matchable (`TokenKind`, `NodeKind`);
-   `…TypeId` = per-language identifier, an associated type on `Lang`
+   `…TypeId` = per-language *classification*, an associated type on `Lang`
    (`Lang::GroupTypeId`, `Lang::CallableTypeId`) — typically a small closed enum in a real
-   language definition, `u32` under `SimpleLang`. (July 2026 revision: formerly open
-   registry ids interned in `Language`.)
+   language definition, `u32` under `SimpleLang`; classifies (group classes, invocation
+   forms), never identifies a delimiter spelling. (July 2026 revisions: formerly open
+   registry ids interned in `Language`; then per-delimiter-pair identities.)
 6. **Transitions read as adjectives** — `ParsingState::derived()` per Rust's
    `to_uppercase` convention: signals a *transition* producing a new value, not a field copy.
 
@@ -76,16 +77,16 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Arc-carrying range | `SourceSpan` | replaces lifetime-bound source locations in nodes/errors |
 | Tokens | `Token<'s, L>`, `TokenKind<'s, L>` | `…Kind` per the registry rule; `Clone`, not `Copy` (`Specials` carries an `Arc`) |
 | Token reading | `TokenReader<'s, L>` (trait), `StdTokenReader` | trait = behavior extension point; peek idempotent per (position, state instance) |
-| Tokenization rule facets | `WhitespaceRules`, `CommandRule`, `CommentRule`, `GroupType` | sub-structs of `TokenRules`; `Option`/empty-`Vec` = feature disabled |
+| Tokenization rule facets | `WhitespaceRules`, `CommandRule`, `CommentRule`, `GroupRule` | sub-structs of `TokenRules`; `Option`/empty-`Vec` = feature disabled; `GroupRule` = delimiter pair + group class, `Arc`d (travels on `GroupOpen` tokens) |
 | Whitespace primitive | `skip_whitespace` | one function for pre-space and all post-space; never consumes a `\n\s*\n` newline |
 | Specials scan | `Lang::scan_specials` → `SpecialsMatch<'s, L>`; `Lang::specials_trigger_chars` → `TriggerChars` | recognition = resolution (name + spec in one call) |
 | Derived delimiter table | `PrefixTable`, `PrefixEntry` | built from `TokenRules`, cached per parsing state |
 | Token-level errors | `TokenError<'s, L>`, `TokenErrorKind`, `TokenRecovery<'s, L>`, `TokenResult<'s, L, T>` | transient `Span`-based; `TokenResult` not `TokResult` (clarity over brevity) |
 | Callable behavior | `CallableSpec<L>` (trait), `StdCallableSpec<L>` | de-keyed: no name, no invocation form |
 | Invocation-form id | `Lang::CallableTypeId` | closed per-language type (enum in real langs; `u32` under `SimpleLang`) |
-| Group-type id | `Lang::GroupTypeId` | closed per-language type; delimiter *strings* stay runtime rules data |
+| Group class | `Lang::GroupTypeId` | closed per-language classification (content vs. math group), detached from delimiters; delimiter *rules* stay runtime data any parser can mint |
 | Argument/slot structure | `Vec<Arc<ArgumentSpec<L>>>` / `Vec<Arc<SlotSpec<L>>>` on the spec (slice accessors) | args configure; slots hold content regions; `Arc`d so parsed records share them |
-| Argument parsing spec | `ArgumentParserSpec<L>` (data variants + `Custom`), `ArgumentParser<L>` (trait) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`) |
+| Argument parsing | `ArgumentParser<L>` (trait; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser>`) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`); no core data variants — standard parsers are preset-provided (July 2026) |
 | Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
@@ -94,7 +95,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
 | Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: entry = `Arc`'d spec + presence/child offset + per-instance syntax + ext |
 | Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
-| Group payload | `GroupData<L>` | delimiters stored on the node + `Option<Lang::GroupTypeId>` identity |
+| Group payload | `GroupData<L>` | delimiters stored on the node + `Option<Lang::GroupTypeId>` class |
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + parsed arguments/slots |
 | Node textual payload | `TextContent` (`Spanned` / `Owned`) | logical content first-class; span = provenance |
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, `CommentNodeExt`, `ListNodeExt`, `ArgumentExt`; bundled as `Lang::NodeExts: NodeExtTypes` | `SimpleLang` defaults them all to `()`; `ArgumentExt` rides on `ParsedArgument` records |
@@ -145,9 +146,9 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `CharsNode`, `GroupNode`, `CommentNode`, `NodeList` (struct-per-type) | `NodeKind::{Chars, Group, Comment, List}` in flat `NodeTree` | flat index-based storage, `NodeRef` proxies |
 | `Arguments` | `ParsedArguments` | Dec 2025 chose `Arguments`; reversed July 2026 — spec-side `ArgumentSpec`/`ArgumentParserSpec` now coexist in scope, and pylatexenc parity |
 | `ArgumentsSpec` (Dec 2025 → `ArgumentStructureSpec`) | `Vec<Arc<ArgumentSpec>>` slices on `CallableSpec` | wrapper dropped July 2026 with the pylatexenc-shaped argument model; too close to `ArgumentSpec` anyway |
-| `ArgumentKind` | `ArgumentParserSpec` (+ `ArgumentParser` customs) | an argument *is* a parser; closed enum was a regression vs. pylatexenc's per-argument parsers (July 2026) |
+| `ArgumentKind`, then `ArgumentParserSpec` data variants | `ArgumentParser` objects only | an argument *is* a parser; closed enums were a regression vs. pylatexenc's per-argument parsers — the core cannot know a language's argument forms (July 2026, two steps) |
 | `ArgsLayout`/`ArgLayout`, `SlotsLayout`/`SlotLayout` | `ParsedArguments`/`ParsedArgument`, `ParsedSlots`/`ParsedSlot` | "layout" opaque; records now self-describing (Arc'd specs), markers are `Chars` nodes (July 2026) |
-| open `GroupTypeId`/`CallableTypeId` (u32, interned in `Language`) | `Lang::GroupTypeId`/`Lang::CallableTypeId` associated types | forms and group identities are static per language definition; closed enums, no ids floating around (July 2026) |
+| open `GroupTypeId`/`CallableTypeId` (u32, interned in `Language`) | `Lang::GroupTypeId`/`Lang::CallableTypeId` associated types | forms and group *classes* are static per language definition; closed enums, no ids floating around (July 2026; `GroupTypeId` reframed identity → class the same month — delimiter pairings are runtime `GroupRule`s, not enum variants) |
 | `Parser` trait (in `constructs`) | `ConstructParser` | avoids clash with high-level parser type |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
 | "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; `…TypeId` = per-language id type |

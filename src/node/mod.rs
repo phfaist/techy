@@ -12,7 +12,7 @@
 //!   ([`NodeExtTypes`] bundle, `Lang::NodeExts`), orthogonal
 //!   to structural identity.
 //! - [`GroupData`] records a group's delimiters *on the node* (pylatexenc's
-//!   `delimiters`), alongside its optional typed identity.
+//!   `delimiters`), alongside its optional typed class (`Lang::GroupTypeId`).
 //! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
 //!   arguments/slots, post-space); shared behavior lives in the spec, context in the
 //!   recorded parsing state (the division-of-labor rule).
@@ -60,9 +60,9 @@ mod tests {
     use super::*;
     use crate::library::LibraryStack;
     use crate::source::{Source, SourceSpan, Span, TextContent};
-    use crate::spec::{ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
+    use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
     use crate::state::{Lang, ParsingState, SimpleLang, StateData};
-    use crate::token::{GroupType, TokenRules};
+    use crate::token::{GroupRule, TokenRules};
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -81,7 +81,11 @@ mod tests {
         TokenRules {
             whitespace: None,
             double_newline_paragraphs: false,
-            group_types: vec![GroupType { id: GT_BRACE, open: "{".into(), close: "}".into() }],
+            groups: vec![Arc::new(GroupRule {
+                group_type: GT_BRACE,
+                open: "{".into(),
+                close: "}".into(),
+            })],
             commands: Vec::new(),
             comments: Vec::new(),
             forbidden_chars: String::new(),
@@ -109,8 +113,24 @@ mod tests {
         )
     }
 
+    /// Stand-in for the preset-provided standard argument parsers.
+    #[derive(Debug)]
+    struct StubParser;
+    impl<L: Lang> ArgumentParser<L> for StubParser {}
+
     fn brace_arg_spec<L: Lang<GroupTypeId = u32>>() -> Arc<ArgumentSpec<L>> {
-        Arc::new(ArgumentSpec::group(GT_BRACE))
+        Arc::new(ArgumentSpec::new(Arc::new(StubParser)))
+    }
+
+    /// Compile-time proof of the thread-safety contract (DESIGN_RATIONALE.md): trees,
+    /// states, and spec handles are `Send + Sync`, so a tree parsed on one thread can be
+    /// handed to another.
+    #[test]
+    fn trees_states_and_specs_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<NodeTree<PlainLang>>();
+        assert_send_sync::<ParsingState<PlainLang>>();
+        assert_send_sync::<Arc<dyn CallableSpec<PlainLang>>>();
     }
 
     /// Builds the running example: `x\frac{a}{b} % note` as
@@ -252,11 +272,11 @@ mod tests {
         );
 
         let star_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::marker("*").named("star"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("star"));
         let placement_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::optional_group(GT_BRACE).named("placement"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("placement"));
         let title_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::group(GT_BRACE).named("title"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("title"));
         let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(
             vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
             vec![],

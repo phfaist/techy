@@ -21,7 +21,9 @@ use core::fmt::Debug;
 /// [`SourceProvenance`](super::SourceProvenance), which every source carries). Once the
 /// `Lang` trait exists (Phase 3+), a language definition selects its origin type via
 /// `L::SourceOrigin`.
-pub trait SourceOrigin: Debug + Clone + Default {
+/// `Send + Sync` because sources are `Arc`-shared (decided July 2026, together with the
+/// thread-safety contract on the spec traits — see DESIGN_RATIONALE.md).
+pub trait SourceOrigin: Debug + Clone + Default + Send + Sync {
     /// Short human-readable label shown in diagnostics (e.g. a URL).
     ///
     /// Returns `None` if there is nothing meaningful to display; diagnostics then omit the

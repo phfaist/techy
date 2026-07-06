@@ -385,6 +385,42 @@ interpretation; comments precede the specials scan, so a trigger string starting
 comment delimiter is shadowed (deliberate: deterministic rules data wins over hook
 behavior). Reproduces pylatexenc's `$\zeta$$\gamma$` / `$$…$$` behaviors exactly (ported
 tests).
+*(Amended July 2026, group-classes session: the field now holds the expected
+`Arc<GroupRule<L>>` itself rather than a `GroupTypeId` — a class cannot name a pairing once
+`GroupTypeId` means class (next entry); the tokenizer compares the rule's close string
+directly, which also deleted the id→rule lookup from the hot path.)*
+
+**Group classes detached from delimiters: `Lang::GroupTypeId` = class, `GroupRule` = runtime
+delimiter data, tokens carry the resolved rule** — DECIDED (user, July 2026, group-classes
+session; reframes the closed-ids decision of §3.4). A group *type* is a language-native class
+of "delimited region viewed as one object" — the latexlike preset will declare content-group
+and math-group variants — and says nothing about spellings. This is the exact semantic
+parallel of `CallableTypeId`: closed invocation *forms* ↔ runtime-registered *callables*;
+closed group *classes* ↔ runtime-minted *delimiter rules*. `GroupRule<L>` =
+`{ group_type, open, close }` (renamed from `GroupType`, joining
+`CommandRule`/`CommentRule`), held as `Arc` in `TokenRules::groups`; any construct parser may
+mint a rule mid-parse via a state delta (an optional-argument parser momentarily declaring
+`[`…`]`, a custom spec declaring `<`…`>`).
+Because a class no longer identifies a pairing, every consumer of the id *as pairing
+identity* now uses the rule itself: `GroupOpen` tokens carry `Arc<GroupRule<L>>` — the
+tokenizer's resolution (expected close first, then longest match, earlier rules winning ties)
+travels with the token, the same make-mismatch-impossible principle as `Specials` carrying
+its resolved spec — while `GroupClose` carries only `delim` (the parser knows which close it
+expects; a stray close needs no more); `expecting_group_close` holds the rule;
+`GroupData.group_type` stays but records the class.
+*Rationale:* per-pairing identities in a closed enum blocked exactly the extensibility the
+delimited-group machinery exists for — a third-party spec cannot add variants to the preset's
+enum, so novel delimiters (beamer-style `<…>` overlay arguments, `|…|` forms) were
+unrepresentable, and even the preset's own optional-argument parser had to pre-register its
+`[…]` pairing. Meanwhile pairing identity never distinguished anything the strings didn't.
+The class keeps the typed "is this a math group?" answer (no string comparison) and makes
+parse-time behavior data-driven — "entering this group enters math mode" is one class check,
+where per-spelling variants (`DollarInline`, `ParenMath`, …) scattered it.
+*Rejected:* removing `GroupTypeId` entirely (loses typed classification; would have reversed
+§3.5's "delimiters-only degenerates to string comparison" rejection); keeping per-pairing ids
+with runtime allocation (recreates the deleted interned-id registry).
+*Revisit if:* per-instance group data beyond class + spellings is needed — that is
+`GroupNodeExt`'s job, not more id structure.
 
 ### 3.3 Parsing state and deltas
 
@@ -559,6 +595,16 @@ inventory — real regression vs. pylatexenc); every-argument-is-an-opaque-parse
 (pylatexenc-pure — loses declarative introspection).
 *Revisit if:* the data-variant inventory grows unwieldy (fold variants into shipped standard
 `ArgumentParser` impls instead).
+*(Amended July 2026, group-classes session: the *Revisit if* fired early and fully — the data
+variants are gone; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser<L>>`, pylatexenc's
+parser-objects-everywhere, with the terse `group`/`optional_group`/`marker` constructors
+removed. Once `GroupTypeId` became a delimiter-detached class (§3.2), the core could no
+longer name "the `{…}` argument" in a data variant or constructor — which group class, whose
+spelling? The standard forms become preset-provided `ArgumentParser` impls, pylatexenc's own
+resolution of the `'{'`/`'['`/`'*'` shorthands into parser instances. The introspection
+argument for data variants turned out not to be load-bearing: recomposition reads nodes and
+layouts — delimiters and marker spellings stored as `TextContent` per §3.5 — never specs. The
+prior *Rejected:* "every-argument-is-an-opaque-parser" is thereby deliberately reversed.)*
 
 **`ArgumentStructureSpec`/`SlotStructureSpec` wrappers dropped; `CallableSpec` exposes
 `&[Arc<ArgumentSpec<L>>]` / `&[Arc<SlotSpec<L>>]`** — DECIDED (July 2026, same session).
@@ -586,6 +632,52 @@ runtime state; type *identities* are not.
 *Revisit if:* a genuine runtime-registration need for group/callable types appears (e.g.
 catcode-style schemes minting new group types mid-parse) — then that language can use an
 integer id type; the associated-type design accommodates it without core changes.
+*(Amended July 2026, group-classes session: the *Revisit if* fired for groups — construct
+parsers do mint delimiter pairs mid-parse (optional arguments, custom specs). Resolved not by
+opening the id space (the rejected registry) but by detaching the closed vocabulary from
+spellings: `GroupTypeId` reframed from per-pairing identity to group *class* — see the §3.2
+group-classes entry. `CallableTypeId` is untouched; both remain closed per-`Lang`.)*
+*(Amended July 2026, thread-safety session: both id types' bounds gained `+ Send + Sync` —
+see the thread-safety entry below.)*
+
+**Thread safety is a core contract: `Send + Sync` supertraits on the dyn spec traits** —
+DECIDED (user + Claude, July 2026, thread-safety session).
+`CallableSpec`, `SpecLookup`, and `ArgumentParser` carry `Send + Sync` supertraits; the
+bounds this forces propagate to `Lang`'s associated types (`GroupTypeId`, `CallableTypeId`,
+`StateExt`, `Event`), all seven `NodeExtTypes` types, and the `SourceOrigin` trait. Result:
+`NodeTree`, `ParsingState`, `Token`, deltas, and every spec handle are `Send + Sync` — parse
+on one thread and hand the tree off; share preset libraries across parallel parses.
+*Rationale:* `Arc<T>: Send` needs `T: Send + Sync`, and Send-ness is erased at the trait
+declaration — without the supertraits a threading consumer has **no safe recourse** (only a
+newtype + `unsafe impl Send`, unsound if any spec actually isn't thread-safe), while under
+them a single-threaded implementor always has a safe path. And that path is barely longer:
+every extension-trait method takes `&self` and specs are `Arc`-shared across nodes, so
+mutable implementor state needs interior mutability *regardless* — the bounds never
+introduce a wrapper, they only select `Mutex`/`RwLock`/`OnceLock`/atomics (`spin` on
+`no_std`) over `RefCell`/`Cell`/`OnceCell`. A survey of realistic non-threadsafe wants found
+no blocked use case: a database-backed lookup holds `Mutex<Connection>` (forced by `&self`
+anyway — rusqlite/diesel connections are `!Sync`; the lock is invisible next to the query)
+and returns plain-data `StdCallableSpec`s; pyo3-backed specs are already `Send + Sync`
+(GIL-guarded); the one awkward case is `!Send` script-engine handles (`mlua::Lua`), solved
+by mlua's own `send` feature or a dedicated interpreter thread. Also resolves clippy's
+`arc_with_non_send_sync` — the crate's global `alloc::sync::Arc` commitment previously paid
+atomic refcounts for zero capability — and completes §3.3's "OnceCell would make states
+non-`Sync`" intent. Contrast pylatexenc: Python's GIL made shared mutable spec state a
+non-issue; ports of such specs use locks.
+*Rejected:* a `sync` cargo feature gating the supertraits (or `Arc` vs `Rc`) — cargo
+features are additive and unified across the dependency graph, so a contract-changing
+feature forks the extension ecosystem into two incompatible dialects: extension crates must
+pick a side, and one crate enabling it imposes it on all (`im`/`im-rc` shipped as *separate
+crates* for exactly this reason; rhai's `sync` feature is the cautionary precedent).
+Mechanically it also needs duplicated trait definitions or a `MaybeSendSync` helper trait,
+plus double CI and docs. Spelling `Arc<dyn … + Send + Sync>` at use sites — same effective
+constraint for anything stored in a tree, but two distinct erased types and the
+`Box<dyn Error + Send + Sync>` spelling plague.
+*Revisit if:* a compelling single-threaded embedder materializes — then a parallel
+`Rc`-based local layer can be added *without* breaking the `Send` world (rowan's `Send`
+green tree / deliberately-`!Send` red cursors precedent); the reverse migration (adding
+bounds later) would break implementors holding non-`Send` state, which is why the bounds
+land now while the API is fluid.
 
 ### 3.5 Nodes and AST
 
@@ -696,6 +788,10 @@ for the same reason `CallableData` is: `Chars` must keep dominating the enum siz
 comparison); registry-only (the inconsistency above).
 *Revisit if:* per-group-node allocation shows up in profiles (then consider inlining a
 small-string delimiter pair).
+*(Amended July 2026, group-classes session: `group_type` now records the group's *class*
+(§3.2), not a pairing identity — the "is this a math group?" typed check stands unchanged,
+while `$…$` vs. `$$…$$` now share a class and are distinguished by the stored delimiter
+strings where spelling matters. The delimiters-only rejection stands.)*
 
 **Node spans stay mandatory; synthetic-node representation deferred** — DECIDED (user,
 July 2026, Phase 5 design session). `NodeData.span: SourceSpan` is non-optional: parse-produced

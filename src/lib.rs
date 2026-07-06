@@ -83,15 +83,13 @@ pub use node::{
     BuildId, CallableData, GroupData, NodeData, NodeId, NodeKind, NodeRef, NodeTree,
     NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
 };
-pub use spec::{
-    ArgumentParser, ArgumentParserSpec, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec,
-};
+pub use spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
 pub use state::{
     Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
     TokenRulesOverrides,
 };
 pub use token::{
-    skip_whitespace, CommandRule, CommentRule, GroupType, PrefixTable, SpecialsMatch,
+    skip_whitespace, CommandRule, CommentRule, GroupRule, PrefixTable, SpecialsMatch,
     StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery,
     TokenResult, TokenRules, TriggerChars, WhitespaceRules,
 };

@@ -47,6 +47,6 @@ mod token;
 pub use error::{TokenError, TokenErrorKind, TokenRecovery, TokenResult};
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
-pub use rules::{CommandRule, CommentRule, GroupType, TokenRules, WhitespaceRules};
+pub use rules::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};
 pub use specials::{SpecialsMatch, TriggerChars};
 pub use token::{Token, TokenKind};

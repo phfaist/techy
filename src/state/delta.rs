@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::library::SpecLookup;
-use crate::token::{CommandRule, CommentRule, GroupType, TokenRules, WhitespaceRules};
+use crate::token::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};
 
 use super::lang::Lang;
 use super::parsing_state::StateData;
@@ -16,7 +16,7 @@ use super::parsing_state::StateData;
 /// `Some(None)` for the optional fields, meaning "disable the feature").
 ///
 /// Collections are replaced wholesale, not merged: a delta that wants "current group
-/// types plus one more" is built by the party that can see the current state (typically
+/// rules plus one more" is built by the party that can see the current state (typically
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
 /// override itself would smuggle policy into the choke point.
 pub struct TokenRulesOverrides<L: Lang> {
@@ -24,8 +24,8 @@ pub struct TokenRulesOverrides<L: Lang> {
     pub whitespace: Option<Option<WhitespaceRules>>,
     /// Override the paragraph-break flag.
     pub double_newline_paragraphs: Option<bool>,
-    /// Replace the recognizable group types.
-    pub group_types: Option<Vec<GroupType<L>>>,
+    /// Replace the recognizable group delimiter rules.
+    pub groups: Option<Vec<Arc<GroupRule<L>>>>,
     /// Replace the command syntaxes.
     pub commands: Option<Vec<CommandRule>>,
     /// Replace the comment syntaxes.
@@ -33,7 +33,7 @@ pub struct TokenRulesOverrides<L: Lang> {
     /// Replace the forbidden-character set.
     pub forbidden_chars: Option<String>,
     /// Override the expected group close (`Some(None)` clears it).
-    pub expecting_group_close: Option<Option<L::GroupTypeId>>,
+    pub expecting_group_close: Option<Option<Arc<GroupRule<L>>>>,
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
@@ -45,8 +45,8 @@ impl<L: Lang> TokenRulesOverrides<L> {
         if let Some(v) = self.double_newline_paragraphs {
             rules.double_newline_paragraphs = v;
         }
-        if let Some(v) = &self.group_types {
-            rules.group_types = v.clone();
+        if let Some(v) = &self.groups {
+            rules.groups = v.clone();
         }
         if let Some(v) = &self.commands {
             rules.commands = v.clone();
@@ -57,8 +57,8 @@ impl<L: Lang> TokenRulesOverrides<L> {
         if let Some(v) = &self.forbidden_chars {
             rules.forbidden_chars = v.clone();
         }
-        if let Some(v) = self.expecting_group_close {
-            rules.expecting_group_close = v;
+        if let Some(v) = &self.expecting_group_close {
+            rules.expecting_group_close = v.clone();
         }
     }
 }
@@ -147,7 +147,7 @@ impl<L: Lang> Default for TokenRulesOverrides<L> {
         TokenRulesOverrides {
             whitespace: None,
             double_newline_paragraphs: None,
-            group_types: None,
+            groups: None,
             commands: None,
             comments: None,
             forbidden_chars: None,
@@ -161,11 +161,11 @@ impl<L: Lang> Clone for TokenRulesOverrides<L> {
         TokenRulesOverrides {
             whitespace: self.whitespace.clone(),
             double_newline_paragraphs: self.double_newline_paragraphs,
-            group_types: self.group_types.clone(),
+            groups: self.groups.clone(),
             commands: self.commands.clone(),
             comments: self.comments.clone(),
             forbidden_chars: self.forbidden_chars.clone(),
-            expecting_group_close: self.expecting_group_close,
+            expecting_group_close: self.expecting_group_close.clone(),
         }
     }
 }
@@ -175,7 +175,7 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
         f.debug_struct("TokenRulesOverrides")
             .field("whitespace", &self.whitespace)
             .field("double_newline_paragraphs", &self.double_newline_paragraphs)
-            .field("group_types", &self.group_types)
+            .field("groups", &self.groups)
             .field("commands", &self.commands)
             .field("comments", &self.comments)
             .field("forbidden_chars", &self.forbidden_chars)
@@ -188,7 +188,7 @@ impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
             && self.double_newline_paragraphs == other.double_newline_paragraphs
-            && self.group_types == other.group_types
+            && self.groups == other.groups
             && self.commands == other.commands
             && self.comments == other.comments
             && self.forbidden_chars == other.forbidden_chars

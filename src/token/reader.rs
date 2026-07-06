@@ -255,19 +255,14 @@ impl<'s> StdTokenReader<'s> {
         let rules = state.rules();
         let rest = &self.content[pos..];
 
-        if let Some(expected_id) = rules.expecting_group_close {
-            if let Some(group_type) = rules.group_types.iter().find(|g| g.id == expected_id) {
-                if !group_type.close.is_empty() && rest.starts_with(group_type.close.as_str()) {
-                    let span = Span::new(pos, pos + group_type.close.len());
-                    return Some(Token::new(
-                        TokenKind::GroupClose {
-                            delim: span.slice(self.content),
-                            group_type: expected_id,
-                        },
-                        span,
-                        pre_space,
-                    ));
-                }
+        if let Some(expected) = &rules.expecting_group_close {
+            if !expected.close.is_empty() && rest.starts_with(expected.close.as_str()) {
+                let span = Span::new(pos, pos + expected.close.len());
+                return Some(Token::new(
+                    TokenKind::GroupClose { delim: span.slice(self.content) },
+                    span,
+                    pre_space,
+                ));
             }
         }
 
@@ -275,8 +270,8 @@ impl<'s> StdTokenReader<'s> {
         let span = Span::new(pos, pos + entry.delim().len());
         let delim = span.slice(self.content);
         let kind = match (entry.open(), entry.close()) {
-            (Some(group_type), _) => TokenKind::GroupOpen { delim, group_type },
-            (None, Some(group_type)) => TokenKind::GroupClose { delim, group_type },
+            (Some(rule), _) => TokenKind::GroupOpen { delim, rule: rule.clone() },
+            (None, Some(_)) => TokenKind::GroupClose { delim },
             (None, None) => unreachable!("prefix table entries always carry a direction"),
         };
         Some(Token::new(kind, span, pre_space))
@@ -401,14 +396,16 @@ mod tests {
     use crate::library::LibraryStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
-    use crate::token::{CommentRule, GroupType, SpecialsMatch, TriggerChars};
+    use crate::token::{CommentRule, GroupRule, SpecialsMatch, TriggerChars};
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    // Group type ids used by the hardcoded latexlike-flavored test rules (the test langs
-    // use the SimpleLang-style `u32` id space).
+    // Group classes used by the hardcoded latexlike-flavored test rules (the test langs
+    // use the SimpleLang-style `u32` class space; a real preset would use a small enum,
+    // with several rules sharing a class). Distinct per rule here so tests can look
+    // rules up by class.
     const BRACES: u32 = 0;
     const BRACKETS: u32 = 1;
     const MATH_INLINE: u32 = 2;
@@ -433,7 +430,7 @@ mod tests {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() }),
             double_newline_paragraphs: true,
-            group_types: vec![
+            groups: vec![
                 group(BRACES, "{", "}"),
                 group(BRACKETS, "[", "]"),
                 group(MATH_INLINE, "$", "$"),
@@ -451,18 +448,31 @@ mod tests {
         }
     }
 
-    fn group<L: Lang<GroupTypeId = u32>>(id: u32, open: &str, close: &str) -> GroupType<L> {
-        GroupType { id, open: open.into(), close: close.into() }
+    fn group<L: Lang<GroupTypeId = u32>>(
+        group_type: u32,
+        open: &str,
+        close: &str,
+    ) -> Arc<GroupRule<L>> {
+        Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
     }
 
     fn state(rules: TokenRules<TestLang>) -> ParsingState<TestLang> {
         ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
     }
 
-    /// Rules with the given group type's close delimiter expected (as the group parser
-    /// sets up when entering an ambiguously-delimited group).
-    fn expecting_close(id: u32) -> ParsingState<TestLang> {
-        state(TokenRules { expecting_group_close: Some(id), ..latex_rules() })
+    /// The `latex_rules` rule of the given class (unique per rule in these tests).
+    fn rule_of(group_type: u32) -> Arc<GroupRule<TestLang>> {
+        latex_rules::<TestLang>()
+            .groups
+            .into_iter()
+            .find(|g| g.group_type == group_type)
+            .expect("class present in latex_rules")
+    }
+
+    /// Rules with the given rule's close delimiter expected (as the group parser sets up
+    /// when entering an ambiguously-delimited group).
+    fn expecting_close(group_type: u32) -> ParsingState<TestLang> {
+        state(TokenRules { expecting_group_close: Some(rule_of(group_type)), ..latex_rules() })
     }
 
     fn sp(start: usize, end: usize) -> Span {
@@ -677,7 +687,7 @@ mod tests {
         );
         assert_eq!(
             next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", group_type: BRACES },
+            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
         );
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('e'));
     }
@@ -702,7 +712,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
-                TokenKind::GroupOpen { delim: "{", group_type: BRACES },
+                TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
                 sp(0, 1),
                 Span::empty(0),
             ),
@@ -712,7 +722,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
-                TokenKind::GroupClose { delim: "}", group_type: BRACES },
+                TokenKind::GroupClose { delim: "}" },
                 sp(0, 1),
                 Span::empty(0),
             ),
@@ -727,7 +737,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
-                TokenKind::GroupOpen { delim: "{", group_type: BRACES },
+                TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
                 sp(7, 8),
                 sp(0, 7),
             ),
@@ -740,14 +750,14 @@ mod tests {
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "[", group_type: BRACKETS },
+            TokenKind::GroupOpen { delim: "[", rule: rule_of(BRACKETS) },
         );
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('('));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('i'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char(')'));
         assert_eq!(
             next(&mut tr, &st).kind,
-            TokenKind::GroupClose { delim: "]", group_type: BRACKETS },
+            TokenKind::GroupClose { delim: "]" },
         );
     }
 
@@ -758,7 +768,7 @@ mod tests {
         let mut tr = StdTokenReader::new("$x$");
         assert_eq!(
             peek(&mut tr, &state(latex_rules())).kind,
-            TokenKind::GroupOpen { delim: "$", group_type: MATH_INLINE },
+            TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) },
         );
     }
 
@@ -767,7 +777,7 @@ mod tests {
         let mut tr = StdTokenReader::new("$ and more");
         assert_eq!(
             peek(&mut tr, &expecting_close(MATH_INLINE)).kind,
-            TokenKind::GroupClose { delim: "$", group_type: MATH_INLINE },
+            TokenKind::GroupClose { delim: "$" },
         );
     }
 
@@ -778,7 +788,7 @@ mod tests {
         let mut tr = StdTokenReader::new(r"\) rest");
         assert_eq!(
             peek(&mut tr, &state(latex_rules())).kind,
-            TokenKind::GroupClose { delim: r"\)", group_type: MATH_INLINE_PAREN },
+            TokenKind::GroupClose { delim: r"\)" },
         );
     }
 
@@ -790,7 +800,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::GroupOpen { delim: r"\(", group_type: MATH_INLINE_PAREN },
+                TokenKind::GroupOpen { delim: r"\(", rule: rule_of(MATH_INLINE_PAREN) },
                 sp(1, 3),
                 sp(0, 1),
             ),
@@ -800,7 +810,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
-                TokenKind::GroupOpen { delim: r"\[", group_type: MATH_DISPLAY_BRACKET },
+                TokenKind::GroupOpen { delim: r"\[", rule: rule_of(MATH_DISPLAY_BRACKET) },
                 sp(1, 3),
                 sp(0, 1),
             ),
@@ -819,16 +829,16 @@ mod tests {
 
         let cases: [(usize, &ParsingState<TestLang>, TokenKind<'_, TestLang>, usize); 8] = [
             // (pos, state, expected kind, expected end)
-            (1, &plain, TokenKind::GroupOpen { delim: "$", group_type: MATH_INLINE }, 2),
+            (1, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 2),
             // expected close beats the longest ('$$') match:
-            (9, &in_inline, TokenKind::GroupClose { delim: "$", group_type: MATH_INLINE }, 10),
-            (10, &plain, TokenKind::GroupOpen { delim: "$", group_type: MATH_INLINE }, 11),
-            (18, &in_inline, TokenKind::GroupClose { delim: "$", group_type: MATH_INLINE }, 19),
+            (9, &in_inline, TokenKind::GroupClose { delim: "$" }, 10),
+            (10, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 11),
+            (18, &in_inline, TokenKind::GroupClose { delim: "$" }, 19),
             // not expecting a close: longest match wins -> display '$$':
-            (19, &plain, TokenKind::GroupOpen { delim: "$$", group_type: MATH_DISPLAY }, 21),
-            (30, &plain, TokenKind::GroupOpen { delim: "$", group_type: MATH_INLINE }, 31),
-            (34, &in_inline, TokenKind::GroupClose { delim: "$", group_type: MATH_INLINE }, 35),
-            (36, &in_display, TokenKind::GroupClose { delim: "$$", group_type: MATH_DISPLAY }, 38),
+            (19, &plain, TokenKind::GroupOpen { delim: "$$", rule: rule_of(MATH_DISPLAY) }, 21),
+            (30, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 31),
+            (34, &in_inline, TokenKind::GroupClose { delim: "$" }, 35),
+            (36, &in_display, TokenKind::GroupClose { delim: "$$" }, 38),
         ];
 
         for (pos, st, kind, end) in cases {
@@ -1191,7 +1201,7 @@ mod tests {
         assert_eq!(next(&mut tr, &st), char_token('b', 2, Span::empty(2)));
         assert_eq!(
             next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", group_type: BRACES },
+            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
         );
     }
 
@@ -1266,7 +1276,7 @@ mod tests {
         );
         assert_eq!(
             next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", group_type: BRACES },
+            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
         );
 
         let p = find(r"\vec"); // post-space present

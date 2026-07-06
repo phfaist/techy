@@ -194,8 +194,8 @@ pub struct Token<'s, L: Lang> {
 
 pub enum TokenKind<'s, L: Lang> {
     Char(char),                                             // single character — never runs
-    GroupOpen  { delim: &'s str, group_type: GroupTypeId },
-    GroupClose { delim: &'s str, group_type: GroupTypeId },
+    GroupOpen  { delim: &'s str, rule: Arc<GroupRule<L>> },  // resolved rule travels with the token
+    GroupClose { delim: &'s str },
     Command    { name: &'s str, post_space: Span },         // \foobar␣ — rules-data driven
     Specials   { name: &'s str, spec: Arc<dyn CallableSpec<L>> },  // scan-hook driven
     Comment    { content: &'s str, post_space: Span },      // whole comment, sans newline
@@ -279,11 +279,11 @@ pub struct StateData<L: Lang> {
 pub struct TokenRules {
     pub whitespace: Option<WhitespaceRules>,   // None = whitespace handling disabled
     pub double_newline_paragraphs: bool,       // \n\s*\n = paragraph break (token + skip rule)
-    pub group_types: Vec<GroupType>,           // {…}, […], $…$, $$…$$, \[…\] — all just group types
+    pub groups: Vec<Arc<GroupRule<L>>>,        // {…}, […], $…$, $$…$$, \[…\] — delimiter pair + group class
     pub commands: Vec<CommandRule>,            // escape-char syntaxes; empty = disabled
     pub comments: Vec<CommentRule>,            // start delimiters (to end of line); empty = disabled
     pub forbidden_chars: String,
-    pub expecting_group_close: Option<GroupTypeId>,  // ambiguous-delimiter disambiguator
+    pub expecting_group_close: Option<Arc<GroupRule<L>>>,  // ambiguous-delimiter disambiguator
     // NB: no specials strings — specials recognition is the Lang::scan_specials hook (§token)
 }
 ```
@@ -487,8 +487,8 @@ pub struct CallableData<L: Lang> {
 exactly PARSING_STRATEGY.md's concept list — chars, groups, callables, comments — and
 "environment" is not a core concept: "is this an environment" =
 `node.callable_type() == latexlike::CT_ENVIRONMENT` (honest two-level dispatch). `$…$` parses
-as a `Group` with a `$`-delimited `GroupTypeId` under the preset's math-mode state ext; the
-preset provides `NodeRef` accessor helpers so ergonomics don't suffer. Exhaustive pattern
+as a `Group` whose class (`GroupTypeId`) is the preset's math-group class, under the preset's
+math-mode state ext; the preset provides `NodeRef` accessor helpers so ergonomics don't suffer. Exhaustive pattern
 matching, no downcasting, no `clone_box`, trivially serializable.
 
 **`TextContent` — logical content as first-class data; the span is provenance:**

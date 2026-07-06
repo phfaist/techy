@@ -20,8 +20,8 @@ use super::{CallableNodeExt, CharsNodeExt, CommentNodeExt, GroupNodeExt, ListNod
 ///   specials invocations differ by invocation *form*, not by parsed shape — all are
 ///   [`Callable`](NodeKind::Callable) nodes; "is this an environment" is
 ///   `callable_type == latexlike::CT_ENVIRONMENT` (honest two-level dispatch). `$…$`
-///   parses as a [`Group`](NodeKind::Group) whose `$`-delimited group type is a
-///   `Lang::GroupTypeId` under the preset's math-mode state ext.
+///   parses as a [`Group`](NodeKind::Group) whose class (`Lang::GroupTypeId`) is the
+///   preset's math-group class, under the preset's math-mode state ext.
 /// - **Custom data attaches through the per-kind ext types** (`Lang::NodeExts`),
 ///   orthogonal to structural identity: a group with custom data is still a group to all
 ///   generic tooling.
@@ -116,12 +116,14 @@ impl<L: Lang> NodeKind<L> {
 /// `LatexGroupNode.delimiters`): recomposition and delimiter-sensitive consumers must not
 /// depend on a registry lookup — the same "recomposability must not depend on `Lang`
 /// cooperation" rule that puts marker spellings in [`ParsedArguments`]. The typed
-/// `group_type` identity is kept *alongside* the strings ("is this a math group?" without
-/// string comparison; `$…$` vs `$$…$$` share spellings, not identity).
+/// `group_type` *class* is kept alongside the strings ("is this a math group?" without
+/// string comparison); where spelling matters within a class (`$…$` vs. `$$…$$`), the
+/// stored delimiters answer.
 pub struct GroupData<L: Lang> {
-    /// The group type, when the group came from tokenization (or was synthesized as a
-    /// specific type). `None` for internal synthesized groups that exist structurally
-    /// but correspond to no language group type.
+    /// The group's class, when the group came from tokenization (its
+    /// [`GroupRule`](crate::token::GroupRule)'s class) or was synthesized as a specific
+    /// class. `None` for internal synthesized groups that exist structurally but
+    /// correspond to no language group class.
     pub group_type: Option<L::GroupTypeId>,
     /// The opening delimiter as written — span-backed when parsed, owned when
     /// synthesized.
@@ -134,7 +136,7 @@ pub struct GroupData<L: Lang> {
 }
 
 impl<L: Lang> GroupData<L> {
-    /// A group of the given type with the given delimiters and default ext.
+    /// A group of the given class with the given delimiters and default ext.
     pub fn new(
         group_type: L::GroupTypeId,
         open: impl Into<TextContent>,
@@ -148,7 +150,7 @@ impl<L: Lang> GroupData<L> {
         }
     }
 
-    /// A synthesized group with no language group type.
+    /// A synthesized group with no language group class.
     pub fn untyped(
         open: impl Into<TextContent>,
         close: impl Into<TextContent>,

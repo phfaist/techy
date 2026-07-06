@@ -27,7 +27,13 @@ use super::structure::{ArgumentSpec, SlotSpec};
 /// `parse_invocation()` — the full-takeover escape hatch for `\verb`-like constructs —
 /// arrives in Phase 6 together with `ConstructParser`/`ParseContext`
 /// (DESIGN_RATIONALE.md §3.4).
-pub trait CallableSpec<L: Lang>: fmt::Debug {
+///
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
+/// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.
+/// Every method takes `&self`, so a stateful implementation needs interior mutability
+/// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
+/// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell` (DESIGN_RATIONALE.md).
+pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync {
     /// The declarative argument structure of an invocation, in invocation order.
     /// Default: no arguments.
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>] {

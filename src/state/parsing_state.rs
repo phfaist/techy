@@ -77,7 +77,7 @@ impl<L: Lang> ParsingState<L> {
         &self.data.ext
     }
 
-    /// The delimiter-matching table derived from [`rules().group_types`](TokenRules).
+    /// The delimiter-matching table derived from [`rules().groups`](TokenRules).
     pub fn prefix_table(&self) -> &PrefixTable<L> {
         &self.prefix_table
     }
@@ -145,8 +145,9 @@ mod tests {
     use super::*;
     use crate::library::LibraryStack;
     use crate::state::TokenRulesOverrides;
-    use crate::token::{CommandRule, GroupType, WhitespaceRules};
+    use crate::token::{CommandRule, GroupRule, WhitespaceRules};
     use alloc::string::String;
+    use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -154,11 +155,11 @@ mod tests {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
             double_newline_paragraphs: true,
-            group_types: vec![GroupType {
-                id: 0,
+            groups: vec![Arc::new(GroupRule {
+                group_type: 0,
                 open: "{".into(),
                 close: "}".into(),
-            }],
+            })],
             commands: vec![CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
@@ -201,11 +202,11 @@ mod tests {
         assert!(state.prefix_table().match_at("[x").is_none());
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            group_types: Some(vec![GroupType {
-                id: 1,
+            groups: Some(vec![Arc::new(GroupRule {
+                group_type: 1,
                 open: "[".into(),
                 close: "]".into(),
-            }]),
+            })]),
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta);
