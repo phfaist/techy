@@ -422,6 +422,20 @@ with runtime allocation (recreates the deleted interned-id registry).
 *Revisit if:* per-instance group data beyond class + spellings is needed — that is
 `GroupNodeExt`'s job, not more id structure.
 
+**`TokenKind::Command` records its escape character** — DECIDED (user, July 2026, Phase 6
+plan session; Phase 6 notes item C2). `Command { name, escape_char: char, post_space }`.
+*Rationale:* §3.4's lookup design requires `CallableQuery { syntax: Command { escape_char } }`,
+the escape char was not recoverable from the token, and the nodes parser must not reach
+around the reader into raw content (§3.2, `EndOfStream` rationale). The tokenizer knows
+which `CommandRule` fired; recording it is syntactic fact (which rule fired), not resolution
+output — consistent with the no-`CallableTypeId`-on-tokens line. Small ripple through the
+Phase 3 token tests, accepted.
+
+**`TokenRules::multi_newline_paragraphs` (renamed from `double_newline_paragraphs`)** —
+DECIDED (user, July 2026, Phase 6 plan session). Any run of two or more newlines (however
+many, with interleaved inline whitespace) forms one paragraph break; the old name misread as
+"exactly two".
+
 ### 3.3 Parsing state and deltas
 
 **Tokenization config is plain data (`TokenRules`), not per-facet traits** — PROPOSED
@@ -914,6 +928,71 @@ requires the source content, so a structural `==` would be a footgun (`Spanned(2
 accessors). Node/layout types likewise ship without `PartialEq` until golden-test needs make
 the right equality concrete (Phase 6/7).
 
+**`Comment` nodes store their start delimiter and post-space** — DECIDED (user, July 2026,
+Phase 6 plan session; closes open question §6.5 / Phase 6 notes Q4, Option A).
+`Comment { content, start: TextContent, post_space: TextContent, ext }`; the node's span
+covers start delimiter + content + post-space (the token's span convention).
+*Rationale:* with several `CommentRule`s in scope, *which* start delimiter fired and what
+syntactic post-space followed (newline + indentation) are per-instance facts; storing both
+mirrors `CallableData.post_space` and the recorded-delimiter principle (`GroupData`), making
+level-2 recomposition self-contained, synthesized comments included.
+*Rejected:* recovering either from the span (fails for synthesized comments) or from a
+`Language` default (guessing).
+
+**Environment scaffolding (`\begin{name}` / `\end{name}`) is neither child nodes nor a
+stored record — rigid syntax, reconstructed** — DECIDED (user, July 2026, Phase 6 plan
+session; closes the terminator-representation question left open by the regions session).
+An environment-shaped callable's span covers the whole `\begin{align}…\end{align}` extent
+(plus post-space); its children are the argument regions followed by the body `List` — one
+contiguous block whose span runs from the first argument region to the body's end. The
+`\begin{name}` / `\end{name}` bytes are the block's prefix/suffix complement within the
+node's span and are not otherwise represented.
+*Rationale:* the syntax is deliberately **rigid** (a deviation from LaTeX): no comments or
+newlines between the begin/end command and its name group — the name group must be the
+immediately following token; inline whitespace after `\begin`/`\end` (the command token's
+post-space) is tolerated and *not recorded*, an accepted level-2 normalization to the
+canonical spelling. Under rigid syntax, reconstruction from `(callable_type, name)` + spec
+knowledge is deterministic — "reproduce, don't guess" holds because there is nothing to
+guess. The partition invariant holds in its callable form: regions tile the child list, the
+children block is span-contiguous, and the scaffolding is derivable as the two sub-spans
+(node-span start → children start) and (children end → post-space start). A preset that
+wants the verbatim scaffolding strings anyway extracts exactly those two sub-spans at
+`Lang::finalize_node` time (§3.6) and stashes them in node ext.
+*Rejected:* a `terminator: TextContent` record on `ParsedSlot` (every environment pays
+storage for a string that rigid syntax makes reconstructible); terminator as region nodes
+(`\end`'s command bytes have no honest node kind — a `Chars` node holding markup would
+violate chars-are-content).
+*Revisit if:* a construct's closing syntax is genuinely per-instance-variable (a fence
+closing with its own trigger text is fine — that is `name`; a freely chosen close spelling
+is not): that construct's parser then records the choice on the node, following the
+`GroupData` delimiter precedent.
+
+**Whitespace and span invariants pinned (the §nodes Phase 6 pin-down)** — DECIDED (user,
+July 2026, Phase 6 plan session; ARCHITECTURE.md §nodes updated).
+1. *Chars accumulation:* `Char` tokens accumulate into maximal `Chars` nodes; a token's
+   pre-space (content whitespace) joins the run; the run flushes when any non-`Char`
+   construct starts. Pending whitespace with no adjacent chars becomes a whitespace-only
+   `Chars` node. Parsed content is always `TextContent::Spanned` (the exact span slice).
+2. *Paragraph breaks:* their own nodes, produced via `Lang::make_paragraph_break_node`
+   (§3.6; default: whitespace-only `Chars` spanning the full token, newlines included);
+   never merged into neighboring whitespace nodes (adjacent whitespace-only `Chars` nodes
+   are possible and fine — deterministic).
+3. *Callable post-space:* claimed **by the invocation parser**, not by the dispatch loop —
+   peek + `move_to(tok, rewind_pre_space = false)`, packaged as a one-call helper.
+   Accepted consequence: a custom parser that skips the helper corrupts nothing — the
+   whitespace lands as following sibling content (a behavioral difference, not a broken
+   invariant). Groups have no post-space (space after `}` is content). Comment post-space
+   is the token's (newline + indentation, stopping at paragraph breaks).
+4. *End of stream:* `EndOfStream.pre_space` materializes as a final whitespace-only `Chars`
+   node.
+5. *Partition invariant:* sibling spans partition the parent's *content interior* exactly —
+   `List` bodies, `Group` interiors, the root. For callables: argument/slot regions tile
+   the child list (builder-enforced), the children block is span-contiguous, and unrecorded
+   rigid scaffolding is the reconstructible complement (previous entry). Checked
+   mechanically by a test-utility `check_tree_invariants()` — deliberately a test aid, not
+   builder law, so a future construct that legitimately breaks byte-accounting amends a
+   test, not the architecture.
+
 ### 3.6 Construct parsers, dispatch, engine
 
 **Single-context parsing API (`ParseContext`)** — PROPOSED (July 2026).
@@ -927,6 +1006,162 @@ scattered dispatch logic, priority races).
 **`Language<L>` owns no per-parse state** — DECIDED (March 2026, as "FLMEnvironment";
 renamed July 2026). Long-lived, reusable across parses, accumulates no memory. Sessions are
 transient; results are frozen.
+
+**Construct parsers are temporaries; stored parser objects are immutable behavior data (the
+two-tier ownership model)** — DECIDED (user, July 2026, Phase 6 plan session).
+Tier 1, *stored* behavior objects (specs; `ArgumentParser`s inside `ArgumentSpec`):
+`Arc`-shared, `Send + Sync`, immutable; every per-use input arrives as arguments of their
+entry points (`&self`). Tier 2, *engine* construct parsers (`NodesParser`, the group parser,
+invocation parsers, body parsers): short-lived values constructed with their per-use
+configuration where they are needed, free to borrow (`'s` content, token refs),
+`parse(&mut self, …)` so working state may live in fields, dropped when the frame ends. No
+`Send + Sync`, no `'static`, no `OnceLock`/`static` gymnastics — those pressures existed
+only in designs that *stored* engine parsers.
+*Rationale:* mutable working state and stored sharing are incompatible without locks; giving
+each tier one job removes the conflict. Closures (stop predicates) are thereby confined to
+tier 2 — specs stay data (§2.1).
+
+**`CallableSpec::make_invocation_parser` — a factory moving a fresh parser to the caller** —
+DECIDED (user, July 2026, Phase 6 plan session; settles Phase 6 notes Q2 with a third option
+superseding both sketched ones).
+
+```rust
+fn make_invocation_parser<'a>(
+    &'a self,
+    invocation: Invocation<'a, /* 's, */ L>,  // callable_type, name, spec, trigger token
+) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a> {
+    Box::new(StdInvocationParser::new(invocation))
+}
+```
+
+The dispatch loop resolves the callable (`Lang::resolve_command`, or the spec riding on a
+`Specials` token), builds the `Invocation`, calls the factory, runs `parser.parse(cx)`,
+drops the parser. Overriding the factory is the full-takeover escape hatch (`\verb`,
+tabular preambles, FLM constructs).
+*Rationale:* all parser logic lives in construct parsers — specs only *supply* parser
+objects; the invocation travels inside the parser instance, so `ConstructParser::parse`
+keeps one uniform signature; and this is exactly pylatexenc's `get_node_parser(token)`
+shape (a parser instance built for that token), with ownership made explicit.
+*Rejected:* a defaulted `parse_invocation(&self, cx, &Invocation)` method on the spec
+(fuses factory and call — parsing methods on specs); a cached `Arc<dyn ConstructParser>` in
+the spec with the pending `Invocation` in a `ParseContext` field (a set-before-use protocol
+spanning every spec and every dispatch — the regions two-phase records accepted that genus
+of invariant only because it is contained in one component at one point); a generic
+`with_invocation_parser(inv, closure)` (stack allocation, but kills `dyn CallableSpec`
+object safety).
+*Revisit if — **flagged, to check before Phase 6 closes**:* the per-invocation `Box`
+allocation shows up in parse-throughput profiles (run a micro-benchmark; see
+Phase6Execution.md). If it ever matters, the dispatch loop can special-case the default
+path without touching the trait.
+
+**`Lang::finalize_node` — one centralized finalization hook, run by the builder for every
+staged node** — DECIDED (user, July 2026, Phase 6 plan session; supersedes the spec-level
+`finalize_invocation` proposal — report R3 / pylatexenc's `CallableSpec.finalize_node`).
+Called inside `NodeTreeBuilder::add` for **all** nodes (every kind, not just callables),
+before the staging checks; receives mutable access to the node's parts (kind, uniform ext,
+span, state) plus a read-only view of already-staged nodes (so a callable's hook can
+inspect its children — e.g. extract scaffolding sub-spans, §3.5); default: no-op.
+*Rationale:* the builder is the single mutation boundary, so hooking there guarantees *no
+node escapes finalization* — no parser cooperation required, transforms and tests included.
+A preset delegates to spec-specific behavior itself (FLM's `Lang` sees a `Callable`, reads
+`data.spec`, downcasts to its own spec trait, attaches its `flm_specinfo`-like ext), so the
+core needs no spec-level hook at all; and *uniform* per-node initialization (fields every
+node of a language carries) gets a natural home, which a callables-only spec hook could
+never provide.
+*Consequences:* the hook must tolerate re-staging (transform-built trees pass nodes through
+a new builder — finalization runs again on already-finalized data; implementations must be
+idempotent); it runs on speculatively staged nodes that may be abandoned (harmless — they
+drop unreachable); the builder grows a small staged-node read view (also wanted by
+node-based stop predicates, below).
+*Rejected:* spec-level finalize in core (callables-only; custom invocation parsers must
+remember to call it); a `ParseContext`-side helper (forgettable, and transforms bypass it).
+
+**`Lang::resolve_command` hook** — DECIDED (user, July 2026, Phase 6 plan session; Phase 6
+notes item C1 as sketched). `Command` tokens resolve through
+`fn resolve_command(state, &token) -> Option<ResolvedCallable<Self>>`
+(`{ callable_type, spec }`); typically dispatches to the state's libraries via
+`CallableQuery { syntax: Command { escape_char }, … }` — the token now carries its escape
+char (§3.2). Default `None` → the nodes parser diagnoses and recovers (§3.8). Specials need
+no hook: recognition = resolution; the token already carries its spec.
+*Rationale:* the dispatch loop needs `(CallableTypeId, spec)` for command tokens and the
+core cannot know a preset's type ids; follows the `scan_specials` precedent (a `Lang` hook,
+recognition kept close to resolution).
+
+**`Lang::make_paragraph_break_node` hook** — DECIDED (user, July 2026, Phase 6 plan
+session; Phase 6 notes item C3, upgraded from "core default, hook only if Phase 7 needs
+it"). `fn make_paragraph_break_node(state, &token) -> NodeKind<Self>`; default: a
+whitespace-only `Chars` kind, `TextContent::Spanned` over the full token span (newlines
+included). The *core* stages the returned kind with the token's span and the current state —
+a `Lang` cannot stage nodes itself.
+*Rationale:* ARCHITECTURE §nodes left paragraph-break representation to the preset;
+returning a `NodeKind` keeps callable-shaped paragraph breaks (FLM) expressible without a
+Phase 7 redesign, while the default preserves the whitespace-as-chars invariant (§3.5).
+
+**Stop conditions: reified value + tier-2 predicates; abnormal endings are data
+(`StopCause`), not errors** — DECIDED (user, July 2026, Phase 6 plan session;
+pylatexenc-informed). `NodesParser` accepts a stop specification with two independent
+triggers, mirroring pylatexenc's well-tested pair:
+- *token condition* — a small closed enum (`Command(name)`, `GroupClose(group_type)`,
+  `ParagraphBreak`, …) **or** a programmatic predicate (`Fn(&Token) -> bool`);
+- *node condition* — a programmatic predicate consulted after each node is assembled,
+  receiving (node count, view of the just-staged node) — covers pylatexenc's
+  `stop_nodelist_condition` uses (stop-after-one-node, `LatexSingleNodeParser`).
+Semantics pinned: a token-condition match leaves the token **unconsumed** (the caller
+consumes and interprets it — pylatexenc's `handle_stop_condition_token` ambiguity removed);
+a node-condition match includes the triggering node and stops after it; conditions are
+tested only at the parser's own nesting level (nested groups are consumed whole by the
+group parser, so an `\end` inside a brace group cannot terminate an environment body).
+`NodesParser` returns its `StopCause` — `StopConditionMet` / `EndOfInput` /
+`UnexpectedGroupClose` — and the *caller* decides which causes are errors (§3.8).
+Deliberate deviations from pylatexenc: the node predicate sees (count, last node), not the
+whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
+invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
+data (§2.1).
+*Rejected:* a declarative stop-condition language in spec data (the Q1 ruling: terminators
+are parser business); closure storage in specs.
+
+**Slot terminators are parser business; the environment-body parser lives in core
+`constructs`, parameterized** — DECIDED (user, July 2026, Phase 6 plan session; settles
+Phase 6 notes Q1 against both sketched options). `SlotSpec` stays
+`{ name, parsing_state_delta }` — no declarative terminator vocabulary in core spec data.
+The data of the rejected declarative design (stop-command name, name-group type,
+match-invocation-name) becomes the *constructor parameters* of a core
+`EnvironmentBodyParser`: it runs `NodesParser` with a stop condition on the terminator
+command, verifies the name back-reference (`\end{align}` matches the `align` that opened),
+stages the body `List`, and leaves post-space claiming to the invocation parser driving it.
+Environments remain zero-custom-code for spec authors — the preset's `EnvironmentSpec`
+(Phase 7) instantiates the parser from data. Verbatim bodies need no terminator-state
+doctrine at all: a verbatim construct's parser reads raw content itself and never runs
+`NodesParser` — the "which state scans the terminator" question dissolves.
+*Rationale:* a declarative terminator spec re-creates a parser-description language inside
+spec data for exactly one consumer, while the parameterized parser expresses the same
+constructs with the same zero user code; core placement is legitimate because every
+parameter is data — no privileged spellings (§2.3).
+*Rejected:* `SlotTerminatorSpec`/`StopConditionSpec` as core spec data (notes Q1 Option A);
+stop-before-terminator with preset-owned consumption (Option B — weakened the declarative
+path and left terminator syntax neither recorded nor reconstructible).
+
+**Terminator mismatch recovery: close without consuming** — DECIDED (user, July 2026,
+Phase 6 plan session). `\begin{A}…\begin{B}…\end{A}`: B's body parser stops at `\end`,
+reads the name, sees the mismatch → diagnostic ("missing `\end{B}`"), closes B **without
+consuming** the terminator, and returns; the unwinding lets A's parser find and consume its
+own `\end{A}`. An orphan `\end` eventually reaches the root nodes parser as an ordinary
+command and takes the unresolvable-command recovery (§3.8). A *malformed* terminator
+(`\end` not followed by its name group) is diagnosed, **consumed**, and closes the
+environment — leaving it unconsumed would cascade the same malformed token through every
+enclosing level. Loop safety: every level either consumes the token or unwinds out of its
+own frame; the root always consumes.
+Accepted consequence: "was this environment properly terminated?" lives in `Diagnostics`,
+not on the node — a preset wanting it on the node flags it in ext via `Lang::finalize_node`.
+
+**No `Language<L>` type in Phase 6; `ParserSession` is the root object** — DECIDED (user,
+July 2026, Phase 6 plan session; amends Phase 6 notes item C5 and the §engine timing).
+Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery` policy), driven directly
+by tests; the `Language<L>` runtime bundle and any `parse()` convenience entry point are
+deferred to the phase that demonstrates the need (Phase 7 at the earliest) — convenience
+code is not written before its convenience is demonstrable. Consequence: type-id interning
+stays deferred exactly as §3.4 recorded (it presupposed `Language`). The "`Language<L>`
+owns no per-parse state" principle above is untouched — it binds the type when it arrives.
 
 ### 3.7 Generics strategy
 
@@ -977,6 +1212,30 @@ carry plain `Span`s, not `SourceSpan`s — they are transient like tokens; the s
 whatever it reports into Arc-span `Diagnostic`s (Phase 6). The reader itself is policy-free:
 it always returns `Err` with the recovery attached, and the session's `Recovery` policy
 decides (the WIP's per-reader `tolerant_parsing` flag is superseded).
+
+**Detection-site recovery; `Err` means abort** — DECIDED (user, July 2026, Phase 6 plan
+session; Phase 6 notes item C4 concretized). Three rules:
+1. *Recovery happens where the problem is detected.* `ParseContext` exposes the `Recovery`
+   policy and the diagnostics sink behind a helper (tolerant: record the diagnostic and
+   continue; strict: return `Err`). Token errors continue with their `TokenRecovery` token
+   (the reader is already repositioned via `resume_pos`); each parse-level condition
+   defines its recovery at its site — unresolvable command: diagnostic + span-backed
+   chars-node fallback (markup text in a `Chars` node is an accepted tolerant-recovery
+   artifact, always accompanied by a diagnostic); missing mandatory argument: absent +
+   diagnostic; unmatched group close at the root: diagnostic + skip; terminator mismatch:
+   close-without-consuming (§3.6).
+2. *Abnormal endings of sub-parses are data, not errors.* `NodesParser` returns a
+   `StopCause`; only the caller knows whether EOF-before-`\end{align}` is an error. Nobody
+   ever continues *past* an `Err` — which is what keeps the reader position and the state
+   `Arc`s coherent through recovery, by construction.
+3. *`Err(ParseError)` = strict-mode abort or genuinely unrecoverable.* It carries no
+   recovery payload and bubbles freely. State deltas from an abandoned parse are dropped
+   unless the recovering site explicitly returns one; abandoned staged nodes are dropped by
+   the builder (designed for this).
+*Rejected:* pylatexenc's recovery-attributes-on-exceptions (`recovery_nodes`,
+`recovery_at_token`, `recovery_past_token`, caller-applied repositioning) — a workaround
+for having no context object, and exactly the caller/callee reader-state ambiguity that
+rule 2 eliminates.
 
 ### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
 
@@ -1029,6 +1288,13 @@ Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 202
   (fatal collision with `EnvironmentSpec`/`EnvironmentNode`); `ConstructParser` avoids clashing
   with any high-level `Parser` type; `Lang` replaces `LanguageSpecification` (too long for a
   parameter appearing in nearly every signature).
+- **Phase 6 plan session (July 2026):** `ConstructParserResult<T>` (= `Result<T, ParseError>`)
+  over the sketched `ParseOutcome` — unambiguous next to the engine-level `ParseResult`;
+  clarity over brevity. `NodesParser` over `ContentParser` — the regions session gave
+  "content" a precise technical meaning (`ContentNodes`, designated argument/slot content)
+  that a general nodes parser has nothing to do with. `StopCause` for the parser-returned
+  ending cause; `Invocation` for the resolved-invocation value; `make_*` for factory hooks
+  (`make_invocation_parser`, `make_paragraph_break_node`).
 
 When naming something new: check NAMING_STRATEGY.md, then ask "does this collide with or
 shadow an existing concept in LaTeX terminology or in this codebase?"
@@ -1176,16 +1442,15 @@ Current list — remove entries as they are settled (move the outcome into §3):
    design session): one node per region (one child per present argument, one `List` child per
    slot), with presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout`.
    Outcome moved to §3.5.
-3. **Top-level convenience API**: does a thin `Parser` facade exist above `Language::parse()`,
-   or is `Language` the entry point? Bikeshed; defer to Phase 6.
+3. ~~**Top-level convenience API**~~ — settled July 2026 (Phase 6 plan session): no facade,
+   and no `Language<L>`/`parse()` convenience entry point in Phase 6 at all — `ParserSession`
+   is the root object; convenience API deferred to the phase that demonstrates the need
+   (Phase 7+). Outcome moved to §3.6.
 4. **`CompactString`**: plain `String` initially; whether a small-string optimization ever pays
    for delimiter/specials storage is a profiling question, not a design question.
-5. **`Comment` node recomposition fields**: level-2 recomposition of a comment needs its start
-   delimiter (several `CommentRule`s may coexist) and its syntactic post-space, which the
-   decided `Comment { content, ext }` shape does not store (level 1 is covered — the node span
-   includes both). Decide with the whitespace/span invariants in Phase 6 whether `Comment`
-   grows per-instance syntax fields (the callable `post_space` precedent) or the recomposer
-   reads them from the span.
+5. ~~**`Comment` node recomposition fields**~~ — settled July 2026 (Phase 6 plan session):
+   `Comment` grows `start` + `post_space` per-instance syntax fields (notes Q4, Option A).
+   Outcome moved to §3.5.
 
 ---
 

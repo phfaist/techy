@@ -375,10 +375,15 @@ pub trait CallableSpec<L: Lang> {
     // which spec each argument was parsed against. See DESIGN_RATIONALE §3.4.)
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>];
     fn slots(&self) -> &[Arc<SlotSpec<L>>];
-    /// Parser consuming the invocation. The default is built from the two structure
-    /// specs; overriding it is the full-takeover escape hatch (\verb, tabular preambles,
-    /// FLM constructs) — pylatexenc's most valuable extensibility property, preserved.
-    fn invocation_parser(&self) -> &dyn ConstructParser<L, Output = NodeId>;
+    /// Factory: a fresh, single-use construct parser for one invocation of this callable,
+    /// ownership moved to the caller (amended July 2026, Phase 6 plan session — was a
+    /// stored-parser accessor; DESIGN_RATIONALE §3.6). Default: the standard declarative
+    /// parser driven by arguments() + slots(). Overriding it is the full-takeover escape
+    /// hatch (\verb, tabular preambles, FLM constructs) — pylatexenc's most valuable
+    /// extensibility property, preserved (its get_node_parser(token) has exactly this
+    /// build-a-parser-for-this-token shape).
+    fn make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>)
+        -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>;
     /// Optional recomposition hook (§nodes level 2) for constructs whose custom parser
     /// records per-instance syntax the default recomposer cannot infer.
     // fn recompose(&self, …) -> …   — default covers declaratively-specced callables
@@ -387,9 +392,12 @@ pub trait CallableSpec<L: Lang> {
 
 **Arguments vs. slots.** All callables can have both. *Arguments* configure (each
 `ArgumentSpec` carries its parser: group-delimited / optional / marker / custom / …); *slots*
-contain content regions (separators and terminators, where terminator patterns may
-reference the invocation name — `\end{align}` must match the `align` that opened; a `---` fence
-closes with `---`). A macro has no slots; an environment has exactly one (its body); specials
+contain content regions. Terminators — where the pattern may reference the invocation name
+(`\end{align}` must match the `align` that opened; a `---` fence closes with `---`) — are
+*parser* business, not spec vocabulary (decided July 2026, Phase 6 plan session): the
+terminator data parameterizes the core `EnvironmentBodyParser`, and `SlotSpec` stays
+`{ name, parsing_state_delta }` (DESIGN_RATIONALE §3.6). A macro has no slots; an
+environment has exactly one (its body); specials
 usually have none but may have any number (a fence-block construct with `+++` separators is
 expressible as a specials callable with multiple slots). The boundary is a guideline, not a
 theorem (`\verb`'s delimited content could be argued either way); the spec decides, and the
@@ -526,17 +534,21 @@ must not be obstructed). Layout discipline: keep ext types word-sized (an index 
 Lang-owned storage); `CallableData` is boxed so the enum stays small for the dominant `Chars`
 case.
 
-**Whitespace and span invariants** (decided in principle; pinned down in phase 6):
+**Whitespace and span invariants** (pinned July 2026, Phase 6 plan session — full numbered
+statement in DESIGN_RATIONALE.md §3.5):
 - Whitespace immediately following a callable is its `post_space`, **stopping at any paragraph
-  break**; whitespace elsewhere between constructs becomes a whitespace-only `Chars` node
-  (pylatexenc behavior). No double counting ⇒ **sibling spans partition the parent's interior
-  exactly** — no gaps; span math trustworthy for tooling and editing.
+  break** — claimed *by the invocation parser*, not the dispatch loop (a one-call helper; a
+  custom parser that skips it corrupts nothing — the whitespace lands as following content);
+  whitespace elsewhere between constructs becomes a whitespace-only `Chars` node
+  (pylatexenc behavior). No double counting ⇒ **sibling spans partition the parent's content
+  interior exactly** — no gaps; span math trustworthy for tooling and editing. Mechanically
+  checkable via the test utility `check_tree_invariants()`.
 - A callable's `SourceSpan` **includes** its `post_space` (so a `Spanned` post_space is a
   trailing sub-range of the node's own span). Node span semantics are the public contract and
   are deliberately decoupled from token behavior — tokens are transient engine internals.
-- Paragraph breaks surface as their own nodes; whether as whitespace `Chars` or as a
-  specials-type callable (PARSING_STRATEGY.md contemplated `"\n\n"` as specials) is a preset
-  decision, phase 7.
+- Paragraph breaks surface as their own nodes via `Lang::make_paragraph_break_node`
+  (default: whitespace-only `Chars` over the full token span; a preset may return a
+  callable-shaped kind — the "specials representation" option survives as this hook).
 
 **Recomposition requirement** (constrains `ParsedArguments` — formerly `ArgsLayout`):
 - *Level 1 — verbatim:* a node's own `SourceSpan` → exact original text. Never needs an
@@ -552,8 +564,12 @@ case.
   (July 2026 regions session: markers, pre-argument whitespace, and comments are region
   nodes; `ParsedArguments` records the regions + designated content ranges), on `GroupData`
   for group delimiters, *not* in ext: recomposability must not depend on Lang cooperation
-  (group delimiters therefore live on the node, July 2026). Exotic custom parsers use the
-  `CallableSpec::recompose()` hook.
+  (group delimiters therefore live on the node, July 2026). **Rigid spec-determined syntax
+  is the one sanctioned exception** (July 2026, Phase 6 plan session): environment
+  `\begin{name}`/`\end{name}` scaffolding is deliberately inflexible (no comments/newlines
+  before the name group; unrecorded inline whitespace normalized away) and is
+  *reconstructed*, not recorded — deterministic, hence still "reproduce, don't guess"
+  (DESIGN_RATIONALE §3.5). Exotic custom parsers use the `CallableSpec::recompose()` hook.
 
 **Two-phase region records — a deliberate runtime invariant (July 2026 regions session).**
 `ParsedArguments`/`ParsedSlots` entries hold child *regions* (noise + syntax + designated
@@ -583,15 +599,23 @@ The single most important trait in the system. To avoid pylatexenc's three-argum
 pub struct ParseContext<'a, 's, L: Lang> {
     pub tokens: &'a mut dyn TokenReader<'s, L>,
     pub state: Arc<ParsingState<L>>,
-    pub session: &'a mut ParserSession<'s, L>,   // node building, source creation, resolver, diagnostics
+    pub session: &'a mut ParserSession<L>,   // node building, diagnostics, Recovery policy
 }
 
+pub type ConstructParserResult<T> = Result<T, ParseError>;
+
 pub trait ConstructParser<L: Lang> {
-    type Output;                                  // NodeId, ParsedArguments, () …
-    fn parse<'s>(&self, cx: &mut ParseContext<'_, 's, L>)
-        -> ParseResult<(Self::Output, Option<ParsingStateDelta<L>>)>;
+    type Output;                              // BuildId, Vec<BuildId>, ParsedArguments, …
+    fn parse(&mut self, cx: &mut ParseContext<'_, '_, L>)
+        -> ConstructParserResult<(Self::Output, Option<ParsingStateDelta<L>>)>;
 }
 ```
+
+Construct parsers are **temporaries** (July 2026, Phase 6 plan session): constructed with
+their per-use configuration, `&mut self` so working state lives in fields, dropped when the
+frame ends — never stored in specs (two-tier ownership model, DESIGN_RATIONALE §3.6).
+`Err` means abort; recovery happens at the detection site and abnormal endings travel as
+`StopCause` data (DESIGN_RATIONALE §3.8).
 
 **Dispatch is by token kind + library lookup — never by parser registry scanning.** The main
 loop (`NodesParser`, pylatexenc's `LatexGeneralNodesParser` + nodes collector):
@@ -601,15 +625,16 @@ loop:
   tok = tokens.peek(state)
   match tok.kind:
     Char            -> accumulate chars node (whitespace-only chars nodes from pre_space, §nodes)
-    ParagraphBreak  -> own node (representation: preset decision, §nodes)
-    GroupOpen(t)    -> GroupParser(t)                  (delimiters from state.rules)
+    ParagraphBreak  -> own node via Lang::make_paragraph_break_node (default: whitespace Chars)
+    GroupOpen(rule) -> group parser (derived state expecting_group_close; recurse NodesParser)
     Comment         -> comment node built directly from the token (whole-comment tokens)
-    Command(name)   -> parse-time preset lookup (Lang-level; typically via libraries;
-                       unknown -> fallback singleton) -> spec.invocation_parser().parse(cx)
-    Specials(spec)  -> spec.invocation_parser().parse(cx)   (spec already on the token)
-    GroupClose(t)   -> stop condition / error
+    Command(name)   -> Lang::resolve_command (typically via libraries; None -> diagnose+recover)
+                       -> spec.make_invocation_parser(invocation).parse(cx)
+    Specials(spec)  -> make_invocation_parser likewise (spec already on the token)
+    GroupClose(t)   -> stop-condition match? stop : StopCause::UnexpectedGroupClose (caller decides)
     EndOfStream     -> materialize trailing-whitespace chars node from pre_space; stop
   returned delta -> state.derived(&delta) -> new Arc<ParsingState> for subsequent siblings
+NodesParser returns (nodes, StopCause) — the caller interprets the ending (§errors).
 ```
 
 Everything the Sonnet doc wanted from `can_parse()`/`priority()` registries is achieved
@@ -618,13 +643,17 @@ data-first: custom syntax enters via (a) specials strings in `TokenRules` + a `S
 nuclear option — (d) a custom `TokenReader` or a custom nodes parser. Deterministic, no
 priority races.
 
-Standard construct parsers to implement (mirroring pylatexenc's `latexnodes.parsers`):
-`NodesParser` (with stop conditions), `GroupParser`,
-`CallableInvocationParser` (the default built from argument+slot structure specs; environments
-arrive via the preset's `\begin`/`\end` specs), `ArgumentsParser` (+ std argument types),
-`SlotsParser` (separators/terminators with invocation-name back-reference), `DelimitedParser`,
-`VerbatimParser`, `ExpressionParser` (single node). (No `CommentParser`: whole-comment
-tokens made it vestigial — comment nodes come straight from tokens.)
+Standard construct parsers to implement (mirroring pylatexenc's `latexnodes.parsers`;
+list revised July 2026, Phase 6 plan session): `NodesParser` (stop conditions: reified
+token-condition enum + tier-2 programmatic predicates; returns `StopCause`), the group
+parser, `StdInvocationParser` (the default declarative invocation parser: argument specs →
+argument parsers → regions, slots, post-space claim), the standard `ArgumentParser`
+implementations (delimited-group / optional-group / marker / expression fallback — core,
+parameterized by group types; presets add one-liner constructors in Phase 7),
+`EnvironmentBodyParser` (core, parameterized: stop-command name, name-group type,
+invocation-name back-reference), `ExpressionParser` (single node — `\frac12` acceptance).
+(`VerbatimParser` → Phase 7 with `\verb`, via the escape hatch. No `CommentParser`:
+whole-comment tokens made it vestigial — comment nodes come straight from tokens.)
 
 ### engine (S1) — orchestration
 
@@ -648,6 +677,21 @@ pub trait Lang: Sized {                 // the compile-time bundle (was: Languag
         -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> { Ok(None) }
     /// Hot-path filter for scan_specials, cached per state (§token). Default: none.
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars { … }
+
+    // Phase 6 plan session hooks (July 2026; DESIGN_RATIONALE §3.6):
+
+    /// Resolve a Command token to (callable_type, spec). Typically dispatches to the
+    /// state's libraries via CallableQuery. Default: None → diagnose + recover.
+    fn resolve_command(state: &ParsingState<Self>, token: &Token<'_, Self>)
+        -> Option<ResolvedCallable<Self>> { None }
+    /// Node kind representing a paragraph break; the core stages it with the token's
+    /// span. Default: whitespace-only Chars over the full token span.
+    fn make_paragraph_break_node(state: &ParsingState<Self>, token: &Token<'_, Self>)
+        -> NodeKind<Self> { … }
+    /// Centralized node finalization: run by NodeTreeBuilder::add for EVERY staged node
+    /// (all kinds — presets attach spec-derived/uniform ext here; must be idempotent,
+    /// transforms re-stage nodes). Default: no-op.
+    fn finalize_node(/* &mut kind/ext, span, state, children + staged read view */) {}
 }
 
 pub struct Language<L: Lang> {          // the runtime bundle (was: FLMEnvironment)
@@ -659,6 +703,12 @@ impl<L: Lang> Language<L> {
     pub fn session(&self) -> ParserSession<'_, L>;    // advanced path
 }
 ```
+
+*(Phase 6 amendment, July 2026: `Language<L>` itself and the `parse()` convenience entry
+point are **deferred** — Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery`)
+as the root object, driven directly; `Language` arrives with the phase that demonstrates
+the need, Phase 7 at the earliest. Type-id interning stays deferred with it.
+DESIGN_RATIONALE §3.6.)*
 
 **Stratum note** (July 2026): the `Lang` trait and its bound-trait `NodeExtTypes` are
 *documented* here as the compile-time bundle, but their *definitions* live in the S1 core next
@@ -976,9 +1026,19 @@ hardcoded `TokenRules` value).
   argument/slot — inter-argument noise kept as nodes, `pre_space` removed,
   parser-designated content ranges (`ChildRegion`/`ContentNodes`), two-phase records
   resolved to global node indices by `finish()`. DESIGN_RATIONALE §3.5.)*
-- **Phase 6 — `constructs` + `engine`.** `ParseContext`, `NodesParser`, group/comment/callable
-  parsers, `ArgumentsParser` + `SlotsParser`, `Language<L>`/`ParserSession`/`ParseResult`;
-  pin down the whitespace/span invariants of §nodes; end-to-end tests on real LaTeX snippets.
+- **Phase 6 — `constructs` + engine core.** Execution plan: **Phase6Execution.md** (July
+  2026, Phase 6 plan session; supersedes the preliminary notes). Scope as amended there:
+  `ParseContext` + `ConstructParser`/`ConstructParserResult` (parsers are temporaries —
+  two-tier ownership), `NodesParser` (reified + programmatic stop conditions, `StopCause`),
+  group parsing, the `make_invocation_parser` factory + `StdInvocationParser`, standard
+  argument parsers (regions/`ContentNodes`), core `EnvironmentBodyParser`; `Lang` hooks
+  `resolve_command` / `make_paragraph_break_node` / `finalize_node`; token amendments
+  (`escape_char` on `Command`, `multi_newline_paragraphs` rename, token-list reader);
+  `Comment` syntax fields; detection-site tolerant recovery; whitespace/span invariants
+  pinned + `check_tree_invariants()`. **`Language<L>` and any `parse()` convenience are
+  deferred** — `ParserSession` is the root object. End-to-end tests on LaTeX-ish snippets
+  under test langs (the real preset is Phase 7).
+  DESIGN_RATIONALE §3.2/§3.5/§3.6/§3.8/§3.10.
 - **Phase 7 — `latexlike` preset.** Environments via `\begin`/`\end` specs, math group types +
   mode-aware lookup, verbatim, std library; tolerant-parsing behavior tests; port a slice of
   pylatexenc's walker test suite as acceptance tests.
