@@ -9,9 +9,9 @@
 //! [`Lang::scan_specials`] (gated by the state's cached
 //! [`TriggerChars`](super::TriggerChars) filter).
 //!
-//! The whitespace primitive [`skip_whitespace`] implements the double-newline rule in one
+//! The whitespace primitive [`skip_whitespace`] implements the multi-newline rule in one
 //! place for pre-space, command post-space, and comment post-space alike: when
-//! [`TokenRules::double_newline_paragraphs`] is set, skipped whitespace never consumes a
+//! [`TokenRules::multi_newline_paragraphs`] is set, skipped whitespace never consumes a
 //! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 
@@ -64,7 +64,7 @@ pub trait TokenReader<'s, L: Lang> {
 /// End position of the whitespace run starting at `pos` (= `pos` if none, or if
 /// whitespace handling is disabled).
 ///
-/// **The double-newline rule** (`TokenRules::double_newline_paragraphs`): skipped
+/// **The multi-newline rule** (`TokenRules::multi_newline_paragraphs`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
 /// skipping stops right *before* the first newline of a paragraph break. This one
 /// primitive serves pre-space, command post-space, and comment post-space, which is what
@@ -79,7 +79,7 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
             break;
         }
         if c == '\n'
-            && rules.double_newline_paragraphs
+            && rules.multi_newline_paragraphs
             && paragraph_continues(content, end + 1, ws)
         {
             break;
@@ -217,7 +217,7 @@ impl<'s> StdTokenReader<'s> {
         pre_space: Span,
         rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
-        if !rules.double_newline_paragraphs {
+        if !rules.multi_newline_paragraphs {
             return None;
         }
         let ws = rules.whitespace.as_ref()?;
@@ -323,7 +323,11 @@ impl<'s> StdTokenReader<'s> {
         };
 
         Ok(Token::new(
-            TokenKind::Command { name: &s[name_start..name_end], post_space },
+            TokenKind::Command {
+                name: &s[name_start..name_end],
+                escape_char: rule.escape_char,
+                post_space,
+            },
             Span::new(pos, post_space.end),
             pre_space,
         ))
@@ -429,7 +433,7 @@ mod tests {
     fn latex_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() }),
-            double_newline_paragraphs: true,
+            multi_newline_paragraphs: true,
             groups: vec![
                 group(BRACES, "{", "}"),
                 group(BRACKETS, "[", "]"),
@@ -546,7 +550,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
-                TokenKind::Command { name: "somemacro", post_space: sp(10, 11) },
+                TokenKind::Command { name: "somemacro", escape_char: '\\', post_space: sp(10, 11) },
                 sp(0, 11),
                 Span::empty(0),
             ),
@@ -562,7 +566,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
-                TokenKind::Command { name: "somemacro", post_space: sp(17, 18) },
+                TokenKind::Command { name: "somemacro", escape_char: '\\', post_space: sp(17, 18) },
                 sp(7, 18),
                 sp(0, 7),
             ),
@@ -575,7 +579,7 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
-                TokenKind::Command { name: "&", post_space: Span::empty(2) },
+                TokenKind::Command { name: "&", escape_char: '\\', post_space: Span::empty(2) },
                 sp(0, 2),
                 Span::empty(0),
             ),
@@ -587,7 +591,7 @@ mod tests {
         let mut tr = StdTokenReader::new(r"\`accent");
         let st = state(latex_rules());
         let token = next(&mut tr, &st);
-        assert_eq!(token.kind, TokenKind::Command { name: "`", post_space: Span::empty(2) });
+        assert_eq!(token.kind, TokenKind::Command { name: "`", escape_char: '\\', post_space: Span::empty(2) });
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
     }
 
@@ -600,7 +604,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "macroname", post_space: Span::empty(10) },
+                TokenKind::Command { name: "macroname", escape_char: '\\', post_space: Span::empty(10) },
                 sp(0, 10),
                 Span::empty(0),
             ),
@@ -619,7 +623,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "macroname", post_space: sp(10, 13) },
+                TokenKind::Command { name: "macroname", escape_char: '\\', post_space: sp(10, 13) },
                 sp(0, 13),
                 Span::empty(0),
             ),
@@ -650,10 +654,42 @@ mod tests {
             Token::new(
                 TokenKind::Command {
                     name,
+                    escape_char: '\\',
                     post_space: sp(1 + name.len(), 1 + name.len() + 1),
                 },
                 sp(0, 1 + name.len() + 1),
                 Span::empty(0),
+            ),
+        );
+    }
+
+    #[test]
+    fn command_records_the_fired_rules_escape_char() {
+        // Two coexisting command syntaxes: each token records which rule's escape
+        // character fired (parse-time lookup disambiguates by it — DESIGN_RATIONALE §3.2).
+        let names = "abcdefghijklmnopqrstuvwxyz";
+        let st = state(TokenRules {
+            commands: vec![
+                CommandRule { escape_char: '\\', name_chars: names.into() },
+                CommandRule { escape_char: '@', name_chars: names.into() },
+            ],
+            ..latex_rules()
+        });
+        let mut tr = StdTokenReader::new("\\foo @bar");
+        assert_eq!(
+            next(&mut tr, &st),
+            Token::new(
+                TokenKind::Command { name: "foo", escape_char: '\\', post_space: sp(4, 5) },
+                sp(0, 5),
+                Span::empty(0),
+            ),
+        );
+        assert_eq!(
+            next(&mut tr, &st),
+            Token::new(
+                TokenKind::Command { name: "bar", escape_char: '@', post_space: Span::empty(9) },
+                sp(5, 9),
+                Span::empty(5),
             ),
         );
     }
@@ -680,7 +716,7 @@ mod tests {
             next(&mut tr, &st),
             // No post_space: '{' follows the name directly.
             Token::new(
-                TokenKind::Command { name: "begin", post_space: Span::empty(6) },
+                TokenKind::Command { name: "begin", escape_char: '\\', post_space: Span::empty(6) },
                 sp(0, 6),
                 Span::empty(0),
             ),
@@ -1000,7 +1036,7 @@ mod tests {
     #[test]
     fn paragraph_breaks_disabled() {
         let mut tr = StdTokenReader::new("Abc\n\nNew");
-        let st = state(TokenRules { double_newline_paragraphs: false, ..latex_rules() });
+        let st = state(TokenRules { multi_newline_paragraphs: false, ..latex_rules() });
         tr.move_to_pos(2);
         assert_eq!(next(&mut tr, &st), char_token('c', 2, Span::empty(2)));
         // The double newline is ordinary consumable whitespace now.
@@ -1214,7 +1250,7 @@ mod tests {
         let st = state(latex_rules());
 
         let token = peek(&mut tr, &st);
-        assert_eq!(token.kind, TokenKind::Command { name: "vec", post_space: sp(6, 7) });
+        assert_eq!(token.kind, TokenKind::Command { name: "vec", escape_char: '\\', post_space: sp(6, 7) });
         assert_eq!(token.span, sp(2, 7)); // includes post_space
         assert_eq!(token.pre_space, sp(0, 2));
         assert_eq!(token.post_space(), sp(6, 7));
@@ -1257,7 +1293,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "`", post_space: Span::empty(p + 2) },
+                TokenKind::Command { name: "`", escape_char: '\\', post_space: Span::empty(p + 2) },
                 sp(p, p + 2),
                 Span::empty(p),
             ),
@@ -1269,7 +1305,7 @@ mod tests {
             next(&mut tr, &st),
             // '{' follows the name: no post_space.
             Token::new(
-                TokenKind::Command { name: "textbf", post_space: Span::empty(p + 8) },
+                TokenKind::Command { name: "textbf", escape_char: '\\', post_space: Span::empty(p + 8) },
                 sp(p + 1, p + 8),
                 sp(p, p + 1),
             ),
@@ -1284,7 +1320,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "vec", post_space: sp(p + 4, p + 5) },
+                TokenKind::Command { name: "vec", escape_char: '\\', post_space: sp(p + 4, p + 5) },
                 sp(p, p + 5),
                 Span::empty(p),
             ),
@@ -1295,7 +1331,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "&", post_space: Span::empty(p + 3) },
+                TokenKind::Command { name: "&", escape_char: '\\', post_space: Span::empty(p + 3) },
                 sp(p + 1, p + 3),
                 sp(p, p + 1),
             ),
@@ -1307,7 +1343,7 @@ mod tests {
         let token = next(&mut tr, &st);
         assert_eq!(
             token.kind,
-            TokenKind::Command { name: "begin", post_space: Span::empty(p + 6) },
+            TokenKind::Command { name: "begin", escape_char: '\\', post_space: Span::empty(p + 6) },
         );
 
         let p = find("@@@") + 3; // pre space up to \end
@@ -1315,7 +1351,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "end", post_space: Span::empty(p + 10) },
+                TokenKind::Command { name: "end", escape_char: '\\', post_space: Span::empty(p + 10) },
                 sp(p + 6, p + 10),
                 sp(p, p + 6),
             ),
@@ -1343,7 +1379,7 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Command { name: "mymacro", post_space: Span::empty(p + 8) },
+                TokenKind::Command { name: "mymacro", escape_char: '\\', post_space: Span::empty(p + 8) },
                 sp(p, p + 8),
                 Span::empty(p),
             ),
@@ -1379,7 +1415,7 @@ mod tests {
         assert_eq!(skip_whitespace("\n\nx", 0, &rules), 0);
         // Flag off: everything is consumable.
         let no_par: TokenRules<TestLang> =
-            TokenRules { double_newline_paragraphs: false, ..latex_rules() };
+            TokenRules { multi_newline_paragraphs: false, ..latex_rules() };
         assert_eq!(skip_whitespace("   \n  \n x", 0, &no_par), 8);
         // Whitespace handling disabled: nothing is skipped.
         let no_ws: TokenRules<TestLang> = TokenRules { whitespace: None, ..latex_rules() };

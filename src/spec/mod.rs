@@ -13,9 +13,9 @@
 //! as the standard implementation. An argument **is a parser**: every argument routes to
 //! an [`ArgumentParser`] object, with the standard forms (delimited group, optional
 //! group, literal marker, …) provided by the preset — the core has no privileged
-//! argument shapes (revised July 2026). Argument/slot parsing
-//! (`ArgumentsParser`/`SlotsParser`) and the `parse_invocation()` full-takeover hatch
-//! arrive in Phase 6 (DESIGN_RATIONALE.md §3.4).
+//! argument shapes (revised July 2026). The `ArgumentParser` entry point, the standard
+//! argument parsers, and the `make_invocation_parser()` factory (whose override is the
+//! full-takeover hatch) arrive in Phase 6.4–6.5 (DESIGN_RATIONALE.md §3.6).
 //!
 //! Definition lookup — [`Library`](crate::library::Library) and friends — lives in the
 //! neighboring [`library`](crate::library) topic.

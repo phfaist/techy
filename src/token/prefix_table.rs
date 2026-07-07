@@ -179,7 +179,7 @@ mod tests {
     fn rules_with_groups(groups: Vec<Arc<GroupRule<PlainLang>>>) -> TokenRules<PlainLang> {
         TokenRules {
             whitespace: None,
-            double_newline_paragraphs: false,
+            multi_newline_paragraphs: false,
             groups,
             commands: Vec::new(),
             comments: Vec::new(),

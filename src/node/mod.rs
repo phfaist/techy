@@ -38,7 +38,7 @@ mod tree;
 pub use arguments::{
     ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
 };
-pub use builder::{BuildId, NodeTreeBuilder};
+pub use builder::{BuildId, NodeTreeBuilder, StagedNodeView, StagedNodes};
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::NodeRef;
 pub use tree::{NodeData, NodeId, NodeTree};
@@ -85,7 +85,7 @@ mod tests {
     fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: None,
-            double_newline_paragraphs: false,
+            multi_newline_paragraphs: false,
             groups: vec![Arc::new(GroupRule {
                 group_type: GT_BRACE,
                 open: "{".into(),
@@ -193,7 +193,8 @@ mod tests {
         );
 
         let comment = b.add(
-            NodeKind::comment(Span::new(14, 19)),
+            // start "%" + content " note" + empty post_space (end of input).
+            NodeKind::comment(Span::new(13, 14), Span::new(14, 19), Span::empty(19)),
             spanned(&source, 13..19),
             st.clone(),
             vec![],
@@ -227,7 +228,11 @@ mod tests {
 
         let comment = root.child(2).unwrap();
         assert_eq!(comment.comment(), Some(" note"));
+        assert_eq!(comment.comment_start(), Some("%"));
+        assert_eq!(comment.comment_post_space(), Some(""));
         assert!(comment.chars().is_none());
+        assert!(x.comment_start().is_none());
+        assert!(x.comment_post_space().is_none());
 
         assert!(root.child(3).is_none());
         // children() iterates in order:
@@ -420,7 +425,13 @@ mod tests {
         let mut b = NodeTreeBuilder::new();
 
         let ws1 = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![]);
-        let com = b.add(NodeKind::comment(Span::new(7, 8)), spanned(&source, 6..9), st.clone(), vec![]);
+        let com = b.add(
+            // start "%" + content "h" + post_space "\n" (the node's span covers all three).
+            NodeKind::comment(Span::new(6, 7), Span::new(7, 8), Span::new(8, 9)),
+            spanned(&source, 6..9),
+            st.clone(),
+            vec![],
+        );
         let ws2 = b.add(NodeKind::chars(Span::new(9, 10)), spanned(&source, 9..10), st.clone(), vec![]);
         let a = b.add(NodeKind::chars(Span::new(11, 12)), spanned(&source, 11..12), st.clone(), vec![]);
         let a_group = b.add(
@@ -788,13 +799,17 @@ mod tests {
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
         assert_eq!(root.child(1).unwrap().post_space(), Some(" "));
         assert_eq!(root.child(2).unwrap().comment(), Some(" note"));
+        assert_eq!(root.child(2).unwrap().comment_start(), Some("%"));
         let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().next().unwrap();
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
         for node in owned.iter() {
             match node.kind() {
-                NodeKind::Chars { content, .. } | NodeKind::Comment { content, .. } => {
-                    assert!(content.is_owned())
+                NodeKind::Chars { content, .. } => assert!(content.is_owned()),
+                NodeKind::Comment { content, start, post_space, .. } => {
+                    assert!(content.is_owned());
+                    assert!(start.is_owned());
+                    assert!(post_space.is_owned());
                 }
                 NodeKind::Group(data) => {
                     assert!(data.open.is_owned());
@@ -892,6 +907,141 @@ mod tests {
         }
         // Default tier-1 ext via plain add():
         assert_eq!(*tree.root().ext(), 0);
+    }
+
+    // --- Lang::finalize_node (the centralized finalization hook) ---------------------
+
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts every `finalize_node` run (test-global; only `FinalizeLang` tests read it,
+    /// and they compare before/after within one test).
+    static FINALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct FinalizeExts;
+    impl crate::state::NodeExtTypes for FinalizeExts {
+        type NodeExt = u32; // set by the hook: number of descendants
+        type CharsNodeExt = ();
+        type GroupNodeExt = ();
+        type CallableNodeExt = ();
+        type CommentNodeExt = ();
+        type ListNodeExt = ();
+        type ArgumentExt = ();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct FinalizeLang;
+    impl Lang for FinalizeLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = FinalizeExts;
+
+        fn finalize_node(
+            _kind: &mut NodeKind<Self>,
+            ext: &mut u32,
+            _span: &SourceSpan,
+            _parsing_state: &Arc<ParsingState<Self>>,
+            children: &[BuildId],
+            staged: &StagedNodes<'_, Self>,
+        ) {
+            FINALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
+            // Uniform per-node initialization through the staged read view: the number
+            // of descendants, recomputed from the children each run (idempotent, per the
+            // hook contract — transforms re-stage nodes).
+            *ext = children
+                .iter()
+                .map(|c| staged.get(*c).expect("children are staged").ext() + 1)
+                .sum();
+        }
+    }
+
+    /// The hook runs for every staged node, of every kind, and its mutations land in the
+    /// finished tree (it runs *before* the staging checks — no node escapes it).
+    #[test]
+    fn finalize_node_runs_for_every_staged_kind() {
+        let source: Arc<Source> = Arc::new(Source::new("x{a}%c\n"));
+        let st = state::<FinalizeLang>();
+        let before = FINALIZE_CALLS.load(Ordering::Relaxed);
+        let mut b = NodeTreeBuilder::new();
+
+        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
+        let a = b.add(NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), st.clone(), vec![]);
+        let g = b.add(
+            NodeKind::group(brace_group(1..2, 3..4)),
+            spanned(&source, 1..4),
+            st.clone(),
+            vec![a],
+        );
+        let c = b.add(
+            NodeKind::comment(Span::new(4, 5), Span::new(5, 6), Span::new(6, 7)),
+            spanned(&source, 4..7),
+            st.clone(),
+            vec![],
+        );
+        let spec: Arc<dyn CallableSpec<FinalizeLang>> = Arc::new(StdCallableSpec::default());
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: ParsedArguments::empty(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            spanned(&source, 7..7),
+            st.clone(),
+            vec![],
+        );
+        let root = b.add(
+            NodeKind::list(),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![x, g, c, m],
+        );
+        let tree = b.finish(root);
+
+        // One run per add(), all five kinds included.
+        assert_eq!(FINALIZE_CALLS.load(Ordering::Relaxed) - before, 6);
+        // The hook's ext mutations (descendant counts) survived into the tree:
+        assert_eq!(*tree.root().ext(), 5);
+        let group = tree.root().child(1).unwrap();
+        assert!(group.is_group());
+        assert_eq!(*group.ext(), 1);
+        assert_eq!(*tree.root().child(0).unwrap().ext(), 0);
+    }
+
+    // --- the staged read view ---------------------------------------------------------
+
+    #[test]
+    fn staged_nodes_view_reads_back_staged_data() {
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        assert!(b.staged_nodes().is_empty());
+
+        let a = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
+        let l = b.add(NodeKind::list(), spanned(&source, 0..2), st.clone(), vec![a]);
+
+        let staged = b.staged_nodes();
+        assert_eq!(staged.len(), 2);
+
+        let view = staged.get(a).unwrap();
+        assert_eq!(view.id(), a);
+        assert!(matches!(view.kind(), NodeKind::Chars { .. }));
+        assert_eq!(view.span().start(), 0);
+        assert_eq!(view.span().end(), 1);
+        assert!(view.children().is_empty());
+        assert!(Arc::ptr_eq(view.parsing_state(), &st));
+        let _uniform_ext: &() = view.ext();
+
+        let list_view = staged.get(l).unwrap();
+        assert_eq!(list_view.children(), &[a]);
+        // Views are plain Copy proxies and debuggable:
+        let copy = view;
+        assert!(alloc::format!("{:?}", copy).contains("Chars"));
     }
 
     // --- Debug does not demand anything of the lang ZST itself -----------------------

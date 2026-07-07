@@ -7,11 +7,14 @@
 //! §engine stratum note).
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use core::fmt;
 use core::hash::Hash;
 
-use crate::source::SourceOrigin;
-use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
+use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
+use crate::source::{SourceOrigin, SourceSpan};
+use crate::spec::CallableSpec;
+use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
 
 use super::parsing_state::{ParsingState, StateData};
 
@@ -152,6 +155,92 @@ pub trait Lang: Sized {
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
         let _ = data;
         TriggerChars::default()
+    }
+
+    // --- Phase 6 dispatch/finalization hooks (July 2026, DESIGN_RATIONALE.md §3.6) ------
+
+    /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its invocation
+    /// form and behavior spec. Typically implemented by a preset dispatching to the
+    /// state's libraries via a [`CallableQuery`](crate::library::CallableQuery) — the
+    /// token carries the fired escape character for syntax disambiguation. `Specials`
+    /// tokens need no hook: recognition = resolution, the token already carries its spec.
+    ///
+    /// The default resolves nothing; the nodes parser then diagnoses the command as
+    /// unresolvable and recovers (span-backed chars-node fallback, DESIGN_RATIONALE.md
+    /// §3.8).
+    fn resolve_command(
+        state: &ParsingState<Self>,
+        token: &Token<'_, Self>,
+    ) -> Option<ResolvedCallable<Self>> {
+        let _ = (state, token);
+        None
+    }
+
+    /// The node kind representing a paragraph break. The *core* stages the returned kind
+    /// with the token's span and the current state (a `Lang` cannot stage nodes itself);
+    /// a preset may return a callable-shaped kind (FLM's paragraph constructs) without
+    /// any core change.
+    ///
+    /// The default preserves the whitespace-as-chars invariant (§3.5): a whitespace-only
+    /// `Chars` kind, span-backed over the full token span (newlines included).
+    fn make_paragraph_break_node(
+        state: &ParsingState<Self>,
+        token: &Token<'_, Self>,
+    ) -> NodeKind<Self> {
+        let _ = state;
+        NodeKind::chars(token.span)
+    }
+
+    /// Centralized node finalization, run by
+    /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add) for **every** staged
+    /// node (all kinds, before the staging checks). The builder is the single mutation
+    /// boundary, so no node escapes finalization — no parser cooperation required;
+    /// transforms and tests included. A preset dispatches to spec-specific behavior
+    /// itself (match a `Callable`, read its `spec`, downcast, attach ext), and uniform
+    /// per-node initialization gets a natural home.
+    ///
+    /// Implementations must be **idempotent**: transform-built trees pass nodes through
+    /// a new builder, re-running finalization on already-finalized data. The hook also
+    /// runs on speculatively staged nodes that may be abandoned (harmless — they drop
+    /// unreachable). `staged` is the read-only view of the already-staged nodes, so a
+    /// callable's hook can inspect its `children`. The default does nothing.
+    fn finalize_node(
+        kind: &mut NodeKind<Self>,
+        ext: &mut NodeExt<Self>,
+        span: &SourceSpan<Self::SourceOrigin>,
+        parsing_state: &Arc<ParsingState<Self>>,
+        children: &[BuildId],
+        staged: &StagedNodes<'_, Self>,
+    ) {
+        let _ = (kind, ext, span, parsing_state, children, staged);
+    }
+}
+
+/// The result of [`Lang::resolve_command`]: which invocation form the command resolved
+/// to, and the behavior spec to drive its parse — exactly what the dispatch loop needs
+/// to build an `Invocation` (the core cannot know a preset's type ids).
+pub struct ResolvedCallable<L: Lang> {
+    /// The invocation form (latexlike: macro / environment / …).
+    pub callable_type: L::CallableTypeId,
+    /// The resolved behavior spec.
+    pub spec: Arc<dyn CallableSpec<L>>,
+}
+
+// Manual impls: derives would demand `L:` bounds although only associated types (already
+// bounded) and an `Arc` are stored.
+
+impl<L: Lang> Clone for ResolvedCallable<L> {
+    fn clone(&self) -> Self {
+        ResolvedCallable { callable_type: self.callable_type, spec: Arc::clone(&self.spec) }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolvedCallable")
+            .field("callable_type", &self.callable_type)
+            .field("spec", &self.spec)
+            .finish()
     }
 }
 

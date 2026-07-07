@@ -23,7 +23,7 @@ pub struct TokenRulesOverrides<L: Lang> {
     /// Override whitespace handling (`Some(None)` disables it).
     pub whitespace: Option<Option<WhitespaceRules>>,
     /// Override the paragraph-break flag.
-    pub double_newline_paragraphs: Option<bool>,
+    pub multi_newline_paragraphs: Option<bool>,
     /// Replace the recognizable group delimiter rules.
     pub groups: Option<Vec<Arc<GroupRule<L>>>>,
     /// Replace the command syntaxes.
@@ -42,8 +42,8 @@ impl<L: Lang> TokenRulesOverrides<L> {
         if let Some(v) = &self.whitespace {
             rules.whitespace = v.clone();
         }
-        if let Some(v) = self.double_newline_paragraphs {
-            rules.double_newline_paragraphs = v;
+        if let Some(v) = self.multi_newline_paragraphs {
+            rules.multi_newline_paragraphs = v;
         }
         if let Some(v) = &self.groups {
             rules.groups = v.clone();
@@ -146,7 +146,7 @@ impl<L: Lang> Default for TokenRulesOverrides<L> {
     fn default() -> Self {
         TokenRulesOverrides {
             whitespace: None,
-            double_newline_paragraphs: None,
+            multi_newline_paragraphs: None,
             groups: None,
             commands: None,
             comments: None,
@@ -160,7 +160,7 @@ impl<L: Lang> Clone for TokenRulesOverrides<L> {
     fn clone(&self) -> Self {
         TokenRulesOverrides {
             whitespace: self.whitespace.clone(),
-            double_newline_paragraphs: self.double_newline_paragraphs,
+            multi_newline_paragraphs: self.multi_newline_paragraphs,
             groups: self.groups.clone(),
             commands: self.commands.clone(),
             comments: self.comments.clone(),
@@ -174,7 +174,7 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRulesOverrides")
             .field("whitespace", &self.whitespace)
-            .field("double_newline_paragraphs", &self.double_newline_paragraphs)
+            .field("multi_newline_paragraphs", &self.multi_newline_paragraphs)
             .field("groups", &self.groups)
             .field("commands", &self.commands)
             .field("comments", &self.comments)
@@ -187,7 +187,7 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
 impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
-            && self.double_newline_paragraphs == other.double_newline_paragraphs
+            && self.multi_newline_paragraphs == other.multi_newline_paragraphs
             && self.groups == other.groups
             && self.commands == other.commands
             && self.comments == other.comments

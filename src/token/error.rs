@@ -141,9 +141,9 @@ impl<L: Lang> fmt::Debug for TokenError<'_, L> {
     }
 }
 
-impl<L: Lang> fmt::Display for TokenError<'_, L> {
+impl fmt::Display for TokenErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
+        match self {
             TokenErrorKind::EndOfStreamAfterEscape { escape_char } => {
                 write!(
                     f,
@@ -152,9 +152,15 @@ impl<L: Lang> fmt::Display for TokenError<'_, L> {
                 )
             }
             TokenErrorKind::ForbiddenChar { ch } => {
-                write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", ch, ch as u32)
+                write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", ch, *ch as u32)
             }
         }
+    }
+}
+
+impl<L: Lang> fmt::Display for TokenError<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.kind, f)
     }
 }
 

@@ -44,12 +44,21 @@ pub enum NodeKind<L: Lang> {
     /// [`CallableData`]). Boxed: `Chars` dominates node vectors, and boxing the large
     /// payload keeps the enum small.
     Callable(Box<CallableData<L>>),
-    /// A comment: the content after the start delimiter, without the terminating
-    /// newline. (Whether level-2 recomposition needs delimiter/post-space fields here is
-    /// pinned down with the whitespace/span invariants, Phase 6.)
+    /// A comment: start delimiter, content, and syntactic post-space, each recorded on
+    /// the node (decided July 2026, Phase 6 plan session): with several `CommentRule`s in
+    /// scope, *which* delimiter fired and what post-space followed are per-instance
+    /// facts, and level-2 recomposition must not depend on `Lang` cooperation — the same
+    /// recorded-delimiter principle as [`GroupData`]. The node's span covers all three
+    /// parts (the token's span convention).
     Comment {
         /// The comment text (sans delimiter and newline).
         content: TextContent,
+        /// The start delimiter as written (`%` in LaTeX).
+        start: TextContent,
+        /// Syntactic whitespace consumed after the content: the terminating newline plus
+        /// following indentation — empty when the comment ran to end of input or
+        /// bordered a paragraph break. Mirrors [`CallableData::post_space`].
+        post_space: TextContent,
         /// Per-kind ext data.
         ext: CommentNodeExt<L>,
     },
@@ -77,9 +86,19 @@ impl<L: Lang> NodeKind<L> {
         NodeKind::Callable(Box::new(data))
     }
 
-    /// A [`Comment`](NodeKind::Comment) kind with default ext.
-    pub fn comment(content: impl Into<TextContent>) -> NodeKind<L> {
-        NodeKind::Comment { content: content.into(), ext: Default::default() }
+    /// A [`Comment`](NodeKind::Comment) kind with default ext. Arguments in source
+    /// order: start delimiter, content, post-space.
+    pub fn comment(
+        start: impl Into<TextContent>,
+        content: impl Into<TextContent>,
+        post_space: impl Into<TextContent>,
+    ) -> NodeKind<L> {
+        NodeKind::Comment {
+            content: content.into(),
+            start: start.into(),
+            post_space: post_space.into(),
+            ext: Default::default(),
+        }
     }
 
     /// A [`List`](NodeKind::List) kind with default ext.
@@ -101,8 +120,10 @@ impl<L: Lang> NodeKind<L> {
             NodeKind::Callable(data) => {
                 NodeKind::Callable(Box::new(data.materialized(source_content)))
             }
-            NodeKind::Comment { content, ext } => NodeKind::Comment {
+            NodeKind::Comment { content, start, post_space, ext } => NodeKind::Comment {
                 content: content.materialized(source_content),
+                start: start.materialized(source_content),
+                post_space: post_space.materialized(source_content),
                 ext: ext.clone(),
             },
             NodeKind::List { ext } => NodeKind::List { ext: ext.clone() },
@@ -224,9 +245,12 @@ impl<L: Lang> Clone for NodeKind<L> {
             }
             NodeKind::Group(data) => NodeKind::Group(data.clone()),
             NodeKind::Callable(data) => NodeKind::Callable(data.clone()),
-            NodeKind::Comment { content, ext } => {
-                NodeKind::Comment { content: content.clone(), ext: ext.clone() }
-            }
+            NodeKind::Comment { content, start, post_space, ext } => NodeKind::Comment {
+                content: content.clone(),
+                start: start.clone(),
+                post_space: post_space.clone(),
+                ext: ext.clone(),
+            },
             NodeKind::List { ext } => NodeKind::List { ext: ext.clone() },
         }
     }
@@ -240,9 +264,13 @@ impl<L: Lang> fmt::Debug for NodeKind<L> {
             }
             NodeKind::Group(data) => f.debug_tuple("Group").field(data).finish(),
             NodeKind::Callable(data) => f.debug_tuple("Callable").field(data).finish(),
-            NodeKind::Comment { content, ext } => {
-                f.debug_struct("Comment").field("content", content).field("ext", ext).finish()
-            }
+            NodeKind::Comment { content, start, post_space, ext } => f
+                .debug_struct("Comment")
+                .field("content", content)
+                .field("start", start)
+                .field("post_space", post_space)
+                .field("ext", ext)
+                .finish(),
             NodeKind::List { ext } => f.debug_struct("List").field("ext", ext).finish(),
         }
     }

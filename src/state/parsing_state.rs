@@ -154,7 +154,7 @@ mod tests {
     fn base_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
-            double_newline_paragraphs: true,
+            multi_newline_paragraphs: true,
             groups: vec![Arc::new(GroupRule {
                 group_type: 0,
                 open: "{".into(),
@@ -182,17 +182,17 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            double_newline_paragraphs: Some(false),
+            multi_newline_paragraphs: Some(false),
             forbidden_chars: Some("$".into()),
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta);
 
-        assert!(!derived.rules().double_newline_paragraphs);
+        assert!(!derived.rules().multi_newline_paragraphs);
         assert_eq!(derived.rules().forbidden_chars, "$");
         // Unchanged fields kept; the original state is untouched.
         assert_eq!(derived.rules().commands, state.rules().commands);
-        assert!(state.rules().double_newline_paragraphs);
+        assert!(state.rules().multi_newline_paragraphs);
     }
 
     #[test]

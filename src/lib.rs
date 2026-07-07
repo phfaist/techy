@@ -36,7 +36,10 @@
 //!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy access.
 //!   **Implemented (Phase 5)**; the whitespace/span invariants and the concrete
 //!   `ArgsLayout` syntax records grow with the parsers in Phase 6.
-//! - `constructs` + `engine` (S1) — construct parsers and the high-level API. *Phase 6.*
+//! - [`constructs`] + [`engine`] (S1) — construct parsers and the parse-session API.
+//!   **In progress (Phase 6)**: the contracts ([`ConstructParser`], [`ParseContext`],
+//!   [`Invocation`], [`ParserSession`], [`ParseError`]) landed in 6.1; the parsers land
+//!   in 6.2–6.6.
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
 //!
 //! ## Quick start (what exists today)
@@ -59,6 +62,8 @@
 
 extern crate alloc;
 
+pub mod constructs;
+pub mod engine;
 pub mod error;
 pub mod library;
 pub mod node;
@@ -67,13 +72,18 @@ pub mod spec;
 pub mod state;
 pub mod token;
 
-// The remaining modules of the previous exploratory implementation (`parser`,
-// `constructs`) are kept in the tree as a quarry but are not compiled; they are
-// rebuilt phase-by-phase per ARCHITECTURE.md §9 (superseded quarry files are kept
-// alongside the new modules as `*_JUNK._rs`).
+// The remaining module of the previous exploratory implementation (`parser`) is kept in
+// the tree as a quarry but is not compiled; it is rebuilt phase-by-phase per
+// ARCHITECTURE.md §9 (superseded quarry files are kept alongside the new modules as
+// `*_JUNK._rs`).
 
 // Re-export the public API of the implemented topics.
-pub use error::{format_position, format_traceback, Diagnostic, Diagnostics, Recovery, Severity};
+pub use constructs::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+pub use engine::{ParseResult, ParserSession};
+pub use error::{
+    format_position, format_traceback, Diagnostic, Diagnostics, ParseError, ParseErrorKind,
+    Recovery, Severity,
+};
 pub use source::{
     LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
     SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
@@ -82,16 +92,17 @@ pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLook
 pub use node::{
     BuildId, CallableData, ChildRegion, ContentNodes, GroupData, NodeData, NodeId, NodeKind,
     NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
+    StagedNodeView, StagedNodes,
 };
 pub use spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
 pub use state::{
-    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
+    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable, SimpleLang, StateData,
     TokenRulesOverrides,
 };
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, GroupRule, PrefixTable, SpecialsMatch,
-    StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery,
-    TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+    StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenListReader, TokenReader,
+    TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
 };
 
 /// Library version

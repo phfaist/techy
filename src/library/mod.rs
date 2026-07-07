@@ -346,7 +346,7 @@ mod tests {
     fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {
             whitespace: None,
-            double_newline_paragraphs: false,
+            multi_newline_paragraphs: false,
             groups: vec![],
             commands: vec![],
             comments: vec![],

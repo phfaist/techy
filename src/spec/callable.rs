@@ -24,9 +24,11 @@ use super::structure::{ArgumentSpec, SlotSpec};
 /// callable — no arguments, no slots — suitable for simple specials (`~`) and fallback
 /// specs. The declarative standard implementation is [`StdCallableSpec`].
 ///
-/// `parse_invocation()` — the full-takeover escape hatch for `\verb`-like constructs —
-/// arrives in Phase 6 together with `ConstructParser`/`ParseContext`
-/// (DESIGN_RATIONALE.md §3.4).
+/// `make_invocation_parser()` — the factory returning a fresh boxed
+/// [`ConstructParser`](crate::constructs::ConstructParser) per resolved
+/// [`Invocation`](crate::constructs::Invocation), whose override is the full-takeover
+/// escape hatch for `\verb`-like constructs — lands in Phase 6.4 with its default
+/// implementation, the declarative `StdInvocationParser` (DESIGN_RATIONALE.md §3.6).
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.

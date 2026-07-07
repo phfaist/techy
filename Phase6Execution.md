@@ -23,7 +23,7 @@ below, and summarize what shipped and what (if anything) deviated.
 | subphase | scope | status |
 |---|---|---|
 | 6.0 | Documentation pre-update (ARCHITECTURE.md, DESIGN_RATIONALE.md) | ✅ done (July 2026, plan session) |
-| 6.1 | Contracts & amendments (token/node/Lang/builder/module scaffolds) | ☐ |
+| 6.1 | Contracts & amendments (token/node/Lang/builder/module scaffolds) | ✅ done (July 2026). `ConstructParserResult<L, T>` takes `L` (user-approved; `TokenResult` convention, §2 updated); `check_tree_invariants` deferred to 6.3 as allowed |
 | 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ☐ |
 | 6.3 | Groups + `check_tree_invariants()` | ☐ |
 | 6.4 | Invocation dispatch + `make_invocation_parser` + `StdInvocationParser` (zero-arg) | ☐ |
@@ -96,12 +96,13 @@ pub struct ParseContext<'a, 's, L: Lang> {
     pub session: &'a mut ParserSession<L>,
 }
 
-pub type ConstructParserResult<T> = Result<T, ParseError>;
+// (6.1 adjustment: lang-first, like TokenResult<'s, L, T> — ParseError is origin-generic)
+pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceOrigin>>;
 
 pub trait ConstructParser<L: Lang> {
     type Output;
     fn parse(&mut self, cx: &mut ParseContext<'_, '_, L>)
-        -> ConstructParserResult<(Self::Output, Option<ParsingStateDelta<L>>)>;
+        -> ConstructParserResult<L, (Self::Output, Option<ParsingStateDelta<L>>)>;
 }
 
 pub struct Invocation<'a, 's, L: Lang> {

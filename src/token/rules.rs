@@ -109,10 +109,10 @@ pub struct TokenRules<L: Lang> {
     /// Whitespace handling; `None` disables it entirely.
     pub whitespace: Option<WhitespaceRules>,
     /// Whether a whitespace run containing two or more newlines forms a paragraph break.
-    /// Gates both `ParagraphBreak` tokens and the no-double-newline rule of whitespace
+    /// Gates both `ParagraphBreak` tokens and the no-multi-newline rule of whitespace
     /// skipping (pre-space and post-space never consume a newline belonging to a
     /// `\n\s*\n` sequence). Only meaningful when whitespace handling is enabled.
-    pub double_newline_paragraphs: bool,
+    pub multi_newline_paragraphs: bool,
     /// The group delimiter rules recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`,
     /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
     /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
@@ -170,7 +170,7 @@ impl<L: Lang> Clone for TokenRules<L> {
     fn clone(&self) -> Self {
         TokenRules {
             whitespace: self.whitespace.clone(),
-            double_newline_paragraphs: self.double_newline_paragraphs,
+            multi_newline_paragraphs: self.multi_newline_paragraphs,
             groups: self.groups.clone(),
             commands: self.commands.clone(),
             comments: self.comments.clone(),
@@ -184,7 +184,7 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRules")
             .field("whitespace", &self.whitespace)
-            .field("double_newline_paragraphs", &self.double_newline_paragraphs)
+            .field("multi_newline_paragraphs", &self.multi_newline_paragraphs)
             .field("groups", &self.groups)
             .field("commands", &self.commands)
             .field("comments", &self.comments)
@@ -197,7 +197,7 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
 impl<L: Lang> PartialEq for TokenRules<L> {
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
-            && self.double_newline_paragraphs == other.double_newline_paragraphs
+            && self.multi_newline_paragraphs == other.multi_newline_paragraphs
             && self.groups == other.groups
             && self.commands == other.commands
             && self.comments == other.comments

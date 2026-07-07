@@ -1,4 +1,5 @@
-//! Span-based diagnostics and the tolerant-parsing policy.
+//! Span-based diagnostics, the tolerant-parsing policy, and the parse abort error
+//! ([`ParseError`]).
 //!
 //! Diagnostics carry Arc-based [`SourceSpan`]s, so they are self-contained and outlive the
 //! parse that produced them — no `'src` lifetime spreads through error signatures. Library
@@ -6,7 +7,9 @@
 //! on the parse result), never through a logging side channel (ARCHITECTURE.md Decision 5).
 //!
 //! The token-level error type carrying a recovery token (`TokenError`) lives with `Token` in
-//! the token layer (Phase 2); the [`Recovery`] policy that governs it is defined here.
+//! the token layer (Phase 2); the [`Recovery`] policy that governs it is defined here, as is
+//! [`ParseError`] — the construct-parsing abort (Phase 6), which deliberately carries **no**
+//! recovery payload (DESIGN_RATIONALE.md §3.8).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -14,6 +17,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::source::{SourceOrigin, SourceProvenance, SourceSpan};
+use crate::token::TokenErrorKind;
 
 /// How severe a [`Diagnostic`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -200,6 +204,78 @@ pub enum Recovery {
     /// Record a diagnostic and continue whenever recovery is possible.
     Tolerant,
 }
+
+/// What aborted a parse (see [`ParseError`]).
+///
+/// Closed enum per the naming rule (`…Kind`), but `#[non_exhaustive]`: parse-level
+/// conditions are added as the construct parsers grow (Phase 6.2–6.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParseErrorKind {
+    /// A tokenization error, escalated to an abort under [`Recovery::Strict`] (tolerant
+    /// mode continues with the error's recovery token instead).
+    Token(TokenErrorKind),
+    /// A parse-level syntax condition — the same message that tolerant mode records as
+    /// an error-severity [`Diagnostic`] before continuing with its local recovery.
+    Syntax {
+        /// Human-readable description of the condition.
+        message: String,
+    },
+}
+
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseErrorKind::Token(kind) => fmt::Display::fmt(kind, f),
+            ParseErrorKind::Syntax { message } => f.write_str(message),
+        }
+    }
+}
+
+/// The abort error of construct parsing: a strict-mode escalation or a genuinely
+/// unrecoverable condition.
+///
+/// **`Err` means abort** (DESIGN_RATIONALE.md §3.8): recovery happens where a problem is
+/// detected (the session's recovery helper), abnormal endings of sub-parses travel as
+/// data (`StopCause`, Phase 6.2), and nobody ever continues *past* a `ParseError` — it
+/// carries no recovery payload and bubbles freely. Like [`Diagnostic`], it holds an
+/// Arc-based [`SourceSpan`], so it is self-contained and outlives the parse.
+#[derive(Debug, Clone)]
+pub struct ParseError<O: SourceOrigin = Option<String>> {
+    kind: ParseErrorKind,
+    span: SourceSpan<O>,
+}
+
+impl<O: SourceOrigin> ParseError<O> {
+    /// Create a parse error.
+    pub fn new(kind: ParseErrorKind, span: SourceSpan<O>) -> ParseError<O> {
+        ParseError { kind, span }
+    }
+
+    /// What aborted the parse.
+    pub fn kind(&self) -> &ParseErrorKind {
+        &self.kind
+    }
+
+    /// Where in the source the condition occurred.
+    pub fn span(&self) -> &SourceSpan<O> {
+        &self.span
+    }
+
+    /// Render a human-readable multi-line report (message, position, provenance chain),
+    /// like [`Diagnostic::render`].
+    pub fn render(&self) -> String {
+        Diagnostic::error(self.kind.to_string(), self.span.clone()).render()
+    }
+}
+
+impl<O: SourceOrigin> fmt::Display for ParseError<O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.kind, f)
+    }
+}
+
+impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
 /// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
 /// back to `@ char pos 42` when line information is unavailable (huge sources, see

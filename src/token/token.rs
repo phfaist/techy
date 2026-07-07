@@ -60,6 +60,12 @@ pub enum TokenKind<'s, L: Lang> {
     Command {
         /// The command name, without the escape character.
         name: &'s str,
+        /// The escape character that introduced the command — i.e. which
+        /// [`CommandRule`](super::CommandRule) fired (a syntactic fact, not resolution
+        /// output). Parse-time lookup needs it for disambiguation when several command
+        /// syntaxes coexist (`CallableQuery { syntax: Command { escape_char } }`), and it
+        /// is not otherwise recoverable from the token (added July 2026, Phase 6).
+        escape_char: char,
         /// Syntactic whitespace consumed after a multi-character name (the whitespace
         /// that terminates the name is part of the invocation syntax, not content).
         /// Empty for single-character names (`\&`). Trailing sub-range of `span`.
@@ -154,9 +160,11 @@ impl<L: Lang> Clone for TokenKind<'_, L> {
                 TokenKind::GroupOpen { delim, rule: Arc::clone(rule) }
             }
             TokenKind::GroupClose { delim } => TokenKind::GroupClose { delim },
-            TokenKind::Command { name, post_space } => {
-                TokenKind::Command { name, post_space: *post_space }
-            }
+            TokenKind::Command { name, escape_char, post_space } => TokenKind::Command {
+                name,
+                escape_char: *escape_char,
+                post_space: *post_space,
+            },
             TokenKind::Specials { name, spec } => {
                 TokenKind::Specials { name, spec: Arc::clone(spec) }
             }
@@ -191,9 +199,9 @@ impl<L: Lang> PartialEq for TokenKind<'_, L> {
                 d1 == d2
             }
             (
-                TokenKind::Command { name: n1, post_space: p1 },
-                TokenKind::Command { name: n2, post_space: p2 },
-            ) => n1 == n2 && p1 == p2,
+                TokenKind::Command { name: n1, escape_char: e1, post_space: p1 },
+                TokenKind::Command { name: n2, escape_char: e2, post_space: p2 },
+            ) => n1 == n2 && e1 == e2 && p1 == p2,
             (
                 TokenKind::Specials { name: n1, spec: s1 },
                 TokenKind::Specials { name: n2, spec: s2 },
@@ -231,9 +239,10 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
             TokenKind::GroupClose { delim } => {
                 f.debug_struct("GroupClose").field("delim", delim).finish()
             }
-            TokenKind::Command { name, post_space } => f
+            TokenKind::Command { name, escape_char, post_space } => f
                 .debug_struct("Command")
                 .field("name", name)
+                .field("escape_char", escape_char)
                 .field("post_space", post_space)
                 .finish(),
             TokenKind::Specials { name, spec } => {

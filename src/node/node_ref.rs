@@ -137,6 +137,26 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         }
     }
 
+    /// A `Comment` node's start delimiter, as logical text (`%` in LaTeX — records which
+    /// comment syntax fired).
+    pub fn comment_start(&self) -> Option<&'t str> {
+        match self.kind() {
+            NodeKind::Comment { start, .. } => Some(start.resolve(self.source_content())),
+            _ => None,
+        }
+    }
+
+    /// A `Comment` node's syntactic post-space (terminating newline plus following
+    /// indentation; empty at end of input or before a paragraph break), as logical text.
+    pub fn comment_post_space(&self) -> Option<&'t str> {
+        match self.kind() {
+            NodeKind::Comment { post_space, .. } => {
+                Some(post_space.resolve(self.source_content()))
+            }
+            _ => None,
+        }
+    }
+
     /// A `Group` node's full payload (delimiters, group class, ext).
     pub fn group(&self) -> Option<&'t GroupData<L>> {
         match self.kind() {

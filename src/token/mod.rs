@@ -35,6 +35,7 @@
 //!   (Phase 6), not the reader.
 
 mod error;
+mod list_reader;
 mod prefix_table;
 mod reader;
 mod rules;
@@ -45,6 +46,7 @@ mod specials;
 mod token;
 
 pub use error::{TokenError, TokenErrorKind, TokenRecovery, TokenResult};
+pub use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
 pub use rules::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};

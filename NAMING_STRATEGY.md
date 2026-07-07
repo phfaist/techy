@@ -135,7 +135,7 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `TokenKind::Chars(&str)` (maximal runs) | `TokenKind::Char(char)` | tokens are atomic units; construct parsers may need char-by-char reading |
 | `TokenKind::CommentStart`, `CommentRules` | `TokenKind::Comment` (whole comment), `CommentRule` | parser has no business inside comment content |
 | `TokenKind::Specials { chars }` + `TokenRules::specials` list | `TokenKind::Specials { name, spec }` via `Lang::scan_specials` | recognition = resolution; trigger sets are library-driven |
-| `TokenRules::paragraph_breaks` | `TokenRules::double_newline_paragraphs` | pylatexenc's flag name; gates both the token and the skip rule |
+| `TokenRules::paragraph_breaks` | `TokenRules::multi_newline_paragraphs` | gates both the token and the skip rule; renamed from `double_newline_paragraphs`, July 2026 — "double" misread as "exactly two" |
 | uniform `Token::post_space` field | per-variant `post_space` + `Token::post_space()` accessor | post-space is a per-kind syntactic fact (commands, comments only) |
 | `peek → Ok(None)` at EOF | `TokenKind::EndOfStream` token | terminal + idempotent; `pre_space` reports final whitespace |
 | `StringTokenReader` | `StdTokenReader` | driven by `TokenRules` data, not tied to `String` input |

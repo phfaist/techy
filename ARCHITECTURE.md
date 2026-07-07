@@ -224,7 +224,7 @@ Key points:
   stored in those variants (`Token::post_space()` accessor). One primitive,
   `skip_whitespace`, enforces the paragraph rule for pre- and post-space alike: skipped
   whitespace never consumes a newline of a `\n\s*\n` sequence
-  (`TokenRules::double_newline_paragraphs`).
+  (`TokenRules::multi_newline_paragraphs`).
 - `peek` always returns a token: `EndOfStream` is terminal and idempotent, and its
   `pre_space` reports trailing whitespace so it reaches the node tree without the nodes
   parser touching raw content.
@@ -278,7 +278,7 @@ pub struct StateData<L: Lang> {
 
 pub struct TokenRules {
     pub whitespace: Option<WhitespaceRules>,   // None = whitespace handling disabled
-    pub double_newline_paragraphs: bool,       // \n\s*\n = paragraph break (token + skip rule)
+    pub multi_newline_paragraphs: bool,        // \n\s*\n = paragraph break (token + skip rule)
     pub groups: Vec<Arc<GroupRule<L>>>,        // {…}, […], $…$, $$…$$, \[…\] — delimiter pair + group class
     pub commands: Vec<CommandRule>,            // escape-char syntaxes; empty = disabled
     pub comments: Vec<CommentRule>,            // start delimiters (to end of line); empty = disabled
@@ -911,7 +911,7 @@ over `Arguments`, spec argument lists over `ArgumentStructureSpec` — NAMING_ST
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, … (bundled as `Lang::NodeExts`) | `GroupExt` (too vague), `NodeGroupExt` (wrong parse) |
 | Token-level command syntax | `TokenKind::Command`, `CommandRule` | `Macro` token kind, `MacroRules` ("command" per TeX lineage; scales to future non-escape syntaxes, unlike "escape") |
 | Comment syntax rule | `CommentRule` (start string; end-of-line terminated) | `CommentRules` |
-| Paragraph-break flag | `TokenRules::double_newline_paragraphs` | `paragraph_breaks` (pylatexenc's flag name adopted) |
+| Paragraph-break flag | `TokenRules::multi_newline_paragraphs` | `paragraph_breaks`, `double_newline_paragraphs` (renamed July 2026: any run of 2+ newlines is one break) |
 | Specials recognition | `Lang::scan_specials` → `SpecialsMatch` (name + spec); `TriggerChars` filter | `TokenRules::specials` string list |
 | Whitespace primitive | `skip_whitespace` (never consumes a `\n\s*\n` newline) | per-call-site inline logic |
 

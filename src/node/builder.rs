@@ -109,14 +109,20 @@ impl<L: Lang> NodeTreeBuilder<L> {
     }
 
     /// Stage a node with an explicit uniform ext (tier 1).
+    ///
+    /// Runs [`Lang::finalize_node`] on the node's parts first — the builder is the single
+    /// mutation boundary, so hooking here guarantees no node escapes finalization
+    /// (DESIGN_RATIONALE.md §3.6) — then the staging checks (hook mutations are validated
+    /// too).
     pub fn add_with_ext(
         &mut self,
-        kind: NodeKind<L>,
+        mut kind: NodeKind<L>,
         span: SourceSpan<L::SourceOrigin>,
         parsing_state: Arc<ParsingState<L>>,
         children: Vec<BuildId>,
-        ext: NodeExt<L>,
+        mut ext: NodeExt<L>,
     ) -> BuildId {
+        L::finalize_node(&mut kind, &mut ext, &span, &parsing_state, &children, &self.staged_nodes());
         assert!(self.staged.len() < u32::MAX as usize, "node tree too large");
         for child in &children {
             let staged = self
@@ -200,6 +206,12 @@ impl<L: Lang> NodeTreeBuilder<L> {
         let id = BuildId(self.staged.len() as u32);
         self.staged.push(Staged { kind, ext, span, parsing_state, children, claimed: false });
         id
+    }
+
+    /// A read-only view of the nodes staged so far (what [`Lang::finalize_node`] and
+    /// node-based stop predicates consume).
+    pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
+        StagedNodes { staged: &self.staged }
     }
 
     /// Freeze everything reachable from `root` into a flat [`NodeTree`] (breadth-first:
@@ -323,6 +335,108 @@ fn resolve_regions<L: Lang>(
     }
 }
 
+/// A read-only view over a [`NodeTreeBuilder`]'s staged nodes, keyed by [`BuildId`] —
+/// the "already staged" context handed to [`Lang::finalize_node`] (so a callable's hook
+/// can inspect its children, e.g. to extract environment scaffolding sub-spans) and to
+/// node-based stop predicates (Phase 6.2).
+///
+/// Obtained from [`NodeTreeBuilder::staged_nodes`]; borrows the builder, no mutation.
+pub struct StagedNodes<'b, L: Lang> {
+    staged: &'b [Staged<L>],
+}
+
+impl<'b, L: Lang> StagedNodes<'b, L> {
+    /// The view of staged node `id`, if `id` has been staged in this builder.
+    pub fn get(&self, id: BuildId) -> Option<StagedNodeView<'b, L>> {
+        self.staged.get(id.0 as usize).map(|staged| StagedNodeView { id, staged })
+    }
+
+    /// The number of nodes staged so far.
+    pub fn len(&self) -> usize {
+        self.staged.len()
+    }
+
+    /// Whether nothing has been staged yet.
+    pub fn is_empty(&self) -> bool {
+        self.staged.is_empty()
+    }
+}
+
+/// One staged node, viewed read-only (see [`StagedNodes`]). Accessors return
+/// `'b`-borrowed data (borrowing the builder, not this transient proxy), mirroring
+/// [`NodeRef`](super::NodeRef) over finished trees.
+pub struct StagedNodeView<'b, L: Lang> {
+    id: BuildId,
+    staged: &'b Staged<L>,
+}
+
+impl<'b, L: Lang> StagedNodeView<'b, L> {
+    /// This node's staging id.
+    pub fn id(&self) -> BuildId {
+        self.id
+    }
+
+    /// The structural kind.
+    pub fn kind(&self) -> &'b NodeKind<L> {
+        &self.staged.kind
+    }
+
+    /// The uniform (tier-1) ext data.
+    pub fn ext(&self) -> &'b NodeExt<L> {
+        &self.staged.ext
+    }
+
+    /// The node's provenance span.
+    pub fn span(&self) -> &'b SourceSpan<L::SourceOrigin> {
+        &self.staged.span
+    }
+
+    /// The parsing state the node was staged under.
+    pub fn parsing_state(&self) -> &'b Arc<ParsingState<L>> {
+        &self.staged.parsing_state
+    }
+
+    /// The node's structural children, as staging ids in order.
+    pub fn children(&self) -> &'b [BuildId] {
+        &self.staged.children
+    }
+}
+
+// Manual impls: the views are Copy/Clone/Debug regardless of `L` (only borrows stored).
+
+impl<L: Lang> Clone for StagedNodes<'_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Lang> Copy for StagedNodes<'_, L> {}
+
+impl<L: Lang> fmt::Debug for StagedNodes<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StagedNodes").field("len", &self.staged.len()).finish()
+    }
+}
+
+impl<L: Lang> Clone for StagedNodeView<'_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Lang> Copy for StagedNodeView<'_, L> {}
+
+impl<L: Lang> fmt::Debug for StagedNodeView<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StagedNodeView")
+            .field("id", &self.id)
+            .field("kind", &self.staged.kind)
+            .field("span", &self.staged.span)
+            .field("children", &self.staged.children)
+            .finish()
+    }
+}
+
 impl<L: Lang> Default for NodeTreeBuilder<L> {
     fn default() -> Self {
         NodeTreeBuilder::new()
@@ -353,7 +467,11 @@ fn debug_assert_spanned_contents<L: Lang>(kind: &NodeKind<L>, span: &SourceSpan<
         };
         match kind {
             NodeKind::Chars { content: text, .. } => check(text, "chars content"),
-            NodeKind::Comment { content: text, .. } => check(text, "comment content"),
+            NodeKind::Comment { content, start, post_space, .. } => {
+                check(content, "comment content");
+                check(start, "comment start delimiter");
+                check(post_space, "comment post_space");
+            }
             NodeKind::Callable(data) => {
                 check(&data.post_space, "callable post_space");
             }
