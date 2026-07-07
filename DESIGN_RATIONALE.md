@@ -732,6 +732,13 @@ flat-tree contiguity invariant, and costs per-callable allocations.
 *(Amended July 2026, current-level review: the record types `ArgsLayout`/`SlotsLayout` are
 superseded by `ParsedArguments`/`ParsedSlots` — see below. The one-node-per-region encoding
 itself stands, with one change: provided markers are ordinary `Chars` child nodes.)*
+*(Amended again July 2026, regions session: the one-node-per-argument encoding is superseded
+by **one child region per argument/slot** — see the `ChildRegion` entry below. One node per
+argument gave inter-argument comments no home (`\frac % half⏎{1}{2}`: `pre_space` held only
+whitespace), breaking the partition invariant. The span-answerability rationale carries over
+(region span = first..last region node); "generic child traversal visits meaningful units" is
+deliberately weakened — a callable's child list is now the raw-syntax view, and semantic
+access goes through the records.)*
 
 **`ParsedArguments`/`ParsedSlots` replace `ArgsLayout`/`SlotsLayout` (pylatexenc's
 `ParsedArguments` pattern)** — DECIDED (user, July 2026, current-level review session).
@@ -768,6 +775,89 @@ length/pointer-consistency invariant and a redundant `Arc` when the spec also si
 entry); "layout" as a name (opaque — nobody could say what it referred to).
 *Revisit if:* an argument form that is "provided" yet produces no node appears — then
 presence needs a flag separate from `child`.
+*(Amended July 2026, regions session: `child: Option<u32>` and `pre_space` are replaced by
+`region: Option<ChildRegion>` — next entry. The revisit clause above is thereby resolved:
+presence is `Option`-ness of the region, no longer tied to node existence (an empty region
+is representable). The self-describing-records, presence-inside-the-entry,
+markers-as-`Chars`, and no-name-map points stand. The "content access is computed, not
+stored" point is refined: extraction conveniences stay computed, but *which nodes are
+content* is now recorded per argument — parser-designated, eliminating pylatexenc's
+lone-group unwrap heuristics.)*
+
+**Argument/slot child *regions* with parser-designated content, resolved to global node
+ranges by the builder (`ChildRegion`, `ContentNodes`)** — DECIDED (user, July 2026, regions
+session; supersedes one-node-per-argument and `pre_space`). A callable's children range is
+the concatenation of one contiguous **region** per provided argument, then one per slot. A
+region holds the argument's full syntactic extent in source order: leading noise (comment
+nodes and whitespace-only `Chars` nodes — `pre_space` is deleted; whitespace before an
+argument is a node like everywhere else, matching the D1/D4 whitespace-as-chars rule and
+pylatexenc's expression parser), the syntax-bearing node(s) (a `Group` for `{…}`/`[…]` with
+delimiters on `GroupData`; a `Chars` node for `\frac 1 2` single tokens and `*` markers,
+which **count as content** — pylatexenc parity), and any trailing per-instance syntax.
+Records: `ParsedArgument { spec, region: Option<ChildRegion>, ext }` and
+`ParsedSlot { spec, region: ChildRegion }`; a resolved `ChildRegion` =
+`{ children: Range<u32>, content_range: Range<u32>, content_parent: NodeId }`, **all in
+global node-index coordinates** (the `NodeData.children` system — one coordinate language,
+no per-callable base arithmetic). `content_parent` is the node whose child list holds the
+content (the callable itself for region-level content): it preserves "the group node of
+this argument" / "the body `List` of this slot" without heuristics, and anchors empty
+content (`\m{}`). Key points:
+- **Content is parser-designated, never heuristically unwrapped.** For `\textbf{abc}` the
+  standard parser designates the group's children; for `[{arg with ]}]` the *inner* group's
+  children; `content_nodes` reads are plain range slices. pylatexenc comparison (checked in
+  its source): its expression parser collects pre-comment/whitespace nodes, but the standard
+  argument parser *drops* them by default (`return_full_node_list=False`, spans-only
+  recovery), and `get_content_nodelist()` needs a lone-group unwrap plus the
+  `unwrap_double_group` hack — both warts die here, and noise is kept out of content's way.
+- **Noise ownership is the argument parser's** (pylatexenc-style), *not* a centralized
+  `ArgumentsParser` scan: noise policy is inseparable from argument syntax — a verbatim
+  argument whose delimiter is the comment char must see raw tokens, and the scan must run
+  under the argument's own parsing-state delta. Standard parsers share one noise-scan helper
+  (Phase 6); no noise knobs on `ArgumentSpec`. **Absent means zero consumption**: noise
+  scanned while searching is rewound and re-parsed as enclosing content (an absent-optional
+  probe before a present mandatory re-scans the same noise — by design); abandoned staged
+  nodes are dropped by the builder.
+- **Two-phase records — the accepted "honest cost".** Global ranges name positions in the
+  breadth-first flattened layout, which does not exist while parsers run (a node's final
+  index depends on unparsed input — siblings of its ancestors discovered later). So regions
+  are *staged* (child offsets into the callable's child list + a `ContentNodes` designation:
+  `InRegion(sub-range)` / `InChildrenOf(BuildId, child sub-range)` — contiguity by
+  construction, O(1) even for huge slot bodies, empty ranges stay anchored) and *resolved in
+  place* by `NodeTreeBuilder::finish()`. The phase is a runtime invariant the type system
+  can't see — the same genus as the rejected Q2-Option-B set-before-use field protocol —
+  accepted here because resolution happens in a single component at a single point, finished
+  trees cannot contain staged regions, and the resolved-only accessors panic on staged
+  records (a caller bug under the builder's panic policy). Bought with it: parsers build
+  `ParsedArguments`/`ParsedSlots` directly and `add()` keeps its signature — no bespoke
+  staging API.
+- **Builder checks:** hard asserts at `add()` (regions staged / in bounds / ordered /
+  non-overlapping; designation sub-ranges within their parent's child list) and at
+  `finish()` (content parent reachable and inside its own region's subtree — only checkable
+  once the layout exists); debug-assert that regions **tile** the child list exactly (the
+  §nodes partition invariant, mechanically checkable).
+- **Consequences accepted:** a callable's child list is the raw-syntax view (child count ≠
+  argument count; `\frac 1 2` costs two whitespace `Chars` nodes); an argument has no single
+  node identity — transforms and views splice child *ranges* (Phase 7 view API);
+  `NodeRef::argument(i)`/`argument_named()` are replaced by region/content-nodes accessors;
+  `ParsedArguments` holds no `TextContent`, so its materialization plumbing is deleted.
+  `CallableData.post_space` deliberately stays a field: it lies outside the region tiling
+  and is whitespace-only by construction (trailing comments are never consumed).
+- **Slots mirror arguments** (same `ChildRegion` type), keeping the body `List` as the
+  content parent (span/state/ext identity; "an empty body exists"); whether terminator
+  syntax (`\end{align}`) becomes region nodes or spec-driven records stays open with Q1.
+*Rejected:* centralized noise scanning (breaks verbatim-delimiter arguments; scans under the
+wrong state); noise as `TextContent` blobs (comments lose node identity — invisible to
+visitors and transforms); a wrapper `List` node per argument (extra node, unnatural shape);
+`content_child: u32` marking a single node (can't express content inside groups, multi-node
+content, or trailing syntax); a *relative* `content_range` (child offsets cannot name a
+group's children — they are not the callable's children); flattening argument delimiters
+into sibling syntax nodes (the same braces would get two representations depending on
+structural role, and argument values lose their group class); lone-group unwrap accessor
+heuristics (parser intent is not reconstructible after the fact); `Vec<BuildId>` content
+designation (contiguity by checked contract instead of by construction; O(k) for slot
+bodies; empty content loses its anchor).
+*Revisit if:* re-minting the layout-dependent ranges in transforms proves error-prone (by
+design, any new tree re-resolves records through its own builder).
 
 **Group nodes store their delimiters: `NodeKind::Group(Box<GroupData<L>>)`** — DECIDED
 (user, July 2026, current-level review session; follows pylatexenc's

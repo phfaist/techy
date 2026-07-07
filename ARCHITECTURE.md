@@ -476,7 +476,8 @@ pub struct CallableData<L: Lang> {
     pub name: Box<str>,                  // invocation spelling; identity ⇒ always owned
     pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None (§specs fallback)
     pub arguments: ParsedArguments<L>,   // pylatexenc pattern (July 2026): entries carry their
-                                         // Arc'd ArgumentSpec + presence/child + syntax + ext
+                                         // Arc'd ArgumentSpec + child region (noise + syntax
+                                         // + designated content range) + ext — regions session
     pub slots: ParsedSlots<L>,           // 0..n content regions (environment body = 1 slot)
     pub post_space: TextContent,         // reproduced verbatim in recomposition
     pub ext: L::CallableNodeExt,         // tier 2: per-kind, per-instance parse results
@@ -546,9 +547,23 @@ case.
   re-tokenizes and re-parses to an equivalent tree under the same `Language` (the validity
   criterion — licenses e.g. inserting a separating space where required). Consequence: **the
   invocation parser must record per-instance syntax choices the spec doesn't determine**
-  (optional-arg presence, matched delimiter alternative, chosen verbatim fence, star) — in
-  `ParsedArguments`/`GroupData`, as `TextContent` where textual, *not* in ext: recomposability
-  must not depend on Lang cooperation (group delimiters therefore live on the node, July 2026). Exotic custom parsers use the `CallableSpec::recompose()` hook.
+  (optional-arg presence, matched delimiter alternative, chosen verbatim fence, star,
+  inter-argument noise) — as ordinary nodes in the argument/slot child regions where textual
+  (July 2026 regions session: markers, pre-argument whitespace, and comments are region
+  nodes; `ParsedArguments` records the regions + designated content ranges), on `GroupData`
+  for group delimiters, *not* in ext: recomposability must not depend on Lang cooperation
+  (group delimiters therefore live on the node, July 2026). Exotic custom parsers use the
+  `CallableSpec::recompose()` hook.
+
+**Two-phase region records — a deliberate runtime invariant (July 2026 regions session).**
+`ParsedArguments`/`ParsedSlots` entries hold child *regions* (noise + syntax + designated
+content nodes) as ranges of **global node indices** in the final flat layout — which does not
+exist while parsers run. Records are therefore staged in `BuildId` coordinates and resolved in
+place by `NodeTreeBuilder::finish()`. This is the accepted "honest cost": a phase the type
+system can't see, contained because resolution happens in one component at one point, finished
+trees cannot contain staged records, and resolved-only accessors panic on staged ones. It buys
+the important property that construct parsers build `ParsedArguments` directly with an
+unchanged builder API. Full argument: DESIGN_RATIONALE.md §3.5.
 
 Access is only through `NodeRef<'pr>` proxies as designed in March (Copy, resolves indices,
 `span_content()`, `children()`, `parsing_state()`, `name()`, `arguments()`, `slots()`,
@@ -957,7 +972,10 @@ hardcoded `TokenRules` value).
   recomposition fields grow with their consumers in Phase 6 (DESIGN_RATIONALE.md §6.5).
   *(Amended July 2026, current-level review: `ArgsLayout`/`SlotsLayout` replaced by
   pylatexenc-shaped `ParsedArguments`/`ParsedSlots`; `Group` grew a boxed `GroupData` with
-  on-node delimiters. DESIGN_RATIONALE §3.5.)*
+  on-node delimiters. Amended again July 2026, regions session: one child *region* per
+  argument/slot — inter-argument noise kept as nodes, `pre_space` removed,
+  parser-designated content ranges (`ChildRegion`/`ContentNodes`), two-phase records
+  resolved to global node indices by `finish()`. DESIGN_RATIONALE §3.5.)*
 - **Phase 6 — `constructs` + `engine`.** `ParseContext`, `NodesParser`, group/comment/callable
   parsers, `ArgumentsParser` + `SlotsParser`, `Language<L>`/`ParserSession`/`ParseResult`;
   pin down the whitespace/span invariants of §nodes; end-to-end tests on real LaTeX snippets.

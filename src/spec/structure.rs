@@ -33,12 +33,26 @@ use crate::state::{Lang, ParsingStateDelta};
 ///
 /// **Phase 6 grows the actual parse entry point** (it needs `ParseContext`); until then
 /// the trait reserves the slot so spec-facing types are final. An implementation parses
-/// one argument region and stages its node (or reports the argument absent); the standard
-/// invocation path records the result in the node's
+/// one argument region and stages its nodes, designating the content nodes among them
+/// ([`ChildRegion`](crate::node::ChildRegion) /
+/// [`ContentNodes`](crate::node::ContentNodes)), or reports the argument absent; the
+/// standard invocation path records the result in the node's
 /// [`ParsedArguments`](crate::node::ParsedArguments) like any other argument. Parsers
 /// needing group delimiters install the [`GroupRule`](crate::token::GroupRule)s they
 /// want via a state delta for the argument's extent (an optional-argument parser
 /// momentarily declaring `[`…`]`, a custom spec declaring `<`…`>`).
+///
+/// **Noise ownership** (decided July 2026, regions session; DESIGN_RATIONALE.md §3.5):
+/// an argument parser owns its argument's *entire* region, leading noise included — it
+/// scans whitespace and comments itself (typically via the standard noise-scan helper,
+/// Phase 6) and stages them as ordinary nodes (comment nodes, whitespace-only `Chars`
+/// nodes) ahead of the argument's syntax. The core never scans noise on a parser's
+/// behalf: noise policy is inseparable from the argument's syntax (a verbatim argument
+/// whose delimiter is the comment character must see the raw token stream), and the
+/// scan must run under the argument's own parsing-state delta. Reporting the argument
+/// **absent means consuming nothing**: the reader is rewound past any scanned noise —
+/// it is re-parsed as enclosing content — and speculatively staged nodes are simply
+/// never claimed (the builder drops them).
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026; see [`CallableSpec`](super::CallableSpec)'s note and DESIGN_RATIONALE.md).

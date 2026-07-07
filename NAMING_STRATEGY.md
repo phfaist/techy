@@ -93,7 +93,8 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
 | Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeId`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
-| Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: entry = `Arc`'d spec + presence/child offset + per-instance syntax + ext |
+| Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: entry = `Arc`'d spec + optional child region + ext (regions session, July 2026) |
+| Argument/slot region record | `ChildRegion` (two-phase), `ContentNodes` (staged content designation: `InRegion` / `InChildrenOf`) | region = contiguous run of the callable's children (noise + syntax); content parser-designated, resolved to global node-index ranges by `finish()` (July 2026) |
 | Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
 | Group payload | `GroupData<L>` | delimiters stored on the node + `Option<Lang::GroupTypeId>` class |
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + parsed arguments/slots |
@@ -148,6 +149,7 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `ArgumentsSpec` (Dec 2025 → `ArgumentStructureSpec`) | `Vec<Arc<ArgumentSpec>>` slices on `CallableSpec` | wrapper dropped July 2026 with the pylatexenc-shaped argument model; too close to `ArgumentSpec` anyway |
 | `ArgumentKind`, then `ArgumentParserSpec` data variants | `ArgumentParser` objects only | an argument *is* a parser; closed enums were a regression vs. pylatexenc's per-argument parsers — the core cannot know a language's argument forms (July 2026, two steps) |
 | `ArgsLayout`/`ArgLayout`, `SlotsLayout`/`SlotLayout` | `ParsedArguments`/`ParsedArgument`, `ParsedSlots`/`ParsedSlot` | "layout" opaque; records now self-describing (Arc'd specs), markers are `Chars` nodes (July 2026) |
+| `ParsedArgument.child` + `.pre_space`; `ParsedSlot.child` | `.region` (`ChildRegion` with `children`/`content_range`/`content_parent`) | regions session July 2026: inter-argument noise (comments, whitespace) kept as region nodes, content parser-designated; `NodeRef::argument()`/`argument_named()` → `argument_nodes()`/`argument_content_nodes()` |
 | open `GroupTypeId`/`CallableTypeId` (u32, interned in `Language`) | `Lang::GroupTypeId`/`Lang::CallableTypeId` associated types | forms and group *classes* are static per language definition; closed enums, no ids floating around (July 2026; `GroupTypeId` reframed identity → class the same month — delimiter pairings are runtime `GroupRule`s, not enum variants) |
 | `Parser` trait (in `constructs`) | `ConstructParser` | avoids clash with high-level parser type |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |

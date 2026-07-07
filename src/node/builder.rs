@@ -9,15 +9,28 @@
 //! stages nodes with explicit child lists and lays the tree out breadth-first in
 //! [`finish`](NodeTreeBuilder::finish): the root lands at index 0, and each node's
 //! children are appended as one contiguous block. O(n), one transient copy.
+//!
+//! # Region resolution (the two-phase record contract)
+//!
+//! For the same reason, `finish()` also **resolves** each callable's staged
+//! argument/slot regions ([`ChildRegion`](super::ChildRegion)) from staging coordinates
+//! (child offsets + [`ContentNodes`](super::ContentNodes) designations in `BuildId`
+//! terms) into global node-index ranges: those ranges name positions in the flattened
+//! layout, which exists only here. This is the accepted "honest cost" of letting
+//! parsers build `ParsedArguments`/`ParsedSlots` directly with an unchanged `add()`
+//! (DESIGN_RATIONALE.md §3.5) — the record's phase is a runtime invariant, contained by
+//! resolving at exactly this one point, so a finished tree never holds staged regions.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::ops::Range;
 
 use crate::source::{SourceSpan, TextContent};
 use crate::state::{Lang, ParsingState};
 
-use super::kind::NodeKind;
+use super::arguments::ContentNodes;
+use super::kind::{CallableData, NodeKind};
 use super::tree::{NodeData, NodeTree};
 use super::NodeExt;
 
@@ -58,9 +71,15 @@ struct Staged<L: Lang> {
 /// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
 /// - Each staged node is used as a child at most once, and the root must not be anyone's
 ///   child.
-/// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` child offsets must index into
-///   the node's child list.
-/// - Debug builds additionally check the `TextContent` invariant: `Spanned` ranges must
+/// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` regions must be *staged* (never
+///   reuse records from a finished tree — ranges are only meaningful for the layout that
+///   minted them), in bounds of the node's child list, in order, and non-overlapping;
+///   content designations must fit their parent's child list, and a content parent must
+///   lie inside its own region's subtree (checked in [`finish`](NodeTreeBuilder::finish),
+///   where the layout exists).
+/// - Debug builds additionally check that the regions **tile** the child list exactly
+///   (argument regions, then slot regions, no gaps — every child accounted for: the
+///   §nodes partition invariant), and the `TextContent` invariant: `Spanned` ranges must
 ///   lie inside the node's own source content, on `char` boundaries.
 ///
 /// Staged nodes unreachable from the root are silently dropped: parsers may abandon
@@ -76,9 +95,9 @@ impl<L: Lang> NodeTreeBuilder<L> {
     }
 
     /// Stage a node with the default uniform ext. `children` are the node's structural
-    /// children in order (for a `Callable`: one node per provided argument, then one
-    /// `List` node per slot — the `ParsedArguments`/`ParsedSlots` offsets index this
-    /// list).
+    /// children in order (for a `Callable`: the concatenation of one child region per
+    /// provided argument, then one per slot — the `ParsedArguments`/`ParsedSlots`
+    /// regions index this list).
     pub fn add(
         &mut self,
         kind: NodeKind<L>,
@@ -108,24 +127,73 @@ impl<L: Lang> NodeTreeBuilder<L> {
             staged.claimed = true;
         }
         if let NodeKind::Callable(data) = &kind {
-            for arg in data.arguments.iter() {
-                if let Some(child) = arg.child {
-                    assert!(
-                        (child as usize) < children.len(),
-                        "argument child offset {} out of bounds ({} children)",
-                        child,
-                        children.len()
-                    );
+            let n_children = children.len() as u32;
+            let mut next: u32 = 0;
+            let regions = data
+                .arguments
+                .iter()
+                .filter_map(|arg| arg.region.as_ref())
+                .chain(data.slots.iter().map(|slot| &slot.region));
+            for region in regions {
+                let (child_range, content) = region.staged().unwrap_or_else(|| {
+                    panic!(
+                        "callable staged with an already-resolved region: parsed \
+                         argument/slot records must be built fresh for the tree being staged"
+                    )
+                });
+                assert!(
+                    child_range.start <= child_range.end && child_range.end <= n_children,
+                    "argument/slot region {:?} out of bounds ({} children)",
+                    child_range,
+                    n_children
+                );
+                assert!(
+                    child_range.start >= next,
+                    "argument/slot regions must be in order and non-overlapping \
+                     (region {:?} starts before offset {})",
+                    child_range,
+                    next
+                );
+                debug_assert!(
+                    child_range.start == next,
+                    "argument/slot regions must tile the child list exactly \
+                     (children {}..{} belong to no region)",
+                    next,
+                    child_range.start
+                );
+                next = child_range.end;
+                match content {
+                    ContentNodes::InRegion(r) => {
+                        let region_len = child_range.end - child_range.start;
+                        assert!(
+                            r.start <= r.end && r.end <= region_len,
+                            "content range {:?} out of bounds (region has {} nodes)",
+                            r,
+                            region_len
+                        );
+                    }
+                    ContentNodes::InChildrenOf(b, r) => {
+                        let content_parent = self
+                            .staged
+                            .get(b.0 as usize)
+                            .unwrap_or_else(|| panic!("content parent {:?} has not been staged", b));
+                        assert!(
+                            r.start <= r.end && r.end as usize <= content_parent.children.len(),
+                            "content range {:?} out of bounds (content parent {:?} has {} children)",
+                            r,
+                            b,
+                            content_parent.children.len()
+                        );
+                    }
                 }
             }
-            for slot in data.slots.iter() {
-                assert!(
-                    (slot.child as usize) < children.len(),
-                    "slot child offset {} out of bounds ({} children)",
-                    slot.child,
-                    children.len()
-                );
-            }
+            debug_assert!(
+                next == n_children,
+                "argument/slot regions must tile the child list exactly \
+                 (children {}..{} belong to no region)",
+                next,
+                n_children
+            );
         }
         debug_assert_spanned_contents(&kind, &span);
 
@@ -135,9 +203,11 @@ impl<L: Lang> NodeTreeBuilder<L> {
     }
 
     /// Freeze everything reachable from `root` into a flat [`NodeTree`] (breadth-first:
-    /// root at index 0, each node's children as one contiguous block). Staged nodes not
-    /// reachable from `root` are dropped.
+    /// root at index 0, each node's children as one contiguous block), **resolving**
+    /// every callable's staged argument/slot regions into global node-index ranges (see
+    /// the module docs). Staged nodes not reachable from `root` are dropped.
     pub fn finish(self, root: BuildId) -> NodeTree<L> {
+        const NONE: u32 = u32::MAX; // safe sentinel: add() caps staging below u32::MAX
         let mut staged: Vec<Option<Staged<L>>> = self.staged.into_iter().map(Some).collect();
         assert!((root.0 as usize) < staged.len(), "root {:?} has not been staged", root);
         assert!(
@@ -146,17 +216,24 @@ impl<L: Lang> NodeTreeBuilder<L> {
             root
         );
 
-        // Pass 1: breadth-first order and per-node children ranges. Child ids were
-        // checked staged-and-claimed-once in add(), so the traversal visits each staged
-        // node at most once.
+        // Pass 1: breadth-first order, per-node children ranges, parent links, and the
+        // staged-id → final-index map (the layout tables region resolution needs).
+        // Child ids were checked staged-and-claimed-once in add(), so the traversal
+        // visits each staged node at most once.
         let mut order: Vec<u32> = Vec::with_capacity(staged.len());
-        let mut ranges: Vec<core::ops::Range<u32>> = Vec::with_capacity(staged.len());
+        let mut ranges: Vec<Range<u32>> = Vec::with_capacity(staged.len());
+        let mut parent: Vec<u32> = Vec::with_capacity(staged.len()); // final index; NONE at the root
+        let mut final_of: Vec<u32> = alloc::vec![NONE; staged.len()]; // staged id → final index
         order.push(root.0);
+        parent.push(NONE);
+        final_of[root.0 as usize] = 0;
         let mut pos = 0;
         while pos < order.len() {
             let sid = order[pos] as usize;
             let start = order.len() as u32;
             for child in &staged[sid].as_ref().unwrap().children {
+                final_of[child.0 as usize] = order.len() as u32;
+                parent.push(pos as u32);
                 order.push(child.0);
             }
             let end = order.len() as u32;
@@ -164,12 +241,17 @@ impl<L: Lang> NodeTreeBuilder<L> {
             pos += 1;
         }
 
-        // Pass 2: move the staged data into place.
+        // Pass 2: move the staged data into place, resolving callable region records
+        // (only possible here, where the flattened layout exists).
         let nodes = order
             .iter()
-            .zip(ranges)
-            .map(|(&sid, children)| {
-                let staged = staged[sid as usize].take().expect("staged node used twice");
+            .enumerate()
+            .map(|(f, &sid)| {
+                let children = ranges[f].clone();
+                let mut staged = staged[sid as usize].take().expect("staged node used twice");
+                if let NodeKind::Callable(data) = &mut staged.kind {
+                    resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of);
+                }
                 NodeData {
                     kind: staged.kind,
                     ext: staged.ext,
@@ -180,6 +262,64 @@ impl<L: Lang> NodeTreeBuilder<L> {
             })
             .collect();
         NodeTree { nodes }
+    }
+}
+
+/// Resolve a callable's staged argument/slot regions into global node-index ranges.
+/// `callable` is the callable's final index and `callable_children` its final children
+/// block; `ranges`/`parent`/`final_of` are the pass-1 layout tables. Bounds were checked
+/// at `add()`; what is only checkable here is reachability and that each content parent
+/// lies inside its own region's subtree.
+fn resolve_regions<L: Lang>(
+    data: &mut CallableData<L>,
+    callable: u32,
+    callable_children: &Range<u32>,
+    ranges: &[Range<u32>],
+    parent: &[u32],
+    final_of: &[u32],
+) {
+    const NONE: u32 = u32::MAX;
+    let regions = data
+        .arguments
+        .arguments
+        .iter_mut()
+        .filter_map(|arg| arg.region.as_mut())
+        .chain(data.slots.slots.iter_mut().map(|slot| &mut slot.region));
+    for region in regions {
+        let (child_range, content) = {
+            let (c, k) = region.staged().expect("staged regions were checked in add()");
+            (c.clone(), k.clone())
+        };
+        let children =
+            callable_children.start + child_range.start..callable_children.start + child_range.end;
+        let (content_range, content_parent) = match content {
+            ContentNodes::InRegion(r) => {
+                (children.start + r.start..children.start + r.end, callable)
+            }
+            ContentNodes::InChildrenOf(b, r) => {
+                let bf = final_of[b.0 as usize];
+                assert!(bf != NONE, "content parent {:?} is not reachable from the root", b);
+                // The content parent must be one of this region's nodes or a descendant
+                // of one — walk up to its child-of-the-callable ancestor.
+                let mut a = bf;
+                loop {
+                    let p = parent[a as usize];
+                    assert!(p != NONE, "content parent {:?} is not inside the callable's subtree", b);
+                    if p == callable {
+                        break;
+                    }
+                    a = p;
+                }
+                assert!(
+                    children.contains(&a),
+                    "content parent {:?} lies outside its own argument/slot region",
+                    b
+                );
+                let block = &ranges[bf as usize];
+                (block.start + r.start..block.start + r.end, bf)
+            }
+        };
+        region.resolve(children, content_range, content_parent);
     }
 }
 
@@ -216,9 +356,6 @@ fn debug_assert_spanned_contents<L: Lang>(kind: &NodeKind<L>, span: &SourceSpan<
             NodeKind::Comment { content: text, .. } => check(text, "comment content"),
             NodeKind::Callable(data) => {
                 check(&data.post_space, "callable post_space");
-                for arg in data.arguments.iter() {
-                    check(&arg.pre_space, "argument pre_space");
-                }
             }
             NodeKind::Group(data) => {
                 check(&data.open, "group open delimiter");

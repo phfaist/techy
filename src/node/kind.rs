@@ -115,7 +115,8 @@ impl<L: Lang> NodeKind<L> {
 /// **Delimiters are stored on the node** (decided July 2026, following pylatexenc's
 /// `LatexGroupNode.delimiters`): recomposition and delimiter-sensitive consumers must not
 /// depend on a registry lookup — the same "recomposability must not depend on `Lang`
-/// cooperation" rule that puts marker spellings in [`ParsedArguments`]. The typed
+/// cooperation" rule that keeps per-instance argument syntax as ordinary nodes in the
+/// argument's child region (see [`ParsedArguments`]). The typed
 /// `group_type` *class* is kept alongside the strings ("is this a math group?" without
 /// string comparison); where spelling matters within a class (`$…$` vs. `$$…$$`), the
 /// stored delimiters answer.
@@ -183,13 +184,16 @@ pub struct CallableData<L: Lang> {
     /// The behavior spec — shared, de-keyed, and never absent (unknown callables resolve
     /// to per-type fallback singletons, ARCHITECTURE.md §specs).
     pub spec: Arc<dyn CallableSpec<L>>,
-    /// The parsed arguments: which are provided, where their nodes are, and which
-    /// [`ArgumentSpec`](crate::spec::ArgumentSpec) each was parsed against.
+    /// The parsed arguments: which are provided, where their region/content nodes are,
+    /// and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each was parsed against.
     pub arguments: ParsedArguments<L>,
-    /// The parsed slots: where each slot's `List` node is.
+    /// The parsed slots: each slot's region and content nodes.
     pub slots: ParsedSlots<L>,
     /// Whitespace consumed after the invocation — reproduced verbatim in recomposition.
     /// Included in the node's span (a `Spanned` post-space is a trailing sub-range of it).
+    /// Deliberately a field, not a child node: it lies *outside* the argument/slot
+    /// region tiling of the children range, and comments after an invocation are never
+    /// consumed by it — post-space is whitespace-only by construction.
     pub post_space: TextContent,
     /// Per-kind ext data.
     pub ext: CallableNodeExt<L>,
@@ -201,7 +205,7 @@ impl<L: Lang> CallableData<L> {
             callable_type: self.callable_type,
             name: self.name.clone(),
             spec: Arc::clone(&self.spec),
-            arguments: self.arguments.materialized(source_content),
+            arguments: self.arguments.clone(),
             slots: self.slots.clone(),
             post_space: self.post_space.materialized(source_content),
             ext: self.ext.clone(),

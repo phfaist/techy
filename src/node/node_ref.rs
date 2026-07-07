@@ -199,30 +199,42 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         self.callable().map(|data| &data.slots)
     }
 
-    /// The node of argument `i`, when this is a callable and the argument was provided
-    /// (`None` for absent optionals — consult [`arguments`](NodeRef::arguments) to
-    /// distinguish). The node is the entire argument, delimiters included.
-    pub fn argument(&self, i: usize) -> Option<NodeRef<'t, L>> {
-        let child = self.callable()?.arguments.get(i)?.child?;
-        self.child(child as usize)
+    /// The nodes of argument `i`'s region — the argument's full syntactic extent
+    /// (leading comment/whitespace noise plus the syntax-bearing nodes), in source
+    /// order. `None` for non-callables, out-of-range indices, and absent arguments
+    /// (consult [`arguments`](NodeRef::arguments) to distinguish).
+    pub fn argument_nodes(&self, i: usize) -> Option<impl Iterator<Item = NodeRef<'t, L>>> {
+        let region = self.callable()?.arguments.get(i)?.region.as_ref()?;
+        Some(self.tree.nodes_in(region.children()))
     }
 
-    /// The node of the argument named `name`, when this is a callable and that argument
-    /// was provided.
-    pub fn argument_named(&self, name: &str) -> Option<NodeRef<'t, L>> {
-        let child = self.callable()?.arguments.get_named(name)?.child?;
-        self.child(child as usize)
+    /// The content nodes of argument `i`, noise and delimiters excluded: the group's
+    /// children for `\textbf{abc}`, the single `Chars` node for `\frac 1 2` — exactly
+    /// what the argument's parser designated, no unwrap heuristics.
+    pub fn argument_content_nodes(
+        &self,
+        i: usize,
+    ) -> Option<impl Iterator<Item = NodeRef<'t, L>>> {
+        let region = self.callable()?.arguments.get(i)?.region.as_ref()?;
+        Some(self.tree.nodes_in(region.content_range()))
     }
 
-    /// The `List` node holding slot `i`'s content, when this is a callable with such a
-    /// slot.
+    /// The node whose children hold slot `i`'s content — the body `List` of an
+    /// environment-shaped callable — when this is a callable with such a slot.
     pub fn slot(&self, i: usize) -> Option<NodeRef<'t, L>> {
-        let slot = self.callable()?.slots.get(i)?;
-        self.child(slot.child as usize)
+        let region = &self.callable()?.slots.get(i)?.region;
+        Some(NodeRef::new(self.tree, region.content_parent()))
     }
 
-    /// The first slot's content — the *body* of environment-shaped callables (which have
-    /// exactly one slot).
+    /// The content nodes of slot `i` (the body nodes, for the standard environment
+    /// shape), in source order.
+    pub fn slot_content_nodes(&self, i: usize) -> Option<impl Iterator<Item = NodeRef<'t, L>>> {
+        let region = &self.callable()?.slots.get(i)?.region;
+        Some(self.tree.nodes_in(region.content_range()))
+    }
+
+    /// The first slot's content holder — the *body* of environment-shaped callables
+    /// (which have exactly one slot).
     pub fn body(&self) -> Option<NodeRef<'t, L>> {
         self.slot(0)
     }

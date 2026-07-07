@@ -1,6 +1,6 @@
 //! [`ParsedArguments`] / [`ParsedSlots`]: the per-invocation record of a `Callable`
-//! node — which spec'd arguments were provided, where each region's node lives in the
-//! node's children range, and which spec each region was parsed against.
+//! node — which spec'd arguments were provided, where each one's region and content
+//! nodes live in the tree, and which spec each region was parsed against.
 //!
 //! **Modeled on pylatexenc's `ParsedArguments`** (decided July 2026, replacing the
 //! Phase 5 `ArgsLayout`/`SlotsLayout` offset maps): pylatexenc keeps two parallel lists —
@@ -11,74 +11,216 @@
 //! callable spec didn't declare — `\newcommand`-alikes), and absent optionals keep their
 //! spec, so by-name lookup can distinguish "not provided" from "no such argument".
 //!
-//! **Encoding: one node per region** (unchanged from the Phase 5 design session,
-//! DESIGN_RATIONALE.md §3.5). A callable's children range holds one node per *provided*
-//! argument — the argument's natural node, delimiters included: a `Group` for `{…}`/`[…]`
-//! forms, the single-expression node for `\frac12`-style acceptance, a `Chars` node for
-//! provided markers (`*`, pylatexenc behavior) — followed by one `List` node per slot.
-//! Absent arguments have an entry but no node.
+//! # Encoding: one child *region* per argument/slot (July 2026 regions session,
+//! DESIGN_RATIONALE.md §3.5; supersedes the one-node-per-argument shape)
 //!
-//! Per-instance syntax the spec doesn't determine (the level-2 recomposition requirement,
-//! ARCHITECTURE.md §nodes) is recorded here as [`TextContent`] — today the whitespace
-//! skipped before each argument (`pre_space`); slot separator/terminator records arrive
-//! with `SlotsParser` (Phase 6). Recomposability must not depend on `Lang` cooperation.
+//! A callable's children range is the concatenation of one contiguous **region** per
+//! *provided* argument, followed by one region per slot. A region holds the argument's
+//! full syntactic extent in source order: leading noise (comment nodes and
+//! whitespace-only `Chars` nodes — there is no `pre_space` field; whitespace skipped
+//! before an argument is a node like everywhere else), the syntax-bearing node(s)
+//! (a `Group` for `{…}`/`[…]` forms, delimiters stored on the group; a `Chars` node for
+//! `\frac 1 2` single tokens and provided `*` markers), and any trailing per-instance
+//! syntax. Absent arguments have an entry but no region — reporting an argument absent
+//! means having consumed *nothing* (noise scanned while looking for it is rewound and
+//! re-parsed as enclosing content; see [`ArgumentParser`](crate::spec::ArgumentParser)).
+//! The callable's child list is thus the **raw-syntax view** (child count ≠ argument
+//! count); semantic access goes through these records.
 //!
-//! Content-extraction conveniences (pylatexenc's `get_content_nodelist()` /
-//! `get_content_as_chars()` / keyval helpers) are deliberately *computed accessors*, not
-//! stored fields — the group node's children *are* the content, and stored copies would
-//! diverge under transforms. They arrive as `NodeRef`-level views (Phase 7); extensions
-//! that want to *cache* derived data per argument use the [`ext`](ParsedArgument::ext)
-//! slot instead.
+//! Each region also designates its **content nodes** — for `\textbf{abc}` the group's
+//! children (braces excluded), for `\frac 1 2` the single `Chars` node, for
+//! `[{arg with ]}]` the *inner* group's children. Content is designated by the parser at
+//! parse time ([`ContentNodes`]) and read back as a plain node range: there is no
+//! lone-group unwrap heuristic (pylatexenc's `get_content_nodelist()` +
+//! `unwrap_double_group` hack), and — unlike pylatexenc's standard argument parsers,
+//! which drop pre-argument comment nodes by default (`return_full_node_list=False`) —
+//! noise is kept, out of the way of content.
+//!
+//! # Two-phase records — the accepted "honest cost" (DESIGN_RATIONALE.md §3.5)
+//!
+//! Resolved region ranges name positions in the **flattened** tree (the coordinate
+//! system of `NodeData.children`), and those positions don't exist while parsers run: a
+//! node's final index depends on parts of the tree not yet parsed when it is staged
+//! (see [`NodeTreeBuilder`](super::NodeTreeBuilder)'s module docs). So a [`ChildRegion`]
+//! is **staged** by the parser (child offsets into the callable's child list, plus a
+//! [`ContentNodes`] designation in `BuildId` terms) and **resolved in place** by
+//! [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) into global node-index
+//! ranges. The phase is a runtime invariant the type system can't see — the price paid
+//! so parsers can construct `ParsedArguments` directly instead of driving a bespoke
+//! staging API. It is contained: resolution happens at exactly one point (`finish`), a
+//! finished [`NodeTree`](super::NodeTree) cannot hold staged regions, and the
+//! resolved-only accessors panic on a staged region — reachable only by a parser
+//! reading back records it itself built pre-finish, a caller bug under the builder's
+//! panic-on-contract-violation policy.
+//!
+//! Content-extraction conveniences beyond the stored ranges (keyval helpers, chars
+//! flattening) remain *computed* views (Phase 7); extensions that want to cache derived
+//! data per argument use the [`ext`](ParsedArgument::ext) slot instead.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::ops::Range;
 
-use crate::source::TextContent;
 use crate::spec::ArgumentSpec;
 use crate::spec::SlotSpec;
 use crate::state::Lang;
 
+use super::builder::BuildId;
+use super::tree::NodeId;
 use super::ArgumentExt;
 
+/// Parser-side designation of a region's content nodes, in staging coordinates. Both
+/// forms name a contiguous run of one node's children *by construction* — contiguity in
+/// the flattened tree needs no checking — and an empty sub-range stays anchored (the
+/// content of `\m{}` is empty *inside the group*).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContentNodes {
+    /// Elements `i..j` of the region's own node list (`0` = the region's first node):
+    /// content sitting directly among the callable's children — a `\frac 1 2` single
+    /// token, a provided `*` marker (which counts as content — pylatexenc parity), or
+    /// multi-node content of a custom parser.
+    InRegion(Range<u32>),
+    /// Children `i..j` of the staged node: content *inside* a region node — a `{…}`
+    /// argument's group children, the inner group's children of `[{arg with ]}]`, a
+    /// slot body `List`'s children. The node must be one of the region's nodes or a
+    /// descendant of one (checked at resolution, where the layout exists).
+    InChildrenOf(BuildId, Range<u32>),
+}
+
+/// The child region of one provided argument or slot: the full syntactic extent
+/// (noise + content + delimiting syntax) and its designated content nodes.
+///
+/// **Two-phase** (module docs): built by a parser in staging coordinates, resolved by
+/// [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) into global node-index
+/// ranges. The read accessors ([`children`](ChildRegion::children),
+/// [`content_range`](ChildRegion::content_range),
+/// [`content_parent`](ChildRegion::content_parent)) exist only on resolved regions and
+/// panic on staged ones — a finished tree never contains staged regions.
+#[derive(Clone, Debug)]
+pub struct ChildRegion {
+    state: RegionState,
+}
+
+#[derive(Clone, Debug)]
+enum RegionState {
+    /// As built by a parser: `children` are offsets into the callable's child list;
+    /// `content` designates the content nodes in staging coordinates.
+    Staged { children: Range<u32>, content: ContentNodes },
+    /// After `finish()`: global node-index ranges, plus the node whose child list
+    /// contains the content range (the callable itself for region-level content).
+    Resolved { children: Range<u32>, content: Range<u32>, content_parent: u32 },
+}
+
+impl ChildRegion {
+    /// A staged region: `children` is the offset range of the region's nodes within the
+    /// callable's child list; `content` designates the content nodes.
+    pub fn new(children: Range<u32>, content: ContentNodes) -> ChildRegion {
+        ChildRegion { state: RegionState::Staged { children, content } }
+    }
+
+    /// A staged single-node region whose one node is itself the content — the common
+    /// shape of `\frac 1 2` single-token arguments and provided `*` markers.
+    /// `child_offset` indexes the callable's child list.
+    pub fn single(child_offset: u32) -> ChildRegion {
+        ChildRegion::new(child_offset..child_offset + 1, ContentNodes::InRegion(0..1))
+    }
+
+    /// Whether [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) has resolved
+    /// this region to node-index ranges. Always `true` on regions read from a finished
+    /// tree.
+    pub fn is_resolved(&self) -> bool {
+        matches!(self.state, RegionState::Resolved { .. })
+    }
+
+    /// The region's nodes — the argument's/slot's full syntactic extent, in source
+    /// order — as a global node-index range of the finished tree (resolve to nodes via
+    /// [`NodeTree::nodes_in`](super::NodeTree::nodes_in)).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a staged region (see [`ChildRegion`]).
+    pub fn children(&self) -> Range<u32> {
+        self.resolved().0.clone()
+    }
+
+    /// The region's designated content nodes, as a global node-index range of the
+    /// finished tree. Reading it is a plain slice — no unwrap heuristics; possibly
+    /// empty (anchored by [`content_parent`](ChildRegion::content_parent)).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a staged region (see [`ChildRegion`]).
+    pub fn content_range(&self) -> Range<u32> {
+        self.resolved().1.clone()
+    }
+
+    /// The node whose child list contains [`content_range`](ChildRegion::content_range):
+    /// the argument's `Group`, the slot's body `List` — or the callable itself for
+    /// region-level content. Answers delimiter queries ("the group node of this
+    /// argument") and anchors empty content ranges (`\m{}`).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a staged region (see [`ChildRegion`]).
+    pub fn content_parent(&self) -> NodeId {
+        NodeId(self.resolved().2)
+    }
+
+    fn resolved(&self) -> (&Range<u32>, &Range<u32>, u32) {
+        match &self.state {
+            RegionState::Resolved { children, content, content_parent } => {
+                (children, content, *content_parent)
+            }
+            RegionState::Staged { .. } => panic!(
+                "child region still staged: node-index ranges are minted by \
+                 NodeTreeBuilder::finish() (two-phase record contract, node::arguments docs)"
+            ),
+        }
+    }
+
+    /// The staged form, if not yet resolved (builder-side validation).
+    pub(crate) fn staged(&self) -> Option<(&Range<u32>, &ContentNodes)> {
+        match &self.state {
+            RegionState::Staged { children, content } => Some((children, content)),
+            RegionState::Resolved { .. } => None,
+        }
+    }
+
+    /// Flip to resolved (called exactly once, by `NodeTreeBuilder::finish`).
+    pub(crate) fn resolve(&mut self, children: Range<u32>, content: Range<u32>, content_parent: u32) {
+        self.state = RegionState::Resolved { children, content, content_parent };
+    }
+}
+
 /// One spec'd argument of one invocation: the spec it was parsed against, whether (and
-/// where) it was provided, and per-instance records.
+/// where) it was provided, and per-argument ext data.
 pub struct ParsedArgument<L: Lang> {
     /// The spec this argument was parsed against (pylatexenc's `arguments_spec_list`
     /// entry) — always present, so names and introspection work for absent optionals too.
     pub spec: Arc<ArgumentSpec<L>>,
-    /// Offset into the callable node's children range of the argument's node (the entire
-    /// argument, delimiters included). `None` = the argument was not provided
-    /// (pylatexenc's `None` in `argnlist`).
-    pub child: Option<u32>,
-    /// Whitespace skipped before the argument (`\frac {a}`), reproduced verbatim by
-    /// level-2 recomposition. Empty when absent or when nothing was skipped.
-    pub pre_space: TextContent,
+    /// The argument's child region. `None` = the argument was not provided (pylatexenc's
+    /// `None` in `argnlist`); an absent argument consumed nothing, not even noise.
+    pub region: Option<ChildRegion>,
     /// Extension data attached to this argument (`Lang::NodeExts::ArgumentExt`) — e.g. a
     /// reference extension caching `{domain, key}` parsed out of the argument's content.
     pub ext: ArgumentExt<L>,
 }
 
 impl<L: Lang> ParsedArgument<L> {
-    /// An argument parsed against `spec` whose node is at child offset `child`.
-    pub fn provided(spec: Arc<ArgumentSpec<L>>, child: u32) -> ParsedArgument<L> {
-        ParsedArgument { spec, child: Some(child), pre_space: TextContent::empty(), ext: Default::default() }
+    /// An argument parsed against `spec` occupying `region`.
+    pub fn provided(spec: Arc<ArgumentSpec<L>>, region: ChildRegion) -> ParsedArgument<L> {
+        ParsedArgument { spec, region: Some(region), ext: Default::default() }
     }
 
     /// An argument parsed against `spec` that was not provided.
     pub fn absent(spec: Arc<ArgumentSpec<L>>) -> ParsedArgument<L> {
-        ParsedArgument { spec, child: None, pre_space: TextContent::empty(), ext: Default::default() }
-    }
-
-    /// Record the whitespace skipped before the argument.
-    pub fn with_pre_space(mut self, pre_space: TextContent) -> ParsedArgument<L> {
-        self.pre_space = pre_space;
-        self
+        ParsedArgument { spec, region: None, ext: Default::default() }
     }
 
     /// Whether the argument was provided (pylatexenc's `was_provided()`).
     pub fn is_provided(&self) -> bool {
-        self.child.is_some()
+        self.region.is_some()
     }
 
     /// The argument's name, per its spec.
@@ -133,20 +275,21 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
     }
 }
 
-/// One slot of one invocation. Slots always have a node (an empty body is an empty
-/// `List` node — a region that *exists* with no content, unlike an absent optional
-/// argument). Separator/terminator syntax records arrive with `SlotsParser` (Phase 6).
+/// One slot of one invocation. Slots always have a region (a region that *exists*, with
+/// possibly empty content — unlike an absent optional argument): for the standard
+/// environment shape it holds the body `List` node, whose children are the content;
+/// separator/terminator syntax records arrive with `SlotsParser` (Phase 6).
 pub struct ParsedSlot<L: Lang> {
     /// The spec this slot was parsed against.
     pub spec: Arc<SlotSpec<L>>,
-    /// Offset into the callable node's children range (a `List` node).
-    pub child: u32,
+    /// The slot's child region.
+    pub region: ChildRegion,
 }
 
 impl<L: Lang> ParsedSlot<L> {
-    /// A slot parsed against `spec` whose `List` node is at child offset `child`.
-    pub fn new(spec: Arc<SlotSpec<L>>, child: u32) -> ParsedSlot<L> {
-        ParsedSlot { spec, child }
+    /// A slot parsed against `spec` occupying `region`.
+    pub fn new(spec: Arc<SlotSpec<L>>, region: ChildRegion) -> ParsedSlot<L> {
+        ParsedSlot { spec, region }
     }
 
     /// The slot's name, per its spec.
@@ -200,25 +343,6 @@ impl<L: Lang> From<Vec<ParsedSlot<L>>> for ParsedSlots<L> {
     }
 }
 
-// --- materialization (crate-internal; see NodeTree::materialize) ----------------------
-
-impl<L: Lang> ParsedArguments<L> {
-    pub(crate) fn materialized(&self, source_content: &str) -> ParsedArguments<L> {
-        ParsedArguments {
-            arguments: self
-                .arguments
-                .iter()
-                .map(|arg| ParsedArgument {
-                    spec: Arc::clone(&arg.spec),
-                    child: arg.child,
-                    pre_space: arg.pre_space.materialized(source_content),
-                    ext: arg.ext.clone(),
-                })
-                .collect(),
-        }
-    }
-}
-
 // Manual impls: derives would demand `L:` bounds although only associated types (already
 // bounded) and `Arc`s are stored.
 
@@ -226,8 +350,7 @@ impl<L: Lang> Clone for ParsedArgument<L> {
     fn clone(&self) -> Self {
         ParsedArgument {
             spec: Arc::clone(&self.spec),
-            child: self.child,
-            pre_space: self.pre_space.clone(),
+            region: self.region.clone(),
             ext: self.ext.clone(),
         }
     }
@@ -237,8 +360,7 @@ impl<L: Lang> fmt::Debug for ParsedArgument<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedArgument")
             .field("spec", &self.spec)
-            .field("child", &self.child)
-            .field("pre_space", &self.pre_space)
+            .field("region", &self.region)
             .field("ext", &self.ext)
             .finish()
     }
@@ -258,7 +380,7 @@ impl<L: Lang> fmt::Debug for ParsedArguments<L> {
 
 impl<L: Lang> Clone for ParsedSlot<L> {
     fn clone(&self) -> Self {
-        ParsedSlot { spec: Arc::clone(&self.spec), child: self.child }
+        ParsedSlot { spec: Arc::clone(&self.spec), region: self.region.clone() }
     }
 }
 
@@ -266,7 +388,7 @@ impl<L: Lang> fmt::Debug for ParsedSlot<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedSlot")
             .field("spec", &self.spec)
-            .field("child", &self.child)
+            .field("region", &self.region)
             .finish()
     }
 }

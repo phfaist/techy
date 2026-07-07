@@ -88,8 +88,26 @@ impl<L: Lang> NodeTree<L> {
         (0..self.nodes.len() as u32).map(move |i| NodeRef::new(self, NodeId(i)))
     }
 
+    /// The nodes of a global node-index range — a resolved
+    /// [`ChildRegion`](super::ChildRegion)'s [`children()`](super::ChildRegion::children)
+    /// or [`content_range()`](super::ChildRegion::content_range) of *this* tree — in
+    /// source order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range does not lie within this tree's storage — like [`NodeId`]s,
+    /// ranges are only meaningful for the tree whose builder minted them.
+    pub fn nodes_in(&self, range: Range<u32>) -> impl Iterator<Item = NodeRef<'_, L>> {
+        assert!(
+            range.start <= range.end && range.end as usize <= self.nodes.len(),
+            "node range {:?} out of range",
+            range
+        );
+        range.map(move |i| NodeRef::new(self, NodeId(i)))
+    }
+
     /// A new tree with every [`TextContent`](crate::source::TextContent) owned
-    /// (node contents, callable post-spaces, and marker spellings). Trees stay
+    /// (node contents, group delimiters, and callable post-spaces). Trees stay
     /// immutable — `self` is untouched; spans, states, and specs are Arc-shared.
     pub fn materialize(&self) -> NodeTree<L> {
         let nodes = self

@@ -16,12 +16,15 @@
 //! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
 //!   arguments/slots, post-space); shared behavior lives in the spec, context in the
 //!   recorded parsing state (the division-of-labor rule).
-//! - **One node per region** (Phase 5 design session, DESIGN_RATIONALE.md §3.5): a
-//!   callable's children are one node per *provided* argument followed by one `List`
-//!   node per slot; [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments`
-//!   pattern, July 2026) map each region to its child offset, record which
-//!   [`ArgumentSpec`](crate::spec::ArgumentSpec) it was parsed against, and hold
-//!   per-instance syntax records.
+//! - **One child region per argument/slot** (July 2026 regions session,
+//!   DESIGN_RATIONALE.md §3.5): a callable's children are the concatenation of one
+//!   contiguous region per *provided* argument, then one per slot — each region holding
+//!   noise (comment nodes, whitespace-only `Chars` nodes) alongside the syntax-bearing
+//!   nodes. [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments` pattern)
+//!   record each region and its parser-designated content nodes ([`ChildRegion`] —
+//!   two-phase: staged by parsers, resolved to global node-index ranges by the
+//!   builder's `finish()`), and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each
+//!   was parsed against.
 //! - Node textual payloads are [`TextContent`](crate::source::TextContent) (span-backed
 //!   or owned); [`NodeTree::materialize`] produces an all-owned copy. Names are always
 //!   owned (identity vs. content ownership rule).
@@ -32,7 +35,9 @@ mod kind;
 mod node_ref;
 mod tree;
 
-pub use arguments::{ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots};
+pub use arguments::{
+    ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
+};
 pub use builder::{BuildId, NodeTreeBuilder};
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::NodeRef;
@@ -168,8 +173,14 @@ mod tests {
                 name: "frac".into(),
                 spec,
                 arguments: vec![
-                    ParsedArgument::provided(arg_specs[0].clone(), 0),
-                    ParsedArgument::provided(arg_specs[1].clone(), 1),
+                    ParsedArgument::provided(
+                        arg_specs[0].clone(),
+                        ChildRegion::new(0..1, ContentNodes::InChildrenOf(a_group, 0..1)),
+                    ),
+                    ParsedArgument::provided(
+                        arg_specs[1].clone(),
+                        ChildRegion::new(1..2, ContentNodes::InChildrenOf(b_group, 0..1)),
+                    ),
                 ]
                 .into(),
                 slots: ParsedSlots::empty(),
@@ -229,18 +240,31 @@ mod tests {
         let tree = example_tree();
         let frac = tree.root().child(1).unwrap();
 
-        let arg0 = frac.argument(0).unwrap();
+        // Region nodes: the argument's full syntactic extent (here just the group).
+        let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
+        assert_eq!(region0.len(), 1);
+        let arg0 = region0[0];
         assert!(arg0.is_group());
         assert_eq!(arg0.group_type(), Some(GT_BRACE));
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         assert_eq!(arg0.span_content(), "{a}");
-        assert_eq!(arg0.child(0).unwrap().chars(), Some("a"));
 
-        let arg1 = frac.argument(1).unwrap();
-        assert_eq!(arg1.span_content(), "{b}");
+        // Content nodes: what the parser designated — the group's children, braces
+        // excluded; read back as a plain node range, no unwrap heuristics.
+        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
+        assert_eq!(content0.len(), 1);
+        assert_eq!(content0[0].chars(), Some("a"));
 
-        assert!(frac.argument(2).is_none());
         let args = frac.arguments().unwrap();
+        // Resolved records are global node-index ranges (the NodeData.children
+        // coordinate system), readable through NodeTree::nodes_in:
+        let region1 = args.get(1).unwrap().region.as_ref().unwrap();
+        assert!(region1.is_resolved());
+        assert_eq!(tree.nodes_in(region1.children()).next().unwrap().span_content(), "{b}");
+        // The content parent is the group node (delimiter queries, empty-content anchor):
+        assert_eq!(tree.node(region1.content_parent()).span_content(), "{b}");
+
+        assert!(frac.argument_nodes(2).is_none());
         assert_eq!(args.len(), 2);
         assert!(args.iter().all(|arg| arg.is_provided()));
         // Every parsed argument knows the spec it was parsed against:
@@ -248,7 +272,7 @@ mod tests {
 
         // Non-callables answer None everywhere:
         let x = tree.root().child(0).unwrap();
-        assert!(x.argument(0).is_none());
+        assert!(x.argument_nodes(0).is_none());
         assert!(x.name().is_none());
         assert!(x.arguments().is_none());
     }
@@ -287,9 +311,12 @@ mod tests {
                 name: "section".into(),
                 spec,
                 arguments: vec![
-                    ParsedArgument::provided(star_spec, 0),
+                    ParsedArgument::provided(star_spec, ChildRegion::single(0)),
                     ParsedArgument::absent(placement_spec),
-                    ParsedArgument::provided(title_spec, 1),
+                    ParsedArgument::provided(
+                        title_spec,
+                        ChildRegion::new(1..2, ContentNodes::InChildrenOf(title, 0..1)),
+                    ),
                 ]
                 .into(),
                 slots: ParsedSlots::empty(),
@@ -303,21 +330,30 @@ mod tests {
         let tree = b.finish(section);
 
         let node = tree.root();
-        // The provided marker is an ordinary Chars child node; the absent optional has
-        // an entry but no node.
-        assert_eq!(node.argument(0).unwrap().chars(), Some("*"));
-        assert!(node.argument(1).is_none());
-        assert_eq!(node.argument(2).unwrap().span_content(), "{t}");
+        // The provided marker is an ordinary Chars child node and counts as its own
+        // content (star-as-content convention); the absent optional has an entry but no
+        // region — it consumed nothing.
+        assert_eq!(node.argument_content_nodes(0).unwrap().next().unwrap().chars(), Some("*"));
+        assert!(node.argument_nodes(1).is_none());
+        assert_eq!(node.argument_nodes(2).unwrap().next().unwrap().span_content(), "{t}");
 
         let args = node.arguments().unwrap();
         assert!(args.get(0).unwrap().is_provided());
         assert!(!args.get(1).unwrap().is_provided());
-        assert_eq!(args.get(2).unwrap().child, Some(1));
+        assert!(args.get(1).unwrap().region.is_none());
+
+        // Region-level content (the marker): the content parent is the callable itself.
+        let star_region = args.get(0).unwrap().region.as_ref().unwrap();
+        assert_eq!(star_region.content_parent(), node.id());
+        assert_eq!(star_region.children(), star_region.content_range());
 
         // By-name access — absent arguments keep their spec, so "absent" and "no such
         // argument" stay distinguishable:
-        assert_eq!(node.argument_named("title").unwrap().span_content(), "{t}");
-        assert!(node.argument_named("placement").is_none());
+        let title_region = args.get_named("title").unwrap().region.as_ref().unwrap();
+        assert_eq!(
+            tree.nodes_in(title_region.children()).next().unwrap().span_content(),
+            "{t}"
+        );
         assert!(!args.get_named("placement").unwrap().is_provided());
         assert!(args.get_named("nonsense").is_none());
     }
@@ -341,7 +377,11 @@ mod tests {
                 name: "it".into(),
                 spec,
                 arguments: ParsedArguments::empty(),
-                slots: vec![ParsedSlot::new(slot_spec, 0)].into(),
+                slots: vec![ParsedSlot::new(
+                    slot_spec,
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(body, 0..1)),
+                )]
+                .into(),
                 post_space: TextContent::empty(),
                 ext: (),
             }),
@@ -358,9 +398,350 @@ mod tests {
         assert_eq!(body.child(0).unwrap().chars(), Some("hi"));
         assert_eq!(node.slot(0).unwrap().id(), body.id());
         assert!(node.slot(1).is_none());
+        // Slot content reads as a plain node range — the body List's children:
+        let content: Vec<_> = node.slot_content_nodes(0).unwrap().collect();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("hi"));
         let slots = node.slots().unwrap();
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots.get_named("body").unwrap().child, 0);
+        // Global layout: env = 0, body List = 1, "hi" chars = 2.
+        assert_eq!(slots.get_named("body").unwrap().region.children(), 1..2);
+        assert_eq!(slots.get_named("body").unwrap().region.content_range(), 2..3);
+    }
+
+    /// Noise between arguments: `\frac %h␊ {a}{b}` — the comment and the surrounding
+    /// whitespace are ordinary child nodes inside the first argument's region, out of
+    /// the way of the designated content.
+    #[test]
+    fn argument_regions_hold_noise_nodes() {
+        let source: Arc<Source> = Arc::new(Source::new("\\frac %h\n {a}{b}"));
+        // \frac=0..5  " "=5..6  %h␊=6..9 (content "h"=7..8)  " "=9..10  {a}=10..13  {b}=13..16
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+
+        let ws1 = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![]);
+        let com = b.add(NodeKind::comment(Span::new(7, 8)), spanned(&source, 6..9), st.clone(), vec![]);
+        let ws2 = b.add(NodeKind::chars(Span::new(9, 10)), spanned(&source, 9..10), st.clone(), vec![]);
+        let a = b.add(NodeKind::chars(Span::new(11, 12)), spanned(&source, 11..12), st.clone(), vec![]);
+        let a_group = b.add(
+            NodeKind::group(brace_group(10..11, 12..13)),
+            spanned(&source, 10..13),
+            st.clone(),
+            vec![a],
+        );
+        let bb = b.add(NodeKind::chars(Span::new(14, 15)), spanned(&source, 14..15), st.clone(), vec![]);
+        let b_group = b.add(
+            NodeKind::group(brace_group(13..14, 15..16)),
+            spanned(&source, 13..16),
+            st.clone(),
+            vec![bb],
+        );
+
+        let arg_specs = [brace_arg_spec(), brace_arg_spec()];
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(arg_specs.to_vec(), vec![]));
+        let frac = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "frac".into(),
+                spec,
+                arguments: vec![
+                    ParsedArgument::provided(
+                        arg_specs[0].clone(),
+                        ChildRegion::new(0..4, ContentNodes::InChildrenOf(a_group, 0..1)),
+                    ),
+                    ParsedArgument::provided(
+                        arg_specs[1].clone(),
+                        ChildRegion::new(4..5, ContentNodes::InChildrenOf(b_group, 0..1)),
+                    ),
+                ]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![ws1, com, ws2, a_group, b_group],
+        );
+        let tree = b.finish(frac);
+
+        let frac = tree.root();
+        let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
+        assert_eq!(region0.len(), 4);
+        assert_eq!(region0[0].chars(), Some(" ")); // whitespace-only Chars node
+        assert!(region0[1].is_comment());
+        assert_eq!(region0[1].comment(), Some("h"));
+        assert!(region0[3].is_group());
+        // …while the content is undisturbed by the noise:
+        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
+        assert_eq!(content0.len(), 1);
+        assert_eq!(content0[0].chars(), Some("a"));
+        // The second argument is unaffected by the first one's noise:
+        assert_eq!(frac.argument_content_nodes(1).unwrap().next().unwrap().chars(), Some("b"));
+        // The regions tile the child list: recomposing the children in order
+        // reproduces the arguments' text byte-for-byte (partition invariant).
+        let all: String = frac.children().map(|c| c.span_content()).collect();
+        assert_eq!(all, " %h\n {a}{b}");
+    }
+
+    /// Content may be designated arbitrarily deep: `\m[{x}]` protects `]`-containing
+    /// content behind an inner brace group — the content nodes are the *inner* group's
+    /// children. The parser says what the content is; there is no unwrap-double-group
+    /// heuristic (pylatexenc's hack).
+    #[test]
+    fn content_designation_reaches_into_nested_groups() {
+        const GT_BRACKET: u32 = 1;
+        let source: Arc<Source> = Arc::new(Source::new("\\m[{x}]"));
+        // \m=0..2  [=2..3  {=3..4  x=4..5  }=5..6  ]=6..7
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+
+        let x = b.add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![]);
+        let inner = b.add(
+            NodeKind::group(brace_group(3..4, 5..6)),
+            spanned(&source, 3..6),
+            st.clone(),
+            vec![x],
+        );
+        let outer = b.add(
+            NodeKind::group(GroupData::new(
+                GT_BRACKET,
+                TextContent::Spanned(Span::new(2, 3)),
+                TextContent::Spanned(Span::new(6, 7)),
+            )),
+            spanned(&source, 2..7),
+            st.clone(),
+            vec![inner],
+        );
+
+        let arg_spec = brace_arg_spec();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()], vec![]));
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: vec![ParsedArgument::provided(
+                    arg_spec,
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(inner, 0..1)),
+                )]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![outer],
+        );
+        let tree = b.finish(m);
+
+        let m = tree.root();
+        let region: Vec<_> = m.argument_nodes(0).unwrap().collect();
+        assert_eq!(region.len(), 1);
+        assert_eq!(region[0].span_content(), "[{x}]");
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().collect();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("x"));
+        // The content parent is the inner group — a descendant of, not a member of,
+        // the region:
+        let record = m.arguments().unwrap().get(0).unwrap().region.clone().unwrap();
+        assert_eq!(tree.node(record.content_parent()).span_content(), "{x}");
+    }
+
+    /// Empty content stays anchored: `\m{}` — the content range is empty, but its
+    /// parent (the group) still answers "where content would go".
+    #[test]
+    fn empty_content_is_anchored_by_its_parent() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let group = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        );
+        let arg_spec = brace_arg_spec();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()], vec![]));
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: vec![ParsedArgument::provided(
+                    arg_spec,
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(group, 0..0)),
+                )]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![group],
+        );
+        let tree = b.finish(m);
+
+        let record = tree.root().arguments().unwrap().get(0).unwrap().region.clone().unwrap();
+        assert!(record.content_range().is_empty());
+        assert_eq!(tree.node(record.content_parent()).span_content(), "{}");
+        assert_eq!(tree.root().argument_content_nodes(0).unwrap().count(), 0);
+    }
+
+    // --- builder contract violations around regions -----------------------------------
+
+    /// Helper: a one-argument callable staged over the given children with the given
+    /// region record (drives the builder's region checks).
+    fn stage_callable_with_arg(
+        b: &mut NodeTreeBuilder<PlainLang>,
+        source: &Arc<Source>,
+        st: &Arc<ParsingState<PlainLang>>,
+        args: Vec<ParsedArgument<PlainLang>>,
+        children: Vec<BuildId>,
+    ) -> BuildId {
+        let specs: Vec<_> = args.iter().map(|a| a.spec.clone()).collect();
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(specs, vec![]));
+        b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: args.into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(source),
+            st.clone(),
+            children,
+        )
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn region_out_of_bounds_panics() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0))];
+        stage_callable_with_arg(&mut b, &source, &st, args, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "in order and non-overlapping")]
+    fn overlapping_regions_panic() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let group = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        );
+        let args = vec![
+            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
+            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
+        ];
+        stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "tile the child list exactly")]
+    fn region_gaps_panic_in_debug() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let g1 = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        );
+        let g2 = b.add(
+            NodeKind::group(brace_group(4..5, 5..6)),
+            spanned(&source, 4..6),
+            st.clone(),
+            vec![],
+        );
+        // One argument claiming only the second child: the first belongs to no region.
+        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(1))];
+        stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not reachable from the root")]
+    fn dangling_content_parent_panics() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let group = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        );
+        // Content designated inside a staged node that never becomes part of the tree:
+        let stray = b.add(NodeKind::list(), spanned(&source, 0..0), st.clone(), vec![]);
+        let args = vec![ParsedArgument::provided(
+            brace_arg_spec(),
+            ChildRegion::new(0..1, ContentNodes::InChildrenOf(stray, 0..0)),
+        )];
+        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
+        b.finish(m);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside its own argument/slot region")]
+    fn content_parent_outside_its_region_panics() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let g1 = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        );
+        let g2 = b.add(
+            NodeKind::group(brace_group(4..5, 5..6)),
+            spanned(&source, 4..6),
+            st.clone(),
+            vec![],
+        );
+        // Argument 0's content designated inside argument 1's group:
+        let args = vec![
+            ParsedArgument::provided(
+                brace_arg_spec(),
+                ChildRegion::new(0..1, ContentNodes::InChildrenOf(g2, 0..0)),
+            ),
+            ParsedArgument::provided(
+                brace_arg_spec(),
+                ChildRegion::new(1..2, ContentNodes::InChildrenOf(g2, 0..0)),
+            ),
+        ];
+        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
+        b.finish(m);
+    }
+
+    #[test]
+    #[should_panic(expected = "already-resolved region")]
+    fn restaging_resolved_records_panics() {
+        let tree = example_tree();
+        let frac = tree.root().child(1).unwrap();
+        // Records from a finished tree hold that tree's node-index ranges; staging them
+        // into a new builder is a caller bug (the two-phase record contract).
+        let data = frac.callable().unwrap().clone();
+        let source: Arc<Source> = Arc::new(Source::new("x"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::<PlainLang>::new();
+        b.add(NodeKind::callable(data), SourceSpan::entire(&source), st, vec![]);
     }
 
     #[test]
@@ -407,7 +788,8 @@ mod tests {
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
         assert_eq!(root.child(1).unwrap().post_space(), Some(" "));
         assert_eq!(root.child(2).unwrap().comment(), Some(" note"));
-        assert_eq!(root.child(1).unwrap().argument(0).unwrap().group_delimiters(), Some(("{", "}")));
+        let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().next().unwrap();
+        assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
         for node in owned.iter() {
             match node.kind() {
@@ -420,7 +802,6 @@ mod tests {
                 }
                 NodeKind::Callable(data) => {
                     assert!(data.post_space.is_owned());
-                    assert!(data.arguments.iter().all(|arg| arg.pre_space.is_owned()));
                 }
                 _ => {}
             }

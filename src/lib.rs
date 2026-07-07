@@ -80,8 +80,8 @@ pub use source::{
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{
-    BuildId, CallableData, GroupData, NodeData, NodeId, NodeKind, NodeRef, NodeTree,
-    NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
+    BuildId, CallableData, ChildRegion, ContentNodes, GroupData, NodeData, NodeId, NodeKind,
+    NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
 };
 pub use spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
 pub use state::{
