@@ -1,7 +1,7 @@
 //! Construct parsers: the parsing layer of the S1 core (ARCHITECTURE.md §constructs).
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
-//! the main content loop (`NodesParser`, Phase 6.2), groups (6.3), callable invocations
+//! the main content loop ([`NodesParser`]), groups (6.3), callable invocations
 //! (6.4), arguments (6.5), environment bodies (6.6) — is parsed by an implementation of
 //! it, reading tokens and staging nodes through one [`ParseContext`].
 //!
@@ -27,7 +27,11 @@
 //!
 //! `Err` means **abort**: recovery happens at the detection site (the
 //! [`recover`](ParseContext::recover) helper), and abnormal endings of sub-parses travel
-//! as data (`StopCause`, Phase 6.2) — nobody continues past an `Err`.
+//! as data ([`StopCause`]) — nobody continues past an `Err`.
+
+mod nodes_parser;
+
+pub use nodes_parser::{NodesOutcome, NodesParser, StopCause, StopSpec, TokenStopCondition};
 
 use alloc::sync::Arc;
 use core::fmt;

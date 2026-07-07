@@ -24,7 +24,7 @@ below, and summarize what shipped and what (if anything) deviated.
 |---|---|---|
 | 6.0 | Documentation pre-update (ARCHITECTURE.md, DESIGN_RATIONALE.md) | ✅ done (July 2026, plan session) |
 | 6.1 | Contracts & amendments (token/node/Lang/builder/module scaffolds) | ✅ done (July 2026). `ConstructParserResult<L, T>` takes `L` (user-approved; `TokenResult` convention, §2 updated); `check_tree_invariants` deferred to 6.3 as allowed |
-| 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ☐ |
+| 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ✅ done (July 2026). Sibling-delta application deferred to 6.4 (no 6.2 arm produces a delta; the mid-stream test lands with the `\newcommand`-shaped test). Position-seam convention pinned: on any stop, the reader stands at the stop token's `span.start`, its pre-space already staged as sibling content |
 | 6.3 | Groups + `check_tree_invariants()` | ☐ |
 | 6.4 | Invocation dispatch + `make_invocation_parser` + `StdInvocationParser` (zero-arg) | ☐ |
 | 6.5 | Arguments (`ArgumentParser` entry point, standard argument parsers, regions) | ☐ |

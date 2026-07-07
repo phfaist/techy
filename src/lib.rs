@@ -38,8 +38,9 @@
 //!   `ArgsLayout` syntax records grow with the parsers in Phase 6.
 //! - [`constructs`] + [`engine`] (S1) — construct parsers and the parse-session API.
 //!   **In progress (Phase 6)**: the contracts ([`ConstructParser`], [`ParseContext`],
-//!   [`Invocation`], [`ParserSession`], [`ParseError`]) landed in 6.1; the parsers land
-//!   in 6.2–6.6.
+//!   [`Invocation`], [`ParserSession`], [`ParseError`]) landed in 6.1; the content
+//!   dispatch loop ([`NodesParser`], stop conditions, [`StopCause`]) landed in 6.2;
+//!   groups, invocations, arguments, and environment bodies land in 6.3–6.6.
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
 //!
 //! ## Quick start (what exists today)
@@ -78,7 +79,10 @@ pub mod token;
 // `*_JUNK._rs`).
 
 // Re-export the public API of the implemented topics.
-pub use constructs::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+pub use constructs::{
+    ConstructParser, ConstructParserResult, Invocation, NodesOutcome, NodesParser, ParseContext,
+    StopCause, StopSpec, TokenStopCondition,
+};
 pub use engine::{ParseResult, ParserSession};
 pub use error::{
     format_position, format_traceback, Diagnostic, Diagnostics, ParseError, ParseErrorKind,
