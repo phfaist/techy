@@ -29,19 +29,22 @@
 //! # Stop conditions and the position seam
 //!
 //! A [`StopSpec`] carries two independent triggers (decided July 2026, §3.6): a *token*
-//! condition tested on peek — a match leaves the token **unconsumed** for the caller to
-//! consume and interpret — and a *node* condition tested after each staged node — a
-//! match includes that node and stops after it. Conditions are tested only at this
-//! parser's own nesting level (a nested group is consumed whole by the group parser).
-//! Abnormal endings are **data**, not errors: the parser reports its [`StopCause`] and
-//! the caller decides (§3.8 rule 2) — an unexpected group close likewise stays
+//! condition tested on peek — a match ends the parse and, per the condition's
+//! [`consume`](TokenStopCondition::consume) switch, either leaves the token unconsumed
+//! for the caller or consumes it here — and a *node* condition tested after each staged
+//! node — a match includes that node and stops after it. Conditions are tested only at
+//! this parser's own nesting level (a nested group is consumed whole by the group
+//! parser). Abnormal endings are **data**, not errors: the parser reports its
+//! [`StopCause`] and the caller decides (§3.8 rule 2) — an unexpected group close stays
 //! unconsumed.
 //!
-//! On *any* return, the reader stands exactly at the end of the bytes the staged nodes
-//! account for: a stop token is left at its own `span.start`, its pre-space already
-//! housed in the flushed sibling nodes (the partition invariant requires it — the
-//! whitespace before a `}` or `\end` is interior content). Re-peeking therefore yields
-//! the stop token with an **empty** `pre_space`, and no byte is represented twice.
+//! On *any* return the stop token's pre-space is first flushed into the sibling nodes
+//! (the partition invariant requires it — the whitespace before a `}` or `\end` is
+//! interior content). A **left** stop token then sits at its own `span.start`, so
+//! re-peeking yields it with an **empty** `pre_space` and no byte is represented twice; a
+//! **consumed** stop token is taken whole, including any syntactic post-space (a command
+//! name's terminating whitespace), so the reader stands just past it. The matched span is
+//! reported in [`StopCause::TokenCondition`] either way.
 //!
 //! # Recovery (DESIGN_RATIONALE.md §3.8)
 //!
@@ -71,13 +74,9 @@ use crate::token::{Token, TokenKind, TokenReader};
 
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
-/// The token-condition half of a [`StopSpec`]: which peeked token ends the parse
-/// (mirroring pylatexenc's `stop_token_condition`, reified as a closed enum plus a
-/// tier-2 predicate escape).
-///
-/// A match leaves the token **unconsumed** — the caller consumes and interprets it
-/// (pylatexenc's `handle_stop_condition_token` ambiguity removed).
-pub enum TokenStopCondition<'p, L: Lang> {
+/// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
+/// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
+pub enum TokenStopKind<'p, L: Lang> {
     /// Stop at a [`Command`](TokenKind::Command) token with this name (an environment
     /// body stopping at `\end`).
     Command {
@@ -110,6 +109,24 @@ pub enum TokenStopCondition<'p, L: Lang> {
     Predicate(&'p dyn Fn(&Token<'_, L>) -> bool),
 }
 
+/// The token-condition half of a [`StopSpec`]: which peeked token ends the parse
+/// ([`kind`](Self::kind)) and whether [`NodesParser`] consumes it on a match
+/// ([`consume`](Self::consume)).
+///
+/// On a match `NodesParser` returns [`StopCause::TokenCondition`] with the matched
+/// token's span. With `consume = false` the token is left **unconsumed** at its own
+/// `span.start` (peek it again); with `consume = true` it is taken whole — including any
+/// syntactic post-space (a command name's terminating whitespace), so no byte is re-read
+/// as content. This is a declarative consume/leave switch, not pylatexenc's
+/// `handle_stop_condition_token` interpretation hook.
+pub struct TokenStopCondition<'p, L: Lang> {
+    /// Which token ends the parse.
+    pub kind: TokenStopKind<'p, L>,
+    /// Whether `NodesParser` consumes the matched token (`true`) or leaves it unconsumed
+    /// for the caller (`false`).
+    pub consume: bool,
+}
+
 /// What ends a [`NodesParser`] run — both triggers optional and independent.
 ///
 /// The `'p` lifetime ties borrowed conditions (names, predicates) to the parser
@@ -132,9 +149,10 @@ impl<'p, L: Lang> StopSpec<'p, L> {
         StopSpec { token: None, node: None }
     }
 
-    /// Only a token condition.
-    pub fn at_token(condition: TokenStopCondition<'p, L>) -> StopSpec<'p, L> {
-        StopSpec { token: Some(condition), node: None }
+    /// Only a token condition: stop at `kind`, consuming the matched token or leaving it
+    /// per `consume`.
+    pub fn at_token(kind: TokenStopKind<'p, L>, consume: bool) -> StopSpec<'p, L> {
+        StopSpec { token: Some(TokenStopCondition { kind, consume }), node: None }
     }
 }
 
@@ -149,16 +167,28 @@ impl<L: Lang> Default for StopSpec<'_, L> {
 /// (DESIGN_RATIONALE.md §3.8 rule 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopCause {
-    /// A stop condition was met: the stopping token is left **unconsumed** at its own
-    /// span start (peek it; its pre-space is already staged as sibling content), or the
-    /// node condition fired on the last staged node.
-    StopConditionMet,
+    /// The token stop condition matched. `span` is the matched token's span; whether it
+    /// was consumed is the [`consume`](TokenStopCondition::consume) the caller set —
+    /// consumed ⇒ the reader stands just past it, otherwise it sits unconsumed at
+    /// `span.start`, its pre-space already staged as sibling content.
+    TokenCondition {
+        /// The matched stop token's span.
+        span: Span,
+    },
+    /// The node stop condition fired on the last staged node (the reader stands where
+    /// that node ended: a directly staged node is consumed, a flush leaves the triggering
+    /// token unconsumed at its own start).
+    NodeCondition,
     /// [`EndOfStream`](TokenKind::EndOfStream) was reached (its trailing-whitespace
     /// node, if any, is already staged).
     EndOfInput,
-    /// A group close no condition asked for; the close token is left unconsumed and the
-    /// caller decides (diagnose-and-skip at the root, unwind in a group parser — §3.8).
-    UnexpectedGroupClose,
+    /// A group close no condition asked for; the close token is left unconsumed at
+    /// `span.start` and the caller decides (diagnose-and-skip at the root, unwind in a
+    /// group parser — §3.8).
+    UnexpectedGroupClose {
+        /// The unexpected close token's span.
+        span: Span,
+    },
 }
 
 /// What a [`NodesParser`] produces: the staged sibling nodes, in source order, and how
@@ -278,27 +308,27 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         }
     }
 
-    /// Whether the token stop condition matches the peeked token.
-    fn token_stop_matches(&self, state: &ParsingState<L>, token: &Token<'_, L>) -> bool {
-        match &self.stop.token {
-            None => false,
-            Some(TokenStopCondition::Command { name }) => {
+    /// If the token stop condition matches the peeked token, whether it is to be consumed
+    /// ([`TokenStopCondition::consume`]); `None` when no token condition matches.
+    fn token_stop(&self, state: &ParsingState<L>, token: &Token<'_, L>) -> Option<bool> {
+        let cond = self.stop.token.as_ref()?;
+        let matches = match &cond.kind {
+            TokenStopKind::Command { name } => {
                 matches!(&token.kind, TokenKind::Command { name: n, .. } if n == name)
             }
-            Some(TokenStopCondition::GroupClose { group_type, close }) => match &token.kind {
-                // Both the spelling and the state-resolved class must match the pairing
-                // the group opened with (a `]` sharing the class, or a `}` a delta
-                // re-classed, must not close it).
+            // Both the spelling and the state-resolved class must match the pairing the
+            // group opened with (a `]` sharing the class, or a `}` a delta re-classed,
+            // must not close it).
+            TokenStopKind::GroupClose { group_type, close } => match &token.kind {
                 TokenKind::GroupClose { delim } => {
                     delim == close && group_close_type(state, delim) == Some(*group_type)
                 }
                 _ => false,
             },
-            Some(TokenStopCondition::ParagraphBreak) => {
-                matches!(token.kind, TokenKind::ParagraphBreak)
-            }
-            Some(TokenStopCondition::Predicate(predicate)) => predicate(token),
-        }
+            TokenStopKind::ParagraphBreak => matches!(token.kind, TokenKind::ParagraphBreak),
+            TokenStopKind::Predicate(predicate) => predicate(token),
+        };
+        matches.then_some(cond.consume)
     }
 
     /// The shared tolerant recovery of the not-yet-wired arms (`Command` until
@@ -371,13 +401,21 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
             };
 
             // Token stop condition — consulted for cleanly read tokens only: a recovery
-            // placeholder is processed as content (its site already diagnosed it, and
-            // "leave the stop token unconsumed" cannot hold for a token that cannot be
-            // re-read).
-            if !recovered && self.token_stop_matches(&cx.state, &token) {
-                self.flush_through(cx, token.pre_space);
-                cx.tokens.move_to(&token, false);
-                return Ok((self.outcome(StopCause::StopConditionMet), None));
+            // placeholder is processed as content (its site already diagnosed it, and a
+            // stop token that cannot be re-read cannot be left for the caller).
+            if !recovered {
+                if let Some(consume) = self.token_stop(&cx.state, &token) {
+                    self.flush_through(cx, token.pre_space); // REVIEW FLAG - It looks like the node predicate fires in this call, but it probably shouldn't.
+                    if consume {
+                        // Take the whole token, syntactic post-space included; its
+                        // pre-space is already housed in the flushed sibling nodes.
+                        cx.tokens.move_past(&token, true);
+                    } else {
+                        cx.tokens.move_to(&token, false);
+                    }
+                    let span = token.span;
+                    return Ok((self.outcome(StopCause::TokenCondition { span }), None));
+                }
             }
 
             match &token.kind {
@@ -396,7 +434,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_to(&token, false);
                     }
                     let cause =
-                        if fired { StopCause::StopConditionMet } else { StopCause::EndOfInput };
+                        if fired { StopCause::NodeCondition } else { StopCause::EndOfInput };
                     return Ok((self.outcome(cause), None));
                 }
 
@@ -408,9 +446,9 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_to(&token, false);
                     }
                     let cause = if fired {
-                        StopCause::StopConditionMet
+                        StopCause::NodeCondition
                     } else {
-                        StopCause::UnexpectedGroupClose
+                        StopCause::UnexpectedGroupClose { span: token.span }
                     };
                     return Ok((self.outcome(cause), None));
                 }
@@ -420,7 +458,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                     // Invariant 2: the break is its own node — the hook's kind, staged
                     // by the loop over the full token span (a `Lang` cannot stage nodes
@@ -430,7 +468,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_past(&token, true);
                     }
                     if self.stage_node(cx, kind, token.span) {
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
 
@@ -439,7 +477,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                     // The token's span is start delimiter + content + post-space; the
                     // content's length and end position pin down the three sub-spans.
@@ -451,7 +489,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_past(&token, true);
                     }
                     if self.stage_node(cx, kind, token.span) {
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
 
@@ -462,7 +500,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // span-backed chars fallback.
                     let message = format!("cannot resolve command ‘{}{}’", escape_char, name);
                     if self.recover_as_chars(cx, &token, recovered, message)? {
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
 
@@ -471,7 +509,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // token); until then, same recovery as unresolved commands.
                     let message = format!("cannot invoke specials ‘{}’ here", name);
                     if self.recover_as_chars(cx, &token, recovered, message)? {
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
 
@@ -480,7 +518,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // fallback over the delimiter.
                     let message = format!("cannot parse group opened by ‘{}’ here", delim);
                     if self.recover_as_chars(cx, &token, recovered, message)? {
-                        return Ok((self.outcome(StopCause::StopConditionMet), None));
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
             }
@@ -523,20 +561,29 @@ fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: usize) {
 
 // Manual impls: predicates have no useful Debug, and derives would demand `L:` bounds.
 
-impl<L: Lang> fmt::Debug for TokenStopCondition<'_, L> {
+impl<L: Lang> fmt::Debug for TokenStopKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenStopCondition::Command { name } => {
+            TokenStopKind::Command { name } => {
                 f.debug_struct("Command").field("name", name).finish()
             }
-            TokenStopCondition::GroupClose { group_type, close } => f
+            TokenStopKind::GroupClose { group_type, close } => f
                 .debug_struct("GroupClose")
                 .field("group_type", group_type)
                 .field("close", close)
                 .finish(),
-            TokenStopCondition::ParagraphBreak => write!(f, "ParagraphBreak"),
-            TokenStopCondition::Predicate(_) => write!(f, "Predicate(..)"),
+            TokenStopKind::ParagraphBreak => write!(f, "ParagraphBreak"),
+            TokenStopKind::Predicate(_) => write!(f, "Predicate(..)"),
         }
+    }
+}
+
+impl<L: Lang> fmt::Debug for TokenStopCondition<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenStopCondition")
+            .field("kind", &self.kind)
+            .field("consume", &self.consume)
+            .finish()
     }
 }
 
@@ -891,12 +938,13 @@ mod tests {
             content,
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::Command { name: "end" }),
-            StopSpec::at_token(TokenStopCondition::Command { name: "end" }),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
         );
         // The stop token's pre-space is interior content: it lands in the flushed run.
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        // The reported span covers the whole `\end` token (name + terminating space).
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
         assert_eq!(parsed.pos, 3);
 
         // Re-peeking from the seam yields the stop token itself, with empty pre-space —
@@ -915,11 +963,11 @@ mod tests {
             " \\end",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::Command { name: "end" }),
-            StopSpec::at_token(TokenStopCondition::Command { name: "end" }),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..1 \" \""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(1, 5) });
         assert_eq!(parsed.pos, 1);
     }
 
@@ -930,11 +978,11 @@ mod tests {
             "ab}c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 3) });
         assert_eq!(parsed.pos, 2);
     }
 
@@ -950,11 +998,11 @@ mod tests {
             "a b$c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a b\""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 4) });
         assert_eq!(parsed.pos, 3);
     }
 
@@ -971,11 +1019,11 @@ mod tests {
             "ab}c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_MATH, close: "$" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -996,11 +1044,11 @@ mod tests {
             "ab]c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1022,11 +1070,11 @@ mod tests {
             "ab}c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1037,7 +1085,7 @@ mod tests {
         let parsed =
             run_both("ab}c", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
         assert_eq!(parsed.pos, 2);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1049,11 +1097,11 @@ mod tests {
             "ab\n\ncd",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::ParagraphBreak),
-            StopSpec::at_token(TokenStopCondition::ParagraphBreak),
+            StopSpec::at_token(TokenStopKind::ParagraphBreak, false),
+            StopSpec::at_token(TokenStopKind::ParagraphBreak, false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 4) });
         assert_eq!(parsed.pos, 2);
     }
 
@@ -1065,11 +1113,55 @@ mod tests {
             "ab %c\nd",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::Predicate(&predicate)),
-            StopSpec::at_token(TokenStopCondition::Predicate(&predicate)),
+            StopSpec::at_token(TokenStopKind::Predicate(&predicate), false),
+            StopSpec::at_token(TokenStopKind::Predicate(&predicate), false),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 6) });
+        assert_eq!(parsed.pos, 3);
+    }
+
+    #[test]
+    fn consume_flag_swallows_a_command_stop_token_with_its_post_space() {
+        let st = state();
+        let content = "ab \\end rest";
+        let parsed = run_both(
+            content,
+            &st,
+            Recovery::Strict,
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, true),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, true),
+        );
+        // Same sibling content as the leave-it case; the command's terminating space is
+        // syntactic post-space, taken with the token — so the reader lands past it (8),
+        // not at the token start (3).
+        assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
+        assert_eq!(parsed.pos, 8);
+
+        // The next read is the following content, its pre-space empty (nothing re-read).
+        let mut reader = StdTokenReader::new(content);
+        reader.move_to_pos(parsed.pos);
+        let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        assert!(matches!(token.kind, TokenKind::Char('r')));
+        assert!(token.pre_space.is_empty());
+    }
+
+    #[test]
+    fn consume_flag_swallows_a_group_close_stop_token() {
+        let st = state();
+        let parsed = run_both(
+            "ab} c",
+            &st,
+            Recovery::Strict,
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, true),
+            StopSpec::at_token(TokenStopKind::GroupClose { group_type: GT_BRACE, close: "}" }, true),
+        );
+        assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(2, 3) });
+        // The close is consumed (reader past `}`); `}` carries no post-space, so the
+        // following space is not the close's — it stays for the enclosing content as the
+        // next token's pre-space, unclaimed here.
         assert_eq!(parsed.pos, 3);
     }
 
@@ -1088,7 +1180,7 @@ mod tests {
         // The comment token triggered the flush; the condition fired on the flushed
         // node, so the comment stays unconsumed at its own start.
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::NodeCondition);
         assert_eq!(parsed.pos, 3);
         assert_partition(&parsed.result, 0..3);
     }
@@ -1115,7 +1207,7 @@ mod tests {
             shapes(&parsed.result),
             ["comment 0..3 start=\"%\" content=\"c\" post=\"\\n\""]
         );
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::NodeCondition);
         assert_eq!(parsed.pos, 3);
     }
 
@@ -1134,7 +1226,7 @@ mod tests {
         // The final flush (at end of stream) staged the only node; the node condition
         // fired on it, so the cause is the condition, not EndOfInput.
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
-        assert_eq!(parsed.stop, StopCause::StopConditionMet);
+        assert_eq!(parsed.stop, StopCause::NodeCondition);
     }
 
     // --- tokenizer-error recovery (std reader only: the list reader cannot fail) ---------
@@ -1244,7 +1336,7 @@ mod tests {
             shapes(&parsed.result),
             ["chars 0..2 \"a \"", "chars 2..3 \"{\"", "chars 3..4 \"b\""]
         );
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(4, 5) });
         assert_eq!(parsed.pos, 4);
         assert_eq!(parsed.result.diagnostics.len(), 1);
     }

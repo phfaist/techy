@@ -24,7 +24,7 @@ below, and summarize what shipped and what (if anything) deviated.
 |---|---|---|
 | 6.0 | Documentation pre-update (ARCHITECTURE.md, DESIGN_RATIONALE.md) | ✅ done (July 2026, plan session) |
 | 6.1 | Contracts & amendments (token/node/Lang/builder/module scaffolds) | ✅ done (July 2026). `ConstructParserResult<L, T>` takes `L` (user-approved; `TokenResult` convention, §2 updated); `check_tree_invariants` deferred to 6.3 as allowed |
-| 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ✅ done (July 2026). Sibling-delta application deferred to 6.4 (no 6.2 arm produces a delta; the mid-stream test lands with the `\newcommand`-shaped test). Position-seam convention pinned: on any stop, the reader stands at the stop token's `span.start`, its pre-space already staged as sibling content |
+| 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ✅ done (July 2026). Sibling-delta application deferred to 6.4 (no 6.2 arm produces a delta; the mid-stream test lands with the `\newcommand`-shaped test). Position-seam convention pinned: on a *leave* stop, the reader stands at the stop token's `span.start`, its pre-space already staged as sibling content. Post-review amendment (user, July 2026): token stop conditions gained a `consume` switch (`TokenStopCondition` is now `{ kind: TokenStopKind, consume }`) and `StopCause` split into `TokenCondition {span}` / `NodeCondition` (+ `span` on `UnexpectedGroupClose`) — a consumed stop token is taken whole (`move_past`, post-space included) and its span reported; see DESIGN_RATIONALE §3.6 |
 | 6.3 | Groups + `check_tree_invariants()` | ☐ |
 | 6.4 | Invocation dispatch + `make_invocation_parser` + `StdInvocationParser` (zero-arg) | ☐ |
 | 6.5 | Arguments (`ArgumentParser` entry point, standard argument parsers, regions) | ☐ |
@@ -59,8 +59,11 @@ Update the status column (☐ → ✅ + date, or ⚠ + note) when a subphase com
    argument regions + body `List`, one span-contiguous block; scaffolding = the complement.
    Presets wanting the verbatim strings extract the two sub-spans in `finalize_node` → ext.
 7. **Stop conditions** (§3.6): token condition (closed enum or predicate) + node condition
-   (predicate over (count, last staged node)); stop token always left **unconsumed**;
-   `NodesParser` returns **`StopCause`** — abnormal endings are data, not errors.
+   (predicate over (count, last staged node)); a matched token is left unconsumed or
+   consumed per the condition's `consume` switch (6.2 amendment; default = leave);
+   `NodesParser` returns **`StopCause`** — `TokenCondition`/`NodeCondition`/`EndOfInput`/
+   `UnexpectedGroupClose`, the token-bearing causes carrying the matched span — abnormal
+   endings are data, not errors.
 8. **Terminator mismatch: close without consuming** (§3.6); malformed terminator (no name
    group): diagnose + consume + close. Loop safety: every level consumes or unwinds; the
    root always consumes.
@@ -120,7 +123,7 @@ where 's: 'a
 
 // --- NodesParser stop machinery ---------------------------------------------------
 
-pub enum TokenStopCondition<'p, L: Lang> {
+pub enum TokenStopKind<'p, L: Lang> {    // token-condition discriminant (was TokenStopCondition; 6.2 amendment)
     Command { name: &'p str },
     // matches the exact (group_type, close) pairing: close disambiguates within a class
     // (`]` vs `{`), group_type within a delimiter (a delta-reclassed `}`); class resolved
@@ -130,15 +133,24 @@ pub enum TokenStopCondition<'p, L: Lang> {
     Predicate(&'p dyn Fn(&Token<'_, L>) -> bool),
 }
 
+// consume switch bound to the condition (6.2 amendment): on a match NodesParser consumes
+// the matched token (move_past, syntactic post-space included) when `consume`, else leaves
+// it unconsumed at span.start. No `leave_post_space` knob — a closer has no content space.
+pub struct TokenStopCondition<'p, L: Lang> {
+    pub kind: TokenStopKind<'p, L>,
+    pub consume: bool,
+}
+
 pub struct StopSpec<'p, L: Lang> {       // both triggers optional and independent
     pub token: Option<TokenStopCondition<'p, L>>,
     pub node: Option<&'p mut dyn FnMut(usize, StagedNodeView<'_, L>) -> bool>,
 }
 
-pub enum StopCause {
-    StopConditionMet,        // stopping token left UNCONSUMED (peek it), or node cond hit
-    EndOfInput,              // EndOfStream reached (trailing-whitespace node already staged)
-    UnexpectedGroupClose,    // close token left unconsumed; caller decides (§3.8)
+pub enum StopCause {                     // split + spans (6.2 amendment)
+    TokenCondition { span: Span },        // token stop matched; span = the matched (consumed) token
+    NodeCondition,                        // node cond hit on the last staged node
+    EndOfInput,                           // EndOfStream reached (trailing-whitespace node staged)
+    UnexpectedGroupClose { span: Span },  // close token left unconsumed; caller decides (§3.8)
 }
 
 pub struct NodesOutcome { pub nodes: Vec<BuildId>, pub stop: StopCause }

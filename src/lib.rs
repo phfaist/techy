@@ -81,7 +81,7 @@ pub mod token;
 // Re-export the public API of the implemented topics.
 pub use constructs::{
     ConstructParser, ConstructParserResult, Invocation, NodesOutcome, NodesParser, ParseContext,
-    StopCause, StopSpec, TokenStopCondition,
+    StopCause, StopSpec, TokenStopCondition, TokenStopKind,
 };
 pub use engine::{ParseResult, ParserSession};
 pub use error::{

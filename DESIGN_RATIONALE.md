@@ -1109,13 +1109,16 @@ triggers, mirroring pylatexenc's well-tested pair:
 - *node condition* — a programmatic predicate consulted after each node is assembled,
   receiving (node count, view of the just-staged node) — covers pylatexenc's
   `stop_nodelist_condition` uses (stop-after-one-node, `LatexSingleNodeParser`).
-Semantics pinned: a token-condition match leaves the token **unconsumed** (the caller
-consumes and interprets it — pylatexenc's `handle_stop_condition_token` ambiguity removed);
-a node-condition match includes the triggering node and stops after it; conditions are
+Semantics pinned: a token-condition match, by default, leaves the token **unconsumed**
+(the caller peeks it) — or consumes it when the condition's `consume` flag is set, a
+declarative switch that is never pylatexenc's `handle_stop_condition_token` interpretation
+hook (consume amendment below); a node-condition match includes the triggering node and
+stops after it; conditions are
 tested only at the parser's own nesting level (nested groups are consumed whole by the
 group parser, so an `\end` inside a brace group cannot terminate an environment body).
-`NodesParser` returns its `StopCause` — `StopConditionMet` / `EndOfInput` /
-`UnexpectedGroupClose` — and the *caller* decides which causes are errors (§3.8).
+`NodesParser` returns its `StopCause` — `TokenCondition { span }` / `NodeCondition` /
+`EndOfInput` / `UnexpectedGroupClose { span }` — and the *caller* decides which causes are
+errors (§3.8).
 Deliberate deviations from pylatexenc: the node predicate sees (count, last node), not the
 whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
 invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
@@ -1132,8 +1135,39 @@ see the group-token entry), so the class is re-resolved from the current state a
 time — the same state the tokenizer used, so a reclassifying delta is honored. A close that
 matches neither field is left unconsumed and surfaces as `UnexpectedGroupClose` for the
 caller to adjudicate.
+*Token stop conditions carry a `consume` switch; `StopCause` reports the matched span
+(amended July 2026, Phase 6.2 review):* `TokenStopCondition` became a struct
+`{ kind: TokenStopKind, consume: bool }` (the closed enum renamed `TokenStopKind`), so the
+flag binds to the presence of a token condition — an orphan `consume` with no condition is
+unrepresentable. On a match `NodesParser` either leaves the token (`consume = false`,
+reader parked at `span.start`) or takes it whole (`consume = true`, `move_past` past any
+syntactic post-space). Two reasons over the earlier always-unconsumed rule: (a) the common
+closer parsers (a group parser consumes its `}`, …) stop hand-writing the consume line; and
+(b) **atomicity** — consuming at match time uses the exact state that matched, whereas
+leave-then-re-peek re-tokenizes at `span.start` under whatever state is *now* current, which
+can reclassify the delimiter (a delta that drops the close rule makes `}` come back a
+`Char`, desynchronizing the caller). A post-hoc consume helper cannot fix this — it, too,
+re-peeks. `StopCause` accordingly split `StopConditionMet` into `TokenCondition { span }`
+(token stop) and `NodeCondition` (node stop), and `UnexpectedGroupClose` grew a `span`: the
+group parser (6.3) builds its `Spanned` close delimiter from that span, which it can no
+longer re-peek once the token is consumed. No `consumed` field — the cause discriminant plus
+the caller's own `consume` already determine it. Consume is always `move_past(token, true)`:
+a *closing* token has no *content* space to preserve — a command's trailing space is its
+name-terminating **syntactic** post-space (a sub-range inside `span`, absorbed by the macro),
+and a `GroupClose` reports no post-space at all (any following whitespace is already the next
+token's `pre_space`) — so a `leave_post_space` knob has no correct caller and does not exist.
+Scope pitfall: the flag only expresses consume decisions knowable from the stop token *at
+match time*; the environment-body terminator (close-without-consuming on a name mismatch,
+below) hinges on the name group *after* `\end`, invisible at the stop point, so it stays
+manual post-stop lookahead regardless of the flag.
 *Rejected:* a declarative stop-condition language in spec data (the Q1 ruling: terminators
-are parser business); closure storage in specs.
+are parser business); closure storage in specs; a consume *callback* handed to the stop
+predicate (or a `Stop { consume }` predicate return) — it only adds per-match branching
+inside one heterogeneous predicate (rare), reaches neither the declarative variants (the
+common `GroupClose`) nor the post-lookahead case, would force a second consume mechanism
+alongside the static flag, and turns a pure condition into a reader-mutating actor;
+deferred until a real dynamic-consume consumer appears, and even then localized to the
+`Predicate` variant.
 
 **Slot terminators are parser business; the environment-body parser lives in core
 `constructs`, parameterized** — DECIDED (user, July 2026, Phase 6 plan session; settles

@@ -31,7 +31,9 @@
 
 mod nodes_parser;
 
-pub use nodes_parser::{NodesOutcome, NodesParser, StopCause, StopSpec, TokenStopCondition};
+pub use nodes_parser::{
+    NodesOutcome, NodesParser, StopCause, StopSpec, TokenStopCondition, TokenStopKind,
+};
 
 use alloc::sync::Arc;
 use core::fmt;
