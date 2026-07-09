@@ -12,24 +12,37 @@ use super::lang::Lang;
 use super::parsing_state::StateData;
 
 /// Typed optional overrides of [`TokenRules`] — pylatexenc's "changed kwargs", reified.
-/// `None` = leave unchanged; `Some(value)` = replace the whole field (including
-/// `Some(None)` for the optional fields, meaning "disable the feature").
+/// `None` = leave unchanged; `Some(value)` = replace the whole field.
+///
+/// The `enable_*` gates override independently of their data: disabling a feature for a
+/// scope is `enable_commands: Some(false)`, and a later `Some(true)` re-enables it with
+/// the *original* rules intact — no party has to carry them (DESIGN_RATIONALE.md §3.2).
 ///
 /// Collections are replaced wholesale, not merged: a delta that wants "current group
 /// rules plus one more" is built by the party that can see the current state (typically
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
 /// override itself would smuggle policy into the choke point.
 pub struct TokenRulesOverrides<L: Lang> {
-    /// Override whitespace handling (`Some(None)` disables it).
-    pub whitespace: Option<Option<WhitespaceRules>>,
-    /// Override the paragraph-break flag.
-    pub multi_newline_paragraphs: Option<bool>,
+    /// Override the whitespace-handling gate.
+    pub enable_whitespace: Option<bool>,
+    /// Replace the whitespace rules.
+    pub whitespace: Option<WhitespaceRules>,
+    /// Override the paragraph-break gate.
+    pub enable_multi_newline_paragraphs: Option<bool>,
+    /// Override the group-delimiter gate.
+    pub enable_groups: Option<bool>,
     /// Replace the recognizable group delimiter rules.
     pub groups: Option<Vec<Arc<GroupRule<L>>>>,
+    /// Override the command-syntax gate.
+    pub enable_commands: Option<bool>,
     /// Replace the command syntaxes.
     pub commands: Option<Vec<CommandRule>>,
+    /// Override the comment-syntax gate.
+    pub enable_comments: Option<bool>,
     /// Replace the comment syntaxes.
     pub comments: Option<Vec<CommentRule>>,
+    /// Override the specials-scan gate.
+    pub enable_specials: Option<bool>,
     /// Replace the forbidden-character set.
     pub forbidden_chars: Option<String>,
     /// Override the expected group close (`Some(None)` clears it).
@@ -39,20 +52,35 @@ pub struct TokenRulesOverrides<L: Lang> {
 impl<L: Lang> TokenRulesOverrides<L> {
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
     pub fn apply(&self, rules: &mut TokenRules<L>) {
+        if let Some(v) = self.enable_whitespace {
+            rules.enable_whitespace = v;
+        }
         if let Some(v) = &self.whitespace {
             rules.whitespace = v.clone();
         }
-        if let Some(v) = self.multi_newline_paragraphs {
-            rules.multi_newline_paragraphs = v;
+        if let Some(v) = self.enable_multi_newline_paragraphs {
+            rules.enable_multi_newline_paragraphs = v;
+        }
+        if let Some(v) = self.enable_groups {
+            rules.enable_groups = v;
         }
         if let Some(v) = &self.groups {
             rules.groups = v.clone();
         }
+        if let Some(v) = self.enable_commands {
+            rules.enable_commands = v;
+        }
         if let Some(v) = &self.commands {
             rules.commands = v.clone();
         }
+        if let Some(v) = self.enable_comments {
+            rules.enable_comments = v;
+        }
         if let Some(v) = &self.comments {
             rules.comments = v.clone();
+        }
+        if let Some(v) = self.enable_specials {
+            rules.enable_specials = v;
         }
         if let Some(v) = &self.forbidden_chars {
             rules.forbidden_chars = v.clone();
@@ -145,11 +173,16 @@ impl<L: Lang> Default for ParsingStateDelta<L> {
 impl<L: Lang> Default for TokenRulesOverrides<L> {
     fn default() -> Self {
         TokenRulesOverrides {
+            enable_whitespace: None,
             whitespace: None,
-            multi_newline_paragraphs: None,
+            enable_multi_newline_paragraphs: None,
+            enable_groups: None,
             groups: None,
+            enable_commands: None,
             commands: None,
+            enable_comments: None,
             comments: None,
+            enable_specials: None,
             forbidden_chars: None,
             expecting_group_close: None,
         }
@@ -159,11 +192,16 @@ impl<L: Lang> Default for TokenRulesOverrides<L> {
 impl<L: Lang> Clone for TokenRulesOverrides<L> {
     fn clone(&self) -> Self {
         TokenRulesOverrides {
+            enable_whitespace: self.enable_whitespace,
             whitespace: self.whitespace.clone(),
-            multi_newline_paragraphs: self.multi_newline_paragraphs,
+            enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
+            enable_groups: self.enable_groups,
             groups: self.groups.clone(),
+            enable_commands: self.enable_commands,
             commands: self.commands.clone(),
+            enable_comments: self.enable_comments,
             comments: self.comments.clone(),
+            enable_specials: self.enable_specials,
             forbidden_chars: self.forbidden_chars.clone(),
             expecting_group_close: self.expecting_group_close.clone(),
         }
@@ -173,11 +211,16 @@ impl<L: Lang> Clone for TokenRulesOverrides<L> {
 impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRulesOverrides")
+            .field("enable_whitespace", &self.enable_whitespace)
             .field("whitespace", &self.whitespace)
-            .field("multi_newline_paragraphs", &self.multi_newline_paragraphs)
+            .field("enable_multi_newline_paragraphs", &self.enable_multi_newline_paragraphs)
+            .field("enable_groups", &self.enable_groups)
             .field("groups", &self.groups)
+            .field("enable_commands", &self.enable_commands)
             .field("commands", &self.commands)
+            .field("enable_comments", &self.enable_comments)
             .field("comments", &self.comments)
+            .field("enable_specials", &self.enable_specials)
             .field("forbidden_chars", &self.forbidden_chars)
             .field("expecting_group_close", &self.expecting_group_close)
             .finish()
@@ -186,11 +229,16 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
 
 impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
     fn eq(&self, other: &Self) -> bool {
-        self.whitespace == other.whitespace
-            && self.multi_newline_paragraphs == other.multi_newline_paragraphs
+        self.enable_whitespace == other.enable_whitespace
+            && self.whitespace == other.whitespace
+            && self.enable_multi_newline_paragraphs == other.enable_multi_newline_paragraphs
+            && self.enable_groups == other.enable_groups
             && self.groups == other.groups
+            && self.enable_commands == other.enable_commands
             && self.commands == other.commands
+            && self.enable_comments == other.enable_comments
             && self.comments == other.comments
+            && self.enable_specials == other.enable_specials
             && self.forbidden_chars == other.forbidden_chars
             && self.expecting_group_close == other.expecting_group_close
     }

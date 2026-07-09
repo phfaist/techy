@@ -325,7 +325,7 @@ mod tests {
     use super::*;
     use crate::spec::StdCallableSpec;
     use crate::state::{ParsingStateDelta, StateData};
-    use crate::token::TokenRules;
+    use crate::token::{TokenRules, WhitespaceRules};
     use alloc::string::String;
     use alloc::vec;
 
@@ -345,11 +345,16 @@ mod tests {
 
     fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {
-            whitespace: None,
-            multi_newline_paragraphs: false,
+            enable_whitespace: false,
+            whitespace: WhitespaceRules::default(),
+            enable_multi_newline_paragraphs: false,
+            enable_groups: true,
             groups: vec![],
+            enable_commands: true,
             commands: vec![],
+            enable_comments: true,
             comments: vec![],
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }

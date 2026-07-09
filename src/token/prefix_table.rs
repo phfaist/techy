@@ -53,9 +53,15 @@ pub struct PrefixTable<L: Lang> {
 }
 
 impl<L: Lang> PrefixTable<L> {
-    /// Build the table for the group rules of `rules`. Empty delimiter strings are ignored.
+    /// Build the table for the group rules of `rules`. Empty delimiter strings are
+    /// ignored. With [`TokenRules::enable_groups`] off the table is empty — the gate is
+    /// baked in here (per state, at freeze time) so the hot path never branches on it;
+    /// `expecting_group_close` is checked separately by the reader and is *not* gated.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
+        if !rules.enable_groups {
+            return PrefixTable { entries, first_chars: String::new() };
+        }
 
         let mut add = |delim: &str, rule: &Arc<GroupRule<L>>, is_open: bool| {
             if delim.is_empty() {
@@ -169,6 +175,7 @@ impl<L: Lang> Eq for PrefixTable<L> {}
 mod tests {
     use super::*;
     use crate::state::SimpleLang;
+    use crate::token::WhitespaceRules;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -178,11 +185,16 @@ mod tests {
 
     fn rules_with_groups(groups: Vec<Arc<GroupRule<PlainLang>>>) -> TokenRules<PlainLang> {
         TokenRules {
-            whitespace: None,
-            multi_newline_paragraphs: false,
+            enable_whitespace: false,
+            whitespace: WhitespaceRules::default(),
+            enable_multi_newline_paragraphs: false,
+            enable_groups: true,
             groups,
+            enable_commands: true,
             commands: Vec::new(),
+            enable_comments: true,
             comments: Vec::new(),
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }

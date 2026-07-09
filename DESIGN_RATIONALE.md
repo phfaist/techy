@@ -436,7 +436,42 @@ Phase 3 token tests, accepted.
 **`TokenRules::multi_newline_paragraphs` (renamed from `double_newline_paragraphs`)** —
 DECIDED (user, July 2026, Phase 6 plan session). Any run of two or more newlines (however
 many, with interleaved inline whitespace) forms one paragraph break; the old name misread as
-"exactly two".
+"exactly two". *(Superseded naming: joined the `enable_*` family as
+`enable_multi_newline_paragraphs` — see the flags entry below.)*
+
+**`enable_*` feature flags on `TokenRules`** — DECIDED (user, July 2026, child-state design
+session follow-up; pylatexenc's `enable_macros`/`enable_comments`/… pattern). Every major
+tokenization feature gets a boolean gate stored next to its data: `enable_whitespace`,
+`enable_multi_newline_paragraphs` (the former `multi_newline_paragraphs`, renamed into the
+family), `enable_groups`, `enable_commands`, `enable_comments`, `enable_specials`. Disabled
+= the feature's syntax reads as ordinary content characters; the data stays in place, so a
+delta can disable a feature and a later delta re-enable it without any party carrying the
+original rules — the restore problem wholesale collection overrides cannot solve, because
+the re-enabling party (applying a returned delta, or a `ChildStateSpec` policy) typically
+never saw the state that held the original `CommandRule`s. Two spellings of "off" are
+accepted deliberately: flag `false` is the *scoped* off (data preserved for re-enabling),
+empty data is the *constitutive* off (the language has no such feature) — pylatexenc
+precedent. Uniformization rider: `whitespace` loses its `Option` (plain `WhitespaceRules` +
+`enable_whitespace`), which also removes the `Option<Option<…>>` override wart in
+`TokenRulesOverrides`; every flag overrides as a plain `Option<bool>`.
+Decided interactions: (1) **`enable_groups` does not gate `expecting_group_close`** — the
+expected close is positional data the tokenizer checks *before* the delimiter table, and it
+survives the flag: a group interior that disables groups entirely still finds its close
+(preserves §3.6's termination guarantee structurally). (2) **`enable_specials` settles the
+disable-specials gap (former open question §6.6)**: specials *data* stays Lang/library
+business, but the gate is rules data — `freeze()` skips `Lang::specials_trigger_chars`
+entirely and stores the empty `TriggerChars` filter, so the scan hook is unreachable in
+disabled states. (3) Flags bake into the eager per-state caches where possible (empty
+`PrefixTable` under `enable_groups: false`, empty `TriggerChars` under
+`enable_specials: false`) — zero hot-path cost; the rest are single bool branches replacing
+former `Option` checks. (4) `forbidden_chars` deliberately gets **no** flag (one trivially
+restorable string, not a feature toggle with a demonstrated scoped-off need);
+`expecting_group_close` is positional data, not a feature.
+*Rationale:* the `ChildStateSpec` restricted-state use cases (§3.6) need scoped, losslessly
+reversible feature disabling, and field-wise wholesale replacement can express "off" but
+not "off, remembering what on meant".
+*Rejected:* keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
+"off"); `enable_forbidden_chars` (uniformity for its own sake).
 
 ### 3.3 Parsing state and deltas
 
@@ -1228,6 +1263,90 @@ code is not written before its convenience is demonstrable. Consequence: type-id
 stays deferred exactly as §3.4 recorded (it presupposed `Language`). The "`Language<L>`
 owns no per-parse state" principle above is untouched — it binds the type when it arrives.
 
+**`ChildStateSpec`: per-use descent-state policy on `NodesParser`** — DECIDED (user, July
+2026, child-state design session; ports pylatexenc's `make_child_parsing_state`).
+`NodesParser` gains per-use configuration alongside `StopSpec` (same tier-2 borrowed-config
+role): `ChildStateSpec { group: GroupChildState<'p, L>, invocation:
+InvocationChildState<'p, L> }`, each `Inherit` (default — today's behavior) |
+`Fixed(Arc<ParsingState<L>>)` | `Compute(&'p dyn Fn(…) -> Arc<ParsingState<L>>)`. The
+descending arms resolve the child construct parser's **base state** through it: the
+`GroupOpen` arm through `group` (compute context: the open `Token`, which carries `delim` +
+the resolved `Arc<GroupRule<L>>`), the `Command`/`Specials` arms through `invocation`
+(compute context: the `&Invocation` — callable type, name, spec, trigger token). Motivating
+use case: a macro argument parsed chars-except-groups — a delta-restricted state (commands/
+comments cleared, groups kept) whose group interiors *revert to the outer state*:
+`group: Fixed(outer)`. Timing: the struct and `group` arm land with 6.3; the `invocation`
+arm activates with 6.4 alongside `Invocation` itself.
+Decided semantics: (1) *resolution precedes policy* — `Lang::resolve_command` runs under the
+loop's own `cx.state`, coherent with the state that tokenized the token, and what makes the
+resolved spec available to the callback (pylatexenc's hook likewise runs post-resolution,
+receiving the node class); (2) *the policy provides the base; spec deltas stack on top* —
+`ArgumentSpec`/`SlotSpec` `parsing_state_delta` derive from the policy's answer, so a
+caller's rule applies "before the callables add their own deltas"; (3) *one level deep* —
+the `NodesParser`s recursed into by group/invocation parsers default to `Inherit`; note that
+group-delimited *arguments* of an invocation are reached by the `invocation` policy (they
+are parsed inside the invocation parser), not by `group`; (4) *sibling deltas unaffected* —
+still applied to the loop's own `cx.state` (§3.3's outward-propagation design already
+blesses applying a delta to a base the producer never saw); (5) *states pass as-is* —
+`Arc` in, `Arc` out: `Inherit`/`Fixed`/pass-through `Compute` never force a `derived()`,
+and returning the same `Arc` preserves pointer identity (the §3.2 identity-keyed
+memoization argument stays sound); (6) *callbacks are pure `&dyn Fn`* (like
+`TokenStopKind::Predicate`, unlike the node condition's deliberate `FnMut`): a descent
+policy whose answer depends on call order would be fragile, and `Fixed` covers the
+stateless case.
+Pitfalls recorded: group termination self-heals under any policy base (the group parser
+sets `expecting_group_close` on the interior state, which takes tokenizer precedence), but
+environment bodies do not — a base that cannot tokenize `\end` runs the body to
+`EndOfInput`, surfacing as `StopCause` for the caller to diagnose; and "disable specials"
+was not delta-expressible when this was decided — settled immediately after by
+`enable_specials` in the `TokenRules` `enable_*` flags decision (§3.2).
+*Rationale:* descent-state control is the one pylatexenc state hook with no techy
+equivalent, and pure parser composition (run `NodesParser` to a `GroupOpen` stop,
+invoke the group parser directly under the other state, loop) — while it works and remains
+the escape hatch — re-implements the stitching at every use site; the knob makes the
+common case declarative.
+*Rejected:* three fields keyed by token kind (`command` + `specials` would be near-identical
+enums; the real split is the descent pathway, and `Invocation` already carries
+`callable_type`); routing through `StateExt` + `finalize_transition` on a group-entry event
+(can only *reconstruct* rules, never restore the actual outer `Arc`, and makes a generic
+chars-except-groups argument parser depend on `Lang` cooperation); letting the policy
+influence *resolution* (would resolve under a state other than the one that tokenized the
+token, and voids the callback's resolved-spec context).
+
+**Group interior states are memoized in the session** — DECIDED (user, July 2026,
+child-state design session; conditional go — "adopt if straightforward" — and it is). The
+6.3 group parser keeps always-derive *semantics* (every interior state carries its
+`expecting_group_close`: the uniform invariant, and the recognition guarantee for the close),
+but the derivation is deduplicated through a memo in `ParserSession`: a small vector of
+`(base, rule, interior)` `Arc` triples matched by `Arc::ptr_eq`, consulted only for the pure
+expecting-close derivation (no spec or policy delta in play). The memo is exposed as a
+*narrowly-typed* session helper (`group_interior_state(base, rule)` or similar), **not** a
+general derived-state wrapper: `state.derived(&delta)` remains the universal transition
+choke point, and memoization exists only where the derivation inputs have `Arc` identity —
+an arbitrary `ParsingStateDelta` has no equality (`L::StateExt`/`L::Event` are not
+`PartialEq`; `Arc<dyn SpecLookup>` has none), and non-recurring derivations gain nothing
+from a memo anyway. (Spec-side deltas *do* have identity — `Arc<ArgumentSpec<L>>` carries
+its `parsing_state_delta` — so a `(base, spec)`-keyed entry kind is a possible 6.4+
+extension, strictly profiling-driven.) Sibling `{…}` groups under one
+state then share a single interior `Arc` — one `StateData` clone per `(base, rule)` instead
+of per group descent, the dominant state-cloning cost in deep documents. Entries hold their
+key `Arc`s alive, so pointer keys cannot be reused (no ABA hazard). Consequences:
+`Lang::finalize_transition` runs once per `(base, rule)`, not once per descent — its
+contract is already a pure function of `(data, prev, events)`; and `derived()` itself still
+always mints a new `Arc` (the memo sits in the group parser, calling it less often), so the
+§3.2 peek-idempotence argument is untouched — shared interior `Arc`s only *raise* the hit
+rate of any future identity-keyed reader memo.
+*Rationale:* `ParsingState` cannot host the memo — its derived caches are eager by decision
+(no_std: no `OnceLock`, and `OnceCell` would cost `Sync`) — but `ParserSession` is the
+parse's designated mutable surface, `&mut`-threaded, needing no synchronization.
+*Rejected:* a memo inside `ParsingState` (above); skipping derivation when the close is
+already table-resolvable in the base state (saves the same clones but leaves children of
+plain brace groups recording a state whose `expecting_group_close` is `None` — the memo
+gets the savings without the semantic wrinkle).
+*Revisit if:* profiling shows the linear memo scan or memory growth under pathological
+nesting (one entry per depth level) warrants a map or a cap — or 6.3 implementation
+friction appears, in which case ship plain always-derive and flag for performance review.
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
@@ -1516,6 +1635,10 @@ Current list — remove entries as they are settled (move the outcome into §3):
 5. ~~**`Comment` node recomposition fields**~~ — settled July 2026 (Phase 6 plan session):
    `Comment` grows `start` + `post_space` per-instance syntax fields (notes Q4, Option A).
    Outcome moved to §3.5.
+6. ~~**Disabling specials by delta**~~ — settled July 2026 (child-state design session
+   follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
+   stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
+   moved to §3.2.
 
 ---
 

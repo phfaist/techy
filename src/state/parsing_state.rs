@@ -77,20 +77,29 @@ impl<L: Lang> ParsingState<L> {
         &self.data.ext
     }
 
-    /// The delimiter-matching table derived from [`rules().groups`](TokenRules).
+    /// The delimiter-matching table derived from [`rules().groups`](TokenRules) — empty
+    /// when [`TokenRules::enable_groups`] is off (the gate is baked in at freeze time).
     pub fn prefix_table(&self) -> &PrefixTable<L> {
         &self.prefix_table
     }
 
     /// The specials trigger-character filter derived via
-    /// [`Lang::specials_trigger_chars`].
+    /// [`Lang::specials_trigger_chars`] — the empty filter when
+    /// [`TokenRules::enable_specials`] is off (the gate is baked in at freeze time).
     pub fn trigger_chars(&self) -> &TriggerChars {
         &self.trigger_chars
     }
 
     fn freeze(data: StateData<L>) -> ParsingState<L> {
         let prefix_table = PrefixTable::for_rules(&data.rules);
-        let trigger_chars = L::specials_trigger_chars(&data);
+        // The enable_specials gate is baked in here: a disabled state stores the empty
+        // filter, so `Lang::scan_specials` is unreachable and the hot path never
+        // branches on the flag (same treatment as enable_groups in the prefix table).
+        let trigger_chars = if data.rules.enable_specials {
+            L::specials_trigger_chars(&data)
+        } else {
+            TriggerChars::default()
+        };
         ParsingState { data, prefix_table, trigger_chars }
     }
 }
@@ -153,18 +162,23 @@ mod tests {
 
     fn base_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
-            multi_newline_paragraphs: true,
+            enable_whitespace: true,
+            whitespace: WhitespaceRules { chars: " \t\n".into() },
+            enable_multi_newline_paragraphs: true,
+            enable_groups: true,
             groups: vec![Arc::new(GroupRule {
                 group_type: 0,
                 open: "{".into(),
                 close: "}".into(),
             })],
+            enable_commands: true,
             commands: vec![CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
             }],
+            enable_comments: true,
             comments: Vec::new(),
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }
@@ -182,17 +196,17 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            multi_newline_paragraphs: Some(false),
+            enable_multi_newline_paragraphs: Some(false),
             forbidden_chars: Some("$".into()),
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta);
 
-        assert!(!derived.rules().multi_newline_paragraphs);
+        assert!(!derived.rules().enable_multi_newline_paragraphs);
         assert_eq!(derived.rules().forbidden_chars, "$");
         // Unchanged fields kept; the original state is untouched.
         assert_eq!(derived.rules().commands, state.rules().commands);
-        assert!(state.rules().multi_newline_paragraphs);
+        assert!(state.rules().enable_multi_newline_paragraphs);
     }
 
     #[test]
@@ -220,6 +234,50 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
         let derived = state.derived(&ParsingStateDelta::new());
         assert_eq!(derived.rules(), state.rules());
+    }
+
+    #[test]
+    fn enable_flag_disables_and_reenables_without_carrying_the_data() {
+        // The restore problem the enable_* gates exist for (DESIGN_RATIONALE §3.2): the
+        // re-enabling delta names no CommandRules — the data survived the disabled scope.
+        let state: ParsingState<PlainLang> =
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+
+        let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_commands: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(!disabled.rules().enable_commands);
+        assert_eq!(disabled.rules().commands, state.rules().commands);
+
+        let reenabled = disabled.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_commands: Some(true),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(reenabled.rules().enable_commands);
+        assert_eq!(reenabled.rules().commands, state.rules().commands);
+    }
+
+    #[test]
+    fn enable_groups_flag_rebakes_the_prefix_table() {
+        // The gate is baked into the per-state table at freeze time; toggling it through
+        // deltas empties and rebuilds the table with the (untouched) group rules.
+        let state: ParsingState<PlainLang> =
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+        assert!(state.prefix_table().match_at("{x").is_some());
+
+        let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_groups: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(disabled.prefix_table().match_at("{x").is_none());
+        assert_eq!(disabled.rules().groups, state.rules().groups);
+
+        let reenabled = disabled.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_groups: Some(true),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(reenabled.prefix_table().match_at("{x").is_some());
     }
 
     // --- a lang exercising events + the finalize customizer ---------------------------

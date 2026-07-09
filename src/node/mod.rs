@@ -67,7 +67,7 @@ mod tests {
     use crate::source::{Source, SourceSpan, Span, TextContent};
     use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
     use crate::state::{Lang, ParsingState, SimpleLang, StateData};
-    use crate::token::{GroupRule, TokenRules};
+    use crate::token::{GroupRule, TokenRules, WhitespaceRules};
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -84,15 +84,20 @@ mod tests {
 
     fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            whitespace: None,
-            multi_newline_paragraphs: false,
+            enable_whitespace: false,
+            whitespace: WhitespaceRules::default(),
+            enable_multi_newline_paragraphs: false,
+            enable_groups: true,
             groups: vec![Arc::new(GroupRule {
                 group_type: GT_BRACE,
                 open: "{".into(),
                 close: "}".into(),
             })],
+            enable_commands: true,
             commands: Vec::new(),
+            enable_comments: true,
             comments: Vec::new(),
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }

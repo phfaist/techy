@@ -49,10 +49,11 @@ pub struct GroupRule<L: Lang> {
     pub close: String,
 }
 
-/// Whitespace-handling rules. Absent (`None` in [`TokenRules::whitespace`]) = whitespace
-/// handling disabled: whitespace characters are ordinary content characters, `pre_space` is
-/// always empty, and paragraph breaks are never detected (character-level access mode).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Whitespace-handling rules. Gated by [`TokenRules::enable_whitespace`]; with the gate
+/// off (or an empty `chars` set), whitespace characters are ordinary content characters,
+/// `pre_space` is always empty, and paragraph breaks are never detected (character-level
+/// access mode).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WhitespaceRules {
     /// The characters treated as whitespace (e.g. `" \t\n\r"`).
     pub chars: String,
@@ -105,24 +106,54 @@ pub struct CommentRule {
 /// group delimiters (expected close first, then longest match) → command escape characters
 /// → comment starts → specials scan → forbidden-character check → single content
 /// character.
+///
+/// # `enable_*` feature gates
+///
+/// Every major feature has a boolean gate stored next to its data (pylatexenc's
+/// `enable_macros`/`enable_comments`/… pattern; DESIGN_RATIONALE.md §3.2). A disabled
+/// feature's syntax reads as ordinary content characters while its data **stays in
+/// place** — so a state delta can disable a feature and a later delta re-enable it,
+/// without any party having to carry the original rules. Two spellings of "off" are
+/// deliberate: gate `false` is the *scoped* off (data preserved for re-enabling), empty
+/// data is the *constitutive* off (the language has no such feature).
 pub struct TokenRules<L: Lang> {
-    /// Whitespace handling; `None` disables it entirely.
-    pub whitespace: Option<WhitespaceRules>,
+    /// Whether whitespace handling is on; disabled = whitespace characters are ordinary
+    /// content characters, `pre_space` is always empty, and paragraph breaks are never
+    /// detected (character-level access mode).
+    pub enable_whitespace: bool,
+    /// Whitespace handling (gated by [`enable_whitespace`](Self::enable_whitespace)).
+    pub whitespace: WhitespaceRules,
     /// Whether a whitespace run containing two or more newlines forms a paragraph break.
     /// Gates both `ParagraphBreak` tokens and the no-multi-newline rule of whitespace
     /// skipping (pre-space and post-space never consume a newline belonging to a
     /// `\n\s*\n` sequence). Only meaningful when whitespace handling is enabled.
-    pub multi_newline_paragraphs: bool,
+    pub enable_multi_newline_paragraphs: bool,
+    /// Whether group delimiters are recognized (gates the delimiter table — but **not**
+    /// [`expecting_group_close`](Self::expecting_group_close), which is positional data:
+    /// a group interior that disables groups still finds its own close).
+    pub enable_groups: bool,
     /// The group delimiter rules recognizable here (`{…}`, `[…]`, `$…$`, `$$…$$`,
     /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
     /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
     pub groups: Vec<Arc<GroupRule<L>>>,
+    /// Whether command syntax is recognized; disabled = escape characters are ordinary
+    /// content characters.
+    pub enable_commands: bool,
     /// Command syntaxes; empty = no command recognition.
     pub commands: Vec<CommandRule>,
+    /// Whether comment syntax is recognized; disabled = comment starts are ordinary
+    /// content characters.
+    pub enable_comments: bool,
     /// Comment syntaxes; empty = no comment recognition.
     pub comments: Vec<CommentRule>,
+    /// Whether the specials scan runs. The specials *data* lives with the language
+    /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → libraries), but the
+    /// gate is rules data so a delta can switch it: disabled states freeze with the empty
+    /// [`TriggerChars`](super::TriggerChars) filter and the scan hook is never consulted.
+    pub enable_specials: bool,
     /// Characters that may not appear as content; encountering one yields a recoverable
-    /// [`TokenError`](super::TokenError).
+    /// [`TokenError`](super::TokenError). Empty = off (deliberately no `enable_*` gate:
+    /// one trivially restorable string, not a feature toggle).
     pub forbidden_chars: String,
     /// The group rule whose *close* delimiter takes precedence over all other delimiter
     /// matches — set (via a state delta) by the group construct parser upon entering a
@@ -130,6 +161,9 @@ pub struct TokenRules<L: Lang> {
     /// inside a `$…$` group this field holds the `$…$` rule, so a following `$$`
     /// tokenizes as close-`$` (then open-`$`) rather than as a `$$` delimiter.
     /// Generalizes pylatexenc's `math_mode_delimiter` without privileging math.
+    /// Not gated by [`enable_groups`](Self::enable_groups) — positional data, not a
+    /// feature; the recognition guarantee for an entered group's close must survive any
+    /// interior rule set.
     pub expecting_group_close: Option<Arc<GroupRule<L>>>,
 }
 
@@ -169,11 +203,16 @@ impl<L: Lang> Eq for GroupRule<L> {}
 impl<L: Lang> Clone for TokenRules<L> {
     fn clone(&self) -> Self {
         TokenRules {
+            enable_whitespace: self.enable_whitespace,
             whitespace: self.whitespace.clone(),
-            multi_newline_paragraphs: self.multi_newline_paragraphs,
+            enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
+            enable_groups: self.enable_groups,
             groups: self.groups.clone(),
+            enable_commands: self.enable_commands,
             commands: self.commands.clone(),
+            enable_comments: self.enable_comments,
             comments: self.comments.clone(),
+            enable_specials: self.enable_specials,
             forbidden_chars: self.forbidden_chars.clone(),
             expecting_group_close: self.expecting_group_close.clone(),
         }
@@ -183,11 +222,16 @@ impl<L: Lang> Clone for TokenRules<L> {
 impl<L: Lang> fmt::Debug for TokenRules<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRules")
+            .field("enable_whitespace", &self.enable_whitespace)
             .field("whitespace", &self.whitespace)
-            .field("multi_newline_paragraphs", &self.multi_newline_paragraphs)
+            .field("enable_multi_newline_paragraphs", &self.enable_multi_newline_paragraphs)
+            .field("enable_groups", &self.enable_groups)
             .field("groups", &self.groups)
+            .field("enable_commands", &self.enable_commands)
             .field("commands", &self.commands)
+            .field("enable_comments", &self.enable_comments)
             .field("comments", &self.comments)
+            .field("enable_specials", &self.enable_specials)
             .field("forbidden_chars", &self.forbidden_chars)
             .field("expecting_group_close", &self.expecting_group_close)
             .finish()
@@ -196,11 +240,16 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
 
 impl<L: Lang> PartialEq for TokenRules<L> {
     fn eq(&self, other: &Self) -> bool {
-        self.whitespace == other.whitespace
-            && self.multi_newline_paragraphs == other.multi_newline_paragraphs
+        self.enable_whitespace == other.enable_whitespace
+            && self.whitespace == other.whitespace
+            && self.enable_multi_newline_paragraphs == other.enable_multi_newline_paragraphs
+            && self.enable_groups == other.enable_groups
             && self.groups == other.groups
+            && self.enable_commands == other.enable_commands
             && self.commands == other.commands
+            && self.enable_comments == other.enable_comments
             && self.comments == other.comments
+            && self.enable_specials == other.enable_specials
             && self.forbidden_chars == other.forbidden_chars
             && self.expecting_group_close == other.expecting_group_close
     }

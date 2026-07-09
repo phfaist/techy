@@ -126,11 +126,16 @@ mod tests {
 
     fn min_rules() -> TokenRules<PlainLang> {
         TokenRules {
-            whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
-            multi_newline_paragraphs: true,
+            enable_whitespace: true,
+            whitespace: WhitespaceRules { chars: " \t\n".into() },
+            enable_multi_newline_paragraphs: true,
+            enable_groups: true,
             groups: Vec::new(),
+            enable_commands: true,
             commands: Vec::new(),
+            enable_comments: true,
             comments: Vec::new(),
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }

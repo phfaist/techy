@@ -673,18 +673,23 @@ mod tests {
 
     fn rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            whitespace: Some(WhitespaceRules { chars: " \t\n".into() }),
-            multi_newline_paragraphs: true,
+            enable_whitespace: true,
+            whitespace: WhitespaceRules { chars: " \t\n".into() },
+            enable_multi_newline_paragraphs: true,
+            enable_groups: true,
             groups: vec![Arc::new(GroupRule {
                 group_type: GT_BRACE,
                 open: "{".into(),
                 close: "}".into(),
             })],
+            enable_commands: true,
             commands: vec![CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
             }],
+            enable_comments: true,
             comments: vec![CommentRule { start: "%".into() }],
+            enable_specials: true,
             forbidden_chars: String::new(),
             expecting_group_close: None,
         }
