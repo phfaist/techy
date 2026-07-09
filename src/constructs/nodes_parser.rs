@@ -46,6 +46,13 @@
 //! name's terminating whitespace), so the reader stands just past it. The matched span is
 //! reported in [`StopCause::TokenCondition`] either way.
 //!
+//! When the two triggers collide — the pre-stop flush stages a node the node condition
+//! would match — the token condition wins outright (§3.6): that flush does **not**
+//! consult the node predicate. Its answer could change nothing (the parse ends as
+//! `TokenCondition` either way; honoring it would instead leave a `consume = true` token
+//! unconsumed, breaking the flag's atomicity), and the predicate is a stateful `FnMut`
+//! that must not observe a consulted-but-ignored call.
+//!
 //! # Recovery (DESIGN_RATIONALE.md §3.8)
 //!
 //! Recovery happens where a problem is detected, through the session's policy helper.
@@ -132,11 +139,14 @@ pub struct TokenStopCondition<'p, L: Lang> {
 /// The `'p` lifetime ties borrowed conditions (names, predicates) to the parser
 /// temporary — construct parsers are free to borrow (two-tier ownership model, §3.6).
 pub struct StopSpec<'p, L: Lang> {
-    /// Token condition, tested on peek; a match leaves the token unconsumed.
+    /// Token condition, tested on peek; a match ends the parse, consuming the token or
+    /// leaving it per its [`consume`](TokenStopCondition::consume) switch.
     pub token: Option<TokenStopCondition<'p, L>>,
     /// Node condition, tested after each staged node with (number of nodes staged so
     /// far, view of the just-staged node); a match includes that node and stops after
-    /// it. The (count, last node) signature is a deliberate deviation from pylatexenc's
+    /// it. Not consulted on the final flush a matched token condition triggers — the
+    /// token condition wins outright (see the module docs on the position seam). The
+    /// (count, last node) signature is a deliberate deviation from pylatexenc's
     /// whole-nodelist rescans (§3.6).
     // The decided signature (DESIGN_RATIONALE.md §3.6); an alias would only rename it.
     #[allow(clippy::type_complexity)]
@@ -275,22 +285,39 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     }
 
     /// Extend the pending run with `pre_space`, then flush it: the path taken when a
-    /// non-`Char` construct starts (invariant 1) — including stop tokens, whose
-    /// pre-space is interior content and must land in a sibling node for the partition
-    /// invariant to hold.
+    /// non-`Char` construct starts (invariant 1). A matched *stop* token's flush goes
+    /// through [`flush_for_token_stop`](Self::flush_for_token_stop) instead — same
+    /// staging, no node-condition test.
     fn flush_through(&mut self, cx: &mut ParseContext<'_, '_, L>, pre_space: Span) -> bool {
         self.take_pre_space(pre_space);
         self.flush(cx)
     }
 
-    /// Stage a childless node under the current state, record it as a sibling, and test
-    /// the node stop condition on it.
-    fn stage_node(
+    /// [`flush_through`](Self::flush_through) minus the node-condition test: the flush
+    /// performed when the token stop condition has matched. The stop token's pre-space
+    /// is interior content and must land in a sibling node (partition invariant), but
+    /// the token condition has already ended the parse and wins outright (§3.6): a
+    /// node-condition match here could not change the outcome, and honoring it instead
+    /// would leave a `consume = true` stop token unconsumed, forfeiting the consume
+    /// flag's atomicity guarantee. The predicate is a stateful `FnMut`, so even a
+    /// consulted-but-ignored call would be an observable side effect — it is not
+    /// consulted at all.
+    fn flush_for_token_stop(&mut self, cx: &mut ParseContext<'_, '_, L>, pre_space: Span) {
+        self.take_pre_space(pre_space);
+        if let Some(run) = self.run.take() {
+            self.stage(cx, NodeKind::chars(run), run);
+        }
+    }
+
+    /// Stage a childless node under the current state and record it as a sibling —
+    /// without testing the node stop condition (that is [`stage_node`](Self::stage_node)'s
+    /// job; the token-stop flush stages through this directly).
+    fn stage(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
         kind: NodeKind<L>,
         span: Span,
-    ) -> bool {
+    ) -> BuildId {
         let id = cx.session.builder.add(
             kind,
             SourceSpan::new(&self.source, span.range()),
@@ -298,6 +325,18 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             vec![],
         );
         self.nodes.push(id);
+        id
+    }
+
+    /// Stage a childless node ([`stage`](Self::stage)) and test the node stop condition
+    /// on it.
+    fn stage_node(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+        kind: NodeKind<L>,
+        span: Span,
+    ) -> bool {
+        let id = self.stage(cx, kind, span);
         match &mut self.stop.node {
             Some(condition) => {
                 let staged = cx.session.builder.staged_nodes();
@@ -405,7 +444,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
             // stop token that cannot be re-read cannot be left for the caller).
             if !recovered {
                 if let Some(consume) = self.token_stop(&cx.state, &token) {
-                    self.flush_through(cx, token.pre_space); // REVIEW FLAG - It looks like the node predicate fires in this call, but it probably shouldn't.
+                    self.flush_for_token_stop(cx, token.pre_space);
                     if consume {
                         // Take the whole token, syntactic post-space included; its
                         // pre-space is already housed in the flushed sibling nodes.
@@ -1227,6 +1266,50 @@ mod tests {
         // fired on it, so the cause is the condition, not EndOfInput.
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
         assert_eq!(parsed.stop, StopCause::NodeCondition);
+    }
+
+    #[test]
+    fn token_stop_flush_does_not_consult_the_node_condition() {
+        // Both triggers collide: the `\end` match flushes the pending run, and the
+        // (always-true) node condition would fire on the flushed node. The token
+        // condition wins outright — the run is staged, the predicate is never invoked
+        // (a stateful `FnMut` must not observe a consulted-but-ignored call), and the
+        // `consume = true` token is taken atomically.
+        let st = state();
+        let mut calls_std = 0usize;
+        let mut calls_list = 0usize;
+        let mut c1 = |_: usize, _: StagedNodeView<'_, TestLang>| {
+            calls_std += 1;
+            true
+        };
+        let mut c2 = |_: usize, _: StagedNodeView<'_, TestLang>| {
+            calls_list += 1;
+            true
+        };
+        let parsed = run_both(
+            "ab \\end rest",
+            &st,
+            Recovery::Strict,
+            StopSpec {
+                token: Some(TokenStopCondition {
+                    kind: TokenStopKind::Command { name: "end" },
+                    consume: true,
+                }),
+                node: Some(&mut c1),
+            },
+            StopSpec {
+                token: Some(TokenStopCondition {
+                    kind: TokenStopKind::Command { name: "end" },
+                    consume: true,
+                }),
+                node: Some(&mut c2),
+            },
+        );
+        assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
+        assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 8) });
+        assert_eq!(parsed.pos, 8);
+        assert_eq!(calls_std, 0, "the token-stop flush consulted the node condition");
+        assert_eq!(calls_list, 0, "the token-stop flush consulted the node condition");
     }
 
     // --- tokenizer-error recovery (std reader only: the list reader cannot fail) ---------

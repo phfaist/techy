@@ -1160,6 +1160,22 @@ Scope pitfall: the flag only expresses consume decisions knowable from the stop 
 match time*; the environment-body terminator (close-without-consuming on a name mismatch,
 below) hinges on the name group *after* `\end`, invisible at the stop point, so it stays
 manual post-stop lookahead regardless of the flag.
+*The token condition wins outright; the pre-stop flush does not consult the node
+condition (amended July 2026, Phase 6.2 review):* the two triggers can collide — a token
+match flushes the pending chars run (stop token's pre-space included) as a final node,
+and that node could satisfy the node condition. Decided: that flush stages **without
+invoking the node predicate**, and the cause is `TokenCondition`. Consulting it could
+change nothing (the parse ends either way), and *honoring* a match instead would leave a
+`consume = true` stop token unconsumed — forfeiting exactly the at-match-time atomicity
+the consume flag exists for. Since the predicate is a stateful `FnMut` (latching
+conditions are the norm), even a consulted-but-ignored call is an observable side effect:
+the caller's closure would end the parse believing its condition fired while the cause
+reads `TokenCondition`. pylatexenc is no precedent here — it checks the nodelist
+condition on the deferred pending-chars flush inside `finalize()`, setting *both*
+met-flags (an ambiguous cause) and re-raising `ReachedStoppingCondition` out of
+`process_tokens`'s `finally`, which `LatexGeneralNodesParser` never catches: the
+collision is a latent control-flow leak upstream, unhit only because no caller combines
+both conditions this way.
 *Rejected:* a declarative stop-condition language in spec data (the Q1 ruling: terminators
 are parser business); closure storage in specs; a consume *callback* handed to the stop
 predicate (or a `Stop { consume }` predicate return) — it only adds per-match branching
