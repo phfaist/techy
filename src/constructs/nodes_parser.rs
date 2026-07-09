@@ -84,14 +84,24 @@ pub enum TokenStopCondition<'p, L: Lang> {
         /// The command name to stop at (as written, without the escape character).
         name: &'p str,
     },
-    /// Stop at a [`GroupClose`](TokenKind::GroupClose) token closing a group of this
-    /// class. The arriving close's class is resolved against the state's expected close
-    /// first (mirroring the tokenizer's precedence), then its delimiter rules; a close
-    /// of a *different* class does not match and surfaces as
-    /// [`StopCause::UnexpectedGroupClose`] instead.
+    /// Stop at a [`GroupClose`](TokenKind::GroupClose) token that spells `close` **and**
+    /// whose class (resolved against the current state) is `group_type` — the exact
+    /// `(group_type, close)` pairing the enclosing group opened with. Both must match:
+    /// a group opened with `{` (class `group_type`) stops at `}`, but neither at a `]`
+    /// that merely shares its class (different `close`) nor at a `}` a state change has
+    /// re-classed to a *different* group class (same `close`, different `group_type`). A
+    /// non-matching close surfaces as [`StopCause::UnexpectedGroupClose`] instead.
+    ///
+    /// The class is not carried on the token — `GroupClose` holds only its `delim`
+    /// (DESIGN_RATIONALE.md §3.5) — so it is re-resolved against `cx.state`, the same
+    /// state (including sibling deltas applied so far) the tokenizer used to emit the
+    /// token; a reclassifying delta is therefore reflected here.
     GroupClose {
-        /// The group class whose close ends the parse.
+        /// The group class the enclosing group belongs to (resolved for the arriving
+        /// close against the current state — the expected close, then the delimiter table).
         group_type: L::GroupTypeId,
+        /// The closing delimiter (as written, e.g. `}`) the enclosing group expects.
+        close: &'p str,
     },
     /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
     ParagraphBreak,
@@ -275,9 +285,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             Some(TokenStopCondition::Command { name }) => {
                 matches!(&token.kind, TokenKind::Command { name: n, .. } if n == name)
             }
-            Some(TokenStopCondition::GroupClose { group_type }) => match &token.kind {
+            Some(TokenStopCondition::GroupClose { group_type, close }) => match &token.kind {
+                // Both the spelling and the state-resolved class must match the pairing
+                // the group opened with (a `]` sharing the class, or a `}` a delta
+                // re-classed, must not close it).
                 TokenKind::GroupClose { delim } => {
-                    group_close_type(state, delim) == Some(*group_type)
+                    delim == close && group_close_type(state, delim) == Some(*group_type)
                 }
                 _ => false,
             },
@@ -516,9 +529,11 @@ impl<L: Lang> fmt::Debug for TokenStopCondition<'_, L> {
             TokenStopCondition::Command { name } => {
                 f.debug_struct("Command").field("name", name).finish()
             }
-            TokenStopCondition::GroupClose { group_type } => {
-                f.debug_struct("GroupClose").field("group_type", group_type).finish()
-            }
+            TokenStopCondition::GroupClose { group_type, close } => f
+                .debug_struct("GroupClose")
+                .field("group_type", group_type)
+                .field("close", close)
+                .finish(),
             TokenStopCondition::ParagraphBreak => write!(f, "ParagraphBreak"),
             TokenStopCondition::Predicate(_) => write!(f, "Predicate(..)"),
         }
@@ -909,14 +924,14 @@ mod tests {
     }
 
     #[test]
-    fn stop_at_group_close_by_class_via_the_delimiter_table() {
+    fn stop_at_group_close_produced_by_the_delimiter_table() {
         let st = state();
         let parsed = run_both(
             "ab}c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
         assert_eq!(parsed.stop, StopCause::StopConditionMet);
@@ -924,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_at_group_close_by_class_via_the_expected_close() {
+    fn stop_at_group_close_produced_by_the_expected_close() {
         // `$` closes only through `expecting_group_close` (ambiguous delimiter read as
         // an opener otherwise) — the 6.3 group parser's configuration, exercised here.
         let mut r = rules::<TestLang>();
@@ -935,8 +950,8 @@ mod tests {
             "a b$c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a b\""]);
         assert_eq!(parsed.stop, StopCause::StopConditionMet);
@@ -944,9 +959,10 @@ mod tests {
     }
 
     #[test]
-    fn group_close_of_a_different_class_is_unexpected() {
-        // Expecting a math close, a brace close arrives: not a stop-condition match —
-        // reported as data, token unconsumed, no diagnostic (the caller decides).
+    fn group_close_of_a_different_delimiter_is_unexpected() {
+        // The stop condition waits for the math `$` close; a `}` arrives: the delimiter
+        // does not match — reported as data, token unconsumed, no diagnostic (the caller
+        // decides).
         let mut r = rules::<TestLang>();
         r.groups.push(math_rule());
         r.expecting_group_close = Some(math_rule());
@@ -955,8 +971,59 @@ mod tests {
             "ab}c",
             &st,
             Recovery::Strict,
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH }),
-            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_MATH, close: "$" }),
+        );
+        assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.pos, 2);
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn group_close_of_a_shared_class_but_different_delimiter_is_unexpected() {
+        // `[`/`]` and `{`/`}` share the class GT_BRACE. A group opened with `{` must not
+        // be closed by a `]`: same class, different delimiter — the `close` field
+        // disambiguates within a class.
+        let mut r = rules::<TestLang>();
+        r.groups.push(Arc::new(GroupRule {
+            group_type: GT_BRACE,
+            open: "[".into(),
+            close: "]".into(),
+        }));
+        let st = state_with(r);
+        let parsed = run_both(
+            "ab]c",
+            &st,
+            Recovery::Strict,
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+        );
+        assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);
+        assert_eq!(parsed.pos, 2);
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn group_close_reclassified_to_another_class_is_unexpected() {
+        // A `{`-opened GT_BRACE group; a state delta has re-classed `}` to close a
+        // GT_MATH group (same delimiter, different class). The `}` must not close the
+        // GT_BRACE group: `group_type` disambiguates within a delimiter spelling. Modeled
+        // by an `expecting_group_close` whose close is `}` but whose class is GT_MATH.
+        let mut r = rules::<TestLang>();
+        r.expecting_group_close = Some(Arc::new(GroupRule {
+            group_type: GT_MATH,
+            open: "{".into(),
+            close: "}".into(),
+        }));
+        let st = state_with(r);
+        let parsed = run_both(
+            "ab}c",
+            &st,
+            Recovery::Strict,
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
+            StopSpec::at_token(TokenStopCondition::GroupClose { group_type: GT_BRACE, close: "}" }),
         );
         assert_eq!(shapes(&parsed.result), ["chars 0..2 \"ab\""]);
         assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose);

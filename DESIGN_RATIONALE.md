@@ -406,8 +406,10 @@ identity* now uses the rule itself: `GroupOpen` tokens carry `Arc<GroupRule<L>>`
 tokenizer's resolution (expected close first, then longest match, earlier rules winning ties)
 travels with the token, the same make-mismatch-impossible principle as `Specials` carrying
 its resolved spec — while `GroupClose` carries only `delim` (the parser knows which close it
-expects; a stray close needs no more); `expecting_group_close` holds the rule;
-`GroupData.group_type` stays but records the class.
+expects; a stray close needs no more — and where a consumer needs the close's *class*, e.g.
+the `NodesParser` stop condition, it re-resolves it from state: see the stop-conditions
+entry); `expecting_group_close` holds the rule; `GroupData.group_type` stays but records
+the class.
 *Rationale:* per-pairing identities in a closed enum blocked exactly the extensibility the
 delimited-group machinery exists for — a third-party spec cannot add variants to the preset's
 enum, so novel delimiters (beamer-style `<…>` overlay arguments, `|…|` forms) were
@@ -1101,8 +1103,9 @@ Phase 7 redesign, while the default preserves the whitespace-as-chars invariant 
 (`StopCause`), not errors** — DECIDED (user, July 2026, Phase 6 plan session;
 pylatexenc-informed). `NodesParser` accepts a stop specification with two independent
 triggers, mirroring pylatexenc's well-tested pair:
-- *token condition* — a small closed enum (`Command(name)`, `GroupClose(group_type)`,
-  `ParagraphBreak`, …) **or** a programmatic predicate (`Fn(&Token) -> bool`);
+- *token condition* — a small closed enum (`Command(name)`,
+  `GroupClose(group_type, close)`, `ParagraphBreak`, …) **or** a programmatic predicate
+  (`Fn(&Token) -> bool`);
 - *node condition* — a programmatic predicate consulted after each node is assembled,
   receiving (node count, view of the just-staged node) — covers pylatexenc's
   `stop_nodelist_condition` uses (stop-after-one-node, `LatexSingleNodeParser`).
@@ -1117,6 +1120,18 @@ Deliberate deviations from pylatexenc: the node predicate sees (count, last node
 whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
 invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
 data (§2.1).
+*`GroupClose` matches the exact `(group_type, close)` pairing, not either field alone
+(amended July 2026, Phase 6.2 review):* both must hold, because each guards a distinct
+false match. `close` disambiguates delimiters *within* a class — where `{`/`}` and `[`/`]`
+share one `GroupTypeId`, a group opened with `{` must not stop at a stray `]`. `group_type`
+disambiguates classes *within* a delimiter — if a mid-stream state delta re-classes `}` to
+close a math group, that `}` must not close the enclosing brace group (wait for one that is
+a brace close again). The close token carries only `delim` (the pairing's type is a
+property of the *open*, which alone establishes group identity; the close merely matches —
+see the group-token entry), so the class is re-resolved from the current state at match
+time — the same state the tokenizer used, so a reclassifying delta is honored. A close that
+matches neither field is left unconsumed and surfaces as `UnexpectedGroupClose` for the
+caller to adjudicate.
 *Rejected:* a declarative stop-condition language in spec data (the Q1 ruling: terminators
 are parser business); closure storage in specs.
 

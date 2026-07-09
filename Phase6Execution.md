@@ -122,7 +122,10 @@ where 's: 'a
 
 pub enum TokenStopCondition<'p, L: Lang> {
     Command { name: &'p str },
-    GroupClose { group_type: L::GroupTypeId },
+    // matches the exact (group_type, close) pairing: close disambiguates within a class
+    // (`]` vs `{`), group_type within a delimiter (a delta-reclassed `}`); class resolved
+    // from the current state (the `GroupClose` token carries only `delim`) — 6.2 amendment
+    GroupClose { group_type: L::GroupTypeId, close: &'p str },
     ParagraphBreak,
     Predicate(&'p dyn Fn(&Token<'_, L>) -> bool),
 }
@@ -274,9 +277,11 @@ demonstrated.
 ### 6.3 — Groups + invariant checker
 
 - `GroupOpen` arm: group parsing — derived state (`expecting_group_close` from the token's
-  `Arc<GroupRule>`), recurse `NodesParser` with `GroupClose` stop condition, consume the
-  close, stage `Group` with `GroupData` (delimiters `Spanned`, `group_type` = rule class).
-  Structural state revert after the group.
+  `Arc<GroupRule>`), recurse `NodesParser` with the `GroupClose` stop condition carrying
+  **both** `group_type` and `close` from that opening rule (pass both — matching either
+  alone re-admits the `]`-closes-`{` / reclassified-`}` bugs the §2 note describes),
+  consume the close, stage `Group` with `GroupData` (delimiters `Spanned`, `group_type` =
+  rule class). Structural state revert after the group.
 - Unclosed group (EOF inside): diagnostic + empty `close: TextContent` recovery (per §3.5
   `GroupData` rationale). `UnexpectedGroupClose` at root: diagnostic + skip (decision 9).
 - `check_tree_invariants(&NodeTree)` public test utility in `node` (report R5): sibling
