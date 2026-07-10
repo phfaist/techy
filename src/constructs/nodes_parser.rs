@@ -7,8 +7,9 @@
 //! and end of stream. The `GroupOpen` (6.3) and `Command`/`Specials` invocation arms
 //! (6.4) currently take a minimal tolerant recovery — diagnostic plus a span-backed
 //! chars fallback node — until their parsers land; sibling state-deltas returned by
-//! invocation parsers will be applied inside the loop (`state.derived(&delta)`) once the
-//! 6.4 arms produce them.
+//! invocation parsers will be applied inside the loop (session-mediated,
+//! `cx.session.derived_state(…)` — DESIGN_RATIONALE.md §3.6) once the 6.4 arms produce
+//! them.
 //!
 //! # Whitespace and span invariants (DESIGN_RATIONALE.md §3.5, pinned)
 //!
@@ -562,9 +563,10 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 }
             }
 
-            // (Sibling-delta application — `cx.state = Arc::new(cx.state.derived(&d))`,
-            // §2 state-threading convention — slots in here once the invocation arms
-            // (6.4) return deltas; no 6.2 arm produces one.)
+            // (Sibling-delta application — session-mediated per DESIGN_RATIONALE §3.6,
+            // `cx.state = cx.session.derived_state(&cx.state, &d)` via a temporary, §2
+            // state-threading convention — slots in here once the invocation arms (6.4)
+            // return deltas; no 6.2 arm produces one.)
         }
     }
 }

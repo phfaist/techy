@@ -1293,7 +1293,9 @@ and returning the same `Arc` preserves pointer identity (the §3.2 identity-keye
 memoization argument stays sound); (6) *callbacks are pure `&dyn Fn`* (like
 `TokenStopKind::Predicate`, unlike the node condition's deliberate `FnMut`): a descent
 policy whose answer depends on call order would be fragile, and `Fixed` covers the
-stateless case.
+stateless case. (Re-examined and upheld against session access, July 2026 — see the
+session-mediated derivation entry: precompute-and-select expresses context-dependent
+policies purely, with full `Arc` sharing.)
 Pitfalls recorded: group termination self-heals under any policy base (the group parser
 sets `expecting_group_close` on the interior state, which takes tokenizer precedence), but
 environment bodies do not — a base that cannot tokenize `\end` runs the body to
@@ -1320,9 +1322,11 @@ child-state design session; conditional go — "adopt if straightforward" — an
 but the derivation is deduplicated through a memo in `ParserSession`: a small vector of
 `(base, rule, interior)` `Arc` triples matched by `Arc::ptr_eq`, consulted only for the pure
 expecting-close derivation (no spec or policy delta in play). The memo is exposed as a
-*narrowly-typed* session helper (`group_interior_state(base, rule)` or similar), **not** a
-general derived-state wrapper: `state.derived(&delta)` remains the universal transition
-choke point, and memoization exists only where the derivation inputs have `Arc` identity —
+*narrowly-typed* session helper (`group_interior_state(base, rule)` or similar) — the
+general session wrapper `derived_state` exists for instrumentation but **never** memoizes
+(see the session-mediated derivation entry below): `state.derived(&delta)` remains the
+underlying pure transition, and memoization exists only where the derivation inputs have
+`Arc` identity —
 an arbitrary `ParsingStateDelta` has no equality (`L::StateExt`/`L::Event` are not
 `PartialEq`; `Arc<dyn SpecLookup>` has none), and non-recurring derivations gain nothing
 from a memo anyway. (Spec-side deltas *do* have identity — `Arc<ArgumentSpec<L>>` carries
@@ -1346,6 +1350,55 @@ gets the savings without the semantic wrinkle).
 *Revisit if:* profiling shows the linear memo scan or memory growth under pathological
 nesting (one entry per depth level) warrants a map or a cap — or 6.3 implementation
 friction appears, in which case ship plain always-derive and flag for performance review.
+
+**Session-mediated derivation is the in-parse standard; transitions have two levels** —
+DECIDED (user, July 2026, child-state design session follow-up; extends the memo entry
+above). Within a parse frame, construct parsers obtain derived states through the session:
+`ParserSession::derived_state(&base, &delta) -> Arc<ParsingState<L>>` — the unkeyed general
+form, instrumented but **never memoized** (an arbitrary delta has no identity, per the memo
+entry) — plus the narrowly-typed keyed helpers where derivation inputs have `Arc` identity
+(`group_interior_state(base, rule)`; a `(base, Arc<ArgumentSpec>)` form possible later).
+Pinned invariant: **the session layer is data-equivalent to `ParsingState::derived()`** —
+it may dedup and observe, never alter the resulting state. `derived()` stays public and
+pure and remains the sole real constructor; out-of-parse code (initial states, tests,
+post-parse tree transforms) keeps calling it directly. The standard is scoped to parse
+frames and enforced by convention — sound because only gracefully-degrading features live
+on the session layer: a bypassed memo is a missed dedup, a bypassed observation a missed
+count, never a wrong state.
+The two levels exist because two different questions get asked at a transition:
+*constructing the data* is `Lang::finalize_transition` (inside `derived()`, unchanged) — a
+pure function of (base data, delta, events), structurally airtight, and memoizable
+*because* pure: it runs once per unique derivation, **not** once per transition event.
+*Observing the event* is the new `Lang::observe_transition(&mut L::SessionExt, prev, new,
+&delta)`, called by `derived_state` on **every** transition event, memo hits included.
+Parse-history accumulation ("how many times did the parse enter math mode") belongs to the
+second level; in finalize it would be doubly wrong — states revert structurally, so a
+state-side counter yields nesting depth at best, and the memo skips finalize on repeats,
+so counts under-report. (Mirrors pylatexenc's walker-level parsing-state event handler.)
+`Lang` gains **`SessionExt`** (parse-global mutable extension, `Default`-initialized,
+stored on `ParserSession`) — the preset-owned mutable object, and the home for parse-global
+caches. The ext-cache pattern under pure finalize: expensive shared tables are computed at
+the *delta-producing site* (construct parsers have the session) and shipped `Arc`'d inside
+the delta (ext replacement or event payload); finalize installs them cheaply. Structural
+sharing covers the rest — `StateData::clone` preserves `Arc` identity, and whole-state memo
+hits share ext caches wholesale.
+Timing: `derived_state`, the keyed group helper, `SessionExt`, and `observe_transition`
+land together in 6.3 — the seam ships whole, so the memo never exists without its
+observation channel.
+*Rationale:* one seam hides memo storage, gives transition provenance a place to reach
+`Diagnostics` (the "deltas are inspectable data" promise), and sees memo-hit transitions —
+which no state-level hook can, by construction.
+*Costs accepted:* two derivation idioms coexist, separated by documented scope; Rust has no
+stable associated-type defaults, so every manual `Lang` impl writes `type SessionExt = ();`
+(`SimpleLang` absorbs it).
+*Rejected:* `get_derived_state` naming (the crate's first `get_` prefix; `derived_state`
+chosen — adjective form matching `ParsingState::derived`); giving `finalize_transition`
+session access (forfeits the memo and breaks data-equivalence of out-of-session
+derivations); session access for `ChildStateSpec::Compute` callbacks (a policy hook could
+stage nodes and emit diagnostics, and the loop's borrows tangle — purity upheld:
+precompute-and-select covers context-dependent policies with full `Arc` sharing, and the
+designated first relaxation, should a consumer demand latching state, is `Fn` → `FnMut` on
+the node-condition precedent, not session injection).
 
 ### 3.7 Generics strategy
 

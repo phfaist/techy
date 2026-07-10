@@ -327,7 +327,9 @@ Properties, roughly in decreasing order of importance:
   `&mut` exists only inside it, on a clone nothing else can observe yet.
 - **Producer/scope split.** The party producing a change and the party deciding its scope
   differ, which is why the delta must be a standalone value. For *inward* scoping (group or
-  math interior) a parser calls `state.derived(…)` itself and drops the child state when done
+  math interior) a parser derives the child state itself and drops it when done — inside a
+  parse frame through the session seam (`session.derived_state(…)` / keyed memo helpers —
+  amended July 2026, DESIGN_RATIONALE §3.6), out of parse via `state.derived(…)` directly
   — reversion is structural (the caller still holds the outer `Arc`); deltas are never
   inverted. For *outward* propagation (`\newcommand`) the parser returns the delta to its
   caller, who applies it to **its own** state for subsequent siblings — a base the producer
@@ -641,7 +643,9 @@ loop:
     Specials(spec)  -> make_invocation_parser likewise (spec already on the token)
     GroupClose(t)   -> stop-condition match? stop : StopCause::UnexpectedGroupClose (caller decides)
     EndOfStream     -> materialize trailing-whitespace chars node from pre_space; stop
-  returned delta -> state.derived(&delta) -> new Arc<ParsingState> for subsequent siblings
+  returned delta -> session.derived_state(&state, &delta) -> new Arc<ParsingState> for subsequent
+                    siblings (session-mediated: the memo/observation seam — amended July 2026,
+                    DESIGN_RATIONALE §3.6; ParsingState::derived stays the underlying pure transition)
 NodesParser returns (nodes, StopCause) — the caller interprets the ending (§errors).
 ```
 
@@ -671,13 +675,25 @@ Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally
 ```rust
 pub trait Lang: Sized {                 // the compile-time bundle (was: LanguageSpecification)
     type StateExt:  Clone + Debug + Default;
+    type SessionExt: Debug + Default;   // parse-global MUTABLE extension on ParserSession —
+                                        // counters, parse-global caches (amended July 2026,
+                                        // DESIGN_RATIONALE §3.6 two-level transition doctrine)
     type Event:     Clone + Debug;      // semantic transition events (e.g. FLM's EnterMath)
     type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§nodes) [Phase 5]
     type SourceOrigin: …;
 
-    /// Transition customizer — the choke-point hook of §state. Default: empty.
+    /// Transition customizer — the choke-point hook of §state. PURE constructor of state
+    /// data (what makes derivations memoizable); runs once per unique derivation.
+    /// Default: empty.
     fn finalize_transition(new: &mut StateData<Self>, prev: &ParsingState<Self>,
                            events: &[Self::Event]) {}
+
+    /// Per-EVENT transition observation (amended July 2026, DESIGN_RATIONALE §3.6):
+    /// called by ParserSession::derived_state on every transition event, memo hits
+    /// included — parse-history accumulation lives here, never in finalize_transition.
+    /// Observational only: cannot alter the resulting state. Default: no-op. [6.3]
+    fn observe_transition(ext: &mut Self::SessionExt, prev: &ParsingState<Self>,
+                          new: &ParsingState<Self>, delta: &ParsingStateDelta<Self>) {}
 
     /// Specials scan (§token): recognition + resolution in one call — the match carries
     /// name AND spec. Typically dispatches to the state's libraries. Default: no specials.
