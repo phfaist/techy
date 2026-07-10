@@ -270,9 +270,7 @@ mod tests {
     /// `Chars` node, returns no delta. Exercises the full 6.1 plumbing —
     /// `ParseContext` over a `TokenListReader`, staging through the session's builder,
     /// `finish` into a `ParseResult`.
-    struct OneCharParser {
-        source: Arc<Source>,
-    }
+    struct OneCharParser;
 
     impl ConstructParser<PlainLang> for OneCharParser {
         type Output = crate::node::BuildId;
@@ -288,7 +286,7 @@ mod tests {
             let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };
             let id = cx.session.builder.add(
                 NodeKind::chars(token.span),
-                crate::source::SourceSpan::new(&self.source, token.span.range()),
+                crate::source::SourceSpan::new(&cx.source, token.span.range()),
                 cx.state.clone(),
                 vec![],
             );
@@ -307,10 +305,11 @@ mod tests {
 
         let mut cx = ParseContext {
             tokens: &mut reader,
+            source: source.clone(),
             state: st.clone(),
             session: &mut session,
         };
-        let mut parser = OneCharParser { source: source.clone() };
+        let mut parser = OneCharParser;
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
         assert_eq!(cx.tokens.pos(), 1);
@@ -326,7 +325,12 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new(Recovery::Tolerant);
-        let mut cx = ParseContext { tokens: &mut reader, state: st, session: &mut session };
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            source: source.clone(),
+            state: st,
+            session: &mut session,
+        };
 
         let kind = ParseErrorKind::Syntax { message: "boom".into() };
         assert!(cx.recover(kind, span(&source, 0..1)).is_ok());

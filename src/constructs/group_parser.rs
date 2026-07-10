@@ -45,7 +45,7 @@ use core::mem;
 
 use crate::error::ParseErrorKind;
 use crate::node::{BuildId, GroupData, NodeKind};
-use crate::source::{Source, SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingStateDelta};
 use crate::token::GroupRule;
 
@@ -55,7 +55,6 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 /// The group construct parser: a tier-2 temporary, constructed per group descent from
 /// the opening token's facts (see the module docs for the contract).
 pub struct GroupParser<L: Lang> {
-    source: Arc<Source<L::SourceOrigin>>,
     /// The opening delimiter's span (the consumed `GroupOpen` token's span).
     open_span: Span,
     /// The opening token's resolved rule: the close spelling and group class of the
@@ -65,14 +64,10 @@ pub struct GroupParser<L: Lang> {
 
 impl<L: Lang> GroupParser<L> {
     /// A parser for the group opened by the consumed `GroupOpen` token with span
-    /// `open_span` and resolved rule `rule`, staging nodes whose spans refer into
-    /// `source`.
-    pub fn new(
-        source: Arc<Source<L::SourceOrigin>>,
-        open_span: Span,
-        rule: Arc<GroupRule<L>>,
-    ) -> GroupParser<L> {
-        GroupParser { source, open_span, rule }
+    /// `open_span` and resolved rule `rule`, staging nodes with spans into the context's
+    /// [`source`](super::ParseContext::source).
+    pub fn new(open_span: Span, rule: Arc<GroupRule<L>>) -> GroupParser<L> {
+        GroupParser { open_span, rule }
     }
 }
 
@@ -97,7 +92,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
             },
             true,
         );
-        let mut interior = NodesParser::new(Arc::clone(&self.source), stop);
+        let mut interior = NodesParser::new(stop);
         let outer_state = mem::replace(&mut cx.state, interior_state);
         let result = interior.parse(cx);
         cx.state = outer_state;
@@ -116,7 +111,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
                             self.rule.close
                         ),
                     },
-                    SourceSpan::new(&self.source, self.open_span.range()),
+                    SourceSpan::new(&cx.source, self.open_span.range()),
                 )?;
                 (TextContent::empty(), cx.tokens.pos())
             }
@@ -127,7 +122,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
                     ParseErrorKind::Syntax {
                         message: format!("unclosed group: expected ‘{}’", self.rule.close),
                     },
-                    SourceSpan::new(&self.source, span.range()),
+                    SourceSpan::new(&cx.source, span.range()),
                 )?;
                 (TextContent::empty(), span.start)
             }
@@ -145,7 +140,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
         let span = Span::new(self.open_span.start, end);
         let id = cx.session.builder.add(
             NodeKind::group(data),
-            SourceSpan::new(&self.source, span.range()),
+            SourceSpan::new(&cx.source, span.range()),
             Arc::clone(&cx.state),
             outcome.nodes,
         );
@@ -168,6 +163,7 @@ mod tests {
     use crate::engine::ParserSession;
     use crate::error::Recovery;
     use crate::library::LibraryStack;
+    use crate::source::Source;
     use crate::state::{ParsingState, SimpleLang, StateData};
     use crate::token::{
         StdTokenReader, Token, TokenKind, TokenReader, TokenRules, WhitespaceRules,
@@ -225,9 +221,13 @@ mod tests {
         let rule = Arc::clone(rule);
         reader.move_past(&open, true);
         let mut session = ParserSession::new(recovery);
-        let mut cx =
-            ParseContext { tokens: &mut reader, state: Arc::clone(&st), session: &mut session };
-        let mut parser = GroupParser::new(Arc::clone(&source), open.span, rule);
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            source: Arc::clone(&source),
+            state: Arc::clone(&st),
+            session: &mut session,
+        };
+        let mut parser = GroupParser::new(open.span, rule);
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
         let pos = cx.tokens.pos();

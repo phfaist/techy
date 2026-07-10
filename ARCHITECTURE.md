@@ -196,8 +196,9 @@ pub enum TokenKind<'s, L: Lang> {
     Char(char),                                             // single character — never runs
     GroupOpen  { delim: &'s str, rule: Arc<GroupRule<L>> },  // resolved rule travels with the token
     GroupClose { delim: &'s str },
-    Command    { name: &'s str, post_space: Span },         // \foobar␣ — rules-data driven
-    Specials   { name: &'s str, spec: Arc<dyn CallableSpec<L>> },  // scan-hook driven
+    Command    { name: &'s str, escape_char: char, post_space: Span },  // \foobar␣ — rules-data driven
+    Specials   { callable_type: L::CallableTypeId, name: &'s str,       // scan-hook driven; carries
+                 spec: Arc<dyn CallableSpec<L>> },                      //   its full resolution [6.4]
     Comment    { content: &'s str, post_space: Span },      // whole comment, sans newline
     ParagraphBreak,           // \n\s*\n run; span = first..last newline
     EndOfStream,              // terminal, idempotent; pre_space = final whitespace
@@ -206,18 +207,21 @@ pub enum TokenKind<'s, L: Lang> {
 
 Key points:
 
-- Tokens are **structural and minimal**, and carry **no invocation forms**: no
-  macro/environment/specials taxonomy and no `CallableTypeId` at the token level. `\begin`
-  is a `Command` like `\foobar`; environment recognition is entirely a parse-time preset
-  concern. Terminology stack: **command** (token-level syntactic form) → **callable**
-  (parse-level concept) → **macro/environment/specials** (preset-level invocation flavors).
+- Tokens are **structural and minimal**, and *parse-time-resolved* tokens carry **no
+  invocation forms**: no macro/environment/specials taxonomy and no `CallableTypeId` on
+  `Command` tokens. `\begin` is a `Command` like `\foobar`; environment recognition is
+  entirely a parse-time preset concern. Terminology stack: **command** (token-level
+  syntactic form) → **callable** (parse-level concept) → **macro/environment/specials**
+  (preset-level invocation flavors). (`Specials` is the deliberate exception — next
+  bullet.)
 - **Two callable-trigger kinds, split by production mechanism.** `Command` is recognized
   from `CommandRule { escape_char, name_chars }` *data* (delta-changeable; fires
   unconditionally — unknown names resolve at parse time to fallback specs; no lookup at
   token time). `Specials` is recognized by the `Lang::scan_specials` *hook* — recognition
-  *is* resolution: the `SpecialsMatch` returns name **and** spec together, so
-  scanning/lookup mismatches are impossible. The hook is gated by the state-cached
-  `TriggerChars` first-character filter (`Lang::specials_trigger_chars`).
+  *is* resolution: the `SpecialsMatch` returns name **and** the full resolution
+  (`callable_type` + spec, the `ResolvedCallable` pair — amended July 2026, Phase 6.4)
+  together, so scanning/lookup mismatches are impossible. The hook is gated by the
+  state-cached `TriggerChars` first-character filter (`Lang::specials_trigger_chars`).
 - **Syntactic vs. content whitespace.** `pre_space` (every token) is *content* whitespace —
   it belongs to the document flow. Post-space exists only where tokenization syntax
   consumes whitespace — multi-character `Command` names and `Comment` line ends — and is
@@ -546,15 +550,18 @@ case.
 
 **Whitespace and span invariants** (pinned July 2026, Phase 6 plan session — full numbered
 statement in DESIGN_RATIONALE.md §3.5):
-- Whitespace immediately following a callable is its `post_space`, **stopping at any paragraph
-  break** — claimed *by the invocation parser*, not the dispatch loop (a one-call helper; a
-  custom parser that skips it corrupts nothing — the whitespace lands as following content);
-  whitespace elsewhere between constructs becomes a whitespace-only `Chars` node
-  (pylatexenc behavior). No double counting ⇒ **sibling spans partition the parent's content
-  interior exactly** — no gaps; span math trustworthy for tooling and editing. Mechanically
-  checkable via the test utility `check_tree_invariants()`.
-- A callable's `SourceSpan` **includes** its `post_space` (so a `Spanned` post_space is a
-  trailing sub-range of the node's own span). Node span semantics are the public contract and
+- A callable's `post_space` is **exactly its trigger token's own syntactic post-space** —
+  the name-terminating whitespace of a multi-character command, stopping at any paragraph
+  break; nothing beyond the token is ever claimed (amended July 2026, Phase 6.4, user
+  decision — supersedes the claim-helper rule; whitespace after `\&` or after a final
+  argument is ordinary sibling/region content, as in TeX/pylatexenc). Whitespace elsewhere
+  between constructs becomes a whitespace-only `Chars` node (pylatexenc behavior). No
+  double counting ⇒ **sibling spans partition the parent's content interior exactly** — no
+  gaps; span math trustworthy for tooling and editing. Mechanically checkable via the test
+  utility `check_tree_invariants()`.
+- A callable's `SourceSpan` **includes** its `post_space` (a `Spanned` post_space is a
+  sub-range of the node's own span — trailing for zero-argument callables; between the name
+  and the first argument region otherwise). Node span semantics are the public contract and
   are deliberately decoupled from token behavior — tokens are transient engine internals.
 - Paragraph breaks surface as their own nodes via `Lang::make_paragraph_break_node`
   (default: whitespace-only `Chars` over the full token span; a preset may return a
@@ -608,16 +615,20 @@ The single most important trait in the system. To avoid pylatexenc's three-argum
 ```rust
 pub struct ParseContext<'a, 's, L: Lang> {
     pub tokens: &'a mut dyn TokenReader<'s, L>,
+    pub source: Arc<Source<L::SourceOrigin>>, // what staging a SourceSpan requires; lives here
+                                              //   because tokens/readers deliberately carry only
+                                              //   byte spans (added 6.4, user-approved)
     pub state: Arc<ParsingState<L>>,
     pub session: &'a mut ParserSession<L>,   // node building, diagnostics, Recovery policy
 }
 
-pub type ConstructParserResult<T> = Result<T, ParseError>;
+// lang-first like TokenResult (6.1 adjustment); ParseError is origin-generic
+pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceOrigin>>;
 
 pub trait ConstructParser<L: Lang> {
     type Output;                              // BuildId, Vec<BuildId>, ParsedArguments, …
     fn parse(&mut self, cx: &mut ParseContext<'_, '_, L>)
-        -> ConstructParserResult<(Self::Output, Option<ParsingStateDelta<L>>)>;
+        -> ConstructParserResult<L, (Self::Output, Option<ParsingStateDelta<L>>)>;
 }
 ```
 
@@ -640,7 +651,7 @@ loop:
     Comment         -> comment node built directly from the token (whole-comment tokens)
     Command(name)   -> Lang::resolve_command (typically via libraries; None -> diagnose+recover)
                        -> spec.make_invocation_parser(invocation).parse(cx)
-    Specials(spec)  -> make_invocation_parser likewise (spec already on the token)
+    Specials(..)    -> make_invocation_parser likewise (resolution — type + spec — on the token)
     GroupClose(t)   -> stop-condition match? stop : StopCause::UnexpectedGroupClose (caller decides)
     EndOfStream     -> materialize trailing-whitespace chars node from pre_space; stop
   returned delta -> session.derived_state(&state, &delta) -> new Arc<ParsingState> for subsequent
@@ -659,7 +670,8 @@ Standard construct parsers to implement (mirroring pylatexenc's `latexnodes.pars
 list revised July 2026, Phase 6 plan session): `NodesParser` (stop conditions: reified
 token-condition enum + tier-2 programmatic predicates; returns `StopCause`), the group
 parser, `StdInvocationParser` (the default declarative invocation parser: argument specs →
-argument parsers → regions, slots, post-space claim), the standard `ArgumentParser`
+argument parsers → regions, slots; post_space = the trigger token's own — 6.4 amendment),
+the standard `ArgumentParser`
 implementations (delimited-group / optional-group / marker / expression fallback — core,
 parameterized by group types; presets add one-liner constructors in Phase 7),
 `EnvironmentBodyParser` (core, parameterized: stop-command name, name-group type,

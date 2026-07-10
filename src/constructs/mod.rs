@@ -2,8 +2,10 @@
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
 //! the main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
-//! (6.4), arguments (6.5), environment bodies (6.6) — is parsed by an implementation of
-//! it, reading tokens and staging nodes through one [`ParseContext`].
+//! ([`StdInvocationParser`], behind the
+//! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) factory),
+//! arguments (6.5), environment bodies (6.6) — is parsed by an implementation of it,
+//! reading tokens and staging nodes through one [`ParseContext`].
 //!
 //! # The two-tier ownership model (DESIGN_RATIONALE.md §3.6)
 //!
@@ -31,10 +33,12 @@
 
 mod child_state;
 mod group_parser;
+mod invocation_parser;
 mod nodes_parser;
 
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use group_parser::GroupParser;
+pub use invocation_parser::StdInvocationParser;
 pub use nodes_parser::{
     NodesOutcome, NodesParser, StopCause, StopSpec, TokenStopCondition, TokenStopKind,
 };
@@ -44,7 +48,7 @@ use core::fmt;
 
 use crate::engine::ParserSession;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::source::SourceSpan;
+use crate::source::{Source, SourceSpan};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenReader};
@@ -55,6 +59,12 @@ use crate::token::{Token, TokenReader};
 pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
+    /// The source the token spans refer into — what staging a node's
+    /// [`SourceSpan`] requires (added July 2026, Phase 6.4, user-approved). It lives
+    /// here, not on tokens or readers, because the token layer deliberately carries
+    /// only transient byte spans (DESIGN_RATIONALE.md §3.8); the construct-parser layer
+    /// is where byte spans become `Arc`-backed source spans.
+    pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).
     pub state: Arc<ParsingState<L>>,
@@ -119,10 +129,16 @@ pub trait ConstructParser<L: Lang> {
 }
 
 /// One resolved callable invocation, as handed to
-/// `CallableSpec::make_invocation_parser` (Phase 6.4): the dispatch loop resolves the
-/// trigger token (via [`Lang::resolve_command`], or the spec riding on a `Specials`
-/// token), builds this value, and moves it into the invocation parser the spec's factory
-/// returns.
+/// [`CallableSpec::make_invocation_parser`]: the dispatch loop resolves the trigger
+/// token (via [`Lang::resolve_command`], or the
+/// resolution riding on a `Specials` token), builds this value, and moves it into the
+/// invocation parser the spec's factory returns.
+///
+/// When the parser runs, the trigger token has already been **consumed whole** by the
+/// dispatching arm (`move_past(token, true)`, syntactic post-space included) — see
+/// [`StdInvocationParser`]'s module docs for the full contract.
+///
+/// [`CallableSpec::make_invocation_parser`]: crate::spec::CallableSpec::make_invocation_parser
 pub struct Invocation<'a, 's, L: Lang> {
     /// The invocation form the trigger resolved to.
     pub callable_type: L::CallableTypeId,

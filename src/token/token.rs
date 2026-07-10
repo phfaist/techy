@@ -73,8 +73,15 @@ pub enum TokenKind<'s, L: Lang> {
     },
     /// A specials trigger (`~`, `&`, `---`, …), recognized *and resolved* by the
     /// `Lang::scan_specials` hook — recognition is a lookup, so the token carries the
-    /// resulting spec (never absent; unknown-name fallback is the scan's business).
+    /// full resolution: the invocation form *and* the spec (never absent; unknown-name
+    /// fallback is the scan's business). Exactly a
+    /// [`ResolvedCallable`](crate::state::ResolvedCallable)'s pair — what the dispatch
+    /// loop needs to build an `Invocation` (`callable_type` added July 2026, Phase 6.4,
+    /// user-approved).
     Specials {
+        /// The invocation form the trigger resolved to (a preset's specials form; a
+        /// fence-block form; …).
+        callable_type: L::CallableTypeId,
         /// The specials name (usually the matched string itself).
         name: &'s str,
         /// The resolved behavior spec.
@@ -165,9 +172,11 @@ impl<L: Lang> Clone for TokenKind<'_, L> {
                 escape_char: *escape_char,
                 post_space: *post_space,
             },
-            TokenKind::Specials { name, spec } => {
-                TokenKind::Specials { name, spec: Arc::clone(spec) }
-            }
+            TokenKind::Specials { callable_type, name, spec } => TokenKind::Specials {
+                callable_type: *callable_type,
+                name,
+                spec: Arc::clone(spec),
+            },
             TokenKind::Comment { content, post_space } => {
                 TokenKind::Comment { content, post_space: *post_space }
             }
@@ -203,9 +212,9 @@ impl<L: Lang> PartialEq for TokenKind<'_, L> {
                 TokenKind::Command { name: n2, escape_char: e2, post_space: p2 },
             ) => n1 == n2 && e1 == e2 && p1 == p2,
             (
-                TokenKind::Specials { name: n1, spec: s1 },
-                TokenKind::Specials { name: n2, spec: s2 },
-            ) => n1 == n2 && Arc::ptr_eq(s1, s2),
+                TokenKind::Specials { callable_type: t1, name: n1, spec: s1 },
+                TokenKind::Specials { callable_type: t2, name: n2, spec: s2 },
+            ) => t1 == t2 && n1 == n2 && Arc::ptr_eq(s1, s2),
             (
                 TokenKind::Comment { content: c1, post_space: p1 },
                 TokenKind::Comment { content: c2, post_space: p2 },
@@ -245,9 +254,12 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
                 .field("escape_char", escape_char)
                 .field("post_space", post_space)
                 .finish(),
-            TokenKind::Specials { name, spec } => {
-                f.debug_struct("Specials").field("name", name).field("spec", spec).finish()
-            }
+            TokenKind::Specials { callable_type, name, spec } => f
+                .debug_struct("Specials")
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .field("spec", spec)
+                .finish(),
             TokenKind::Comment { content, post_space } => f
                 .debug_struct("Comment")
                 .field("content", content)

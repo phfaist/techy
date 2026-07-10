@@ -7,11 +7,16 @@
 //! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
 //! [`GroupParser`] under the policy's state (structural swap/revert). The
-//! `Command`/`Specials` invocation arms (6.4) currently take a minimal tolerant
-//! recovery — diagnostic plus a span-backed chars fallback node — until their parsers
-//! land; sibling state-deltas returned by invocation parsers will be applied inside the
-//! loop (session-mediated, `cx.session.derived_state(…)` — DESIGN_RATIONALE.md §3.6)
-//! once the 6.4 arms produce them.
+//! `Command`/`Specials` invocation arms (6.4) descend the same way: a `Command` token
+//! resolves through [`Lang::resolve_command`] under the loop's own state (resolution
+//! precedes the descent policy — §3.6), a `Specials` token carries its resolution; the
+//! arm consumes the trigger whole, builds the [`Invocation`], and runs the parser
+//! returned by the spec's
+//! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+//! factory under the policy's state. The state delta an invocation parser returns is
+//! the invocation's after-effect for subsequent siblings (`\newcommand`), applied to
+//! the loop's own state session-mediated (`cx.session.derived_state(…)` —
+//! DESIGN_RATIONALE.md §3.6).
 //!
 //! # Whitespace and span invariants (DESIGN_RATIONALE.md §3.5, pinned)
 //!
@@ -61,8 +66,9 @@
 //! Recovery happens where a problem is detected, through the session's policy helper.
 //! Tokenizer errors continue with their [`TokenRecovery`](crate::token::TokenRecovery)
 //! placeholder token, the reader repositioned to the error's `resume_pos` (so the error
-//! is never re-read); parse-level conditions (unresolvable command, and — until 6.4 —
-//! specials) recover as a diagnostic plus a chars fallback node over the token's span.
+//! is never re-read); an unresolvable command recovers as a diagnostic plus a chars
+//! fallback node over the token's span (specials never take this path: recognition =
+//! resolution, so a recognized trigger always dispatches).
 //! Markup text inside a `Chars` node is an accepted tolerant-recovery artifact, always
 //! accompanied by a diagnostic; fallback nodes are deliberately *not* merged into
 //! neighboring chars runs. Group recovery (unclosed at end of input, mismatched close)
@@ -78,13 +84,13 @@ use core::mem;
 
 use crate::error::{ParseError, ParseErrorKind};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
-use crate::source::{Source, SourceSpan, Span};
+use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind, TokenReader};
 
-use super::child_state::{ChildStateSpec, GroupChildState};
+use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
-use super::{ConstructParser, ConstructParserResult, ParseContext};
+use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
 
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
 /// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
@@ -227,10 +233,9 @@ pub struct NodesOutcome {
 /// parser itself returns `None` as its pass-through delta (§2 state-threading
 /// convention — no current consumer of a merged delta).
 pub struct NodesParser<'p, L: Lang> {
-    source: Arc<Source<L::SourceOrigin>>,
     stop: StopSpec<'p, L>,
-    /// Descent-state policy for child constructs (groups now, invocations from 6.4);
-    /// defaults to inherit-everywhere.
+    /// Descent-state policy for child constructs (groups and invocations); defaults to
+    /// inherit-everywhere.
     child_states: ChildStateSpec<'p, L>,
     nodes: Vec<BuildId>,
     /// The pending maximal chars run (invariant 1): extended by `Char` tokens and every
@@ -239,11 +244,10 @@ pub struct NodesParser<'p, L: Lang> {
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
-    /// A parser staging nodes whose spans refer into `source` (the source the context's
-    /// token reader is reading), stopping per `stop`.
-    pub fn new(source: Arc<Source<L::SourceOrigin>>, stop: StopSpec<'p, L>) -> NodesParser<'p, L> {
+    /// A parser staging nodes with spans into the context's [`source`](ParseContext::source),
+    /// stopping per `stop`.
+    pub fn new(stop: StopSpec<'p, L>) -> NodesParser<'p, L> {
         NodesParser {
-            source,
             stop,
             child_states: ChildStateSpec::inherit(),
             nodes: Vec::new(),
@@ -341,7 +345,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     ) -> BuildId {
         let id = cx.session.builder.add(
             kind,
-            SourceSpan::new(&self.source, span.range()),
+            SourceSpan::new(&cx.source, span.range()),
             Arc::clone(&cx.state),
             vec![],
         );
@@ -424,12 +428,50 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         }
         cx.recover(
             ParseErrorKind::Syntax { message },
-            SourceSpan::new(&self.source, token.span.range()),
+            SourceSpan::new(&cx.source, token.span.range()),
         )?;
         if !recovered {
             cx.tokens.move_past(token, true);
         }
         Ok(self.stage_node(cx, NodeKind::chars(token.span), token.span))
+    }
+
+    /// Dispatch a resolved invocation (the `Command`/`Specials` arms): resolve the
+    /// descent base state through the [`invocation`](ChildStateSpec::invocation) policy
+    /// (resolution already ran under the loop's own state — resolution precedes policy,
+    /// §3.6), consume the trigger token **whole** (syntactic post-space included —
+    /// mirroring the `GroupOpen` arm, so loop progress holds by construction), run the
+    /// spec's invocation parser under the policy state (structural swap/revert), record
+    /// the staged node, and apply the parser's after-effect delta to the loop's own
+    /// state for subsequent siblings (`\newcommand` — session-mediated, so the
+    /// transition is observed). Returns whether the node stop condition fired.
+    fn dispatch_invocation<'s>(
+        &mut self,
+        cx: &mut ParseContext<'_, 's, L>,
+        invocation: Invocation<'_, 's, L>,
+    ) -> ConstructParserResult<L, bool> {
+        // `Arc` in, `Arc` out — pass-through policies preserve pointer identity.
+        let base = match &self.child_states.invocation {
+            InvocationChildState::Inherit => Arc::clone(&cx.state),
+            InvocationChildState::Fixed(state) => Arc::clone(state),
+            InvocationChildState::Compute(compute) => compute(&cx.state, &invocation),
+        };
+        cx.tokens.move_past(invocation.token, true);
+        let spec = invocation.spec;
+        let mut parser = spec.make_invocation_parser(invocation);
+        let outer_state = mem::replace(&mut cx.state, base);
+        let result = parser.parse(cx);
+        cx.state = outer_state;
+        drop(parser);
+        let (id, delta) = result?;
+        self.nodes.push(id);
+        if let Some(delta) = delta {
+            // The after-effect applies to the loop's own state, not the policy base
+            // (decided semantics 4, §3.6 — §3.3's outward propagation blesses applying
+            // a delta to a base the producer never saw).
+            cx.state = cx.session.derived_state(&cx.state, &delta);
+        }
+        Ok(self.test_node_stop(cx, id))
     }
 
     /// Drain the collected siblings into the outcome.
@@ -455,7 +497,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 Ok(token) => (token, false),
                 Err(error) => {
                     let kind = ParseErrorKind::Token(error.kind());
-                    let span = SourceSpan::new(&self.source, error.span().range());
+                    let span = SourceSpan::new(&cx.source, error.span().range());
                     match error.into_recovery() {
                         None => return Err(ParseError::new(kind, span)),
                         Some(recovery) => {
@@ -561,21 +603,63 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 }
 
                 TokenKind::Command { name, escape_char, .. } => {
-                    // Invocation dispatch (`Lang::resolve_command` →
-                    // `make_invocation_parser`) lands in 6.4; until then every command
-                    // takes the unresolvable-command recovery (§3.8): diagnostic plus
-                    // span-backed chars fallback.
-                    let message = format!("cannot resolve command ‘{}{}’", escape_char, name);
-                    if self.recover_as_chars(cx, &token, recovered, message)? {
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                    // Resolution runs under the loop's own state — coherent with the
+                    // state that tokenized the token (resolution precedes policy,
+                    // §3.6). A recovery placeholder is never dispatched: its site
+                    // already diagnosed it, and a token with no real bytes behind it
+                    // cannot be consumed by the arm.
+                    let resolved =
+                        if recovered { None } else { L::resolve_command(&cx.state, &token) };
+                    match resolved {
+                        Some(resolved) => {
+                            if self.flush_through(cx, token.pre_space) {
+                                cx.tokens.move_to(&token, false);
+                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                            }
+                            let invocation = Invocation {
+                                callable_type: resolved.callable_type,
+                                name,
+                                spec: &resolved.spec,
+                                token: &token,
+                            };
+                            if self.dispatch_invocation(cx, invocation)? {
+                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                            }
+                        }
+                        None => {
+                            // Unresolvable command (§3.8): diagnostic plus span-backed
+                            // chars fallback.
+                            let message =
+                                format!("cannot resolve command ‘{}{}’", escape_char, name);
+                            if self.recover_as_chars(cx, &token, recovered, message)? {
+                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                            }
+                        }
                     }
                 }
 
-                TokenKind::Specials { name, .. } => {
-                    // Invocation dispatch lands in 6.4 (the spec already rides on the
-                    // token); until then, same recovery as unresolved commands.
-                    let message = format!("cannot invoke specials ‘{}’ here", name);
-                    if self.recover_as_chars(cx, &token, recovered, message)? {
+                TokenKind::Specials { callable_type, name, spec } => {
+                    // Recognition = resolution: the token carries the full resolution
+                    // (callable type + spec). Recovery placeholders are never
+                    // dispatched, as for commands.
+                    if recovered {
+                        let message = format!("cannot invoke specials ‘{}’ here", name);
+                        if self.recover_as_chars(cx, &token, recovered, message)? {
+                            return Ok((self.outcome(StopCause::NodeCondition), None));
+                        }
+                        continue;
+                    }
+                    if self.flush_through(cx, token.pre_space) {
+                        cx.tokens.move_to(&token, false);
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                    }
+                    let invocation = Invocation {
+                        callable_type: *callable_type,
+                        name,
+                        spec,
+                        token: &token,
+                    };
+                    if self.dispatch_invocation(cx, invocation)? {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
@@ -608,11 +692,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // under the state that tokenized it (the at-match-time atomicity
                     // rule); the group parser gets its two facts — open span and rule.
                     cx.tokens.move_past(&token, true);
-                    let mut group = GroupParser::new(
-                        Arc::clone(&self.source),
-                        token.span,
-                        Arc::clone(rule),
-                    );
+                    let mut group = GroupParser::new(token.span, Arc::clone(rule));
                     // The parser's input state is the policy's answer, scoped by
                     // structural swap/revert.
                     let outer_state = mem::replace(&mut cx.state, base);
@@ -625,11 +705,6 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     }
                 }
             }
-
-            // (Sibling-delta application — session-mediated per DESIGN_RATIONALE §3.6,
-            // `cx.state = cx.session.derived_state(&cx.state, &d)` via a temporary, §2
-            // state-threading convention — slots in here once the invocation arms (6.4)
-            // return deltas; no 6.2 arm produces one.)
         }
     }
 }
@@ -715,23 +790,123 @@ mod tests {
     use super::*;
     use crate::engine::{ParseResult, ParserSession};
     use crate::error::Recovery;
-    use crate::library::LibraryStack;
-    use crate::source::TextContent;
-    use crate::spec::StdCallableSpec;
-    use super::super::InvocationChildState;
-    use crate::state::{SimpleLang, StateData, TokenRulesOverrides};
+    use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
+    use crate::node::{GroupData, NodeExt, StagedNodes};
+    use crate::source::{Source, TextContent};
+    use crate::spec::{CallableSpec, StdCallableSpec};
+    use super::super::{InvocationChildState, StdInvocationParser};
+    use crate::state::{
+        NodeExtTypes, ResolvedCallable, SimpleLang, StateData, TokenRulesOverrides,
+    };
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenErrorKind,
         TokenListReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
+    use alloc::boxed::Box;
     use alloc::string::ToString;
 
     const GT_BRACE: u32 = 0;
     const GT_MATH: u32 = 1;
+    const CT_MACRO: u32 = 10;
+    const CT_SPECIALS: u32 = 11;
 
     #[derive(Debug, Clone, Copy)]
     struct TestLang;
     impl SimpleLang for TestLang {}
+
+    /// The preset resolution pattern, shared by the 6.4 test langs: dispatch a
+    /// `Command` token to the state's libraries under the `CT_MACRO` form
+    /// ([`CallableQuery`], escape char included).
+    fn resolve_macro_via_libraries<L: Lang<CallableTypeId = u32>>(
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> Option<ResolvedCallable<L>> {
+        let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+            return None;
+        };
+        let query = CallableQuery::new(
+            CT_MACRO,
+            name,
+            CallableSyntax::Command { escape_char: *escape_char },
+        )
+        .with_token(token);
+        let spec = state.libraries().resolve(&query, state)?;
+        Some(ResolvedCallable { callable_type: CT_MACRO, spec })
+    }
+
+    /// Test lang resolving `Command` tokens against the state's libraries under the
+    /// `CT_MACRO` form.
+    #[derive(Debug, Clone, Copy)]
+    struct CmdLang;
+    impl Lang for CmdLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn resolve_command(
+            state: &ParsingState<Self>,
+            token: &Token<'_, Self>,
+        ) -> Option<ResolvedCallable<Self>> {
+            resolve_macro_via_libraries(state, token)
+        }
+    }
+
+    /// Test lang recognizing `~` as a specials trigger resolving to a zero-arg spec
+    /// under the `CT_SPECIALS` form.
+    #[derive(Debug, Clone, Copy)]
+    struct TildeLang;
+    impl Lang for TildeLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn scan_specials<'s>(
+            _state: &ParsingState<Self>,
+            content: &'s str,
+            pos: usize,
+        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            if content[pos..].starts_with('~') {
+                Ok(Some(SpecialsMatch {
+                    end: pos + 1,
+                    callable_type: CT_SPECIALS,
+                    name: &content[pos..pos + 1],
+                    spec: Arc::new(StdCallableSpec::default()),
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("~".into())
+        }
+    }
+
+    /// A library defining each of `names` as a zero-arg `CT_MACRO` callable (one shared
+    /// spec — flyweight).
+    fn macro_library<L: Lang<CallableTypeId = u32> + 'static>(names: &[&str]) -> Arc<Library<L>> {
+        let mut lib = Library::new("test-macros");
+        let spec: Arc<dyn CallableSpec<L>> = Arc::new(StdCallableSpec::default());
+        for name in names {
+            lib.insert(CT_MACRO, *name, Arc::clone(&spec));
+        }
+        Arc::new(lib)
+    }
+
+    /// A `CmdLang` state whose library stack defines `names` as zero-arg macros.
+    fn state_with_macros(names: &[&str]) -> Arc<ParsingState<CmdLang>> {
+        let mut libraries = LibraryStack::new();
+        libraries.push(macro_library(names));
+        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }))
+    }
 
     fn math_rule<L: Lang<GroupTypeId = u32>>() -> Arc<GroupRule<L>> {
         Arc::new(GroupRule { group_type: GT_MATH, open: "$".into(), close: "$".into() })
@@ -817,9 +992,13 @@ mod tests {
     ) -> Result<Parsed<L>, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext { tokens, state: Arc::clone(state), session: &mut session };
-        let mut parser =
-            NodesParser::new(Arc::clone(&source), stop).with_child_states(child_states);
+        let mut cx = ParseContext {
+            tokens,
+            source: Arc::clone(&source),
+            state: Arc::clone(state),
+            session: &mut session,
+        };
+        let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
         let pos = cx.tokens.pos();
@@ -1499,7 +1678,7 @@ mod tests {
         ));
     }
 
-    // --- placeholder-arm recovery (commands and specials, until 6.4) ---------------------
+    // --- unresolvable-command recovery (§3.8) ---------------------------------------------
 
     #[test]
     fn unresolved_command_recovers_as_a_chars_fallback() {
@@ -1532,48 +1711,422 @@ mod tests {
     }
 
     #[test]
-    fn specials_recover_as_a_chars_fallback() {
+    fn library_miss_takes_the_unresolvable_command_recovery() {
+        // Same recovery, reached through a resolve_command that consults libraries and
+        // misses (no fallback registered).
+        let st = state_with_macros(&[]);
+        let parsed =
+            run_both("a \\foo b", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"a \"", "chars 2..7 \"\\\\foo \"", "chars 7..8 \"b\""]
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        assert_partition(&parsed.result, 0..8);
+    }
+
+    // --- invocation dispatch (6.4) ----------------------------------------------------------
+
+    #[test]
+    fn zero_arg_macro_end_to_end() {
+        let st = state_with_macros(&["foo"]);
+        let parsed =
+            run_both("ab \\foo cd", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        // The callable's span is the whole trigger token: escape + name + syntactic
+        // post-space. The pre-space is sibling content.
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..3 \"ab \"", "callable 3..8", "chars 8..10 \"cd\""]
+        );
+        let node = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(node.callable_type(), Some(CT_MACRO));
+        assert_eq!(node.name(), Some("foo"));
+        assert_eq!(node.post_space(), Some(" "));
+        let data = node.callable().unwrap();
+        assert!(data.arguments.is_empty() && data.slots.is_empty());
+        // The node records the library's spec (the flyweight Arc).
+        let expected = st
+            .libraries()
+            .lookup(
+                &CallableQuery::new(
+                    CT_MACRO,
+                    "foo",
+                    CallableSyntax::Command { escape_char: '\\' },
+                ),
+                &st,
+            )
+            .unwrap();
+        assert!(Arc::ptr_eq(&data.spec, &expected));
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        assert!(parsed.result.diagnostics.is_empty());
+        assert_partition(&parsed.result, 0..10);
+    }
+
+    #[test]
+    fn macro_post_space_is_the_trigger_tokens_own_and_nothing_more() {
+        // `\foo bar`: the name-terminating space is the token's syntactic post-space —
+        // recorded on the node, inside its span (the user-decided 6.4 rule: nothing
+        // beyond the token's own post-space is ever claimed).
+        let st = state_with_macros(&["foo", "&"]);
+        let parsed =
+            run_both("\\foo bar", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["callable 0..5", "chars 5..8 \"bar\""]);
+        let node = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(node.post_space(), Some(" "));
+        assert_partition(&parsed.result, 0..8);
+
+        // A single non-name-char command (`\&`) takes no post-space at the token level,
+        // and the invocation claims nothing beyond the token: the space is sibling
+        // content (TeX/pylatexenc parity).
+        let parsed =
+            run_both("\\& b", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["callable 0..2", "chars 2..4 \" b\""]);
+        let node = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(node.post_space(), Some(""));
+        assert_partition(&parsed.result, 0..4);
+    }
+
+    #[test]
+    fn macro_post_space_stops_at_a_paragraph_break() {
+        let st = state_with_macros(&["foo"]);
+        let parsed = run_both(
+            "\\foo \n\nb",
+            &st,
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        // The token's post-space is cut off before the paragraph break (a token-rules
+        // guarantee); the break is its own node.
+        assert_eq!(
+            shapes(&parsed.result),
+            ["callable 0..5", "chars 5..7 \"\\n\\n\"", "chars 7..8 \"b\""]
+        );
+        assert_eq!(parsed.result.tree.root().child(0).unwrap().post_space(), Some(" "));
+        assert_partition(&parsed.result, 0..8);
+    }
+
+    #[test]
+    fn specials_dispatch_through_the_resolution_riding_on_the_token() {
+        // Recognition = resolution: a recognized specials trigger always dispatches
+        // (6.4) — the pre-6.4 chars-fallback recovery no longer applies to specials.
+        let st = state_with(rules::<TildeLang>());
+        let parsed =
+            run_both("a~b", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..1 \"a\"", "callable 1..2", "chars 2..3 \"b\""]
+        );
+        let node = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(node.callable_type(), Some(CT_SPECIALS));
+        assert_eq!(node.name(), Some("~"));
+        assert_eq!(node.post_space(), Some("")); // a specials token has no post-space
+        assert!(parsed.result.diagnostics.is_empty());
+        assert_partition(&parsed.result, 0..3);
+    }
+
+    #[test]
+    fn invocation_inside_a_group_dispatches_at_that_level() {
+        let st = state_with_macros(&["foo"]);
+        let parsed =
+            run_both("{\\foo x}", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["group 0..8"]);
+        let group = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(group.child_count(), 2);
+        assert_eq!(group.child(0).unwrap().name(), Some("foo"));
+        assert_eq!(group.child(1).unwrap().chars(), Some("x"));
+        assert_partition(&parsed.result, 0..8);
+    }
+
+    #[test]
+    fn invocation_delta_defines_later_siblings() {
+        // The `\newcommand` shape: `\def`'s parser delegates to the standard parser
+        // for its own node, then returns a push-library delta as its after-effect;
+        // the later sibling `\late` resolves against the pushed library.
+        #[derive(Debug)]
+        struct DefSpec;
+        impl CallableSpec<CmdLang> for DefSpec {
+            fn make_invocation_parser<'a, 's>(
+                &'a self,
+                invocation: Invocation<'a, 's, CmdLang>,
+            ) -> Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>
+            where
+                's: 'a,
+            {
+                Box::new(DefParser { inner: StdInvocationParser::new(invocation) })
+            }
+        }
+
+        struct DefParser<'a, 's> {
+            inner: StdInvocationParser<'a, 's, CmdLang>,
+        }
+
+        impl ConstructParser<CmdLang> for DefParser<'_, '_> {
+            type Output = BuildId;
+
+            fn parse(
+                &mut self,
+                cx: &mut ParseContext<'_, '_, CmdLang>,
+            ) -> ConstructParserResult<
+                CmdLang,
+                (BuildId, Option<ParsingStateDelta<CmdLang>>),
+            > {
+                let (id, _) = self.inner.parse(cx)?;
+                let delta =
+                    ParsingStateDelta::new().push_library(macro_library(&["late"]));
+                Ok((id, Some(delta)))
+            }
+        }
+
+        let mut lib: Library<CmdLang> = Library::new("base");
+        lib.insert(CT_MACRO, "def", Arc::new(DefSpec));
+        let mut libraries = LibraryStack::new();
+        libraries.push(Arc::new(lib));
+        let st: Arc<ParsingState<CmdLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+
+        let parsed = run_both(
+            "\\def \\late x",
+            &st,
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        assert_eq!(
+            shapes(&parsed.result),
+            ["callable 0..5", "callable 5..11", "chars 11..12 \"x\""]
+        );
+        let def = parsed.result.tree.root().child(0).unwrap();
+        let late = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(def.name(), Some("def"));
+        assert_eq!(late.name(), Some("late"));
+        // The after-effect was applied to the loop's state: the later sibling records
+        // the derived state (session-mediated), not the initial one.
+        assert!(Arc::ptr_eq(def.parsing_state(), &st));
+        assert!(!Arc::ptr_eq(late.parsing_state(), &st));
+        assert!(parsed.result.diagnostics.is_empty());
+        assert_partition(&parsed.result, 0..12);
+
+        // Control: without the preceding `\def`, `\late` is unresolvable.
+        let st = state_with_macros(&[]);
+        let parsed = run_both(
+            "\\late x",
+            &st,
+            Recovery::Tolerant,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn takeover_parser_reads_raw_tokens_stages_custom_shape_and_returns_a_delta() {
+        // The full-takeover escape hatch (§3.6, the C6 obligation): an overridden
+        // factory returns a custom parser that consumes tokens up to a `!` marker —
+        // markup included, no group descent — stages its own node shape (an untyped
+        // group holding the raw chars), and returns a tokenization-affecting delta
+        // (comments disabled) as its after-effect.
+        #[derive(Debug)]
+        struct TakeSpec;
+        impl CallableSpec<CmdLang> for TakeSpec {
+            fn make_invocation_parser<'a, 's>(
+                &'a self,
+                invocation: Invocation<'a, 's, CmdLang>,
+            ) -> Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>
+            where
+                's: 'a,
+            {
+                Box::new(TakeParser { invocation })
+            }
+        }
+
+        struct TakeParser<'a, 's> {
+            invocation: Invocation<'a, 's, CmdLang>,
+        }
+
+        impl ConstructParser<CmdLang> for TakeParser<'_, '_> {
+            type Output = BuildId;
+
+            fn parse(
+                &mut self,
+                cx: &mut ParseContext<'_, '_, CmdLang>,
+            ) -> ConstructParserResult<
+                CmdLang,
+                (BuildId, Option<ParsingStateDelta<CmdLang>>),
+            > {
+                // The trigger is already consumed whole; its span becomes the "open
+                // delimiter". Raw content runs from there to the `!` marker.
+                let open_span = self.invocation.token.span;
+                let mut content = Span::empty(open_span.end);
+                let close_span = loop {
+                    let token = cx.tokens.peek(&cx.state).expect("clean test content");
+                    cx.tokens.move_past(&token, true);
+                    match token.kind {
+                        TokenKind::Char('!') => break token.span,
+                        TokenKind::EndOfStream => panic!("test content has a marker"),
+                        _ => content.end = token.span.end,
+                    }
+                };
+                let child = cx.session.builder.add(
+                    NodeKind::chars(content),
+                    SourceSpan::new(&cx.source, content.range()),
+                    Arc::clone(&cx.state),
+                    vec![],
+                );
+                let data: GroupData<CmdLang> = GroupData::untyped(
+                    TextContent::Spanned(open_span),
+                    TextContent::Spanned(close_span),
+                );
+                let id = cx.session.builder.add(
+                    NodeKind::group(data),
+                    SourceSpan::new(&cx.source, open_span.start..close_span.end),
+                    Arc::clone(&cx.state),
+                    vec![child],
+                );
+                let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
+                    enable_comments: Some(false),
+                    ..TokenRulesOverrides::default()
+                });
+                Ok((id, Some(delta)))
+            }
+        }
+
+        let mut lib: Library<CmdLang> = Library::new("base");
+        lib.insert(CT_MACRO, "take", Arc::new(TakeSpec));
+        let mut libraries = LibraryStack::new();
+        libraries.push(Arc::new(lib));
+        let st: Arc<ParsingState<CmdLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+
+        // `a{b` would normally open a group (and diagnose it unclosed); the takeover
+        // parser consumes it raw. ` %c` would normally be a comment; the returned
+        // delta disables comments, so it parses as plain chars. StdTokenReader only:
+        // a pre-scanned token list can neither re-serve raw bytes nor re-tokenize
+        // under mid-parse rule changes (TokenListReader's documented fidelity limit).
+        let content = "\\take a{b! %c";
+        let mut reader = StdTokenReader::new(content);
+        let parsed =
+            try_run(content, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["group 0..10", "chars 10..13 \" %c\""]
+        );
+        let take = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(take.group_type(), None); // untyped: no language group class
+        assert_eq!(take.group_delimiters(), Some(("\\take ", "!")));
+        assert_eq!(take.child(0).unwrap().chars(), Some("a{b"));
+        assert!(parsed.result.diagnostics.is_empty());
+        assert_partition(&parsed.result, 0..13);
+    }
+
+    #[test]
+    fn finalize_node_populates_callable_ext_through_the_dispatch_loop() {
+        // FLM pattern rehearsal (§3.6): the builder-run hook sees every staged
+        // `Callable` and attaches derived data as its per-kind ext — a preset would
+        // downcast `data.spec` to its own spec trait; the test derives from the
+        // invocation facts and the spec's declarative surface.
+        struct ExtBundle;
+        impl NodeExtTypes for ExtBundle {
+            type NodeExt = ();
+            type CharsNodeExt = ();
+            type GroupNodeExt = ();
+            type CallableNodeExt = Box<str>;
+            type CommentNodeExt = ();
+            type ListNodeExt = ();
+            type ArgumentExt = ();
+        }
+
         #[derive(Debug, Clone, Copy)]
-        struct TildeLang;
-        impl Lang for TildeLang {
+        struct ExtLang;
+        impl Lang for ExtLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type StateExt = ();
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
-            type NodeExts = ();
+            type NodeExts = ExtBundle;
 
-            fn scan_specials<'s>(
-                _state: &ParsingState<Self>,
-                content: &'s str,
-                pos: usize,
-            ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
-                if content[pos..].starts_with('~') {
-                    Ok(Some(SpecialsMatch {
-                        end: pos + 1,
-                        name: &content[pos..pos + 1],
-                        spec: Arc::new(StdCallableSpec::default()),
-                    }))
-                } else {
-                    Ok(None)
-                }
+            fn resolve_command(
+                state: &ParsingState<Self>,
+                token: &Token<'_, Self>,
+            ) -> Option<ResolvedCallable<Self>> {
+                resolve_macro_via_libraries(state, token)
             }
 
-            fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
-                TriggerChars::Only("~".into())
+            fn finalize_node(
+                kind: &mut NodeKind<Self>,
+                _ext: &mut NodeExt<Self>,
+                _span: &SourceSpan<Self::SourceOrigin>,
+                _parsing_state: &Arc<ParsingState<Self>>,
+                _children: &[BuildId],
+                _staged: &StagedNodes<'_, Self>,
+            ) {
+                if let NodeKind::Callable(data) = kind {
+                    // Idempotent: recomputing from the same facts yields the same ext.
+                    data.ext = format!("{}#{}", data.name, data.spec.arguments().len())
+                        .into_boxed_str();
+                }
             }
         }
 
-        let st = state_with(rules::<TildeLang>());
+        let mut libraries = LibraryStack::new();
+        libraries.push(macro_library::<ExtLang>(&["foo"]));
+        let st: Arc<ParsingState<ExtLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+
         let parsed =
-            run_both("a~b", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
-        assert_eq!(
-            shapes(&parsed.result),
-            ["chars 0..1 \"a\"", "chars 1..2 \"~\"", "chars 2..3 \"b\""]
+            run_both("\\foo x", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        let node = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(&*node.callable().unwrap().ext, "foo#0");
+    }
+
+    #[test]
+    fn invocation_child_state_policy_fixed_and_compute() {
+        let st = state_with_macros(&["foo"]);
+        let other = Arc::new(st.derived(&ParsingStateDelta::new()));
+
+        // Fixed: the invocation parser runs under (and its node records) the fixed
+        // state; the policy scopes the descent only — the next sibling is back on the
+        // loop's own state.
+        let parsed = run_both_with(
+            "\\foo x",
+            &st,
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+            ChildStateSpec {
+                group: GroupChildState::Inherit,
+                invocation: InvocationChildState::Fixed(Arc::clone(&other)),
+            },
         );
-        assert_eq!(parsed.result.diagnostics.len(), 1);
-        assert_partition(&parsed.result, 0..3);
+        let node = parsed.result.tree.root().child(0).unwrap();
+        assert!(Arc::ptr_eq(node.parsing_state(), &other));
+        let sibling = parsed.result.tree.root().child(1).unwrap();
+        assert!(Arc::ptr_eq(sibling.parsing_state(), &st));
+
+        // Compute: a pure selection receiving the resolved invocation (resolution
+        // precedes policy); returning an input preserves pointer identity.
+        let compute = |state: &Arc<ParsingState<CmdLang>>,
+                       invocation: &Invocation<'_, '_, CmdLang>|
+         -> Arc<ParsingState<CmdLang>> {
+            assert_eq!(invocation.name, "foo");
+            assert_eq!(invocation.callable_type, CT_MACRO);
+            Arc::clone(state)
+        };
+        let parsed = run_both_with(
+            "\\foo x",
+            &st,
+            Recovery::Strict,
+            StopSpec::none(),
+            StopSpec::none(),
+            ChildStateSpec {
+                group: GroupChildState::Inherit,
+                invocation: InvocationChildState::Compute(&compute),
+            },
+        );
+        let node = parsed.result.tree.root().child(0).unwrap();
+        assert!(Arc::ptr_eq(node.parsing_state(), &st));
     }
 
     // --- groups (6.3) ----------------------------------------------------------------------
@@ -1797,10 +2350,11 @@ mod tests {
         let stop = loop {
             let mut cx = ParseContext {
                 tokens: &mut reader,
+                source: Arc::clone(&source),
                 state: Arc::clone(&st),
                 session: &mut session,
             };
-            let mut parser = NodesParser::new(Arc::clone(&source), StopSpec::none());
+            let mut parser = NodesParser::new(StopSpec::none());
             let (outcome, _) = parser.parse(&mut cx).unwrap();
             nodes.extend(outcome.nodes);
             match outcome.stop {
@@ -2013,10 +2567,11 @@ mod tests {
         let mut session: ParserSession<CountLang> = ParserSession::new(Recovery::Strict);
         let mut cx = ParseContext {
             tokens: &mut reader,
+            source: Arc::clone(&source),
             state: Arc::clone(&st),
             session: &mut session,
         };
-        let mut parser = NodesParser::new(Arc::clone(&source), StopSpec::none());
+        let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, _) = parser.parse(&mut cx).unwrap();
         assert!(matches!(outcome.stop, StopCause::EndOfInput));
         assert_eq!(session.ext.observed, 2);

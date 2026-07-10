@@ -210,11 +210,17 @@ pub struct CallableData<L: Lang> {
     pub arguments: ParsedArguments<L>,
     /// The parsed slots: each slot's region and content nodes.
     pub slots: ParsedSlots<L>,
-    /// Whitespace consumed after the invocation — reproduced verbatim in recomposition.
-    /// Included in the node's span (a `Spanned` post-space is a trailing sub-range of it).
-    /// Deliberately a field, not a child node: it lies *outside* the argument/slot
-    /// region tiling of the children range, and comments after an invocation are never
-    /// consumed by it — post-space is whitespace-only by construction.
+    /// The syntactic whitespace consumed by the invocation's **trigger token** — the
+    /// name-terminating whitespace of a multi-character command (pylatexenc's
+    /// `macro_post_space`), reproduced verbatim in recomposition. Nothing beyond the
+    /// token's own post-space is ever claimed (amended July 2026, Phase 6.4, user
+    /// decision — supersedes "whitespace after the invocation"): whitespace after a
+    /// single-character command or after a final argument is ordinary sibling/region
+    /// content, as in TeX. Included in the node's span (a `Spanned` post-space is a
+    /// sub-range of it — trailing for zero-argument callables; between the name and the
+    /// first argument region otherwise). Deliberately a field, not a child node: it lies
+    /// *outside* the argument/slot region tiling of the children range, and it is
+    /// whitespace-only by construction.
     pub post_space: TextContent,
     /// Per-kind ext data.
     pub ext: CallableNodeExt<L>,

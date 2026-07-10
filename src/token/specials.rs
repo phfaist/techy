@@ -30,6 +30,12 @@ use crate::state::Lang;
 pub struct SpecialsMatch<'s, L: Lang> {
     /// Byte offset one past the end of the matched trigger (the token's `span.end`).
     pub end: usize,
+    /// The invocation form the trigger resolved to (recorded on the token; the dispatch
+    /// loop needs it to build an `Invocation`). Recognition = resolution, and a
+    /// resolution is the *(callable type, spec)* pair — the same shape as
+    /// [`ResolvedCallable`](crate::state::ResolvedCallable) (added July 2026, Phase 6.4,
+    /// user-approved).
+    pub callable_type: L::CallableTypeId,
     /// The specials name recorded on the token and later on the node — usually the matched
     /// string itself. Borrowed from the scanned content (zero-copy).
     pub name: &'s str,
@@ -42,6 +48,7 @@ impl<L: Lang> fmt::Debug for SpecialsMatch<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SpecialsMatch")
             .field("end", &self.end)
+            .field("callable_type", &self.callable_type)
             .field("name", &self.name)
             .field("spec", &self.spec)
             .finish()

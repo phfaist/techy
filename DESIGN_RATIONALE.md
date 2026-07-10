@@ -243,7 +243,14 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   (preset-level invocation flavors). "Command" over "escape": a future non-escape command
   syntax (`@MARKER@`-style, a possible `CommandRule` extension) would make "escape" a
   misnomer, and "escape token" wrongly connotes escaped-character semantics (`\&` as
-  literal `&`).
+  literal `&`). *(Amended July 2026, Phase 6.4, user-approved: this rule is scoped to
+  tokens whose resolution happens at parse time — `Command`. The `Specials` token, whose
+  recognition **is** resolution (next-but-one bullet), now carries the resolved
+  `callable_type` alongside its spec: a resolution is the `(callable_type, spec)` pair —
+  `ResolvedCallable`'s exact shape — and the dispatch loop needs both to build an
+  `Invocation`. The "token says MACRO, node says ENVIRONMENT" wart cannot re-arise: both
+  fields come from the single scan-time resolution site, so there is no second resolution
+  to disagree with.)*
 - **Single-character `Char` tokens** (reverses Phase 2's maximal runs). A token is an
   atomic unit of parsed thing, and construct parsers may need char-by-char reading
   (tabular preambles); with runs, a parser wanting one char must split a token or reach
@@ -264,9 +271,11 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
 - **Specials: recognition = resolution, owned by the preset.** Specials trigger sets can be
   large and change with library pushes (pylatexenc defers them to the latex context for
   the same reason), so they are *not* enumerated in `TokenRules`. `Lang::scan_specials`
-  returns a `SpecialsMatch` carrying name **and** spec in one call — scanning/lookup
-  normalization or scoping mismatches are impossible by construction, and unknown-name
-  fallback is the scan's own business (a `Specials` token's spec is never absent). It is a
+  returns a `SpecialsMatch` carrying name **and** the full resolution — `callable_type` +
+  spec, the `ResolvedCallable` pair (`callable_type` added July 2026, Phase 6.4,
+  user-approved) — in one call: scanning/lookup normalization or scoping mismatches are
+  impossible by construction, and unknown-name fallback is the scan's own business (a
+  `Specials` token's spec is never absent). It is a
   `Lang` hook (the `finalize_transition` precedent), *not* a per-library protocol and
   *not* a swappable dyn object in the state: the hook receives the state, so it can
   dispatch on `ext` and pushed libraries — everything a swapped object could express,
@@ -1014,12 +1023,24 @@ July 2026, Phase 6 plan session; ARCHITECTURE.md §nodes updated).
    (§3.6; default: whitespace-only `Chars` spanning the full token, newlines included);
    never merged into neighboring whitespace nodes (adjacent whitespace-only `Chars` nodes
    are possible and fine — deterministic).
-3. *Callable post-space:* claimed **by the invocation parser**, not by the dispatch loop —
-   peek + `move_to(tok, rewind_pre_space = false)`, packaged as a one-call helper.
-   Accepted consequence: a custom parser that skips the helper corrupts nothing — the
-   whitespace lands as following sibling content (a behavioral difference, not a broken
-   invariant). Groups have no post-space (space after `}` is content). Comment post-space
-   is the token's (newline + indentation, stopping at paragraph breaks).
+3. *Callable post-space:* **exactly the trigger token's own syntactic post-space** — the
+   name-terminating whitespace of a multi-character command, already inside the token's
+   span (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed. Whitespace
+   after a single-character command (`\& b`) or after a final argument is ordinary
+   sibling/region content, as in TeX. Groups have no post-space (space after `}` is
+   content). Comment post-space is the token's (newline + indentation, stopping at
+   paragraph breaks). *(Amended July 2026, Phase 6.4, user decision — supersedes the
+   original "claimed by the invocation parser via a peek + `move_to` one-call helper"
+   rule; the planned `claim_post_space` helper was never shipped. Two arguments: TeX
+   swallows whitespace only after a control word, so claiming beyond the token would
+   deviate from both TeX and pylatexenc semantics; and the token-only rule keeps
+   `TokenListReader` faithful — a claim helper re-peeking after the trigger would read
+   whitespace a pre-scanned list cannot re-serve. Consequences: for callables *with*
+   arguments (6.5) the recorded post-space sits between the name and the first argument
+   region — a sub-range of the node's span but no longer necessarily trailing — and
+   environment-shaped callables record empty post-space, the whitespace after `\begin`
+   being unrecorded rigid-scaffolding normalization and the whitespace after
+   `\end{…}` being sibling content.)*
 4. *End of stream:* `EndOfStream.pre_space` materializes as a final whitespace-only `Chars`
    node.
 5. *Partition invariant:* sibling spans partition the parent's *content interior* exactly —
@@ -1035,6 +1056,17 @@ July 2026, Phase 6 plan session; ARCHITECTURE.md §nodes updated).
 **Single-context parsing API (`ParseContext`)** — PROPOSED (July 2026).
 Bundles token reader + state + session handle, avoiding pylatexenc's three-argument threading
 through every parser. One place to extend later (e.g. depth limits, cancellation).
+*(Amended July 2026, Phase 6.4, user-approved: `ParseContext` gains
+`source: Arc<Source<L::SourceOrigin>>` — the source the token spans refer into, which
+staging a node's `SourceSpan` requires. Factory-created parsers
+(`make_invocation_parser(&self, invocation)`, later `ArgumentParser` entry points) have no
+constructor through which a caller could thread it, and it cannot ride on tokens or
+readers: the token layer deliberately carries only transient byte spans (§3.8 — no
+`Arc`-span infection; a reader-side accessor would force `StdTokenReader` origin-generic
+and `TokenListReader` to carry a source it doesn't have). The construct-parser layer is
+where byte spans become `Arc`-backed source spans, so the context is the honest carrier.
+`NodesParser::new`/`GroupParser::new` dropped their redundant `source` parameters —
+single source of truth.)*
 
 **Dispatch by token kind + library lookup** — PROPOSED (July 2026). See §2.6.
 *Rejected:* `can_parse()`/`priority()` parser registries (registration-order-dependent,

@@ -1,7 +1,7 @@
 //! Tokenization: zero-copy tokens, tokenization rules, and the standard token reader.
 //!
 //! The whole token topic lives in the **S1 core stratum** (ARCHITECTURE.md §3): tokens are
-//! generic over `L: Lang` (a `Specials` token carries its resolved spec), the reader reads
+//! generic over `L: Lang` (a `Specials` token carries its resolution), the reader reads
 //! the full [`ParsingState<L>`](crate::state::ParsingState), and token errors are free to
 //! grow language/state context. The only tokenization-adjacent S0 type is the plain byte
 //! range [`Span`](crate::source::Span), which lives in the source topic.

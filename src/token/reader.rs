@@ -190,7 +190,11 @@ impl<'s> StdTokenReader<'s> {
         if state.trigger_chars().may_start(c) {
             if let Some(m) = L::scan_specials(state, s, pos)? {
                 return Ok(Token::new(
-                    TokenKind::Specials { name: m.name, spec: m.spec },
+                    TokenKind::Specials {
+                        callable_type: m.callable_type,
+                        name: m.name,
+                        spec: m.spec,
+                    },
                     Span::new(pos, m.end),
                     pre_space,
                 ));
@@ -1108,6 +1112,7 @@ mod tests {
                 if content[pos..].starts_with(trigger) {
                     return Ok(Some(SpecialsMatch {
                         end: pos + trigger.len(),
+                        callable_type: 7,
                         name: &content[pos..pos + trigger.len()],
                         spec: Arc::new(StubSpec),
                     }));
@@ -1129,7 +1134,8 @@ mod tests {
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
         let token = TokenReader::next(&mut tr, &st).unwrap();
         match &token.kind {
-            TokenKind::Specials { name, spec } => {
+            TokenKind::Specials { callable_type, name, spec } => {
+                assert_eq!(*callable_type, 7);
                 assert_eq!(*name, "&");
                 assert_eq!(format!("{:?}", spec), "StubSpec");
             }

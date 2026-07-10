@@ -26,7 +26,7 @@ below, and summarize what shipped and what (if anything) deviated.
 | 6.1 | Contracts & amendments (token/node/Lang/builder/module scaffolds) | ✅ done (July 2026). `ConstructParserResult<L, T>` takes `L` (user-approved; `TokenResult` convention, §2 updated); `check_tree_invariants` deferred to 6.3 as allowed |
 | 6.2 | `NodesParser` core (chars, paragraphs, comments, stop conditions, recovery) | ✅ done (July 2026). Sibling-delta application deferred to 6.4 (no 6.2 arm produces a delta; the mid-stream test lands with the `\newcommand`-shaped test). Position-seam convention pinned: on a *leave* stop, the reader stands at the stop token's `span.start`, its pre-space already staged as sibling content. Post-review amendment (user, July 2026): token stop conditions gained a `consume` switch (`TokenStopCondition` is now `{ kind: TokenStopKind, consume }`) and `StopCause` split into `TokenCondition {span}` / `NodeCondition` (+ `span` on `UnexpectedGroupClose`) — a consumed stop token is taken whole (`move_past`, post-space included) and its span reported; see DESIGN_RATIONALE §3.6 |
 | 6.3 | Groups + `check_tree_invariants()` | ✅ done (July 2026). Also shipped, per the child-state design session's 6.3 timing (DESIGN_RATIONALE §3.6): `ChildStateSpec` (struct + both enums; `group` arm active, `invocation` consulted from 6.4) and the whole session derivation seam (`Lang::SessionExt` + `observe_transition`, `ParserSession::derived_state`, ptr-keyed `group_interior_state` memo). Implementation notes: the dispatch arm consumes the `GroupOpen` trigger and hands `GroupParser` `(open_span, rule)` — the uniform `parse(&mut self, cx)` signature cannot tie a stored `Token<'s>` to the context's reader, and arm-side consumption keeps the token consumed under the state that tokenized it; interior `UnexpectedGroupClose` → diagnostic + close-without-consuming (decision 8 unwinding), root diagnose+skip lives in the root driver (tests now, `Language::parse` in Phase 7) and drops the skipped byte — the one accepted byte-accounting break, exempted from the checker; `SessionExt` bounds grew `Send + Sync` for consistency with the trait's other associated types |
-| 6.4 | Invocation dispatch + `make_invocation_parser` + `StdInvocationParser` (zero-arg) | ☐ |
+| 6.4 | Invocation dispatch + `make_invocation_parser` + `StdInvocationParser` (zero-arg) | ✅ done (July 2026). Three user-approved amendments: (1) **`CallableData.post_space` = exactly the trigger token's own syntactic post-space; nothing is ever claimed beyond it** (TeX/pylatexenc parity — `\& b`'s space is sibling content; also keeps `TokenListReader` faithful, which a re-peeking claim helper would desync). `claim_post_space` never shipped; §3.5 invariant 3 amended. 6.5/6.6 consequences: with arguments the recorded post-space sits between name and first region (⇒ `check_tree_invariants` rule 3's *trailing* assertion must be revised in 6.5); environments will record empty post-space. (2) `ParseContext` gained `source: Arc<Source<L::SourceOrigin>>` (factory-created parsers have no ctor to thread it; tokens/readers deliberately carry only byte spans, §3.8) — `NodesParser::new`/`GroupParser::new` dropped their source params. (3) `TokenKind::Specials`/`SpecialsMatch` carry `callable_type`: recognition = resolution ⇒ the full `ResolvedCallable` pair rides the token (§3.2 amended). Implementation notes: the arm consumes the trigger **whole** before the parser runs (GroupOpen precedent — loop progress by construction; takeover parsers reposition via `move_past(token, false)` for the `\verb` idiom); recovery-placeholder Command/Specials tokens are never dispatched (chars fallback); the after-effect delta is applied in the dispatch helper via `session.derived_state` *after* the structural revert, i.e. to the loop's own state. Shipped tests: macro + specials end-to-end (both readers), post-space placement (multi-char/single-char/¶ cutoff), library-miss recovery, `\newcommand`-shaped push-library delta, raw-token takeover (untyped-group shape + tokenization-affecting delta, C6 proven), `finalize_node` callable-ext rehearsal, `InvocationChildState` Fixed/Compute |
 | 6.5 | Arguments (`ArgumentParser` entry point, standard argument parsers, regions) | ☐ |
 | 6.6 | Environment bodies (`EnvironmentBodyParser`) + end-to-end suite | ☐ |
 | 6.7 | Closing docs, quarry, benchmark check | ☐ |
@@ -95,6 +95,11 @@ Module homes: construct parsers in `src/constructs/` (S1 topic); `ParserSession`
 
 pub struct ParseContext<'a, 's, L: Lang> {
     pub tokens: &'a mut dyn TokenReader<'s, L>,
+    // (6.4 amendment, user-approved) the source token spans refer into — what staging a
+    // SourceSpan requires; factory-created parsers have no ctor to thread it through, and
+    // tokens/readers deliberately carry only byte spans (§3.8). NodesParser::new /
+    // GroupParser::new dropped their redundant source params.
+    pub source: Arc<Source<L::SourceOrigin>>,
     pub state: Arc<ParsingState<L>>,      // the parser's INPUT state (caller sets it)
     pub session: &'a mut ParserSession<L>,
 }
@@ -109,13 +114,19 @@ pub trait ConstructParser<L: Lang> {
 }
 
 pub struct Invocation<'a, 's, L: Lang> {
-    pub callable_type: L::CallableTypeId,
+    pub callable_type: L::CallableTypeId,  // for Specials: carried on the token (6.4 amendment)
     pub name: &'s str,                     // as written (the node stores an owned copy)
     pub spec: &'a Arc<dyn CallableSpec<L>>,
     pub token: &'a Token<'s, L>,           // trigger token: span, pre_space, escape_char
 }
 
-// on CallableSpec (added in 6.4, defaulted once StdInvocationParser exists):
+// on CallableSpec (added in 6.4, defaulted by StdInvocationParser). Contract pinned in
+// 6.4: the dispatching arm consumes the trigger token WHOLE (move_past(tok, true) —
+// GroupOpen precedent, loop progress by construction) before the parser runs; a takeover
+// parser wanting the post-space bytes raw repositions itself (move_past(token, false)).
+// CallableData.post_space = exactly the trigger token's own syntactic post-space — the
+// claim_post_space helper was superseded before shipping (user decision, 6.4; see the
+// progress-table note and DESIGN_RATIONALE §3.5 invariant 3).
 fn make_invocation_parser<'a, 's>(&'a self, invocation: Invocation<'a, 's, L>)
     -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
 where 's: 'a
@@ -313,8 +324,11 @@ unclosed/stray-close recovery in both modes, checker over every tree in the suit
   token, owned; empty `ParsedArguments`/`ParsedSlots`; post-space claim).
 - `Command` arm: `Lang::resolve_command`; `None` → diagnostic + span-backed chars-node
   fallback (decision 9). `Specials` arm: spec from token, same factory path.
-- `claim_post_space(cx)` helper (peek + `move_to(tok, rewind_pre_space = false)`,
-  whitespace only, stops at paragraph breaks) — invariant 3.
+- ~~`claim_post_space(cx)` helper (peek + `move_to(tok, rewind_pre_space = false)`,
+  whitespace only, stops at paragraph breaks) — invariant 3.~~ *(Superseded during 6.4,
+  user decision: `post_space` = exactly the trigger token's own syntactic post-space;
+  nothing is ever claimed beyond it — no helper. Invariant 3 amended in
+  DESIGN_RATIONALE §3.5.)*
 - After-invocation delta propagation: parser returns delta; `NodesParser` applies for
   subsequent siblings. `\newcommand`-shaped test (push-library delta; later sibling
   resolves against it).

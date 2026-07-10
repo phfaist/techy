@@ -4,10 +4,13 @@
 //! The invocation-form identifier is [`Lang::CallableTypeId`] — a closed per-language
 //! type (decided July 2026; formerly an open interned id).
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::constructs::{ConstructParser, Invocation, StdInvocationParser};
+use crate::node::BuildId;
 use crate::state::Lang;
 
 use super::structure::{ArgumentSpec, SlotSpec};
@@ -24,11 +27,10 @@ use super::structure::{ArgumentSpec, SlotSpec};
 /// callable — no arguments, no slots — suitable for simple specials (`~`) and fallback
 /// specs. The declarative standard implementation is [`StdCallableSpec`].
 ///
-/// `make_invocation_parser()` — the factory returning a fresh boxed
-/// [`ConstructParser`](crate::constructs::ConstructParser) per resolved
-/// [`Invocation`](crate::constructs::Invocation), whose override is the full-takeover
-/// escape hatch for `\verb`-like constructs — lands in Phase 6.4 with its default
-/// implementation, the declarative `StdInvocationParser` (DESIGN_RATIONALE.md §3.6).
+/// The behavioral surface is [`make_invocation_parser`](CallableSpec::make_invocation_parser):
+/// a factory returning a fresh boxed [`ConstructParser`] per resolved [`Invocation`],
+/// defaulting to the declarative [`StdInvocationParser`]. Overriding it is the
+/// full-takeover escape hatch for `\verb`-like constructs (DESIGN_RATIONALE.md §3.6).
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.
@@ -46,6 +48,33 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync {
     /// slots (macro-shaped); an environment-shaped callable has exactly one (its body).
     fn slots(&self) -> &[Arc<SlotSpec<L>>] {
         &[]
+    }
+
+    /// The factory producing this spec's invocation parser: a **fresh boxed parser per
+    /// resolved invocation**, ownership moved to the caller, the [`Invocation`]
+    /// traveling inside the parser instance (decided July 2026, DESIGN_RATIONALE.md
+    /// §3.6 — pylatexenc's `get_node_parser(token)` shape with ownership made
+    /// explicit). The dispatch loop resolves the trigger, builds the `Invocation`,
+    /// calls this factory, runs `parser.parse(cx)` once, and drops the parser.
+    ///
+    /// When the parser runs, the trigger token has already been consumed whole by the
+    /// dispatching arm; the parser's `cx.state` is the invocation's base state (see
+    /// [`StdInvocationParser`]'s module docs for the full contract, including the
+    /// post-space rule).
+    ///
+    /// The default returns the declarative [`StdInvocationParser`]. **Overriding this
+    /// factory is the full-takeover escape hatch**: a custom parser reads tokens
+    /// however it wants (`\verb` raw content, tabular preambles), stages its own node
+    /// shape, and may return a state delta as the invocation's after-effect for
+    /// subsequent siblings (`\newcommand`).
+    fn make_invocation_parser<'a, 's>(
+        &'a self,
+        invocation: Invocation<'a, 's, L>,
+    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    where
+        's: 'a,
+    {
+        Box::new(StdInvocationParser::new(invocation))
     }
 }
 
