@@ -305,6 +305,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = MathState;
         type Event = MathEvent;
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
 

@@ -430,6 +430,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
     }
@@ -1088,6 +1089,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
 
@@ -1179,6 +1181,7 @@ mod tests {
             type CallableTypeId = u32;
             type StateExt = ();
             type Event = ();
+            type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {

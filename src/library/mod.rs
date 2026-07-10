@@ -339,6 +339,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
     }
@@ -534,6 +535,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = MathState;
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
     }

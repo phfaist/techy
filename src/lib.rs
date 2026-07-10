@@ -40,7 +40,9 @@
 //!   **In progress (Phase 6)**: the contracts ([`ConstructParser`], [`ParseContext`],
 //!   [`Invocation`], [`ParserSession`], [`ParseError`]) landed in 6.1; the content
 //!   dispatch loop ([`NodesParser`], stop conditions, [`StopCause`]) landed in 6.2;
-//!   groups, invocations, arguments, and environment bodies land in 6.3–6.6.
+//!   groups ([`GroupParser`], the [`ChildStateSpec`] descent policy, the session
+//!   derivation seam, `check_tree_invariants`) landed in 6.3; invocations, arguments,
+//!   and environment bodies land in 6.4–6.6.
 //! - `latexlike` preset (S2) — the familiar LaTeX behavior. *Phase 7.*
 //!
 //! ## Quick start (what exists today)
@@ -80,8 +82,9 @@ pub mod token;
 
 // Re-export the public API of the implemented topics.
 pub use constructs::{
-    ConstructParser, ConstructParserResult, Invocation, NodesOutcome, NodesParser, ParseContext,
-    StopCause, StopSpec, TokenStopCondition, TokenStopKind,
+    ChildStateSpec, ConstructParser, ConstructParserResult, GroupChildState, GroupParser,
+    Invocation, InvocationChildState, NodesOutcome, NodesParser, ParseContext, StopCause,
+    StopSpec, TokenStopCondition, TokenStopKind,
 };
 pub use engine::{ParseResult, ParserSession};
 pub use error::{
@@ -94,9 +97,9 @@ pub use source::{
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{
-    BuildId, CallableData, ChildRegion, ContentNodes, GroupData, NodeData, NodeId, NodeKind,
-    NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
-    StagedNodeView, StagedNodes,
+    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, GroupData, NodeData,
+    NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
+    ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
 };
 pub use spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
 pub use state::{

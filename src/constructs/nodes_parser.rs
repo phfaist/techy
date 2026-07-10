@@ -2,14 +2,16 @@
 //! its stop machinery ([`StopSpec`], [`TokenStopCondition`], [`StopCause`]).
 //!
 //! The parser peeks one token at a time and dispatches on its kind — never on parser
-//! registries (§2.6). This subphase (6.2) implements the content arms: chars
-//! accumulation, paragraph breaks (via [`Lang::make_paragraph_break_node`]), comments,
-//! and end of stream. The `GroupOpen` (6.3) and `Command`/`Specials` invocation arms
-//! (6.4) currently take a minimal tolerant recovery — diagnostic plus a span-backed
-//! chars fallback node — until their parsers land; sibling state-deltas returned by
-//! invocation parsers will be applied inside the loop (session-mediated,
-//! `cx.session.derived_state(…)` — DESIGN_RATIONALE.md §3.6) once the 6.4 arms produce
-//! them.
+//! registries (§2.6). The content arms (6.2) cover chars accumulation, paragraph breaks
+//! (via [`Lang::make_paragraph_break_node`]), comments, and end of stream. The
+//! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
+//! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
+//! [`GroupParser`] under the policy's state (structural swap/revert). The
+//! `Command`/`Specials` invocation arms (6.4) currently take a minimal tolerant
+//! recovery — diagnostic plus a span-backed chars fallback node — until their parsers
+//! land; sibling state-deltas returned by invocation parsers will be applied inside the
+//! loop (session-mediated, `cx.session.derived_state(…)` — DESIGN_RATIONALE.md §3.6)
+//! once the 6.4 arms produce them.
 //!
 //! # Whitespace and span invariants (DESIGN_RATIONALE.md §3.5, pinned)
 //!
@@ -59,12 +61,12 @@
 //! Recovery happens where a problem is detected, through the session's policy helper.
 //! Tokenizer errors continue with their [`TokenRecovery`](crate::token::TokenRecovery)
 //! placeholder token, the reader repositioned to the error's `resume_pos` (so the error
-//! is never re-read); parse-level conditions (unresolvable command, and — until their
-//! parsers land — groups and specials) recover as a diagnostic plus a chars fallback
-//! node over the token's span. Markup text inside a `Chars` node is an accepted
-//! tolerant-recovery artifact, always accompanied by a diagnostic; fallback nodes are
-//! deliberately *not* merged into neighboring chars runs. `Err` means abort — nobody
-//! continues past one.
+//! is never re-read); parse-level conditions (unresolvable command, and — until 6.4 —
+//! specials) recover as a diagnostic plus a chars fallback node over the token's span.
+//! Markup text inside a `Chars` node is an accepted tolerant-recovery artifact, always
+//! accompanied by a diagnostic; fallback nodes are deliberately *not* merged into
+//! neighboring chars runs. Group recovery (unclosed at end of input, mismatched close)
+//! lives in [`GroupParser`]. `Err` means abort — nobody continues past one.
 
 use alloc::format;
 use alloc::string::String;
@@ -80,6 +82,8 @@ use crate::source::{Source, SourceSpan, Span};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind, TokenReader};
 
+use super::child_state::{ChildStateSpec, GroupChildState};
+use super::group_parser::GroupParser;
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
@@ -225,6 +229,9 @@ pub struct NodesOutcome {
 pub struct NodesParser<'p, L: Lang> {
     source: Arc<Source<L::SourceOrigin>>,
     stop: StopSpec<'p, L>,
+    /// Descent-state policy for child constructs (groups now, invocations from 6.4);
+    /// defaults to inherit-everywhere.
+    child_states: ChildStateSpec<'p, L>,
     nodes: Vec<BuildId>,
     /// The pending maximal chars run (invariant 1): extended by `Char` tokens and every
     /// token's pre-space, flushed when a non-`Char` construct starts.
@@ -235,7 +242,20 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// A parser staging nodes whose spans refer into `source` (the source the context's
     /// token reader is reading), stopping per `stop`.
     pub fn new(source: Arc<Source<L::SourceOrigin>>, stop: StopSpec<'p, L>) -> NodesParser<'p, L> {
-        NodesParser { source, stop, nodes: Vec::new(), run: None }
+        NodesParser {
+            source,
+            stop,
+            child_states: ChildStateSpec::inherit(),
+            nodes: Vec::new(),
+            run: None,
+        }
+    }
+
+    /// Replace the descent-state policy (default: inherit everywhere). See
+    /// [`ChildStateSpec`].
+    pub fn with_child_states(mut self, child_states: ChildStateSpec<'p, L>) -> Self {
+        self.child_states = child_states;
+        self
     }
 
     /// Extend the pending run with a token's pre-space (content whitespace joins the
@@ -338,6 +358,13 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         span: Span,
     ) -> bool {
         let id = self.stage(cx, kind, span);
+        self.test_node_stop(cx, id)
+    }
+
+    /// Test the node stop condition against an already-recorded sibling (the last entry
+    /// of `self.nodes` — staged either by [`stage`](Self::stage) or by a child construct
+    /// parser).
+    fn test_node_stop(&mut self, cx: &mut ParseContext<'_, '_, L>, id: BuildId) -> bool {
         match &mut self.stop.node {
             Some(condition) => {
                 let staged = cx.session.builder.staged_nodes();
@@ -372,8 +399,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     }
 
     /// The shared tolerant recovery of the not-yet-wired arms (`Command` until
-    /// resolution dispatch lands in 6.4, `Specials` likewise, `GroupOpen` until group
-    /// parsing lands in 6.3) — and the decided unresolvable-command recovery (§3.8):
+    /// resolution dispatch lands in 6.4, `Specials` likewise, plus recovery-placeholder
+    /// `GroupOpen` tokens) — and the decided unresolvable-command recovery (§3.8):
     /// flush, record the condition (or abort under strict), consume the token, and stage
     /// a chars fallback node over its full span. For a `Command` token the span includes
     /// its post-space, which the fallback deliberately swallows (consuming the token
@@ -553,11 +580,47 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     }
                 }
 
-                TokenKind::GroupOpen { delim, .. } => {
-                    // Group parsing lands in 6.3; until then, diagnostic plus chars
-                    // fallback over the delimiter.
-                    let message = format!("cannot parse group opened by ‘{}’ here", delim);
-                    if self.recover_as_chars(cx, &token, recovered, message)? {
+                TokenKind::GroupOpen { delim, rule } => {
+                    // A recovery placeholder GroupOpen (no current TokenRecovery emits
+                    // one) has no real bytes behind it and cannot be parsed as a group:
+                    // chars fallback, reader untouched.
+                    if recovered {
+                        let message =
+                            format!("cannot parse group opened by ‘{}’ here", delim);
+                        if self.recover_as_chars(cx, &token, recovered, message)? {
+                            return Ok((self.outcome(StopCause::NodeCondition), None));
+                        }
+                        continue;
+                    }
+                    if self.flush_through(cx, token.pre_space) {
+                        cx.tokens.move_to(&token, false);
+                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                    }
+                    // The interior's *base* state per the descent policy (the group
+                    // parser derives expecting_group_close from it); `Arc` in, `Arc`
+                    // out — pass-through policies preserve pointer identity.
+                    let base = match &self.child_states.group {
+                        GroupChildState::Inherit => Arc::clone(&cx.state),
+                        GroupChildState::Fixed(state) => Arc::clone(state),
+                        GroupChildState::Compute(compute) => compute(&cx.state, &token),
+                    };
+                    // Consume the trigger token here, at the site that peeked it and
+                    // under the state that tokenized it (the at-match-time atomicity
+                    // rule); the group parser gets its two facts — open span and rule.
+                    cx.tokens.move_past(&token, true);
+                    let mut group = GroupParser::new(
+                        Arc::clone(&self.source),
+                        token.span,
+                        Arc::clone(rule),
+                    );
+                    // The parser's input state is the policy's answer, scoped by
+                    // structural swap/revert.
+                    let outer_state = mem::replace(&mut cx.state, base);
+                    let result = group.parse(cx);
+                    cx.state = outer_state;
+                    let (id, _delta) = result?; // groups have no after-effect
+                    self.nodes.push(id);
+                    if self.test_node_stop(cx, id) {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
@@ -655,7 +718,8 @@ mod tests {
     use crate::library::LibraryStack;
     use crate::source::TextContent;
     use crate::spec::StdCallableSpec;
-    use crate::state::{SimpleLang, StateData};
+    use super::super::InvocationChildState;
+    use crate::state::{SimpleLang, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenErrorKind,
         TokenListReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
@@ -729,8 +793,9 @@ mod tests {
         }
     }
 
-    /// Drive a `NodesParser` over `tokens`, stage the outcome under a root `List`, and
-    /// freeze. The reader must be reading `content`.
+    /// Drive a `NodesParser` over `tokens`, stage the outcome under a root `List`
+    /// spanning exactly the parsed extent, freeze, and run the invariant checker over
+    /// the finished tree. The reader must be reading `content`.
     fn try_run<'s, L: Lang<SourceOrigin = Option<String>>>(
         content: &'s str,
         tokens: &mut dyn TokenReader<'s, L>,
@@ -738,20 +803,47 @@ mod tests {
         recovery: Recovery,
         stop: StopSpec<'_, L>,
     ) -> Result<Parsed<L>, ParseError> {
+        try_run_with(content, tokens, state, recovery, stop, ChildStateSpec::inherit())
+    }
+
+    /// [`try_run`] with an explicit descent-state policy.
+    fn try_run_with<'s, 'p, L: Lang<SourceOrigin = Option<String>>>(
+        content: &'s str,
+        tokens: &mut dyn TokenReader<'s, L>,
+        state: &Arc<ParsingState<L>>,
+        recovery: Recovery,
+        stop: StopSpec<'p, L>,
+        child_states: ChildStateSpec<'p, L>,
+    ) -> Result<Parsed<L>, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new(recovery);
         let mut cx = ParseContext { tokens, state: Arc::clone(state), session: &mut session };
-        let mut parser = NodesParser::new(Arc::clone(&source), stop);
+        let mut parser =
+            NodesParser::new(Arc::clone(&source), stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
         let pos = cx.tokens.pos();
+        // The root `List` spans exactly the parsed extent (its content interior — the
+        // partition invariant the checker verifies); a consumed stop token lies outside.
+        let root_span = {
+            let staged = session.builder.staged_nodes();
+            match (outcome.nodes.first(), outcome.nodes.last()) {
+                (Some(&first), Some(&last)) => Span::new(
+                    staged.get(first).unwrap().span().start(),
+                    staged.get(last).unwrap().span().end(),
+                ),
+                _ => Span::empty(0),
+            }
+        };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::entire(&source),
+            SourceSpan::new(&source, root_span.range()),
             Arc::clone(state),
             outcome.nodes,
         );
-        Ok(Parsed { result: session.finish(root), stop: outcome.stop, pos })
+        let result = session.finish(root);
+        crate::node::check_tree_invariants(&result.tree);
+        Ok(Parsed { result, stop: outcome.stop, pos })
     }
 
     /// Scan `content` into the full token list (including the terminal `EndOfStream`).
@@ -773,19 +865,40 @@ mod tests {
     /// assert they agree on shapes, stop cause, position, and diagnostics count. The two
     /// stop specs must be equivalent (node predicates are `&mut`, so each run needs its
     /// own).
-    fn run_both<L: Lang<SourceOrigin = Option<String>>>(
+    fn run_both<'p, L: Lang<SourceOrigin = Option<String>>>(
         content: &str,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
-        stop_std: StopSpec<'_, L>,
-        stop_list: StopSpec<'_, L>,
+        stop_std: StopSpec<'p, L>,
+        stop_list: StopSpec<'p, L>,
+    ) -> Parsed<L> {
+        run_both_with(content, state, recovery, stop_std, stop_list, ChildStateSpec::inherit())
+    }
+
+    /// [`run_both`] with an explicit descent-state policy (cloned per reader — it is
+    /// shallow: `Arc`s and borrows).
+    fn run_both_with<'p, L: Lang<SourceOrigin = Option<String>>>(
+        content: &str,
+        state: &Arc<ParsingState<L>>,
+        recovery: Recovery,
+        stop_std: StopSpec<'p, L>,
+        stop_list: StopSpec<'p, L>,
+        child_states: ChildStateSpec<'p, L>,
     ) -> Parsed<L> {
         let mut std_reader = StdTokenReader::new(content);
-        let a =
-            try_run(content, &mut std_reader, state, recovery, stop_std).expect("std reader");
+        let a = try_run_with(
+            content,
+            &mut std_reader,
+            state,
+            recovery,
+            stop_std,
+            child_states.clone(),
+        )
+        .expect("std reader");
         let mut list_reader = TokenListReader::new(scan(content, state));
         let b =
-            try_run(content, &mut list_reader, state, recovery, stop_list).expect("list reader");
+            try_run_with(content, &mut list_reader, state, recovery, stop_list, child_states)
+                .expect("list reader");
         assert_eq!(shapes(&a.result), shapes(&b.result), "readers disagree on {:?}", content);
         assert_eq!(a.stop, b.stop, "stop causes disagree on {:?}", content);
         assert_eq!(a.pos, b.pos, "positions disagree on {:?}", content);
@@ -896,6 +1009,7 @@ mod tests {
             type CallableTypeId = u32;
             type StateExt = ();
             type Event = ();
+            type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
 
@@ -1385,7 +1499,7 @@ mod tests {
         ));
     }
 
-    // --- placeholder-arm recovery (commands 6.4, specials 6.4, groups 6.3) ---------------
+    // --- placeholder-arm recovery (commands and specials, until 6.4) ---------------------
 
     #[test]
     fn unresolved_command_recovers_as_a_chars_fallback() {
@@ -1418,20 +1532,6 @@ mod tests {
     }
 
     #[test]
-    fn group_open_recovers_as_chars_and_the_stray_close_is_reported() {
-        let st = state();
-        let parsed =
-            run_both("a {b} c", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
-        assert_eq!(
-            shapes(&parsed.result),
-            ["chars 0..2 \"a \"", "chars 2..3 \"{\"", "chars 3..4 \"b\""]
-        );
-        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(4, 5) });
-        assert_eq!(parsed.pos, 4);
-        assert_eq!(parsed.result.diagnostics.len(), 1);
-    }
-
-    #[test]
     fn specials_recover_as_a_chars_fallback() {
         #[derive(Debug, Clone, Copy)]
         struct TildeLang;
@@ -1440,6 +1540,7 @@ mod tests {
             type CallableTypeId = u32;
             type StateExt = ();
             type Event = ();
+            type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
 
@@ -1475,7 +1576,478 @@ mod tests {
         assert_partition(&parsed.result, 0..3);
     }
 
+    // --- groups (6.3) ----------------------------------------------------------------------
+
+    #[test]
+    fn group_round_trips_with_exact_spans_and_delimiters() {
+        let st = state();
+        let parsed =
+            run_both("a {b} c", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"a \"", "group 2..5", "chars 5..7 \" c\""]
+        );
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        assert!(parsed.result.diagnostics.is_empty());
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.group_type(), Some(GT_BRACE));
+        assert_eq!(group.group_delimiters(), Some(("{", "}")));
+        assert_eq!(group.child_count(), 1);
+        assert_eq!(group.child(0).unwrap().chars(), Some("b"));
+        // The space after `}` is enclosing content, not a group post-space.
+        assert_partition(&parsed.result, 0..7);
+    }
+
+    #[test]
+    fn nested_groups_with_exact_spans() {
+        let st = state();
+        let parsed =
+            run_both("{a{b}c}", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["group 0..7"]);
+        let outer = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(outer.child_count(), 3);
+        assert_eq!(outer.child(0).unwrap().chars(), Some("a"));
+        let inner = outer.child(1).unwrap();
+        assert!(inner.is_group());
+        assert_eq!(inner.span().range(), 2..5);
+        assert_eq!(inner.child(0).unwrap().chars(), Some("b"));
+        assert_eq!(outer.child(2).unwrap().chars(), Some("c"));
+    }
+
+    #[test]
+    fn empty_group_has_no_children() {
+        let st = state();
+        let parsed =
+            run_both("x{}y", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..1 \"x\"", "group 1..3", "chars 3..4 \"y\""]
+        );
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.child_count(), 0);
+        assert_eq!(group.group_delimiters(), Some(("{", "}")));
+    }
+
+    #[test]
+    fn paragraph_break_inside_a_group_stays_inside() {
+        let st = state();
+        let parsed =
+            run_both("{a\n\nb}", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["group 0..6"]);
+        let group = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(group.child_count(), 3); // "a", the break node, "b"
+        assert_eq!(group.child(1).unwrap().chars(), Some("\n\n"));
+    }
+
+    #[test]
+    fn ambiguous_dollar_group_closes_via_the_derived_expected_close() {
+        // `$` opens and closes GT_MATH groups. As a *closer* it is only recognizable
+        // through `expecting_group_close` — which the interior state carries precisely
+        // because the group parser derives it (session-memoized); without it the
+        // interior `$` would read as another opener. Std reader only: a pre-scanned
+        // token list is tokenized under the base state and cannot see the interior
+        // state's reclassification.
+        let mut r = rules::<TestLang>();
+        r.groups.push(math_rule());
+        let st = state_with(r);
+        let mut reader = StdTokenReader::new("a $x$ b");
+        let parsed =
+            try_run("a $x$ b", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"a \"", "group 2..5", "chars 5..7 \" b\""]
+        );
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.group_type(), Some(GT_MATH));
+        assert_eq!(group.group_delimiters(), Some(("$", "$")));
+        assert_eq!(group.child(0).unwrap().chars(), Some("x"));
+    }
+
+    #[test]
+    fn node_condition_counts_a_group_as_one_node() {
+        let st = state();
+        let mut c1 = |count: usize, view: StagedNodeView<'_, TestLang>| {
+            count >= 1 && matches!(view.kind(), NodeKind::Group(_))
+        };
+        let mut c2 = |count: usize, view: StagedNodeView<'_, TestLang>| {
+            count >= 1 && matches!(view.kind(), NodeKind::Group(_))
+        };
+        let parsed = run_both(
+            "{a}b",
+            &st,
+            Recovery::Strict,
+            StopSpec { token: None, node: Some(&mut c1) },
+            StopSpec { token: None, node: Some(&mut c2) },
+        );
+        // The condition fired on the group (one staged sibling, consumed whole); the
+        // parse stops right after it.
+        assert_eq!(shapes(&parsed.result), ["group 0..3"]);
+        assert_eq!(parsed.stop, StopCause::NodeCondition);
+        assert_eq!(parsed.pos, 3);
+    }
+
+    #[test]
+    fn stop_conditions_are_not_consulted_inside_a_group() {
+        // Conditions are tested only at the parser's own nesting level (§3.6): the
+        // `\end` inside the group is the *interior* parser's business (here the
+        // 6.4-pending unresolvable-command recovery), never an outer stop.
+        let st = state();
+        let parsed = run_both(
+            "a{\\end}b",
+            &st,
+            Recovery::Tolerant,
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
+            StopSpec::at_token(TokenStopKind::Command { name: "end" }, false),
+        );
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.child(0).unwrap().chars(), Some("\\end"));
+    }
+
+    // --- group recovery (6.3) --------------------------------------------------------------
+
+    #[test]
+    fn unclosed_group_at_end_of_input_recovers_with_an_empty_close() {
+        let st = state();
+        let parsed =
+            run_both("a {bc", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["chars 0..2 \"a \"", "group 2..5"]);
+        assert_eq!(parsed.stop, StopCause::EndOfInput);
+        assert_eq!(parsed.pos, 5);
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.group_delimiters(), Some(("{", "")));
+        assert_eq!(group.child(0).unwrap().chars(), Some("bc"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.result.diagnostics.iter().next().unwrap().message(),
+            "unclosed group: expected ‘}’ before end of input"
+        );
+    }
+
+    #[test]
+    fn unclosed_group_strict_aborts() {
+        let st = state();
+        let mut reader = StdTokenReader::new("a {bc");
+        let err = try_run("a {bc", &mut reader, &st, Recovery::Strict, StopSpec::none())
+            .unwrap_err();
+        assert_eq!(err.to_string(), "unclosed group: expected ‘}’ before end of input");
+        // The diagnostic points at the open delimiter that was never closed.
+        assert_eq!(err.span().range(), 2..3);
+    }
+
+    #[test]
+    fn mismatched_close_inside_a_group_unwinds_without_consuming() {
+        // `[`/`]` shares class GT_BRACE. Inside the `{` group, the `]` matches neither
+        // the expected close spelling nor rules it out by class alone: the interior
+        // reports it as data, the group parser diagnoses and closes *without consuming*
+        // (unwinding — every level consumes or unwinds, §3.6), and the stray close then
+        // surfaces at this level, still unconsumed, for the root driver to adjudicate.
+        let mut r = rules::<TestLang>();
+        r.groups.push(Arc::new(GroupRule {
+            group_type: GT_BRACE,
+            open: "[".into(),
+            close: "]".into(),
+        }));
+        let st = state_with(r);
+        let parsed =
+            run_both("{a]}", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(shapes(&parsed.result), ["group 0..2"]);
+        let group = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(group.group_delimiters(), Some(("{", "")));
+        assert_eq!(group.child(0).unwrap().chars(), Some("a"));
+        assert_eq!(parsed.stop, StopCause::UnexpectedGroupClose { span: Span::new(2, 3) });
+        assert_eq!(parsed.pos, 2);
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.result.diagnostics.iter().next().unwrap().message(),
+            "unclosed group: expected ‘}’"
+        );
+    }
+
+    #[test]
+    fn mismatched_close_inside_a_group_strict_aborts() {
+        let mut r = rules::<TestLang>();
+        r.groups.push(Arc::new(GroupRule {
+            group_type: GT_BRACE,
+            open: "[".into(),
+            close: "]".into(),
+        }));
+        let st = state_with(r);
+        let mut reader = StdTokenReader::new("{a]}");
+        let err =
+            try_run("{a]}", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
+        assert_eq!(err.to_string(), "unclosed group: expected ‘}’");
+        assert_eq!(err.span().range(), 2..3);
+    }
+
+    #[test]
+    fn root_driver_skips_a_stray_close_and_continues() {
+        // The root always consumes (§3.6): `UnexpectedGroupClose` is data, and the
+        // *root driver* — here the test, later a `Language::parse` entry (Phase 7) —
+        // diagnoses, skips the token, and resumes. The skipped byte is dropped from the
+        // tree: an accepted tolerant byte-accounting break, so this is the one tree the
+        // invariant checker is deliberately not applied to.
+        let content = "a}b";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let st = state();
+        let mut reader = StdTokenReader::new(content);
+        let mut session: ParserSession<TestLang> = ParserSession::new(Recovery::Tolerant);
+        let mut nodes = Vec::new();
+        let stop = loop {
+            let mut cx = ParseContext {
+                tokens: &mut reader,
+                state: Arc::clone(&st),
+                session: &mut session,
+            };
+            let mut parser = NodesParser::new(Arc::clone(&source), StopSpec::none());
+            let (outcome, _) = parser.parse(&mut cx).unwrap();
+            nodes.extend(outcome.nodes);
+            match outcome.stop {
+                StopCause::UnexpectedGroupClose { span } => {
+                    session
+                        .recover(
+                            ParseErrorKind::Syntax {
+                                message: "unexpected closing ‘}’".into(),
+                            },
+                            SourceSpan::new(&source, span.range()),
+                        )
+                        .unwrap();
+                    let stray: Token<'_, TestLang> =
+                        TokenReader::peek(&mut reader, &st).unwrap();
+                    reader.move_past(&stray, true);
+                }
+                other => break other,
+            }
+        };
+        assert_eq!(stop, StopCause::EndOfInput);
+        let root = session.builder.add(
+            NodeKind::list(),
+            SourceSpan::entire(&source),
+            Arc::clone(&st),
+            nodes,
+        );
+        let result = session.finish(root);
+        let texts: Vec<_> = result
+            .tree
+            .root()
+            .children()
+            .map(|c| c.chars().unwrap().to_string())
+            .collect();
+        assert_eq!(texts, ["a", "b"]);
+        assert_eq!(result.diagnostics.len(), 1);
+    }
+
+    // --- descent-state policy + the session seam (6.3) --------------------------------------
+
+    #[test]
+    fn child_state_fixed_reverts_group_interiors_to_the_outer_state() {
+        // The chars-except-groups motivating case (§3.6): a restricted outer state
+        // (comments disabled) whose group interiors revert to the full state. Std
+        // reader only: a pre-scanned list cannot see the interior reclassification.
+        let full = state();
+        let restricted = Arc::new(full.derived(&ParsingStateDelta::new().rules(
+            TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
+        )));
+        let content = "%x{%y\n}z";
+
+        // Under the restricted state alone, `%` is ordinary content everywhere.
+        let mut reader = StdTokenReader::new(content);
+        let plain =
+            try_run(content, &mut reader, &restricted, Recovery::Strict, StopSpec::none())
+                .unwrap();
+        let group = plain.result.tree.root().child(1).unwrap();
+        assert!(group.children().all(|c| c.is_chars()));
+
+        // With `group: Fixed(full)` the interior reverts: `%y` is a comment again.
+        let policy = ChildStateSpec {
+            group: GroupChildState::Fixed(Arc::clone(&full)),
+            invocation: InvocationChildState::Inherit,
+        };
+        let mut reader = StdTokenReader::new(content);
+        let parsed = try_run_with(
+            content,
+            &mut reader,
+            &restricted,
+            Recovery::Strict,
+            StopSpec::none(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"%x\"", "group 2..7", "chars 7..8 \"z\""]
+        );
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.child_count(), 1);
+        assert_eq!(group.child(0).unwrap().comment(), Some("y"));
+        // The group node itself records the policy's base state (its input state).
+        assert!(Arc::ptr_eq(group.parsing_state(), &full));
+    }
+
+    #[test]
+    fn child_state_compute_selects_by_the_open_token() {
+        // The callback receives the loop's state and the open token (delim + resolved
+        // rule): comments stay enabled inside `{…}` (pass-through) but are disabled
+        // inside `[…]` (precomputed state selected by group class). Std reader only.
+        const GT_OPT: u32 = 2;
+        let mut r = rules::<TestLang>();
+        r.groups.push(Arc::new(GroupRule {
+            group_type: GT_OPT,
+            open: "[".into(),
+            close: "]".into(),
+        }));
+        let full = state_with(r);
+        let no_comments = Arc::new(full.derived(&ParsingStateDelta::new().rules(
+            TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
+        )));
+        let compute = |state: &Arc<ParsingState<TestLang>>, token: &Token<'_, TestLang>| {
+            match &token.kind {
+                TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
+                    Arc::clone(&no_comments)
+                }
+                _ => Arc::clone(state), // pass-through preserves pointer identity
+            }
+        };
+        let policy = ChildStateSpec {
+            group: GroupChildState::Compute(&compute),
+            invocation: InvocationChildState::Inherit,
+        };
+
+        let content = "{%a\n}[%b\n]";
+        let mut reader = StdTokenReader::new(content);
+        let parsed = try_run_with(
+            content,
+            &mut reader,
+            &full,
+            Recovery::Strict,
+            StopSpec::none(),
+            policy,
+        )
+        .unwrap();
+        let braces = parsed.result.tree.root().child(0).unwrap();
+        assert_eq!(braces.child_count(), 1);
+        assert_eq!(braces.child(0).unwrap().comment(), Some("a"));
+        assert!(Arc::ptr_eq(braces.parsing_state(), &full)); // pass-through identity
+        let brackets = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(brackets.group_type(), Some(GT_OPT));
+        assert_eq!(brackets.child_count(), 1);
+        assert_eq!(brackets.child(0).unwrap().chars(), Some("%b\n"));
+        assert!(Arc::ptr_eq(brackets.parsing_state(), &no_comments));
+    }
+
+    #[test]
+    fn sibling_group_interiors_share_one_memoized_state() {
+        let st = state();
+        let parsed =
+            run_both("{a}{b}", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        let root = parsed.result.tree.root();
+        let g1 = root.child(0).unwrap();
+        let g2 = root.child(1).unwrap();
+        // The group nodes record the outer state (structural revert restores the Arc)…
+        assert!(Arc::ptr_eq(g1.parsing_state(), &st));
+        assert!(Arc::ptr_eq(g2.parsing_state(), &st));
+        // …while their interior children share one derived Arc (the session memo) that
+        // carries the expected close.
+        let a = g1.child(0).unwrap();
+        let b = g2.child(0).unwrap();
+        assert!(Arc::ptr_eq(a.parsing_state(), b.parsing_state()));
+        assert!(!Arc::ptr_eq(a.parsing_state(), &st));
+        assert_eq!(
+            a.parsing_state()
+                .rules()
+                .expecting_group_close
+                .as_ref()
+                .map(|rule| rule.close.as_str()),
+            Some("}")
+        );
+    }
+
+    #[test]
+    fn observe_transition_fires_per_descent_finalize_once_per_derivation() {
+        // The two-level transition doctrine (§3.6): `{a}{b}` makes two group descents —
+        // both reach observe_transition (memo hits included) — but only one actual
+        // derivation runs finalize_transition.
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        static FINALIZE_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Debug, Default)]
+        struct Counts {
+            observed: usize,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct CountLang;
+        impl Lang for CountLang {
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = Counts;
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+
+            fn finalize_transition(
+                _new: &mut StateData<Self>,
+                _prev: &ParsingState<Self>,
+                _events: &[()],
+            ) {
+                FINALIZE_RUNS.fetch_add(1, Ordering::Relaxed);
+            }
+
+            fn observe_transition(
+                ext: &mut Counts,
+                _prev: &ParsingState<Self>,
+                _new: &ParsingState<Self>,
+                _delta: &ParsingStateDelta<Self>,
+            ) {
+                ext.observed += 1;
+            }
+        }
+
+        // Driven manually so the session stays inspectable after the parse.
+        let content = "{a}{b}";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let st = state_with(rules::<CountLang>());
+        let mut reader = StdTokenReader::new(content);
+        let mut session: ParserSession<CountLang> = ParserSession::new(Recovery::Strict);
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            state: Arc::clone(&st),
+            session: &mut session,
+        };
+        let mut parser = NodesParser::new(Arc::clone(&source), StopSpec::none());
+        let (outcome, _) = parser.parse(&mut cx).unwrap();
+        assert!(matches!(outcome.stop, StopCause::EndOfInput));
+        assert_eq!(session.ext.observed, 2);
+        assert_eq!(FINALIZE_RUNS.load(Ordering::Relaxed), 1);
+    }
+
     // --- everything at once ----------------------------------------------------------------
+
+    #[test]
+    fn mixed_content_with_groups_partitions_exactly() {
+        let st = state();
+        let content = "ab {cd %e\nf} g\n\nh";
+        let parsed =
+            run_both(content, &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            [
+                "chars 0..3 \"ab \"",
+                "group 3..12",
+                "chars 12..14 \" g\"",
+                "chars 14..16 \"\\n\\n\"",
+                "chars 16..17 \"h\"",
+            ]
+        );
+        let group = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(group.child_count(), 3);
+        assert_eq!(group.child(0).unwrap().chars(), Some("cd "));
+        assert_eq!(group.child(1).unwrap().comment(), Some("e"));
+        assert_eq!(group.child(2).unwrap().chars(), Some("f"));
+        assert_partition(&parsed.result, 0..content.len());
+    }
 
     #[test]
     fn mixed_content_shapes_and_partition() {

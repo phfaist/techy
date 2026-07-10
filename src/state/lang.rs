@@ -16,6 +16,7 @@ use crate::source::{SourceOrigin, SourceSpan};
 use crate::spec::CallableSpec;
 use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
 
+use super::delta::ParsingStateDelta;
 use super::parsing_state::{ParsingState, StateData};
 
 /// The bundle of node extension types of a language: the **two-tier ext system** of
@@ -103,6 +104,17 @@ pub trait Lang: Sized {
     /// [`finalize_transition`](Lang::finalize_transition). `()` if unused.
     type Event: Clone + fmt::Debug + Send + Sync;
 
+    /// Parse-global **mutable** extension, `Default`-initialized and stored on
+    /// [`ParserSession`](crate::engine::ParserSession) — the preset-owned mutable object
+    /// of a parse, and the home for parse-history accumulation
+    /// ([`observe_transition`](Lang::observe_transition)) and parse-global caches
+    /// (decided July 2026, DESIGN_RATIONALE.md §3.6). `()` if unused.
+    ///
+    /// Unlike [`StateExt`](Lang::StateExt) this is not `Clone`: sessions are transient
+    /// single-parse objects, never shared or reverted — access is always `&mut`, through
+    /// the session.
+    type SessionExt: fmt::Debug + Default + Send + Sync;
+
     /// Origin metadata type for sources (plugged into `Source<O>`); conventionally
     /// `Option<String>`.
     type SourceOrigin: SourceOrigin;
@@ -123,6 +135,30 @@ pub trait Lang: Sized {
         events: &[Self::Event],
     ) {
         let _ = (new, prev, events);
+    }
+
+    /// Per-event transition **observation** (decided July 2026, DESIGN_RATIONALE.md
+    /// §3.6): called by the session-mediated derivation helpers
+    /// ([`ParserSession::derived_state`](crate::engine::ParserSession::derived_state),
+    /// [`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state))
+    /// on **every** transition event — memo hits included, which is what
+    /// [`finalize_transition`](Lang::finalize_transition) structurally cannot see (it
+    /// runs once per unique *derivation*, not once per transition). Parse-history
+    /// accumulation ("how many times did the parse enter math mode") belongs here, in
+    /// the session's [`SessionExt`](Lang::SessionExt) — never in `finalize_transition`,
+    /// where structural scope reverts and memoization would make counts wrong twice
+    /// over.
+    ///
+    /// Observational only: it receives the already-frozen `new` state and cannot alter
+    /// the transition's outcome (the session layer is data-equivalent to
+    /// [`ParsingState::derived`]). The default does nothing.
+    fn observe_transition(
+        ext: &mut Self::SessionExt,
+        prev: &ParsingState<Self>,
+        new: &ParsingState<Self>,
+        delta: &ParsingStateDelta<Self>,
+    ) {
+        let _ = (ext, prev, new, delta);
     }
 
     /// Specials scan: is a callable-triggering character sequence at `content[pos..]`?
@@ -245,7 +281,7 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
 }
 
 /// All-defaults language marker: `impl SimpleLang for MyLang {}` yields a [`Lang`] with
-/// every associated type defaulted (`StateExt`/`Event`/`NodeExts` = `()`,
+/// every associated type defaulted (`StateExt`/`Event`/`SessionExt`/`NodeExts` = `()`,
 /// `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`) and the
 /// default method behavior — the workaround for associated-type defaults being unstable.
 ///
@@ -261,6 +297,7 @@ impl<T: SimpleLang> Lang for T {
     type CallableTypeId = u32;
     type StateExt = ();
     type Event = ();
+    type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = ();
 }

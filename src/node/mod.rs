@@ -31,6 +31,7 @@
 
 mod arguments;
 mod builder;
+mod invariants;
 mod kind;
 mod node_ref;
 mod tree;
@@ -39,6 +40,7 @@ pub use arguments::{
     ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
 };
 pub use builder::{BuildId, NodeTreeBuilder, StagedNodeView, StagedNodes};
+pub use invariants::check_tree_invariants;
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::NodeRef;
 pub use tree::{NodeData, NodeId, NodeTree};
@@ -208,6 +210,14 @@ mod tests {
         let root =
             b.add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![x, frac, comment]);
         b.finish(root)
+    }
+
+    #[test]
+    fn example_tree_passes_the_invariant_checker() {
+        // Exercises the checker's callable path (children-block contiguity, post-space
+        // suffix, region tiling, InChildrenOf content designations) ahead of 6.4's
+        // parser-produced callables.
+        check_tree_invariants(&example_tree());
     }
 
     #[test]
@@ -882,6 +892,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ExtBundle;
     }
@@ -940,6 +951,7 @@ mod tests {
         type CallableTypeId = u32;
         type StateExt = ();
         type Event = ();
+        type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = FinalizeExts;
 
