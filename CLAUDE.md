@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**techy** is a Rust port of Python's `pylatexenc` library for parsing LaTeX-like markup languages. It builds an Abstract Syntax Tree (AST) from LaTeX source code.
+**techy** is a Rust rewrite of Python's `pylatexenc` library for parsing LaTeX-like markup languages. It builds an Abstract Syntax Tree (AST) from LaTeX source code.
 
 Original python project is at: https://github.com/phfaist/pylatexenc
 
@@ -50,6 +50,10 @@ cargo test <name>    # Specific test
 
 - [ARCHITECTURE.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
 - [DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
+
+- [Phase6Execution.md] - Detailed plan and recorded progress during execution of the sub-phases of Phase 6 of our Architecture plan.
+
+If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.
 
 ## Design Philosophy
 

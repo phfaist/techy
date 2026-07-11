@@ -125,10 +125,22 @@ mod tests {
         )
     }
 
-    /// Stand-in for the preset-provided standard argument parsers.
+    /// Stand-in for the standard argument parsers — never invoked; the tests here
+    /// hand-build their trees.
     #[derive(Debug)]
     struct StubParser;
-    impl<L: Lang> ArgumentParser<L> for StubParser {}
+    impl<L: Lang> ArgumentParser<L> for StubParser {
+        fn parse_argument(
+            &self,
+            _cx: &mut crate::constructs::ParseContext<'_, '_, L>,
+            _spec: &ArgumentSpec<L>,
+        ) -> crate::constructs::ConstructParserResult<
+            L,
+            Option<crate::spec::ParsedArgumentNodes>,
+        > {
+            Ok(None)
+        }
+    }
 
     fn brace_arg_spec<L: Lang<GroupTypeId = u32>>() -> Arc<ArgumentSpec<L>> {
         Arc::new(ArgumentSpec::new(Arc::new(StubParser)))
@@ -146,7 +158,10 @@ mod tests {
     }
 
     /// Builds the running example: `x\frac{a}{b} % note` as
-    /// List [ Chars"x", Callable\frac(Group(Chars"a"), Group(Chars"b")), Comment" note" ].
+    /// List [ Chars"x", Callable\frac(Group(Chars"a"), Group(Chars"b")), Chars" ",
+    /// Comment" note" ]. The callable's post-space is the trigger token's own —
+    /// empty here, `{` follows the name directly — so the space before the comment is
+    /// sibling content (§3.5 invariant 3 as amended in Phase 6.4).
     fn example_tree() -> NodeTree<PlainLang> {
         let source: Arc<Source> = Arc::new(Source::new(r"x\frac{a}{b} % note"));
         let st = state::<PlainLang>();
@@ -191,14 +206,17 @@ mod tests {
                 ]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::Spanned(Span::new(12, 13)),
+                // The trigger token's own syntactic post-space: empty (`{` follows).
+                post_space: TextContent::Spanned(Span::empty(6)),
                 ext: (),
             }),
-            spanned(&source, 1..13), // includes post_space (§nodes span convention)
+            spanned(&source, 1..12),
             st.clone(),
             vec![a_group, b_group],
         );
 
+        let ws =
+            b.add(NodeKind::chars(Span::new(12, 13)), spanned(&source, 12..13), st.clone(), vec![]);
         let comment = b.add(
             // start "%" + content " note" + empty post_space (end of input).
             NodeKind::comment(Span::new(13, 14), Span::new(14, 19), Span::empty(19)),
@@ -207,8 +225,12 @@ mod tests {
             vec![],
         );
 
-        let root =
-            b.add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![x, frac, comment]);
+        let root = b.add(
+            NodeKind::list(),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![x, frac, ws, comment],
+        );
         b.finish(root)
     }
 
@@ -225,8 +247,8 @@ mod tests {
         let tree = example_tree();
         let root = tree.root();
         assert!(root.is_list());
-        assert_eq!(root.child_count(), 3);
-        assert_eq!(tree.node_count(), 8);
+        assert_eq!(root.child_count(), 4);
+        assert_eq!(tree.node_count(), 9);
 
         let x = root.child(0).unwrap();
         assert_eq!(x.chars(), Some("x"));
@@ -237,11 +259,11 @@ mod tests {
         assert!(frac.is_callable());
         assert_eq!(frac.name(), Some("frac"));
         assert_eq!(frac.callable_type(), Some(CT_MACRO));
-        assert_eq!(frac.post_space(), Some(" "));
-        assert_eq!(frac.span_content(), r"\frac{a}{b} ");
+        assert_eq!(frac.post_space(), Some(""));
+        assert_eq!(frac.span_content(), r"\frac{a}{b}");
         assert!(frac.spec().is_some());
 
-        let comment = root.child(2).unwrap();
+        let comment = root.child(3).unwrap();
         assert_eq!(comment.comment(), Some(" note"));
         assert_eq!(comment.comment_start(), Some("%"));
         assert_eq!(comment.comment_post_space(), Some(""));
@@ -249,10 +271,10 @@ mod tests {
         assert!(x.comment_start().is_none());
         assert!(x.comment_post_space().is_none());
 
-        assert!(root.child(3).is_none());
+        assert!(root.child(4).is_none());
         // children() iterates in order:
         let kinds: Vec<bool> = root.children().map(|c| c.is_callable()).collect();
-        assert_eq!(kinds, [false, true, false]);
+        assert_eq!(kinds, [false, true, false, false]);
     }
 
     #[test]
@@ -812,9 +834,10 @@ mod tests {
         // Logical text identical…
         let root = owned.root();
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
-        assert_eq!(root.child(1).unwrap().post_space(), Some(" "));
-        assert_eq!(root.child(2).unwrap().comment(), Some(" note"));
-        assert_eq!(root.child(2).unwrap().comment_start(), Some("%"));
+        assert_eq!(root.child(1).unwrap().post_space(), Some(""));
+        assert_eq!(root.child(2).unwrap().chars(), Some(" "));
+        assert_eq!(root.child(3).unwrap().comment(), Some(" note"));
+        assert_eq!(root.child(3).unwrap().comment_start(), Some("%"));
         let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().next().unwrap();
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
@@ -842,7 +865,7 @@ mod tests {
             _ => unreachable!(),
         }
         // Spans (provenance) survive materialization:
-        assert_eq!(owned.root().child(1).unwrap().span_content(), r"\frac{a}{b} ");
+        assert_eq!(owned.root().child(1).unwrap().span_content(), r"\frac{a}{b}");
     }
 
     #[test]

@@ -1432,6 +1432,40 @@ precompute-and-select covers context-dependent policies with full `Arc` sharing,
 designated first relaxation, should a consumer demand latching state, is `Fn` → `FnMut` on
 the node-condition precedent, not session injection).
 
+**Optional-group arguments balance their delimiters; brace protection via the descent
+policy (pylatexenc's `make_child_parsing_state` semantics)** — DECIDED (user, July 2026,
+subphase 6.5 review; supersedes the LaTeX-style first-`]`-closes rule briefly shipped in
+6.5). `OptionalGroupArgumentParser`'s minted `GroupRule` is in force for the argument's
+whole extent — the probing peek *and* the group's contents, not just the opening
+delimiter: `\item[with[recursive[use]of]brackets]` parses as **one** argument whose
+contents hold nested `[…]` group nodes. The two-sided child-descent rule that makes this
+coherent: a nested group opened by the *minted rule* keeps the contents state (the rule
+then rides the inherited states of deeper levels — that is what balances recursively),
+while every **other** child descent — a brace group, an invocation — reverts to the
+argument's own state, where `]` is an ordinary character: braces protect
+(`[{arg with ]}]`, the §3.5 designation example, unchanged), and an invocation's own
+arguments inside the option see no bracket rule (`\item[\m{a]b}]`). This is exactly
+pylatexenc's `LatexDelimitedGroupParserInfo.make_child_parsing_state` ("group with same
+delimiter → keep contents parsing state; else → the outer, original parsing state"),
+expressed through `ChildStateSpec` — the §3.6 hook that ports that very pylatexenc
+method; `GroupParser` gained a per-use `with_child_states` config so the parser that
+scopes a group's interior can steer its descents (default stays `Inherit`; decided
+semantics 3 — one-level-deep policies — is untouched: this is per-use configuration at
+the level that scopes it, not propagation). Shapes verified empirically against
+pylatexenc 3.0a33 (`[with[recursive[use]of]brackets]` → identical node spans;
+`[{arg with ]}]` → protected; `[ {a} ]` → three content nodes, no unwrap).
+*Rejected:* LaTeX's first-unprotected-`]` rule (TeX delimited-parameter matching, xparse
+`o`/`O` arguments) — implemented first for LaTeX parity and reverted on user review:
+pylatexenc parity is the 6.5 exit criterion, balanced matching is what document tooling
+expects, and the brace-protection idiom survives either way.
+*Pitfall recorded:* the protection policy rides one bracket level, as in pylatexenc —
+whose depth-2 behavior already contradicts its own docstring (`\item[a[{x]y}b]` mangles
+silently there: the nested group comes back childless; checked against 3.0a33). techy
+mangles the same pathological shape *with* diagnostics (the brace group inside the
+nested bracket level surfaces `UnexpectedGroupClose` and decision-8 unwinding takes
+over). A consumer needing every-depth protection drives the nesting recursion itself —
+the parser-composition escape hatch above.
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).

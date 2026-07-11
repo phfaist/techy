@@ -31,7 +31,10 @@ use super::tree::{NodeData, NodeId, NodeTree};
 ///    childless.
 /// 3. **Callable children-block contiguity.** A `Callable`'s children block is
 ///    span-contiguous (sibling spans chain without gaps) and lies inside the node's
-///    span; a `Spanned` post-space is the trailing sub-range of the node's span.
+///    span; a `Spanned` post-space — exactly the trigger token's own syntactic
+///    post-space (§3.5 invariant 3, as amended in Phase 6.4) — ends where the first
+///    child begins, or ends the node's span when there are no children (the
+///    argument-less shape, where it *is* trailing).
 /// 4. **Region tiling.** A `Callable`'s resolved argument/slot regions tile its children
 ///    block exactly, in order (arguments before slots); every content range lies within
 ///    its content parent's children, and a content parent other than the callable itself
@@ -221,9 +224,19 @@ fn check_node<L: Lang>(
         NodeKind::Callable(callable) => {
             residency(&callable.post_space, "callable post-space");
             if let TextContent::Spanned(s) = &callable.post_space {
+                // The trigger token's own syntactic post-space (§3.5 invariant 3 as
+                // amended): between the name and the first child region — or trailing
+                // when there are no children (revised in Phase 6.5; it asserted
+                // "trailing" unconditionally while all callables were argument-less).
+                let expected_end = tree
+                    .nodes_in(data.children.clone())
+                    .next()
+                    .map(|first| first.span().start())
+                    .unwrap_or(span.end);
                 assert!(
-                    s.end == span.end && s.start >= span.start,
-                    "node {}: spanned post-space {:?} is not a trailing sub-range of span {:?}",
+                    s.end == expected_end && s.start >= span.start,
+                    "node {}: spanned post-space {:?} does not end at the first child \
+                     (or the span end {:?} for a childless callable)",
                     i,
                     s,
                     span

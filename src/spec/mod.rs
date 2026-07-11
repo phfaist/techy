@@ -12,10 +12,14 @@
 //! spec (arguments *configure*; slots hold *content regions*), with [`StdCallableSpec`]
 //! as the standard implementation. An argument **is a parser**: every argument routes to
 //! an [`ArgumentParser`] object, with the standard forms (delimited group, optional
-//! group, literal marker, …) provided by the preset — the core has no privileged
-//! argument shapes (revised July 2026). The `ArgumentParser` entry point, the standard
-//! argument parsers, and the `make_invocation_parser()` factory (whose override is the
-//! full-takeover hatch) arrive in Phase 6.4–6.5 (DESIGN_RATIONALE.md §3.6).
+//! group, literal marker, …) provided as core construct parsers, parameterized by group
+//! types and rules — the core has no privileged argument *spellings* (revised July
+//! 2026). The [`ArgumentParser`] entry point ([`parse_argument`], returning
+//! [`ParsedArgumentNodes`]) and the standard argument parsers landed in Phase 6.5; the
+//! `make_invocation_parser()` factory (whose override is the full-takeover hatch) in
+//! Phase 6.4 (DESIGN_RATIONALE.md §3.6).
+//!
+//! [`parse_argument`]: ArgumentParser::parse_argument
 //!
 //! Definition lookup — [`Library`](crate::library::Library) and friends — lives in the
 //! neighboring [`library`](crate::library) topic.
@@ -24,7 +28,7 @@ mod callable;
 mod structure;
 
 pub use callable::{CallableSpec, StdCallableSpec};
-pub use structure::{ArgumentParser, ArgumentSpec, SlotSpec};
+pub use structure::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes, SlotSpec};
 
 #[cfg(test)]
 mod tests {
@@ -46,11 +50,19 @@ mod tests {
         type NodeExts = ();
     }
 
-    /// Stand-in for the preset-provided standard argument parsers (delimited group,
-    /// optional group, marker, …).
+    /// Stand-in for the standard argument parsers (delimited group, optional group,
+    /// marker, …) — never invoked here; structure tests only.
     #[derive(Debug)]
     struct StubParser;
-    impl<L: Lang> ArgumentParser<L> for StubParser {}
+    impl<L: Lang> ArgumentParser<L> for StubParser {
+        fn parse_argument(
+            &self,
+            _cx: &mut crate::constructs::ParseContext<'_, '_, L>,
+            _spec: &ArgumentSpec<L>,
+        ) -> crate::constructs::ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+            Ok(None)
+        }
+    }
 
     fn stub() -> Arc<dyn ArgumentParser<PlainLang>> {
         Arc::new(StubParser)
@@ -94,7 +106,18 @@ mod tests {
         // parser.
         #[derive(Debug)]
         struct CharsOnly;
-        impl ArgumentParser<PlainLang> for CharsOnly {}
+        impl ArgumentParser<PlainLang> for CharsOnly {
+            fn parse_argument(
+                &self,
+                _cx: &mut crate::constructs::ParseContext<'_, '_, PlainLang>,
+                _spec: &ArgumentSpec<PlainLang>,
+            ) -> crate::constructs::ConstructParserResult<
+                PlainLang,
+                Option<ParsedArgumentNodes>,
+            > {
+                Ok(None)
+            }
+        }
 
         let spec: StdCallableSpec<PlainLang> = StdCallableSpec::new(
             vec![Arc::new(

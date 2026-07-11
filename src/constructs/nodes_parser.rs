@@ -86,11 +86,11 @@ use crate::error::{ParseError, ParseErrorKind};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenKind, TokenReader};
+use crate::token::{Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
-use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use super::{resume_at, ConstructParser, ConstructParserResult, Invocation, ParseContext};
 
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
 /// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
@@ -727,17 +727,6 @@ fn group_close_type<L: Lang>(state: &ParsingState<L>, delim: &str) -> Option<L::
         .map(|rule| rule.group_type)
 }
 
-/// Reposition the reader to an absolute byte position (a `TokenRecovery::resume_pos`).
-///
-/// [`TokenReader`] expresses positioning through tokens, so "go to `pos`" is phrased as
-/// moving to a zero-width marker token at `pos` — `move_to(tok, false)` means "position
-/// = `tok.span.start`" for any reader honoring the span conventions.
-fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: usize) {
-    let marker: Token<'s, L> =
-        Token::new(TokenKind::EndOfStream, Span::empty(pos), Span::empty(pos));
-    tokens.move_to(&marker, false);
-}
-
 // Manual impls: predicates have no useful Debug, and derives would demand `L:` bounds.
 
 impl<L: Lang> fmt::Debug for TokenStopKind<'_, L> {
@@ -800,7 +789,7 @@ mod tests {
     };
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenErrorKind,
-        TokenListReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        TokenListReader, TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::ToString;

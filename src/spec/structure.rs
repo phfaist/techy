@@ -23,24 +23,49 @@
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 
+use crate::constructs::{ConstructParserResult, ParseContext};
+use crate::node::{BuildId, ContentNodes};
 use crate::state::{Lang, ParsingStateDelta};
+
+/// What an [`ArgumentParser`] returns for a *provided* argument: the region's staged
+/// nodes and the content designation among them (Phase 6.5, the decided
+/// `parse_argument` shape).
+///
+/// The nodes are the argument's full syntactic extent in source order — leading noise
+/// (comment nodes, whitespace-only `Chars` nodes), then the syntax-bearing node(s). The
+/// standard invocation parser appends them to the callable's child list and records a
+/// staged [`ChildRegion`](crate::node::ChildRegion) over them; `content` passes through
+/// as the region's designation (both [`ContentNodes`] forms are already relative to the
+/// region / anchored on a staged node).
+#[derive(Debug, Clone)]
+pub struct ParsedArgumentNodes {
+    /// The region's nodes, in source order (staged, not yet claimed by a parent).
+    pub nodes: Vec<BuildId>,
+    /// The content designation, relative to this region.
+    pub content: ContentNodes,
+}
 
 /// An argument parser: how one argument of an invocation is recognized and parsed —
 /// pylatexenc's "any `LatexParserBase` instance as `LatexArgumentSpec.parser`", and the
 /// single argument-parsing interface (no privileged data forms in the core).
 ///
-/// **Phase 6 grows the actual parse entry point** (it needs `ParseContext`); until then
-/// the trait reserves the slot so spec-facing types are final. An implementation parses
-/// one argument region and stages its nodes, designating the content nodes among them
-/// ([`ChildRegion`](crate::node::ChildRegion) /
+/// The entry point is [`parse_argument`](ArgumentParser::parse_argument) (Phase 6.5).
+/// An implementation parses one argument region and stages its nodes, designating the
+/// content nodes among them ([`ChildRegion`](crate::node::ChildRegion) /
 /// [`ContentNodes`](crate::node::ContentNodes)), or reports the argument absent; the
 /// standard invocation path records the result in the node's
 /// [`ParsedArguments`](crate::node::ParsedArguments) like any other argument. Parsers
 /// needing group delimiters install the [`GroupRule`](crate::token::GroupRule)s they
 /// want via a state delta for the argument's extent (an optional-argument parser
-/// momentarily declaring `[`…`]`, a custom spec declaring `<`…`>`).
+/// momentarily declaring `[`…`]`, a custom spec declaring `<`…`>`). The standard
+/// implementations live in [`constructs`](crate::constructs):
+/// [`GroupArgumentParser`](crate::constructs::GroupArgumentParser),
+/// [`OptionalGroupArgumentParser`](crate::constructs::OptionalGroupArgumentParser),
+/// [`MarkerArgumentParser`](crate::constructs::MarkerArgumentParser),
+/// [`ExpressionParser`](crate::constructs::ExpressionParser).
 ///
 /// **Noise ownership** (decided July 2026, regions session; DESIGN_RATIONALE.md §3.5):
 /// an argument parser owns its argument's *entire* region, leading noise included — it
@@ -56,7 +81,33 @@ use crate::state::{Lang, ParsingStateDelta};
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026; see [`CallableSpec`](super::CallableSpec)'s note and DESIGN_RATIONALE.md).
-pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {}
+/// Argument parsers are tier-1 *stored* behavior objects (`Arc`-shared inside
+/// [`ArgumentSpec`]s): immutable, `&self`, every per-use input arriving as arguments —
+/// unlike the tier-2 construct-parser temporaries they drive internally.
+pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
+    /// Parse one argument at the context's current position.
+    ///
+    /// `cx.state` is the argument's own state — the caller has already stacked the
+    /// [`ArgumentSpec::parsing_state_delta`] on the invocation's base state, so the
+    /// whole extent (noise scan included) runs under it; the caller reverts
+    /// structurally afterwards. `spec` is the spec being parsed against (its `name`
+    /// serves diagnostics; its delta is already applied).
+    ///
+    /// Returns `Ok(Some(_))` with the region's staged nodes and content designation
+    /// when the argument is provided; `Ok(None)` when it is absent — and **absent means
+    /// nothing was consumed**: the reader is rewound past any probed noise (re-parsed
+    /// as enclosing content) and speculatively staged nodes are simply never claimed
+    /// (the builder drops them). Whether absence is an error is the parser's own
+    /// policy: an optional argument stays silent, a mandatory one records its
+    /// diagnostic (tolerant) or aborts (strict) at this detection site
+    /// (DESIGN_RATIONALE.md §3.8) before reporting absent. There is deliberately no
+    /// after-effect delta channel: an argument scopes no state beyond its own extent.
+    fn parse_argument(
+        &self,
+        cx: &mut ParseContext<'_, '_, L>,
+        spec: &ArgumentSpec<L>,
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>>;
+}
 
 /// One argument accepted by a callable (pylatexenc's `LatexArgumentSpec`).
 pub struct ArgumentSpec<L: Lang> {

@@ -49,29 +49,44 @@ use crate::source::{SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingStateDelta};
 use crate::token::GroupRule;
 
+use super::child_state::ChildStateSpec;
 use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// The group construct parser: a tier-2 temporary, constructed per group descent from
 /// the opening token's facts (see the module docs for the contract).
-pub struct GroupParser<L: Lang> {
+pub struct GroupParser<'p, L: Lang> {
     /// The opening delimiter's span (the consumed `GroupOpen` token's span).
     open_span: Span,
     /// The opening token's resolved rule: the close spelling and group class of the
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
+    /// Descent-state policy handed to the interior [`NodesParser`]; defaults to
+    /// inherit-everywhere (§3.6 decided semantics 3: policies are one level deep, so a
+    /// plain arm-driven descent never propagates one). A parser that scopes the group's
+    /// interior state sets it per use — the optional-group argument parser's
+    /// brace-protection policy is the motivating consumer
+    /// ([`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)).
+    child_states: ChildStateSpec<'p, L>,
 }
 
-impl<L: Lang> GroupParser<L> {
+impl<'p, L: Lang> GroupParser<'p, L> {
     /// A parser for the group opened by the consumed `GroupOpen` token with span
     /// `open_span` and resolved rule `rule`, staging nodes with spans into the context's
     /// [`source`](super::ParseContext::source).
-    pub fn new(open_span: Span, rule: Arc<GroupRule<L>>) -> GroupParser<L> {
-        GroupParser { open_span, rule }
+    pub fn new(open_span: Span, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
+        GroupParser { open_span, rule, child_states: ChildStateSpec::inherit() }
+    }
+
+    /// Replace the interior's descent-state policy (default: inherit everywhere). See
+    /// [`ChildStateSpec`].
+    pub fn with_child_states(mut self, child_states: ChildStateSpec<'p, L>) -> Self {
+        self.child_states = child_states;
+        self
     }
 }
 
-impl<L: Lang> ConstructParser<L> for GroupParser<L> {
+impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
     type Output = BuildId;
 
     fn parse(
@@ -92,7 +107,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
             },
             true,
         );
-        let mut interior = NodesParser::new(stop);
+        let mut interior = NodesParser::new(stop).with_child_states(self.child_states.clone());
         let outer_state = mem::replace(&mut cx.state, interior_state);
         let result = interior.parse(cx);
         cx.state = outer_state;
@@ -148,11 +163,12 @@ impl<L: Lang> ConstructParser<L> for GroupParser<L> {
     }
 }
 
-impl<L: Lang> core::fmt::Debug for GroupParser<L> {
+impl<L: Lang> core::fmt::Debug for GroupParser<'_, L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GroupParser")
             .field("open_span", &self.open_span)
             .field("rule", &self.rule)
+            .field("child_states", &self.child_states)
             .finish()
     }
 }

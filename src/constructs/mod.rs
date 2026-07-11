@@ -31,11 +31,16 @@
 //! [`recover`](ParseContext::recover) helper), and abnormal endings of sub-parses travel
 //! as data ([`StopCause`]) — nobody continues past an `Err`.
 
+mod argument_parsers;
 mod child_state;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
 
+pub use argument_parsers::{
+    scan_argument_noise, stage_pre_space, ArgumentNoise, ExpressionParser,
+    GroupArgumentParser, MarkerArgumentParser, OptionalGroupArgumentParser,
+};
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use group_parser::GroupParser;
 pub use invocation_parser::StdInvocationParser;
@@ -48,10 +53,22 @@ use core::fmt;
 
 use crate::engine::ParserSession;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::source::{Source, SourceSpan};
+use crate::source::{Source, SourceSpan, Span};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenReader};
+use crate::token::{Token, TokenKind, TokenReader};
+
+/// Reposition the reader to an absolute byte position (a `TokenRecovery::resume_pos`,
+/// an argument parser's absent-rewind target).
+///
+/// [`TokenReader`] expresses positioning through tokens, so "go to `pos`" is phrased as
+/// moving to a zero-width marker token at `pos` — `move_to(tok, false)` means "position
+/// = `tok.span.start`" for any reader honoring the span conventions.
+pub(crate) fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: usize) {
+    let marker: Token<'s, L> =
+        Token::new(TokenKind::EndOfStream, Span::empty(pos), Span::empty(pos));
+    tokens.move_to(&marker, false);
+}
 
 /// Everything a construct parser needs, in one context value — avoiding pylatexenc's
 /// three-argument threading (`walker, token_reader, parsing_state`) and giving the API
