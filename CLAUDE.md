@@ -53,7 +53,7 @@ cargo test <name>    # Specific test
 
 - [Phase6Execution.md] - Detailed plan and recorded progress during execution of the sub-phases of Phase 6 of our Architecture plan.
 
-If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.
+If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.  Overall, we should try to achieve more or less parity with pylatexenc's capabilities on the features we are planning to implement, while taking advantage of the opportunity to improve on some bugs and quicks of pylatexenc.
 
 ## Design Philosophy
 

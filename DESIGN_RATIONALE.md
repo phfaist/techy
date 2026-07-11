@@ -1465,6 +1465,32 @@ mangles the same pathological shape *with* diagnostics (the brace group inside t
 nested bracket level surfaces `UnexpectedGroupClose` and decision-8 unwinding takes
 over). A consumer needing every-depth protection drives the nesting recursion itself —
 the parser-composition escape hatch above.
+*Revisit — planned mechanism, direction decided (user, July 2026, follow-up
+discussion):* the one-level pitfall is to be closed by **temporary group rules scoped in
+state data** — reversion by reconstruction (stripping), the only vehicle that reaches
+depth N: the outer `Arc` sits N frames up and is unknowable to the descending site, and
+caller-side descent policies are one level deep by design. Direction pinned: temporariness
+is reified in **core rules data** (a `temporary_groups` list next to `TokenRules::groups`,
+or a `transient` flag on `GroupRule`) — *not* a `Lang` callback recording a `StateExt`
+flag (a core parser's parsing correctness must not depend on `Lang` cooperation — the
+same ground the ChildStateSpec entry's `StateExt`-routing rejection stands on;
+`finalize_transition` stays reserved for genuine language semantics) and *not* the
+session (the session layer is pinned data-equivalent to `derived()` and may never alter
+a resulting state). Stripping lives in the **pure derivation path**, keyed on the
+`expecting_group_close` change: a derivation installing a *non-temporary* expected close
+clears the temporary rules. The trigger self-disambiguates — a nested minted `[` installs
+the temporary rule (kept, so brackets keep balancing), a brace installs a normal one
+(stripped, so braces protect at any depth) — and remains a pure function of
+`(base, rule)`, so the group-interior memo is untouched. With it, `\item[a[b{c]}]]`
+parses as expected — beyond pylatexenc, which mangles exactly that input (3.0a33
+checked: childless nested group, leaked `]`). Open sub-questions for the implementing
+session (the seam ships whole, 6.3 precedent): (i) the stripping site — a `derived()`
+core rule vs. the `group_interior_state` delta construction; (ii) the fate of the
+optional parser's `ChildStateSpec` wiring — the group half becomes redundant, and the
+invocation half's `Fixed(outer)` revert differs observably from state-carried stripping
+(an invocation inside `[…]` would tokenize its non-group tokens with the bracket rule
+still in force), needing its own ruling; (iii) the encoding — rules-list vs. rule flag
+(both mechanically break struct literals).
 
 ### 3.7 Generics strategy
 

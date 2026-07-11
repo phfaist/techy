@@ -441,3 +441,7 @@ Phase 7 (latexlike preset) unblocked.
 - Transform/visitor APIs; synthetic-source registry beyond the skeleton; level-2
   recomposer *implementation* (Phase 6 only guarantees the records/reconstructibility).
 - Multi-slot separators (fence blocks with `+++`) — first real consumer decides.
+- Temporary group rules scoped in state data (depth-N bracket protection,
+  `\item[a[b{c]}]]`) — direction decided July 2026, recorded as the *Revisit* note on
+  the balanced-optional-arguments entry (DESIGN_RATIONALE §3.6); seam + stripping
+  semantics ship together in a later session.
