@@ -48,9 +48,14 @@
 //! first argument region — a sub-range of the node's span, no longer necessarily
 //! trailing (§3.5 invariant 3 as amended).
 //!
-//! # Subphase scope
+//! # Slots
 //!
-//! Slot parsing (environment bodies) lands in 6.6; the spec must declare no slots yet.
+//! `StdInvocationParser` is macro-shaped: it parses no slots and debug-asserts that the
+//! spec declares none. Slot content is inseparable from terminator syntax, which is
+//! parser business, not spec data (§3.6) — an environment-shaped spec overrides
+//! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) with a
+//! composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser)
+//! (Phase 6.6; the argument half is shared as [`parse_declared_arguments`]).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -62,9 +67,50 @@ use crate::node::{
     ParsedSlots,
 };
 use crate::source::{SourceSpan, TextContent};
+use crate::spec::ArgumentSpec;
 use crate::state::{Lang, ParsingStateDelta};
 
 use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+
+/// Parse a callable's declared arguments at the reader's position — the argument half of
+/// [`StdInvocationParser`], shared with environment-shaped compositions (Phase 6.6).
+///
+/// Iterates `argument_specs` in invocation order, running each argument's parser under
+/// the argument's own state — the spec's `parsing_state_delta` stacked on `cx.state`
+/// (§3.6 decided semantics 2), session-mediated, reverted structurally — and collects
+/// the provided regions' nodes into one child list plus one [`ParsedArgument`] entry per
+/// spec (absent arguments keep their entry and contribute no nodes). The returned
+/// regions are staged in child-list offsets, ready for the caller's
+/// [`ParsedArguments`] record.
+pub(crate) fn parse_declared_arguments<L: Lang>(
+    cx: &mut ParseContext<'_, '_, L>,
+    argument_specs: &[Arc<ArgumentSpec<L>>],
+) -> ConstructParserResult<L, (Vec<BuildId>, Vec<ParsedArgument<L>>)> {
+    let mut children: Vec<BuildId> = Vec::new();
+    let mut arguments: Vec<ParsedArgument<L>> = Vec::new();
+    for argument_spec in argument_specs {
+        let argument_state = match &argument_spec.parsing_state_delta {
+            Some(delta) => cx.session.derived_state(&cx.state, delta),
+            None => Arc::clone(&cx.state),
+        };
+        let outer_state = mem::replace(&mut cx.state, argument_state);
+        let result = argument_spec.parser.parse_argument(cx, argument_spec);
+        cx.state = outer_state;
+        match result? {
+            Some(region) => {
+                let start = children.len() as u32;
+                children.extend_from_slice(&region.nodes);
+                let end = children.len() as u32;
+                arguments.push(ParsedArgument::provided(
+                    Arc::clone(argument_spec),
+                    ChildRegion::new(start..end, region.content),
+                ));
+            }
+            None => arguments.push(ParsedArgument::absent(Arc::clone(argument_spec))),
+        }
+    }
+    Ok((children, arguments))
+}
 
 /// The standard declarative invocation parser: a tier-2 temporary constructed per
 /// invocation by the spec's factory (see the module docs for the contract).
@@ -87,38 +133,16 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
-        // Phase 6.5: arguments live; slots (environment bodies) land in 6.6.
         debug_assert!(
             self.invocation.spec.slots().is_empty(),
-            "StdInvocationParser parses declared slots from Phase 6.6 on"
+            "StdInvocationParser is macro-shaped: a spec declaring slots overrides \
+             make_invocation_parser with a composition that knows its terminator syntax \
+             (EnvironmentBodyParser — Phase 6.6)"
         );
 
         let token = self.invocation.token;
-        let mut children: Vec<BuildId> = Vec::new();
-        let mut arguments: Vec<ParsedArgument<L>> = Vec::new();
-        for argument_spec in self.invocation.spec.arguments() {
-            // The argument's own state: the spec's delta stacks on the invocation's
-            // base (§3.6 decided semantics 2), session-mediated; structural revert.
-            let argument_state = match &argument_spec.parsing_state_delta {
-                Some(delta) => cx.session.derived_state(&cx.state, delta),
-                None => Arc::clone(&cx.state),
-            };
-            let outer_state = mem::replace(&mut cx.state, argument_state);
-            let result = argument_spec.parser.parse_argument(cx, argument_spec);
-            cx.state = outer_state;
-            match result? {
-                Some(region) => {
-                    let start = children.len() as u32;
-                    children.extend_from_slice(&region.nodes);
-                    let end = children.len() as u32;
-                    arguments.push(ParsedArgument::provided(
-                        Arc::clone(argument_spec),
-                        ChildRegion::new(start..end, region.content),
-                    ));
-                }
-                None => arguments.push(ParsedArgument::absent(Arc::clone(argument_spec))),
-            }
-        }
+        let (children, arguments) =
+            parse_declared_arguments(cx, self.invocation.spec.arguments())?;
 
         // Span: trigger through the last child (regions are span-contiguous); the
         // trigger's span alone for argument-less shapes (6.4 parity).

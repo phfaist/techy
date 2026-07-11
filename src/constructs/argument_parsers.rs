@@ -43,7 +43,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 
-use crate::error::{ParseError, ParseErrorKind, Recovery};
+use crate::error::ParseErrorKind;
 use crate::node::{
     BuildId, CallableData, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
     ParsedSlots,
@@ -55,7 +55,9 @@ use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
-use super::{resume_at, ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use super::{
+    resume_at, try_peek, ConstructParser, ConstructParserResult, Invocation, ParseContext,
+};
 
 // --- the shared noise scan ----------------------------------------------------------
 
@@ -111,7 +113,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
     let start = cx.tokens.pos();
     let mut nodes = Vec::new();
     loop {
-        let Some(token) = peek_argument_token(cx)? else {
+        let Some(token) = try_peek(cx)? else {
             return Ok(ArgumentNoise { nodes, start, next: None });
         };
         match &token.kind {
@@ -152,26 +154,6 @@ fn stage<L: Lang>(cx: &mut ParseContext<'_, '_, L>, kind: NodeKind<L>, span: Spa
         Arc::clone(&cx.state),
         Vec::new(),
     )
-}
-
-/// Peek under the current state, mapping a tokenizer error per the recovery policy:
-/// strict aborts with the token error (mirroring the content loop); tolerant reports
-/// `None` without diagnosing or consuming — the argument is treated as absent and the
-/// enclosing loop re-reads the error and applies its own recovery (module docs).
-fn peek_argument_token<'s, L: Lang>(
-    cx: &mut ParseContext<'_, 's, L>,
-) -> ConstructParserResult<L, Option<Token<'s, L>>> {
-    match cx.tokens.peek(&cx.state) {
-        Ok(token) => Ok(Some(token)),
-        Err(error) => match cx.session.recovery {
-            Recovery::Tolerant => Ok(None),
-            Recovery::Strict => {
-                let kind = ParseErrorKind::Token(error.kind());
-                let span = SourceSpan::new(&cx.source, error.span().range());
-                Err(ParseError::new(kind, span))
-            }
-        },
-    }
 }
 
 /// ` ‘name’` when the spec is named — diagnostics mention the argument by name where
@@ -554,7 +536,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         });
         let contents_state = cx.session.derived_state(&cx.state, &delta);
         let argument_state = mem::replace(&mut cx.state, Arc::clone(&contents_state));
-        let open = peek_argument_token(cx);
+        let open = try_peek(cx);
         cx.state = Arc::clone(&argument_state);
         let matched = match open? {
             Some(token)
@@ -663,7 +645,7 @@ impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser {
         let mut span = first.span;
         cx.tokens.move_past(&first, true);
         for expected in self.marker.chars().skip(1) {
-            let Some(token) = peek_argument_token(cx)? else {
+            let Some(token) = try_peek(cx)? else {
                 noise.rewind(cx);
                 return Ok(None);
             };
@@ -715,6 +697,7 @@ mod tests {
     };
     use super::*;
     use crate::engine::{ParseResult, ParserSession};
+    use crate::error::{ParseError, Recovery};
     use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
     use crate::node::NodeRef;
     use crate::source::Source;
@@ -1480,11 +1463,11 @@ mod tests {
         assert!(parsed.result.diagnostics.is_empty());
     }
 
-    // --- slots stay a 6.6 boundary -------------------------------------------------------
+    // --- slots need a factory override (StdInvocationParser is macro-shaped) ------------
 
     #[test]
     #[should_panic(expected = "Phase 6.6")]
-    fn declared_slots_are_a_6_6_boundary() {
+    fn declared_slots_need_a_factory_override() {
         let spec: Arc<dyn CallableSpec<ArgLang>> = Arc::new(StdCallableSpec::new(
             vec![],
             vec![Arc::new(SlotSpec::new())],

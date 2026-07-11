@@ -4,8 +4,9 @@
 //! the main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
 //! ([`StdInvocationParser`], behind the
 //! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) factory),
-//! arguments (6.5), environment bodies (6.6) — is parsed by an implementation of it,
-//! reading tokens and staging nodes through one [`ParseContext`].
+//! arguments (the standard [`ArgumentParser`](crate::spec::ArgumentParser)
+//! implementations), environment bodies ([`EnvironmentBodyParser`]) — is parsed by an
+//! implementation of it, reading tokens and staging nodes through one [`ParseContext`].
 //!
 //! # The two-tier ownership model (DESIGN_RATIONALE.md §3.6)
 //!
@@ -33,6 +34,7 @@
 
 mod argument_parsers;
 mod child_state;
+mod environment_parser;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
@@ -42,6 +44,7 @@ pub use argument_parsers::{
     GroupArgumentParser, MarkerArgumentParser, OptionalGroupArgumentParser,
 };
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
+pub use environment_parser::{EnvironmentBody, EnvironmentBodyParser};
 pub use group_parser::GroupParser;
 pub use invocation_parser::StdInvocationParser;
 pub use nodes_parser::{
@@ -52,7 +55,7 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::ParserSession;
-use crate::error::{ParseError, ParseErrorKind};
+use crate::error::{ParseError, ParseErrorKind, Recovery};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
@@ -68,6 +71,27 @@ pub(crate) fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: u
     let marker: Token<'s, L> =
         Token::new(TokenKind::EndOfStream, Span::empty(pos), Span::empty(pos));
     tokens.move_to(&marker, false);
+}
+
+/// Peek under the current state, mapping a tokenizer error per the recovery policy:
+/// strict mode aborts with the token error (mirroring the content loop); tolerant mode
+/// reports `None` **without diagnosing or consuming** — the caller treats the position
+/// as unusable (argument absent, terminator malformed) and the enclosing content loop
+/// re-reads the error and applies its own token recovery, avoiding a double report.
+pub(crate) fn try_peek<'s, L: Lang>(
+    cx: &mut ParseContext<'_, 's, L>,
+) -> ConstructParserResult<L, Option<Token<'s, L>>> {
+    match cx.tokens.peek(&cx.state) {
+        Ok(token) => Ok(Some(token)),
+        Err(error) => match cx.session.recovery {
+            Recovery::Tolerant => Ok(None),
+            Recovery::Strict => {
+                let kind = ParseErrorKind::Token(error.kind());
+                let span = SourceSpan::new(&cx.source, error.span().range());
+                Err(ParseError::new(kind, span))
+            }
+        },
+    }
 }
 
 /// Everything a construct parser needs, in one context value — avoiding pylatexenc's

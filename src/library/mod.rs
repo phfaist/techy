@@ -369,7 +369,7 @@ mod tests {
         Arc::new(StdCallableSpec::default())
     }
 
-    fn macro_query<'a>(name: &'a str) -> CallableQuery<'a, 'static, PlainLang> {
+    fn macro_query(name: &str) -> CallableQuery<'_, 'static, PlainLang> {
         CallableQuery::new(MACRO, name, CallableSyntax::Command { escape_char: '\\' })
     }
 
