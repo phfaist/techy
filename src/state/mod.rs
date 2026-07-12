@@ -14,7 +14,11 @@
 //! - [`ParsingState::derived`] is the **sole constructor of non-initial states**: it
 //!   applies the overrides, runs the [`Lang::finalize_transition`] customizer exactly
 //!   once, and freezes the result (caches rebuilt). Cross-cutting rules ("in math mode
-//!   the escape char is `#`") live in the customizer, not in delta writers.
+//!   the escape char is `#`") live in the customizer, not in delta writers. The seed
+//!   state comes only from [`ParsingState::initial`], which freezes the language's
+//!   canonical [`Lang::initial_state_data`] — the data→state step is crate-owned, so no
+//!   caller can assemble a state that bypasses the choke point (seed coherence itself is
+//!   the `Lang` author's contract; see the hook's docs).
 //! - [`Lang`] is the compile-time bundle (one generic parameter everywhere). It also
 //!   carries the two token-level hooks, [`Lang::scan_specials`] and
 //!   [`Lang::specials_trigger_chars`] — specials recognition is the one part of

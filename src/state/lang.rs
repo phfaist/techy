@@ -11,10 +11,15 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::hash::Hash;
 
+use alloc::vec::Vec;
+
+use crate::library::LibraryStack;
 use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
 use crate::source::{SourceOrigin, SourceSpan};
 use crate::spec::CallableSpec;
-use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
+use crate::token::{
+    SpecialsMatch, Token, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+};
 
 use super::delta::ParsingStateDelta;
 use super::parsing_state::{ParsingState, StateData};
@@ -123,12 +128,55 @@ pub trait Lang: Sized {
     /// custom node data.
     type NodeExts: NodeExtTypes;
 
+    /// The language's canonical initial (seed) state data: base token rules, seed
+    /// libraries (unknown-callable fallbacks included), and the initial state ext.
+    /// The crate freezes the returned data into the seed state
+    /// ([`ParsingState::initial`]) — the data→state step is crate-owned, so every other
+    /// state a parse sees comes from [`derived()`](ParsingState::derived) and passes
+    /// through [`finalize_transition`](Lang::finalize_transition). Callers customize the
+    /// starting point by deriving from the seed with a delta, never by assembling a
+    /// state from scratch.
+    ///
+    /// **Coherence contract:** `finalize_transition` does *not* run on the seed (it has
+    /// no previous state), so the returned data must already satisfy every invariant the
+    /// customizer maintains — if `finalize_transition` installs a `$…$` group rule
+    /// whenever the ext says math mode, a seed whose ext says math mode must come with
+    /// that rule in place. Both hooks have the same author, which keeps the contract
+    /// local; a test asserting `initial().derived(&ParsingStateDelta::new())` is
+    /// data-equivalent to `initial()` pins it mechanically.
+    ///
+    /// The default is the most neutral data: every syntax gate off (character-level
+    /// content — no whitespace handling, groups, commands, comments, or specials), no
+    /// libraries, default ext. Real languages return their canonical rules instead.
+    fn initial_state_data() -> StateData<Self> {
+        StateData {
+            rules: TokenRules {
+                enable_whitespace: false,
+                whitespace: WhitespaceRules { chars: String::new() },
+                enable_multi_newline_paragraphs: false,
+                enable_groups: false,
+                groups: Vec::new(),
+                enable_commands: false,
+                commands: Vec::new(),
+                enable_comments: false,
+                comments: Vec::new(),
+                enable_specials: false,
+                forbidden_chars: String::new(),
+                expecting_group_close: None,
+            },
+            libraries: LibraryStack::new(),
+            ext: Default::default(),
+        }
+    }
+
     /// Transition customizer — the choke-point hook, run exactly once per
     /// [`derived()`](ParsingState::derived) transition, after the delta's overrides have
     /// been applied and before the new state is frozen. Cross-cutting rules centralize
     /// here (e.g. FLM's "in math mode the escape char is `#`"); the override policy —
     /// pure normalization vs. event-driven — is this function's business
-    /// (ARCHITECTURE.md §state). The default does nothing.
+    /// (ARCHITECTURE.md §state). Never runs on the seed state (see
+    /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
+    /// default does nothing.
     fn finalize_transition(
         new: &mut StateData<Self>,
         prev: &ParsingState<Self>,

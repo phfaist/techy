@@ -356,8 +356,13 @@ Properties, roughly in decreasing order of importance:
   *event-driven* (touch only what each event implies; preserves overrides, must cover every
   contributing path). The default lang's finalize is empty, so the question only exists for
   whoever writes a customizer.
-- **Airtightness is structural.** Private fields + `derived()` as sole constructor mean the
-  compiler guarantees finalize sees every change — no documented invariant needed.
+- **Airtightness is structural.** Private fields plus crate-owned constructors — the seed
+  comes only from `ParsingState::initial()` (freezing `Lang::initial_state_data()`), every
+  other state only from `derived()` — mean the compiler guarantees finalize sees every
+  change after the seed. The one non-structural piece is the seed itself: finalize has no
+  `prev` to run against there, so the seed's coherence is the `Lang` author's documented
+  contract (the hook's docs; the author of `initial_state_data` and of
+  `finalize_transition` is the same party).
 - **Hot path = plain field reads.** Per-instance caches (the sorted delimiter-prefix table
   with open/close-ambiguity merging, salvaged from the WIP) stay valid for the `Arc`'s
   lifetime because states are immutable — and `dbg!(state)` always shows exactly what the

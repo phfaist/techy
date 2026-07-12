@@ -43,10 +43,23 @@ pub struct ParsingState<L: Lang> {
 }
 
 impl<L: Lang> ParsingState<L> {
-    /// Create an initial parsing state. (Non-initial states only ever come from
-    /// [`derived()`](ParsingState::derived); at the engine level, `Language<L>` seeds
-    /// the initial state from its defaults, Phase 6.)
-    pub fn new(data: StateData<L>) -> ParsingState<L> {
+    /// The seed state: [`Lang::initial_state_data`] frozen — the one public path from
+    /// data to state, so every state a parse sees is either this seed or a
+    /// [`derived()`](ParsingState::derived) descendant that passed through
+    /// [`Lang::finalize_transition`]. Callers customize the starting point by deriving
+    /// from the seed with a delta. The seed itself does *not* run `finalize_transition`
+    /// (it has no predecessor); its coherence is the language author's contract (the
+    /// hook's docs).
+    pub fn initial() -> ParsingState<L> {
+        ParsingState::freeze(L::initial_state_data())
+    }
+
+    /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`].
+    /// Test-internal: tests assemble ad-hoc states; the public paths are
+    /// [`initial()`](ParsingState::initial) and [`derived()`](ParsingState::derived),
+    /// which keep the choke point airtight.
+    #[cfg(test)]
+    pub(crate) fn new(data: StateData<L>) -> ParsingState<L> {
         ParsingState::freeze(data)
     }
 
@@ -232,6 +245,50 @@ mod tests {
     fn empty_delta_is_a_clean_copy() {
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+        let derived = state.derived(&ParsingStateDelta::new());
+        assert_eq!(derived.rules(), state.rules());
+    }
+
+    #[test]
+    fn default_initial_state_is_neutral() {
+        // The default `Lang::initial_state_data`: every syntax gate off, no libraries.
+        let state: ParsingState<PlainLang> = ParsingState::initial();
+        assert!(!state.rules().enable_whitespace);
+        assert!(!state.rules().enable_groups);
+        assert!(!state.rules().enable_commands);
+        assert!(!state.rules().enable_comments);
+        assert!(!state.rules().enable_specials);
+        assert!(state.libraries().is_empty());
+        assert!(state.prefix_table().match_at("{x").is_none());
+    }
+
+    // --- a lang with a canonical seed: initial() is the crate-owned freeze of its data --
+
+    #[derive(Debug, Clone, Copy)]
+    struct SeededLang;
+    impl Lang for SeededLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn initial_state_data() -> StateData<Self> {
+            StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () }
+        }
+    }
+
+    #[test]
+    fn initial_freezes_the_langs_seed_data() {
+        let state: ParsingState<SeededLang> = ParsingState::initial();
+        assert!(state.rules().enable_groups);
+        // The caches are built from the seed data at freeze:
+        assert!(state.prefix_table().match_at("{x").is_some());
+        // Customizing the starting point goes through derived() — the finalize choke
+        // point — and an empty delta reproduces the seed (the coherence contract's
+        // mechanical check, trivial here since SeededLang has no normalizer):
         let derived = state.derived(&ParsingStateDelta::new());
         assert_eq!(derived.rules(), state.rules());
     }

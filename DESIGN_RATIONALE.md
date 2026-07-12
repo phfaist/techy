@@ -560,6 +560,39 @@ without adding a state field, dyn indirection, and a delta story for swapping it
 declarations with core-legislated cross-library shadowing (see §3.2 — the preset owns its
 scan; the core legislates nothing about trigger precedence).
 
+**Seed states are crate-frozen `Lang` data: `ParsingState::initial()` +
+`Lang::initial_state_data()`** — DECIDED (user, July 2026, code-review follow-up
+session; closes the seed hole flagged by the state review).
+`ParsingState::new(data)` was `pub`, so any caller could assemble a state that never
+passed `finalize_transition` — the one hole in "airtightness is structural". Now the
+language provides its canonical seed as *data* (`Lang::initial_state_data() ->
+StateData<Self>`, default: every syntax gate off, no libraries, default ext), and the
+*crate* owns the data→state freeze (`ParsingState::initial()`); `new()` is
+`#[cfg(test)] pub(crate)`. Callers customize the starting point via `derived(delta)` —
+which runs finalize — never by assembling a state.
+*Rationale:* the hook returns `StateData`, not `ParsingState`, precisely so out-of-crate
+presets can implement it while the freeze stays crate-owned. `finalize_transition` still
+does not run on the seed (no `prev` exists), but the obligation shrinks from "any caller
+anywhere" to "the `Lang` author's own canonical seed must be coherent" — author-local,
+documented on the hook, and mechanically pinnable by asserting
+`initial().derived(&empty)` is data-equivalent to `initial()`.
+*Rejected:* a separate `Lang::finalize_initial(&mut StateData)` hook (two hooks to keep
+consistent — the same forgettability the hole had); changing `finalize_transition` to
+`prev: Option<&ParsingState>` (taxes every transition-reactive implementor with a `None`
+arm that pure normalizers never need); a `Default for TokenRules` to back the hook's
+default body (rules.rs deliberately implements no `Default` — the neutral all-off rules
+are constructed inline in the hook instead).
+*Deferred (user, same session):* generic seed-side registration of `LibraryStack`
+*fallbacks* is still inexpressible by delta (a `Lang` author bakes fallbacks into
+`initial_state_data`; a *user* of a preset cannot add their own). Resolution folded into
+the planned LibraryStack revisit — deltas should become much more expressive about
+library manipulation, possibly whole-library replacement in a transition (§6 open
+question 7).
+*Revisit if:* the LibraryStack revisit lands (the delta story may then subsume parts of
+the seed contract), or a preset needs `finalize_transition`-grade normalization on the
+seed itself — the `derived(&empty)`-at-seed trick (one extra freeze at session start)
+is the cheap mechanical option before any signature change.
+
 ### 3.4 Specs and libraries
 
 **Unified `CallableSpec` with self-supplied invocation parser** — PROPOSED (July 2026,
@@ -1850,19 +1883,15 @@ Current list — remove entries as they are settled (move the outcome into §3):
    follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
    stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
    moved to §3.2.
-7. **Seed states must pass through `Lang`** (direction chosen July 2026, code-review
-   follow-up session; design not final). `ParsingState::new` bypasses
-   `Lang::finalize_transition`, so a normalizing customizer's invariants do not hold on
-   the seed state — the one hole in the "airtight choke point" story. Chosen direction:
-   the language provides the canonical seed (a hook returning `StateData<Self>` so
-   out-of-crate presets can implement it; the *crate* owns the data→state freeze),
-   `ParsingState::new` becomes `pub(crate)`, and all user customization flows through
-   `derived(delta)` — which runs finalize. Delta-coverage audit (prerequisite, done):
-   `TokenRulesOverrides` covers every `TokenRules` field 1:1; `ext` is whole-value
-   replaceable plus events; **gap:** `LibraryStack::fallbacks` (per-`CallableTypeId`
-   unknown-callable fallback specs) is not delta-expressible — only `push_libraries` is.
-   The gap must be closed (a delta field for fallback registration, or a parameterized
-   seed hook) before `new()` can be locked down. Blocked on that decision.
+7. **LibraryStack structure and delta expressiveness** (opened July 2026, code-review
+   follow-up session; the seed-path half is settled — outcome moved to §3.3, "Seed
+   states are crate-frozen `Lang` data"). The delta vocabulary for libraries is push-only
+   (`push_libraries`); the July 2026 audit found `LibraryStack::fallbacks`
+   (per-`CallableTypeId` unknown-callable fallback specs) entirely delta-inexpressible,
+   and the user wants deltas to become much more expressive about library manipulation
+   generally — up to replacing the library wholesale in a state transition. Requires
+   revisiting `LibraryStack`'s structure itself; until then, seed-side library/fallback
+   setup is the `Lang` author's business inside `initial_state_data`.
 
 ---
 
