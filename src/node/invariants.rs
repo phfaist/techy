@@ -12,7 +12,7 @@ use crate::source::TextContent;
 use crate::state::Lang;
 
 use super::kind::NodeKind;
-use super::tree::{NodeData, NodeId, NodeTree};
+use super::tree::{NodeData, NodeTree};
 
 /// Check a finished tree against the pinned structural and span invariants, panicking
 /// with a description of the first violation. Intended for test suites (assert every
@@ -343,7 +343,7 @@ fn check_regions<L: Lang>(
 
         let content = region.content_range();
         let content_parent = region.content_parent();
-        if content_parent == NodeId(i as u32) {
+        if content_parent.index() == i {
             assert!(
                 children.start <= content.start && content.end <= children.end,
                 "node {}: region {} content {:?} escapes its region children {:?}",

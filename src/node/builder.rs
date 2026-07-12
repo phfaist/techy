@@ -220,6 +220,7 @@ impl<L: Lang> NodeTreeBuilder<L> {
     /// the module docs). Staged nodes not reachable from `root` are dropped.
     pub fn finish(self, root: BuildId) -> NodeTree<L> {
         const NONE: u32 = u32::MAX; // safe sentinel: add() caps staging below u32::MAX
+        let tree_tag = super::tree::next_tree_tag();
         let mut staged: Vec<Option<Staged<L>>> = self.staged.into_iter().map(Some).collect();
         assert!((root.0 as usize) < staged.len(), "root {:?} has not been staged", root);
         assert!(
@@ -262,7 +263,7 @@ impl<L: Lang> NodeTreeBuilder<L> {
                 let children = ranges[f].clone();
                 let mut staged = staged[sid as usize].take().expect("staged node used twice");
                 if let NodeKind::Callable(data) = &mut staged.kind {
-                    resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of);
+                    resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of, tree_tag);
                 }
                 NodeData {
                     kind: staged.kind,
@@ -273,7 +274,11 @@ impl<L: Lang> NodeTreeBuilder<L> {
                 }
             })
             .collect();
-        NodeTree { nodes }
+        NodeTree {
+            nodes,
+            #[cfg(debug_assertions)]
+            tag: tree_tag,
+        }
     }
 }
 
@@ -289,6 +294,7 @@ fn resolve_regions<L: Lang>(
     ranges: &[Range<u32>],
     parent: &[u32],
     final_of: &[u32],
+    tree_tag: u32,
 ) {
     const NONE: u32 = u32::MAX;
     let regions = data
@@ -331,7 +337,7 @@ fn resolve_regions<L: Lang>(
                 (block.start + r.start..block.start + r.end, bf)
             }
         };
-        region.resolve(children, content_range, content_parent);
+        region.resolve(children, content_range, content_parent, tree_tag);
     }
 }
 

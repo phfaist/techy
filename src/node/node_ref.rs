@@ -29,6 +29,12 @@ pub struct NodeRef<'t, L: Lang> {
 
 impl<'t, L: Lang> NodeRef<'t, L> {
     pub(crate) fn new(tree: &'t NodeTree<L>, id: NodeId) -> NodeRef<'t, L> {
+        debug_assert_eq!(
+            id.tree_tag(),
+            tree.tree_tag(),
+            "NodeId used with a tree that did not mint it \
+             (ids are only meaningful for their own tree)"
+        );
         NodeRef { tree, id }
     }
 
@@ -85,13 +91,13 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     pub fn child(&self, i: usize) -> Option<NodeRef<'t, L>> {
         let children = &self.data().children;
         let id = children.start.checked_add(u32::try_from(i).ok()?)?;
-        (id < children.end).then(|| NodeRef::new(self.tree, NodeId(id)))
+        (id < children.end).then(|| NodeRef::new(self.tree, self.tree.make_id(id)))
     }
 
     /// The structural children, in order.
     pub fn children(&self) -> impl Iterator<Item = NodeRef<'t, L>> {
         let tree = self.tree;
-        self.data().children.clone().map(move |i| NodeRef::new(tree, NodeId(i)))
+        self.data().children.clone().map(move |i| NodeRef::new(tree, tree.make_id(i)))
     }
 
     // --- kind predicates and kind-specific accessors ------------------------------------
@@ -239,11 +245,17 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         Some(self.tree.nodes_in(region.content_range()))
     }
 
-    /// The node whose children hold slot `i`'s content — the body `List` of an
-    /// environment-shaped callable — when this is a callable with such a slot.
-    pub fn slot(&self, i: usize) -> Option<NodeRef<'t, L>> {
+    /// The node whose child list holds slot `i`'s content — the body `List` of the
+    /// standard environment shape — when this is a callable with such a slot. `None`
+    /// when the slot's content sits directly among the callable's own children
+    /// ([`ContentNodes::InRegion`](super::ContentNodes) designations), where no such
+    /// wrapper node exists — returning the callable itself would send naive recursive
+    /// walkers into a loop. Content access that works for *both* shapes is
+    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) / [`body`](NodeRef::body).
+    pub fn slot_content_parent(&self, i: usize) -> Option<NodeRef<'t, L>> {
         let region = &self.callable()?.slots.get(i)?.region;
-        Some(NodeRef::new(self.tree, region.content_parent()))
+        let parent = region.content_parent();
+        (parent != self.id).then(|| NodeRef::new(self.tree, parent))
     }
 
     /// The content nodes of slot `i` (the body nodes, for the standard environment
@@ -253,10 +265,12 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         Some(self.tree.nodes_in(region.content_range()))
     }
 
-    /// The first slot's content holder — the *body* of environment-shaped callables
-    /// (which have exactly one slot).
-    pub fn body(&self) -> Option<NodeRef<'t, L>> {
-        self.slot(0)
+    /// The content nodes of the first slot — the *body* of environment-shaped callables
+    /// (which have exactly one slot), in source order. Sugar for
+    /// [`slot_content_nodes(0)`](NodeRef::slot_content_nodes); the body `List` node
+    /// itself, when one exists, is [`slot_content_parent(0)`](NodeRef::slot_content_parent).
+    pub fn body(&self) -> Option<impl Iterator<Item = NodeRef<'t, L>>> {
+        self.slot_content_nodes(0)
     }
 }
 

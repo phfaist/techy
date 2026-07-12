@@ -441,21 +441,79 @@ mod tests {
         let tree = b.finish(env);
 
         let node = tree.root();
-        let body = node.body().unwrap();
+        // The wrapper node: the body `List`, exposed as the slot's content parent.
+        let body = node.slot_content_parent(0).unwrap();
         assert!(body.is_list());
         assert_eq!(body.child_count(), 1);
         assert_eq!(body.child(0).unwrap().chars(), Some("hi"));
-        assert_eq!(node.slot(0).unwrap().id(), body.id());
-        assert!(node.slot(1).is_none());
-        // Slot content reads as a plain node range — the body List's children:
+        assert!(node.slot_content_parent(1).is_none());
+        // Slot content reads as a plain node range — the body List's children;
+        // `body()` is the same nodes for slot 0:
         let content: Vec<_> = node.slot_content_nodes(0).unwrap().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("hi"));
+        let body_nodes: Vec<_> = node.body().unwrap().collect();
+        assert_eq!(body_nodes.len(), 1);
+        assert_eq!(body_nodes[0].id(), content[0].id());
         let slots = node.slots().unwrap();
         assert_eq!(slots.len(), 1);
         // Global layout: env = 0, body List = 1, "hi" chars = 2.
         assert_eq!(slots.get_named("body").unwrap().region.children(), 1..2);
         assert_eq!(slots.get_named("body").unwrap().region.content_range(), 2..3);
+    }
+
+    /// A slot whose content sits directly among the callable's children
+    /// (`ContentNodes::InRegion`): there is no wrapper node, and `slot_content_parent`
+    /// reports that as `None` — never the callable itself, which would send naive
+    /// recursive walkers into a loop — while the content accessors work unchanged.
+    #[test]
+    fn region_level_slot_content_has_no_content_parent() {
+        let source: Arc<Source> = Arc::new(Source::new("hi"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+
+        let hi = b.add(NodeKind::chars(Span::new(0, 2)), spanned(&source, 0..2), st.clone(), vec![]);
+        let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![], vec![slot_spec.clone()]));
+        let env = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_ENVIRONMENT,
+                name: "it".into(),
+                spec,
+                arguments: ParsedArguments::empty(),
+                slots: vec![ParsedSlot::new(slot_spec, ChildRegion::single(0))].into(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![hi],
+        );
+        let tree = b.finish(env);
+
+        let node = tree.root();
+        // The record itself still anchors the content at the callable:
+        let region = &node.slots().unwrap().get(0).unwrap().region;
+        assert_eq!(region.content_parent(), node.id());
+        // ... but the read API reports "no wrapper node" instead of the callable:
+        assert!(node.slot_content_parent(0).is_none());
+        let body: Vec<_> = node.body().unwrap().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some("hi"));
+    }
+
+    /// Debug builds stamp ids with their tree's provenance tag: using an id minted by
+    /// one tree on another trips the assertion instead of silently resolving to an
+    /// unrelated node (release builds cannot detect this — `NodeTree::node`'s docs).
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "did not mint")]
+    fn cross_tree_node_id_is_caught_in_debug() {
+        let tree_a = example_tree();
+        let tree_b = example_tree();
+        let id_from_a = tree_a.root().child(0).unwrap().id();
+        let _ = tree_b.node(id_from_a); // in range for tree_b, but foreign
     }
 
     /// Noise between arguments: `\frac %h␊ {a}{b}` — the comment and the surrounding

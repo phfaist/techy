@@ -109,7 +109,15 @@ enum RegionState {
     Staged { children: Range<u32>, content: ContentNodes },
     /// After `finish()`: global node-index ranges, plus the node whose child list
     /// contains the content range (the callable itself for region-level content).
-    Resolved { children: Range<u32>, content: Range<u32>, content_parent: u32 },
+    Resolved {
+        children: Range<u32>,
+        content: Range<u32>,
+        content_parent: u32,
+        /// Debug-only provenance tag of the resolving tree, stamped into the
+        /// [`NodeId`]s this record mints (see `NodeTree`'s `tag` field).
+        #[cfg(debug_assertions)]
+        tree_tag: u32,
+    },
 }
 
 impl ChildRegion {
@@ -164,12 +172,13 @@ impl ChildRegion {
     ///
     /// Panics on a staged region (see [`ChildRegion`]).
     pub fn content_parent(&self) -> NodeId {
-        NodeId(self.resolved().2)
+        let index = self.resolved().2;
+        NodeId::new(index, self.resolved_tree_tag())
     }
 
     fn resolved(&self) -> (&Range<u32>, &Range<u32>, u32) {
         match &self.state {
-            RegionState::Resolved { children, content, content_parent } => {
+            RegionState::Resolved { children, content, content_parent, .. } => {
                 (children, content, *content_parent)
             }
             RegionState::Staged { .. } => panic!(
@@ -177,6 +186,16 @@ impl ChildRegion {
                  NodeTreeBuilder::finish() (two-phase record contract, node::arguments docs)"
             ),
         }
+    }
+
+    /// The resolving tree's provenance tag (`0` in release builds; only called on
+    /// resolved regions — `resolved()` has already panicked otherwise).
+    fn resolved_tree_tag(&self) -> u32 {
+        #[cfg(debug_assertions)]
+        if let RegionState::Resolved { tree_tag, .. } = &self.state {
+            return *tree_tag;
+        }
+        0
     }
 
     /// The staged form, if not yet resolved (builder-side validation).
@@ -188,8 +207,21 @@ impl ChildRegion {
     }
 
     /// Flip to resolved (called exactly once, by `NodeTreeBuilder::finish`).
-    pub(crate) fn resolve(&mut self, children: Range<u32>, content: Range<u32>, content_parent: u32) {
-        self.state = RegionState::Resolved { children, content, content_parent };
+    pub(crate) fn resolve(
+        &mut self,
+        children: Range<u32>,
+        content: Range<u32>,
+        content_parent: u32,
+        tree_tag: u32,
+    ) {
+        let _ = tree_tag;
+        self.state = RegionState::Resolved {
+            children,
+            content,
+            content_parent,
+            #[cfg(debug_assertions)]
+            tree_tag,
+        };
     }
 }
 

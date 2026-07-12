@@ -1466,7 +1466,7 @@ mod tests {
     // --- slots need a factory override (StdInvocationParser is macro-shaped) ------------
 
     #[test]
-    #[should_panic(expected = "Phase 6.6")]
+    #[should_panic(expected = "StdInvocationParser is macro-shaped")]
     fn declared_slots_need_a_factory_override() {
         let spec: Arc<dyn CallableSpec<ArgLang>> = Arc::new(StdCallableSpec::new(
             vec![],

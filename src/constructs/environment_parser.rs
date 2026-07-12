@@ -998,7 +998,7 @@ mod tests {
         // Children = the body `List` alone; its span is the body's content interior,
         // whitespace on both ends included.
         assert_eq!(env.child_count(), 1);
-        let body = env.body().expect("body list");
+        let body = env.slot_content_parent(0).expect("body list");
         assert!(body.is_list());
         assert_eq!(body.span().range(), 17..22);
         assert_eq!(body_shapes(env), ["chars 17..22 \" a b \""]);
@@ -1017,9 +1017,10 @@ mod tests {
 
         let env = root_child(&parsed, 0);
         assert_eq!(env.span().range(), 0..28);
-        let body = env.body().unwrap();
+        let body = env.slot_content_parent(0).unwrap();
         assert_eq!(body.span().range(), 15..15);
         assert_eq!(body.child_count(), 0);
+        assert_eq!(env.body().unwrap().count(), 0);
         assert!(parsed.result.diagnostics.is_empty());
     }
 
@@ -1109,7 +1110,7 @@ mod tests {
             body_shapes(outer),
             ["chars 9..12 \" x \"", "callable 12..31 \"B\"", "chars 31..34 \" z \""],
         );
-        let inner = outer.body().unwrap().child(1).unwrap();
+        let inner = outer.body().unwrap().nth(1).unwrap();
         assert_eq!(body_shapes(inner), ["chars 21..24 \" y \""]);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1122,7 +1123,7 @@ mod tests {
 
         let outer = root_child(&parsed, 0);
         assert_eq!(outer.span().range(), 0..33);
-        let inner = outer.body().unwrap().child(0).unwrap();
+        let inner = outer.body().unwrap().next().unwrap();
         assert_eq!(inner.span().range(), 9..26);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1143,7 +1144,7 @@ mod tests {
             body_shapes(a),
             ["chars 9..10 \"x\"", "callable 10..20 \"B\""],
         );
-        let b = a.body().unwrap().child(1).unwrap();
+        let b = a.body().unwrap().nth(1).unwrap();
         // B's extent ends at its body's end, before the terminator it did not consume.
         assert_eq!(b.span().range(), 10..20);
         assert_eq!(body_shapes(b), ["chars 19..20 \"y\""]);
@@ -1254,7 +1255,7 @@ mod tests {
         // Both levels diagnose their own missing terminator (loop safety at EOF).
         let a = root_child(&parsed, 0);
         assert_eq!(a.span().range(), 0..19);
-        let b = a.body().unwrap().child(0).unwrap();
+        let b = a.body().unwrap().next().unwrap();
         assert_eq!(b.span().range(), 9..19);
         assert_eq!(parsed.result.diagnostics.len(), 2);
         assert_eq!(diagnostics_mentioning(&parsed, "before end of input"), 2);
@@ -1500,12 +1501,12 @@ mod tests {
                 "chars 78..79 \"\\n\"",
             ],
         );
-        let body = env.body().unwrap();
-        let item_with_option = body.child(1).unwrap();
+        let body: Vec<_> = env.body().unwrap().collect();
+        let item_with_option = body[1];
         assert!(item_with_option.arguments().unwrap().get(0).unwrap().is_provided());
-        let bare_item = body.child(4).unwrap();
+        let bare_item = body[4];
         assert!(!bare_item.arguments().unwrap().get(0).unwrap().is_provided());
-        let frac = body.child(6).unwrap();
+        let frac = body[6];
         let ones: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
         assert_eq!(ones[0].chars(), Some("1"));
 

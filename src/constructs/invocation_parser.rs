@@ -133,11 +133,14 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
-        debug_assert!(
+        assert!(
+            // ### PhF - FIXME: I turned this from debug_assert!() into an assert!(), but this should really be
+            // a special type of error that is returned.  We want someting like ParseError::MisconfiguredLang
+            // or ParseError::InternalError or something like that for this.
             self.invocation.spec.slots().is_empty(),
             "StdInvocationParser is macro-shaped: a spec declaring slots overrides \
              make_invocation_parser with a composition that knows its terminator syntax \
-             (EnvironmentBodyParser — Phase 6.6)"
+             (e.g., EnvironmentBodyParser)"
         );
 
         let token = self.invocation.token;

@@ -1051,6 +1051,50 @@ July 2026, Phase 6 plan session; ARCHITECTURE.md §nodes updated).
    builder law, so a future construct that legitimately breaks byte-accounting amends a
    test, not the architecture.
 
+**Cross-tree `NodeId` misuse: debug-only provenance tags** — DECIDED (user, July 2026,
+code-review follow-up session).
+`NodeTree::node()`'s assert checks *range*, not *provenance*: an in-range id minted by a
+different tree silently resolves to whatever node sits at that index — exactly the hazard
+of Phase 7 transforms, which hold two trees (source + rebuilt) at once. Debug builds now
+stamp every tree layout with a tag from a wrapping `static AtomicU32` counter
+(`node::tree::next_tree_tag`; `fetch_add` wraps, fine for a heuristic), carry it in
+`NodeId` and in resolved `ChildRegion` records, and `debug_assert` the match at the single
+choke point `NodeRef::new`. Release builds store and check nothing (`NodeId` stays 4
+bytes). The tag is excluded from `NodeId`'s `Eq`/`Ord`/`Hash` so debug and release agree
+on id semantics. Layout-preserving copies (`clone()`, `materialize()`) share their
+source's tag — their ids are genuinely interchangeable.
+*Rejected:* the nodes `Vec`'s data pointer as tag (not stable while the builder's vec
+grows — ids are minted before the final layout exists — and reused by the allocator after
+drop); a debug-only `Box` dummy allocation whose address tags the tree (unique among
+*live* trees, but likewise reusable after drop; the counter never repeats short of 2^32
+trees). Bare `Range<u32>` node ranges remain uncheckable — they carry no provenance even
+in debug; `nodes_in()`'s docs say so.
+*Revisit if:* Phase 7 gives ids/regions a first-class cross-tree remapping story — the
+tag then belongs in that design.
+
+**Slot read API: content nodes are primary; the wrapper node is an explicit, optional
+accessor** — DECIDED (user, July 2026, code-review follow-up session).
+The old `slot(i)`/`body()` returned "the node whose children hold the content" — but for
+a `ContentNodes::InRegion` designation the builder resolves `content_parent` to the
+callable *itself* (there is no wrapper node), so `env.body()` could return `env` and a
+naive recursive walker (`walk(n.body())`) would loop forever. Now `body()` returns slot
+0's *content nodes* (sugar for `slot_content_nodes(0)`) — shape-agnostic and loop-free by
+construction, since a region's content range only ever names strict descendants — and
+`slot(i)` is renamed `slot_content_parent(i)`, returning `None` when the content parent
+is the callable. This also fixes the naming wobble (`slot(i)` did not return one of what
+`slots()` yields) and makes slots symmetric with arguments (node-list accessors first).
+The `ChildRegion::content_parent()` *record* accessor is unchanged — records stay
+self-describing; only the walker-facing read API refuses to hand back the callable.
+*Direction (not yet implemented):* `List` should ultimately never appear as an explicit
+*node* in the tree — children are a list of nodes, but a child node itself cannot be a
+list; the rare construct that genuinely needs a list child wraps it in a `Group` with
+empty delimiters. That removes the body-`List` wrapper (and this accessor's `Option`)
+altogether. Until then, environment bodies still build a `List` and
+`slot_content_parent(0)` is how consumers reach its span (empty-body anchor) and
+parsing state.
+*Revisit if:* the List-free direction lands — `slot_content_parent` then likely
+disappears with the wrapper it exposes.
+
 ### 3.6 Construct parsers, dispatch, engine
 
 **Single-context parsing API (`ParseContext`)** — PROPOSED (July 2026).
@@ -1806,6 +1850,19 @@ Current list — remove entries as they are settled (move the outcome into §3):
    follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
    stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
    moved to §3.2.
+7. **Seed states must pass through `Lang`** (direction chosen July 2026, code-review
+   follow-up session; design not final). `ParsingState::new` bypasses
+   `Lang::finalize_transition`, so a normalizing customizer's invariants do not hold on
+   the seed state — the one hole in the "airtight choke point" story. Chosen direction:
+   the language provides the canonical seed (a hook returning `StateData<Self>` so
+   out-of-crate presets can implement it; the *crate* owns the data→state freeze),
+   `ParsingState::new` becomes `pub(crate)`, and all user customization flows through
+   `derived(delta)` — which runs finalize. Delta-coverage audit (prerequisite, done):
+   `TokenRulesOverrides` covers every `TokenRules` field 1:1; `ext` is whole-value
+   replaceable plus events; **gap:** `LibraryStack::fallbacks` (per-`CallableTypeId`
+   unknown-callable fallback specs) is not delta-expressible — only `push_libraries` is.
+   The gap must be closed (a delta field for fallback registration, or a parameterized
+   seed hook) before `new()` can be locked down. Blocked on that decision.
 
 ---
 

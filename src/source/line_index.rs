@@ -36,8 +36,9 @@ pub struct LineIndex<'c> {
     max_scan_len: usize,
 }
 
-/// Default maximum content length (in bytes) for which line information is computed.
-pub const DEFAULT_MAX_SCAN_LEN: usize = 100_000;
+/// Default maximum content length (in bytes) for which line information is computed
+/// (adjustable per index via [`LineIndex::set_max_scan_len`]).
+const DEFAULT_MAX_SCAN_LEN: usize = 100_000;
 
 impl<'c> LineIndex<'c> {
     /// Create a lazy line index over `content` with default line/column offsets `(1, 1)`.
@@ -64,7 +65,8 @@ impl<'c> LineIndex<'c> {
         self
     }
 
-    /// Set the maximum content length (in bytes) for which line information is computed.
+    /// Set the maximum content length (in bytes) for which line information is computed
+    /// (default: 100 000 bytes).
     ///
     /// Content longer than this is not indexed and [`line_col`](Self::line_col) returns
     /// `None` for every position.

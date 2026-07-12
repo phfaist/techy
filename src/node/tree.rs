@@ -12,16 +12,83 @@ use super::kind::NodeKind;
 use super::node_ref::NodeRef;
 use super::NodeExt;
 
+/// Wrapping counter minting debug-build tree provenance tags (see [`NodeTree`]'s `tag`
+/// field). `fetch_add` wraps on overflow, so tags may recur after 2^32 tree layouts —
+/// acceptable for a debug-only heuristic.
+#[cfg(debug_assertions)]
+static NEXT_TREE_TAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Mint a provenance tag for a new tree layout: a fresh counter value in debug builds,
+/// `0` in release builds (where tags are not stored).
+pub(crate) fn next_tree_tag() -> u32 {
+    #[cfg(debug_assertions)]
+    return NEXT_TREE_TAG.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(debug_assertions))]
+    return 0;
+}
+
 /// Index of a node within its [`NodeTree`]. Minted by the tree's builder; only
 /// meaningful for the tree that produced it (access goes through [`NodeRef`] proxies,
-/// whose lifetime ties them to their tree).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeId(pub(crate) u32);
+/// whose lifetime ties them to their tree). Debug builds additionally stamp each id
+/// with its tree's provenance tag, so cross-tree misuse trips a debug assertion.
+#[derive(Clone, Copy)]
+pub struct NodeId(
+    pub(crate) u32,
+    /// Debug-only provenance tag of the tree layout that minted this id. Excluded from
+    /// comparisons and hashing so debug and release builds agree on id semantics.
+    #[cfg(debug_assertions)] pub(crate) u32,
+);
 
 impl NodeId {
+    pub(crate) fn new(index: u32, tree_tag: u32) -> NodeId {
+        let _ = tree_tag;
+        #[cfg(debug_assertions)]
+        return NodeId(index, tree_tag);
+        #[cfg(not(debug_assertions))]
+        return NodeId(index);
+    }
+
     /// The raw index of this id.
     pub const fn index(&self) -> usize {
         self.0 as usize
+    }
+
+    /// The provenance tag stamped at mint time (`0` in release builds).
+    pub(crate) fn tree_tag(&self) -> u32 {
+        #[cfg(debug_assertions)]
+        return self.1;
+        #[cfg(not(debug_assertions))]
+        return 0;
+    }
+}
+
+// Identity is the index alone (the debug-only tag is provenance metadata, checked by
+// explicit debug assertions — folding it into `Eq`/`Ord`/`Hash` would make debug and
+// release builds disagree).
+
+impl PartialEq for NodeId {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for NodeId {}
+
+impl PartialOrd for NodeId {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NodeId {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl core::hash::Hash for NodeId {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
     }
 }
 
@@ -59,23 +126,44 @@ pub struct NodeData<L: Lang> {
 /// mixed-origin trees cheap.
 pub struct NodeTree<L: Lang> {
     pub(crate) nodes: Vec<NodeData<L>>,
+    /// Debug-only provenance tag ([`next_tree_tag`]) stamped into every [`NodeId`] this
+    /// tree mints, so cross-tree id misuse trips a debug assertion in [`NodeRef::new`].
+    /// Layout-preserving copies ([`clone`](Clone::clone), [`materialize`](NodeTree::materialize))
+    /// share the tag — their ids are genuinely interchangeable.
+    #[cfg(debug_assertions)]
+    pub(crate) tag: u32,
 }
 
 impl<L: Lang> NodeTree<L> {
     /// The root node (index 0; a tree always has at least one node).
     pub fn root(&self) -> NodeRef<'_, L> {
-        self.node(NodeId(0))
+        self.node(self.make_id(0))
     }
 
     /// The node with the given id.
     ///
     /// # Panics
     ///
-    /// Panics if `id` does not belong to this tree (out of range) — ids are only
-    /// meaningful for the tree that minted them.
+    /// Panics if `id` is out of range. Ids are only meaningful for the tree that minted
+    /// them (or a layout-preserving copy of it): an *in-range* id from a different tree
+    /// silently resolves to whatever node sits at that index here — release builds
+    /// cannot detect it; debug builds catch it with a provenance-tag assertion.
     pub fn node(&self, id: NodeId) -> NodeRef<'_, L> {
         assert!(id.index() < self.nodes.len(), "node id {:?} out of range", id);
         NodeRef::new(self, id)
+    }
+
+    /// This tree's provenance tag (`0` in release builds).
+    pub(crate) fn tree_tag(&self) -> u32 {
+        #[cfg(debug_assertions)]
+        return self.tag;
+        #[cfg(not(debug_assertions))]
+        return 0;
+    }
+
+    /// Mint the id of index `index` of *this* tree (debug builds stamp the tree's tag).
+    pub(crate) fn make_id(&self, index: u32) -> NodeId {
+        NodeId::new(index, self.tree_tag())
     }
 
     /// The number of nodes stored (at least 1 — the root).
@@ -85,7 +173,7 @@ impl<L: Lang> NodeTree<L> {
 
     /// All nodes in storage order (root first; every node's children contiguous).
     pub fn iter(&self) -> impl Iterator<Item = NodeRef<'_, L>> {
-        (0..self.nodes.len() as u32).map(move |i| NodeRef::new(self, NodeId(i)))
+        (0..self.nodes.len() as u32).map(move |i| NodeRef::new(self, self.make_id(i)))
     }
 
     /// The nodes of a global node-index range — a resolved
@@ -96,14 +184,16 @@ impl<L: Lang> NodeTree<L> {
     /// # Panics
     ///
     /// Panics if the range does not lie within this tree's storage — like [`NodeId`]s,
-    /// ranges are only meaningful for the tree whose builder minted them.
+    /// ranges are only meaningful for the tree whose builder minted them. Unlike ids,
+    /// bare ranges carry no provenance even in debug builds: applying an in-bounds range
+    /// from another tree silently yields this tree's nodes at those indices.
     pub fn nodes_in(&self, range: Range<u32>) -> impl Iterator<Item = NodeRef<'_, L>> {
         assert!(
             range.start <= range.end && range.end as usize <= self.nodes.len(),
             "node range {:?} out of range",
             range
         );
-        range.map(move |i| NodeRef::new(self, NodeId(i)))
+        range.map(move |i| NodeRef::new(self, self.make_id(i)))
     }
 
     /// A new tree with every [`TextContent`](crate::source::TextContent) owned
@@ -124,7 +214,11 @@ impl<L: Lang> NodeTree<L> {
                 }
             })
             .collect();
-        NodeTree { nodes }
+        NodeTree {
+            nodes,
+            #[cfg(debug_assertions)]
+            tag: self.tag,
+        }
     }
 }
 
@@ -158,7 +252,11 @@ impl<L: Lang> fmt::Debug for NodeData<L> {
 
 impl<L: Lang> Clone for NodeTree<L> {
     fn clone(&self) -> Self {
-        NodeTree { nodes: self.nodes.clone() }
+        NodeTree {
+            nodes: self.nodes.clone(),
+            #[cfg(debug_assertions)]
+            tag: self.tag,
+        }
     }
 }
 
