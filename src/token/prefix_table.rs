@@ -87,7 +87,7 @@ impl<L: Lang> PrefixTable<L> {
         }
 
         // Longest first, for greedy matching; stable, so equal lengths keep declaration order.
-        entries.sort_by(|a, b| b.delim.len().cmp(&a.delim.len()));
+        entries.sort_by_key(|entry| core::cmp::Reverse(entry.delim.len()));
 
         let mut first_chars = String::new();
         for entry in &entries {

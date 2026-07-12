@@ -209,6 +209,7 @@ pub trait Lang: Sized {
         token: &Token<'_, Self>,
     ) -> Option<ResolvedCallable<Self>> {
         let _ = (state, token);
+        // ### PhF-Review: It might be good to produce a diagnostic here, so that user's are alerted to missing command resolution machinery in case of "unknown command" errors
         None
     }
 
