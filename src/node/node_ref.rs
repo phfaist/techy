@@ -84,7 +84,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// The `i`-th structural child.
     pub fn child(&self, i: usize) -> Option<NodeRef<'t, L>> {
         let children = &self.data().children;
-        let id = children.start.checked_add(i as u32)?;
+        let id = children.start.checked_add(u32::try_from(i).ok()?)?;
         (id < children.end).then(|| NodeRef::new(self.tree, NodeId(id)))
     }
 

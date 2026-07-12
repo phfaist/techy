@@ -272,6 +272,13 @@ mod tests {
         assert!(x.comment_post_space().is_none());
 
         assert!(root.child(4).is_none());
+        // Out-of-range must hold for indices past u32 too: `1 << 32` truncates to 0
+        // under an `as u32` cast and would wrongly return child 0. (checked_shl keeps
+        // this compilable on 32-bit targets, where such indices don't exist.)
+        if let Some(big) = 1usize.checked_shl(32) {
+            assert!(root.child(big).is_none());
+        }
+        assert!(root.child(usize::MAX).is_none());
         // children() iterates in order:
         let kinds: Vec<bool> = root.children().map(|c| c.is_callable()).collect();
         assert_eq!(kinds, [false, true, false, false]);
