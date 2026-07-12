@@ -67,6 +67,12 @@ use crate::token::{Token, TokenKind, TokenReader};
 /// [`TokenReader`] expresses positioning through tokens, so "go to `pos`" is phrased as
 /// moving to a zero-width marker token at `pos` — `move_to(tok, false)` means "position
 /// = `tok.span.start`" for any reader honoring the span conventions.
+///
+/// `resume_at` itself is deliberately bidirectional — it also serves as the rewind for
+/// absent arguments and environment name groups — so it asserts nothing about the
+/// direction of the move. When adopting a `TokenRecovery`, the *caller* enforces the
+/// [`resume_pos` advancement contract](crate::token::TokenRecovery#contract-resume_pos-must-advance-the-reader):
+/// the content loop aborts if the reader did not advance.
 pub(crate) fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: usize) {
     let marker: Token<'s, L> =
         Token::new(TokenKind::EndOfStream, Span::empty(pos), Span::empty(pos));

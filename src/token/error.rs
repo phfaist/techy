@@ -54,10 +54,20 @@ pub struct TokenError<'s, L: Lang> {
 /// e.g. after an end-of-stream error the placeholder token is an `EndOfStream` at the
 /// error position but reading resumes at the end of the input, past the offending escape
 /// character.
+///
+/// # Contract: `resume_pos` must advance the reader
+///
+/// `resume_pos` must lie **strictly past** the position the failed read started from —
+/// in particular, past the error itself. The content loop's recovery arm consumes no
+/// token (the placeholder was never in the stream), so its termination rests entirely
+/// on this advancement; the loop treats a resume position that fails to advance the
+/// reader as a contract violation by the token source and aborts the parse with the
+/// token error, even in tolerant mode.
 pub struct TokenRecovery<'s, L: Lang> {
     /// The placeholder token to emit in place of the failed read.
     pub token: Token<'s, L>,
-    /// Byte position at which to resume reading.
+    /// Byte position at which to resume reading — strictly past the failed read's start
+    /// position (see the [advancement contract](TokenRecovery#contract-resume_pos-must-advance-the-reader)).
     pub resume_pos: usize,
 }
 

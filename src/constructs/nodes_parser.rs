@@ -501,8 +501,20 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     match error.into_recovery() {
                         None => return Err(ParseError::new(kind, span)),
                         Some(recovery) => {
-                            cx.recover(kind, span)?;
+                            cx.recover(kind.clone(), span.clone())?;
+                            // The recovery arm is the one arm that consumes no token,
+                            // so loop progress rests entirely on the resume position
+                            // advancing the reader (the `TokenRecovery::resume_pos`
+                            // contract). A violating token source — a custom reader or
+                            // `Lang::scan_specials` — would otherwise re-read the same
+                            // error forever; degrade the hang into an abort, even in
+                            // tolerant mode: its promise is a best-effort tree, not
+                            // tolerance of non-termination.
+                            let before = cx.tokens.pos();
                             resume_at(cx.tokens, recovery.resume_pos);
+                            if cx.tokens.pos() <= before {
+                                return Err(ParseError::new(kind, span));
+                            }
                             (recovery.token, true)
                         }
                     }
@@ -788,8 +800,9 @@ mod tests {
         NodeExtTypes, ResolvedCallable, SimpleLang, StateData, TokenRulesOverrides,
     };
     use crate::token::{
-        CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenErrorKind,
-        TokenListReader, TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenError,
+        TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
+        TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -1639,6 +1652,58 @@ mod tests {
             ParseErrorKind::Token(TokenErrorKind::ForbiddenChar { ch: '#' })
         );
         assert_eq!(err.span().range(), 2..3);
+    }
+
+    /// A token source that violates the `TokenRecovery::resume_pos` advancement
+    /// contract: every `peek` reports a recoverable forbidden-char error whose
+    /// `resume_pos` is the current position, so adopting the recovery re-reads the
+    /// same error.
+    struct StuckRecoveryReader {
+        pos: usize,
+    }
+
+    impl<'s> TokenReader<'s, TestLang> for StuckRecoveryReader {
+        fn peek(
+            &mut self,
+            _state: &ParsingState<TestLang>,
+        ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
+            let span = Span::new(self.pos, self.pos + 1);
+            Err(TokenError::new(
+                TokenErrorKind::ForbiddenChar { ch: '#' },
+                span,
+                Some(TokenRecovery {
+                    token: Token::new(TokenKind::Char('#'), span, Span::empty(self.pos)),
+                    resume_pos: self.pos, // the violation: does not advance
+                }),
+            ))
+        }
+
+        fn move_past(&mut self, tok: &Token<'s, TestLang>, _skip_post_space: bool) {
+            self.pos = tok.span.end;
+        }
+
+        fn move_to(&mut self, tok: &Token<'s, TestLang>, _rewind_pre_space: bool) {
+            self.pos = tok.span.start;
+        }
+
+        fn pos(&self) -> usize {
+            self.pos
+        }
+    }
+
+    #[test]
+    fn non_advancing_token_recovery_aborts_instead_of_spinning() {
+        // Without the advancement guard this parse never terminates in tolerant mode
+        // (the recovery arm consumes no token), pushing one diagnostic per iteration.
+        let st = state();
+        let mut reader = StuckRecoveryReader { pos: 0 };
+        let err = try_run("ab", &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            .expect_err("a non-advancing resume position must abort the parse");
+        assert_eq!(
+            *err.kind(),
+            ParseErrorKind::Token(TokenErrorKind::ForbiddenChar { ch: '#' })
+        );
+        assert_eq!(err.span().range(), 0..1);
     }
 
     #[test]

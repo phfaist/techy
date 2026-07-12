@@ -1566,6 +1566,28 @@ session; Phase 6 notes item C4 concretized). Three rules:
 for having no context object, and exactly the caller/callee reader-state ambiguity that
 rule 2 eliminates.
 
+**`TokenRecovery::resume_pos` must advance the reader; violations abort even in tolerant
+mode** — DECIDED (user, July 2026, code-review follow-up). The content loop's recovery arm
+is the one arm that consumes no token, so its termination rests entirely on `resume_pos`
+repositioning the reader strictly past the failed read's start. Both in-crate producers
+satisfy this, but the contract is reachable by third-party code through two public
+extension points (a custom `TokenReader::peek`, a `Lang::scan_specials` returning a
+`TokenRecovery`), and a violating `resume_pos` was demonstrated to hang `NodesParser` in
+release builds while growing the diagnostics sink unboundedly. The contract is now stated
+on `TokenRecovery::resume_pos` and enforced at the adoption site (`nodes_parser.rs`
+content loop): if the reader did not advance after `resume_at`, the parse aborts with the
+token error as a `ParseError` — *even in tolerant mode*, whose promise is a best-effort
+tree, not tolerance of non-termination; an abort is the doctrine-blessed failure mode
+(no panic, rule 3 above). The guard lives at the adoption site and not inside `resume_at`
+because `resume_at` is deliberately bidirectional (it is also the absent-argument and
+environment-name rewind), so it can assert nothing about direction.
+*Noted for the future (user, July 2026):* contract violations by extension-point code are
+a different *category* from malformed input, and the error model may eventually want to
+distinguish them (e.g. a `ParseError` vs. an `ImplementationError`/contract-violation
+kind), so callers can tell "your document is broken" from "your `Lang`/reader is broken".
+Today both surface as `ParseError` (here: the token error's kind and span); revisit if
+more contract guards accumulate.
+
 ### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
 
 **Absolute minimal mandatory dependencies** — `thiserror` and `log` removed from `Cargo.toml`
