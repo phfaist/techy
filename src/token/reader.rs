@@ -189,6 +189,14 @@ impl<'s> StdTokenReader<'s> {
 
         if state.trigger_chars().may_start(c) {
             if let Some(m) = L::scan_specials(state, s, pos)? {
+                // A malformed `end` from the hook would yield a zero-width token (the
+                // dispatch loop would never advance) or a span that panics when sliced.
+                debug_assert!(
+                    m.end > pos && m.end <= s.len() && s.is_char_boundary(m.end),
+                    "scan_specials returned an invalid match end {} at pos {}",
+                    m.end,
+                    pos
+                );
                 return Ok(Token::new(
                     TokenKind::Specials {
                         callable_type: m.callable_type,
@@ -387,7 +395,9 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
         if skip_post_space {
             self.pos = tok.span.end;
         } else {
-            self.pos = tok.span.end - tok.post_space().len();
+            // Post-space is a trailing sub-range of `span`, so its `start` is the end
+            // of the token proper — for every kind (empty post-space sits at `span.end`).
+            self.pos = tok.post_space().start;
         }
     }
 

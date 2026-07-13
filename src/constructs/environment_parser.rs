@@ -648,7 +648,7 @@ mod tests {
             // (the uniform `parse` signature cannot tie the stored trigger token to the
             // context's reader): reposition so the trigger's post-space bytes stay raw
             // body content (they are not recorded post-space).
-            resume_at(cx.tokens, trigger.span.end - trigger.post_space().len());
+            resume_at(cx.tokens, trigger.post_space().start);
             let body_start = cx.tokens.pos();
             let source = Arc::clone(&cx.source);
             let content = source.content();

@@ -103,6 +103,14 @@ pub trait Lang: Sized {
 
     /// Language-specific parsing state (e.g. a math-mode flag). Typed — no `Any` maps;
     /// `()` for languages without extra state.
+    ///
+    /// **Must be a plain value type — no interior mutability** (no `Mutex`, no atomics
+    /// used for mutation): states are frozen at construction and their derived caches
+    /// (including [`specials_trigger_chars`](Lang::specials_trigger_chars)'s result) are
+    /// computed from the ext at freeze time. Mutating an ext behind a shared
+    /// `Arc<ParsingState>` would silently desynchronize those caches and break the
+    /// readers' peek-idempotence contract. (The interior-mutable set-once idiom
+    /// sanctioned for *node* exts does not carry over here.)
     type StateExt: Clone + fmt::Debug + Default + Send + Sync;
 
     /// Semantic transition events (e.g. an `EnterMath`), consumed by
@@ -170,13 +178,21 @@ pub trait Lang: Sized {
     }
 
     /// Transition customizer — the choke-point hook, run exactly once per
-    /// [`derived()`](ParsingState::derived) transition, after the delta's overrides have
+    /// [`derived()`](ParsingState::derived) call, after the delta's overrides have
     /// been applied and before the new state is frozen. Cross-cutting rules centralize
     /// here (e.g. FLM's "in math mode the escape char is `#`"); the override policy —
     /// pure normalization vs. event-driven — is this function's business
     /// (ARCHITECTURE.md §state). Never runs on the seed state (see
     /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
     /// default does nothing.
+    ///
+    /// **Must be a deterministic pure function of `(new, prev, events)`** — no side
+    /// effects, no interior mutability, no dependence on call count. Derivations are
+    /// deduplicated (the session's group-interior memo), so this runs once per unique
+    /// *derivation*, not once per transition: `{a}{b}` under one state runs it **once**
+    /// for two descents. Anything history-shaped (counters, caches keyed by occurrence)
+    /// belongs in [`observe_transition`](Lang::observe_transition), which fires on every
+    /// transition, memo hits included.
     fn finalize_transition(
         new: &mut StateData<Self>,
         prev: &ParsingState<Self>,
@@ -215,8 +231,23 @@ pub trait Lang: Sized {
     /// the name and the resolved spec (unknown-name fallback policy included), which
     /// makes scanning/lookup mismatches impossible by construction. Typically implemented
     /// by a preset dispatching to the state's libraries (Phase 4+). Positions are
-    /// absolute byte offsets into `content`. May fail recoverably (the error participates
-    /// in the recovery-token protocol like any tokenization step).
+    /// absolute byte offsets into `content`.
+    ///
+    /// **Implementer obligations:**
+    ///
+    /// - A returned match must be non-empty and boundary-aligned: see the contract on
+    ///   [`SpecialsMatch::end`]. A zero-width match would hang the parse loop; the
+    ///   reader debug-asserts the contract.
+    /// - May fail recoverably, but the recovery-token protocol has teeth: a
+    ///   [`TokenError`](crate::token::TokenError) *without* a recovery token aborts the
+    ///   parse even in tolerant mode, and a recovery's `resume_pos` must strictly
+    ///   advance past the failed read's start (see
+    ///   [`TokenRecovery::resume_pos`](crate::token::TokenRecovery)) — the content loop
+    ///   aborts otherwise.
+    /// - Specials have the *lowest* recognition precedence: the reader tries group
+    ///   delimiters, command escapes, and comment starts first, so a trigger that
+    ///   overlaps any of those silently never fires (no diagnostic). The `Lang` author
+    ///   is the one who can create — and must avoid — such a collision.
     ///
     /// Only consulted when the current character is in
     /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (cached per state).
@@ -236,6 +267,20 @@ pub trait Lang: Sized {
     /// `PrefixTable`); receives [`StateData`] rather than [`ParsingState`] because it
     /// runs *while* the state is being built. Return [`TriggerChars::Any`] for fully
     /// dynamic scanners. The default: no specials.
+    ///
+    /// **Implementer obligations:**
+    ///
+    /// - The returned set must be a conservative *superset*: it must contain the first
+    ///   character of every trigger [`scan_specials`](Lang::scan_specials) can match
+    ///   under `data` (or be [`TriggerChars::Any`]). An omitted character means the
+    ///   trigger silently never fires — no error, no diagnostic.
+    /// - Must be a pure function of `data` — the result is cached on the frozen state
+    ///   and never re-consulted.
+    /// - The `enable_specials` gate is applied by the core; the implementation need not
+    ///   check it.
+    /// - "Rebuilt at transitions" means once per group descent, optional-argument probe,
+    ///   and argument delta — keep it cheap (cache expensive derivations in an `Arc`
+    ///   inside `StateExt` if needed).
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
         let _ = data;
         TriggerChars::default()
@@ -265,6 +310,11 @@ pub trait Lang: Sized {
     /// with the token's span and the current state (a `Lang` cannot stage nodes itself);
     /// a preset may return a callable-shaped kind (FLM's paragraph constructs) without
     /// any core change.
+    ///
+    /// **Constraint:** the kind is staged with *no children*, so a callable-shaped kind
+    /// must carry no argument regions and no slots — the builder's region-tiling assert
+    /// panics otherwise. (Structurally intrinsic: this hook has no session/builder and
+    /// cannot stage children.)
     ///
     /// The default preserves the whitespace-as-chars invariant (§3.5): a whitespace-only
     /// `Chars` kind, span-backed over the full token span (newlines included).

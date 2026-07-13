@@ -115,8 +115,7 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).
     pub state: Arc<ParsingState<L>>,
-    /// The session: node building, diagnostics, and the [`Recovery`](crate::error::Recovery)
-    /// policy.
+    /// The session: node building, diagnostics, and the [`Recovery`] policy.
     pub session: &'a mut ParserSession<L>,
 }
 
@@ -138,6 +137,7 @@ impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParseContext")
             .field("pos", &self.tokens.pos())
+            .field("source", &self.source)
             .field("state", &self.state)
             .field("session", &self.session)
             .finish()

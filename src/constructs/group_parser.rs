@@ -22,7 +22,7 @@
 //! interior state is scoped structurally: `cx.state` is swapped for the recursion and
 //! restored after (the group has no after-effect — the returned delta is always `None`).
 //!
-//! # Matching and recovery (DESIGN_RATIONALE.md §3.6, §3.8)
+//! # Matching and recovery (DESIGN_RATIONALE.md §3.5, §3.6, §3.8)
 //!
 //! The interior [`NodesParser`] stops at the exact `(group_type, close)` pairing the
 //! group opened with, **consuming** the close at match time (the consume flag's

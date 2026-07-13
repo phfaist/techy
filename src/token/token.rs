@@ -13,11 +13,15 @@ use super::rules::GroupRule;
 ///
 /// Design invariants (DESIGN_RATIONALE.md §3.2):
 ///
-/// - **No invocation-form knowledge.** There is no macro/environment/specials taxonomy
-///   here and no `CallableTypeId`: `\begin` tokenizes as a [`Command`](TokenKind::Command)
-///   exactly like `\foobar`; which names are macros or environments is decided at parse
-///   time by the preset. (Terminology: *command* is the token-level syntactic form;
-///   *callable* the parse-level concept; *macro*/*environment* preset-level flavors.)
+/// - **No invocation-form knowledge on tokens whose resolution happens at parse time.**
+///   There is no macro/environment/specials taxonomy on [`Command`](TokenKind::Command)
+///   tokens and no `CallableTypeId`: `\begin` tokenizes exactly like `\foobar`; which
+///   names are macros or environments is decided at parse time by the preset.
+///   [`Specials`](TokenKind::Specials) is the scoped exception (July 2026 amendment):
+///   there recognition *is* resolution, so the token carries the full resolved pair
+///   (`callable_type`, `spec`). (Terminology: *command* is the token-level syntactic
+///   form; *callable* the parse-level concept; *macro*/*environment* preset-level
+///   flavors.)
 /// - **Single-character content tokens.** [`Char`](TokenKind::Char) covers exactly one
 ///   character: a token is an atomic unit, and construct parsers may need char-by-char
 ///   reading (e.g. tabular preambles). Chars accumulate into nodes at the node level.
@@ -139,6 +143,22 @@ pub struct Token<'s, L: Lang> {
 impl<'s, L: Lang> Token<'s, L> {
     /// Create a token.
     pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
+        debug_assert!(
+            pre_space.end == span.start,
+            "pre_space {:?} must end exactly at span start {:?}",
+            pre_space,
+            span
+        );
+        if let TokenKind::Command { post_space, .. } | TokenKind::Comment { post_space, .. } =
+            &kind
+        {
+            debug_assert!(
+                post_space.end == span.end && post_space.start >= span.start,
+                "post_space {:?} must be a trailing sub-range of span {:?}",
+                post_space,
+                span
+            );
+        }
         Token { kind, span, pre_space }
     }
 

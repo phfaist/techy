@@ -92,17 +92,15 @@ impl<O: SourceOrigin> Diagnostic<O> {
         msg.push_str("\n  at: ");
         msg.push_str(&format_position(&self.span));
 
-        let mut provenance = self.span.source().provenance();
-        loop {
+        for provenance in self.span.source().provenance_chain() {
             match provenance {
-                SourceProvenance::Primary => break,
+                SourceProvenance::Primary => {}
                 SourceProvenance::Resolved { reference, triggered_at } => {
                     msg.push_str(&format!(
                         "\n  included from {} ({})",
                         format_position(triggered_at),
                         reference,
                     ));
-                    provenance = triggered_at.source().provenance();
                 }
                 SourceProvenance::Synthesized { description, triggered_at } => {
                     msg.push_str(&format!(
@@ -110,7 +108,6 @@ impl<O: SourceOrigin> Diagnostic<O> {
                         format_position(triggered_at),
                         description,
                     ));
-                    provenance = triggered_at.source().provenance();
                 }
             }
         }

@@ -92,8 +92,8 @@ pub use error::{
     Recovery, Severity,
 };
 pub use source::{
-    LineIndex, MapResolver, NoResolver, ResolveError, Source, SourceContent, SourceCursor,
-    SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
+    LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError, Source, SourceContent,
+    SourceCursor, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{
@@ -101,7 +101,9 @@ pub use node::{
     NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
     ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
 };
-pub use spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
+pub use spec::{
+    ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes, SlotSpec, StdCallableSpec,
+};
 pub use state::{
     Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable, SimpleLang, StateData,
     TokenRulesOverrides,

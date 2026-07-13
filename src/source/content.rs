@@ -2,8 +2,8 @@
 //!
 //! [`SourceContent`] is the trait boundary that decouples reading from the backing storage.
 //! Only in-memory strings implement it today; it exists so that a memory-mapped backing can
-//! be added later without changing cursor or parser code (SOURCE_ARCHITECTURE.md, "future
-//! huge files" — deliberately deferred).
+//! be added later without changing cursor or parser code (DESIGN_RATIONALE.md §3.1,
+//! "future huge files" — deliberately deferred).
 
 use alloc::string::String;
 use core::fmt;

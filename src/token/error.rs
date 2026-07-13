@@ -25,8 +25,10 @@ pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 /// What went wrong while reading a token.
 ///
 /// Closed enum per the naming rule (`…Kind`); grows as the tokenizer learns to detect more
-/// error conditions.
+/// error conditions — hence `#[non_exhaustive]`, matching the `ParseErrorKind` wrapper
+/// that carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TokenErrorKind {
     /// The input ended immediately after a command escape character, before any name.
     EndOfStreamAfterEscape {

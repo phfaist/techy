@@ -1818,9 +1818,11 @@ holding the full argument.
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
 - **Tokenizer-level environment recognition (`\begin{…}` tokens)** (§3.2) — bakes language
   semantics into the tokenizer; `\begin` is an ordinary command, environments are a parser concern.
-- **Invocation-form ids (`CallableTypeId`) on tokens** (§3.2) — invocation form is
-  resolution output, not tokenization output; carrying it on tokens re-creates the
-  "token says MACRO, node says ENVIRONMENT" wart.
+- **Invocation-form ids (`CallableTypeId`) on tokens resolved at parse time** (§3.2) —
+  invocation form is resolution output, not tokenization output; carrying it on `Command`
+  tokens re-creates the "token says MACRO, node says ENVIRONMENT" wart. (Scoped: does
+  *not* apply to `Specials`, where recognition *is* resolution — the token carries the
+  full `ResolvedCallable` pair, §3.2 July 2026 amendment.)
 - **Whitespace as its own token kind** (§3.2) — every construct parser's peek grows a
   "maybe whitespace first" case; pre/post-space spans localize the cost in the tokenizer.
 - **Uniform `post_space` field on `Token`** (§3.2) — post-space is a per-kind syntactic

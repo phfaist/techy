@@ -7,13 +7,16 @@
 //! variants): the core cannot know a language's argument forms — which group class a
 //! `{…}` argument uses, whether `[…]` is a group rule of the current state or a
 //! momentarily-minted one — so the standard parsers (delimited group, optional group,
-//! literal marker, chars-only, comma-lists, verbatim, …) are provided by the preset as
-//! `ArgumentParser` implementations, exactly pylatexenc's resolution of the `'{'` / `'['`
-//! / `'*'` shorthands into standard parser instances.
+//! literal marker, expression) live in [`constructs`](crate::constructs) as core
+//! `ArgumentParser` implementations, parameterized by group types and rules; the preset
+//! supplies the one-liners resolving pylatexenc's `'{'` / `'['` / `'*'` shorthands into
+//! configured instances (Phase 7).
 //!
-//! The slot separator/terminator machinery (including the invocation-name back-reference
-//! that makes `\end{align}` match the `align` that opened) grows in Phase 6, when
-//! `ArgumentsParser`/`SlotsParser` make the requirements concrete (ARCHITECTURE.md §specs).
+//! Slot terminators are parser business, not spec data (Phase 6 decision): [`SlotSpec`]
+//! stays `{ name, parsing_state_delta }`, and terminator handling (including the
+//! invocation-name back-reference that makes `\end{align}` match the `align` that
+//! opened) parameterizes the core `EnvironmentBodyParser`
+//! (`constructs::environment_parser`).
 //!
 //! **Arguments vs. slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
 //! `\item[label]`); slots contain *content regions* (an environment's body). A macro has
@@ -147,7 +150,8 @@ impl<L: Lang> ArgumentSpec<L> {
 ///
 /// Separators and terminators — where terminator patterns may reference the invocation
 /// name (`\end{align}` must match the `align` that opened; a `---` fence closes with
-/// `---`) — arrive with `SlotsParser` (Phase 6).
+/// `---`) — are parser business, not spec data (Phase 6 decision): they parameterize the
+/// core `EnvironmentBodyParser` rather than living here.
 pub struct SlotSpec<L: Lang> {
     /// Optional name for by-name access to parsed slots.
     pub name: Option<Box<str>>,

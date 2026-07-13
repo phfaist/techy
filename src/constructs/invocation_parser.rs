@@ -87,7 +87,7 @@ pub(crate) fn parse_declared_arguments<L: Lang>(
     argument_specs: &[Arc<ArgumentSpec<L>>],
 ) -> ConstructParserResult<L, (Vec<BuildId>, Vec<ParsedArgument<L>>)> {
     let mut children: Vec<BuildId> = Vec::new();
-    let mut arguments: Vec<ParsedArgument<L>> = Vec::new();
+    let mut arguments: Vec<ParsedArgument<L>> = Vec::with_capacity(argument_specs.len());
     for argument_spec in argument_specs {
         let argument_state = match &argument_spec.parsing_state_delta {
             Some(delta) => cx.session.derived_state(&cx.state, delta),

@@ -12,10 +12,12 @@
 //!   an atomic unit identifying *what to parse next*. [`TokenKind::Char`] covers exactly
 //!   one character (construct parsers may need char-by-char reading); chars accumulate
 //!   into nodes at the node level.
-//! - **No invocation forms at the token level**: no macro/environment/specials taxonomy,
-//!   no `CallableTypeId`, no begin/end-environment tokens. `\begin` is a
-//!   [`Command`](TokenKind::Command) like any other; what its name *means* is decided at
-//!   parse time by the preset.
+//! - **No invocation forms on parse-time-resolved tokens**: no macro/environment/specials
+//!   taxonomy on [`Command`](TokenKind::Command) tokens, no begin/end-environment tokens.
+//!   `\begin` is a `Command` like any other; what its name *means* is decided at parse
+//!   time by the preset. ([`Specials`](TokenKind::Specials) is the scoped exception:
+//!   recognition *is* resolution there, so it carries its `CallableTypeId` and spec —
+//!   July 2026 amendment, DESIGN_RATIONALE §3.2.)
 //! - **Two callable-trigger token kinds, split by mechanism**:
 //!   [`Command`](TokenKind::Command) is recognized from [`CommandRule`] *data* in the
 //!   rules; [`Specials`](TokenKind::Specials) is recognized by the `Lang::scan_specials`

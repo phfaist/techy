@@ -98,7 +98,9 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
         if skip_post_space {
             self.pos = tok.span.end;
         } else {
-            self.pos = tok.span.end - tok.post_space().len();
+            // Post-space is a trailing sub-range of `span`, so its `start` is the end
+            // of the token proper — underflow-free even for hand-built tokens.
+            self.pos = tok.post_space().start;
         }
     }
 

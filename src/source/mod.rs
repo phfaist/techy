@@ -1,13 +1,17 @@
-//! L0 — source management: content, spans, provenance, resolution, line/column analysis.
+//! S0 — source management: content, spans, provenance, resolution, line/column analysis.
 //!
-//! This layer implements the design of `SOURCE_ARCHITECTURE.md` (March 2026) as adopted by
-//! `ARCHITECTURE.md` §L0 (July 2026):
+//! This stratum implements `ARCHITECTURE.md` §source and `DESIGN_RATIONALE.md` §3.1:
 //!
 //! - [`Source`] owns one unit of source content, its origin metadata, and its
 //!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
-//! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes, tokens-turned-diagnostics, and
-//!   errors carry `SourceSpan`s, making them self-contained — no lifetime parameters, no
-//!   external source store.
+//! - [`Span`] is a plain `Copy` byte range — the transient span type on which all span
+//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately, §3.8; the
+//!   type lives here rather than in the token topic because errors and cursors use it
+//!   independently of tokenization).
+//! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes and errors/diagnostics carry
+//!   `SourceSpan`s, making them self-contained — no lifetime parameters, no external
+//!   source store. The construct-parser layer is where a byte `Span` becomes a
+//!   `SourceSpan`, via its `ParseContext`'s source.
 //! - [`SourceProvenance`] records where a source came from (`Primary` / `Resolved` /
 //!   `Synthesized`), with a `triggered_at: SourceSpan` back-reference forming a provenance
 //!   tree walkable for error reporting. Provenance lives on the *source* (one hop per

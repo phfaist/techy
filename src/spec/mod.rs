@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn std_callable_spec_exposes_its_structures() {
         // \section*[placement]{title}-shaped, with a body slot for good measure (the
-        // stubs stand in for the preset's marker / optional-group / group parsers).
+        // stubs stand in for the core's marker / optional-group / group parsers).
         let spec = StdCallableSpec::new(
             vec![
                 Arc::new(ArgumentSpec::new(stub())),

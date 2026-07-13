@@ -29,6 +29,13 @@ use crate::state::Lang;
 /// resulting token need no offset arithmetic.
 pub struct SpecialsMatch<'s, L: Lang> {
     /// Byte offset one past the end of the matched trigger (the token's `span.end`).
+    ///
+    /// **Contract:** the match must be non-empty and boundary-aligned — `end` must
+    /// satisfy `pos < end <= content.len()` and fall on a `char` boundary, and `name`
+    /// should be the matched slice `&content[pos..end]`. A zero-width match would
+    /// produce a token that never advances the parse (an infinite loop); an
+    /// out-of-range or mid-codepoint `end` panics later when the span is sliced.
+    /// The reader debug-asserts this at the call site.
     pub end: usize,
     /// The invocation form the trigger resolved to (recorded on the token; the dispatch
     /// loop needs it to build an `Invocation`). Recognition = resolution, and a
