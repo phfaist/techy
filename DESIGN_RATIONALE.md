@@ -1665,6 +1665,157 @@ kind), so callers can tell "your document is broken" from "your `Lang`/reader is
 Today both surface as `ParseError` (here: the token error's kind and span); revisit if
 more contract guards accumulate.
 
+**Structured diagnostics: condition payloads, not prose** — DECIDED (user + design sessions,
+July 2026; supersedes the "grow `ParseErrorKind` variants" intent noted at its definition —
+implementation plan in CodeReportAction_01.md). `Diagnostic` and `ParseError` carry a
+structured condition payload `Box<dyn DiagnosticData>` plus span and traceback frames — no
+`message: String` field, no kind enum, and no string-message constructors
+(`Diagnostic::error("…", span)` is removed, with no ad-hoc escape type). The human message is
+a pure function of the payload (its `Display`); a wording difference that is not worth a
+field in the payload is not worth existing. Condition types are plain public-field data
+structs defined **next to the construct that detects them** (group conditions in the group
+parser, environment conditions with the environment helper, token conditions in the token
+layer, FLM's in FLM) — third-party conditions are structurally identical citizens.
+*Rationale:* the tolerant path — the one tools consume — reduced every condition to
+severity + sentence + span, and `ParseErrorKind::Syntax { message }` had become the only
+parse-level kind, `format!`-ing away exactly the fields a linter/LSP needs. A kind *enum*
+cannot be made right: core-owned variants would privilege construct-level vocabulary
+("environment" is not a core concept, §2.3), and `#[non_exhaustive]` extension is crate-only,
+so downstream languages would stay stringly forever — the same disease one level out. On the
+message side, the "same condition, subtly different context" case decomposes without
+remainder: a semantic difference belongs in a payload field (tools want it too); a positional
+difference is what frames render. This conforms to §2.4: the *structure*
+(severity/payload/span/frames) stays closed; the openness is payload-level, like specs, and
+serializability is preserved (see the serialization entry below). Exhaustive matching over an
+open-ended condition space is not meaningful — consumers handle what they know, via
+identifier or downcast. Severity stays a separate field (conditions do not choose it; the
+recover funnel records errors), and the `Diagnostic*` nomenclature deliberately leaves room
+for warnings later. The contract-violation category noted above also gets its mechanism for
+free: ordinary condition types under e.g. `core.contract.*`.
+*Rejected:* promoting recurring conditions to enum variants (the original Action-01
+proposal — layering and extension flaws above); a `Lang(L::ErrorKind)` static arm (spreads
+`L` into `Diagnostic`/`ParseError`, blocking cross-language aggregation, and callables need
+dyn anyway since specs live as `Arc<dyn CallableSpec<L>>`); a message-override `String` on
+`Diagnostic` (two truths: prose drifts from data, and re-renderers must ignore one of them).
+
+**`DiagnosticInfo` (implementor) / `DiagnosticData` (dyn facade) split** — DECIDED (user +
+design sessions, July 2026). Implementors write a plain data struct (pub fields,
+`#[non_exhaustive]` + constructor for semver headroom, ordinary `Clone`/`Debug` derives), a
+`Display` impl for the wording, and a `DiagnosticInfo` impl: `const IDENTIFIER: &'static str`
+plus a defaulted `serializable_data()`. The dyn-compatible facade `DiagnosticData`
+(`identifier()`, `serializable_data()`, `clone_box()`) is blanket-implemented for every
+`DiagnosticInfo` type and **sealed** — the blanket impl is the only way in.
+*Rationale:* the split is forced (an associated const makes a trait non-dyn-compatible) and
+buys everything else: `clone_box` boilerplate vanishes (the blanket impl uses the ordinary
+`Clone` derive), the identifier is a compile-time constant, and sealing enforces the
+const-identifier discipline. Downcasting targets the data struct itself — one type, one
+identity.
+*Rejected:* macro-generated wrapper types implementing the dyn trait (Rust separates data
+from impls, so no wrapper is needed; a wrapper would make downcasts target the wrapper,
+splitting each condition's identity in two); getters over pub fields (invariant-free
+records).
+*Future:* `#[derive(DiagnosticInfo)]` proc-macro, thiserror-style (`#[diagnostic(id = "…",
+message = "…{field}…")]`; rustc's internal `derive(Diagnostic)` is prior art) — generates
+identifier, message wording, and serialization keys from the struct definition, making drift
+between them impossible; build-time dependency only, runtime stays zero-dep. Unsealing later
+is non-breaking; re-sealing is not.
+
+**Two identities: the type in-process, an explicit string on the wire** — DECIDED (user +
+design sessions, July 2026). In-process identity is the concrete type (downcast via `Any` —
+collision-proof, compiler-checked at producer and consumer); the string `identifier()` exists
+only for boundaries where types cannot go (JSON output, linter config, logs). Identifiers are
+hand-chosen, namespaced `<layer-or-preset>.<area>.<condition>` (provisional scheme — user,
+July 2026: `core.token.*`, `core.nodes_parser.*`, … for library conditions, areas mirroring
+today's modules; `<preset-name>.<namespaced-name>` for presets and downstream languages),
+exposed as `pub const IDENTIFIER` so consumers compare against the const rather than a
+literal. Identifiers and serialization field names are semver-stable API surface: although
+the provisional scheme mirrors today's module areas, the strings are frozen independently of
+future code moves.
+*Rationale:* no compiler mechanism yields a stable wire identity — `type_name` has an
+explicitly unstable format and encodes module paths (a refactor must not break a user's
+linter config), and `TypeId` differs per build and is not serializable. Wire naming is
+convention-based in every ecosystem (rustc lints, ESLint rules, LSP codes); what convention
+*can* get is hardening: single-definition consts and a documented namespace rule.
+*Rejected:* deriving the identifier from the type name (the two have different change
+cadences — a struct rename is an internal refactor, a wire-id change is a silent break; the
+derive macro will *require* the id attribute); method name `diagnostic_identifier()`
+(stutters as `DiagnosticData::diagnostic_identifier`; the trait context already qualifies,
+§3.10); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (user, July 2026:
+maintenance work to keep in sync, and namespace prefixes already prevent collisions — can be
+added later without breakage).
+
+**Serialization is a derived projection; the struct is the schema** — DECIDED (user + design
+sessions, July 2026). `serializable_data() -> DiagnosticValue` (a minimal alloc-only value
+tree: null/bool/int/string/list/map) serves serialization boundaries and generic tooling
+only — programmatic consumers downcast to the typed struct; there is no stringly-keyed access
+API anywhere. The method is defaulted (empty) so the trait ships before the serialization
+work. No hand-written shipped schemas.
+*Rationale:* `serde::Serialize` is not dyn-compatible (the ecosystem workaround,
+`erased-serde`, is a dependency — §3.9), hence the own value tree. The authoritative schema
+is the Rust struct itself. pylatexenc's `error_type_info` weakness was ad-hoc dicts assembled
+at every raise site; here the keys are written once, adjacent to the struct fields, and the
+eventual derive macro generates them from the field names. A shipped machine schema would be
+a third representation that drifts from the other two; if external consumers ever need one,
+the derive generates it from the same source of truth.
+
+**Parse traceback: an explicit frame stack on `ParserSession`** — DECIDED (user + design
+sessions, July 2026). `Vec<Frame<L>>` on the session, maintained by a closure-scoped
+`cx.with_frame(frame, |cx| …)` at the descent points (invocation, argument, group interior,
+environment body); the recover funnel snapshots the live stack into every `Diagnostic` and
+`ParseError` as `L`-free `TraceFrame<O>`s (rendered `title: String` + `SourceSpan<O>`),
+innermost first — this finally produces `format_traceback`'s input and renders as
+pylatexenc-style "while parsing …" tracebacks (exactly LSP `relatedInformation` shape). Live
+frames allocate nothing: `FrameTitle<L>` stores *mechanisms, not a construct taxonomy* — a
+`&'static str` label, a quoted source slice, or an `Arc<dyn CallableSpec<L>>` + role whose
+title is produced only at snapshot time via a new defaulted, dyn-compatible
+`CallableSpec::stack_frame_title(…)` hook.
+*Rationale:* pylatexenc attaches `open_contexts` in `except` clauses as exceptions bubble;
+techy's tolerant diagnostics are recorded at the detection site and never bubble (rule 1
+above), so the context must already exist when the condition fires — an explicit stack. That
+is strictly better: non-aborting diagnostics get full tracebacks too, from a single
+attachment point. It lives on the *session* because the alternatives fail hard:
+`ParsingState` is `Arc`-shared, snapshotted into nodes, and `mem::replace`d on descent (group
+parser) — a stack there is lost or aliased; the token reader tracks lexical position, not
+descent. The session is the unique-per-parse mutable object and already owns the consumer
+(the diagnostics sink). Hot/cold asymmetry: frames are pushed on the *success* path, O(every
+construct), so they must be allocation-free (`Arc` bumps only), while condition payloads are
+cold, so boxing is free — eager `String` titles would be an allocation per descent.
+Closure-scoped rather than an RAII guard because a guard would hold `&mut cx` against the
+parser body. The live frame may be `L`-generic (the session already is), but the snapshot
+must be `O`-generic only, or `L` re-enters `Diagnostic` through the back door. "Frame", not
+"context": `ParseContext` already owns that word (§3.10 sibling-vocabulary rule).
+*Rejected:* frames in `ParsingState` (above); structured machine fields on frames (frames are
+the human-facing projection — machine data belongs in the condition payload; title + span is
+what tools need); wrapping-on-bubble (the tolerant path never bubbles).
+
+**`Lang::refine_diagnostic` hook** — DECIDED (user + design sessions, July 2026).
+`fn refine_diagnostic(Box<dyn DiagnosticData>, &ParsingState<L>) -> Box<dyn DiagnosticData>`,
+default identity, applied exactly once in the recover funnel (at the `ParseContext` level,
+where the state is in scope). A `Lang` can replace a generic condition with its own — FLM
+maps a forbidden-`$` token condition to a `DollarMathDisabled { … }` whose `Display` explains
+the config option — and the replacement is *structured*, so tools see (and can attach
+quickfixes to) the refined condition, not just better prose. The original condition's fields
+can be embedded in the refined type where faithfulness matters.
+*Rationale:* a presentation-only hook improves messages but hides the real condition from
+machines; refinement serves both needs with one mechanism, and wording stays a pure function
+of the payload. State-dependent information the message needs is baked into the payload's
+fields at refine time — errors stay self-contained after the parse (no `Arc<ParsingState>`
+inside errors, no lazy `L`-dependent rendering).
+*Rejected:* `L::format_message(&payload, &state) -> Option<String>` (subsumed by refinement;
+a second wording path would reintroduce drift).
+
+**Token layer joins the same model** — DECIDED (user + design sessions, July 2026). The two
+`TokenErrorKind` variants become plain condition structs (`EndOfStreamAfterEscape`,
+`ForbiddenChar`, each a `DiagnosticInfo` impl) wrapped by the enum, which gains
+`Custom(Box<dyn DiagnosticData>)` for `Lang::scan_specials`; the enum loses `Copy`
+(accepted), and `TokenError::kind()` returns a reference. The lift into diagnostics boxes the
+built-in structs and *unwraps* `Custom`; a named `ParseError::from_token_error(…)`
+constructor replaces the lift currently duplicated at `try_peek` (`constructs/mod.rs`) and
+the content-loop recovery arm (`nodes_parser.rs`).
+*Rationale:* `scan_specials` participates in the recovery protocol but could only lie with
+tokenizer-internal kinds; one extension mechanism (`DiagnosticData`) serves both layers,
+while the token layer keeps a concrete matchable enum for the recovery protocol.
+
 ### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
 
 **Absolute minimal mandatory dependencies** — `thiserror` and `log` removed from `Cargo.toml`
@@ -1894,6 +2045,13 @@ Current list — remove entries as they are settled (move the outcome into §3):
    generally — up to replacing the library wholesale in a state transition. Requires
    revisiting `LibraryStack`'s structure itself; until then, seed-side library/fallback
    setup is the `Lang` author's business inside `initial_state_data`.
+8. **Structured-diagnostics implementation details** (opened July 2026 — decisions in §3.8,
+   plan in CodeReportAction_01.md). Sub-items settled July 2026: MSRV bumped to 1.86 (dyn
+   trait upcasting); `FrameTitle` variants as sketched; `DiagnosticValue` barebones with no
+   float variant (serialize as string if ever needed); `diagnostic_catalog()` dropped.
+   Remaining: the identifier scheme (`core.<area>.*` / `<preset-name>.<namespaced-name>`) is
+   provisional — a final naming/identifier pass is due before a public release makes the
+   strings semver surface.
 
 ---
 

@@ -14,16 +14,107 @@
 use core::fmt;
 
 use crate::error::{
-    Diagnostic, Diagnostics, ParseError, ParseErrorKind, Recovery,
+    Diagnostic, DiagnosticData, Diagnostics, ParseError, Recovery, Severity, TraceFrame,
 };
 use crate::node::{BuildId, NodeTree, NodeTreeBuilder};
 use crate::source::SourceSpan;
+use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::GroupRule;
 
-use alloc::string::ToString;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+/// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md §3.8):
+/// pushed at the descent points through
+/// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
+/// snapshotted into `L`-free [`TraceFrame`]s by the recover funnel. Pushes run on the
+/// hot success path — once per construct — so a frame is **allocation-free to build**
+/// (`Arc` bumps only); its title is rendered only at snapshot time, on the cold path.
+pub struct Frame<L: Lang> {
+    /// How the frame's traceback title is produced at snapshot time.
+    pub title: FrameTitle<L>,
+    /// Where in the source the parse descended (the traceback's location line).
+    pub span: SourceSpan<L::SourceOrigin>,
+}
+
+/// A live frame's title recipe: **mechanisms, not a construct taxonomy**
+/// (DESIGN_RATIONALE.md §3.8) — the core has no macro/environment vocabulary, so a
+/// callable's title comes from its spec's
+/// [`stack_frame_title`](CallableSpec::stack_frame_title) hook at snapshot time.
+pub enum FrameTitle<L: Lang> {
+    /// A fixed title.
+    Static(&'static str),
+    /// `label ‘<slice>’`, quoting a source slice (a group's open delimiter, an
+    /// environment's name).
+    Quoted {
+        /// The label preceding the quoted slice.
+        label: &'static str,
+        /// The span whose content is quoted.
+        name: SourceSpan<L::SourceOrigin>,
+    },
+    /// A callable's frame, titled by the spec's
+    /// [`stack_frame_title`](CallableSpec::stack_frame_title) hook.
+    Callable {
+        /// The invocation's behavior spec.
+        spec: Arc<dyn CallableSpec<L>>,
+        /// Which part of the callable's parse the frame covers.
+        role: FrameRole,
+        /// The span of the invocation spelling, quoted into the title.
+        name: SourceSpan<L::SourceOrigin>,
+    },
+}
+
+impl<L: Lang> Frame<L> {
+    /// Render the live frame into a snapshot [`TraceFrame`] — the cold path: titles
+    /// allocate here, never on push.
+    fn render(&self) -> TraceFrame<L::SourceOrigin> {
+        let title = match &self.title {
+            FrameTitle::Static(title) => String::from(*title),
+            FrameTitle::Quoted { label, name } => {
+                format!("{} ‘{}’", label, name.content())
+            }
+            FrameTitle::Callable { spec, role, name } => {
+                spec.stack_frame_title(*role, name.content())
+            }
+        };
+        TraceFrame::new(title, self.span.clone())
+    }
+}
+
+// Manual Debug impls: derives would demand `L: Debug` although only associated types
+// (already bounded) and `Arc`s are stored.
+
+impl<L: Lang> fmt::Debug for Frame<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Frame")
+            .field("title", &self.title)
+            .field("span", &self.span)
+            .finish()
+    }
+}
+
+impl<L: Lang> fmt::Debug for FrameTitle<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FrameTitle::Static(title) => f.debug_tuple("Static").field(title).finish(),
+            FrameTitle::Quoted { label, name } => f
+                .debug_struct("Quoted")
+                .field("label", label)
+                .field("name", name)
+                .finish(),
+            FrameTitle::Callable { spec, role, name } => f
+                .debug_struct("Callable")
+                .field("spec", spec)
+                .field("role", role)
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
 
 /// The root object of one parse: node building, diagnostics, and the recovery policy.
 ///
@@ -48,6 +139,13 @@ pub struct ParserSession<L: Lang> {
     /// whose inputs recur with `Arc` identity. Entries hold their key `Arc`s alive, so
     /// pointer keys cannot be reused (no ABA hazard).
     group_interior_memo: GroupInteriorMemo<L>,
+    /// The live parse-frame stack, outermost first (DESIGN_RATIONALE.md §3.8):
+    /// maintained exclusively by
+    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame)
+    /// (closure-scoped push/pop) and snapshotted — innermost first — into every
+    /// condition the recover funnel records. Private: the push/pop balance is an
+    /// invariant.
+    frames: Vec<Frame<L>>,
 }
 
 type GroupInteriorMemo<L> =
@@ -62,7 +160,27 @@ impl<L: Lang> ParserSession<L> {
             recovery,
             ext: Default::default(),
             group_interior_memo: Vec::new(),
+            frames: Vec::new(),
         }
+    }
+
+    /// Push a live traceback frame — called only by
+    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame), whose
+    /// closure scoping guarantees the matching [`pop_frame`](ParserSession::pop_frame).
+    pub(crate) fn push_frame(&mut self, frame: Frame<L>) {
+        self.frames.push(frame);
+    }
+
+    /// Pop the innermost live traceback frame (`with_frame`'s epilogue).
+    pub(crate) fn pop_frame(&mut self) {
+        let popped = self.frames.pop();
+        debug_assert!(popped.is_some(), "with_frame pops exactly what it pushed");
+    }
+
+    /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
+    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md §3.8).
+    pub(crate) fn snapshot_frames(&self) -> Vec<TraceFrame<L::SourceOrigin>> {
+        self.frames.iter().rev().map(Frame::render).collect()
     }
 
     /// Session-mediated state derivation — the in-parse standard (DESIGN_RATIONALE.md
@@ -125,24 +243,30 @@ impl<L: Lang> ParserSession<L> {
         interior
     }
 
-    /// The detection-site recovery helper (DESIGN_RATIONALE.md §3.8, rule 1): call it
-    /// where a recoverable condition is detected, then — on `Ok(())` — continue with the
-    /// site's local recovery (chars-node fallback, absent argument, skip, …).
+    /// The raw record-or-abort primitive of detection-site recovery
+    /// (DESIGN_RATIONALE.md §3.8, rule 1). Construct parsers call
+    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead — the
+    /// funnel that boxes the condition and applies `Lang::refine_diagnostic` (which needs
+    /// the context's state) before ending up here.
     ///
-    /// Under [`Recovery::Tolerant`], records `kind` as an error-severity [`Diagnostic`]
-    /// at `span` and returns `Ok(())`. Under [`Recovery::Strict`], returns the condition
-    /// as a [`ParseError`] to bubble — nobody continues past an `Err`.
+    /// Under [`Recovery::Tolerant`], records the condition as an error-severity
+    /// [`Diagnostic`] at `span` and returns `Ok(())` (the caller continues with its
+    /// site's local recovery). Under [`Recovery::Strict`], returns the condition as a
+    /// [`ParseError`] to bubble — nobody continues past an `Err`. Either carrier
+    /// receives a snapshot of the live frame stack (the parse traceback).
     pub fn recover(
         &mut self,
-        kind: ParseErrorKind,
+        data: Box<dyn DiagnosticData>,
         span: SourceSpan<L::SourceOrigin>,
     ) -> Result<(), ParseError<L::SourceOrigin>> {
+        let frames = self.snapshot_frames();
         match self.recovery {
             Recovery::Tolerant => {
-                self.diagnostics.push(Diagnostic::error(kind.to_string(), span));
+                self.diagnostics
+                    .push(Diagnostic::from_parts(Severity::Error, data, span, frames));
                 Ok(())
             }
-            Recovery::Strict => Err(ParseError::new(kind, span)),
+            Recovery::Strict => Err(ParseError::from_parts(data, span, frames)),
         }
     }
 
@@ -162,6 +286,7 @@ impl<L: Lang> fmt::Debug for ParserSession<L> {
             .field("recovery", &self.recovery)
             .field("ext", &self.ext)
             .field("group_interior_memo", &self.group_interior_memo.len())
+            .field("frames", &self.frames.len())
             .finish()
     }
 }
@@ -207,6 +332,24 @@ mod tests {
     struct PlainLang;
     impl SimpleLang for PlainLang {}
 
+    /// A third-party-style condition — the extension surface demonstration (§3.8): a
+    /// plain data struct, a `Display` for the wording, and a `DiagnosticInfo` impl,
+    /// structurally identical to the library's own conditions.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestUnresolvable {
+        name: String,
+    }
+
+    impl fmt::Display for TestUnresolvable {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "unresolvable command ‘{}’", self.name)
+        }
+    }
+
+    impl crate::error::DiagnosticInfo for TestUnresolvable {
+        const IDENTIFIER: &'static str = "test.engine.unresolvable-command";
+    }
+
     fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             enable_whitespace: true,
@@ -238,21 +381,29 @@ mod tests {
 
     #[test]
     fn recover_is_tolerant_or_strict() {
+        use crate::error::DiagnosticInfo;
+
         let source: Arc<Source> = Arc::new(Source::new("abc"));
 
         let mut session: ParserSession<PlainLang> = ParserSession::new(Recovery::Tolerant);
-        let kind = ParseErrorKind::Syntax { message: "unresolvable command ‘foo’".into() };
-        assert!(session.recover(kind.clone(), span(&source, 0..3)).is_ok());
+        let condition = TestUnresolvable { name: "foo".into() };
+        assert!(session
+            .recover(alloc::boxed::Box::new(condition.clone()), span(&source, 0..3))
+            .is_ok());
         assert_eq!(session.diagnostics.len(), 1);
         assert!(session.diagnostics.has_errors());
-        assert_eq!(
-            session.diagnostics.iter().next().unwrap().message(),
-            "unresolvable command ‘foo’"
-        );
+        let diagnostic = session.diagnostics.iter().next().unwrap();
+        // The message is rendered from the payload's Display, on demand.
+        assert_eq!(diagnostic.message(), "unresolvable command ‘foo’");
+        assert_eq!(diagnostic.identifier(), TestUnresolvable::IDENTIFIER);
 
         let mut session: ParserSession<PlainLang> = ParserSession::new(Recovery::Strict);
-        let err = session.recover(kind.clone(), span(&source, 0..3)).unwrap_err();
-        assert_eq!(*err.kind(), kind);
+        let err = session
+            .recover(alloc::boxed::Box::new(condition.clone()), span(&source, 0..3))
+            .unwrap_err();
+        // No PartialEq on the carriers (§3.8): compare identifier and downcast fields.
+        assert_eq!(err.identifier(), TestUnresolvable::IDENTIFIER);
+        assert_eq!(err.data().downcast_ref::<TestUnresolvable>(), Some(&condition));
         assert_eq!(err.span().start(), 0);
         assert!(session.diagnostics.is_empty()); // strict mode records nothing
         // Display renders the condition's message; render() adds position info.
@@ -332,9 +483,114 @@ mod tests {
             session: &mut session,
         };
 
-        let kind = ParseErrorKind::Syntax { message: "boom".into() };
-        assert!(cx.recover(kind, span(&source, 0..1)).is_ok());
+        let condition = TestUnresolvable { name: "boom".into() };
+        assert!(cx.recover(condition, span(&source, 0..1)).is_ok());
         assert_eq!(session.diagnostics.len(), 1);
+    }
+
+    // --- the live frame stack (§3.8) ----------------------------------------------------
+
+    #[test]
+    fn with_frame_pushes_pops_and_snapshots_into_diagnostics() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut session = ParserSession::new(Recovery::Tolerant);
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            source: Arc::clone(&source),
+            state: st,
+            session: &mut session,
+        };
+
+        let frame =
+            Frame { title: FrameTitle::Static("test frame"), span: span(&source, 0..1) };
+        let inner_depth = cx.with_frame(frame, |cx| {
+            // A condition recorded inside the frame carries it in its snapshot.
+            cx.recover(TestUnresolvable { name: "x".into() }, span(&source, 1..2))
+                .unwrap();
+            cx.session.frames.len()
+        });
+        assert_eq!(inner_depth, 1);
+        assert!(session.frames.is_empty(), "with_frame pops after the closure returns");
+
+        let diagnostic = session.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.frames().len(), 1);
+        assert_eq!(diagnostic.frames()[0].title(), "test frame");
+        assert_eq!(diagnostic.frames()[0].span().range(), 0..1);
+    }
+
+    #[test]
+    fn with_frame_pops_on_the_err_path_and_strict_errors_carry_frames() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut session = ParserSession::new(Recovery::Strict);
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            source: Arc::clone(&source),
+            state: st,
+            session: &mut session,
+        };
+
+        // The closure body aborts (strict recover); with_frame still pops — the pop
+        // after the closure returns covers the Err path by construction.
+        let outer =
+            Frame { title: FrameTitle::Static("outer frame"), span: span(&source, 0..1) };
+        let inner =
+            Frame { title: FrameTitle::Static("inner frame"), span: span(&source, 1..2) };
+        let result: Result<(), ParseError> = cx.with_frame(outer, |cx| {
+            cx.with_frame(inner, |cx| {
+                cx.recover(TestUnresolvable { name: "x".into() }, span(&source, 1..2))
+            })
+        });
+        let err = result.unwrap_err();
+        assert!(session.frames.is_empty(), "both frames popped on the Err path");
+
+        // The strict ParseError snapshotted the stack, innermost first.
+        let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["inner frame", "outer frame"]);
+        assert!(err.render().contains("Open blocks:"));
+    }
+
+    #[test]
+    fn snapshot_renders_quoted_and_callable_frame_titles() {
+        use crate::spec::{FrameRole, StdCallableSpec};
+
+        let source: Arc<Source> = Arc::new(Source::new(r"{\frac ab}"));
+        let mut session: ParserSession<PlainLang> = ParserSession::new(Recovery::Tolerant);
+        let spec: Arc<dyn crate::spec::CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::default());
+
+        session.push_frame(Frame {
+            title: FrameTitle::Quoted { label: "group", name: span(&source, 0..1) },
+            span: span(&source, 0..1),
+        });
+        session.push_frame(Frame {
+            title: FrameTitle::Callable {
+                spec: Arc::clone(&spec),
+                role: FrameRole::Invocation,
+                name: span(&source, 1..6),
+            },
+            span: span(&source, 1..6),
+        });
+        session.push_frame(Frame {
+            title: FrameTitle::Callable {
+                spec,
+                role: FrameRole::Argument { index: 1 },
+                name: span(&source, 1..6),
+            },
+            span: span(&source, 8..8),
+        });
+
+        // Innermost first; titles rendered only here (the cold path), through the
+        // spec's defaulted stack_frame_title hook for callables.
+        let frames = session.snapshot_frames();
+        let titles: Vec<&str> = frames.iter().map(|f| f.title()).collect();
+        assert_eq!(
+            titles,
+            ["argument #2 of ‘\\frac’", "callable ‘\\frac’", "group ‘{’"]
+        );
     }
 
     // --- the Phase 6 Lang hook defaults ------------------------------------------------

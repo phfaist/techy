@@ -40,24 +40,31 @@ mod invocation_parser;
 mod nodes_parser;
 
 pub use argument_parsers::{
-    scan_argument_noise, stage_pre_space, ArgumentNoise, ExpressionParser,
-    GroupArgumentParser, MarkerArgumentParser, OptionalGroupArgumentParser,
+    scan_argument_noise, stage_pre_space, ArgumentNoise, ExpectedExpressionArgument,
+    ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
+    OptionalGroupArgumentParser,
 };
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-pub use environment_parser::{EnvironmentBody, EnvironmentBodyParser};
-pub use group_parser::GroupParser;
+pub use environment_parser::{
+    EnvironmentBody, EnvironmentBodyParser, EnvironmentTerminatorMismatch,
+    MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingTerminatorFound,
+};
+pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
 pub use invocation_parser::StdInvocationParser;
 pub use nodes_parser::{
-    NodesOutcome, NodesParser, StopCause, StopSpec, TokenStopCondition, TokenStopKind,
+    ExpressionCallableTakesArguments, NodesOutcome, NodesParser, StopCause, StopSpec,
+    TokenStopCondition, TokenStopKind, UnresolvableCommand, UnusableRecoveryToken,
+    UnusableRecoveryTokenKind,
 };
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::engine::ParserSession;
-use crate::error::{ParseError, ParseErrorKind, Recovery};
+use crate::engine::{Frame, FrameTitle, ParserSession};
+use crate::error::{DiagnosticData, DiagnosticInfo, ParseError, Recovery};
 use crate::source::{Source, SourceSpan, Span};
-use crate::spec::CallableSpec;
+use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind, TokenReader};
 
@@ -84,19 +91,45 @@ pub(crate) fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: u
 /// reports `None` **without diagnosing or consuming** — the caller treats the position
 /// as unusable (argument absent, terminator malformed) and the enclosing content loop
 /// re-reads the error and applies its own token recovery, avoiding a double report.
+///
+/// A token error carrying **no** recovery is unrecoverable and aborts even under
+/// [`Recovery::Tolerant`] — mirroring the content loop, whose re-read would abort
+/// anyway; reporting `None` first would only add a spurious absent-position recovery
+/// (and its diagnostic) on the way down.
 pub(crate) fn try_peek<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
 ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
     match cx.tokens.peek(&cx.state) {
         Ok(token) => Ok(Some(token)),
-        Err(error) => match cx.session.recovery {
-            Recovery::Tolerant => Ok(None),
-            Recovery::Strict => {
-                let kind = ParseErrorKind::Token(error.kind());
-                let span = SourceSpan::new(&cx.source, error.span().range());
-                Err(ParseError::new(kind, span))
+        Err(error) => {
+            if cx.session.recovery == Recovery::Tolerant && error.recovery().is_some() {
+                return Ok(None);
             }
+            let span = SourceSpan::new(&cx.source, error.span().range());
+            Err(ParseError::from_token_error(error.kind().clone(), span)
+                .with_frames(cx.session.snapshot_frames()))
+        }
+    }
+}
+
+/// The live frame covering a resolved invocation's parse (the dispatch push site,
+/// DESIGN_RATIONALE.md §3.8): the spec's title hook with the invocation spelling — the
+/// trigger token minus its syntactic post-space — anchored at the trigger. Built before
+/// the `Invocation` moves into the spec's parser factory; allocation-free (`Arc` bumps
+/// only).
+pub(crate) fn invocation_frame<L: Lang>(
+    cx: &ParseContext<'_, '_, L>,
+    invocation: &Invocation<'_, '_, L>,
+) -> Frame<L> {
+    let token = invocation.token;
+    let name_span = Span::new(token.span.start, token.post_space().start);
+    Frame {
+        title: FrameTitle::Callable {
+            spec: Arc::clone(invocation.spec),
+            role: FrameRole::Invocation,
+            name: SourceSpan::new(&cx.source, name_span.range()),
         },
+        span: SourceSpan::new(&cx.source, token.span.range()),
     }
 }
 
@@ -120,16 +153,47 @@ pub struct ParseContext<'a, 's, L: Lang> {
 }
 
 impl<L: Lang> ParseContext<'_, '_, L> {
-    /// Detection-site recovery — forwards to [`ParserSession::recover`]: tolerant mode
-    /// records the condition as a diagnostic and returns `Ok(())` (the caller continues
-    /// with its local recovery); strict mode returns the condition as a [`ParseError`]
-    /// to bubble.
+    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md §3.8):
+    /// boxes the condition and hands it to the session's record-or-abort primitive
+    /// ([`ParserSession::recover`]). Tolerant mode records the condition as an
+    /// error-severity diagnostic and returns `Ok(())` (the caller continues with its
+    /// local recovery); strict mode returns the condition as a [`ParseError`] to bubble.
+    ///
+    /// The funnel lives here, not on the session, because condition refinement
+    /// (`Lang::refine_diagnostic`) needs the context's parsing state.
     pub fn recover(
         &mut self,
-        kind: ParseErrorKind,
+        condition: impl DiagnosticInfo,
         span: SourceSpan<L::SourceOrigin>,
     ) -> Result<(), ParseError<L::SourceOrigin>> {
-        self.session.recover(kind, span)
+        self.recover_boxed(Box::new(condition), span)
+    }
+
+    /// The funnel's boxed entry — for payloads that already live behind the dyn facade
+    /// (the token-error lift, where a `Custom` payload must not be double-boxed).
+    /// Applies [`Lang::refine_diagnostic`] exactly once — this is why the funnel sits on
+    /// the context: refinement needs the parsing state.
+    pub(crate) fn recover_boxed(
+        &mut self,
+        data: Box<dyn DiagnosticData>,
+        span: SourceSpan<L::SourceOrigin>,
+    ) -> Result<(), ParseError<L::SourceOrigin>> {
+        let data = L::refine_diagnostic(data, &self.state);
+        self.session.recover(data, span)
+    }
+
+    /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point
+    /// primitive of the parse traceback (DESIGN_RATIONALE.md §3.8): every condition the
+    /// recover funnel records while `f` runs carries the frame in its snapshot.
+    ///
+    /// Closure-scoped rather than an RAII guard, deliberately: a guard would hold
+    /// `&mut self` against the parser body. The pop after `f` returns covers the `Err`
+    /// path too — a bubbling [`ParseError`] leaves no stale frames behind.
+    pub fn with_frame<R>(&mut self, frame: Frame<L>, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.session.push_frame(frame);
+        let result = f(self);
+        self.session.pop_frame();
+        result
     }
 }
 

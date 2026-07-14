@@ -43,7 +43,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 
-use crate::error::ParseErrorKind;
+use crate::error::DiagnosticInfo;
 use crate::node::{
     BuildId, CallableData, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
     ParsedSlots,
@@ -55,9 +55,79 @@ use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
+use super::nodes_parser::{ExpressionCallableTakesArguments, UnresolvableCommand};
 use super::{
     resume_at, try_peek, ConstructParser, ConstructParserResult, Invocation, ParseContext,
 };
+
+/// Condition: a mandatory argument was missing at its position (end of input, a
+/// paragraph break, an enclosing group close) — detected by the mandatory argument
+/// parsers, which report the argument absent after recording it
+/// (DESIGN_RATIONALE.md §3.8). No callable name in the payload: the frame stack renders
+/// the enclosing invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MissingMandatoryArgument {
+    /// The argument's declared name, when the spec has one.
+    pub argument_name: Option<String>,
+}
+
+impl MissingMandatoryArgument {
+    /// The condition for the (optionally named) argument.
+    pub fn new(argument_name: Option<String>) -> MissingMandatoryArgument {
+        MissingMandatoryArgument { argument_name }
+    }
+}
+
+impl fmt::Display for MissingMandatoryArgument {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "missing mandatory argument")?;
+        if let Some(name) = &self.argument_name {
+            write!(f, " ‘{}’", name)?;
+        }
+        Ok(())
+    }
+}
+
+impl DiagnosticInfo for MissingMandatoryArgument {
+    const IDENTIFIER: &'static str = "core.argument_parsers.missing-mandatory-argument";
+}
+
+/// Condition: no expression could start at a mandatory single-expression argument's
+/// position ([`ExpressionParser`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExpectedExpressionArgument {
+    /// The argument's declared name, when the spec has one.
+    pub argument_name: Option<String>,
+}
+
+impl ExpectedExpressionArgument {
+    /// The condition for the (optionally named) argument.
+    pub fn new(argument_name: Option<String>) -> ExpectedExpressionArgument {
+        ExpectedExpressionArgument { argument_name }
+    }
+}
+
+impl fmt::Display for ExpectedExpressionArgument {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "expected an expression argument")?;
+        if let Some(name) = &self.argument_name {
+            write!(f, " ‘{}’", name)?;
+        }
+        Ok(())
+    }
+}
+
+impl DiagnosticInfo for ExpectedExpressionArgument {
+    const IDENTIFIER: &'static str = "core.argument_parsers.expected-expression-argument";
+}
+
+/// The argument's declared name as an owned payload field
+/// ([`MissingMandatoryArgument::argument_name`]).
+fn argument_name<L: Lang>(spec: &ArgumentSpec<L>) -> Option<String> {
+    spec.name.as_deref().map(String::from)
+}
 
 // --- the shared noise scan ----------------------------------------------------------
 
@@ -156,15 +226,6 @@ fn stage<L: Lang>(cx: &mut ParseContext<'_, '_, L>, kind: NodeKind<L>, span: Spa
     )
 }
 
-/// ` ‘name’` when the spec is named — diagnostics mention the argument by name where
-/// one exists.
-fn argument_label<L: Lang>(spec: &ArgumentSpec<L>) -> String {
-    match &spec.name {
-        Some(name) => format!(" ‘{}’", name),
-        None => String::new(),
-    }
-}
-
 // --- the expression core --------------------------------------------------------------
 
 /// Parse the single expression node starting at `next` (a noise scan's stop token,
@@ -230,9 +291,8 @@ fn parse_expression_node<'s, L: Lang>(
                     // The decided unresolvable-command recovery (§3.8), in expression
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
-                    let message = format!("cannot resolve command ‘{}{}’", escape_char, name);
                     cx.recover(
-                        ParseErrorKind::Syntax { message },
+                        UnresolvableCommand::new(*name, *escape_char),
                         SourceSpan::new(&cx.source, next.span.range()),
                     )?;
                     stage_pre_space(cx, nodes, next.pre_space);
@@ -268,12 +328,8 @@ fn dispatch_expression_invocation<'s, L: Lang>(
 ) -> ConstructParserResult<L, Option<BuildId>> {
     let token = invocation.token;
     if !invocation.spec.arguments().is_empty() || !invocation.spec.slots().is_empty() {
-        let message = format!(
-            "cannot use ‘{}’ as a single expression: it takes arguments",
-            display
-        );
         cx.recover(
-            ParseErrorKind::Syntax { message },
+            ExpressionCallableTakesArguments::new(display),
             SourceSpan::new(&cx.source, token.span.range()),
         )?;
         stage_pre_space(cx, nodes, token.pre_space);
@@ -306,11 +362,13 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     }
 
     stage_pre_space(cx, nodes, token.pre_space);
+    // The invocation's traceback frame (the expression-position dispatch site, §3.8).
+    let frame = super::invocation_frame(cx, &invocation);
     // Consume the trigger whole before the parser runs (the dispatch contract, §3.6).
     cx.tokens.move_past(token, true);
     let spec = invocation.spec;
     let mut parser = spec.make_invocation_parser(invocation);
-    let result = parser.parse(cx);
+    let result = cx.with_frame(frame, |cx| parser.parse(cx));
     drop(parser);
     let (id, _delta) = result?; // after-effect deltas have no scope here (fn docs)
     nodes.push(id);
@@ -352,13 +410,11 @@ impl<L: Lang> ArgumentParser<L> for ExpressionParser {
         match expression {
             Some(_) => Ok(Some(region_with_last_as_content(noise.nodes))),
             None => {
-                let message =
-                    format!("expected an expression argument{}", argument_label(spec));
                 let at = noise.next.as_ref().map(|token| token.span).unwrap_or_else(|| {
                     Span::empty(cx.tokens.pos())
                 });
                 cx.recover(
-                    ParseErrorKind::Syntax { message },
+                    ExpectedExpressionArgument::new(argument_name(spec)),
                     SourceSpan::new(&cx.source, at.range()),
                 )?;
                 noise.rewind(cx);
@@ -442,14 +498,13 @@ fn missing_mandatory<L: Lang>(
     noise: ArgumentNoise<'_, L>,
     spec: &ArgumentSpec<L>,
 ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
-    let message = format!("missing mandatory argument{}", argument_label(spec));
     let at = noise
         .next
         .as_ref()
         .map(|token| token.span)
         .unwrap_or_else(|| Span::empty(cx.tokens.pos()));
     cx.recover(
-        ParseErrorKind::Syntax { message },
+        MissingMandatoryArgument::new(argument_name(spec)),
         SourceSpan::new(&cx.source, at.range()),
     )?;
     noise.rewind(cx);
@@ -1314,6 +1369,87 @@ mod tests {
         assert_eq!(frac.span().range(), 1..6);
         assert!(frac.arguments().unwrap().iter().all(|arg| !arg.is_provided()));
         assert_eq!(parsed.result.diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn unrecoverable_token_error_while_probing_aborts_even_tolerant() {
+        // The try_peek recoverability rule (§3.8): a token error carrying no recovery
+        // must abort even under Tolerant — reporting the argument absent instead would
+        // record a spurious missing-argument diagnostic before the enclosing loop's
+        // re-read aborted anyway.
+        use crate::token::{EndOfStreamAfterEscape, TokenError, TokenErrorKind, TokenResult};
+
+        struct BrokenReader;
+        impl<'s> TokenReader<'s, ArgLang> for BrokenReader {
+            fn peek(
+                &mut self,
+                _state: &ParsingState<ArgLang>,
+            ) -> TokenResult<'s, ArgLang, Token<'s, ArgLang>> {
+                Err(TokenError::new(
+                    TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
+                        '\\',
+                    )),
+                    Span::new(0, 1),
+                    None, // unrecoverable
+                ))
+            }
+
+            fn move_past(&mut self, _token: &Token<'s, ArgLang>, _skip_post_space: bool) {}
+
+            fn move_to(&mut self, _token: &Token<'s, ArgLang>, _rewind_pre_space: bool) {}
+
+            fn pos(&self) -> usize {
+                0
+            }
+        }
+
+        let source: Arc<Source> = Arc::new(Source::new("x"));
+        let st = state_with(&[]);
+        let mut reader = BrokenReader;
+        let mut session = ParserSession::new(Recovery::Tolerant);
+        let mut cx = ParseContext {
+            tokens: &mut reader,
+            source: Arc::clone(&source),
+            state: Arc::clone(&st),
+            session: &mut session,
+        };
+
+        let spec = brace_arg();
+        let err = spec
+            .parser
+            .parse_argument(&mut cx, &spec)
+            .expect_err("an unrecoverable token error must abort the probe");
+        assert_eq!(err.identifier(), EndOfStreamAfterEscape::IDENTIFIER);
+        // No spurious absent-argument diagnostic was recorded on the way out.
+        assert!(session.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn argument_diagnostics_carry_argument_and_invocation_frames() {
+        // `\frac{a}` (tolerant): the missing second argument is diagnosed under two
+        // frames — the argument's (innermost) and the invocation's — titled through the
+        // spec's defaulted stack_frame_title hook at snapshot time.
+        let st = state_with(&[("frac", vec![brace_arg(), brace_arg()])]);
+        let parsed = parse_std(r"\frac{a}", &st, Recovery::Tolerant);
+
+        let diagnostic = parsed
+            .result
+            .diagnostics
+            .with_identifier(MissingMandatoryArgument::IDENTIFIER)
+            .next()
+            .unwrap();
+        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["argument #2 of ‘\\frac’", "callable ‘\\frac’"]);
+        // The argument frame is anchored where the argument's region starts; the
+        // invocation frame at the trigger.
+        assert_eq!(diagnostic.frames()[0].span().range(), 8..8);
+        assert_eq!(diagnostic.frames()[1].span().range(), 0..5);
+
+        // A strict abort carries the same snapshot on the ParseError.
+        let mut reader = StdTokenReader::new(r"\frac{a}");
+        let err = try_run(r"\frac{a}", &mut reader, &st, Recovery::Strict).unwrap_err();
+        let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(titles, ["argument #2 of ‘\\frac’", "callable ‘\\frac’"]);
     }
 
     // --- expression-position rules -------------------------------------------------------

@@ -47,7 +47,10 @@ mod specials;
 #[allow(clippy::module_inception)]
 mod token;
 
-pub use error::{TokenError, TokenErrorKind, TokenRecovery, TokenResult};
+pub use error::{
+    EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
+    TokenResult,
+};
 pub use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdTokenReader, TokenReader};

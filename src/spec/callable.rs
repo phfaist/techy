@@ -5,6 +5,8 @@
 //! type (decided July 2026; formerly an open interned id).
 
 use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -14,6 +16,21 @@ use crate::node::BuildId;
 use crate::state::Lang;
 
 use super::structure::{ArgumentSpec, SlotSpec};
+
+/// Which part of a callable's parse a live traceback [`Frame`](crate::engine::Frame)
+/// covers — the `role` input of [`CallableSpec::stack_frame_title`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FrameRole {
+    /// The invocation itself (arguments and body included), dispatched from a content
+    /// loop or an expression position.
+    Invocation,
+    /// One declared argument of the invocation.
+    Argument {
+        /// The argument's 0-based index in invocation order (rendered 1-based).
+        index: usize,
+    },
+}
 
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and no
 /// invocation form; one spec may back several names (`\emph` and `\textit` can share), and
@@ -75,6 +92,24 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync {
         's: 'a,
     {
         Box::new(StdInvocationParser::new(invocation))
+    }
+
+    /// Title of a parse-traceback frame covering this callable (DESIGN_RATIONALE.md
+    /// §3.8): called at *snapshot* time — the cold path, when a condition is recorded —
+    /// never on push, so live frames stay allocation-free. `name` is the invocation
+    /// spelling as written (`\frac`, `~`), sliced from the source at snapshot time; the
+    /// spec itself is de-keyed and cannot know it.
+    ///
+    /// The default renders `callable ‘\frac’` / `argument #1 of ‘\frac’` — the core has
+    /// no construct taxonomy; a preset overrides this to speak its own vocabulary
+    /// ("macro ‘\frac’", "environment ‘align’").
+    fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
+        match role {
+            FrameRole::Invocation => format!("callable ‘{}’", name),
+            FrameRole::Argument { index } => {
+                format!("argument #{} of ‘{}’", index + 1, name)
+            }
+        }
     }
 }
 

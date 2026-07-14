@@ -39,11 +39,13 @@
 //!
 //! Under [`Recovery::Strict`](crate::error::Recovery) both conditions abort instead.
 
-use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
+use core::fmt;
 use core::mem;
 
-use crate::error::ParseErrorKind;
+use crate::engine::{Frame, FrameTitle};
+use crate::error::DiagnosticInfo;
 use crate::node::{BuildId, GroupData, NodeKind};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingStateDelta};
@@ -52,6 +54,55 @@ use crate::token::GroupRule;
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
 use super::{ConstructParser, ConstructParserResult, ParseContext};
+
+/// Condition: a delimited group was never closed with its expected delimiter — detected
+/// by [`GroupParser`], which defines the condition next to its detection site
+/// (DESIGN_RATIONALE.md §3.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnclosedGroup {
+    /// The close delimiter the group expected (as written, e.g. `}`).
+    pub expected_close: String,
+    /// What blocked the close instead.
+    pub found: UnclosedGroupFound,
+}
+
+/// What an [`UnclosedGroup`] ran into instead of its close delimiter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnclosedGroupFound {
+    /// The input ended inside the group.
+    EndOfInput,
+    /// A close delimiter belonging to a different pairing appeared (the group unwinds,
+    /// leaving the stray token for an enclosing level to claim).
+    StrayClose,
+}
+
+impl UnclosedGroup {
+    /// The condition for a group expecting `expected_close`.
+    pub fn new(expected_close: impl Into<String>, found: UnclosedGroupFound) -> UnclosedGroup {
+        UnclosedGroup { expected_close: expected_close.into(), found }
+    }
+}
+
+impl fmt::Display for UnclosedGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.found {
+            UnclosedGroupFound::EndOfInput => write!(
+                f,
+                "unclosed group: expected ‘{}’ before end of input",
+                self.expected_close
+            ),
+            UnclosedGroupFound::StrayClose => {
+                write!(f, "unclosed group: expected ‘{}’", self.expected_close)
+            }
+        }
+    }
+}
+
+impl DiagnosticInfo for UnclosedGroup {
+    const IDENTIFIER: &'static str = "core.group_parser.unclosed-group";
+}
 
 /// The group construct parser: a tier-2 temporary, constructed per group descent from
 /// the opening token's facts (see the module docs for the contract).
@@ -108,8 +159,17 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             true,
         );
         let mut interior = NodesParser::new(stop).with_child_states(self.child_states.clone());
+        // The group-interior traceback frame (§3.8): conditions detected inside the
+        // group carry `group ‘{’` @ the open delimiter in their snapshot.
+        let frame = Frame {
+            title: FrameTitle::Quoted {
+                label: "group",
+                name: SourceSpan::new(&cx.source, self.open_span.range()),
+            },
+            span: SourceSpan::new(&cx.source, self.open_span.range()),
+        };
         let outer_state = mem::replace(&mut cx.state, interior_state);
-        let result = interior.parse(cx);
+        let result = cx.with_frame(frame, |cx| interior.parse(cx));
         cx.state = outer_state;
         let (outcome, delta) = result?;
         debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
@@ -120,12 +180,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             StopCause::TokenCondition { span } => (TextContent::Spanned(span), span.end),
             StopCause::EndOfInput => {
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: format!(
-                            "unclosed group: expected ‘{}’ before end of input",
-                            self.rule.close
-                        ),
-                    },
+                    UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::EndOfInput),
                     SourceSpan::new(&cx.source, self.open_span.range()),
                 )?;
                 (TextContent::empty(), cx.tokens.pos())
@@ -134,9 +189,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             // group here, leave the token for an enclosing level (or the root) to claim.
             StopCause::UnexpectedGroupClose { span } => {
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: format!("unclosed group: expected ‘{}’", self.rule.close),
-                    },
+                    UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::StrayClose),
                     SourceSpan::new(&cx.source, span.range()),
                 )?;
                 (TextContent::empty(), span.start)
@@ -276,7 +329,13 @@ mod tests {
         assert_eq!(pos, 3);
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
+        // The wording stays covered by a Display assertion…
         assert_eq!(diagnostic.message(), "unclosed group: expected ‘}’ before end of input");
+        // …while machine consumers read the structured condition (§3.8).
+        assert_eq!(diagnostic.identifier(), UnclosedGroup::IDENTIFIER);
+        let condition = diagnostic.data().downcast_ref::<UnclosedGroup>().unwrap();
+        assert_eq!(condition.expected_close, "}");
+        assert_eq!(condition.found, UnclosedGroupFound::EndOfInput);
         // The diagnostic points at the open delimiter that was never closed.
         assert_eq!(diagnostic.span().range(), 0..1);
     }

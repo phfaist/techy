@@ -2,8 +2,9 @@
 name = "techy"
 version = "0.1.0"
 edition = "2021"
-# core::error::Error (used for no_std-friendly error types) stabilized in 1.81.
-rust-version = "1.81"
+# Dyn trait upcasting to `dyn Any` (diagnostics condition payloads, DESIGN_RATIONALE.md
+# §3.8) stabilized in 1.86; core::error::Error, the previous pin, needed only 1.81.
+rust-version = "1.86"
 authors = ["Philippe Faist"]
 description = "A fast, extensible LaTeX parser for Rust"
 license = "MIT"

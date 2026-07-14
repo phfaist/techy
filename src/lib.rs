@@ -82,14 +82,18 @@ pub mod token;
 
 // Re-export the public API of the implemented topics.
 pub use constructs::{
-    ChildStateSpec, ConstructParser, ConstructParserResult, GroupChildState, GroupParser,
-    Invocation, InvocationChildState, NodesOutcome, NodesParser, ParseContext, StopCause,
-    StopSpec, TokenStopCondition, TokenStopKind,
+    ChildStateSpec, ConstructParser, ConstructParserResult, EnvironmentTerminatorMismatch,
+    ExpectedExpressionArgument, ExpressionCallableTakesArguments, GroupChildState,
+    GroupParser, Invocation, InvocationChildState, MalformedEnvironmentTerminator,
+    MissingEnvironmentTerminator, MissingMandatoryArgument, MissingTerminatorFound,
+    NodesOutcome, NodesParser, ParseContext, StopCause, StopSpec, TokenStopCondition,
+    TokenStopKind, UnclosedGroup, UnclosedGroupFound, UnresolvableCommand,
+    UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
-pub use engine::{ParseResult, ParserSession};
+pub use engine::{Frame, FrameTitle, ParseResult, ParserSession};
 pub use error::{
-    format_position, format_traceback, Diagnostic, Diagnostics, ParseError, ParseErrorKind,
-    Recovery, Severity,
+    format_position, format_traceback, Diagnostic, DiagnosticData, DiagnosticInfo,
+    DiagnosticValue, Diagnostics, ParseError, Recovery, Severity, TraceFrame,
 };
 pub use source::{
     LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError, Source, SourceContent,
@@ -102,16 +106,18 @@ pub use node::{
     ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
 };
 pub use spec::{
-    ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes, SlotSpec, StdCallableSpec,
+    ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes, SlotSpec,
+    StdCallableSpec,
 };
 pub use state::{
     Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable, SimpleLang, StateData,
     TokenRulesOverrides,
 };
 pub use token::{
-    skip_whitespace, CommandRule, CommentRule, GroupRule, PrefixTable, SpecialsMatch,
-    StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenListReader, TokenReader,
-    TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+    skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,
+    GroupRule, PrefixTable, SpecialsMatch, StdTokenReader, Token, TokenError, TokenErrorKind,
+    TokenKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
+    TriggerChars, WhitespaceRules,
 };
 
 /// Library version

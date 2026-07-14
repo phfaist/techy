@@ -6,6 +6,7 @@
 //! and moving it there would recreate a module cycle for cosmetics (ARCHITECTURE.md
 //! §engine stratum note).
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
@@ -13,6 +14,7 @@ use core::hash::Hash;
 
 use alloc::vec::Vec;
 
+use crate::error::DiagnosticData;
 use crate::library::LibraryStack;
 use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
 use crate::source::{SourceOrigin, SourceSpan};
@@ -324,6 +326,28 @@ pub trait Lang: Sized {
     ) -> NodeKind<Self> {
         let _ = state;
         NodeKind::chars(token.span)
+    }
+
+    /// Condition refinement (DESIGN_RATIONALE.md §3.8): replace a condition payload with
+    /// a language-specific one before it is recorded. Applied exactly once, in the
+    /// recover funnel ([`ParseContext::recover`](crate::constructs::ParseContext::recover)
+    /// — at the context level, where the parsing state is in scope). The default is the
+    /// identity.
+    ///
+    /// A `Lang` downcasts `data`, decides from the state, and returns either the
+    /// original box or its own [`DiagnosticInfo`](crate::error::DiagnosticInfo) type —
+    /// e.g. FLM mapping a forbidden-`$` token condition to a `DollarMathDisabled` whose
+    /// `Display` explains the configuration option. The replacement is *structured*:
+    /// tools see (and can attach quickfixes to) the refined condition, not just better
+    /// prose. State-dependent information the message needs is baked into the refined
+    /// payload's fields here — conditions stay self-contained after the parse (no state
+    /// references inside errors, no lazy rendering).
+    fn refine_diagnostic(
+        data: Box<dyn DiagnosticData>,
+        state: &ParsingState<Self>,
+    ) -> Box<dyn DiagnosticData> {
+        let _ = state;
+        data
     }
 
     /// Centralized node finalization, run by

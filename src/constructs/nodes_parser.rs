@@ -74,7 +74,6 @@
 //! neighboring chars runs. Group recovery (unclosed at end of input, mismatched close)
 //! lives in [`GroupParser`]. `Err` means abort — nobody continues past one.
 
-use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -82,7 +81,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 
-use crate::error::{ParseError, ParseErrorKind};
+use crate::error::{DiagnosticInfo, ParseError};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
@@ -90,7 +89,130 @@ use crate::token::{Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
-use super::{resume_at, ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use super::{
+    invocation_frame, resume_at, ConstructParser, ConstructParserResult, Invocation,
+    ParseContext,
+};
+
+/// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
+/// ([`Lang::resolve_command`] returned `None`) — the content loop recovers with a
+/// span-backed chars fallback (DESIGN_RATIONALE.md §3.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnresolvableCommand {
+    /// The command name, as written (without the escape character).
+    pub name: String,
+    /// The escape character that introduced the command.
+    pub escape_char: char,
+}
+
+impl UnresolvableCommand {
+    /// The condition for the command `escape_char` + `name`.
+    pub fn new(name: impl Into<String>, escape_char: char) -> UnresolvableCommand {
+        UnresolvableCommand { name: name.into(), escape_char }
+    }
+}
+
+impl fmt::Display for UnresolvableCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot resolve command ‘{}{}’", self.escape_char, self.name)
+    }
+}
+
+impl DiagnosticInfo for UnresolvableCommand {
+    const IDENTIFIER: &'static str = "core.nodes_parser.unresolvable-command";
+}
+
+/// Condition: a callable declaring arguments or slots was used where a *single
+/// expression* was required (pylatexenc's requires-arguments diagnostic) — the
+/// expression position recovers by staging the bare single-token callable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExpressionCallableTakesArguments {
+    /// The callable's invocation spelling, as written (`\frac`, `~`).
+    pub callable: String,
+}
+
+impl ExpressionCallableTakesArguments {
+    /// The condition for the callable spelled `callable`.
+    pub fn new(callable: impl Into<String>) -> ExpressionCallableTakesArguments {
+        ExpressionCallableTakesArguments { callable: callable.into() }
+    }
+}
+
+impl fmt::Display for ExpressionCallableTakesArguments {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cannot use ‘{}’ as a single expression: it takes arguments",
+            self.callable
+        )
+    }
+}
+
+impl DiagnosticInfo for ExpressionCallableTakesArguments {
+    const IDENTIFIER: &'static str = "core.nodes_parser.expression-takes-arguments";
+}
+
+/// Condition: a [`TokenRecovery`](crate::token::TokenRecovery) placeholder token of a
+/// kind the content loop cannot process as content (a `Specials` or `GroupOpen`
+/// placeholder). The placeholder stands in for a failed read — it has no real source
+/// bytes behind it — so it cannot be dispatched or parsed as a construct; the loop
+/// recovers with a chars fallback over the error's span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnusableRecoveryToken {
+    /// The placeholder's spelling (the specials trigger or open delimiter as written).
+    pub spelling: String,
+    /// Which token kind the placeholder had.
+    pub kind: UnusableRecoveryTokenKind,
+}
+
+/// Which token kind an [`UnusableRecoveryToken`] placeholder had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnusableRecoveryTokenKind {
+    /// A `Specials` placeholder (a recognized trigger cannot be invoked without real
+    /// bytes to consume).
+    Specials,
+    /// A `GroupOpen` placeholder (a group cannot be parsed out of a delimiter with no
+    /// bytes behind it).
+    GroupOpen,
+}
+
+impl UnusableRecoveryToken {
+    /// The condition for a placeholder spelled `spelling`.
+    pub fn new(
+        spelling: impl Into<String>,
+        kind: UnusableRecoveryTokenKind,
+    ) -> UnusableRecoveryToken {
+        UnusableRecoveryToken { spelling: spelling.into(), kind }
+    }
+}
+
+impl fmt::Display for UnusableRecoveryToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            UnusableRecoveryTokenKind::Specials => write!(
+                f,
+                "cannot invoke specials ‘{}’ here: the token is a recovery placeholder \
+                 standing in for a tokenization error, with no source bytes to parse",
+                self.spelling
+            ),
+            UnusableRecoveryTokenKind::GroupOpen => write!(
+                f,
+                "cannot parse group opened by ‘{}’ here: the token is a recovery \
+                 placeholder standing in for a tokenization error, with no source bytes \
+                 to parse",
+                self.spelling
+            ),
+        }
+    }
+}
+
+impl DiagnosticInfo for UnusableRecoveryToken {
+    const IDENTIFIER: &'static str = "core.nodes_parser.unusable-recovery-token";
+}
 
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
 /// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
@@ -418,7 +540,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &mut ParseContext<'_, 's, L>,
         token: &Token<'s, L>,
         recovered: bool,
-        message: String,
+        condition: impl DiagnosticInfo,
     ) -> ConstructParserResult<L, bool> {
         if self.flush_through(cx, token.pre_space) {
             if !recovered {
@@ -426,10 +548,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             }
             return Ok(true);
         }
-        cx.recover(
-            ParseErrorKind::Syntax { message },
-            SourceSpan::new(&cx.source, token.span.range()),
-        )?;
+        cx.recover(condition, SourceSpan::new(&cx.source, token.span.range()))?;
         if !recovered {
             cx.tokens.move_past(token, true);
         }
@@ -456,11 +575,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             InvocationChildState::Fixed(state) => Arc::clone(state),
             InvocationChildState::Compute(compute) => compute(&cx.state, &invocation),
         };
+        // The invocation's traceback frame — built before the `Invocation` moves into
+        // the factory, pushed around the parser run (the dispatch push site, §3.8).
+        let frame = invocation_frame(cx, &invocation);
         cx.tokens.move_past(invocation.token, true);
         let spec = invocation.spec;
         let mut parser = spec.make_invocation_parser(invocation);
         let outer_state = mem::replace(&mut cx.state, base);
-        let result = parser.parse(cx);
+        let result = cx.with_frame(frame, |cx| parser.parse(cx));
         cx.state = outer_state;
         drop(parser);
         let (id, delta) = result?;
@@ -496,12 +618,17 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
             let (token, recovered) = match cx.tokens.peek(&cx.state) {
                 Ok(token) => (token, false),
                 Err(error) => {
-                    let kind = ParseErrorKind::Token(error.kind());
+                    let kind = error.kind().clone();
                     let span = SourceSpan::new(&cx.source, error.span().range());
                     match error.into_recovery() {
-                        None => return Err(ParseError::new(kind, span)),
+                        None => {
+                            return Err(ParseError::from_token_error(kind, span)
+                                .with_frames(cx.session.snapshot_frames()))
+                        }
                         Some(recovery) => {
-                            cx.recover(kind.clone(), span.clone())?;
+                            // The lift boxes the built-in token conditions and unwraps
+                            // a `Custom` payload (never double-boxed) — §3.8.
+                            cx.recover_boxed(kind.clone().into_condition(), span.clone())?;
                             // The recovery arm is the one arm that consumes no token,
                             // so loop progress rests entirely on the resume position
                             // advancing the reader (the `TokenRecovery::resume_pos`
@@ -513,7 +640,8 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             let before = cx.tokens.pos();
                             resume_at(cx.tokens, recovery.resume_pos);
                             if cx.tokens.pos() <= before {
-                                return Err(ParseError::new(kind, span));
+                                return Err(ParseError::from_token_error(kind, span)
+                                    .with_frames(cx.session.snapshot_frames()));
                             }
                             (recovery.token, true)
                         }
@@ -641,9 +769,8 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         None => {
                             // Unresolvable command (§3.8): diagnostic plus span-backed
                             // chars fallback.
-                            let message =
-                                format!("cannot resolve command ‘{}{}’", escape_char, name);
-                            if self.recover_as_chars(cx, &token, recovered, message)? {
+                            let condition = UnresolvableCommand::new(*name, *escape_char);
+                            if self.recover_as_chars(cx, &token, recovered, condition)? {
                                 return Ok((self.outcome(StopCause::NodeCondition), None));
                             }
                         }
@@ -655,8 +782,11 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // (callable type + spec). Recovery placeholders are never
                     // dispatched, as for commands.
                     if recovered {
-                        let message = format!("cannot invoke specials ‘{}’ here", name);
-                        if self.recover_as_chars(cx, &token, recovered, message)? {
+                        let condition = UnusableRecoveryToken::new(
+                            *name,
+                            UnusableRecoveryTokenKind::Specials,
+                        );
+                        if self.recover_as_chars(cx, &token, recovered, condition)? {
                             return Ok((self.outcome(StopCause::NodeCondition), None));
                         }
                         continue;
@@ -681,9 +811,11 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // one) has no real bytes behind it and cannot be parsed as a group:
                     // chars fallback, reader untouched.
                     if recovered {
-                        let message =
-                            format!("cannot parse group opened by ‘{}’ here", delim);
-                        if self.recover_as_chars(cx, &token, recovered, message)? {
+                        let condition = UnusableRecoveryToken::new(
+                            *delim,
+                            UnusableRecoveryTokenKind::GroupOpen,
+                        );
+                        if self.recover_as_chars(cx, &token, recovered, condition)? {
                             return Ok((self.outcome(StopCause::NodeCondition), None));
                         }
                         continue;
@@ -1647,9 +1779,12 @@ mod tests {
         let mut reader = StdTokenReader::new("ab#cd");
         let err =
             try_run("ab#cd", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
+        // The token error was lifted into the structured condition (§3.8): compare
+        // identifier and downcast fields (no PartialEq on the carriers).
+        assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
         assert_eq!(
-            *err.kind(),
-            ParseErrorKind::Token(TokenErrorKind::ForbiddenChar { ch: '#' })
+            err.data().downcast_ref::<crate::token::ForbiddenChar>().map(|c| c.ch),
+            Some('#')
         );
         assert_eq!(err.span().range(), 2..3);
     }
@@ -1669,7 +1804,7 @@ mod tests {
         ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
             let span = Span::new(self.pos, self.pos + 1);
             Err(TokenError::new(
-                TokenErrorKind::ForbiddenChar { ch: '#' },
+                TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('#')),
                 span,
                 Some(TokenRecovery {
                     token: Token::new(TokenKind::Char('#'), span, Span::empty(self.pos)),
@@ -1699,11 +1834,96 @@ mod tests {
         let mut reader = StuckRecoveryReader { pos: 0 };
         let err = try_run("ab", &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a non-advancing resume position must abort the parse");
+        assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
         assert_eq!(
-            *err.kind(),
-            ParseErrorKind::Token(TokenErrorKind::ForbiddenChar { ch: '#' })
+            err.data().downcast_ref::<crate::token::ForbiddenChar>().map(|c| c.ch),
+            Some('#')
         );
         assert_eq!(err.span().range(), 0..1);
+    }
+
+    // --- TokenErrorKind::Custom (§3.8: one extension mechanism serves both layers) --------
+
+    /// A language-defined token condition, carried by `TokenErrorKind::Custom`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TabooChar {
+        ch: char,
+    }
+
+    impl fmt::Display for TabooChar {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "the character ‘{}’ is taboo here", self.ch)
+        }
+    }
+
+    impl DiagnosticInfo for TabooChar {
+        const IDENTIFIER: &'static str = "taboolang.token.taboo-char";
+    }
+
+    /// A `scan_specials` reporting a recoverable `Custom` token error on `!` — the
+    /// extension point the variant exists for.
+    #[derive(Debug, Clone, Copy)]
+    struct TabooLang;
+    impl Lang for TabooLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn scan_specials<'s>(
+            _state: &ParsingState<Self>,
+            content: &'s str,
+            pos: usize,
+        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            if content[pos..].starts_with('!') {
+                let span = Span::new(pos, pos + 1);
+                Err(TokenError::new(
+                    TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
+                    span,
+                    Some(TokenRecovery {
+                        token: Token::new(TokenKind::Char('!'), span, Span::empty(pos)),
+                        resume_pos: pos + 1,
+                    }),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("!".into())
+        }
+    }
+
+    #[test]
+    fn custom_token_condition_flows_through_the_lift_unwrapped() {
+        let st = state_with(rules::<TabooLang>());
+
+        // Tolerant: a diagnostic with the language's own identifier; the placeholder
+        // char joins the content run.
+        let mut reader = StdTokenReader::new("a!b");
+        let parsed =
+            try_run("a!b", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+        assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a!b\""]);
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), TabooChar::IDENTIFIER);
+        // The downcast reaches the payload directly: the lift unwraps `Custom` — never
+        // double-boxed.
+        assert_eq!(
+            diagnostic.data().downcast_ref::<TabooChar>(),
+            Some(&TabooChar { ch: '!' })
+        );
+
+        // Strict: the same condition rides the ParseError.
+        let mut reader = StdTokenReader::new("a!b");
+        let err = try_run("a!b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+            .unwrap_err();
+        assert_eq!(err.identifier(), TabooChar::IDENTIFIER);
+        assert!(err.data().downcast_ref::<TabooChar>().is_some());
     }
 
     #[test]
@@ -1726,10 +1946,13 @@ mod tests {
         let mut reader = StdTokenReader::new("ab \\");
         let err =
             try_run("ab \\", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
-        assert!(matches!(
-            err.kind(),
-            ParseErrorKind::Token(TokenErrorKind::EndOfStreamAfterEscape { escape_char: '\\' })
-        ));
+        assert_eq!(err.identifier(), crate::token::EndOfStreamAfterEscape::IDENTIFIER);
+        assert_eq!(
+            err.data()
+                .downcast_ref::<crate::token::EndOfStreamAfterEscape>()
+                .map(|c| c.escape_char),
+            Some('\\')
+        );
     }
 
     // --- unresolvable-command recovery (§3.8) ---------------------------------------------
@@ -1755,6 +1978,37 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_inside_a_group_carry_the_group_frame() {
+        // `{\foo` (tolerant): the unresolvable command fires *inside* the group, so its
+        // snapshot carries the group frame; the unclosed-group condition fires after
+        // the interior frame is popped, so its snapshot is empty (root level).
+        let st = state();
+        let parsed =
+            run_both("{\\foo", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(parsed.result.diagnostics.len(), 2);
+
+        let unresolvable = parsed
+            .result
+            .diagnostics
+            .with_identifier(UnresolvableCommand::IDENTIFIER)
+            .next()
+            .unwrap();
+        assert_eq!(unresolvable.frames().len(), 1);
+        assert_eq!(unresolvable.frames()[0].title(), "group ‘{’");
+        assert_eq!(unresolvable.frames()[0].span().range(), 0..1);
+        // render() appends the traceback.
+        assert!(unresolvable.render().contains("Open blocks:\n  @ (line 1, col 1): group ‘{’"));
+
+        let unclosed = parsed
+            .result
+            .diagnostics
+            .with_identifier(super::super::UnclosedGroup::IDENTIFIER)
+            .next()
+            .unwrap();
+        assert!(unclosed.frames().is_empty());
+    }
+
+    #[test]
     fn unresolved_command_strict_aborts() {
         let st = state();
         let mut reader = StdTokenReader::new("a \\foo  b");
@@ -1777,6 +2031,81 @@ mod tests {
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_partition(&parsed.result, 0..8);
+    }
+
+    // --- Lang::refine_diagnostic (§3.8) -----------------------------------------------------
+
+    /// The refinement demonstration's own condition: structured, so tools see it — not
+    /// just better prose.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CommandsNotAvailable {
+        name: String,
+    }
+
+    impl fmt::Display for CommandsNotAvailable {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "command ‘\\{}’ is not available: this language defines no commands",
+                self.name
+            )
+        }
+    }
+
+    impl DiagnosticInfo for CommandsNotAvailable {
+        const IDENTIFIER: &'static str = "refinelang.commands.not-available";
+    }
+
+    /// A Lang that refines the core's [`UnresolvableCommand`] into its own condition —
+    /// the funnel applies the hook exactly once, on both the tolerant and strict paths.
+    #[derive(Debug, Clone, Copy)]
+    struct RefineLang;
+    impl Lang for RefineLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn refine_diagnostic(
+            data: alloc::boxed::Box<dyn crate::error::DiagnosticData>,
+            _state: &ParsingState<Self>,
+        ) -> alloc::boxed::Box<dyn crate::error::DiagnosticData> {
+            match data.downcast_ref::<UnresolvableCommand>() {
+                Some(condition) => alloc::boxed::Box::new(CommandsNotAvailable {
+                    name: condition.name.clone(),
+                }),
+                None => data,
+            }
+        }
+    }
+
+    #[test]
+    fn refine_diagnostic_replaces_the_condition_in_the_funnel() {
+        let st = state_with(rules::<RefineLang>());
+        let parsed = run_both(
+            "a \\foo b",
+            &st,
+            Recovery::Tolerant,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), CommandsNotAvailable::IDENTIFIER);
+        assert_eq!(
+            diagnostic.data().downcast_ref::<CommandsNotAvailable>().unwrap().name,
+            "foo"
+        );
+        assert!(diagnostic.message().contains("is not available"));
+
+        // Strict mode: the refined condition rides the ParseError too (one funnel).
+        let mut reader = StdTokenReader::new("a \\foo b");
+        let err = try_run("a \\foo b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+            .unwrap_err();
+        assert_eq!(err.identifier(), CommandsNotAvailable::IDENTIFIER);
     }
 
     // --- invocation dispatch (6.4) ----------------------------------------------------------
@@ -2395,6 +2724,24 @@ mod tests {
         // diagnoses, skips the token, and resumes. The skipped byte is dropped from the
         // tree: an accepted tolerant byte-accounting break, so this is the one tree the
         // invariant checker is deliberately not applied to.
+        //
+        // The condition is the driver's own, third-party style (§3.8): a root driver
+        // defines its diagnoses like any downstream language would.
+        #[derive(Debug, Clone)]
+        struct StrayGroupClose {
+            delim: String,
+        }
+
+        impl fmt::Display for StrayGroupClose {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "unexpected closing ‘{}’", self.delim)
+            }
+        }
+
+        impl DiagnosticInfo for StrayGroupClose {
+            const IDENTIFIER: &'static str = "test.root-driver.stray-group-close";
+        }
+
         let content = "a}b";
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state();
@@ -2415,9 +2762,7 @@ mod tests {
                 StopCause::UnexpectedGroupClose { span } => {
                     session
                         .recover(
-                            ParseErrorKind::Syntax {
-                                message: "unexpected closing ‘}’".into(),
-                            },
+                            Box::new(StrayGroupClose { delim: "}".into() }),
                             SourceSpan::new(&source, span.range()),
                         )
                         .unwrap();

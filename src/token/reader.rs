@@ -18,7 +18,10 @@
 use crate::source::Span;
 use crate::state::{Lang, ParsingState};
 
-use super::error::{TokenError, TokenErrorKind, TokenRecovery, TokenResult};
+use super::error::{
+    EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
+    TokenResult,
+};
 use super::rules::{CommandRule, TokenRules, WhitespaceRules};
 use super::token::{Token, TokenKind};
 
@@ -213,7 +216,7 @@ impl<'s> StdTokenReader<'s> {
             let span = Span::new(pos, pos + c.len_utf8());
             let placeholder = Token::new(TokenKind::Char(c), span, pre_space);
             return Err(TokenError::new(
-                TokenErrorKind::ForbiddenChar { ch: c },
+                TokenErrorKind::ForbiddenChar(ForbiddenChar::new(c)),
                 span,
                 Some(TokenRecovery { token: placeholder, resume_pos: span.end }),
             ));
@@ -311,7 +314,9 @@ impl<'s> StdTokenReader<'s> {
             // Recovery: pretend the stream ended here, resume at end of input.
             let placeholder = Token::new(TokenKind::EndOfStream, Span::empty(pos), pre_space);
             return Err(TokenError::new(
-                TokenErrorKind::EndOfStreamAfterEscape { escape_char: rule.escape_char },
+                TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
+                    rule.escape_char,
+                )),
                 Span::new(pos, name_start),
                 Some(TokenRecovery { token: placeholder, resume_pos: s.len() }),
             ));
@@ -1229,7 +1234,10 @@ mod tests {
         });
 
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
-        assert_eq!(err.kind(), TokenErrorKind::ForbiddenChar { ch: '%' });
+        assert!(matches!(
+            err.kind(),
+            TokenErrorKind::ForbiddenChar(ForbiddenChar { ch: '%' })
+        ));
         assert_eq!(err.span(), sp(0, 1));
 
         // Tolerant continuation: use the recovery token, resume past it.
@@ -1248,7 +1256,12 @@ mod tests {
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
 
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
-        assert_eq!(err.kind(), TokenErrorKind::EndOfStreamAfterEscape { escape_char: '\\' });
+        assert!(matches!(
+            err.kind(),
+            TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape {
+                escape_char: '\\',
+            })
+        ));
         assert_eq!(err.span(), sp(2, 3));
 
         // Recovery: pretend the stream ended at the dangling escape, resume at the end.

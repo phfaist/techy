@@ -62,12 +62,13 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 
+use crate::engine::{Frame, FrameTitle};
 use crate::node::{
     BuildId, CallableData, ChildRegion, NodeKind, ParsedArgument, ParsedArguments,
     ParsedSlots,
 };
-use crate::source::{SourceSpan, TextContent};
-use crate::spec::ArgumentSpec;
+use crate::source::{SourceSpan, Span, TextContent};
+use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingStateDelta};
 
 use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
@@ -75,26 +76,43 @@ use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
 /// Parse a callable's declared arguments at the reader's position — the argument half of
 /// [`StdInvocationParser`], shared with environment-shaped compositions (Phase 6.6).
 ///
-/// Iterates `argument_specs` in invocation order, running each argument's parser under
-/// the argument's own state — the spec's `parsing_state_delta` stacked on `cx.state`
-/// (§3.6 decided semantics 2), session-mediated, reverted structurally — and collects
-/// the provided regions' nodes into one child list plus one [`ParsedArgument`] entry per
-/// spec (absent arguments keep their entry and contribute no nodes). The returned
-/// regions are staged in child-list offsets, ready for the caller's
+/// Iterates `callable_spec.arguments()` in invocation order, running each argument's
+/// parser under the argument's own state — the spec's `parsing_state_delta` stacked on
+/// `cx.state` (§3.6 decided semantics 2), session-mediated, reverted structurally — and
+/// collects the provided regions' nodes into one child list plus one [`ParsedArgument`]
+/// entry per spec (absent arguments keep their entry and contribute no nodes). The
+/// returned regions are staged in child-list offsets, ready for the caller's
 /// [`ParsedArguments`] record.
+///
+/// Each argument runs under its traceback frame (`argument #N of ‘\frac’`, §3.8):
+/// `name_span` is the invocation spelling's span, quoted into the title at snapshot
+/// time — the spec is de-keyed, so the spelling must come from the caller.
 pub(crate) fn parse_declared_arguments<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
-    argument_specs: &[Arc<ArgumentSpec<L>>],
+    callable_spec: &Arc<dyn CallableSpec<L>>,
+    name_span: Span,
 ) -> ConstructParserResult<L, (Vec<BuildId>, Vec<ParsedArgument<L>>)> {
+    let argument_specs = callable_spec.arguments();
     let mut children: Vec<BuildId> = Vec::new();
     let mut arguments: Vec<ParsedArgument<L>> = Vec::with_capacity(argument_specs.len());
-    for argument_spec in argument_specs {
+    for (index, argument_spec) in argument_specs.iter().enumerate() {
         let argument_state = match &argument_spec.parsing_state_delta {
             Some(delta) => cx.session.derived_state(&cx.state, delta),
             None => Arc::clone(&cx.state),
         };
+        // The argument's traceback frame, anchored where the argument's region starts.
+        let frame = Frame {
+            title: FrameTitle::Callable {
+                spec: Arc::clone(callable_spec),
+                role: FrameRole::Argument { index },
+                name: SourceSpan::new(&cx.source, name_span.range()),
+            },
+            span: SourceSpan::new(&cx.source, Span::empty(cx.tokens.pos()).range()),
+        };
         let outer_state = mem::replace(&mut cx.state, argument_state);
-        let result = argument_spec.parser.parse_argument(cx, argument_spec);
+        let result = cx.with_frame(frame, |cx| {
+            argument_spec.parser.parse_argument(cx, argument_spec)
+        });
         cx.state = outer_state;
         match result? {
             Some(region) => {
@@ -144,8 +162,11 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         );
 
         let token = self.invocation.token;
+        // The invocation spelling (trigger minus syntactic post-space) titles the
+        // argument frames.
+        let name_span = Span::new(token.span.start, token.post_space().start);
         let (children, arguments) =
-            parse_declared_arguments(cx, self.invocation.spec.arguments())?;
+            parse_declared_arguments(cx, self.invocation.spec, name_span)?;
 
         // Span: trigger through the last child (regions are span-contiguous); the
         // trigger's span alone for argument-less shapes (6.4 parity).

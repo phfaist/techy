@@ -12,8 +12,10 @@
 //! inside, and `Lang::scan_specials` implementations return them) — token machinery lives
 //! wholly in the S1 stratum, so error types are free to grow language/state context later.
 
+use alloc::boxed::Box;
 use core::fmt;
 
+use crate::error::{DiagnosticData, DiagnosticInfo};
 use crate::source::Span;
 use crate::state::Lang;
 
@@ -22,24 +24,96 @@ use super::token::Token;
 /// Result type of tokenization operations.
 pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 
-/// What went wrong while reading a token.
-///
-/// Closed enum per the naming rule (`…Kind`); grows as the tokenizer learns to detect more
-/// error conditions — hence `#[non_exhaustive]`, matching the `ParseErrorKind` wrapper
-/// that carries it.
+/// Condition: the input ended immediately after a command escape character, before any
+/// name (DESIGN_RATIONALE.md §3.8 — the token layer's conditions are ordinary
+/// [`DiagnosticInfo`] data structs, wrapped by [`TokenErrorKind`] for the recovery
+/// protocol).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+pub struct EndOfStreamAfterEscape {
+    /// The escape character that was read.
+    pub escape_char: char,
+}
+
+impl EndOfStreamAfterEscape {
+    /// The condition for the given escape character.
+    pub fn new(escape_char: char) -> EndOfStreamAfterEscape {
+        EndOfStreamAfterEscape { escape_char }
+    }
+}
+
+impl fmt::Display for EndOfStreamAfterEscape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "expected command name after escape character ‘{}’ but reached end of input",
+            self.escape_char
+        )
+    }
+}
+
+impl DiagnosticInfo for EndOfStreamAfterEscape {
+    const IDENTIFIER: &'static str = "core.token.end-of-stream-after-escape";
+}
+
+/// Condition: a character listed in `TokenRules::forbidden_chars` appeared as content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ForbiddenChar {
+    /// The forbidden character encountered.
+    pub ch: char,
+}
+
+impl ForbiddenChar {
+    /// The condition for the given character.
+    pub fn new(ch: char) -> ForbiddenChar {
+        ForbiddenChar { ch }
+    }
+}
+
+impl fmt::Display for ForbiddenChar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", self.ch, self.ch as u32)
+    }
+}
+
+impl DiagnosticInfo for ForbiddenChar {
+    const IDENTIFIER: &'static str = "core.token.forbidden-char";
+}
+
+/// What went wrong while reading a token.
+///
+/// Closed enum per the naming rule (`…Kind`); grows as the tokenizer learns to detect
+/// more error conditions — hence `#[non_exhaustive]`. The built-in variants wrap plain
+/// condition structs (each a [`DiagnosticInfo`] impl) and [`Custom`](Self::Custom)
+/// carries any language-defined payload, so token errors join the structured-diagnostics
+/// model while the token layer keeps a concrete matchable enum for the recovery protocol
+/// (DESIGN_RATIONALE.md §3.8). Not `Copy` (a custom payload is boxed) and no `PartialEq`
+/// — consumers match the variants or downcast the payload.
+#[derive(Debug, Clone)]
+#[non_exhaustive] // ### PhF - why non_exhaustive since we have Custom(Box<dyn...>)?
 pub enum TokenErrorKind {
     /// The input ended immediately after a command escape character, before any name.
-    EndOfStreamAfterEscape {
-        /// The escape character that was read.
-        escape_char: char,
-    },
+    EndOfStreamAfterEscape(EndOfStreamAfterEscape),
     /// A character listed in `TokenRules::forbidden_chars` appeared as content.
-    ForbiddenChar {
-        /// The forbidden character encountered.
-        ch: char,
-    },
+    ForbiddenChar(ForbiddenChar),
+    /// A language-defined condition, reported by an extension point participating in
+    /// the recovery protocol (`Lang::scan_specials`, a custom
+    /// [`TokenReader`](super::TokenReader)) — one extension mechanism serves both
+    /// layers (§3.8).
+    Custom(Box<dyn DiagnosticData>),
+}
+
+impl TokenErrorKind {
+    /// Lift the kind into a condition payload (DESIGN_RATIONALE.md §3.8): the built-in
+    /// conditions are boxed; a `Custom` payload is unwrapped, never double-boxed.
+    pub(crate) fn into_condition(self) -> Box<dyn DiagnosticData> {
+        match self {
+            TokenErrorKind::EndOfStreamAfterEscape(condition) => Box::new(condition),
+            TokenErrorKind::ForbiddenChar(condition) => Box::new(condition),
+            TokenErrorKind::Custom(data) => data,
+        }
+    }
 }
 
 /// An error encountered while reading a token, with an optional recovery possibility.
@@ -84,8 +158,8 @@ impl<'s, L: Lang> TokenError<'s, L> {
     }
 
     /// What went wrong.
-    pub fn kind(&self) -> TokenErrorKind {
-        self.kind
+    pub fn kind(&self) -> &TokenErrorKind {
+        &self.kind
     }
 
     /// Where in the content the error occurred.
@@ -114,7 +188,11 @@ impl<L: Lang> Clone for TokenRecovery<'_, L> {
 
 impl<L: Lang> Clone for TokenError<'_, L> {
     fn clone(&self) -> Self {
-        TokenError { kind: self.kind, span: self.span, recovery: self.recovery.clone() }
+        TokenError {
+            kind: self.kind.clone(),
+            span: self.span,
+            recovery: self.recovery.clone(),
+        }
     }
 }
 
@@ -126,13 +204,8 @@ impl<L: Lang> PartialEq for TokenRecovery<'_, L> {
 
 impl<L: Lang> Eq for TokenRecovery<'_, L> {}
 
-impl<L: Lang> PartialEq for TokenError<'_, L> {
-    fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind && self.span == other.span && self.recovery == other.recovery
-    }
-}
-
-impl<L: Lang> Eq for TokenError<'_, L> {}
+// No PartialEq for TokenError: its kind may carry a dyn condition payload (§3.8) —
+// consumers match the kind's variants or downcast the payload.
 
 impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -155,17 +228,14 @@ impl<L: Lang> fmt::Debug for TokenError<'_, L> {
 
 impl fmt::Display for TokenErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The wording lives on the condition payloads (the message is a pure function
+        // of the payload, §3.8); the enum only delegates.
         match self {
-            TokenErrorKind::EndOfStreamAfterEscape { escape_char } => {
-                write!(
-                    f,
-                    "expected command name after escape character ‘{}’ but reached end of input",
-                    escape_char
-                )
+            TokenErrorKind::EndOfStreamAfterEscape(condition) => {
+                fmt::Display::fmt(condition, f)
             }
-            TokenErrorKind::ForbiddenChar { ch } => {
-                write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", ch, *ch as u32)
-            }
+            TokenErrorKind::ForbiddenChar(condition) => fmt::Display::fmt(condition, f),
+            TokenErrorKind::Custom(data) => fmt::Display::fmt(data, f),
         }
     }
 }

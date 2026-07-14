@@ -46,12 +46,13 @@
 //! "Was this environment properly terminated?" lives in the diagnostics, not on the
 //! node — a preset wanting it on the node flags it in ext via `Lang::finalize_node`.
 
-use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
 use core::mem;
 
-use crate::error::ParseErrorKind;
+use crate::engine::{Frame, FrameTitle};
+use crate::error::DiagnosticInfo;
 use crate::node::{BuildId, NodeKind};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingStateDelta};
@@ -59,6 +60,125 @@ use crate::token::{GroupRule, TokenKind};
 
 use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
 use super::{resume_at, try_peek, ConstructParser, ConstructParserResult, ParseContext};
+
+/// Condition: an environment's body ran into the terminator of a *different*
+/// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
+/// so an enclosing level can claim its own terminator (decision 8,
+/// DESIGN_RATIONALE.md §3.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EnvironmentTerminatorMismatch {
+    /// The environment being parsed, whose terminator was expected.
+    pub expected: String,
+    /// The environment named by the terminator that was found instead.
+    pub found: String,
+}
+
+impl EnvironmentTerminatorMismatch {
+    /// The condition for the environment `expected` running into `found`'s terminator.
+    pub fn new(
+        expected: impl Into<String>,
+        found: impl Into<String>,
+    ) -> EnvironmentTerminatorMismatch {
+        EnvironmentTerminatorMismatch { expected: expected.into(), found: found.into() }
+    }
+}
+
+impl fmt::Display for EnvironmentTerminatorMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "missing terminator of environment ‘{}’: found the terminator of ‘{}’ instead",
+            self.expected, self.found
+        )
+    }
+}
+
+impl DiagnosticInfo for EnvironmentTerminatorMismatch {
+    const IDENTIFIER: &'static str = "core.environment_parser.terminator-mismatch";
+}
+
+/// Condition: the terminator command was not followed immediately by its rigid name
+/// group (`\end[y]`, `\end{ A }`) — the command alone is consumed and the body closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MalformedEnvironmentTerminator {
+    /// The environment being parsed.
+    pub environment: String,
+}
+
+impl MalformedEnvironmentTerminator {
+    /// The condition for the given environment.
+    pub fn new(environment: impl Into<String>) -> MalformedEnvironmentTerminator {
+        MalformedEnvironmentTerminator { environment: environment.into() }
+    }
+}
+
+impl fmt::Display for MalformedEnvironmentTerminator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "malformed terminator of environment ‘{}’: expected its name group \
+             immediately after the command",
+            self.environment
+        )
+    }
+}
+
+impl DiagnosticInfo for MalformedEnvironmentTerminator {
+    const IDENTIFIER: &'static str = "core.environment_parser.malformed-terminator";
+}
+
+/// Condition: an environment's body ended without its terminator ever appearing — at
+/// end of input, or unwound by a stray group close nobody at the body's level asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MissingEnvironmentTerminator {
+    /// The environment being parsed.
+    pub environment: String,
+    /// What ended the body instead.
+    pub found: MissingTerminatorFound,
+}
+
+/// What ended a body missing its terminator ([`MissingEnvironmentTerminator`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MissingTerminatorFound {
+    /// The input ended inside the body.
+    EndOfInput,
+    /// A group close belonging to an enclosing level appeared (the body unwinds,
+    /// leaving the token for that level to claim).
+    StrayGroupClose,
+}
+
+impl MissingEnvironmentTerminator {
+    /// The condition for the given environment.
+    pub fn new(
+        environment: impl Into<String>,
+        found: MissingTerminatorFound,
+    ) -> MissingEnvironmentTerminator {
+        MissingEnvironmentTerminator { environment: environment.into(), found }
+    }
+}
+
+impl fmt::Display for MissingEnvironmentTerminator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.found {
+            MissingTerminatorFound::EndOfInput => write!(
+                f,
+                "missing terminator of environment ‘{}’ before end of input",
+                self.environment
+            ),
+            MissingTerminatorFound::StrayGroupClose => {
+                write!(f, "missing terminator of environment ‘{}’", self.environment)
+            }
+        }
+    }
+}
+
+impl DiagnosticInfo for MissingEnvironmentTerminator {
+    const IDENTIFIER: &'static str = "core.environment_parser.missing-terminator";
+}
 
 /// A successfully read rigid name group: the name's byte span (the exact content between
 /// the delimiters, possibly empty) and the position just past the close delimiter.
@@ -183,6 +303,12 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
     name_group_type: L::GroupTypeId,
     /// Whether the terminator's name must match `invocation_name` (default: `true`).
     match_invocation_name: bool,
+    /// The span of the invocation name as written (`align` in `\begin{align}`), when
+    /// the caller has one: it titles the body's traceback frame (`environment ‘align’`).
+    /// Without it the frame falls back to the generic "environment body".
+    /// (`invocation_name` itself is a borrowed `&str` and cannot ride in the
+    /// allocation-free live frame — a span can, §3.8.)
+    invocation_name_span: Option<Span>,
 }
 
 impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
@@ -201,6 +327,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             stop_command_name,
             name_group_type,
             match_invocation_name: true,
+            invocation_name_span: None,
         }
     }
 
@@ -209,6 +336,14 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     /// terminator does not back-reference the opening.
     pub fn with_match_invocation_name(mut self, match_invocation_name: bool) -> Self {
         self.match_invocation_name = match_invocation_name;
+        self
+    }
+
+    /// Provide the span of the invocation name as written in the source, so the body's
+    /// traceback frame can quote it (`environment ‘align’`). Drivers that read the name
+    /// from a name group pass that group's interior span.
+    pub fn with_invocation_name_span(mut self, name_span: Span) -> Self {
+        self.invocation_name_span = Some(name_span);
         self
     }
 
@@ -250,13 +385,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     // command's start and leave the whole terminator for an enclosing
                     // level.
                     cx.recover(
-                        ParseErrorKind::Syntax {
-                            message: format!(
-                                "missing terminator of environment ‘{}’: found the \
-                                 terminator of ‘{}’ instead",
-                                self.invocation_name, name
-                            ),
-                        },
+                        EnvironmentTerminatorMismatch::new(self.invocation_name, name),
                         SourceSpan::new(&cx.source, end_token.span.start..name_group.end),
                     )?;
                     cx.tokens.move_to(&end_token, false);
@@ -269,13 +398,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 // command) and close.
                 debug_assert_eq!(cx.tokens.pos(), after_command);
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: format!(
-                            "malformed terminator of environment ‘{}’: expected its \
-                             name group immediately after the command",
-                            self.invocation_name
-                        ),
-                    },
+                    MalformedEnvironmentTerminator::new(self.invocation_name),
                     SourceSpan::new(&cx.source, end_token.span.range()),
                 )?;
                 Ok(after_command)
@@ -288,6 +411,28 @@ impl<L: Lang> ConstructParser<L> for EnvironmentBodyParser<'_, L> {
     type Output = EnvironmentBody;
 
     fn parse(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+    ) -> ConstructParserResult<L, (EnvironmentBody, Option<ParsingStateDelta<L>>)> {
+        // The environment-body traceback frame (§3.8), covering the body content *and*
+        // the terminator flow — terminator diagnostics name the environment being
+        // parsed. Anchored at the invocation trigger.
+        let title = match self.invocation_name_span {
+            Some(name_span) => FrameTitle::Quoted {
+                label: "environment",
+                name: SourceSpan::new(&cx.source, name_span.range()),
+            },
+            None => FrameTitle::Static("environment body"),
+        };
+        let frame =
+            Frame { title, span: SourceSpan::new(&cx.source, self.trigger_span.range()) };
+        cx.with_frame(frame, |cx| self.parse_body(cx))
+    }
+}
+
+impl<L: Lang> EnvironmentBodyParser<'_, L> {
+    /// The body parse proper, run under the environment's traceback frame.
+    fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody, Option<ParsingStateDelta<L>>)> {
@@ -320,12 +465,10 @@ impl<L: Lang> ConstructParser<L> for EnvironmentBodyParser<'_, L> {
             StopCause::TokenCondition { .. } => self.finish_terminator(cx, body_end)?,
             StopCause::EndOfInput => {
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: format!(
-                            "missing terminator of environment ‘{}’ before end of input",
-                            self.invocation_name
-                        ),
-                    },
+                    MissingEnvironmentTerminator::new(
+                        self.invocation_name,
+                        MissingTerminatorFound::EndOfInput,
+                    ),
                     SourceSpan::new(&cx.source, self.trigger_span.range()),
                 )?;
                 body_end
@@ -335,12 +478,10 @@ impl<L: Lang> ConstructParser<L> for EnvironmentBodyParser<'_, L> {
             // enclosing level, or the root, to claim).
             StopCause::UnexpectedGroupClose { span } => {
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: format!(
-                            "missing terminator of environment ‘{}’",
-                            self.invocation_name
-                        ),
-                    },
+                    MissingEnvironmentTerminator::new(
+                        self.invocation_name,
+                        MissingTerminatorFound::StrayGroupClose,
+                    ),
                     SourceSpan::new(&cx.source, span.range()),
                 )?;
                 body_end
@@ -368,6 +509,7 @@ impl<L: Lang> fmt::Debug for EnvironmentBodyParser<'_, L> {
             .field("stop_command_name", &self.stop_command_name)
             .field("name_group_type", &self.name_group_type)
             .field("match_invocation_name", &self.match_invocation_name)
+            .field("invocation_name_span", &self.invocation_name_span)
             .finish()
     }
 }
@@ -397,7 +539,7 @@ mod tests {
         TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
-    use alloc::string::{String, ToString};
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -471,6 +613,54 @@ mod tests {
         }
     }
 
+    // --- EnvLang's own conditions: third-party-style `DiagnosticInfo` impls (the
+    // --- extension surface demonstration, §3.8) — plain data structs under the
+    // --- language's "envlang." namespace, structurally identical to core conditions ---
+
+    /// `\begin` not followed immediately by its rigid name group.
+    #[derive(Debug, Clone)]
+    struct MalformedBegin;
+
+    impl fmt::Display for MalformedBegin {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("malformed ‘\\begin’: expected its name group immediately")
+        }
+    }
+
+    impl DiagnosticInfo for MalformedBegin {
+        const IDENTIFIER: &'static str = "envlang.begin.malformed-begin";
+    }
+
+    /// `\begin{name}` naming an environment no library defines.
+    #[derive(Debug, Clone)]
+    struct UnknownEnvironment {
+        name: String,
+    }
+
+    impl fmt::Display for UnknownEnvironment {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "unknown environment ‘{}’", self.name)
+        }
+    }
+
+    impl DiagnosticInfo for UnknownEnvironment {
+        const IDENTIFIER: &'static str = "envlang.begin.unknown-environment";
+    }
+
+    /// A `\raw` verbatim block missing its `\endraw` terminator.
+    #[derive(Debug, Clone)]
+    struct MissingRawTerminator;
+
+    impl fmt::Display for MissingRawTerminator {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("missing ‘\\endraw’ before end of input")
+        }
+    }
+
+    impl DiagnosticInfo for MissingRawTerminator {
+        const IDENTIFIER: &'static str = "envlang.raw.missing-terminator";
+    }
+
     // --- the environment-shaped invocation composition (the plan's "test-lang
     // --- EnvironmentSpec analog"): rigid `\begin{name}` scaffolding, environment lookup,
     // --- arguments (the shared 6.5 loop), the body through EnvironmentBodyParser,
@@ -509,11 +699,7 @@ mod tests {
             // Rigid scaffolding: the name group must be the immediately next token.
             let Some(name_group) = read_rigid_name_group(cx, GT_BRACE)? else {
                 cx.recover(
-                    ParseErrorKind::Syntax {
-                        message: "malformed ‘\\begin’: expected its name group \
-                                  immediately"
-                            .to_string(),
-                    },
+                    MalformedBegin,
                     SourceSpan::new(&cx.source, trigger.span.range()),
                 )?;
                 // Chars fallback over the trigger alone (markup in a Chars node is the
@@ -536,9 +722,7 @@ mod tests {
                     Some(spec) => spec,
                     None => {
                         cx.recover(
-                            ParseErrorKind::Syntax {
-                                message: format!("unknown environment ‘{}’", name),
-                            },
+                            UnknownEnvironment { name: name.into() },
                             SourceSpan::new(&cx.source, name_group.name_span.range()),
                         )?;
                         // Tolerant fallback: an argument-less body-only environment,
@@ -550,9 +734,10 @@ mod tests {
                     }
                 };
 
-            // Arguments: the 6.5 machinery, shared with StdInvocationParser.
+            // Arguments: the 6.5 machinery, shared with StdInvocationParser. The
+            // argument frames quote the *environment's* name, not `\begin`'s.
             let (mut children, arguments) =
-                parse_declared_arguments(cx, spec.arguments())?;
+                parse_declared_arguments(cx, &spec, name_group.name_span)?;
 
             // The body: the single slot of the standard environment shape, parsed
             // under the slot's state (its delta stacked on the invocation's base,
@@ -565,7 +750,8 @@ mod tests {
                 None => Arc::clone(&cx.state),
             };
             let mut body_parser =
-                EnvironmentBodyParser::new(trigger.span, name, "end", GT_BRACE);
+                EnvironmentBodyParser::new(trigger.span, name, "end", GT_BRACE)
+                    .with_invocation_name_span(name_group.name_span);
             let outer_state = mem::replace(&mut cx.state, slot_state);
             let result = body_parser.parse(cx);
             cx.state = outer_state;
@@ -658,9 +844,7 @@ mod tests {
                 }
                 None => {
                     cx.recover(
-                        ParseErrorKind::Syntax {
-                            message: "missing ‘\\endraw’ before end of input".to_string(),
-                        },
+                        MissingRawTerminator,
                         SourceSpan::new(&cx.source, trigger.span.range()),
                     )?;
                     (content.len(), content.len())
@@ -1150,6 +1334,37 @@ mod tests {
         assert_eq!(body_shapes(b), ["chars 19..20 \"y\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_eq!(diagnostics_mentioning(&parsed, "‘B’"), 1);
+    }
+
+    #[test]
+    fn mismatch_diagnostic_carries_the_nested_environment_frames() {
+        // B's mismatch is diagnosed under B's body frame (innermost), B's `\begin`
+        // invocation frame, A's body frame, and A's `\begin` invocation frame — the
+        // pylatexenc-style "while parsing" traceback, from a single attachment point.
+        let st = suite_state();
+        let content = "\\begin{A}x\\begin{B}y\\end{A} z";
+        let parsed = parse_both(content, &st, Recovery::Tolerant);
+
+        let diagnostic = parsed
+            .result
+            .diagnostics
+            .with_identifier(EnvironmentTerminatorMismatch::IDENTIFIER)
+            .next()
+            .unwrap();
+        let condition =
+            diagnostic.data().downcast_ref::<EnvironmentTerminatorMismatch>().unwrap();
+        assert_eq!(condition.expected, "B");
+        assert_eq!(condition.found, "A");
+        let titles: Vec<&str> = diagnostic.frames().iter().map(|f| f.title()).collect();
+        assert_eq!(
+            titles,
+            [
+                "environment ‘B’",
+                "callable ‘\\begin’",
+                "environment ‘A’",
+                "callable ‘\\begin’",
+            ]
+        );
     }
 
     #[test]
