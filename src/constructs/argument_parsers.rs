@@ -57,7 +57,7 @@ use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
 use super::nodes_parser::{ExpressionCallableTakesArguments, UnresolvableCommand};
 use super::{
-    resume_at, try_peek, ConstructParser, ConstructParserResult, Invocation, ParseContext,
+    try_peek, ConstructParser, ConstructParserResult, Invocation, ParseContext,
 };
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
@@ -153,7 +153,7 @@ impl<L: Lang> ArgumentNoise<'_, L> {
     /// the probed noise is re-parsed as enclosing content. The staged noise nodes are
     /// simply never claimed — the builder drops them.
     pub fn rewind(&self, cx: &mut ParseContext<'_, '_, L>) {
-        resume_at(cx.tokens, self.start);
+        cx.tokens.move_to_pos(self.start);
     }
 }
 
@@ -187,14 +187,12 @@ pub fn scan_argument_noise<'s, L: Lang>(
             return Ok(ArgumentNoise { nodes, start, next: None });
         };
         match &token.kind {
-            TokenKind::Comment { content, post_space } => {
+            TokenKind::Comment { start, post_space, .. } => {
                 stage_pre_space(cx, &mut nodes, token.pre_space);
-                // The token's span is start delimiter + content + post-space; the
-                // content's length and end position pin down the three sub-spans.
-                let content_span =
-                    Span::new(post_space.start - content.len(), post_space.start);
-                let start_span = Span::new(token.span.start, content_span.start);
-                let kind = NodeKind::comment(start_span, content_span, *post_space);
+                // The token's sub-spans tile its span: start delimiter, content,
+                // post-space.
+                let content_span = Span::new(start.end, post_space.start);
+                let kind = NodeKind::comment(*start, content_span, *post_space);
                 nodes.push(stage(cx, kind, token.span));
                 cx.tokens.move_past(&token, true);
             }
@@ -278,14 +276,13 @@ fn parse_expression_node<'s, L: Lang>(
             // tokenized the token (§3.6).
             match L::resolve_command(&cx.state, next) {
                 Some(resolved) => {
-                    let display = format!("{}{}", escape_char, name);
                     let invocation = Invocation {
                         callable_type: resolved.callable_type,
                         name,
                         spec: &resolved.spec,
                         token: next,
                     };
-                    dispatch_expression_invocation(cx, nodes, invocation, &display)
+                    dispatch_expression_invocation(cx, nodes, invocation)
                 }
                 None => {
                     // The decided unresolvable-command recovery (§3.8), in expression
@@ -308,7 +305,7 @@ fn parse_expression_node<'s, L: Lang>(
             // Recognition = resolution: the token carries the full resolution.
             let invocation =
                 Invocation { callable_type: *callable_type, name, spec, token: next };
-            dispatch_expression_invocation(cx, nodes, invocation, name)
+            dispatch_expression_invocation(cx, nodes, invocation)
         }
 
         // No expression starts here; the caller decides what absence means.
@@ -324,12 +321,19 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
     nodes: &mut Vec<BuildId>,
     invocation: Invocation<'_, 's, L>,
-    display: &str,
 ) -> ConstructParserResult<L, Option<BuildId>> {
     let token = invocation.token;
     if !invocation.spec.arguments().is_empty() || !invocation.spec.slots().is_empty() {
+        // The trigger's written spelling, built only on this cold branch (the hot
+        // dispatch path stays allocation-free).
+        let spelling = match &token.kind {
+            TokenKind::Command { name, escape_char, .. } => {
+                format!("{}{}", escape_char, name)
+            }
+            _ => invocation.name.into(),
+        };
         cx.recover(
-            ExpressionCallableTakesArguments::new(display),
+            ExpressionCallableTakesArguments::new(spelling),
             SourceSpan::new(&cx.source, token.span.range()),
         )?;
         stage_pre_space(cx, nodes, token.pre_space);
@@ -965,7 +969,7 @@ mod tests {
         let mut scanned = Vec::new();
         let mut scanner = StdTokenReader::new(content);
         loop {
-            let token = TokenReader::next(&mut scanner, state.as_ref()).expect("clean scan");
+            let token = TokenReader::next(&mut scanner, state).expect("clean scan");
             let done = matches!(token.kind, TokenKind::EndOfStream);
             scanned.push(token);
             if done {
@@ -1383,7 +1387,7 @@ mod tests {
         impl<'s> TokenReader<'s, ArgLang> for BrokenReader {
             fn peek(
                 &mut self,
-                _state: &ParsingState<ArgLang>,
+                _state: &Arc<ParsingState<ArgLang>>,
             ) -> TokenResult<'s, ArgLang, Token<'s, ArgLang>> {
                 Err(TokenError::new(
                     TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
@@ -1397,6 +1401,8 @@ mod tests {
             fn move_past(&mut self, _token: &Token<'s, ArgLang>, _skip_post_space: bool) {}
 
             fn move_to(&mut self, _token: &Token<'s, ArgLang>, _rewind_pre_space: bool) {}
+
+            fn move_to_pos(&mut self, _pos: usize) {}
 
             fn pos(&self) -> usize {
                 0

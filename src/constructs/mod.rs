@@ -66,25 +66,7 @@ use crate::error::{DiagnosticData, DiagnosticInfo, ParseError, Recovery};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenKind, TokenReader};
-
-/// Reposition the reader to an absolute byte position (a `TokenRecovery::resume_pos`,
-/// an argument parser's absent-rewind target).
-///
-/// [`TokenReader`] expresses positioning through tokens, so "go to `pos`" is phrased as
-/// moving to a zero-width marker token at `pos` — `move_to(tok, false)` means "position
-/// = `tok.span.start`" for any reader honoring the span conventions.
-///
-/// `resume_at` itself is deliberately bidirectional — it also serves as the rewind for
-/// absent arguments and environment name groups — so it asserts nothing about the
-/// direction of the move. When adopting a `TokenRecovery`, the *caller* enforces the
-/// [`resume_pos` advancement contract](crate::token::TokenRecovery#contract-resume_pos-must-advance-the-reader):
-/// the content loop aborts if the reader did not advance.
-pub(crate) fn resume_at<'s, L: Lang>(tokens: &mut dyn TokenReader<'s, L>, pos: usize) {
-    let marker: Token<'s, L> =
-        Token::new(TokenKind::EndOfStream, Span::empty(pos), Span::empty(pos));
-    tokens.move_to(&marker, false);
-}
+use crate::token::{Token, TokenReader};
 
 /// Peek under the current state, mapping a tokenizer error per the recovery policy:
 /// strict mode aborts with the token error (mirroring the content loop); tolerant mode
@@ -143,7 +125,10 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// [`SourceSpan`] requires (added July 2026, Phase 6.4, user-approved). It lives
     /// here, not on tokens or readers, because the token layer deliberately carries
     /// only transient byte spans (DESIGN_RATIONALE.md §3.8); the construct-parser layer
-    /// is where byte spans become `Arc`-backed source spans.
+    /// is where byte spans become `Arc`-backed source spans. Not a parsing input:
+    /// construct parsers make no forward parsing decision from raw content — even a
+    /// verbatim parser reads `Char` tokens under a features-disabled state
+    /// (DESIGN_RATIONALE.md §3.2, Action-02 entry).
     pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).

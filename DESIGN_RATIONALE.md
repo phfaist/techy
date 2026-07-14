@@ -309,7 +309,8 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   nothing; candidates for granularity (block/nested comments) are served by a future
   per-rule terminator extension of `CommentRule` or the `TokenReader` escape hatch.
   `CommentRule { start }` mirrors `CommandRule` (several syntaxes; longest start wins);
-  the terminator is end-of-line implicitly, independent of `WhitespaceRules`. Corner
+  the terminator is end-of-line implicitly, independent of `WhitespaceRules` (`'\n'`
+  exactly — `'\r'` gets no special treatment, see the Action-02 entry, item 6). Corner
   pinned: `a% c\n\nb` — the comment's terminating newline belongs to a `\n\s*\n` sequence,
   so the comment takes **no** post-space and the `ParagraphBreak` survives as its own
   token (TeX-observable behavior: the blank line still yields `\par`). Consequence:
@@ -318,8 +319,10 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   idempotent and its `pre_space` carries the input's final whitespace, so trailing
   whitespace reaches the node tree through the ordinary token path — the nodes parser
   never reaches around the reader into raw content (which a custom `TokenReader` might not
-  meaningfully expose). Also serves as the recovery placeholder for a dangling escape at
-  EOF (Phase 2 used an empty `Chars` token — impossible once `Chars` became `Char(char)`).
+  meaningfully expose). *(It briefly also served as the recovery placeholder for a dangling
+  escape at EOF — Phase 2 used an empty `Chars` token, impossible once `Chars` became
+  `Char(char)` — but that recovery dropped the escape byte from the tree; superseded by the
+  `Char(escape_char)` placeholder, see the Action-02 token entry below.)*
 - **The token topic is wholly S1; tokens are generic over `L`.** `Specials` carries
   `Arc<dyn CallableSpec<L>>` (tokens are `Clone`, not `Copy`), and `TokenError<'s, L>` may
   grow state context. Tokens remain transient `'s`-bound engine internals; the genericity
@@ -441,6 +444,82 @@ around the reader into raw content (§3.2, `EndOfStream` rationale). The tokeniz
 which `CommandRule` fired; recording it is syntactic fact (which rule fired), not resolution
 output — consistent with the no-`CallableTypeId`-on-tokens line. Small ripple through the
 Phase 3 token tests, accepted.
+
+**Token-layer contract hardening (Action 02)** — DECIDED (user, July 2026, Action-02 review
+session). Six decisions closing contract gaps ahead of third-party `TokenReader`/`Lang`
+implementations:
+
+1. *`TokenKind::Comment` carries `start: Span`* (the matched start delimiter — mirrors
+   `NodeKind::Comment`: which delimiter fired is a per-instance fact). The content span is
+   `start.end..post_space.start`; consumers must **never** reconstruct it from
+   `content.len()` — the previous `post_space.start - content.len()` arithmetic (duplicated
+   in the nodes parser and the noise scan) silently assumed `content` was sliced verbatim
+   from the source, and a custom reader that normalizes content would underflow it: a
+   lib-code panic reachable from a legitimate impl of a public trait.
+2. *Dangling-escape recovery uses a `Char(escape_char)` placeholder* spanning the escape
+   byte (`resume_pos` = its span end). The byte joins the pending chars run, so the tolerant
+   parse keeps the partition invariant — consistent with §3.8's recovery principle (markup
+   text in a `Chars` node, always with a diagnostic) and with the other content-preserving
+   recoveries. *Rejected:* the empty `EndOfStream` placeholder (pylatexenc parity) — it
+   claimed no bytes while reading resumed past the escape, so the root children did not tile
+   the content; the placeholder-vs-drop tradeoff had never actually been weighed when §3.2's
+   sentinel was chosen.
+3. *`peek`/`next` take `&Arc<ParsingState<L>>`.* The documented memoization key (state
+   pointer identity) was unobtainable from `&ParsingState`: a memoizing reader could not
+   pin the allocation, and a recycled address would serve a stale token for a different
+   rule set (ABA). Every call site already held an `Arc`, so the widening was
+   source-compatible in the library; the engine's group-interior memo already pinned its
+   key `Arc`s the same way.
+4. *`move_to_pos(pos: usize)` is a required `TokenReader` method*, replacing the deleted
+   `resume_at` helper (which synthesized a zero-width `EndOfStream` marker and called
+   `move_to` — bypassing `StdTokenReader`'s bounds/char-boundary guards and silently
+   imposing a "`move_to` must be span-derived" contract on implementors). Deliberately
+   **no default body**: a positional move is a distinct capability every reader must
+   answer for, not a marker-token trick to inherit. The std readers' trait impls delegate
+   to their guarded inherent versions (the inherent forms remain — calling through the
+   generic trait needs `L` pinned; the delegation keeps the two from diverging).
+5. *No `content()` on the trait — and no raw-content escape hatch at all* (user,
+   follow-up). A `\verb`-style verbatim parser reads ordinary `Char` tokens under a
+   derived state with every feature gate off (`enable_whitespace/multi_newline_paragraphs/
+   commands/comments/groups/specials: false` — all delta-expressible) and
+   `expecting_group_close` **replaced** by a rule whose close string is the verbatim
+   terminator. The expected close is ungated by `enable_groups` (the `enable_*` flags
+   entry, decided interaction 1) and overrides any close expectation inherited from an
+   enclosing group (without the replacement, a verbatim region inside a braces group
+   would read its body's `}` as `GroupClose`), so it is the single recognizer left
+   active: the body arrives as pure `Char` tokens and the terminator — multi-character
+   strings included — as one `GroupClose`. The test-side `RawBlockParser` demonstrates
+   the recipe for `\raw…\endraw`, inherited-close override test included. Doctrine:
+   construct parsers make no forward parsing decision from raw content;
+   `ParseContext::source` exists for staging `SourceSpan`s (and slicing the text of
+   spans already consumed through tokens, e.g. an environment name — span rendering, not
+   scanning). Cost accepted: char-at-a-time reads are slower than a substring search,
+   and such parsers are testable only against scanning readers (a fixed token list
+   cannot re-tokenize under the verbatim state).
+6. *`TokenError`'s recovery payload is boxed* (`Option<Box<TokenRecovery>>`): every
+   `peek`/`next` returns the `Result`, and the inline payload put the hot type at 104
+   bytes for a 72-byte token; boxing lands the allocation on the cold error path only
+   (public accessors unchanged). Also: `Display for TokenKind` renders written spellings
+   (`Command(\foo)` with the escape char that actually fired; comment content truncated).
+   And `'\r'` receives **no special treatment anywhere in the tokenizer** (user,
+   follow-up): `'\n'` is the sole line terminator; feeding text-mode-normalized content
+   is the embedder's job (the `no_std` core never reads files). pylatexenc's CRLF
+   comment quirk — the `'\r'` of a `\r\n` line ending stays inside the comment content —
+   is thereby parity-by-doctrine, pinned by a test. *Rejected:* moving that `'\r'` into
+   comment post-space when declared whitespace (briefly implemented) — special-casing
+   one legacy line-ending convention inside the scanning core.
+
+**`TokenListReader` demoted to internal test infrastructure** — DECIDED (user, July 2026,
+Action-02 follow-up). Compiled under `cfg(test)` only, `pub(crate)`, removed from the
+public exports. Every consumer is an in-crate test; its load-bearing role is the lockstep
+reader-agreement harness (each construct-parser suite runs every parse against
+`StdTokenReader` *and* a pre-scanned `TokenListReader` and asserts identical trees, stops,
+and diagnostics — the enforcement mechanism for "construct parsers never reach around the
+reader"), plus hand-built token lists for engine tests. Its fixed-list fidelity gap — no
+re-tokenization under the peek state, so state-driven parsers like the verbatim recipe
+cannot run over it — is fine for a test tool but disqualifies it as a public reader
+contract. *Rejected:* deleting it outright (loses the lockstep verification); keeping it
+public (a maintained API surface nothing external needs).
 
 **`TokenRules::multi_newline_paragraphs` (renamed from `double_newline_paragraphs`)** —
 DECIDED (user, July 2026, Phase 6 plan session). Any run of two or more newlines (however
@@ -1612,8 +1691,11 @@ then reshaping it in Phase 2 anyway).
 *Landed (Phase 2, July 2026):* `TokenError<'s>` = structured `TokenErrorKind` (closed enum:
 end-of-stream-after-escape, forbidden-char — replaces pylatexenc's stringly `error_type_info`)
 + byte `Span` + `Option<TokenRecovery<'s>>`, where `TokenRecovery` = placeholder token + an
-explicit `resume_pos` (the two can differ: after end-of-stream-after-escape the placeholder is
-an empty chars token but reading resumes at end of input, per pylatexenc). Token-level errors
+explicit `resume_pos` (explicit rather than derived from the token: a custom source's
+placeholder need not end where reading resumes, and the explicit position carries the
+advancement contract; the built-in recoveries now all resume at their placeholder's span
+end — the end-of-stream-after-escape placeholder is a `Char(escape_char)` covering the
+escape byte, revised July 2026, Action 02). Token-level errors
 carry plain `Span`s, not `SourceSpan`s — they are transient like tokens; the session converts
 whatever it reports into Arc-span `Diagnostic`s (Phase 6). The reader itself is policy-free:
 it always returns `Err` with the recovery attached, and the session's `Recovery` policy
@@ -1652,11 +1734,12 @@ extension points (a custom `TokenReader::peek`, a `Lang::scan_specials` returnin
 `TokenRecovery`), and a violating `resume_pos` was demonstrated to hang `NodesParser` in
 release builds while growing the diagnostics sink unboundedly. The contract is now stated
 on `TokenRecovery::resume_pos` and enforced at the adoption site (`nodes_parser.rs`
-content loop): if the reader did not advance after `resume_at`, the parse aborts with the
+content loop): if the reader did not advance after the positional move (`move_to_pos`,
+née `resume_at` — Action-02 token entry, item 4), the parse aborts with the
 token error as a `ParseError` — *even in tolerant mode*, whose promise is a best-effort
 tree, not tolerance of non-termination; an abort is the doctrine-blessed failure mode
-(no panic, rule 3 above). The guard lives at the adoption site and not inside `resume_at`
-because `resume_at` is deliberately bidirectional (it is also the absent-argument and
+(no panic, rule 3 above). The guard lives at the adoption site and not inside the move
+because `move_to_pos` is deliberately bidirectional (it is also the absent-argument and
 environment-name rewind), so it can assert nothing about direction.
 *Noted for the future (user, July 2026):* contract violations by extension-point code are
 a different *category* from malformed input, and the error model may eventually want to

@@ -1,10 +1,14 @@
 //! [`TokenListReader`]: a [`TokenReader`] over a pre-built token list.
 //!
-//! Its purpose is testing construct parsers in isolation (Phase 6): a hand-written or
-//! pre-scanned `Vec<Token>` drives a parser without a live tokenizer, so a test can
-//! exercise exactly the token sequence it means to. It is also the existence proof that
-//! the parsing layer holds up its end of the [`TokenReader`] abstraction — construct
-//! parsers must never reach around the reader into raw content.
+//! **Internal test infrastructure** — compiled under `cfg(test)` only, deliberately not
+//! public API (decided July 2026, Action-02 follow-up). Its purpose is testing construct
+//! parsers in isolation: a hand-written or pre-scanned `Vec<Token>` drives a parser
+//! without a live tokenizer, so a test can exercise exactly the token sequence it means
+//! to — most importantly as the lockstep reader-agreement harness of the construct-parser
+//! suites, the enforcement mechanism for "construct parsers never reach around the reader
+//! into raw content". The fidelity gap below (a fixed list cannot re-tokenize under the
+//! peek state) is acceptable for a test tool and is why it makes no public reader
+//! contract.
 //!
 //! # Fidelity contract
 //!
@@ -24,6 +28,7 @@
 //!
 //! [`StdTokenReader`]: super::StdTokenReader
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::source::Span;
@@ -56,6 +61,9 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     }
 
     /// The tokens being served.
+    // Unused since the demotion to test-only (July 2026) — it existed as public API
+    // surface. Kept for now; drop it if it stays unused.
+    #[allow(dead_code)]
     pub fn tokens(&self) -> &[Token<'s, L>] {
         &self.tokens
     }
@@ -73,7 +81,7 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
 }
 
 impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
-    fn peek(&mut self, _state: &ParsingState<L>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         match self.current() {
             Some(token) => {
                 // Clip the recorded pre-space to the current position: peeking from
@@ -110,6 +118,10 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
         } else {
             self.pos = tok.span.start;
         }
+    }
+
+    fn move_to_pos(&mut self, pos: usize) {
+        TokenListReader::move_to_pos(self, pos);
     }
 
     fn pos(&self) -> usize {
@@ -167,12 +179,12 @@ mod tests {
         }
     }
 
-    fn state() -> ParsingState<TestLang> {
-        ParsingState::new(StateData {
+    fn state() -> Arc<ParsingState<TestLang>> {
+        Arc::new(ParsingState::new(StateData {
             rules: latex_rules(),
             libraries: LibraryStack::new(),
             ext: (),
-        })
+        }))
     }
 
     /// Scan `content` into the full token list with `StdTokenReader` (including the

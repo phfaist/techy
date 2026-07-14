@@ -91,7 +91,11 @@ impl DiagnosticInfo for ForbiddenChar {
 /// (DESIGN_RATIONALE.md §3.8). Not `Copy` (a custom payload is boxed) and no `PartialEq`
 /// — consumers match the variants or downcast the payload.
 #[derive(Debug, Clone)]
-#[non_exhaustive] // ### PhF - why non_exhaustive since we have Custom(Box<dyn...>)?
+// `Custom` and `#[non_exhaustive]` serve different extension axes: `Custom` lets third
+// parties define new condition *payloads*, while `non_exhaustive` reserves *our* right to
+// promote a recurring condition to a first-class matchable variant in a minor release —
+// without it, adding any variant breaks every exhaustive downstream `match` (semver).
+#[non_exhaustive]
 pub enum TokenErrorKind {
     /// The input ended immediately after a command escape character, before any name.
     EndOfStreamAfterEscape(EndOfStreamAfterEscape),
@@ -117,19 +121,23 @@ impl TokenErrorKind {
 }
 
 /// An error encountered while reading a token, with an optional recovery possibility.
+///
+/// The recovery payload is boxed: every `peek`/`next` returns a `Result` sized by its
+/// error variant, and the error path is cold by construction — boxing keeps the hot
+/// `Result` at payload-plus-tag size.
 pub struct TokenError<'s, L: Lang> {
     kind: TokenErrorKind,
     span: Span,
-    recovery: Option<TokenRecovery<'s, L>>,
+    recovery: Option<Box<TokenRecovery<'s, L>>>,
 }
 
 /// How to continue past a [`TokenError`] in tolerant mode: pretend `token` was read, then
 /// resume reading at `resume_pos`.
 ///
-/// `resume_pos` is explicit rather than derived from the token because the two can differ:
-/// e.g. after an end-of-stream error the placeholder token is an `EndOfStream` at the
-/// error position but reading resumes at the end of the input, past the offending escape
-/// character.
+/// `resume_pos` is explicit rather than derived from the token: a custom token source's
+/// placeholder need not end where reading should resume (its span may stand for
+/// normalized or synthesized content), and the explicit position is what the content
+/// loop's advancement check (below) is enforced against.
 ///
 /// # Contract: `resume_pos` must advance the reader
 ///
@@ -154,7 +162,7 @@ impl<'s, L: Lang> TokenError<'s, L> {
         span: Span,
         recovery: Option<TokenRecovery<'s, L>>,
     ) -> Self {
-        TokenError { kind, span, recovery }
+        TokenError { kind, span, recovery: recovery.map(Box::new) }
     }
 
     /// What went wrong.
@@ -169,12 +177,12 @@ impl<'s, L: Lang> TokenError<'s, L> {
 
     /// The recovery possibility, if the tokenizer could construct one.
     pub fn recovery(&self) -> Option<&TokenRecovery<'s, L>> {
-        self.recovery.as_ref()
+        self.recovery.as_deref()
     }
 
     /// Consume the error, returning its recovery possibility if any.
     pub fn into_recovery(self) -> Option<TokenRecovery<'s, L>> {
-        self.recovery
+        self.recovery.map(|boxed| *boxed)
     }
 }
 

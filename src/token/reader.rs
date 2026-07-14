@@ -3,7 +3,7 @@
 //!
 //! `StdTokenReader` follows pylatexenc's proven `LatexTokenReader` protocol: `peek` parses
 //! the token at the current position without advancing; `move_past`/`move_to` reposition
-//! relative to a token; `next` = peek + move-past. The scanning core is decomposed into
+//! relative to a token; `move_to_pos` repositions absolutely; `next` = peek + move-past. The scanning core is decomposed into
 //! private `detect_*`/`read_*` methods, each driven by one facet of the
 //! [`TokenRules`] — except specials recognition, which is delegated to
 //! [`Lang::scan_specials`] (gated by the state's cached
@@ -14,6 +14,8 @@
 //! [`TokenRules::enable_multi_newline_paragraphs`] is set, skipped whitespace never consumes a
 //! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
+
+use alloc::sync::Arc;
 
 use crate::source::Span;
 use crate::state::{Lang, ParsingState};
@@ -33,16 +35,18 @@ use super::token::{Token, TokenKind};
 /// # Contract
 ///
 /// - **`peek` is idempotent per (position, state instance):** repeated calls at the same
-///   position with the *same* `ParsingState` instance return the same result, and
-///   implementations may memoize on that key (states are immutable, so `Arc` pointer
-///   identity is a sound cache key). A *different* state — even one derived with an empty
+///   position with the *same* `ParsingState` instance return the same result. The state
+///   arrives as an `&Arc` precisely so implementations may memoize on that key: clone
+///   the `Arc` into the cache — pointer identity is a sound key *only while a strong
+///   reference pins the allocation* (a dropped state's address can be recycled for a
+///   different state). A *different* state instance — even one derived with an empty
 ///   delta — relieves `peek` of any obligation to repeat itself.
 /// - At the end of the stream `peek` returns the terminal, idempotent
 ///   [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
 ///   carries the final whitespace.
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
-    fn peek(&mut self, state: &ParsingState<L>) -> TokenResult<'s, L, Token<'s, L>>;
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
 
     /// Move immediately past `tok`. If `skip_post_space` is true the position lands after
     /// the token's post-space; otherwise right after the token proper, before it.
@@ -52,12 +56,24 @@ pub trait TokenReader<'s, L: Lang> {
     /// is true the position lands before the token's preceding whitespace instead.
     fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool);
 
+    /// Move to an absolute byte position: a
+    /// [`TokenRecovery::resume_pos`](super::TokenRecovery), an argument parser's
+    /// absent-argument rewind target. The position must be one the reader can
+    /// meaningfully resume from (for text-scanning readers: on a `char` boundary, at
+    /// most the content's length).
+    ///
+    /// Deliberately bidirectional — it also serves rewinds — so implementations assert
+    /// nothing about the direction of the move. When adopting a `TokenRecovery`, the
+    /// *caller* enforces the [`resume_pos` advancement contract](super::TokenRecovery#contract-resume_pos-must-advance-the-reader)
+    /// (the content loop aborts if the reader did not advance).
+    fn move_to_pos(&mut self, pos: usize);
+
     /// Current byte position.
     fn pos(&self) -> usize;
 
     /// Parse the token at the current position and move past it (including its
     /// post-space): [`peek`](TokenReader::peek) + [`move_past`](TokenReader::move_past).
-    fn next(&mut self, state: &ParsingState<L>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         let token = self.peek(state)?;
         self.move_past(&token, true);
         Ok(token)
@@ -129,6 +145,11 @@ impl<'s> StdTokenReader<'s> {
     pub fn content(&self) -> &'s str {
         self.content
     }
+
+    // `pos`/`move_to_pos` exist both here and on the `TokenReader` trait: the trait
+    // impl is generic over `L`, so calling through it on a concrete reader needs `L`
+    // pinned by context — these inherent forms serve direct (non-generic) users. The
+    // trait impl delegates here; the logic lives in one place.
 
     /// Current byte position.
     pub fn pos(&self) -> usize {
@@ -311,14 +332,19 @@ impl<'s> StdTokenReader<'s> {
         let name_start = pos + rule.escape_char.len_utf8();
 
         if name_start >= s.len() {
-            // Recovery: pretend the stream ended here, resume at end of input.
-            let placeholder = Token::new(TokenKind::EndOfStream, Span::empty(pos), pre_space);
+            // Recovery: a `Char` placeholder covering the dangling escape byte itself
+            // (`name_start` == `s.len()` here), so the byte stays in the tree — it
+            // joins the pending chars run and the tolerant parse keeps the partition
+            // invariant (decided July 2026, Action 02; supersedes the empty
+            // `EndOfStream` placeholder, which dropped the byte from the AST).
+            let span = Span::new(pos, name_start);
+            let placeholder = Token::new(TokenKind::Char(rule.escape_char), span, pre_space);
             return Err(TokenError::new(
                 TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
                     rule.escape_char,
                 )),
-                Span::new(pos, name_start),
-                Some(TokenRecovery { token: placeholder, resume_pos: s.len() }),
+                span,
+                Some(TokenRecovery { token: placeholder, resume_pos: span.end }),
             ));
         }
 
@@ -377,6 +403,9 @@ impl<'s> StdTokenReader<'s> {
             .max_by_key(|d| d.len())?;
 
         let content_start = pos + start.len();
+        // '\n' is the sole line terminator — '\r' gets no special treatment anywhere in
+        // the tokenizer (feeding text-mode-normalized content is the embedder's job;
+        // Action-02 follow-up, July 2026).
         let content_end = match s[content_start..].find('\n') {
             Some(i) => content_start + i,
             None => s.len(),
@@ -384,7 +413,11 @@ impl<'s> StdTokenReader<'s> {
         let post_space = Span::new(content_end, skip_whitespace(s, content_end, rules));
 
         Some(Token::new(
-            TokenKind::Comment { content: &s[content_start..content_end], post_space },
+            TokenKind::Comment {
+                start: Span::new(pos, content_start),
+                content: &s[content_start..content_end],
+                post_space,
+            },
             Span::new(pos, post_space.end),
             pre_space,
         ))
@@ -392,7 +425,7 @@ impl<'s> StdTokenReader<'s> {
 }
 
 impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
-    fn peek(&mut self, state: &ParsingState<L>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         self.peek_impl(state)
     }
 
@@ -414,8 +447,12 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
         }
     }
 
+    fn move_to_pos(&mut self, pos: usize) {
+        StdTokenReader::move_to_pos(self, pos);
+    }
+
     fn pos(&self) -> usize {
-        self.pos
+        StdTokenReader::pos(self)
     }
 }
 
@@ -491,8 +528,8 @@ mod tests {
         Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
     }
 
-    fn state(rules: TokenRules<TestLang>) -> ParsingState<TestLang> {
-        ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
+    fn state(rules: TokenRules<TestLang>) -> Arc<ParsingState<TestLang>> {
+        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () }))
     }
 
     /// The `latex_rules` rule of the given class (unique per rule in these tests).
@@ -506,7 +543,7 @@ mod tests {
 
     /// Rules with the given rule's close delimiter expected (as the group parser sets up
     /// when entering an ambiguously-delimited group).
-    fn expecting_close(group_type: u32) -> ParsingState<TestLang> {
+    fn expecting_close(group_type: u32) -> Arc<ParsingState<TestLang>> {
         state(TokenRules { expecting_group_close: Some(rule_of(group_type)), ..latex_rules() })
     }
 
@@ -514,11 +551,17 @@ mod tests {
         Span::new(start, end)
     }
 
-    fn peek<'s>(tr: &mut StdTokenReader<'s>, st: &ParsingState<TestLang>) -> Token<'s, TestLang> {
+    fn peek<'s>(
+        tr: &mut StdTokenReader<'s>,
+        st: &Arc<ParsingState<TestLang>>,
+    ) -> Token<'s, TestLang> {
         TokenReader::peek(tr, st).unwrap()
     }
 
-    fn next<'s>(tr: &mut StdTokenReader<'s>, st: &ParsingState<TestLang>) -> Token<'s, TestLang> {
+    fn next<'s>(
+        tr: &mut StdTokenReader<'s>,
+        st: &Arc<ParsingState<TestLang>>,
+    ) -> Token<'s, TestLang> {
         TokenReader::next(tr, st).unwrap()
     }
 
@@ -905,7 +948,7 @@ mod tests {
         let in_inline = expecting_close(MATH_INLINE);
         let in_display = expecting_close(MATH_DISPLAY);
 
-        let cases: [(usize, &ParsingState<TestLang>, TokenKind<'_, TestLang>, usize); 8] = [
+        let cases: [(usize, &Arc<ParsingState<TestLang>>, TokenKind<'_, TestLang>, usize); 8] = [
             // (pos, state, expected kind, expected end)
             (1, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 2),
             // expected close beats the longest ('$$') match:
@@ -939,7 +982,11 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Comment { content: " Comment here", post_space: sp(14, 17) },
+                TokenKind::Comment {
+                    start: sp(0, 1),
+                    content: " Comment here",
+                    post_space: sp(14, 17),
+                },
                 sp(0, 17),
                 Span::empty(0),
             ),
@@ -957,7 +1004,11 @@ mod tests {
         assert_eq!(token.span, sp(7, 24));
         assert_eq!(
             token.kind,
-            TokenKind::Comment { content: " Comment here", post_space: sp(21, 24) },
+            TokenKind::Comment {
+                start: sp(7, 8),
+                content: " Comment here",
+                post_space: sp(21, 24),
+            },
         );
     }
 
@@ -972,7 +1023,11 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Comment { content: " c", post_space: Span::empty(4) },
+                TokenKind::Comment {
+                    start: sp(1, 2),
+                    content: " c",
+                    post_space: Span::empty(4),
+                },
                 sp(1, 4),
                 Span::empty(1),
             ),
@@ -992,12 +1047,40 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
-                TokenKind::Comment { content: " trailing", post_space: Span::empty(11) },
+                TokenKind::Comment {
+                    start: sp(1, 2),
+                    content: " trailing",
+                    post_space: Span::empty(11),
+                },
                 sp(1, 11),
                 Span::empty(1),
             ),
         );
         assert_eq!(next(&mut tr, &st).kind, TokenKind::EndOfStream);
+    }
+
+    #[test]
+    fn comment_crlf_carriage_return_is_ordinary_content() {
+        // Deliberate (July 2026, Action-02 follow-up): '\n' is the sole line
+        // terminator, and the tokenizer gives '\r' no special treatment whatsoever —
+        // input is expected text-mode-normalized by the embedder (the no_std core
+        // never reads files). On CRLF input the '\r' therefore stays inside the
+        // comment content, as in pylatexenc.
+        let mut tr = StdTokenReader::new("% note\r\n  more");
+        let st = state(latex_rules());
+        assert_eq!(
+            next(&mut tr, &st),
+            Token::new(
+                TokenKind::Comment {
+                    start: sp(0, 1),
+                    content: " note\r",
+                    post_space: sp(7, 10),
+                },
+                sp(0, 10),
+                Span::empty(0),
+            ),
+        );
+        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('m'));
     }
 
     #[test]
@@ -1014,7 +1097,11 @@ mod tests {
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
-                TokenKind::Comment { content: " Comment here", post_space: sp(25, 26) },
+                TokenKind::Comment {
+                    start: sp(0, 12),
+                    content: " Comment here",
+                    post_space: sp(25, 26),
+                },
                 sp(0, 26),
                 Span::empty(0),
             ),
@@ -1137,8 +1224,8 @@ mod tests {
         }
     }
 
-    fn specials_state(rules: TokenRules<SpecialsLang>) -> ParsingState<SpecialsLang> {
-        ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () })
+    fn specials_state(rules: TokenRules<SpecialsLang>) -> Arc<ParsingState<SpecialsLang>> {
+        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () }))
     }
 
     #[test]
@@ -1216,8 +1303,11 @@ mod tests {
                 panic!("scan_specials consulted for a non-trigger character");
             }
         }
-        let st: ParsingState<PanickyLang> =
-            ParsingState::new(StateData { rules: latex_rules(), libraries: LibraryStack::new(), ext: () });
+        let st: Arc<ParsingState<PanickyLang>> = Arc::new(ParsingState::new(StateData {
+            rules: latex_rules(),
+            libraries: LibraryStack::new(),
+            ext: (),
+        }));
         let mut tr = StdTokenReader::new("x");
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
     }
@@ -1264,11 +1354,12 @@ mod tests {
         ));
         assert_eq!(err.span(), sp(2, 3));
 
-        // Recovery: pretend the stream ended at the dangling escape, resume at the end.
+        // Recovery: a Char placeholder covering the dangling escape byte itself, so the
+        // byte stays in the tree (the tolerant parse keeps the partition invariant).
         let recovery = err.into_recovery().unwrap();
         assert_eq!(
             recovery.token,
-            Token::new(TokenKind::EndOfStream, Span::empty(2), sp(1, 2)),
+            Token::new(TokenKind::Char('\\'), sp(2, 3), sp(1, 2)),
         );
         assert_eq!(recovery.resume_pos, 3);
         tr.move_to_pos(recovery.resume_pos);
@@ -1473,6 +1564,7 @@ mod tests {
             next(&mut tr, &st),
             Token::new(
                 TokenKind::Comment {
+                    start: sp(p + 2, p + 3),
                     content: " here goes a comment",
                     post_space: sp(nl, nl + 1),
                 },

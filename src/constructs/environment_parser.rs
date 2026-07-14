@@ -59,7 +59,7 @@ use crate::state::{Lang, ParsingStateDelta};
 use crate::token::{GroupRule, TokenKind};
 
 use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
-use super::{resume_at, try_peek, ConstructParser, ConstructParserResult, ParseContext};
+use super::{try_peek, ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: an environment's body ran into the terminator of a *different*
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
@@ -232,7 +232,7 @@ pub(crate) fn read_rigid_name_group<L: Lang>(
     match result? {
         Some(name_group) => Ok(Some(name_group)),
         None => {
-            resume_at(cx.tokens, entry);
+            cx.tokens.move_to_pos(entry);
             Ok(None)
         }
     }
@@ -545,6 +545,7 @@ mod tests {
 
     const GT_BRACE: u32 = 0;
     const GT_OPTION: u32 = 1;
+    const GT_RAW: u32 = 2;
     const CT_MACRO: u32 = 10;
     const CT_SPECIALS: u32 = 11;
     const CT_ENVIRONMENT: u32 = 12;
@@ -796,11 +797,15 @@ mod tests {
         }
     }
 
-    // --- the verbatim escape hatch (the 6.6 obligation): a takeover parser reading raw
-    // --- source content, staging an environment-shaped node with a slot record --------
+    // --- the verbatim takeover (the 6.6 obligation): a parser reading its body as raw
+    // --- chars under a features-disabled state, staging an environment-shaped node
+    // --- with a slot record — the decided verbatim recipe (§3.2, Action-02 entry) ------
 
     /// `\raw … \endraw`: the body is raw source bytes — the parser never runs
-    /// `NodesParser`, so no terminator-state doctrine is needed (§3.6).
+    /// `NodesParser`, so no terminator-state doctrine is needed (§3.6). It reads the
+    /// body through the reader like every other parser (no raw-content peeking): under
+    /// the verbatim state every byte is a `Char` token and the terminator one
+    /// `GroupClose`.
     #[derive(Debug)]
     struct RawBlockSpec;
 
@@ -834,23 +839,52 @@ mod tests {
             // (the uniform `parse` signature cannot tie the stored trigger token to the
             // context's reader): reposition so the trigger's post-space bytes stay raw
             // body content (they are not recorded post-space).
-            resume_at(cx.tokens, trigger.post_space().start);
+            cx.tokens.move_to_pos(trigger.post_space().start);
             let body_start = cx.tokens.pos();
-            let source = Arc::clone(&cx.source);
-            let content = source.content();
-            let (body_end, end) = match content[body_start..].find(TERMINATOR) {
-                Some(offset) => {
-                    (body_start + offset, body_start + offset + TERMINATOR.len())
+
+            // The verbatim state: every feature gate off, and the expected group close
+            // *replaced* by the raw terminator. The expected close is ungated by
+            // `enable_groups` and overrides any close expectation inherited from an
+            // enclosing group, so it is the single recognizer left active: the body
+            // arrives as pure `Char` tokens — whitespace and would-be markup included —
+            // and the terminator as one `GroupClose`.
+            let raw_rule: Arc<GroupRule<EnvLang>> = Arc::new(GroupRule {
+                group_type: GT_RAW,
+                open: "\\raw".into(),
+                close: TERMINATOR.into(),
+            });
+            let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
+                enable_whitespace: Some(false),
+                enable_multi_newline_paragraphs: Some(false),
+                enable_groups: Some(false),
+                enable_commands: Some(false),
+                enable_comments: Some(false),
+                enable_specials: Some(false),
+                expecting_group_close: Some(Some(raw_rule)),
+                ..TokenRulesOverrides::default()
+            });
+            let verbatim_state = cx.session.derived_state(&cx.state, &delta);
+            let outer_state = mem::replace(&mut cx.state, verbatim_state);
+            let terminator = loop {
+                let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
+                match &token.kind {
+                    TokenKind::Char(_) => cx.tokens.move_past(&token, true),
+                    TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
+                    other => unreachable!("verbatim state yields only chars, got {}", other),
                 }
-                None => {
+            };
+            cx.tokens.move_past(&terminator, true); // past `\endraw`; no-op at stream end
+            cx.state = outer_state;
+            let (body_end, end) = match &terminator.kind {
+                TokenKind::GroupClose { .. } => (terminator.span.start, terminator.span.end),
+                _ => {
                     cx.recover(
                         MissingRawTerminator,
                         SourceSpan::new(&cx.source, trigger.span.range()),
                     )?;
-                    (content.len(), content.len())
+                    (terminator.span.start, terminator.span.start)
                 }
             };
-            resume_at(cx.tokens, end);
 
             let mut body_nodes = Vec::new();
             if body_end > body_start {
@@ -1072,7 +1106,7 @@ mod tests {
         let mut scanned = Vec::new();
         let mut scanner = StdTokenReader::new(content);
         loop {
-            let token = TokenReader::next(&mut scanner, state.as_ref()).expect("clean scan");
+            let token = TokenReader::next(&mut scanner, state).expect("clean scan");
             let done = matches!(token.kind, TokenKind::EndOfStream);
             scanned.push(token);
             if done {
@@ -1654,6 +1688,28 @@ mod tests {
         assert_eq!(raw.slots().unwrap().len(), 1);
         assert!(raw.slots().unwrap().get_named("raw").is_some());
         assert_eq!(body_shapes(raw), ["chars 4..15 \" {\\\\begin %~\""]);
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn verbatim_body_inside_a_group_overrides_the_inherited_close() {
+        // The Action-02 pitfall: inside a braces group the interior state expects `}`
+        // (ungated by `enable_groups`), so a verbatim state that merely disabled the
+        // feature gates would still read the body's `}` as a GroupClose. The recipe
+        // *replaces* the expectation with the raw terminator instead: the `}` stays
+        // body content, and the enclosing group still finds its own close afterwards.
+        let st = suite_state();
+        //             0....5....1....1....
+        //                  0    5
+        let content = "{a\\raw }b\\endraw c}";
+        let parsed = parse_std(content, &st, Recovery::Strict);
+
+        let group = root_child(&parsed, 0);
+        assert!(group.is_group());
+        assert_eq!(group.span().range(), 0..19);
+        let raw = group.child(1).unwrap();
+        assert_eq!(raw.span().range(), 2..16);
+        assert_eq!(body_shapes(raw), ["chars 6..9 \" }b\""]);
         assert!(parsed.result.diagnostics.is_empty());
     }
 

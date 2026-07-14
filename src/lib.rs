@@ -116,7 +116,7 @@ pub use state::{
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,
     GroupRule, PrefixTable, SpecialsMatch, StdTokenReader, Token, TokenError, TokenErrorKind,
-    TokenKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
+    TokenKind, TokenReader, TokenRecovery, TokenResult, TokenRules,
     TriggerChars, WhitespaceRules,
 };
 

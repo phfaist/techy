@@ -94,6 +94,14 @@ pub enum TokenKind<'s, L: Lang> {
     /// A whole comment: start delimiter plus content, up to (not including) the
     /// terminating newline.
     Comment {
+        /// The matched start delimiter's span — a leading sub-range of the token's
+        /// `span`. Which delimiter fired is a per-instance fact (several comment
+        /// syntaxes may coexist), and it pins down the content span as
+        /// `start.end..post_space.start` *without* assuming `content` was sliced
+        /// verbatim from the source — a custom [`TokenReader`](super::TokenReader) may
+        /// normalize `content`, so consumers must never reconstruct spans from
+        /// `content.len()` (added July 2026, Action 02).
+        start: Span,
         /// The comment text after the start delimiter, without the newline.
         content: &'s str,
         /// Syntactic whitespace consumed after the content: the terminating newline plus
@@ -159,6 +167,15 @@ impl<'s, L: Lang> Token<'s, L> {
                 span
             );
         }
+        if let TokenKind::Comment { start, post_space, .. } = &kind {
+            debug_assert!(
+                start.start == span.start && start.end <= post_space.start,
+                "comment start {:?} must be a leading sub-range of span {:?} ending before post_space {:?}",
+                start,
+                span,
+                post_space
+            );
+        }
         Token { kind, span, pre_space }
     }
 
@@ -197,8 +214,8 @@ impl<L: Lang> Clone for TokenKind<'_, L> {
                 name,
                 spec: Arc::clone(spec),
             },
-            TokenKind::Comment { content, post_space } => {
-                TokenKind::Comment { content, post_space: *post_space }
+            TokenKind::Comment { start, content, post_space } => {
+                TokenKind::Comment { start: *start, content, post_space: *post_space }
             }
             TokenKind::ParagraphBreak => TokenKind::ParagraphBreak,
             TokenKind::EndOfStream => TokenKind::EndOfStream,
@@ -236,9 +253,9 @@ impl<L: Lang> PartialEq for TokenKind<'_, L> {
                 TokenKind::Specials { callable_type: t2, name: n2, spec: s2 },
             ) => t1 == t2 && n1 == n2 && Arc::ptr_eq(s1, s2),
             (
-                TokenKind::Comment { content: c1, post_space: p1 },
-                TokenKind::Comment { content: c2, post_space: p2 },
-            ) => c1 == c2 && p1 == p2,
+                TokenKind::Comment { start: s1, content: c1, post_space: p1 },
+                TokenKind::Comment { start: s2, content: c2, post_space: p2 },
+            ) => s1 == s2 && c1 == c2 && p1 == p2,
             (TokenKind::ParagraphBreak, TokenKind::ParagraphBreak) => true,
             (TokenKind::EndOfStream, TokenKind::EndOfStream) => true,
             _ => false,
@@ -280,8 +297,9 @@ impl<L: Lang> fmt::Debug for TokenKind<'_, L> {
                 .field("name", name)
                 .field("spec", spec)
                 .finish(),
-            TokenKind::Comment { content, post_space } => f
+            TokenKind::Comment { start, content, post_space } => f
                 .debug_struct("Comment")
+                .field("start", start)
                 .field("content", content)
                 .field("post_space", post_space)
                 .finish(),
@@ -301,19 +319,68 @@ impl<L: Lang> fmt::Debug for Token<'_, L> {
     }
 }
 
+/// Longest char-boundary-aligned prefix of `content` within `MAX_DISPLAY_CONTENT`
+/// bytes, and whether anything was cut.
+fn truncate_for_display(content: &str) -> (&str, bool) {
+    const MAX_DISPLAY_CONTENT: usize = 24;
+    if content.len() <= MAX_DISPLAY_CONTENT {
+        return (content, false);
+    }
+    let mut end = MAX_DISPLAY_CONTENT;
+    // Bounded and underflow-free without an explicit guard: a UTF-8 char is at most
+    // four bytes, so a boundary exists within three steps (`end` never drops below
+    // `MAX_DISPLAY_CONTENT - 3`); and `is_char_boundary(0)` is `true`, so `end` cannot
+    // underflow even in principle. The loop must only ever exit *on* a boundary —
+    // exiting early would make the slice below panic.
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&content[..end], true)
+}
+
+/// The `Display` form shows each kind's *written* spelling where the token carries it:
+/// `Command(\foo)` renders the escape character that actually fired (so `\foo` and
+/// `@foo` are distinguishable), delimiters and specials appear as matched, and comment
+/// content is truncated to a preview.
 impl<L: Lang> fmt::Display for TokenKind<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TokenKind::Char(c) => write!(f, "Char({:?})", c),
             TokenKind::GroupOpen { delim, rule } => {
-                write!(f, "GroupOpen({:?}, {:?})", delim, rule.group_type)
+                write!(f, "GroupOpen({}, {:?})", delim, rule.group_type)
             }
-            TokenKind::GroupClose { delim } => write!(f, "GroupClose({:?})", delim),
-            TokenKind::Command { name, .. } => write!(f, "Command({:?})", name),
-            TokenKind::Specials { name, .. } => write!(f, "Specials({:?})", name),
-            TokenKind::Comment { content, .. } => write!(f, "Comment({:?})", content),
+            TokenKind::GroupClose { delim } => write!(f, "GroupClose({})", delim),
+            TokenKind::Command { name, escape_char, .. } => {
+                write!(f, "Command({}{})", escape_char, name)
+            }
+            TokenKind::Specials { name, .. } => write!(f, "Specials({})", name),
+            TokenKind::Comment { content, .. } => {
+                let (preview, truncated) = truncate_for_display(content);
+                write!(f, "Comment({:?}{})", preview, if truncated { "…" } else { "" })
+            }
             TokenKind::ParagraphBreak => write!(f, "ParagraphBreak"),
             TokenKind::EndOfStream => write!(f, "EndOfStream"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_for_display;
+    use alloc::format;
+
+    #[test]
+    fn truncate_for_display_stops_at_char_boundaries() {
+        // Short content passes through untouched.
+        assert_eq!(truncate_for_display("short"), ("short", false));
+        // ASCII: cut exactly at the 24-byte limit.
+        let ascii = "abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(truncate_for_display(ascii), ("abcdefghijklmnopqrstuvwx", true));
+        // A multi-byte char straddling the limit: back up to its start — at most three
+        // bytes (a UTF-8 char is at most four), never past the limit minus three.
+        let straddling = format!("{}🦀!", "x".repeat(22)); // '🦀' occupies bytes 22..26
+        let (prefix, cut) = truncate_for_display(&straddling);
+        assert_eq!(prefix, "x".repeat(22));
+        assert!(cut);
     }
 }

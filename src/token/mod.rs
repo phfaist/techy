@@ -37,6 +37,7 @@
 //!   (Phase 6), not the reader.
 
 mod error;
+#[cfg(test)]
 mod list_reader;
 mod prefix_table;
 mod reader;
@@ -51,7 +52,12 @@ pub use error::{
     EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
     TokenResult,
 };
-pub use list_reader::TokenListReader;
+// Internal test infrastructure, not public API (decided July 2026, Action-02
+// follow-up): its role is the lockstep reader-agreement harness of the construct-parser
+// test suites, and its fixed-list fidelity gap (no re-tokenization under the peek
+// state) makes it unfit as a public reader contract.
+#[cfg(test)]
+pub(crate) use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
 pub use rules::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};

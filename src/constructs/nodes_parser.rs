@@ -90,7 +90,7 @@ use crate::token::{Token, TokenKind};
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
 use super::{
-    invocation_frame, resume_at, ConstructParser, ConstructParserResult, Invocation,
+    invocation_frame, ConstructParser, ConstructParserResult, Invocation,
     ParseContext,
 };
 
@@ -638,7 +638,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             // tolerant mode: its promise is a best-effort tree, not
                             // tolerance of non-termination.
                             let before = cx.tokens.pos();
-                            resume_at(cx.tokens, recovery.resume_pos);
+                            cx.tokens.move_to_pos(recovery.resume_pos);
                             if cx.tokens.pos() <= before {
                                 return Err(ParseError::from_token_error(kind, span)
                                     .with_frames(cx.session.snapshot_frames()));
@@ -721,19 +721,17 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     }
                 }
 
-                TokenKind::Comment { content, post_space } => {
+                TokenKind::Comment { start, post_space, .. } => {
                     if self.flush_through(cx, token.pre_space) {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
-                    // The token's span is start delimiter + content + post-space; the
-                    // content's length and end position pin down the three sub-spans.
-                    let content_span =
-                        Span::new(post_space.start - content.len(), post_space.start);
-                    let start_span = Span::new(token.span.start, content_span.start);
-                    let kind = NodeKind::comment(start_span, content_span, *post_space);
+                    // The token's sub-spans tile its span: start delimiter, content,
+                    // post-space.
+                    let content_span = Span::new(start.end, post_space.start);
+                    let kind = NodeKind::comment(*start, content_span, *post_space);
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }
@@ -1160,7 +1158,7 @@ mod tests {
     }
 
     /// Scan `content` into the full token list (including the terminal `EndOfStream`).
-    fn scan<'s, L: Lang>(content: &'s str, state: &ParsingState<L>) -> Vec<Token<'s, L>> {
+    fn scan<'s, L: Lang>(content: &'s str, state: &Arc<ParsingState<L>>) -> Vec<Token<'s, L>> {
         let mut reader = StdTokenReader::new(content);
         let mut tokens = Vec::new();
         loop {
@@ -1800,7 +1798,7 @@ mod tests {
     impl<'s> TokenReader<'s, TestLang> for StuckRecoveryReader {
         fn peek(
             &mut self,
-            _state: &ParsingState<TestLang>,
+            _state: &Arc<ParsingState<TestLang>>,
         ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
             let span = Span::new(self.pos, self.pos + 1);
             Err(TokenError::new(
@@ -1819,6 +1817,10 @@ mod tests {
 
         fn move_to(&mut self, tok: &Token<'s, TestLang>, _rewind_pre_space: bool) {
             self.pos = tok.span.start;
+        }
+
+        fn move_to_pos(&mut self, pos: usize) {
+            self.pos = pos;
         }
 
         fn pos(&self) -> usize {
@@ -1932,12 +1934,14 @@ mod tests {
         let mut reader = StdTokenReader::new("ab \\");
         let parsed =
             try_run("ab \\", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
-        // The placeholder is an EndOfStream at the escape position; reading resumed at
-        // the input's end (the reader is past the error, not before it).
-        assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
+        // The placeholder is a Char covering the dangling escape byte: it joins the
+        // pending chars run, so the recovery is partition-clean (§3.8) — the escape
+        // byte stays in the tree, accompanied by its diagnostic.
+        assert_eq!(shapes(&parsed.result), ["chars 0..4 \"ab \\\\\""]);
         assert_eq!(parsed.stop, StopCause::EndOfInput);
         assert_eq!(parsed.pos, 4);
         assert_eq!(parsed.result.diagnostics.len(), 1);
+        assert_partition(&parsed.result, 0..4);
     }
 
     #[test]
