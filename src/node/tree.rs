@@ -145,12 +145,12 @@ impl<L: Lang> NodeTree<L> {
     ///
     /// # Panics
     ///
-    /// Panics if `id` is out of range (the approved indexing-style exception, panic
-    /// policy, DESIGN_RATIONALE.md). Ids are only meaningful for the tree that minted
+    /// Panics if `id` is out of range. Ids are only meaningful for the tree that minted
     /// them (or a layout-preserving copy of it): an *in-range* id from a different tree
     /// silently resolves to whatever node sits at that index here — release builds
     /// cannot detect it; debug builds catch it with a provenance-tag assertion.
     pub fn node(&self, id: NodeId) -> NodeRef<'_, L> {
+        // Panic here is an approved exception (indexing-style exception) per panic policy in DESIGN_RATIONALE.md .
         assert!(id.index() < self.nodes.len(), "node id {:?} out of range", id);
         NodeRef::new(self, id)
     }
