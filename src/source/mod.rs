@@ -6,8 +6,8 @@
 //!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
 //! - [`Span`] is a plain `Copy` byte range — the transient span type on which all span
 //!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately, §3.8; the
-//!   type lives here rather than in the token topic because errors and cursors use it
-//!   independently of tokenization).
+//!   type lives here rather than in the token topic because errors use it independently
+//!   of tokenization).
 //! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes and errors/diagnostics carry
 //!   `SourceSpan`s, making them self-contained — no lifetime parameters, no external
 //!   source store. The construct-parser layer is where a byte `Span` becomes a
@@ -18,9 +18,6 @@
 //!   resolved/synthesized source), not on every location.
 //! - [`SourceResolver`] is the pluggable content-lookup extension point (`\input`-like
 //!   references); [`NoResolver`] is the zero-cost default.
-//! - [`SourceContent`] abstracts the backing storage (in-memory strings today; the trait
-//!   boundary is what will later allow memory-mapped files without parser changes).
-//! - [`SourceCursor`] provides forward scanning with mark/rewind over source content.
 //! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
 //!   owned when synthesized or normalized. Node payloads carry it (Phase 5).
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
@@ -47,7 +44,6 @@
 //! In particular there is no file-system-backed resolver: embedders that want file (or URL,
 //! or database) lookup implement [`SourceResolver`] themselves.
 
-mod content;
 mod line_index;
 mod origin;
 mod resolver;
@@ -58,7 +54,6 @@ mod source;
 mod span;
 mod text_content;
 
-pub use content::{SourceContent, SourceCursor};
 pub use line_index::LineIndex;
 pub use origin::SourceOrigin;
 pub use resolver::{

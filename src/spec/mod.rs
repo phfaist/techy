@@ -143,10 +143,11 @@ mod tests {
     }
 
     #[test]
-    fn argument_parsers_and_state_deltas_have_a_slot() {
+    fn custom_argument_parser_and_delta_need_no_invocation_parser() {
         // The pylatexenc mid-granularity extension point: a bespoke argument parser and
         // a per-argument parsing-state delta, declared without a custom invocation
-        // parser.
+        // parser. (Renamed July 2026 — "have a slot" collided with the record-level
+        // slot vocabulary, which this test is not about.)
         #[derive(Debug)]
         struct CharsOnly;
         impl ArgumentParser<PlainLang> for CharsOnly {

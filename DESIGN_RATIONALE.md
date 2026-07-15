@@ -172,10 +172,10 @@ display (errors, diagnostics). The lazy-extension logic and traceback formatting
 
 **Pluggable content resolution** — DECIDED (March 2026).
 `SourceResolver` trait for `\input`-like lookups; `NoResolver` is a ZST so a no-I/O build pays
-nothing. `SourceContent` trait abstracts backing storage so mmap can arrive later without
-parser changes (DEFERRED until a real need). No file-system resolver is shipped (no_std
-policy, §3.9): an embedder implements `SourceResolver` on its side, where the I/O capability
-lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
+nothing. No file-system resolver is shipped (no_std policy, §3.9): an embedder implements
+`SourceResolver` on its side, where the I/O capability lives; the in-memory `MapResolver`
+covers tests and fully preloaded setups. *(The `SourceContent` backing-abstraction half this
+entry originally carried is retired — see the July 2026 retirement entry below.)*
 
 **Origin genericity without `Lang` (Phase 1)** — DECIDED (user, July 2026, Phase 1 kickoff);
 **default origin simplified to an optional URL string** — REVISED (user, July 2026).
@@ -205,11 +205,34 @@ question twice), and the `File` kind clashed with the no_std policy (§3.9). The
 actually knows a URL attaches it via `with_origin`.
 
 **`SourceContent` is a trait boundary, not (yet) a `Source` parameter** — DECIDED (user,
-July 2026, Phase 1 kickoff). The trait exists (implemented by `str` and `String`) and
+July 2026, Phase 1 kickoff). *(Superseded the same month — retired outright; next entry.)*
+The trait exists (implemented by `str` and `String`) and
 `SourceCursor<'s, C: SourceContent + ?Sized = str>` is generic over it, but `Source` stores a
 concrete `String`, with all content access behind methods so the backing can later become
 generic (mmap) without changing the public API. Explicitly: keep the enabling pattern, do not
 implement mmap until a real need.
+
+**`SourceCursor`, `Source::cursor()`, and `SourceContent` retired** — DECIDED (user, July
+2026, Action-06 review; supersedes the entry above). The intended consumer went another
+way: `StdTokenReader` holds `content: &'s str` and scans the `str` directly. Its access
+pattern is random-access slicing at arbitrary offsets (`starts_with` at a position,
+`find('\n')` from a comment start, longest-match through the `PrefixTable`, whitespace
+look-ahead past the current position) — which the cursor's position-local
+char-at-a-time primitives (`peek_char`/`next_char`/`advance`/`mark`/`rewind`) do not
+serve — and the `TokenReader` contract needs deliberately *bidirectional* `move_to_pos`
+(`TokenRecovery::resume_pos` moves forward), which the backward-only, debug-asserted
+`rewind` actively resists. `SourceContent` fell with the cursor: as designed
+(`slice(&self, Range) -> &str` over contiguous valid UTF-8) it is
+information-equivalent to `&str` — a UTF-8 memory-mapped file can be handed in as text
+by the embedder after one validation pass, so the trait enabled no future it claimed
+to; only a genuinely *chunked/streaming* backing would be new, and that is a different
+reader design, not a backing swap behind `Source`. ~215 lines retired (content.rs,
+`Source::cursor()`, the re-exports); `Source` keeps its plain `String` field with
+access behind methods.
+*Rejected:* re-labeling the cursor as an embedder convenience for custom `TokenReader`s
+(nothing needs it, and `&str` + `usize` is simpler than a bespoke cursor API).
+*Revisit if:* a genuinely streaming source materializes — design the chunked reader
+then, with a content abstraction shaped by its real requirements.
 
 **`Span` has private fields; in-place growth is the monotone `extend_to`** — DECIDED
 (user, July 2026, Action-05 session). `Span`'s `start`/`end` went private with
@@ -239,8 +262,8 @@ Action-05 session; settled before any consumer exists — the wiring lands on
   silently renders the wrong chain inside the second inclusion. Returning content makes
   the trap *unrepresentable* — provenance never passes through implementor hands, and
   resolvers may cache content freely. (Content duplication per include site is inherent
-  while `Source.content` is a `String`; the `SourceContent` seam allows an `Arc<str>`
-  backing later without touching this.) *Rejected:* a documented
+  while `Source.content` is a `String`; switching that private field to `Arc<str>` later
+  would remove it without touching this contract.) *Rejected:* a documented
   fresh-`Source`-per-resolve contract (an implicit rule a cache silently violates).
 - **`Send + Sync` supertraits**, matching every other stored extension trait: resolvers
   live in the long-lived shareable language bundle, and `resolve(&self)` means caching
@@ -413,8 +436,9 @@ this hybrid):*
 upheld through the token redesign).
 `Token<'s, L>` holds `&'s str` slices plus `Span`s; `pre_space`/post-space are `Span`s, not
 `String`s. The `'s` lifetime never enters the AST.
-*Revisit if:* a streaming token source can't expose stable slices (then the `SourceContent`
-boundary is the place to solve it, not the token type).
+*Revisit if:* a streaming token source can't expose stable slices (that calls for a
+chunked-content reader design — see §3.1's `SourceContent` retirement entry — not a
+change to the token type).
 
 **`TokenReader` is the behavior extension point for tokenization** — DECIDED (user,
 PARSING_STRATEGY.md; trait landed July 2026, Phase 3).
@@ -934,6 +958,8 @@ wrapper covers; recorded here as the upgrade path if the wrapper proves annoying
 FLM practice. This also unblocks the flagged default-factory escape hatch (§3.6): the
 dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
 profiling ever asks for it.
+
+### 3.5 Nodes and AST
 
 **Flat `NodeTree` (Vec + index ranges), frozen after parse, `NodeRef` proxy access** — DECIDED
 (March 2026). Cache-friendly, no per-node heap allocation, trivially serializable; `NodeRef`
@@ -1812,6 +1838,24 @@ invocation half's `Fixed(outer)` revert differs observably from state-carried st
 still in force), needing its own ruling; (iii) the encoding — rules-list vs. rule flag
 (both mechanically break struct literals).
 
+**Brace protection presupposes the minted close spelling is not a group delimiter of
+the argument state — no active suppression** — DECIDED (user, July 2026, Action-06
+review). The revert-to-argument-state rule above protects `]` inside `[{arg with ]}]`
+because the reverted state reads `]` as an *ordinary character*. If a language's
+**base** rules class `[`/`]` as a genuine group pairing, the reverted state reads `]`
+as a real close-only `GroupClose` — and `\item[{a]b}]` then **genuinely fails** (the
+brace group surfaces `UnclosedGroup`/stray-close unwinding, with diagnostics), exactly
+like `{a]b}` anywhere else in that language. Intended, not degradation: the revert
+idiom restores the language's own reading; it never overrides the language. The clean
+`\item[a]` case is unaffected either way (the minted rule is prepended, winning the
+same-spelling tie in the contents state). Note the planned temporary-group-rules
+mechanism (previous entry) does not change this: stripping removes *temporary* rules,
+and the bracket pairing here is a permanent base rule. Pinned by
+`brackets_as_language_groups_defeat_brace_protection_by_design` (argument_parsers.rs).
+*Rejected:* making the revert state actively suppress the close spelling — `]` would
+then parse differently inside a brace group under an option than in every other brace
+group of the same language: an inconsistency masquerading as robustness.
+
 **`ParseContext::parse_scoped` and `ParseContext::probe_token` replace the hand-rolled
 state swap/restore and the crate-private `try_peek`** — DECIDED (user, July 2026,
 Action-05 session). The `cx.state` swap/restore protocol was correct at every one of its
@@ -1926,9 +1970,9 @@ genuinely needs `Rc`.
 
 **What is generic (via `Lang`) and what is not** — PROPOSED (July 2026).
 Generic: `StateExt`, `NodeData`, `SourceOrigin`. Not generic: spec types (extensibility comes
-from `CallableSpec` being a trait), pointer type (above), content backing (behind
-`SourceContent` trait instead). Every proposed new `Lang` associated type should be challenged
-against §2.1/§2.2 first.
+from `CallableSpec` being a trait), pointer type (above), content backing (a plain `String`
+on `Source`; the `SourceContent` seam was retired, §3.1). Every proposed new `Lang`
+associated type should be challenged against §2.1/§2.2 first.
 
 ### 3.8 Errors and diagnostics
 
@@ -2239,6 +2283,26 @@ the content-loop recovery arm (`nodes_parser.rs`).
 tokenizer-internal kinds; one extension mechanism (`DiagnosticData`) serves both layers,
 while the token layer keeps a concrete matchable enum for the recovery protocol.
 
+**`Diagnostics` retention is capped; collection rendering shares line indices
+(`render_all`)** — DECIDED (user, July 2026, Action-06 review). Two bounded-resource
+fixes in one: (i) `Diagnostics` retains at most `limit` items (`with_limit(n)`;
+`DEFAULT_LIMIT` = 1000 via `new()`) — in tolerant mode degenerate input produces one
+diagnostic per byte, and an unbounded `Vec` turns a 10 MB input into ~GB of identical
+messages. Pushes beyond the cap are *counted* (`suppressed()`, surfaced by `render_all`
+as "… and N more") and still feed `has_errors()` (an error-count field covers retained
+and suppressed pushes alike), but are dropped; `is_empty()` is false whenever anything
+was pushed, retained or not. (ii) `Diagnostics::render_all()` renders the whole
+collection through **one `LineIndex` per distinct source**, matched by `Arc` pointer
+identity (the engine-memo idiom; sound because the borrowed spans pin their sources) —
+per-diagnostic `render()` builds a fresh index per position, making k diagnostics over
+an N-byte source O(k·N), with provenance chains multiplying the rescans. The cache
+(`SourceIndexCache`) lives in the renderer, not on `Source`: a lazily-populated cache on
+the shared `Source` is blocked dep-free (`alloc` has no `Mutex`; `OnceCell` would cost
+`Sync`). `format_position` stays as the documented one-shot convenience.
+*Rejected:* an unbounded default (the failure mode is silent and input-controlled), and
+a public `DiagnosticRenderer` type (no second consumer yet; `render_all` covers the
+need — promote the cache if one appears).
+
 ### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
 
 **Absolute minimal mandatory dependencies** — `thiserror` and `log` removed from `Cargo.toml`
@@ -2424,9 +2488,9 @@ Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 
 - Escape hatch, documented: anyone needing catcode-like tokenization implements `TokenReader`.
 - `\newcommand` **is** supported, but at the parse level (a library-extension delta defining a
   new spec), not as token-stream expansion.
-- Deferred, with trait boundaries already in place so no parser changes are needed later:
-  memory-mapped sources (`SourceContent`), streaming/incremental parsing, `Rc` pointer
-  genericity (§3.7).
+- Deferred: memory-mapped sources (an embedder can already hand in mmap-validated text;
+  the `SourceContent` trait seam was retired as information-equivalent to `&str`, §3.1),
+  streaming/incremental parsing, `Rc` pointer genericity (§3.7).
 
 ---
 

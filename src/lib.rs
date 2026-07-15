@@ -110,8 +110,8 @@ pub use error::{
 };
 pub use source::{
     resolve_source, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,
-    ResolvedContent, Source, SourceContent,
-    SourceCursor, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
+    ResolvedContent, Source, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
+    Span, TextContent,
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{

@@ -2657,7 +2657,7 @@ mod tests {
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_eq!(
             parsed.result.diagnostics.iter().next().unwrap().message(),
-            "unclosed group: expected ‘}’"
+            "mismatched group close: expected ‘}’"
         );
     }
 
@@ -2673,7 +2673,7 @@ mod tests {
         let mut reader = StdTokenReader::new("{a]}");
         let err =
             try_run("{a]}", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
-        assert_eq!(err.to_string(), "unclosed group: expected ‘}’");
+        assert_eq!(err.to_string(), "mismatched group close: expected ‘}’");
         assert_eq!(err.span().range(), 2..3);
     }
 

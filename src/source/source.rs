@@ -5,7 +5,6 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::ops::Range;
 
-use super::content::SourceCursor;
 use super::line_index::LineIndex;
 use super::origin::SourceOrigin;
 use super::span::Span;
@@ -16,9 +15,10 @@ use super::span::Span;
 /// spans (and everything that stores them) self-contained. Sources are immutable once
 /// created.
 ///
-/// The content backing is a `String` for now; all access goes through methods so that the
-/// backing can later move behind the [`SourceContent`](super::SourceContent) trait (e.g. for
-/// memory-mapped files) without changing this type's public API.
+/// The content backing is a plain `String`, deliberately (July 2026, Action 06; retired
+/// the earlier `SourceContent` trait seam): a memory-mapped UTF-8 file can be handed in
+/// as text by the embedder after one validation pass, and a genuinely chunked/streaming
+/// backing would need a different reader design — not a backing swap behind this type.
 pub struct Source<O: SourceOrigin = Option<String>> {
     /// The source text.
     content: String,
@@ -138,11 +138,6 @@ impl<O: SourceOrigin> Source<O> {
     pub fn line_index(&self) -> LineIndex<'_> {
         LineIndex::new(&self.content)
             .with_line_column_number_offsets(self.line_number_offset, self.column_number_offset)
-    }
-
-    /// Create a cursor for scanning this source's content from the beginning.
-    pub fn cursor(&self) -> SourceCursor<'_> {
-        SourceCursor::new(self.content.as_str())
     }
 
     /// Iterate over this source's provenance chain: this source's provenance first, then the

@@ -152,10 +152,11 @@ section names (§source, §token, §state, §specs, §nodes, §constructs, §eng
 
 Exactly as decided in March: `Arc<Source>`-based `SourceSpan`, provenance enum
 (`Primary` / `Resolved` / `Synthesized`) with `triggered_at: SourceSpan` back-references,
-`SourceResolver` trait (`NoResolver` ZST default), `SourceContent` trait over the backing
-storage, cursor with mark/rewind, standalone lazy `LineIndex`. Also home of the plain
-byte-range `Span` (`Copy`, no `Arc`; moved here from the token topic, July 2026 — it is
-used by errors and cursors independently of tokenization).
+`SourceResolver` trait (`NoResolver` ZST default), standalone lazy `LineIndex`. Also home
+of the plain byte-range `Span` (`Copy`, no `Arc`; moved here from the token topic, July
+2026 — it is used by errors independently of tokenization). (The March plan's
+`SourceContent` backing trait and mark/rewind cursor were retired July 2026, Action 06 —
+the tokenizer scans `&str` directly; DESIGN_RATIONALE §3.1.)
 
 One correction to the current `source.rs`: the per-location `via: [SourceLocationVia]` chain is
 removed. Provenance belongs on `Source` (one hop per synthesized/included source), not on every
@@ -387,7 +388,9 @@ systematic across the crate: `…Kind` = closed core enum, exhaustively matchabl
 ```rust
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and
 /// no invocation form; one spec may back several names (\emph and \textit can share).
-pub trait CallableSpec<L: Lang> {
+/// (Supertraits as shipped: Send + Sync — specs live in parsed trees, which stay Send —
+/// plus Debug and Any, the downcast channel for Lang::finalize_node; §3.4, Action 05.)
+pub trait CallableSpec<L: Lang>: Debug + Send + Sync + Any {
     // (amended July 2026: an argument IS a parser — pylatexenc's LatexArgumentSpec.
     // ArgumentSpec<L> = { parser: Arc<dyn ArgumentParser<L>>, name, parsing_state_delta },
     // Arc-shared so parsed nodes record which spec each argument was parsed against.
@@ -405,8 +408,9 @@ pub trait CallableSpec<L: Lang> {
     /// hatch (\verb, tabular preambles, FLM constructs) — pylatexenc's most valuable
     /// extensibility property, preserved (its get_node_parser(token) has exactly this
     /// build-a-parser-for-this-token shape).
-    fn make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>)
-        -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>;
+    fn make_invocation_parser<'a, 's>(&'a self, invocation: Invocation<'a, 's, L>)
+        -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    where 's: 'a;   // 's = the source borrow the invocation's trigger token carries
     /// Optional recomposition hook (§nodes level 2) for constructs whose custom parser
     /// records per-instance syntax the default recomposer cannot infer.
     // fn recompose(&self, …) -> …   — default covers declaratively-specced callables
@@ -432,8 +436,10 @@ multiple slots). The boundary is a guideline, not a theorem (`\verb`'s delimited
 could be argued either way); the spec decides, and the record machinery underneath is
 shared, so nothing breaks structurally either way.
 
-The core ships one standard implementation (`StdCallableSpec`: the argument list +
-optional parser override). The familiar `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` names
+The core ships one standard implementation (`StdCallableSpec`: the argument list as plain
+data — nothing else; a parser override is not a field but an implementor overriding the
+trait's defaulted `make_invocation_parser` on its own spec type). The familiar
+`MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` names
 survive as constructor helpers in the preset stratum (S2) — "macro" and "environment" are
 invocation forms, not core concepts.
 
@@ -935,10 +941,10 @@ Deliberately **not** generic (for now):
   a cargo feature) is mechanical. **[DECISION 4 — decided, July 2026]**
 - Spec types — extensibility comes from `CallableSpec` being a trait; no need for `Lang` to name
   concrete spec types.
-- Content backing stays behind the already-planned `SourceContent` trait (mmap deferred; the
-  feasibility notes — page-level residency, sequential-access fit with the cursor's
-  forward-scan-plus-small-backtracks pattern — are preserved in
-  `docs/archive/SOURCE_ARCHITECTURE.md`).
+- Content backing is a plain `String` on `Source` (the once-planned `SourceContent` trait
+  was retired July 2026 as information-equivalent to `&str` — a UTF-8 mmap can be handed
+  in as text by the embedder; DESIGN_RATIONALE §3.1. The old mmap feasibility notes remain
+  in `docs/archive/SOURCE_ARCHITECTURE.md`).
 
 ---
 
@@ -1038,7 +1044,8 @@ hardcoded `TokenRules` value).
   with default `Option<String>` (`L::SourceOrigin` plugs in at Phase 3+); crate made
   `no_std`-friendly (core + alloc only, no file-backed resolver, principle 6);
   `SourceContent` kept as an enabling boundary
-  (no mmap, `Source` stores `String`); diagnostics + `Recovery` policy landed here while
+  (no mmap, `Source` stores `String`; the boundary was later retired — July 2026, Action
+  06, DESIGN_RATIONALE §3.1); diagnostics + `Recovery` policy landed here while
   `TokenError`/recovery tokens move to Phase 2 with `Token`. See DESIGN_RATIONALE.md §3.1/§3.8.
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
   driven by a hardcoded-for-now `TokenRules` value; delimiter prefix table; exhaustive tokenizer

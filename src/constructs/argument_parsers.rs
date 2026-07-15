@@ -551,6 +551,14 @@ fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32
 /// mixtures like `[a[{x]y}b]` mangle there silently and mangle here *with*
 /// diagnostics.)
 ///
+/// **Protection presupposes the close spelling is not otherwise special in the
+/// argument state.** If the base rules class `[`/`]` as a genuine group pairing of the
+/// language, the reverted state reads `]` as a real close token, and `\item[{a]b}]`
+/// genuinely fails — stray-close unwinding with diagnostics, exactly like `{a]b}`
+/// anywhere else in that language. Intended, not degradation: the revert restores the
+/// language's own reading, it never overrides it (user-decided July 2026,
+/// DESIGN_RATIONALE.md §3.6).
+///
 /// Content designation: the option group's children — except that a **lone child group
 /// of the configured protective class** (`[{arg with ]}]`: braces protecting the `]`)
 /// designates *that* group's children instead, the parse-time resolution of
@@ -775,7 +783,8 @@ impl fmt::Debug for MarkerArgumentParser {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        ChildStateSpec, ConstructParser, NodesParser, StopCause, StopSpec,
+        ChildStateSpec, ConstructParser, NodesParser, StopCause, StopSpec, UnclosedGroup,
+        UnclosedGroupFound,
     };
     use super::*;
     use crate::engine::{ParseResult, ParserSession};
@@ -1339,6 +1348,71 @@ mod tests {
         assert_eq!(content_of(m, 0)[0].chars(), Some("a]b"));
         assert_eq!(root_child(&parsed, 1).chars(), Some(" x"));
         assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn brackets_as_language_groups_defeat_brace_protection_by_design() {
+        // User-decided (July 2026, Action-06 review; DESIGN_RATIONALE §3.6): brace
+        // protection works because the *reverted* argument state reads `]` as an
+        // ordinary character. When the language's own base rules class `[`/`]` as a
+        // genuine group pairing, the reverted state reads `]` as a real group-close
+        // token — `\item[{a]b}]` must then genuinely fail (stray-close unwinding, with
+        // diagnostics), exactly like `{a]b}` anywhere else in that language.
+        const GT_BRACKET: u32 = 3;
+        let mut bracket_rules = rules();
+        bracket_rules.groups.push(Arc::new(GroupRule {
+            group_type: GT_BRACKET,
+            open: "[".into(),
+            close: "]".into(),
+        }));
+        let mut lib = Library::new("test-macros");
+        lib.insert(
+            CT_MACRO,
+            "item",
+            Arc::new(StdCallableSpec::new(vec![optional_arg_unwrapping()]))
+                as Arc<dyn CallableSpec<ArgLang>>,
+        );
+        let mut libraries = LibraryStack::new();
+        libraries.push(Arc::new(lib));
+        let st = Arc::new(ParsingState::new(StateData {
+            rules: bracket_rules,
+            libraries,
+            ext: (),
+        }));
+
+        // The plain case is unaffected: the minted option rule is prepended and wins
+        // the same-spelling tie in the contents state.
+        let clean = parse_std(r"\item[a] x", &st, Recovery::Strict);
+        assert!(clean.result.diagnostics.is_empty());
+        assert_eq!(content_of(root_child(&clean, 0), 0)[0].chars(), Some("a"));
+
+        // The would-be-protected case fails for real.
+        let content = r"\item[{a]b}]";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(content);
+        let mut session = ParserSession::new(Recovery::Tolerant);
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+        );
+        let mut parser =
+            NodesParser::new(StopSpec::none()).with_child_states(ChildStateSpec::inherit());
+        let (outcome, _delta) = parser.parse(&mut cx).expect("tolerant parse");
+
+        // The brace group closed early at the stray `]` (which the option level then
+        // claimed as its close), so the later `}` has no owner and escapes to this
+        // root loop — the input does not silently hold together.
+        assert!(matches!(
+            outcome.stop,
+            StopCause::UnexpectedGroupClose { .. }
+        ));
+        drop(cx);
+        assert!(session.diagnostics.has_errors());
+        assert!(session.diagnostics.conditions::<UnclosedGroup>().any(|c| {
+            c.expected_close == "}" && c.found == UnclosedGroupFound::StrayClose
+        }));
     }
 
     // --- missing-mandatory recovery ------------------------------------------------------

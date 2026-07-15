@@ -26,11 +26,12 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use crate::source::{SourceOrigin, SourceProvenance, SourceSpan};
+use crate::source::{LineIndex, Source, SourceOrigin, SourceProvenance, SourceSpan};
 use crate::token::TokenErrorKind;
 
 // The condition-declaration derives (ARCHITECTURE.md "Condition declaration via
@@ -294,6 +295,11 @@ impl<O: SourceOrigin> TraceFrame<O> {
 }
 
 /// How severe a [`Diagnostic`] is.
+///
+/// The derived `Ord` ranks `Note < Warning < Error` for threshold filtering ("warnings
+/// and above"). The core parser currently emits only `Error` diagnostics; `Note` and
+/// `Warning` are constructor-supported for presets and embedders (lint-ish conditions)
+/// and gain core producers only when such conditions arrive (noted July 2026, Action 06).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     /// Informational note.
@@ -399,7 +405,7 @@ impl<O: SourceOrigin> Diagnostic<O> {
     }
 
     /// Render a human-readable multi-line report: message, position (line/column via
-    /// [`LineIndex`](crate::source::LineIndex), origin label), the traceback
+    /// [`LineIndex`], origin label), the traceback
     /// ([`format_traceback`]), and the source's provenance chain (`included from …` /
     /// `synthesized from …`).
     pub fn render(&self) -> String {
@@ -414,35 +420,83 @@ impl<O: SourceOrigin> fmt::Display for Diagnostic<O> {
 }
 
 /// An ordered collection of [`Diagnostic`]s, as accumulated over one parse.
+///
+/// Retention is **bounded** (July 2026, Action 06): at most [`limit`](Diagnostics::limit)
+/// diagnostics are stored — [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT) unless the
+/// collection was created with [`with_limit`](Diagnostics::with_limit). In tolerant mode
+/// degenerate input can produce one diagnostic per byte; the cap turns that unbounded
+/// allocation into a bounded one. Pushes beyond the cap are counted
+/// ([`suppressed`](Diagnostics::suppressed), surfaced by
+/// [`render_all`](Diagnostics::render_all) as "… and N more") and still feed
+/// [`has_errors`](Diagnostics::has_errors), but the diagnostics themselves are dropped.
 #[derive(Debug, Clone)]
 pub struct Diagnostics<O: SourceOrigin = Option<String>> {
     items: Vec<Diagnostic<O>>,
+    /// Maximum number of retained diagnostics.
+    limit: usize,
+    /// Diagnostics pushed beyond `limit` (counted, not stored).
+    suppressed: usize,
+    /// Error-severity pushes, retained *and* suppressed — keeps `has_errors` truthful
+    /// when errors arrive after the cap.
+    error_count: usize,
 }
 
 impl<O: SourceOrigin> Diagnostics<O> {
-    /// Create an empty collection.
+    /// The default retention cap (see [`with_limit`](Diagnostics::with_limit)) — generous
+    /// for any human- or tool-facing report, small enough that degenerate tolerant-mode
+    /// input cannot balloon memory.
+    pub const DEFAULT_LIMIT: usize = 1000;
+
+    /// Create an empty collection with the [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT)
+    /// retention cap.
     pub fn new() -> Self {
-        Diagnostics { items: Vec::new() }
+        Diagnostics::with_limit(Diagnostics::<O>::DEFAULT_LIMIT)
     }
 
-    /// Append a diagnostic.
+    /// Create an empty collection retaining at most `limit` diagnostics; pushes beyond
+    /// the cap are counted as [`suppressed`](Diagnostics::suppressed) instead of stored.
+    pub fn with_limit(limit: usize) -> Self {
+        Diagnostics { items: Vec::new(), limit, suppressed: 0, error_count: 0 }
+    }
+
+    /// Append a diagnostic. Beyond the retention cap the diagnostic is dropped and only
+    /// counted (see the type docs).
     pub fn push(&mut self, diagnostic: Diagnostic<O>) {
-        self.items.push(diagnostic);
+        if diagnostic.severity == Severity::Error {
+            self.error_count += 1;
+        }
+        if self.items.len() < self.limit {
+            self.items.push(diagnostic);
+        } else {
+            self.suppressed += 1;
+        }
     }
 
-    /// Number of diagnostics recorded.
+    /// Number of diagnostics retained (excludes [`suppressed`](Diagnostics::suppressed)
+    /// ones).
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// Whether no diagnostics were recorded.
+    /// Whether no diagnostics were recorded at all — retained *or* suppressed.
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.is_empty() && self.suppressed == 0
     }
 
-    /// Whether any recorded diagnostic has [`Severity::Error`].
+    /// The retention cap this collection was created with.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Number of diagnostics pushed beyond the retention cap (counted, not stored).
+    pub fn suppressed(&self) -> usize {
+        self.suppressed
+    }
+
+    /// Whether any pushed diagnostic — retained or suppressed — has
+    /// [`Severity::Error`].
     pub fn has_errors(&self) -> bool {
-        self.items.iter().any(|d| d.severity == Severity::Error)
+        self.error_count > 0
     }
 
     /// Iterate over the diagnostics in the order they were recorded.
@@ -470,8 +524,48 @@ impl<O: SourceOrigin> Diagnostics<O> {
     pub fn as_slice(&self) -> &[Diagnostic<O>] {
         &self.items
     }
+
+    /// Render every retained diagnostic as one human-readable report — the
+    /// [`Diagnostic::render`] blocks in recording order, blank-line separated, followed
+    /// by an "… and N more" line when pushes were
+    /// [`suppressed`](Diagnostics::suppressed) beyond the retention cap.
+    ///
+    /// Positions are formatted through **one shared [`LineIndex`] per distinct source**
+    /// (matched by `Arc` pointer identity), so rendering k diagnostics over an N-byte
+    /// document scans it once, not k times — per-diagnostic [`render`](Diagnostic::render)
+    /// calls in a loop rebuild the index for every position (fine for a handful; this is
+    /// the API for whole collections). Provenance chains benefit the same way: each
+    /// including document is indexed once for the whole report.
+    pub fn render_all(&self) -> String {
+        let mut positions = SourceIndexCache::new();
+        let mut out = String::new();
+        for (i, diagnostic) in self.items.iter().enumerate() {
+            if i > 0 {
+                out.push_str("\n\n");
+            }
+            out.push_str(&render_report_with(
+                &mut positions,
+                &diagnostic.to_string(),
+                &diagnostic.span,
+                &diagnostic.frames,
+            ));
+        }
+        if self.suppressed > 0 {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(&format!(
+                "… and {} more diagnostics (retention limit of {} reached)",
+                self.suppressed, self.limit,
+            ));
+        }
+        out
+    }
 }
 
+// Deliberately no `Extend`/`FromIterator` yet (no merging consumer exists). A future
+// impl must merge `suppressed` and `error_count` alongside `items` — plain item
+// concatenation would silently launder suppressed errors.
 impl<O: SourceOrigin> Default for Diagnostics<O> {
     fn default() -> Self {
         Diagnostics::new()
@@ -600,18 +694,74 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
+/// Position formatter sharing one lazily-built [`LineIndex`] per distinct source,
+/// matched by `Arc` pointer identity (the engine-memo idiom) — sound here because every
+/// span handed in borrows for `'a`, so its `Arc` pins the source's address for the
+/// cache's whole lifetime. This is what makes [`Diagnostics::render_all`] O(N + k)
+/// instead of O(k·N); a `LineIndex` cache on `Source` itself is blocked dep-free
+/// (`alloc` has no `Mutex`, `OnceCell` would cost `Sync`), so the renderer is its home.
+struct SourceIndexCache<'a, O: SourceOrigin> {
+    /// (source address, index) pairs; linear scan — a report touches few distinct
+    /// sources.
+    indices: Vec<(*const Source<O>, LineIndex<'a>)>,
+}
+
+impl<'a, O: SourceOrigin> SourceIndexCache<'a, O> {
+    fn new() -> Self {
+        SourceIndexCache { indices: Vec::new() }
+    }
+
+    /// [`format_position`]'s body, against the cached (or newly admitted) index for the
+    /// span's source.
+    fn format_position(&mut self, span: &'a SourceSpan<O>) -> String {
+        let source = span.source();
+        let key: *const Source<O> = Arc::as_ptr(source);
+        let index = match self.indices.iter().position(|(k, _)| *k == key) {
+            Some(i) => &mut self.indices[i].1,
+            None => {
+                self.indices.push((key, source.line_index()));
+                &mut self.indices.last_mut().expect("entry was just pushed").1
+            }
+        };
+
+        let pos_str = match index.line_col(span.start()) {
+            Some((line, col)) => format!("@ (line {}, col {})", line, col),
+            None => format!(
+                "@ char pos {} (no line info: line-index scan limit exceeded)",
+                span.start()
+            ),
+        };
+
+        match source.origin().label() {
+            Some(label) => format!("{} [{}]", pos_str, label),
+            None => pos_str,
+        }
+    }
+}
+
 /// The shared body of [`Diagnostic::render`] and [`ParseError::render`]: headline,
-/// position, traceback, provenance chain.
+/// position, traceback, provenance chain — against a one-shot index cache.
 fn render_report<O: SourceOrigin>(
     headline: &str,
     span: &SourceSpan<O>,
     frames: &[TraceFrame<O>],
 ) -> String {
+    render_report_with(&mut SourceIndexCache::new(), headline, span, frames)
+}
+
+/// [`render_report`] against a caller-owned [`SourceIndexCache`] —
+/// [`Diagnostics::render_all`] threads one cache through all its reports.
+fn render_report_with<'a, O: SourceOrigin>(
+    positions: &mut SourceIndexCache<'a, O>,
+    headline: &str,
+    span: &'a SourceSpan<O>,
+    frames: &'a [TraceFrame<O>],
+) -> String {
     let mut msg = String::from(headline);
     msg.push_str("\n  at: ");
-    msg.push_str(&format_position(span));
+    msg.push_str(&positions.format_position(span));
 
-    let traceback = format_traceback(frames);
+    let traceback = format_traceback_with(positions, frames);
     if !traceback.is_empty() {
         msg.push('\n');
         msg.push_str(&traceback);
@@ -623,14 +773,14 @@ fn render_report<O: SourceOrigin>(
             SourceProvenance::Resolved { reference, triggered_at } => {
                 msg.push_str(&format!(
                     "\n  included from {} ({})",
-                    format_position(triggered_at),
+                    positions.format_position(triggered_at),
                     reference,
                 ));
             }
             SourceProvenance::Synthesized { description, triggered_at } => {
                 msg.push_str(&format!(
                     "\n  synthesized from {} ({})",
-                    format_position(triggered_at),
+                    positions.format_position(triggered_at),
                     description,
                 ));
             }
@@ -643,24 +793,14 @@ fn render_report<O: SourceOrigin>(
 /// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
 /// back to a raw byte position — with a short parenthetical explaining that line
 /// information is unavailable — for huge sources (see
-/// [`LineIndex`](crate::source::LineIndex)). The `[origin]` part is omitted when the
+/// [`LineIndex`]). The `[origin]` part is omitted when the
 /// source's origin has no label.
+///
+/// One-shot convenience: builds (and drops) a fresh line index per call. Rendering a
+/// whole collection goes through [`Diagnostics::render_all`], which shares indices
+/// across positions.
 pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
-    let source = span.source();
-    let mut line_index = source.line_index();
-
-    let pos_str = match line_index.line_col(span.start()) {
-        Some((line, col)) => format!("@ (line {}, col {})", line, col),
-        None => format!(
-            "@ char pos {} (no line info: line-index scan limit exceeded)",
-            span.start()
-        ),
-    };
-
-    match source.origin().label() {
-        Some(label) => format!("{} [{}]", pos_str, label),
-        None => pos_str,
-    }
+    SourceIndexCache::new().format_position(span)
 }
 
 /// Format a traceback snapshot ([`TraceFrame`]s, innermost first) — one line per open
@@ -677,6 +817,14 @@ pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
 ///   @ (line 5, col 3): argument #1 of ‘\section’
 /// ```
 pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
+    format_traceback_with(&mut SourceIndexCache::new(), frames)
+}
+
+/// [`format_traceback`] against a caller-owned [`SourceIndexCache`].
+fn format_traceback_with<'a, O: SourceOrigin>(
+    positions: &mut SourceIndexCache<'a, O>,
+    frames: &'a [TraceFrame<O>],
+) -> String {
     if frames.is_empty() {
         return String::new();
     }
@@ -684,7 +832,7 @@ pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
     let mut result = String::from("Open blocks:");
     for frame in frames {
         result.push_str("\n  ");
-        result.push_str(&format_position(&frame.span));
+        result.push_str(&positions.format_position(&frame.span));
         result.push_str(": ");
         result.push_str(&frame.title);
     }
@@ -877,6 +1025,88 @@ mod tests {
             .map(|c| c.detail.as_str())
             .collect();
         assert_eq!(details, ["a", "b"]);
+    }
+
+    #[test]
+    fn diagnostics_default_limit_applies() {
+        let diagnostics: Diagnostics = Diagnostics::new();
+        assert_eq!(diagnostics.limit(), Diagnostics::<Option<String>>::DEFAULT_LIMIT);
+        assert_eq!(diagnostics.suppressed(), 0);
+    }
+
+    #[test]
+    fn diagnostics_limit_counts_suppressed_pushes() {
+        let source = arc_source("abcd");
+        let mut diagnostics: Diagnostics = Diagnostics::with_limit(2);
+        for i in 0..4 {
+            diagnostics.push(Diagnostic::error(
+                TestCondition::new("boom"),
+                SourceSpan::new(&source, i..i + 1),
+            ));
+        }
+
+        // Two retained, two counted; the collection is decidedly not empty.
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics.suppressed(), 2);
+        assert!(!diagnostics.is_empty());
+        assert!(diagnostics.has_errors());
+        assert_eq!(diagnostics.iter().count(), 2);
+
+        let rendered = diagnostics.render_all();
+        assert!(rendered
+            .contains("… and 2 more diagnostics (retention limit of 2 reached)"));
+    }
+
+    #[test]
+    fn has_errors_sees_errors_beyond_the_limit() {
+        let source = arc_source("ab");
+        let mut diagnostics: Diagnostics = Diagnostics::with_limit(1);
+        diagnostics.push(Diagnostic::warning(
+            TestCondition::new("odd"),
+            SourceSpan::new(&source, 0..1),
+        ));
+        assert!(!diagnostics.has_errors());
+
+        // The error lands beyond the cap: dropped from storage, not from the verdict.
+        diagnostics.push(Diagnostic::error(
+            TestCondition::new("bad"),
+            SourceSpan::new(&source, 1..2),
+        ));
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics.has_errors());
+    }
+
+    #[test]
+    fn render_all_matches_the_per_diagnostic_renders() {
+        // Two sources — one reached through a provenance hop — so the shared index
+        // cache is exercised across sources; sharing must not change the output.
+        let document: Arc<Source> = Arc::new(
+            Source::new("Hello\n\\input{main.tex}").with_origin(origin("document.tex")),
+        );
+        let main: Arc<Source> = Arc::new(Source::resolved(
+            "\\bad\nmore\n",
+            "main.tex",
+            SourceSpan::new(&document, 6..22),
+        ));
+
+        let mut diagnostics: Diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::error(
+            TestCondition::new("first"),
+            SourceSpan::new(&main, 0..4),
+        ));
+        diagnostics.push(Diagnostic::warning(
+            TestCondition::new("second"),
+            SourceSpan::new(&main, 5..9),
+        ));
+        diagnostics.push(Diagnostic::error(
+            TestCondition::new("third"),
+            SourceSpan::new(&document, 0..5),
+        ));
+
+        let separate: Vec<String> = diagnostics.iter().map(|d| d.render()).collect();
+        assert_eq!(diagnostics.render_all(), separate.join("\n\n"));
+        // No suppression footer when nothing was suppressed.
+        assert!(!diagnostics.render_all().contains("… and"));
     }
 
     #[test]

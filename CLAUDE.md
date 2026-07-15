@@ -12,14 +12,14 @@ Original python project is at: https://github.com/phfaist/pylatexenc
 token → constructs → node (AST)
 ```
 
-- **source**: Source location tracking (Source, SourceLocation, SourceLocationDetails)
-- **token**: Tokenization (Token, TokenType, TokenReader)
-- **constructs**: Parsers for individual constructs (Parser trait + implementations)
-- **parser**: High-level API (`Parser` struct - the main entry point)
-- **node**: AST types (Node, NodeList, CharsNode, MacroNode, etc.)
-- **spec**: Extensibility (MacroSpec, EnvironmentSpec, ContextDb)
-- **state**: Parsing context (ParsingState, ParsingStateDelta)
-- **error**: Error handling (ParseError, Result)
+- **source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, TextContent)
+- **token**: Tokenization (Token, TokenKind, TokenRules, TokenReader, StdTokenReader)
+- **constructs**: Parsers for individual constructs (ConstructParser trait + standard parsers)
+- **engine**: High-level machinery (ParserSession, ParseResult; `Language::parse()` arrives Phase 7)
+- **node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData)
+- **spec** + **library**: Extensibility (CallableSpec, StdCallableSpec, ArgumentSpec, ArgumentParser; Library, LibraryStack)
+- **state**: Parsing context (Lang, ParsingState, ParsingStateDelta)
+- **error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery)
 
 ## Critical Naming Conventions
 
@@ -28,20 +28,20 @@ token → constructs → node (AST)
 Key naming rules:
 - **No "Latex" prefixes**: Use `Token` not `LatexToken`, `Parser` not `LatexWalker`
 - **Specificity matters**: `ParsingStateDelta` not `StateDelta` (too vague)
-- **Clarity over brevity**: `ParsedArguments` not `Arguments` (the spec-side `ArgumentSpec`/`ArgumentParserSpec` vocabulary coexists in scope — revised July 2026)
+- **Clarity over brevity**: `ParsedArguments` not `Arguments` (the spec-side `ArgumentSpec`/`ArgumentParser` vocabulary coexists in scope — revised July 2026)
 - **Context determines names** — but only when no sibling vocabulary competes in the same scope (see NAMING_STRATEGY.md principles 3–4)
 
 **Module organization**:
-- `parser` module = high-level public API (`Parser` struct)
-- `constructs` module = parsers for individual LaTeX constructs (traits, parsers)
-- Node names keep simple forms: `MacroNode`, `EnvironmentNode` (already generic enough)
+- `engine` module = high-level machinery (`ParserSession`; the public `Language::parse()` entry arrives Phase 7)
+- `constructs` module = parsers for individual constructs (traits, parsers)
+- Node taxonomy is the closed `NodeKind`: `Chars`/`Group`/`Callable`/`Comment`/`List` — "macro"/"environment" are preset vocabulary, not node kinds
 
 
 ## Development Workflow
 
 ```bash
 cargo build          # Build
-cargo test           # Run tests (39/40 passing)
+cargo test           # Run tests
 cargo test -- --nocapture  # With output
 cargo test <name>    # Specific test
 ```

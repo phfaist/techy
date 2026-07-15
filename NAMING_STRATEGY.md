@@ -13,7 +13,7 @@ of earlier revisions lives in git.
    the familiar LaTeX behavior is a *preset*, and LaTeX-flavored names live there.
 2. **Specificity matters** — `ParsingStateDelta`, not `StateDelta` (delta of *what*?).
 3. **Clarity over brevity** — `TokenResult`, not `TokResult`; `ParsedArguments`, not
-   `Arguments` (the spec-side vocabulary `ArgumentSpec`/`ArgumentParserSpec` coexists in
+   `Arguments` (the spec-side vocabulary `ArgumentSpec`/`ArgumentParser` coexists in
    scope, so the parsed-side types carry the distinguishing prefix — July 2026 revision of
    the Dec 2025 "context makes parsed obvious" call, which predated the richer spec-side
    argument vocabulary).
@@ -87,7 +87,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Group class | `Lang::GroupTypeId` | closed per-language classification (content vs. math group), detached from delimiters; delimiter *rules* stay runtime data any parser can mint |
 | Argument structure | `Vec<Arc<ArgumentSpec<L>>>` on the spec (slice accessor) | args configure; `Arc`d so parsed records share them. Slots are record-level only — no `SlotSpec` (slots session, July 2026) |
 | Emptiness surface | `ArgumentParser::can_match_empty()`, `CallableSpec::requires_content()` | user-decided names (July 2026): "absent" is the record word, "contents" reads oddly for a parser; negative spec-side polarity so takeover overrides read `true` |
-| Argument parsing | `ArgumentParser<L>` (trait; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser>`) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`); no core data variants — standard parsers are preset-provided (July 2026) |
+| Argument parsing | `ArgumentParser<L>` (trait; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser>`) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`); no core data variants — the standard parsers ship in the core, parameterized (`GroupArgumentParser`, `OptionalGroupArgumentParser`, `MarkerArgumentParser`, `ExpressionParser`); the preset adds one-liner constructors (Phase 7) |
 | Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
@@ -101,7 +101,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + parsed arguments/slots |
 | Node textual payload | `TextContent` (`Spanned` / `Owned`) | logical content first-class; span = provenance |
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, `CommentNodeExt`, `ListNodeExt`, `ArgumentExt`; bundled as `Lang::NodeExts: NodeExtTypes` | `SimpleLang` defaults them all to `()`; `ArgumentExt` rides on `ParsedArgument` records |
-| Source model | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `SourceContent`, `SourceCursor`, `LineIndex` | per SOURCE_ARCHITECTURE.md |
+| Source model | `Source`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex` | per SOURCE_ARCHITECTURE.md (its `SourceContent`/`SourceCursor` retired July 2026) |
 | Origin metadata | `SourceOrigin` (trait); default impl on `Option<String>` | no named `Std…` type: the default origin is a plain optional URL string (July 2026 revision) |
 | Resolvers | `NoResolver` (ZST default), `MapResolver`, `ResolveError` | per SOURCE_ARCHITECTURE.md; no `FileResolver` — file I/O lives with the embedder (no_std policy) |
 | Diagnostics | `Diagnostic`, `Diagnostics`, `Severity`, `Recovery` | span-based; `Recovery` = tolerant-parsing policy (strict/tolerant) |
@@ -146,7 +146,7 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `Node` enum with `MacroNode`, `EnvironmentNode`, `SpecialsNode` variants | `NodeKind::Callable` + `Lang::CallableTypeId` | Macro/Environment/Specials differ by invocation form, not parsed shape (Decision 3) |
 | `MathNode` | `Group` with math group type + preset state ext | no privileged math mode in the core |
 | `CharsNode`, `GroupNode`, `CommentNode`, `NodeList` (struct-per-type) | `NodeKind::{Chars, Group, Comment, List}` in flat `NodeTree` | flat index-based storage, `NodeRef` proxies |
-| `Arguments` | `ParsedArguments` | Dec 2025 chose `Arguments`; reversed July 2026 — spec-side `ArgumentSpec`/`ArgumentParserSpec` now coexist in scope, and pylatexenc parity |
+| `Arguments` | `ParsedArguments` | Dec 2025 chose `Arguments`; reversed July 2026 — spec-side argument vocabulary (`ArgumentSpec`/`ArgumentParser`, at the time `ArgumentParserSpec`) coexists in scope, and pylatexenc parity |
 | `ArgumentsSpec` (Dec 2025 → `ArgumentStructureSpec`) | `Vec<Arc<ArgumentSpec>>` slices on `CallableSpec` | wrapper dropped July 2026 with the pylatexenc-shaped argument model; too close to `ArgumentSpec` anyway |
 | `ArgumentKind`, then `ArgumentParserSpec` data variants | `ArgumentParser` objects only | an argument *is* a parser; closed enums were a regression vs. pylatexenc's per-argument parsers — the core cannot know a language's argument forms (July 2026, two steps) |
 | `ArgsLayout`/`ArgLayout`, `SlotsLayout`/`SlotLayout` | `ParsedArguments`/`ParsedArgument`, `ParsedSlots`/`ParsedSlot` | "layout" opaque; records now self-describing (Arc'd specs), markers are `Chars` nodes (July 2026) |
@@ -154,6 +154,7 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | open `GroupTypeId`/`CallableTypeId` (u32, interned in `Language`) | `Lang::GroupTypeId`/`Lang::CallableTypeId` associated types | forms and group *classes* are static per language definition; closed enums, no ids floating around (July 2026; `GroupTypeId` reframed identity → class the same month — delimiter pairings are runtime `GroupRule`s, not enum variants) |
 | `Parser` trait (in `constructs`) | `ConstructParser` | avoids clash with high-level parser type |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
+| `SourceContent`, `SourceCursor`, `Source::cursor()` | (nothing — `StdTokenReader` scans `&str` directly) | retired July 2026 (Action 06): the scanner needs random-access slicing, not a char cursor; the borrow-returning trait was information-equivalent to `&str` (DESIGN_RATIONALE §3.1) |
 | "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; `…TypeId` = per-language id type |
 | `GroupExt`, `NodeGroupExt` | `GroupNodeExt` (etc.) | `GroupExt` too vague; `NodeGroupExt` parses wrong |
 | `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md §3 |

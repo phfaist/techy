@@ -8,6 +8,14 @@
 //! (commands/comments cleared, groups kept) whose group *interiors* revert to the outer,
 //! unrestricted state: `group: Fixed(outer)`.
 //!
+//! The one production consumer today is
+//! [`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)'s
+//! bracket-balancing policy: same-(minted-)rule child groups keep the contents state
+//! (nested `[…]` balance), every other descent reverts to the argument state (brace
+//! protection — which presupposes `]` is not a group delimiter there, see the type's
+//! docs). Per decided semantics 3 below, that protection rides exactly one bracket
+//! level: the reverted state's own descents inherit.
+//!
 //! Decided semantics (§3.6):
 //!
 //! 1. *Resolution precedes policy* — `Lang::resolve_command` runs under the loop's own

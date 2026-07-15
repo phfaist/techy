@@ -146,6 +146,12 @@ impl<L: Lang> ParsingState<L> {
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug` although only the associated
 // types (already bounded in `Lang`) are stored.
+//
+// `ParsingState` itself deliberately has **no** `Clone` (July 2026, Action 06): states
+// are identity-bearing (`Arc` pointer identity keys the engine's memoization and links
+// nodes to the state that parsed them), so duplicating one would fork that identity —
+// and a `Clone` impl would make `Arc::make_mut` on a "frozen" state expressible. The
+// only constructors are `initial()` and `derived()`.
 
 impl<L: Lang> Clone for StateData<L> {
     fn clone(&self) -> Self {
@@ -164,16 +170,6 @@ impl<L: Lang> fmt::Debug for StateData<L> {
             .field("libraries", &self.libraries)
             .field("ext", &self.ext)
             .finish()
-    }
-}
-
-impl<L: Lang> Clone for ParsingState<L> {
-    fn clone(&self) -> Self {
-        ParsingState {
-            data: self.data.clone(),
-            prefix_table: Arc::clone(&self.prefix_table),
-            trigger_chars: self.trigger_chars.clone(),
-        }
     }
 }
 

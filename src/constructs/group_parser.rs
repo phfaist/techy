@@ -79,7 +79,10 @@ pub enum UnclosedGroupFound {
 }
 
 // Hand-written wording: the message varies by what blocked the close (a match, which
-// the message format string cannot express).
+// the message format string cannot express). The two recovery situations read
+// differently on purpose (July 2026, Action 06): EOF points at the open delimiter of a
+// group nothing will ever close; a stray close points at the delimiter that broke the
+// pairing.
 impl fmt::Display for UnclosedGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.found {
@@ -89,7 +92,7 @@ impl fmt::Display for UnclosedGroup {
                 self.expected_close
             ),
             UnclosedGroupFound::StrayClose => {
-                write!(f, "unclosed group: expected ‘{}’", self.expected_close)
+                write!(f, "mismatched group close: expected ‘{}’", self.expected_close)
             }
         }
     }
