@@ -185,8 +185,12 @@ impl<L: Lang> NodeTree<L> {
         self.nodes.len()
     }
 
-    /// All nodes in storage order (root first; every node's children contiguous).
-    pub fn iter(&self) -> impl Iterator<Item = NodeRef<'_, L>> {
+    /// All nodes in **storage order** (breadth-first: root first, every node's children
+    /// contiguous) — *not* document order: for `a{b}c` it yields `a`, `c`, `b`. Named
+    /// for what it is (renamed from `iter`, July 2026, Action-05 session) so nobody
+    /// mistakes it for a document-order walk; recurse via
+    /// [`children()`](super::NodeRef::children) for structure-aware traversal.
+    pub fn iter_storage_order(&self) -> impl Iterator<Item = NodeRef<'_, L>> {
         (0..self.nodes.len() as u32).map(move |i| NodeRef::new(self, self.make_id(i)))
     }
 

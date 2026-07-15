@@ -252,7 +252,7 @@ impl<'s> StdTokenReader<'s> {
             return Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(ForbiddenChar::new(c)),
                 span,
-                Some(TokenRecovery { token: placeholder, resume_pos: span.end }),
+                Some(TokenRecovery { token: placeholder, resume_pos: span.end() }),
             ));
         }
 
@@ -357,7 +357,7 @@ impl<'s> StdTokenReader<'s> {
                     rule.escape_char,
                 )),
                 span,
-                Some(TokenRecovery { token: placeholder, resume_pos: span.end }),
+                Some(TokenRecovery { token: placeholder, resume_pos: span.end() }),
             ));
         }
 
@@ -387,7 +387,7 @@ impl<'s> StdTokenReader<'s> {
                 escape_char: rule.escape_char,
                 post_space,
             },
-            Span::new(pos, post_space.end),
+            Span::new(pos, post_space.end()),
             pre_space,
         ))
     }
@@ -431,7 +431,7 @@ impl<'s> StdTokenReader<'s> {
                 content: &s[content_start..content_end],
                 post_space,
             },
-            Span::new(pos, post_space.end),
+            Span::new(pos, post_space.end()),
             pre_space,
         ))
     }
@@ -444,19 +444,19 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
 
     fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool) {
         if skip_post_space {
-            self.pos = tok.span.end;
+            self.pos = tok.span.end();
         } else {
             // Post-space is a trailing sub-range of `span`, so its `start` is the end
             // of the token proper — for every kind (empty post-space sits at `span.end`).
-            self.pos = tok.post_space().start;
+            self.pos = tok.post_space().start();
         }
     }
 
     fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool) {
         if rewind_pre_space {
-            self.pos = tok.pre_space.start;
+            self.pos = tok.pre_space.start();
         } else {
-            self.pos = tok.span.start;
+            self.pos = tok.span.start();
         }
     }
 

@@ -8,6 +8,7 @@ use core::ops::Range;
 use super::content::SourceCursor;
 use super::line_index::LineIndex;
 use super::origin::SourceOrigin;
+use super::span::Span;
 
 /// One unit of source content (a document, an included file, a synthesized snippet).
 ///
@@ -194,11 +195,14 @@ pub struct SourceSpan<O: SourceOrigin = Option<String>> {
 }
 
 impl<O: SourceOrigin> SourceSpan<O> {
-    /// Create a span over `range` within `source`.
+    /// Create a span over `range` within `source` — a `Range<usize>` or a plain
+    /// [`Span`] (the transient parsing type; this is the bridge from byte-range land
+    /// into `Arc`-carrying land).
     ///
     /// The range must lie within the source content and fall on `char` boundaries
     /// (checked in debug builds; violating it makes [`content`](Self::content) panic).
-    pub fn new(source: &Arc<Source<O>>, range: Range<usize>) -> Self {
+    pub fn new(source: &Arc<Source<O>>, range: impl Into<Range<usize>>) -> Self {
+        let range = range.into();
         debug_assert!(
             range.start <= range.end && range.end <= source.content.len(),
             "SourceSpan range {}..{} out of bounds (source length {})",
@@ -239,6 +243,12 @@ impl<O: SourceOrigin> SourceSpan<O> {
     /// The byte range within the source.
     pub fn range(&self) -> Range<usize> {
         self.start..self.end
+    }
+
+    /// The byte range as a plain [`Span`] — the inverse of the [`new`](Self::new)
+    /// bridge, for handing a stored location back to `Span`-based helpers.
+    pub fn span(&self) -> Span {
+        Span::new(self.start, self.end)
     }
 
     /// Length of the span in bytes.
@@ -372,6 +382,17 @@ mod tests {
         assert_eq!(span.len(), 5);
         assert!(!span.is_empty());
         assert_eq!(span.content(), "Hello");
+    }
+
+    /// The `Span` bridge: `new` accepts a plain `Span` directly, and `span()` hands the
+    /// byte range back as a `Span` (the inverse).
+    #[test]
+    fn span_bridge_round_trips() {
+        let source = arc_source("Hello World");
+        let from_span = SourceSpan::new(&source, Span::new(1, 4));
+        assert_eq!(from_span.range(), 1..4);
+        assert_eq!(from_span.span(), Span::new(1, 4));
+        assert_eq!(from_span, SourceSpan::new(&source, 1..4));
     }
 
     #[test]

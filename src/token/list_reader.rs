@@ -53,10 +53,10 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     /// Create a reader positioned before the first token.
     pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L> {
         debug_assert!(
-            tokens.windows(2).all(|w| w[0].span.end <= w[1].span.start),
+            tokens.windows(2).all(|w| w[0].span.end() <= w[1].span.start()),
             "tokens must be in source order with non-overlapping spans"
         );
-        let pos = tokens.first().map(|t| t.pre_space.start).unwrap_or(0);
+        let pos = tokens.first().map(|t| t.pre_space.start()).unwrap_or(0);
         TokenListReader { tokens, pos }
     }
 
@@ -75,7 +75,7 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
 
     /// The first listed token at or after the current position (its span not yet begun).
     fn current(&self) -> Option<&Token<'s, L>> {
-        let i = self.tokens.partition_point(|t| t.span.start < self.pos);
+        let i = self.tokens.partition_point(|t| t.span.start() < self.pos);
         self.tokens.get(i)
     }
 }
@@ -89,8 +89,8 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
                 // as a fresh scan would.
                 let mut token = token.clone();
                 token.pre_space = Span::new(
-                    token.pre_space.start.max(self.pos).min(token.pre_space.end),
-                    token.pre_space.end,
+                    token.pre_space.start().max(self.pos).min(token.pre_space.end()),
+                    token.pre_space.end(),
                 );
                 Ok(token)
             }
@@ -104,19 +104,19 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
 
     fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool) {
         if skip_post_space {
-            self.pos = tok.span.end;
+            self.pos = tok.span.end();
         } else {
             // Post-space is a trailing sub-range of `span`, so its `start` is the end
             // of the token proper — underflow-free even for hand-built tokens.
-            self.pos = tok.post_space().start;
+            self.pos = tok.post_space().start();
         }
     }
 
     fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool) {
         if rewind_pre_space {
-            self.pos = tok.pre_space.start;
+            self.pos = tok.pre_space.start();
         } else {
-            self.pos = tok.span.start;
+            self.pos = tok.span.start();
         }
     }
 
@@ -270,12 +270,12 @@ mod tests {
         assert_eq!(second, scanned[1]);
 
         TokenReader::move_to(&mut lr, &first, false);
-        assert_eq!(TokenReader::pos(&lr), first.span.start);
+        assert_eq!(TokenReader::pos(&lr), first.span.start());
         assert_eq!(TokenReader::peek(&mut lr, &st).unwrap().kind, first.kind);
         // pre_space was already consumed positionally: clipped to empty.
         assert_eq!(
             TokenReader::peek(&mut lr, &st).unwrap().pre_space,
-            Span::empty(first.span.start),
+            Span::empty(first.span.start()),
         );
     }
 

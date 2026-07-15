@@ -55,9 +55,9 @@ use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
-use super::nodes_parser::{ExpressionCallableTakesArguments, UnresolvableCommand};
+use super::nodes_parser::{ExpressionCallableRequiresContent, UnresolvableCommand};
 use super::{
-    try_peek, ConstructParser, ConstructParserResult, Invocation, ParseContext,
+    ConstructParser, ConstructParserResult, Invocation, ParseContext,
 };
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
@@ -182,8 +182,9 @@ pub fn scan_argument_noise<'s, L: Lang>(
 ) -> ConstructParserResult<L, ArgumentNoise<'s, L>> {
     let start = cx.tokens.pos();
     let mut nodes = Vec::new();
+    let state = Arc::clone(&cx.state); // staging noise nodes never changes the state
     loop {
-        let Some(token) = try_peek(cx)? else {
+        let Some(token) = cx.probe_token(&state)? else {
             return Ok(ArgumentNoise { nodes, start, next: None });
         };
         match &token.kind {
@@ -191,7 +192,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
                 stage_pre_space(cx, &mut nodes, token.pre_space)?;
                 // The token's sub-spans tile its span: start delimiter, content,
                 // post-space.
-                let content_span = Span::new(start.end, post_space.start);
+                let content_span = Span::new(start.end(), post_space.start());
                 let kind = NodeKind::comment(*start, content_span, *post_space);
                 nodes.push(stage(cx, kind, token.span)?);
                 cx.tokens.move_past(&token, true);
@@ -223,7 +224,7 @@ fn stage<L: Lang>(
 ) -> ConstructParserResult<L, BuildId> {
     cx.session
         .builder
-        .add(kind, SourceSpan::new(&cx.source, span.range()), Arc::clone(&cx.state), Vec::new())
+        .add(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), Vec::new())
         .map_err(|error| cx.implementation_error(error, span))
 }
 
@@ -241,12 +242,17 @@ fn stage<L: Lang>(
 /// does not reach here ([`ChildStateSpec`](super::ChildStateSpec) is one level deep,
 /// §3.6) — with two deliberate rules:
 ///
-/// - A callable that declares arguments or slots cannot be *used* as a single-token
-///   expression (pylatexenc's requires-arguments diagnostic). Tolerant recovery stages
-///   the **bare single-token callable** — the trigger alone, every declared argument
-///   absent, no slots — consuming nothing beyond the trigger: exactly the single token
-///   the expression position asked for, so a `\frac\sqrt2`-shaped source leaves `2`
-///   for `\frac`'s next argument rather than letting `\sqrt` swallow it.
+/// - A callable whose invocation **requires content**
+///   ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content):
+///   some declared argument cannot match empty, or a body-bearing takeover spec
+///   overrides it) cannot be *used* bare as a single-token expression (pylatexenc's
+///   requires-arguments diagnostic). Tolerant recovery stages the **bare single-token
+///   callable** — the trigger alone, every declared argument absent, no slots —
+///   consuming nothing beyond the trigger: exactly the single token the expression
+///   position asked for, so a `\frac\sqrt2`-shaped source leaves `2` for `\frac`'s
+///   next argument rather than letting `\sqrt` swallow it. A callable all of whose
+///   arguments can match empty (`\mymacro` taking one optional argument) dispatches in
+///   full — pylatexenc parity.
 /// - An after-effect delta returned by the invocation parser is **dropped**: an
 ///   argument scopes no state beyond its own extent, and
 ///   [`ArgumentParser::parse_argument`] deliberately has no delta channel.
@@ -293,7 +299,7 @@ fn parse_expression_node<'s, L: Lang>(
                     // consumed whole — mirroring the content loop.
                     cx.recover(
                         UnresolvableCommand::new(*name, *escape_char),
-                        SourceSpan::new(&cx.source, next.span.range()),
+                        SourceSpan::new(&cx.source, next.span),
                     )?;
                     stage_pre_space(cx, nodes, next.pre_space)?;
                     cx.tokens.move_past(next, true);
@@ -326,7 +332,7 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     invocation: Invocation<'_, 's, L>,
 ) -> ConstructParserResult<L, Option<BuildId>> {
     let token = invocation.token;
-    if !invocation.spec.arguments().is_empty() || !invocation.spec.slots().is_empty() {
+    if invocation.spec.requires_content() {
         // The trigger's written spelling, built only on this cold branch (the hot
         // dispatch path stays allocation-free).
         let spelling = match &token.kind {
@@ -336,8 +342,8 @@ fn dispatch_expression_invocation<'s, L: Lang>(
             _ => invocation.name.into(),
         };
         cx.recover(
-            ExpressionCallableTakesArguments::new(spelling),
-            SourceSpan::new(&cx.source, token.span.range()),
+            ExpressionCallableRequiresContent::new(spelling),
+            SourceSpan::new(&cx.source, token.span),
         )?;
         stage_pre_space(cx, nodes, token.pre_space)?;
         cx.tokens.move_past(token, true);
@@ -363,7 +369,7 @@ fn dispatch_expression_invocation<'s, L: Lang>(
             .builder
             .add(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, token.span.range()),
+                SourceSpan::new(&cx.source, token.span),
                 Arc::clone(&cx.state),
                 Vec::new(),
             )
@@ -426,12 +432,17 @@ impl<L: Lang> ArgumentParser<L> for ExpressionParser {
                 });
                 cx.recover(
                     ExpectedExpressionArgument::new(argument_name(spec)),
-                    SourceSpan::new(&cx.source, at.range()),
+                    SourceSpan::new(&cx.source, at),
                 )?;
                 noise.rewind(cx);
                 Ok(None)
             }
         }
+    }
+
+    /// The expression is mandatory: absent is a diagnosed recovery, not a valid match.
+    fn can_match_empty(&self) -> bool {
+        false
     }
 }
 
@@ -500,6 +511,11 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
             None => missing_mandatory(cx, noise, spec),
         }
     }
+
+    /// The argument is mandatory: absent is a diagnosed recovery, not a valid match.
+    fn can_match_empty(&self) -> bool {
+        false
+    }
 }
 
 /// The missing-mandatory recovery (§3.8): diagnostic at the blocking position
@@ -516,7 +532,7 @@ fn missing_mandatory<L: Lang>(
         .unwrap_or_else(|| Span::empty(cx.tokens.pos()));
     cx.recover(
         MissingMandatoryArgument::new(argument_name(spec)),
-        SourceSpan::new(&cx.source, at.range()),
+        SourceSpan::new(&cx.source, at),
     )?;
     noise.rewind(cx);
     Ok(None)
@@ -601,10 +617,8 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             ..TokenRulesOverrides::default()
         });
         let contents_state = cx.session.derived_state(&cx.state, &delta);
-        let argument_state = mem::replace(&mut cx.state, Arc::clone(&contents_state));
-        let open = try_peek(cx);
-        cx.state = Arc::clone(&argument_state);
-        let matched = match open? {
+        let argument_state = Arc::clone(&cx.state);
+        let matched = match cx.probe_token(&contents_state)? {
             Some(token)
                 if matches!(
                     &token.kind,
@@ -651,10 +665,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         };
         let mut group =
             GroupParser::new(open.span, Arc::clone(&self.rule)).with_child_states(child_states);
-        let outer_state = mem::replace(&mut cx.state, contents_state);
-        let result = group.parse(cx);
-        cx.state = outer_state;
-        let (id, _delta) = result?;
+        let (id, _delta) = cx.parse_scoped(contents_state, &mut group)?;
 
         // Content: the option group's children, or a lone protective child group's.
         let (content_parent, content_len) = {
@@ -680,6 +691,12 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             nodes: noise.nodes,
             content: ContentNodes::InChildrenOf(content_parent, 0..content_len),
         }))
+    }
+
+    /// Optional: absent is a valid, silent outcome (the trait default, stated
+    /// explicitly — the expression-position guard leans on this answer).
+    fn can_match_empty(&self) -> bool {
+        true
     }
 }
 
@@ -719,24 +736,31 @@ impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser {
         }
         let mut span = first.span;
         cx.tokens.move_past(&first, true);
+        let state = Arc::clone(&cx.state);
         for expected in self.marker.chars().skip(1) {
-            let Some(token) = try_peek(cx)? else {
+            let Some(token) = cx.probe_token(&state)? else {
                 noise.rewind(cx);
                 return Ok(None);
             };
             let continues_marker = matches!(token.kind, TokenKind::Char(c) if c == expected)
                 && token.pre_space.is_empty()
-                && token.span.start == span.end;
+                && token.span.start() == span.end();
             if !continues_marker {
                 noise.rewind(cx);
                 return Ok(None);
             }
-            span.end = token.span.end;
+            span.extend_to(token.span.end());
             cx.tokens.move_past(&token, true);
         }
         stage_pre_space(cx, &mut noise.nodes, first.pre_space)?;
         noise.nodes.push(stage(cx, NodeKind::chars(span), span)?);
         Ok(Some(region_with_last_as_content(mem::take(&mut noise.nodes))))
+    }
+
+    /// Optional: absent is a valid, silent outcome (the trait default, stated
+    /// explicitly — the expression-position guard leans on this answer).
+    fn can_match_empty(&self) -> bool {
+        true
     }
 }
 
@@ -776,7 +800,7 @@ mod tests {
     use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
     use crate::node::NodeRef;
     use crate::source::Source;
-    use crate::spec::{CallableSpec, SlotSpec, StdCallableSpec};
+    use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, ResolvedCallable, StateData};
     use crate::token::{
         CommandRule, CommentRule, StdTokenReader, TokenListReader, TokenReader, TokenRules,
@@ -881,7 +905,7 @@ mod tests {
                 .iter()
                 .map(|(name, arguments)| {
                     let spec: Arc<dyn CallableSpec<ArgLang>> =
-                        Arc::new(StdCallableSpec::new(arguments.clone(), vec![]));
+                        Arc::new(StdCallableSpec::new(arguments.clone()));
                     (*name, spec)
                 })
                 .collect::<Vec<_>>(),
@@ -926,12 +950,7 @@ mod tests {
     ) -> Result<Parsed, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext {
-            tokens,
-            source: Arc::clone(&source),
-            state: Arc::clone(state),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
         let mut parser = NodesParser::new(StopSpec::none())
             .with_child_states(ChildStateSpec::inherit());
         let (outcome, delta) = parser.parse(&mut cx)?;
@@ -950,7 +969,7 @@ mod tests {
         };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::new(&source, root_span.range()),
+            SourceSpan::new(&source, root_span),
             Arc::clone(state),
             outcome.nodes,
         ).unwrap();
@@ -1393,7 +1412,7 @@ mod tests {
 
     #[test]
     fn unrecoverable_token_error_while_probing_aborts_even_tolerant() {
-        // The try_peek recoverability rule (§3.8): a token error carrying no recovery
+        // The probe_token recoverability rule (§3.8): a token error carrying no recovery
         // must abort even under Tolerant — reporting the argument absent instead would
         // record a spurious missing-argument diagnostic before the enclosing loop's
         // re-read aborted anyway.
@@ -1429,12 +1448,7 @@ mod tests {
         let st = state_with(&[]);
         let mut reader = BrokenReader;
         let mut session = ParserSession::new(Recovery::Tolerant);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: Arc::clone(&st),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
 
         let spec = brace_arg();
         let err = spec
@@ -1591,7 +1605,7 @@ mod tests {
                         let span = self.invocation.token.span;
                         let id = cx.session.builder.add(
                             NodeKind::chars(span),
-                            SourceSpan::new(&cx.source, span.range()),
+                            SourceSpan::new(&cx.source, span),
                             Arc::clone(&cx.state),
                             vec![],
                         ).unwrap();
@@ -1607,7 +1621,7 @@ mod tests {
         }
 
         let w: Arc<dyn CallableSpec<ArgLang>> =
-            Arc::new(StdCallableSpec::new(vec![brace_arg()], vec![]));
+            Arc::new(StdCallableSpec::new(vec![brace_arg()]));
         let def: Arc<dyn CallableSpec<ArgLang>> = Arc::new(DefSpec);
         let st = state_with_specs(&[("w", w), ("def", def)]);
         let parsed = parse_std("\\w\\def %c", &st, Recovery::Strict);
@@ -1621,22 +1635,69 @@ mod tests {
         assert!(parsed.result.diagnostics.is_empty());
     }
 
-    // --- slots need a factory override (StdInvocationParser is macro-shaped) ------------
+    // --- the requires_content() guard semantics (slots session, July 2026) --------------
 
-    /// The misconfiguration surfaces as an `ImplementationError` abort — even under
-    /// tolerant recovery (an implementation bug, not a source condition).
+    /// The pylatexenc-parity pin: a callable all of whose arguments can match empty is
+    /// *valid* bare in expression position — it dispatches in full (its optional
+    /// probed and found absent) instead of taking the old any-declared-arguments
+    /// diagnostic. Strict mode passing proves no diagnostic fires at all.
     #[test]
-    fn declared_slots_need_a_factory_override() {
-        for recovery in [Recovery::Strict, Recovery::Tolerant] {
-            let spec: Arc<dyn CallableSpec<ArgLang>> = Arc::new(StdCallableSpec::new(
-                vec![],
-                vec![Arc::new(SlotSpec::new())],
-            ));
-            let st = state_with_specs(&[("env", spec)]);
-            let mut reader = StdTokenReader::new(r"\env");
-            let error = try_run(r"\env", &mut reader, &st, recovery).unwrap_err();
-            assert_eq!(error.identifier(), crate::constructs::ImplementationError::IDENTIFIER);
-            assert!(error.message().contains("StdInvocationParser is macro-shaped"));
+    fn emptiable_arguments_allow_bare_expression_use() {
+        // Optional probing is state-dependent: StdTokenReader only.
+        let st = state_with(&[("a", vec![brace_arg()]), ("b", vec![optional_arg()])]);
+        let parsed = parse_std(r"\a\b x", &st, Recovery::Strict);
+
+        let a = root_child(&parsed, 0);
+        let content = content_of(a, 0);
+        assert_eq!(content.len(), 1);
+        let b = content[0];
+        assert_eq!(b.name(), Some("b"));
+        // Dispatched in full: the optional argument's entry exists, probed and absent.
+        assert!(!b.arguments().unwrap().get(0).unwrap().is_provided());
+        assert!(parsed.result.diagnostics.is_empty());
+
+        // ...and when the optional *is* provided, the bare callable swallows it, as in
+        // pylatexenc: the expression is the full `\b[x]` invocation.
+        let parsed = parse_std(r"\a\b[x]y", &st, Recovery::Strict);
+        let b = content_of(root_child(&parsed, 0), 0)[0];
+        assert!(b.arguments().unwrap().get(0).unwrap().is_provided());
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    /// The override channel pin (`\begin`/`\verb` rehearsal): a takeover spec that
+    /// declares no arguments but overrides `requires_content()` is diagnosed bare in
+    /// expression position and staged as the bare single-token callable — the
+    /// deliberate, documented divergence from pylatexenc, which would dispatch the
+    /// body-bearing construct as the argument.
+    #[test]
+    fn requires_content_override_guards_body_bearing_takeovers() {
+        #[derive(Debug)]
+        struct TakesBodySpec;
+        impl CallableSpec<ArgLang> for TakesBodySpec {
+            fn requires_content(&self) -> bool {
+                true
+            }
         }
+
+        let a: Arc<dyn CallableSpec<ArgLang>> =
+            Arc::new(StdCallableSpec::new(vec![brace_arg()]));
+        let env: Arc<dyn CallableSpec<ArgLang>> = Arc::new(TakesBodySpec);
+        let st = state_with_specs(&[("a", a), ("env", env)]);
+        let parsed = parse_both(r"\a\env{x}", &st, Recovery::Tolerant);
+
+        // `\a`'s argument is the bare `\env` callable — trigger alone, nothing consumed
+        // past it; `{x}` stays sibling content (never handed to `\env`).
+        let a = root_child(&parsed, 0);
+        let content = content_of(a, 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].name(), Some("env"));
+        assert_eq!(content[0].child_count(), 0);
+        assert!(root_child(&parsed, 1).is_group());
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.identifier(),
+            ExpressionCallableRequiresContent::IDENTIFIER
+        );
     }
 }

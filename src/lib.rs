@@ -95,7 +95,7 @@ pub mod __private {
 // Re-export the public API of the implemented topics.
 pub use constructs::{
     ChildStateSpec, ConstructParser, ConstructParserResult, EnvironmentTerminatorMismatch,
-    ExpectedExpressionArgument, ExpressionCallableTakesArguments, GroupChildState,
+    ExpectedExpressionArgument, ExpressionCallableRequiresContent, GroupChildState,
     GroupParser, ImplementationError, Invocation, InvocationChildState,
     MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,
     MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, StopCause, StopSpec,
@@ -109,7 +109,8 @@ pub use error::{
     TraceFrame,
 };
 pub use source::{
-    LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError, Source, SourceContent,
+    resolve_source, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,
+    ResolvedContent, Source, SourceContent,
     SourceCursor, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan, Span, TextContent,
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
@@ -119,7 +120,7 @@ pub use node::{
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
 };
 pub use spec::{
-    ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes, SlotSpec,
+    ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes,
     StdCallableSpec,
 };
 pub use state::{

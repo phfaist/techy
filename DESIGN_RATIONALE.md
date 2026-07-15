@@ -211,6 +211,57 @@ concrete `String`, with all content access behind methods so the backing can lat
 generic (mmap) without changing the public API. Explicitly: keep the enabling pattern, do not
 implement mmap until a real need.
 
+**`Span` has private fields; in-place growth is the monotone `extend_to`** — DECIDED
+(user, July 2026, Action-05 session). `Span`'s `start`/`end` went private with
+`start()`/`end()` accessors, closing the gap where the `start <= end` invariant was only
+advisory (`new` debug-asserts; the fields allowed silent violation). The one mutation
+pattern the lib actually used — growing a chars-run/marker span rightward — became
+`extend_to(end)` (debug-asserted monotone), so every mutator now preserves the
+invariant. `cover(other)` (byte-range union, min/max so it is order- and
+overlap-agnostic) was added at the same time. Consistency with `SourceSpan` (private +
+accessors + validating constructor) decided it over the `std::ops::Range` precedent
+(public fields, no invariant) — the honest alternative that was considered and
+rejected. `contains`/`overlaps` are deliberately **not** added: whichever empty-span
+semantics they pick will be silently depended on, so they arrive only with a consumer,
+pinned by docs + tests in the same commit. Bridging: `SourceSpan::new` accepts
+`impl Into<Range<usize>>` (so a `Span` passes directly; `From<Span> for Range<usize>`)
+and `SourceSpan::span()` is the inverse — `span.rs` itself stays ignorant of
+`SourceSpan` (dependency direction preserved).
+
+**`SourceResolver` contract batch: returns content (not a `Source`), `Send + Sync`,
+no core recursion checking, `ResolveError` cause chain** — DECIDED (user, July 2026,
+Action-05 session; settled before any consumer exists — the wiring lands on
+`Language<L>` in Phase 7).
+- **`resolve()` returns `ResolvedContent { content, origin }`; the caller mints the
+  `Source`** (the `resolve_source` composition). Rationale: provenance lives on the
+  `Source` (`Resolved { reference, triggered_at }`) and diagnostics self-render include
+  chains from it, so a resolver-cached `Arc<Source>` shared across two include sites
+  silently renders the wrong chain inside the second inclusion. Returning content makes
+  the trap *unrepresentable* — provenance never passes through implementor hands, and
+  resolvers may cache content freely. (Content duplication per include site is inherent
+  while `Source.content` is a `String`; the `SourceContent` seam allows an `Arc<str>`
+  backing later without touching this.) *Rejected:* a documented
+  fresh-`Source`-per-resolve contract (an implicit rule a cache silently violates).
+- **`Send + Sync` supertraits**, matching every other stored extension trait: resolvers
+  live in the long-lived shareable language bundle, and `resolve(&self)` means caching
+  needs interior mutability — the bounds pick the thread-safe form (locks/atomics, not
+  `RefCell`), stated before implementors exist.
+- **Recursion is the embedder's job.** The core never interprets reference strings
+  (no path semantics, no canonicalization) and performs no recursion checking; the
+  std/I/O command-line driver enforces its own include-depth/cycle policy, with
+  `Source::provenance_chain()` as the ready-made tool. Documented on the trait.
+- **`ResolveError` = strings + optional structured cause**: human-readable
+  `reference`/`message` stay the primary interface (a failed `\input` flattens into a
+  diagnostic anyway); an optional `Box<dyn core::error::Error + Send + Sync>` cause
+  travels the standard `Error::source()` chain so embedders can downcast (e.g.
+  `io::Error` kind). Consequence: `ResolveError` is no longer `Clone` (single-owner
+  box; nothing relied on it).
+- Smalls: forwarding impls (`&R`/`Box<R>`/`Arc<R>`), a compile-time object-safety pin
+  (drivers may store `Arc<dyn SourceResolver>`), `MapResolver::with_reference_as_origin`
+  (its blanket impl narrows to `O: From<String>` — a convenience type may narrow;
+  exotic origins write their own ten-line resolver), and the trait doc now says the
+  parser "will be" generic over the resolver until it is.
+
 ### 3.2 Tokens and tokenization
 
 **Tokens are minimal and structural** — DECIDED (user, PARSING_STRATEGY.md, Jan 2026;
@@ -792,6 +843,9 @@ for generic `L` where the former `static NONE: ArgumentStructureSpec` cannot (no
 statics; `Vec` is not const-promotable).
 *Revisit if:* structure-level (not per-item) spec fields materialize in Phase 6 — e.g. a
 slot-separator field that belongs to no single slot; then a wrapper returns.
+*(Amended July 2026, slots session: only the arguments slice remains — `SlotSpec` and
+`CallableSpec::slots()` are deleted; slots are record-level vocabulary. See the
+no-spec-side-slots entry, §3.6.)*
 
 **`CallableTypeId` and `GroupTypeId` are closed per-`Lang` associated types** — DECIDED
 (user, July 2026, current-level review session; replaces the open interned-id registry
@@ -857,7 +911,29 @@ green tree / deliberately-`!Send` red cursors precedent); the reverse migration 
 bounds later) would break implementors holding non-`Send` state, which is why the bounds
 land now while the API is fluid.
 
-### 3.5 Nodes and AST
+**`CallableSpec: Any` — downcasting is part of the spec contract; `Lang: 'static`** —
+DECIDED (user, July 2026, Action-05 session). The documented preset pattern
+(`Lang::finalize_node`: "read the spec, downcast, attach ext") was not expressible —
+the trait had no `Any` supertrait. Now it is: `(&*spec as &dyn Any).downcast_ref::<
+ConcreteSpec>()` via trait upcasting (stable exactly at our MSRV 1.86; the rehearsal
+test performs the real downcast through the dispatch loop). Since `Any` requires
+`'static` and generic spec types (`StdCallableSpec<L>`) must satisfy the supertrait,
+`Lang` (and `SimpleLang`) gained a `'static` bound — free in practice, a `Lang` is a
+unit marker type, and the stored `Arc<dyn CallableSpec<L>>` was implicitly `'static`
+all along. **The trait-object case:** `Any` downcasts to concrete types only; a preset
+dispatching on an *open* set of spec types (third parties implementing FLM's
+`trait FlmSpec: CallableSpec<FlmLang>`) funnels them through one concrete wrapper —
+its registration sugar wraps every spec in `FlmSpecBox(Arc<dyn FlmSpec>)` (implementing
+`CallableSpec` by delegation), and finalize downcasts to the wrapper to recover
+`&dyn FlmSpec`. This costs the preset one indirection and zero core machinery.
+*Rejected (for now):* a `Lang`-associated dyn type (`type CallableSpecExt: ?Sized` set
+to `dyn FlmSpec`, plus a defaulted `fn lang_ext(&self) -> Option<&L::CallableSpecExt>`
+bridge on the spec trait) — expressible and object-safe, but it adds an associated type
+to every hand-written `Lang` impl (the SimpleLang-cliff cost, §3.6/H.2) for a need the
+wrapper covers; recorded here as the upgrade path if the wrapper proves annoying in
+FLM practice. This also unblocks the flagged default-factory escape hatch (§3.6): the
+dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
+profiling ever asks for it.
 
 **Flat `NodeTree` (Vec + index ranges), frozen after parse, `NodeRef` proxy access** — DECIDED
 (March 2026). Cache-friendly, no per-node heap allocation, trivially serializable; `NodeRef`
@@ -962,6 +1038,26 @@ stored" point is refined: extraction conveniences stay computed, but *which node
 content* is now recorded per argument — parser-designated, eliminating pylatexenc's
 lone-group unwrap heuristics.)*
 
+**`SlotExt` — slot records carry per-instance ext, symmetric with `ArgumentExt`** — DECIDED
+(user, July 2026, Action-05 session). `ParsedSlot` gains `ext: SlotExt<L>`
+(`Lang::NodeExts::SlotExt`, `()` under the no-ext bundle), mirroring
+`ParsedArgument.ext`. Rationale: the asymmetry bit exactly where FLM is richest — an
+environment's *body* is a slot, and per-instance derived data about a body (tabular cell
+structure, enumerate item boundaries) had no home except the whole-callable ext. Added
+while cheap: one associated type on the bundle, one field on the record; retrofitting after
+downstream `NodeExtTypes` implementors exist would break them all.
+
+**`NodeTree::iter` renamed `iter_storage_order`; no `parent` stored in `NodeData`** —
+DECIDED (user, July 2026, Action-05 session). The flat iterator yields storage
+(breadth-first) order — `a`, `c`, `b` for `a{b}c` — which a name as generic as `iter`
+invites consumers to mistake for document order; the rename makes the iteration order
+part of the signature. A document-order `descendants()` arrives only with the Phase 7
+read API, when it has a consumer. Upward navigation (`parent: u32` in `NodeData`,
+`parent()`/`next_sibling()`/`ancestors()`) was considered and declined as not needed —
+the transient parent vector `finish()` computes for region resolution stays transient.
+Named argument-node accessors (`argument_nodes_named` etc.) are deferred to the Phase 7
+pylatexenc-style argument-access package rather than added piecemeal.
+
 **Argument/slot child *regions* with parser-designated content, resolved to global node
 ranges by the builder (`ChildRegion`, `ContentNodes`)** — DECIDED (user, July 2026, regions
 session; supersedes one-node-per-argument and `pre_space`). A callable's children range is
@@ -973,7 +1069,9 @@ pylatexenc's expression parser), the syntax-bearing node(s) (a `Group` for `{…
 delimiters on `GroupData`; a `Chars` node for `\frac 1 2` single tokens and `*` markers,
 which **count as content** — pylatexenc parity), and any trailing per-instance syntax.
 Records: `ParsedArgument { spec, region: Option<ChildRegion>, ext }` and
-`ParsedSlot { spec, region: ChildRegion }`; a resolved `ChildRegion` =
+`ParsedSlot { spec, region: ChildRegion }` *(slots session, July 2026: the slot record's
+`spec` is now `name: Option<Box<str>>` — see the no-spec-side-slots entry, §3.6)*; a
+resolved `ChildRegion` =
 `{ children: Range<u32>, content_range: Range<u32>, content_parent: NodeId }`, **all in
 global node-index coordinates** (the `NodeData.children` system — one coordinate language,
 no per-callable base arithmetic). `content_parent` is the node whose child list holds the
@@ -1295,10 +1393,11 @@ inspect its children — e.g. extract scaffolding sub-spans, §3.5); default: no
 *Rationale:* the builder is the single mutation boundary, so hooking there guarantees *no
 node escapes finalization* — no parser cooperation required, transforms and tests included.
 A preset delegates to spec-specific behavior itself (FLM's `Lang` sees a `Callable`, reads
-`data.spec`, downcasts to its own spec trait, attaches its `flm_specinfo`-like ext), so the
-core needs no spec-level hook at all; and *uniform* per-node initialization (fields every
-node of a language carries) gets a natural home, which a callables-only spec hook could
-never provide.
+`data.spec`, downcasts, attaches its `flm_specinfo`-like ext — the `Any`-supertrait
+contract, §3.4; downcasting to the preset's own spec *trait* goes through the
+concrete-wrapper pattern recorded there), so the core needs no spec-level hook at all;
+and *uniform* per-node initialization (fields every node of a language carries) gets a
+natural home, which a callables-only spec hook could never provide.
 *Consequences:* the hook must tolerate re-staging (transform-built trees pass nodes through
 a new builder — finalization runs again on already-finalized data; implementations must be
 idempotent); it runs on speculatively staged nodes that may be abandoned (harmless — they
@@ -1434,6 +1533,10 @@ parameter is data — no privileged spellings (§2.3).
 *Rejected:* `SlotTerminatorSpec`/`StopConditionSpec` as core spec data (notes Q1 Option A);
 stop-before-terminator with preset-owned consumption (Option B — weakened the declarative
 path and left terminator syntax neither recorded nor reconstructible).
+*(Amended July 2026, slots session: `SlotSpec` itself is now deleted — slots have no
+spec-side declaration at all; see the no-spec-side-slots entry below. The core of this
+ruling — terminator data as `EnvironmentBodyParser` constructor parameters — stands
+unchanged; the body state delta rehomes to the preset spec type that drives the parse.)*
 
 **Terminator mismatch recovery: close without consuming** — DECIDED (user, July 2026,
 Phase 6 plan session). `\begin{A}…\begin{B}…\end{A}`: B's body parser stops at `\end`,
@@ -1709,6 +1812,108 @@ invocation half's `Fixed(outer)` revert differs observably from state-carried st
 still in force), needing its own ruling; (iii) the encoding — rules-list vs. rule flag
 (both mechanically break struct literals).
 
+**`ParseContext::parse_scoped` and `ParseContext::probe_token` replace the hand-rolled
+state swap/restore and the crate-private `try_peek`** — DECIDED (user, July 2026,
+Action-05 session). The `cx.state` swap/restore protocol was correct at every one of its
+seven lib sites, but the correctness was per-site discipline (restore **before** the
+`?`), and the probe site had to hold a `Result` un-`?`-ed across the restore.
+`parse_scoped(state, &mut parser)` — the pylatexenc
+`walker.parse_content(parser, …, parsing_state)` analog, deliberately on the *context*
+(the session lacks tokens and source; a session-level `parse` remains planned as the
+top-level driver entry, Phase 7) — makes the restore structural; the returned delta stays
+**unapplied** (the §3.3/§3.6 caller-applies law; an auto-applying driver would be wrong
+for group interiors). Frame-opening stays separate (`with_frame` composes around it;
+argument frames wrap two sub-operations, not one parse). The peek-shaped sites that are
+not sub-parses are covered by `probe_token(&state)` — the former `try_peek` as a public
+method, with the state now an **explicit parameter**: that is what dissolved the probe
+site's swap entirely (it existed only because `try_peek` read `cx.state`), and it is the
+public face of the argument-probe protocol (tolerant ⇒ `Ok(None)` without diagnosing or
+consuming; unrecoverable or strict ⇒ abort). `ParserSession::snapshot_frames` went
+public with it (custom parser code building its own `ParseError`s needs the traceback);
+`push_frame`/`pop_frame` stay crate-private — `with_frame` remains the only stack
+mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
+unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
+
+**No spec-side slots: `SlotSpec` and `CallableSpec::slots()` deleted; slots are pure
+record-level vocabulary** — DECIDED (user, July 2026, slots session; supersedes the same
+session's earlier "slots mirror arguments" lean, and executes plan item A of
+PlanSlotsAndConvenienceSurface.md). The mirror died on the **invocation-facts problem**:
+body parsing needs facts only the running invocation has — the environment name for the
+`\end{name}` back-reference, potentially the arguments parsed so far — which no
+spec-declared per-slot parser list can receive through a `parse_argument`-shaped entry
+point. pylatexenc is the confirming precedent: `EnvironmentSpec.make_body_parser(token,
+nodeargd, arg_parsing_state_delta)` configures the body directly on the spec; there is no
+slot-spec list anywhere in pylatexenc. So the callable spec's sanctioned parser (the
+`make_invocation_parser` takeover) parses the body with whatever parsers it chooses to
+drive internally and **directly populates the `ParsedSlot` records**. Arguments and slots
+are the same thing at the **record** level (region + name + ext), not at the spec/parser
+level — "slots" become pure node vocabulary. Consequences shipped together:
+- `ParsedSlot` reshaped: `{ spec: Arc<SlotSpec<L>>, region, ext }` →
+  `{ name: Option<Box<str>>, region, ext }` (user: definitely include the name; kept
+  `Option` — environments may not bother, fence-block multi-slot constructs may name
+  several). Self-describing records (§3.5) *preserved*, not weakened: standing alone now
+  means carrying the name directly — the spec pointer bought nothing else, since
+  `SlotSpec` had no other tool-visible payload. Deliberate asymmetry with
+  `ParsedArgument`, which keeps its `Arc<ArgumentSpec>` (parser/name/delta are worth
+  pointing at).
+- The **slots trap disappears by construction**: with `slots()` gone there is nothing to
+  declare that `StdInvocationParser` won't parse — its implementation-error arm and the
+  pinned test are deleted (§3.8 consequence list amended).
+- The body state delta (pylatexenc's `make_body_parsing_state_delta`) rehomes to the
+  preset spec type that drives the parse — Phase 7's `EnvironmentSpec` holds it as an
+  ordinary field, read back by its own composition (the test-lang `EnvSpec` rehearses
+  this through the §3.4 `Any`-supertrait downcast). The core never interpreted it.
+- `StdCallableSpec::new(arguments)` is single-list (a free ergonomics win); the guard's
+  `!slots().is_empty()` clause is replaced by the spec-level emptiness method (next
+  entry), which the removal makes *more* load-bearing.
+- Composition building blocks promoted to `pub` (plan item A.4):
+  `parse_declared_arguments` (the shared argument half) and `read_rigid_name_group` (+
+  `NameGroup`) — a `\begin`-shaped takeover now assembles from public parts. A
+  `ParsedSlots`-assembly helper was judged unnecessary for now: what remains hand-rolled
+  is a few lines of offset bookkeeping.
+*Open (deliberately):* where the standard `\begin` composition lives — core (a generic
+name-indexed delegating dispatcher) vs. the latexlike preset (Phase 7 owns the
+`\begin`/`\end` spelling). It stays test-side meanwhile (plan item A.5), as does the C
+batch (builder sugar, crate-root re-exports).
+
+**The emptiness surface: `ArgumentParser::can_match_empty()` +
+`CallableSpec::requires_content()`; the expression guard consults the spec** — DECIDED
+(user, July 2026, slots session; both names user-decided 2026-07-15; executes plan item B
+of PlanSlotsAndConvenienceSurface.md; pylatexenc precedent:
+`LatexParserBase.contents_can_be_empty`, consulted by its expression parser).
+- `ArgumentParser::can_match_empty()` — can this argument be satisfied consuming
+  nothing, i.e. is *absent* a valid outcome rather than a diagnosed recovery? Optional
+  group and `*` marker: `true`; mandatory group and expression: `false`. (Name chosen
+  over `contents_can_be_empty` — "contents" reads oddly for an argument *parser* — and
+  over `may_be_absent` — "absent" is the record-level word.) **Default `true`**, the
+  pylatexenc base-class polarity, chosen by failure-mode asymmetry: a custom mandatory
+  parser that forgets to override merely loses the guard diagnostic (its callable
+  dispatches fully and parses greedily in expression position — pylatexenc's own
+  behavior), while a wrongly-`false` default would spuriously diagnose *valid* input.
+  The standard optional parsers state the `true` explicitly (load-bearing, not
+  incidental).
+- `CallableSpec::requires_content()` — would this invocation, appearing bare as a
+  single-token expression argument, be malformed? Default derives from the declarative
+  surface: `arguments().iter().any(|a| !a.parser.can_match_empty())`. Negative polarity
+  deliberately matches the derivation and the override ergonomics: a takeover spec that
+  declares nothing but consumes plenty (`\begin`, `\verb`) overrides with a natural
+  `true` — and with `SlotSpec` gone this method is the **only** channel for a
+  body-bearing spec to say "I take material".
+- The expression guard switches from `!arguments().is_empty() || !slots().is_empty()`
+  to `spec.requires_content()`. Behavior changes pinned in tests: a callable taking
+  only emptiable arguments is now *valid* bare in expression position and dispatches in
+  full (`\frac\mymacro 2` with an optional-only `\mymacro` — pylatexenc parity; if the
+  optional is provided, the bare callable swallows it, also pylatexenc); a bare
+  `\begin` in expression position is *diagnosed* once the dispatcher spec overrides —
+  a deliberate, documented divergence from pylatexenc, which dispatches the environment
+  as the argument.
+- The condition was renamed with the semantics: `ExpressionCallableTakesArguments` →
+  `ExpressionCallableRequiresContent` (identifier
+  `core.nodes_parser.expression-callable-requires-content`), message "…it requires
+  content (arguments or a body)" — the old "it takes arguments" would be a false
+  message for a body-bearing takeover that declares none. *(Implementation-forced
+  naming consequence, flagged for user sign-off in the session report.)*
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
@@ -1759,8 +1964,9 @@ Consequences applied with the decision (July 2026):
   `ParseContext::implementation_error`, deliberately bypassing the recover funnel: an
   implementation bug **aborts even under tolerant recovery** (tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions), and no
-  `Lang::refine_diagnostic` pass applies. `StdInvocationParser`'s slots check reports the
-  same condition.
+  `Lang::refine_diagnostic` pass applies. ~~`StdInvocationParser`'s slots check reports
+  the same condition.~~ *(Slots session, July 2026: the slots check is gone with the
+  spec-side slot list — nothing declarable is left for it to catch.)*
 - Staged-id read-backs whose id passed through outer-layer hands degrade gracefully (the
   node-stop test treats a missing id as "condition did not fire"; invocation/body span
   read-backs fall back to the trigger/body start). No silently-wrong tree results: the

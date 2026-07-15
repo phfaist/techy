@@ -39,7 +39,7 @@ of earlier revisions lives in git.
 | S1 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
 | S1 | `constructs` | `ConstructParser` trait + standard construct parsers |
 | S1 | `node` | `NodeTree`, `NodeKind<L>`, `GroupData`, `CallableData`, `ParsedArguments`/`ParsedSlots`, `NodeRef`, `NodeTreeBuilder`, ext aliases |
-| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `ArgumentSpec`, `ArgumentParserSpec`, `SlotSpec`, `Library`, `LibraryStack`, `CallableQuery` |
+| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `ArgumentSpec`, `ArgumentParser`, `Library`, `LibraryStack`, `CallableQuery` |
 | S1 | `state` | `Lang`, `ParsingState<L>`, `StateData`, `ParsingStateDelta` |
 | S1 | `token` | `Token<'s, L>`, `TokenKind`, `TokenRules`, `TokenReader`, `StdTokenReader` |
 | S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex`, `TextContent` |
@@ -85,7 +85,8 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Callable behavior | `CallableSpec<L>` (trait), `StdCallableSpec<L>` | de-keyed: no name, no invocation form |
 | Invocation-form id | `Lang::CallableTypeId` | closed per-language type (enum in real langs; `u32` under `SimpleLang`) |
 | Group class | `Lang::GroupTypeId` | closed per-language classification (content vs. math group), detached from delimiters; delimiter *rules* stay runtime data any parser can mint |
-| Argument/slot structure | `Vec<Arc<ArgumentSpec<L>>>` / `Vec<Arc<SlotSpec<L>>>` on the spec (slice accessors) | args configure; slots hold content regions; `Arc`d so parsed records share them |
+| Argument structure | `Vec<Arc<ArgumentSpec<L>>>` on the spec (slice accessor) | args configure; `Arc`d so parsed records share them. Slots are record-level only — no `SlotSpec` (slots session, July 2026) |
+| Emptiness surface | `ArgumentParser::can_match_empty()`, `CallableSpec::requires_content()` | user-decided names (July 2026): "absent" is the record word, "contents" reads oddly for a parser; negative spec-side polarity so takeover overrides read `true` |
 | Argument parsing | `ArgumentParser<L>` (trait; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser>`) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`); no core data variants — standard parsers are preset-provided (July 2026) |
 | Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
@@ -93,7 +94,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
 | Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeId`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
-| Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: entry = `Arc`'d spec + optional child region + ext (regions session, July 2026) |
+| Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: argument entry = `Arc`'d spec + optional child region + ext (regions session, July 2026); slot entry = own `name` + region + ext (slots session, July 2026 — no spec pointer) |
 | Argument/slot region record | `ChildRegion` (two-phase), `ContentNodes` (staged content designation: `InRegion` / `InChildrenOf`) | region = contiguous run of the callable's children (noise + syntax); content parser-designated, resolved to global node-index ranges by `finish()` (July 2026) |
 | Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
 | Group payload | `GroupData<L>` | delimiters stored on the node + `Option<Lang::GroupTypeId>` class |

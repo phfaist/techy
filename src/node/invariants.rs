@@ -150,7 +150,7 @@ fn check_node<L: Lang>(
             residency(post_space, "comment post-space");
             if let TextContent::Spanned(s) = start {
                 assert!(
-                    s.start == span.start,
+                    s.start() == span.start,
                     "node {}: spanned comment start {:?} does not begin the node's span {:?}",
                     i,
                     s,
@@ -159,7 +159,7 @@ fn check_node<L: Lang>(
             }
             if let TextContent::Spanned(s) = post_space {
                 assert!(
-                    s.end == span.end,
+                    s.end() == span.end,
                     "node {}: spanned comment post-space {:?} does not end the node's span {:?}",
                     i,
                     s,
@@ -170,7 +170,7 @@ fn check_node<L: Lang>(
                 (start, content, post_space)
             {
                 assert!(
-                    s.end == c.start && c.end == p.start,
+                    s.end() == c.start() && c.end() == p.start(),
                     "node {}: comment parts {:?}/{:?}/{:?} do not partition the node's span {:?}",
                     i,
                     s,
@@ -234,7 +234,7 @@ fn check_node<L: Lang>(
                     .map(|first| first.span().start())
                     .unwrap_or(span.end);
                 assert!(
-                    s.end == expected_end && s.start >= span.start,
+                    s.end() == expected_end && s.start() >= span.start,
                     "node {}: spanned post-space {:?} does not end at the first child \
                      (or the span end {:?} for a childless callable)",
                     i,

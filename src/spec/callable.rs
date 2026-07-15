@@ -9,13 +9,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 
 use crate::constructs::{ConstructParser, Invocation, StdInvocationParser};
 use crate::node::BuildId;
 use crate::state::Lang;
 
-use super::structure::{ArgumentSpec, SlotSpec};
+use super::structure::ArgumentSpec;
 
 /// Which part of a callable's parse a live traceback [`Frame`](crate::engine::Frame)
 /// covers — the `role` input of [`CallableSpec::stack_frame_title`].
@@ -37,12 +38,16 @@ pub enum FrameRole {
 /// per-callable-type unknown-callable fallbacks can be shared singletons
 /// (ARCHITECTURE.md §specs).
 ///
-/// The declarative surface is the two structure lists — [`ArgumentSpec`]s (arguments
-/// *configure* an invocation) and [`SlotSpec`]s (slots hold *content regions*), both
-/// pylatexenc-`arguments_spec_list`-shaped: `Arc`-shared so parsed nodes can record which
-/// spec each argument was parsed against. The default method bodies describe the neutral
-/// callable — no arguments, no slots — suitable for simple specials (`~`) and fallback
-/// specs. The declarative standard implementation is [`StdCallableSpec`].
+/// The declarative surface is the [`ArgumentSpec`] list (arguments *configure* an
+/// invocation), pylatexenc-`arguments_spec_list`-shaped: `Arc`-shared so parsed nodes
+/// can record which spec each argument was parsed against. Slots — a parsed callable's
+/// *content regions* — have no spec-side declaration (decided July 2026, slots
+/// session): a body-bearing callable's takeover parser mints the
+/// [`ParsedSlot`](crate::node::ParsedSlot) records directly, and announces that it
+/// takes material via [`requires_content`](CallableSpec::requires_content). The default
+/// method bodies describe the neutral callable — no arguments, no body — suitable for
+/// simple specials (`~`) and fallback specs. The declarative standard implementation is
+/// [`StdCallableSpec`].
 ///
 /// The behavioral surface is [`make_invocation_parser`](CallableSpec::make_invocation_parser):
 /// a factory returning a fresh boxed [`ConstructParser`] per resolved [`Invocation`],
@@ -54,17 +59,39 @@ pub enum FrameRole {
 /// Every method takes `&self`, so a stateful implementation needs interior mutability
 /// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
 /// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell` (DESIGN_RATIONALE.md).
-pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync {
+///
+/// **Downcasting is part of the contract** (`Any` supertrait, decided July 2026,
+/// Action-05): a preset's [`Lang::finalize_node`](crate::state::Lang::finalize_node)
+/// hook recovers its concrete spec type from a stored `Arc<dyn CallableSpec<L>>` via
+/// trait upcasting — `(&*spec as &dyn core::any::Any).downcast_ref::<MySpec>()`. The
+/// `Arc`'d trait object was already implicitly `'static`; the supertrait makes it
+/// per-implementor law. Downcasting to a preset's own spec *trait* (an open set of
+/// third-party spec types) needs one extra move: register every spec behind one
+/// concrete wrapper (`FlmSpecBox(Arc<dyn FlmSpec>)` delegating to the inner value) and
+/// downcast to the wrapper (DESIGN_RATIONALE.md §3.4).
+pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// The declarative argument structure of an invocation, in invocation order.
     /// Default: no arguments.
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>] {
         &[]
     }
 
-    /// The declarative slot (content-region) structure, in source order. Default: no
-    /// slots (macro-shaped); an environment-shaped callable has exactly one (its body).
-    fn slots(&self) -> &[Arc<SlotSpec<L>>] {
-        &[]
+    /// Would this invocation, appearing **bare** — as a single-token expression
+    /// argument, `\frac\mymacro 2` — be malformed? The expression position's guard
+    /// consults this before dispatching (decided July 2026, slots session; the spec-side
+    /// face of pylatexenc's `contents_can_be_empty` consultation): `true` diagnoses the
+    /// bare use and stages the single-token callable with every declared argument
+    /// absent; `false` dispatches the invocation in full.
+    ///
+    /// The default derives from the declarative surface: content is required exactly
+    /// when some declared argument cannot match empty
+    /// ([`ArgumentParser::can_match_empty`](super::ArgumentParser::can_match_empty)).
+    /// With no spec-side slot list, this method is the **only** channel for a
+    /// body-bearing takeover spec to say "I take material": a spec that declares
+    /// nothing but consumes plenty (a `\begin` dispatcher, `\verb`) must override this
+    /// to `true`.
+    fn requires_content(&self) -> bool {
+        self.arguments().iter().any(|argument| !argument.parser.can_match_empty())
     }
 
     /// The factory producing this spec's invocation parser: a **fresh boxed parser per
@@ -113,31 +140,22 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync {
     }
 }
 
-/// The standard declarative [`CallableSpec`]: the two structure lists as plain data.
+/// The standard declarative [`CallableSpec`]: the argument structure as plain data.
 pub struct StdCallableSpec<L: Lang> {
     /// The argument structure.
     pub arguments: Vec<Arc<ArgumentSpec<L>>>,
-    /// The slot structure.
-    pub slots: Vec<Arc<SlotSpec<L>>>,
 }
 
 impl<L: Lang> StdCallableSpec<L> {
-    /// A spec with the given argument and slot structures.
-    pub fn new(
-        arguments: Vec<Arc<ArgumentSpec<L>>>,
-        slots: Vec<Arc<SlotSpec<L>>>,
-    ) -> StdCallableSpec<L> {
-        StdCallableSpec { arguments, slots }
+    /// A spec with the given argument structure.
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<L>>>) -> StdCallableSpec<L> {
+        StdCallableSpec { arguments }
     }
 }
 
 impl<L: Lang> CallableSpec<L> for StdCallableSpec<L> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>] {
         &self.arguments
-    }
-
-    fn slots(&self) -> &[Arc<SlotSpec<L>>] {
-        &self.slots
     }
 }
 
@@ -146,13 +164,13 @@ impl<L: Lang> CallableSpec<L> for StdCallableSpec<L> {
 
 impl<L: Lang> Default for StdCallableSpec<L> {
     fn default() -> Self {
-        StdCallableSpec { arguments: Vec::new(), slots: Vec::new() }
+        StdCallableSpec { arguments: Vec::new() }
     }
 }
 
 impl<L: Lang> Clone for StdCallableSpec<L> {
     fn clone(&self) -> Self {
-        StdCallableSpec { arguments: self.arguments.clone(), slots: self.slots.clone() }
+        StdCallableSpec { arguments: self.arguments.clone() }
     }
 }
 
@@ -160,7 +178,6 @@ impl<L: Lang> fmt::Debug for StdCallableSpec<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StdCallableSpec")
             .field("arguments", &self.arguments)
-            .field("slots", &self.slots)
             .finish()
     }
 }

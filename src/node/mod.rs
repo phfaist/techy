@@ -61,13 +61,15 @@ pub type CommentNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::CommentNod
 pub type ListNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ListNodeExt;
 /// The parsed-argument ext type of a language (attached to [`ParsedArgument`] records).
 pub type ArgumentExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ArgumentExt;
+/// The parsed-slot ext type of a language (attached to [`ParsedSlot`] records).
+pub type SlotExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::SlotExt;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::library::LibraryStack;
     use crate::source::{Source, SourceSpan, Span, TextContent};
-    use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
+    use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{Lang, ParsingState, SimpleLang, StateData};
     use crate::token::{GroupRule, TokenRules, WhitespaceRules};
     use alloc::string::String;
@@ -188,7 +190,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(arg_specs.to_vec(), vec![]));
+            Arc::new(StdCallableSpec::new(arg_specs.to_vec()));
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -350,10 +352,11 @@ mod tests {
             Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("placement"));
         let title_spec: Arc<ArgumentSpec<PlainLang>> =
             Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("title"));
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(
-            vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
-            vec![],
-        ));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(vec![
+            star_spec.clone(),
+            placement_spec.clone(),
+            title_spec.clone(),
+        ]));
         let section = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -417,17 +420,18 @@ mod tests {
         let hi = b.add(NodeKind::chars(Span::new(10, 12)), spanned(&source, 10..12), st.clone(), vec![]).unwrap();
         let body = b.add(NodeKind::list(), spanned(&source, 10..12), st.clone(), vec![hi]).unwrap();
 
-        let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![], vec![slot_spec.clone()]));
+            Arc::new(StdCallableSpec::default());
         let env = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_ENVIRONMENT,
                 name: "it".into(),
                 spec,
                 arguments: ParsedArguments::empty(),
-                slots: vec![ParsedSlot::new(
-                    slot_spec,
+                // The slot record is minted by the driving parser and carries its own
+                // name (record-level slots, July 2026 slots session).
+                slots: vec![ParsedSlot::named(
+                    "body",
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(body, 0..1)),
                 )]
                 .into(),
@@ -473,16 +477,15 @@ mod tests {
         let mut b = NodeTreeBuilder::new();
 
         let hi = b.add(NodeKind::chars(Span::new(0, 2)), spanned(&source, 0..2), st.clone(), vec![]).unwrap();
-        let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![], vec![slot_spec.clone()]));
+            Arc::new(StdCallableSpec::default());
         let env = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_ENVIRONMENT,
                 name: "it".into(),
                 spec,
                 arguments: ParsedArguments::empty(),
-                slots: vec![ParsedSlot::new(slot_spec, ChildRegion::single(0))].into(),
+                slots: vec![ParsedSlot::named("body", ChildRegion::single(0))].into(),
                 post_space: TextContent::empty(),
                 ext: (),
             }),
@@ -552,7 +555,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(arg_specs.to_vec(), vec![]));
+            Arc::new(StdCallableSpec::new(arg_specs.to_vec()));
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -630,7 +633,7 @@ mod tests {
 
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()], vec![]));
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -679,7 +682,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()], vec![]));
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -721,7 +724,7 @@ mod tests {
         children: Vec<BuildId>,
     ) -> Result<BuildId, NodeBuildError> {
         let specs: Vec<_> = args.iter().map(|a| a.spec.clone()).collect();
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(specs, vec![]));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(specs));
         b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -901,7 +904,7 @@ mod tests {
         // Every node's children ids are a contiguous ascending run, and each non-root
         // node is the child of exactly one node.
         let mut seen = vec![0usize; tree.node_count()];
-        for node in tree.iter() {
+        for node in tree.iter_storage_order() {
             let ids: Vec<usize> = node.children().map(|c| c.id().index()).collect();
             for pair in ids.windows(2) {
                 assert_eq!(pair[1], pair[0] + 1);
@@ -944,7 +947,7 @@ mod tests {
         let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().next().unwrap();
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
-        for node in owned.iter() {
+        for node in owned.iter_storage_order() {
             match node.kind() {
                 NodeKind::Chars { content, .. } => assert!(content.is_owned()),
                 NodeKind::Comment { content, start, post_space, .. } => {
@@ -1009,6 +1012,7 @@ mod tests {
         type CommentNodeExt = ();
         type ListNodeExt = ();
         type ArgumentExt = ();
+        type SlotExt = u8; // e.g. a derived cell/item count
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1051,6 +1055,18 @@ mod tests {
         assert_eq!(*tree.root().ext(), 0);
     }
 
+    /// The slot-side symmetry of `ArgumentExt` (decided July 2026): per-instance derived
+    /// data about one content region (tabular cells, enumerate items) rides on the
+    /// `ParsedSlot` record itself, not on the whole-callable ext.
+    #[test]
+    fn parsed_slot_carries_ext() {
+        let mut slot: ParsedSlot<ExtLang> = ParsedSlot::named("body", ChildRegion::single(0));
+        assert_eq!(slot.name(), Some("body"));
+        assert_eq!(slot.ext, 0); // the constructors Default-initialize the ext
+        slot.ext = 3;
+        assert_eq!(slot.clone().ext, 3);
+    }
+
     // --- Lang::finalize_node (the centralized finalization hook) ---------------------
 
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -1068,6 +1084,7 @@ mod tests {
         type CommentNodeExt = ();
         type ListNodeExt = ();
         type ArgumentExt = ();
+        type SlotExt = ();
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1275,7 +1292,7 @@ mod tests {
     fn tree_get_is_the_non_panicking_node_access() {
         let tree = example_tree();
         assert!(tree.get(tree.root().id()).is_some());
-        let deep = tree.iter().last().unwrap().id();
+        let deep = tree.iter_storage_order().last().unwrap().id();
         assert_eq!(tree.get(deep).unwrap().id(), deep);
 
         // An id from a different tree misses (out of range here; debug builds also
