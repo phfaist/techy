@@ -188,12 +188,12 @@ pub fn scan_argument_noise<'s, L: Lang>(
         };
         match &token.kind {
             TokenKind::Comment { start, post_space, .. } => {
-                stage_pre_space(cx, &mut nodes, token.pre_space);
+                stage_pre_space(cx, &mut nodes, token.pre_space)?;
                 // The token's sub-spans tile its span: start delimiter, content,
                 // post-space.
                 let content_span = Span::new(start.end, post_space.start);
                 let kind = NodeKind::comment(*start, content_span, *post_space);
-                nodes.push(stage(cx, kind, token.span));
+                nodes.push(stage(cx, kind, token.span)?);
                 cx.tokens.move_past(&token, true);
             }
             _ => return Ok(ArgumentNoise { nodes, start, next: Some(token) }),
@@ -208,20 +208,23 @@ pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
     pre_space: Span,
-) {
+) -> ConstructParserResult<L, ()> {
     if !pre_space.is_empty() {
-        nodes.push(stage(cx, NodeKind::chars(pre_space), pre_space));
+        nodes.push(stage(cx, NodeKind::chars(pre_space), pre_space)?);
     }
+    Ok(())
 }
 
 /// Stage a childless node under the context's current state.
-fn stage<L: Lang>(cx: &mut ParseContext<'_, '_, L>, kind: NodeKind<L>, span: Span) -> BuildId {
-    cx.session.builder.add(
-        kind,
-        SourceSpan::new(&cx.source, span.range()),
-        Arc::clone(&cx.state),
-        Vec::new(),
-    )
+fn stage<L: Lang>(
+    cx: &mut ParseContext<'_, '_, L>,
+    kind: NodeKind<L>,
+    span: Span,
+) -> ConstructParserResult<L, BuildId> {
+    cx.session
+        .builder
+        .add(kind, SourceSpan::new(&cx.source, span.range()), Arc::clone(&cx.state), Vec::new())
+        .map_err(|error| cx.implementation_error(error, span))
 }
 
 // --- the expression core --------------------------------------------------------------
@@ -254,15 +257,15 @@ fn parse_expression_node<'s, L: Lang>(
 ) -> ConstructParserResult<L, Option<BuildId>> {
     match &next.kind {
         TokenKind::Char(_) => {
-            stage_pre_space(cx, nodes, next.pre_space);
+            stage_pre_space(cx, nodes, next.pre_space)?;
             cx.tokens.move_past(next, true);
-            let id = stage(cx, NodeKind::chars(next.span), next.span);
+            let id = stage(cx, NodeKind::chars(next.span), next.span)?;
             nodes.push(id);
             Ok(Some(id))
         }
 
         TokenKind::GroupOpen { rule, .. } => {
-            stage_pre_space(cx, nodes, next.pre_space);
+            stage_pre_space(cx, nodes, next.pre_space)?;
             let rule = Arc::clone(rule);
             cx.tokens.move_past(next, true);
             let mut group = GroupParser::new(next.span, rule);
@@ -292,9 +295,9 @@ fn parse_expression_node<'s, L: Lang>(
                         UnresolvableCommand::new(*name, *escape_char),
                         SourceSpan::new(&cx.source, next.span.range()),
                     )?;
-                    stage_pre_space(cx, nodes, next.pre_space);
+                    stage_pre_space(cx, nodes, next.pre_space)?;
                     cx.tokens.move_past(next, true);
-                    let id = stage(cx, NodeKind::chars(next.span), next.span);
+                    let id = stage(cx, NodeKind::chars(next.span), next.span)?;
                     nodes.push(id);
                     Ok(Some(id))
                 }
@@ -336,7 +339,7 @@ fn dispatch_expression_invocation<'s, L: Lang>(
             ExpressionCallableTakesArguments::new(spelling),
             SourceSpan::new(&cx.source, token.span.range()),
         )?;
-        stage_pre_space(cx, nodes, token.pre_space);
+        stage_pre_space(cx, nodes, token.pre_space)?;
         cx.tokens.move_past(token, true);
         // The bare single-token callable: every declared argument absent, no slots —
         // the record stays self-describing (each entry keeps its spec).
@@ -355,17 +358,21 @@ fn dispatch_expression_invocation<'s, L: Lang>(
             post_space: TextContent::Spanned(token.post_space()),
             ext: Default::default(),
         };
-        let id = cx.session.builder.add(
-            NodeKind::callable(data),
-            SourceSpan::new(&cx.source, token.span.range()),
-            Arc::clone(&cx.state),
-            Vec::new(),
-        );
+        let id = cx
+            .session
+            .builder
+            .add(
+                NodeKind::callable(data),
+                SourceSpan::new(&cx.source, token.span.range()),
+                Arc::clone(&cx.state),
+                Vec::new(),
+            )
+            .map_err(|error| cx.implementation_error(error, token.span))?;
         nodes.push(id);
         return Ok(Some(id));
     }
 
-    stage_pre_space(cx, nodes, token.pre_space);
+    stage_pre_space(cx, nodes, token.pre_space)?;
     // The invocation's traceback frame (the expression-position dispatch site, §3.8).
     let frame = super::invocation_frame(cx, &invocation);
     // Consume the trigger whole before the parser runs (the dispatch contract, §3.6).
@@ -473,7 +480,7 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
         // The delimited form: a group open of the configured class.
         if let TokenKind::GroupOpen { rule, .. } = &next.kind {
             if rule.group_type == self.group_type {
-                stage_pre_space(cx, &mut noise.nodes, next.pre_space);
+                stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
                 let rule = Arc::clone(rule);
                 cx.tokens.move_past(&next, true);
                 let mut group = GroupParser::new(next.span, rule);
@@ -613,7 +620,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             return Ok(None);
         };
 
-        stage_pre_space(cx, &mut noise.nodes, open.pre_space);
+        stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
         cx.tokens.move_past(&open, true);
         // pylatexenc's `make_child_parsing_state`, expressed as the decided §3.6
         // descent policy: a nested group opened by the minted rule keeps the contents
@@ -727,8 +734,8 @@ impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser {
             span.end = token.span.end;
             cx.tokens.move_past(&token, true);
         }
-        stage_pre_space(cx, &mut noise.nodes, first.pre_space);
-        noise.nodes.push(stage(cx, NodeKind::chars(span), span));
+        stage_pre_space(cx, &mut noise.nodes, first.pre_space)?;
+        noise.nodes.push(stage(cx, NodeKind::chars(span), span)?);
         Ok(Some(region_with_last_as_content(mem::take(&mut noise.nodes))))
     }
 }
@@ -946,8 +953,8 @@ mod tests {
             SourceSpan::new(&source, root_span.range()),
             Arc::clone(state),
             outcome.nodes,
-        );
-        let result = session.finish(root);
+        ).unwrap();
+        let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
         Ok(Parsed { result, pos })
     }
@@ -1587,7 +1594,7 @@ mod tests {
                             SourceSpan::new(&cx.source, span.range()),
                             Arc::clone(&cx.state),
                             vec![],
-                        );
+                        ).unwrap();
                         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
                             enable_comments: Some(false),
                             ..TokenRulesOverrides::default()
@@ -1616,14 +1623,20 @@ mod tests {
 
     // --- slots need a factory override (StdInvocationParser is macro-shaped) ------------
 
+    /// The misconfiguration surfaces as an `ImplementationError` abort — even under
+    /// tolerant recovery (an implementation bug, not a source condition).
     #[test]
-    #[should_panic(expected = "StdInvocationParser is macro-shaped")]
     fn declared_slots_need_a_factory_override() {
-        let spec: Arc<dyn CallableSpec<ArgLang>> = Arc::new(StdCallableSpec::new(
-            vec![],
-            vec![Arc::new(SlotSpec::new())],
-        ));
-        let st = state_with_specs(&[("env", spec)]);
-        parse_std(r"\env", &st, Recovery::Strict);
+        for recovery in [Recovery::Strict, Recovery::Tolerant] {
+            let spec: Arc<dyn CallableSpec<ArgLang>> = Arc::new(StdCallableSpec::new(
+                vec![],
+                vec![Arc::new(SlotSpec::new())],
+            ));
+            let st = state_with_specs(&[("env", spec)]);
+            let mut reader = StdTokenReader::new(r"\env");
+            let error = try_run(r"\env", &mut reader, &st, recovery).unwrap_err();
+            assert_eq!(error.identifier(), crate::constructs::ImplementationError::IDENTIFIER);
+            assert!(error.message().contains("StdInvocationParser is macro-shaped"));
+        }
     }
 }

@@ -72,7 +72,13 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    I (the user) am progressing through files individually, reviewing them one by one with significant changes. The changes aim to granularily review design decisions and ultimately implement a library that is as powerful and extensible as the original pylatexenc project.
 3. **Never undo my code edits** before confirming my intent on these edits in the first
    place. Do NOT remove any code that appears useless before asking.
-4. **Use Result<T,E>** consistently, never panic in lib code (except in unreachable paths)
+4. **Use Result<T,E>** consistently — never panic in lib code on input, *including* input
+   from outer library layers (specs, hooks, custom parsers): a documented-contract
+   violation returns an `Err`, it does not panic. Panics are allowed only for verifiably
+   unreachable invariants (`unreachable!`/`expect` with the invariant stated), plus the
+   explicitly approved indexing-style accessors that have non-panicking `get` companions.
+   Full policy: DESIGN_RATIONALE.md §3.8 ("Panic policy"). New exceptions need explicit
+   user approval.
 5. **Always check naming strategy** before suggesting names
 6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in docs/archive/ and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
 7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion with a concise paragraph in DESIGN_RATIONALE.md.

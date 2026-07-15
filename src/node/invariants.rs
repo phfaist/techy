@@ -445,32 +445,32 @@ mod tests {
             SourceSpan::new(&source, 0..1),
             Arc::clone(&st),
             alloc::vec![],
-        );
+        ).unwrap();
         let bc = builder.add(
             NodeKind::chars(Span::new(2, 4)),
             SourceSpan::new(&source, 2..4),
             Arc::clone(&st),
             alloc::vec![],
-        );
+        ).unwrap();
         let group = builder.add(
             NodeKind::group(GroupData::new(0u32, Span::new(1, 2), Span::new(4, 5))),
             SourceSpan::new(&source, 1..5),
             Arc::clone(&st),
             alloc::vec![bc],
-        );
+        ).unwrap();
         let d = builder.add(
             NodeKind::chars(Span::new(5, 6)),
             SourceSpan::new(&source, 5..6),
             Arc::clone(&st),
             alloc::vec![],
-        );
+        ).unwrap();
         let root = builder.add(
             NodeKind::list(),
             SourceSpan::entire(&source),
             Arc::clone(&st),
             alloc::vec![a, group, d],
-        );
-        builder.finish(root)
+        ).unwrap();
+        builder.finish(root).unwrap()
     }
 
     #[test]
@@ -496,14 +496,14 @@ mod tests {
             SourceSpan::new(&source, 1..2),
             Arc::clone(&st),
             alloc::vec![],
-        );
+        ).unwrap();
         let root = builder.add(
             NodeKind::list(),
             SourceSpan::entire(&source),
             Arc::clone(&st),
             alloc::vec![b],
-        );
-        check_tree_invariants(&builder.finish(root));
+        ).unwrap();
+        check_tree_invariants(&builder.finish(root).unwrap());
     }
 
     #[test]
@@ -518,8 +518,8 @@ mod tests {
             SourceSpan::new(&source, 0..2),
             Arc::clone(&st),
             alloc::vec![],
-        );
-        check_tree_invariants(&builder.finish(root));
+        ).unwrap();
+        check_tree_invariants(&builder.finish(root).unwrap());
     }
 
     #[test]
@@ -534,7 +534,7 @@ mod tests {
             SourceSpan::new(&source, 1..3),
             Arc::clone(&st),
             alloc::vec![],
-        );
-        check_tree_invariants(&builder.finish(root));
+        ).unwrap();
+        check_tree_invariants(&builder.finish(root).unwrap());
     }
 }

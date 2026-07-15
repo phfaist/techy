@@ -206,12 +206,16 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             ext: Default::default(),
         };
         let span = Span::new(self.open_span.start, end);
-        let id = cx.session.builder.add(
-            NodeKind::group(data),
-            SourceSpan::new(&cx.source, span.range()),
-            Arc::clone(&cx.state),
-            outcome.nodes,
-        );
+        let id = cx
+            .session
+            .builder
+            .add(
+                NodeKind::group(data),
+                SourceSpan::new(&cx.source, span.range()),
+                Arc::clone(&cx.state),
+                outcome.nodes,
+            )
+            .map_err(|error| cx.implementation_error(error, span))?;
         Ok((id, None))
     }
 }
@@ -299,7 +303,7 @@ mod tests {
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
         let pos = cx.tokens.pos();
-        (session.finish(id), pos)
+        (session.finish(id).unwrap(), pos)
     }
 
     #[test]

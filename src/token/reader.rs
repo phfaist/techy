@@ -83,6 +83,10 @@ pub trait TokenReader<'s, L: Lang> {
 /// End position of the whitespace run starting at `pos` (= `pos` if none, or if
 /// whitespace handling is disabled).
 ///
+/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a caller
+/// bug (debug-asserted); the function then returns `pos` unchanged rather than panic
+/// (panic policy, DESIGN_RATIONALE.md).
+///
 /// **The multi-newline rule** (`TokenRules::enable_multi_newline_paragraphs`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
 /// skipping stops right *before* the first newline of a paragraph break. This one
@@ -92,9 +96,18 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
     if !rules.enable_whitespace {
         return pos;
     }
+    let Some(rest) = content.get(pos..) else {
+        debug_assert!(
+            false,
+            "pos {} is out of bounds or not a char boundary (content len {})",
+            pos,
+            content.len()
+        );
+        return pos;
+    };
     let ws = &rules.whitespace;
     let mut end = pos;
-    for c in content[pos..].chars() {
+    for c in rest.chars() {
         if !ws.chars.contains(c) {
             break;
         }
@@ -1621,5 +1634,15 @@ mod tests {
         let no_ws: TokenRules<TestLang> =
             TokenRules { enable_whitespace: false, ..latex_rules() };
         assert_eq!(skip_whitespace("  x", 0, &no_ws), 0);
+    }
+
+    /// An invalid `pos` is a caller bug: debug builds assert; release builds return
+    /// `pos` unchanged rather than panic (panic policy, DESIGN_RATIONALE.md).
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "char boundary"))]
+    fn skip_whitespace_tolerates_invalid_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        assert_eq!(skip_whitespace("ab", 5, &rules), 5); // out of bounds
+        assert_eq!(skip_whitespace("é!", 1, &rules), 1); // mid-char boundary
     }
 }

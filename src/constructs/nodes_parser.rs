@@ -424,10 +424,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// Flush the pending run as a `Chars` node (span-backed over the exact run slice).
     /// Returns whether the node stop condition fired on it.
-    fn flush(&mut self, cx: &mut ParseContext<'_, '_, L>) -> bool {
+    fn flush(&mut self, cx: &mut ParseContext<'_, '_, L>) -> ConstructParserResult<L, bool> {
         match self.run.take() {
             Some(run) => self.stage_node(cx, NodeKind::chars(run), run),
-            None => false,
+            None => Ok(false),
         }
     }
 
@@ -435,7 +435,11 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// non-`Char` construct starts (invariant 1). A matched *stop* token's flush goes
     /// through [`flush_for_token_stop`](Self::flush_for_token_stop) instead — same
     /// staging, no node-condition test.
-    fn flush_through(&mut self, cx: &mut ParseContext<'_, '_, L>, pre_space: Span) -> bool {
+    fn flush_through(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+        pre_space: Span,
+    ) -> ConstructParserResult<L, bool> {
         self.take_pre_space(pre_space);
         self.flush(cx)
     }
@@ -449,11 +453,16 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// flag's atomicity guarantee. The predicate is a stateful `FnMut`, so even a
     /// consulted-but-ignored call would be an observable side effect — it is not
     /// consulted at all.
-    fn flush_for_token_stop(&mut self, cx: &mut ParseContext<'_, '_, L>, pre_space: Span) {
+    fn flush_for_token_stop(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+        pre_space: Span,
+    ) -> ConstructParserResult<L, ()> {
         self.take_pre_space(pre_space);
         if let Some(run) = self.run.take() {
-            self.stage(cx, NodeKind::chars(run), run);
+            self.stage(cx, NodeKind::chars(run), run)?;
         }
+        Ok(())
     }
 
     /// Stage a childless node under the current state and record it as a sibling —
@@ -464,15 +473,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &mut ParseContext<'_, '_, L>,
         kind: NodeKind<L>,
         span: Span,
-    ) -> BuildId {
-        let id = cx.session.builder.add(
-            kind,
-            SourceSpan::new(&cx.source, span.range()),
-            Arc::clone(&cx.state),
-            vec![],
-        );
+    ) -> ConstructParserResult<L, BuildId> {
+        let id = cx
+            .session
+            .builder
+            .add(kind, SourceSpan::new(&cx.source, span.range()), Arc::clone(&cx.state), vec![])
+            .map_err(|error| cx.implementation_error(error, span))?;
         self.nodes.push(id);
-        id
+        Ok(id)
     }
 
     /// Stage a childless node ([`stage`](Self::stage)) and test the node stop condition
@@ -482,23 +490,26 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &mut ParseContext<'_, '_, L>,
         kind: NodeKind<L>,
         span: Span,
-    ) -> bool {
-        let id = self.stage(cx, kind, span);
-        self.test_node_stop(cx, id)
+    ) -> ConstructParserResult<L, bool> {
+        let id = self.stage(cx, kind, span)?;
+        Ok(self.test_node_stop(cx, id))
     }
 
     /// Test the node stop condition against an already-recorded sibling (the last entry
     /// of `self.nodes` — staged either by [`stage`](Self::stage) or by a child construct
     /// parser).
     fn test_node_stop(&mut self, cx: &mut ParseContext<'_, '_, L>, id: BuildId) -> bool {
-        match &mut self.stop.node {
-            Some(condition) => {
-                let staged = cx.session.builder.staged_nodes();
-                let view = staged.get(id).expect("the node was just staged");
-                condition(self.nodes.len(), view)
-            }
-            None => false,
-        }
+        let Some(condition) = &mut self.stop.node else {
+            return false;
+        };
+        let staged = cx.session.builder.staged_nodes();
+        // A miss means a child construct parser handed back a foreign id (an
+        // implementation bug — the builder diagnoses it when the id lands in a child
+        // list); treat it as "condition did not fire" rather than panic (panic policy).
+        let Some(view) = staged.get(id) else {
+            return false;
+        };
+        condition(self.nodes.len(), view)
     }
 
     /// If the token stop condition matches the peeked token, whether it is to be consumed
@@ -542,7 +553,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         recovered: bool,
         condition: impl DiagnosticInfo,
     ) -> ConstructParserResult<L, bool> {
-        if self.flush_through(cx, token.pre_space) {
+        if self.flush_through(cx, token.pre_space)? {
             if !recovered {
                 cx.tokens.move_to(token, false);
             }
@@ -552,7 +563,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         if !recovered {
             cx.tokens.move_past(token, true);
         }
-        Ok(self.stage_node(cx, NodeKind::chars(token.span), token.span))
+        self.stage_node(cx, NodeKind::chars(token.span), token.span)
     }
 
     /// Dispatch a resolved invocation (the `Command`/`Specials` arms): resolve the
@@ -654,7 +665,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
             // stop token that cannot be re-read cannot be left for the caller).
             if !recovered {
                 if let Some(consume) = self.token_stop(&cx.state, &token) {
-                    self.flush_for_token_stop(cx, token.pre_space);
+                    self.flush_for_token_stop(cx, token.pre_space)?;
                     if consume {
                         // Take the whole token, syntactic post-space included; its
                         // pre-space is already housed in the flushed sibling nodes.
@@ -678,7 +689,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 TokenKind::EndOfStream => {
                     // Invariant 4: the terminal token's pre-space is the input's
                     // trailing whitespace and reaches the tree.
-                    let fired = self.flush_through(cx, token.pre_space);
+                    let fired = self.flush_through(cx, token.pre_space)?;
                     if !recovered {
                         cx.tokens.move_to(&token, false);
                     }
@@ -690,7 +701,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 TokenKind::GroupClose { .. } => {
                     // A close the stop condition did not ask for: report it as data and
                     // let the caller decide (§3.8 rule 2); the token stays unconsumed.
-                    let fired = self.flush_through(cx, token.pre_space);
+                    let fired = self.flush_through(cx, token.pre_space)?;
                     if !recovered {
                         cx.tokens.move_to(&token, false);
                     }
@@ -703,7 +714,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 }
 
                 TokenKind::ParagraphBreak => {
-                    if self.flush_through(cx, token.pre_space) {
+                    if self.flush_through(cx, token.pre_space)? {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
@@ -716,13 +727,13 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }
-                    if self.stage_node(cx, kind, token.span) {
+                    if self.stage_node(cx, kind, token.span)? {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
 
                 TokenKind::Comment { start, post_space, .. } => {
-                    if self.flush_through(cx, token.pre_space) {
+                    if self.flush_through(cx, token.pre_space)? {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
@@ -735,7 +746,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }
-                    if self.stage_node(cx, kind, token.span) {
+                    if self.stage_node(cx, kind, token.span)? {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                 }
@@ -750,7 +761,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         if recovered { None } else { L::resolve_command(&cx.state, &token) };
                     match resolved {
                         Some(resolved) => {
-                            if self.flush_through(cx, token.pre_space) {
+                            if self.flush_through(cx, token.pre_space)? {
                                 cx.tokens.move_to(&token, false);
                                 return Ok((self.outcome(StopCause::NodeCondition), None));
                             }
@@ -789,7 +800,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         }
                         continue;
                     }
-                    if self.flush_through(cx, token.pre_space) {
+                    if self.flush_through(cx, token.pre_space)? {
                         cx.tokens.move_to(&token, false);
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
@@ -818,7 +829,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         }
                         continue;
                     }
-                    if self.flush_through(cx, token.pre_space) {
+                    if self.flush_through(cx, token.pre_space)? {
                         cx.tokens.move_to(&token, false);
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
@@ -1151,8 +1162,8 @@ mod tests {
             SourceSpan::new(&source, root_span.range()),
             Arc::clone(state),
             outcome.nodes,
-        );
-        let result = session.finish(root);
+        ).unwrap();
+        let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
         Ok(Parsed { result, stop: outcome.stop, pos })
     }
@@ -2359,7 +2370,7 @@ mod tests {
                     SourceSpan::new(&cx.source, content.range()),
                     Arc::clone(&cx.state),
                     vec![],
-                );
+                ).unwrap();
                 let data: GroupData<CmdLang> = GroupData::untyped(
                     TextContent::Spanned(open_span),
                     TextContent::Spanned(close_span),
@@ -2369,7 +2380,7 @@ mod tests {
                     SourceSpan::new(&cx.source, open_span.start..close_span.end),
                     Arc::clone(&cx.state),
                     vec![child],
-                );
+                ).unwrap();
                 let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
                     enable_comments: Some(false),
                     ..TokenRulesOverrides::default()
@@ -2783,8 +2794,8 @@ mod tests {
             SourceSpan::entire(&source),
             Arc::clone(&st),
             nodes,
-        );
-        let result = session.finish(root);
+        ).unwrap();
+        let result = session.finish(root).unwrap();
         let texts: Vec<_> = result
             .tree
             .root()

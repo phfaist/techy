@@ -18,7 +18,7 @@ use core::fmt;
 use crate::error::{
     Diagnostic, DiagnosticData, Diagnostics, ParseError, Recovery, Severity, TraceFrame,
 };
-use crate::node::{BuildId, NodeTree, NodeTreeBuilder};
+use crate::node::{BuildId, NodeBuildError, NodeTree, NodeTreeBuilder};
 use crate::source::SourceSpan;
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
@@ -285,9 +285,11 @@ impl<L: Lang> ParserSession<L> {
 
     /// Freeze the session: flatten everything reachable from `root` into the final
     /// [`NodeTree`] (resolving staged argument/slot regions) and hand over the
-    /// diagnostics — available even for successful tolerant parses.
-    pub fn finish(self, root: BuildId) -> ParseResult<L> {
-        ParseResult { tree: self.builder.finish(root), diagnostics: self.diagnostics }
+    /// diagnostics — available even for successful tolerant parses. `Err` reports a
+    /// staging-contract violation ([`NodeBuildError`]) — an implementation bug in an
+    /// extension, not a source condition.
+    pub fn finish(self, root: BuildId) -> Result<ParseResult<L>, NodeBuildError> {
+        Ok(ParseResult { tree: self.builder.finish(root)?, diagnostics: self.diagnostics })
     }
 }
 
@@ -453,7 +455,7 @@ mod tests {
                 crate::source::SourceSpan::new(&cx.source, token.span.range()),
                 cx.state.clone(),
                 vec![],
-            );
+            ).unwrap();
             Ok((id, None))
         }
     }
@@ -478,7 +480,7 @@ mod tests {
         assert!(delta.is_none());
         assert_eq!(cx.tokens.pos(), 1);
 
-        let result = session.finish(id);
+        let result = session.finish(id).unwrap();
         assert!(result.diagnostics.is_empty());
         assert_eq!(result.tree.root().chars(), Some("q"));
     }

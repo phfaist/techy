@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::source::{SourceSpan, TextContent};
+use crate::source::{SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingState};
 
 use super::arguments::ContentNodes;
@@ -65,22 +65,28 @@ struct Staged<L: Lang> {
 /// builder — driven by `ParserSession` (Phase 6), tests, and future transforms — is the
 /// only place nodes are assembled.
 ///
-/// # Contract (checked, panicking on violation — these are caller bugs, not runtime
-/// conditions)
+/// # Contract (validated at the boundary — violations return [`NodeBuildError`])
+///
+/// The staging input comes from argument/construct parser implementations and
+/// [`Lang::finalize_node`] hooks — outer layers whose bugs must surface as errors, not
+/// panics (panic policy, DESIGN_RATIONALE.md). Every check runs in every build:
 ///
 /// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
 /// - Each staged node is used as a child at most once, and the root must not be anyone's
 ///   child.
 /// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` regions must be *staged* (never
 ///   reuse records from a finished tree — ranges are only meaningful for the layout that
-///   minted them), in bounds of the node's child list, in order, and non-overlapping;
-///   content designations must fit their parent's child list, and a content parent must
-///   lie inside its own region's subtree (checked in [`finish`](NodeTreeBuilder::finish),
-///   where the layout exists).
-/// - Debug builds additionally check that the regions **tile** the child list exactly
-///   (argument regions, then slot regions, no gaps — every child accounted for: the
-///   §nodes partition invariant), and the `TextContent` invariant: `Spanned` ranges must
-///   lie inside the node's own source content, on `char` boundaries.
+///   minted them) and must **tile** the child list exactly, in order (argument regions,
+///   then slot regions, no gaps — every child accounted for: the §nodes partition
+///   invariant); content designations must fit their parent's child list, and a content
+///   parent must lie inside its own region's subtree (checked in
+///   [`finish`](NodeTreeBuilder::finish), where the layout exists).
+/// - The `TextContent` invariant: `Spanned` ranges must lie inside the node's own source
+///   content, on `char` boundaries.
+///
+/// A builder whose `add` returned an `Err` is **poisoned**: children claimed by the
+/// failed call may stay claimed, so the build must be abandoned — the error reports an
+/// implementation bug to fix, not a condition to recover from.
 ///
 /// Staged nodes unreachable from the root are silently dropped: parsers may abandon
 /// speculatively built nodes (tolerant-parsing recovery paths).
@@ -104,7 +110,7 @@ impl<L: Lang> NodeTreeBuilder<L> {
         span: SourceSpan<L::SourceOrigin>,
         parsing_state: Arc<ParsingState<L>>,
         children: Vec<BuildId>,
-    ) -> BuildId {
+    ) -> Result<BuildId, NodeBuildError> {
         self.add_with_ext(kind, span, parsing_state, children, Default::default())
     }
 
@@ -113,7 +119,8 @@ impl<L: Lang> NodeTreeBuilder<L> {
     /// Runs [`Lang::finalize_node`] on the node's parts first — the builder is the single
     /// mutation boundary, so hooking here guarantees no node escapes finalization
     /// (DESIGN_RATIONALE.md §3.6) — then the staging checks (hook mutations are validated
-    /// too).
+    /// too). `Err` means the input violated the staging contract (see the type docs; the
+    /// builder is poisoned then).
     pub fn add_with_ext(
         &mut self,
         mut kind: NodeKind<L>,
@@ -121,15 +128,19 @@ impl<L: Lang> NodeTreeBuilder<L> {
         parsing_state: Arc<ParsingState<L>>,
         children: Vec<BuildId>,
         mut ext: NodeExt<L>,
-    ) -> BuildId {
+    ) -> Result<BuildId, NodeBuildError> {
         L::finalize_node(&mut kind, &mut ext, &span, &parsing_state, &children, &self.staged_nodes());
-        assert!(self.staged.len() < u32::MAX as usize, "node tree too large");
+        if self.staged.len() >= u32::MAX as usize {
+            return Err(NodeBuildError::TooManyNodes);
+        }
         for child in &children {
             let staged = self
                 .staged
                 .get_mut(child.0 as usize)
-                .unwrap_or_else(|| panic!("child {:?} has not been staged", child));
-            assert!(!staged.claimed, "child {:?} already has a parent", child);
+                .ok_or(NodeBuildError::ChildNotStaged { child: *child })?;
+            if staged.claimed {
+                return Err(NodeBuildError::ChildAlreadyClaimed { child: *child });
+            }
             staged.claimed = true;
         }
         if let NodeKind::Callable(data) = &kind {
@@ -141,71 +152,55 @@ impl<L: Lang> NodeTreeBuilder<L> {
                 .filter_map(|arg| arg.region.as_ref())
                 .chain(data.slots.iter().map(|slot| &slot.region));
             for region in regions {
-                let (child_range, content) = region.staged().unwrap_or_else(|| {
-                    panic!(
-                        "callable staged with an already-resolved region: parsed \
-                         argument/slot records must be built fresh for the tree being staged"
-                    )
-                });
-                assert!(
-                    child_range.start <= child_range.end && child_range.end <= n_children,
-                    "argument/slot region {:?} out of bounds ({} children)",
-                    child_range,
-                    n_children
-                );
-                assert!(
-                    child_range.start >= next,
-                    "argument/slot regions must be in order and non-overlapping \
-                     (region {:?} starts before offset {})",
-                    child_range,
-                    next
-                );
-                debug_assert!(
-                    child_range.start == next,
-                    "argument/slot regions must tile the child list exactly \
-                     (children {}..{} belong to no region)",
-                    next,
-                    child_range.start
-                );
+                let Some((child_range, content)) = region.staged() else {
+                    return Err(NodeBuildError::RegionAlreadyResolved);
+                };
+                if child_range.start > child_range.end || child_range.end > n_children {
+                    return Err(NodeBuildError::RegionOutOfBounds {
+                        region: child_range.clone(),
+                        n_children,
+                    });
+                }
+                if child_range.start != next {
+                    return Err(NodeBuildError::RegionNotTiling {
+                        region: child_range.clone(),
+                        expected_start: next,
+                    });
+                }
                 next = child_range.end;
                 match content {
                     ContentNodes::InRegion(r) => {
                         let region_len = child_range.end - child_range.start;
-                        assert!(
-                            r.start <= r.end && r.end <= region_len,
-                            "content range {:?} out of bounds (region has {} nodes)",
-                            r,
-                            region_len
-                        );
+                        if r.start > r.end || r.end > region_len {
+                            return Err(NodeBuildError::ContentOutOfBounds {
+                                content: r.clone(),
+                                available: region_len,
+                            });
+                        }
                     }
                     ContentNodes::InChildrenOf(b, r) => {
                         let content_parent = self
                             .staged
                             .get(b.0 as usize)
-                            .unwrap_or_else(|| panic!("content parent {:?} has not been staged", b));
-                        assert!(
-                            r.start <= r.end && r.end as usize <= content_parent.children.len(),
-                            "content range {:?} out of bounds (content parent {:?} has {} children)",
-                            r,
-                            b,
-                            content_parent.children.len()
-                        );
+                            .ok_or(NodeBuildError::ContentParentNotStaged { parent: *b })?;
+                        if r.start > r.end || r.end as usize > content_parent.children.len() {
+                            return Err(NodeBuildError::ContentOutOfBounds {
+                                content: r.clone(),
+                                available: content_parent.children.len() as u32,
+                            });
+                        }
                     }
                 }
             }
-            debug_assert!(
-                next == n_children,
-                "argument/slot regions must tile the child list exactly \
-                 (children {}..{} belong to no region)",
-                next,
-                n_children
-            );
+            if next != n_children {
+                return Err(NodeBuildError::ChildrenNotInRegions { unassigned: next..n_children });
+            }
         }
-        debug_assert_spanned_contents(&kind, &span);
+        check_spanned_contents(&kind, &span)?;
 
         let id = BuildId(self.staged.len() as u32);
         self.staged.push(Staged { kind, ext, span, parsing_state, children, claimed: false });
-        id
+        Ok(id)
     }
 
     /// A read-only view of the nodes staged so far (what [`Lang::finalize_node`] and
@@ -217,17 +212,18 @@ impl<L: Lang> NodeTreeBuilder<L> {
     /// Freeze everything reachable from `root` into a flat [`NodeTree`] (breadth-first:
     /// root at index 0, each node's children as one contiguous block), **resolving**
     /// every callable's staged argument/slot regions into global node-index ranges (see
-    /// the module docs). Staged nodes not reachable from `root` are dropped.
-    pub fn finish(self, root: BuildId) -> NodeTree<L> {
+    /// the module docs). Staged nodes not reachable from `root` are dropped. `Err`
+    /// means the staged input violated the contract's layout-time obligations (root
+    /// staged and unclaimed; content parents inside their region's subtree).
+    pub fn finish(self, root: BuildId) -> Result<NodeTree<L>, NodeBuildError> {
         const NONE: u32 = u32::MAX; // safe sentinel: add() caps staging below u32::MAX
         let tree_tag = super::tree::next_tree_tag();
+        match self.staged.get(root.0 as usize) {
+            None => return Err(NodeBuildError::RootNotStaged { root }),
+            Some(entry) if entry.claimed => return Err(NodeBuildError::RootClaimed { root }),
+            Some(_) => {}
+        }
         let mut staged: Vec<Option<Staged<L>>> = self.staged.into_iter().map(Some).collect();
-        assert!((root.0 as usize) < staged.len(), "root {:?} has not been staged", root);
-        assert!(
-            !staged[root.0 as usize].as_ref().unwrap().claimed,
-            "root {:?} is another node's child",
-            root
-        );
 
         // Pass 1: breadth-first order, per-node children ranges, parent links, and the
         // staged-id → final-index map (the layout tables region resolution needs).
@@ -256,29 +252,26 @@ impl<L: Lang> NodeTreeBuilder<L> {
 
         // Pass 2: move the staged data into place, resolving callable region records
         // (only possible here, where the flattened layout exists).
-        let nodes = order
-            .iter()
-            .enumerate()
-            .map(|(f, &sid)| {
-                let children = ranges[f].clone();
-                let mut staged = staged[sid as usize].take().expect("staged node used twice");
-                if let NodeKind::Callable(data) = &mut staged.kind {
-                    resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of, tree_tag);
-                }
-                NodeData {
-                    kind: staged.kind,
-                    ext: staged.ext,
-                    span: staged.span,
-                    parsing_state: staged.parsing_state,
-                    children,
-                }
-            })
-            .collect();
-        NodeTree {
+        let mut nodes = Vec::with_capacity(order.len());
+        for (f, &sid) in order.iter().enumerate() {
+            let children = ranges[f].clone();
+            let mut staged = staged[sid as usize].take().expect("staged node used twice");
+            if let NodeKind::Callable(data) = &mut staged.kind {
+                resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of, tree_tag)?;
+            }
+            nodes.push(NodeData {
+                kind: staged.kind,
+                ext: staged.ext,
+                span: staged.span,
+                parsing_state: staged.parsing_state,
+                children,
+            });
+        }
+        Ok(NodeTree {
             nodes,
             #[cfg(debug_assertions)]
             tag: tree_tag,
-        }
+        })
     }
 }
 
@@ -295,7 +288,7 @@ fn resolve_regions<L: Lang>(
     parent: &[u32],
     final_of: &[u32],
     tree_tag: u32,
-) {
+) -> Result<(), NodeBuildError> {
     const NONE: u32 = u32::MAX;
     let regions = data
         .arguments
@@ -316,29 +309,32 @@ fn resolve_regions<L: Lang>(
             }
             ContentNodes::InChildrenOf(b, r) => {
                 let bf = final_of[b.0 as usize];
-                assert!(bf != NONE, "content parent {:?} is not reachable from the root", b);
+                if bf == NONE {
+                    return Err(NodeBuildError::ContentParentUnreachable { parent: b });
+                }
                 // The content parent must be one of this region's nodes or a descendant
                 // of one — walk up to its child-of-the-callable ancestor.
                 let mut a = bf;
                 loop {
                     let p = parent[a as usize];
-                    assert!(p != NONE, "content parent {:?} is not inside the callable's subtree", b);
+                    if p == NONE {
+                        return Err(NodeBuildError::ContentParentOutsideSubtree { parent: b });
+                    }
                     if p == callable {
                         break;
                     }
                     a = p;
                 }
-                assert!(
-                    children.contains(&a),
-                    "content parent {:?} lies outside its own argument/slot region",
-                    b
-                );
+                if !children.contains(&a) {
+                    return Err(NodeBuildError::ContentParentOutsideRegion { parent: b });
+                }
                 let block = &ranges[bf as usize];
                 (block.start + r.start..block.start + r.end, bf)
             }
         };
         region.resolve(children, content_range, content_parent, tree_tag);
     }
+    Ok(())
 }
 
 /// A read-only view over a [`NodeTreeBuilder`]'s staged nodes, keyed by [`BuildId`] —
@@ -455,37 +451,198 @@ impl<L: Lang> fmt::Debug for NodeTreeBuilder<L> {
     }
 }
 
-/// Debug-check the `TextContent` invariant: every `Spanned` value of this node refers
-/// into the node's own source, in bounds and on `char` boundaries.
-fn debug_assert_spanned_contents<L: Lang>(kind: &NodeKind<L>, span: &SourceSpan<L::SourceOrigin>) {
-    if cfg!(debug_assertions) {
-        let content = span.source().content();
-        let check = |text: &TextContent, what: &str| {
-            if let TextContent::Spanned(s) = text {
-                debug_assert!(
-                    content.get(s.range()).is_some(),
-                    "{} span {:?} is not a valid range of the node's source (len {})",
-                    what,
-                    s,
-                    content.len()
-                );
+/// Check the `TextContent` invariant: every `Spanned` value of this node refers into the
+/// node's own source, in bounds and on `char` boundaries.
+fn check_spanned_contents<L: Lang>(
+    kind: &NodeKind<L>,
+    span: &SourceSpan<L::SourceOrigin>,
+) -> Result<(), NodeBuildError> {
+    let content = span.source().content();
+    let check = |text: &TextContent, what: &'static str| match text {
+        TextContent::Spanned(s) if s.get(content).is_none() => {
+            Err(NodeBuildError::SpannedContentInvalid {
+                what,
+                span: *s,
+                content_len: content.len(),
+            })
+        }
+        _ => Ok(()),
+    };
+    match kind {
+        NodeKind::Chars { content: text, .. } => check(text, "chars content"),
+        NodeKind::Comment { content, start, post_space, .. } => {
+            check(content, "comment content")?;
+            check(start, "comment start delimiter")?;
+            check(post_space, "comment post_space")
+        }
+        NodeKind::Callable(data) => check(&data.post_space, "callable post_space"),
+        NodeKind::Group(data) => {
+            check(&data.open, "group open delimiter")?;
+            check(&data.close, "group close delimiter")
+        }
+        NodeKind::List { .. } => Ok(()),
+    }
+}
+
+/// Contract-violation error of [`NodeTreeBuilder`]: the staged input — produced by an
+/// argument/construct parser implementation or mutated by a [`Lang::finalize_node`]
+/// hook — broke the builder's documented contract (see [`NodeTreeBuilder`]'s type docs).
+///
+/// This reports an **implementation bug** in an extension, not a source-input
+/// condition: parse layers lift it into a `ParseError` that aborts even under tolerant
+/// recovery, and a builder that returned one is poisoned (the build must be abandoned).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NodeBuildError {
+    /// Staging would exceed the `u32` id space.
+    TooManyNodes,
+    /// A child id was never staged in this builder.
+    ChildNotStaged {
+        /// The offending child id.
+        child: BuildId,
+    },
+    /// A child is already another staged node's child.
+    ChildAlreadyClaimed {
+        /// The offending child id.
+        child: BuildId,
+    },
+    /// A callable was staged with an already-resolved argument/slot region: parsed
+    /// argument/slot records must be built fresh for the tree being staged.
+    RegionAlreadyResolved,
+    /// An argument/slot region lies outside the callable's child list.
+    RegionOutOfBounds {
+        /// The offending region's child-offset range.
+        region: Range<u32>,
+        /// The callable's child count.
+        n_children: u32,
+    },
+    /// An argument/slot region does not start where the previous one ended: the regions
+    /// must tile the child list exactly, in order (arguments, then slots).
+    RegionNotTiling {
+        /// The offending region's child-offset range.
+        region: Range<u32>,
+        /// Where the region was expected to start.
+        expected_start: u32,
+    },
+    /// Children after the last argument/slot region belong to no region (the regions
+    /// must tile the child list exactly).
+    ChildrenNotInRegions {
+        /// The child offsets no region accounts for.
+        unassigned: Range<u32>,
+    },
+    /// A region's content range lies outside its containing child list.
+    ContentOutOfBounds {
+        /// The offending content range.
+        content: Range<u32>,
+        /// The containing child list's length.
+        available: u32,
+    },
+    /// A `ContentNodes::InChildrenOf` parent id was never staged in this builder.
+    ContentParentNotStaged {
+        /// The offending content-parent id.
+        parent: BuildId,
+    },
+    /// A `Spanned` text payload is not a valid range of the node's own source.
+    SpannedContentInvalid {
+        /// Which payload (e.g. `"chars content"`, `"group open delimiter"`).
+        what: &'static str,
+        /// The offending span.
+        span: Span,
+        /// The node's source content length.
+        content_len: usize,
+    },
+    /// [`finish`](NodeTreeBuilder::finish)'s root was never staged in this builder.
+    RootNotStaged {
+        /// The offending root id.
+        root: BuildId,
+    },
+    /// [`finish`](NodeTreeBuilder::finish)'s root is another staged node's child.
+    RootClaimed {
+        /// The offending root id.
+        root: BuildId,
+    },
+    /// A content parent is not reachable from the root passed to
+    /// [`finish`](NodeTreeBuilder::finish).
+    ContentParentUnreachable {
+        /// The offending content-parent id.
+        parent: BuildId,
+    },
+    /// A content parent is not inside its callable's subtree.
+    ContentParentOutsideSubtree {
+        /// The offending content-parent id.
+        parent: BuildId,
+    },
+    /// A content parent lies outside its own argument/slot region's subtree.
+    ContentParentOutsideRegion {
+        /// The offending content-parent id.
+        parent: BuildId,
+    },
+}
+
+impl fmt::Display for NodeBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeBuildError::TooManyNodes => write!(f, "node tree too large"),
+            NodeBuildError::ChildNotStaged { child } => {
+                write!(f, "child {:?} has not been staged", child)
             }
-        };
-        match kind {
-            NodeKind::Chars { content: text, .. } => check(text, "chars content"),
-            NodeKind::Comment { content, start, post_space, .. } => {
-                check(content, "comment content");
-                check(start, "comment start delimiter");
-                check(post_space, "comment post_space");
+            NodeBuildError::ChildAlreadyClaimed { child } => {
+                write!(f, "child {:?} already has a parent", child)
             }
-            NodeKind::Callable(data) => {
-                check(&data.post_space, "callable post_space");
+            NodeBuildError::RegionAlreadyResolved => write!(
+                f,
+                "callable staged with an already-resolved region: parsed argument/slot \
+                 records must be built fresh for the tree being staged"
+            ),
+            NodeBuildError::RegionOutOfBounds { region, n_children } => write!(
+                f,
+                "argument/slot region {:?} out of bounds ({} children)",
+                region, n_children
+            ),
+            NodeBuildError::RegionNotTiling { region, expected_start } => write!(
+                f,
+                "argument/slot regions must tile the child list exactly, in order \
+                 (region {:?} where offset {} was expected)",
+                region, expected_start
+            ),
+            NodeBuildError::ChildrenNotInRegions { unassigned } => write!(
+                f,
+                "argument/slot regions must tile the child list exactly \
+                 (children {:?} belong to no region)",
+                unassigned
+            ),
+            NodeBuildError::ContentOutOfBounds { content, available } => write!(
+                f,
+                "content range {:?} out of bounds ({} nodes available)",
+                content, available
+            ),
+            NodeBuildError::ContentParentNotStaged { parent } => {
+                write!(f, "content parent {:?} has not been staged", parent)
             }
-            NodeKind::Group(data) => {
-                check(&data.open, "group open delimiter");
-                check(&data.close, "group close delimiter");
+            NodeBuildError::SpannedContentInvalid { what, span, content_len } => write!(
+                f,
+                "{} span {:?} is not a valid range of the node's source (len {})",
+                what, span, content_len
+            ),
+            NodeBuildError::RootNotStaged { root } => {
+                write!(f, "root {:?} has not been staged", root)
             }
-            NodeKind::List { .. } => {}
+            NodeBuildError::RootClaimed { root } => {
+                write!(f, "root {:?} is another node's child", root)
+            }
+            NodeBuildError::ContentParentUnreachable { parent } => {
+                write!(f, "content parent {:?} is not reachable from the root", parent)
+            }
+            NodeBuildError::ContentParentOutsideSubtree { parent } => {
+                write!(f, "content parent {:?} is not inside the callable's subtree", parent)
+            }
+            NodeBuildError::ContentParentOutsideRegion { parent } => write!(
+                f,
+                "content parent {:?} lies outside its own argument/slot region",
+                parent
+            ),
         }
     }
 }
+
+impl core::error::Error for NodeBuildError {}

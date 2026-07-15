@@ -58,6 +58,7 @@ pub use nodes_parser::{
 };
 
 use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use core::fmt;
 
@@ -180,6 +181,55 @@ impl<L: Lang> ParseContext<'_, '_, L> {
         self.session.pop_frame();
         result
     }
+
+    /// Build the abort error for an extension-implementation contract violation
+    /// detected at `span` — an [`ImplementationError`] with the live traceback
+    /// attached. `detail` is typically a [`NodeBuildError`](crate::node::NodeBuildError)
+    /// or a literal contract description.
+    ///
+    /// Deliberately **not** the recover funnel: an implementation bug is not a source
+    /// condition — it aborts even under [`Recovery::Tolerant`], and no
+    /// [`Lang::refine_diagnostic`] pass applies.
+    pub fn implementation_error(
+        &self,
+        detail: impl fmt::Display,
+        span: Span,
+    ) -> ParseError<L::SourceOrigin> {
+        ParseError::new(
+            ImplementationError::new(detail.to_string()),
+            SourceSpan::new(&self.source, span.range()),
+        )
+        .with_frames(self.session.snapshot_frames())
+    }
+}
+
+/// Condition: an implementation of an extension point — an argument or construct
+/// parser, a [`Lang`] hook, a spec factory — violated a library contract. An
+/// implementation bug to fix, not a source-input problem: it aborts the parse even
+/// under [`Recovery::Tolerant`] (built through
+/// [`ParseContext::implementation_error`], which bypasses the recover funnel).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ImplementationError {
+    /// Description of the violated contract.
+    pub detail: String,
+}
+
+impl ImplementationError {
+    /// The condition for the given contract-violation description.
+    pub fn new(detail: impl Into<String>) -> ImplementationError {
+        ImplementationError { detail: detail.into() }
+    }
+}
+
+impl fmt::Display for ImplementationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "implementation error (extension contract violation): {}", self.detail)
+    }
+}
+
+impl DiagnosticInfo for ImplementationError {
+    const IDENTIFIER: &'static str = "core.constructs.implementation-error";
 }
 
 impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {

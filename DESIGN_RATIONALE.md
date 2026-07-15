@@ -1727,7 +1727,61 @@ against §2.1/§2.2 first.
 
 ### 3.8 Errors and diagnostics
 
-**`Result` everywhere; no panics in library code** — DECIDED (project constraint, CLAUDE.md).
+**Panic policy: `Result` everywhere; panics only for verifiably unreachable invariants** —
+DECIDED (user, July 2026, Action 04; refines the original one-line CLAUDE.md constraint).
+Four rules:
+
+1. Panics are allowed only for **verifiably unreachable** code — impossibility guaranteed by
+   this crate's own structure (a bounds check in the same function; a private constructor
+   that always establishes the invariant), *independent of anything outer layers do*:
+   problematic user input, a buggy `Lang` hook in a preset, or a misbehaving custom
+   argument/construct parser must never panic a core routine. Written as
+   `unreachable!`/`expect` with the invariant stated in the message.
+2. The violation of a documented input contract is **not by itself** a reason to panic — it
+   returns an `Err` (translatable to, e.g., a Python exception by a wrapper).
+3. Individual indexing-style exceptions require explicit user approval. Approved (July
+   2026): `NodeTree::node`/`nodes_in`, `Span::slice`, `TextContent::resolve`, and
+   `ChildRegion`'s resolved-only accessors keep their documented panics **with
+   non-panicking companions** (`NodeTree::get`, `Span::get`) — the std `Index`-vs-`get`
+   convention: the panicking form for ids/spans the caller minted from this very
+   tree/source, the `Option` form for values of unknown provenance.
+4. Everything else returns an error.
+
+Consequences applied with the decision (July 2026):
+- `NodeTreeBuilder::{add, add_with_ext, finish}` validate their contract and return
+  `NodeBuildError`; the previously debug-only exact-tiling and spanned-content checks are
+  always-on error paths (one validation regime in every build — extension authors get clean
+  errors, not debug panics). A builder whose `add` errored is *poisoned*; the build must be
+  abandoned. The builder's internal post-validation read-backs remain `expect`s — rule 1:
+  **validate at the boundary, assert inside**.
+- Construct parsers lift `NodeBuildError` into a `ParseError` carrying the
+  `ImplementationError` condition (`core.constructs.implementation-error`) via
+  `ParseContext::implementation_error`, deliberately bypassing the recover funnel: an
+  implementation bug **aborts even under tolerant recovery** (tolerance promises a
+  best-effort tree for bad *input*, not tolerance of buggy extensions), and no
+  `Lang::refine_diagnostic` pass applies. `StdInvocationParser`'s slots check reports the
+  same condition.
+- Staged-id read-backs whose id passed through outer-layer hands degrade gracefully (the
+  node-stop test treats a missing id as "condition did not fire"; invocation/body span
+  read-backs fall back to the trigger/body start). No silently-wrong tree results: the
+  bogus id still lands in `builder.add`'s child list, where it is diagnosed.
+- `skip_whitespace` returns `pos` unchanged on an invalid `pos` (debug-asserted);
+  `Span::len` saturates on inverted spans, `is_empty` consistent with it;
+  `ParserSession::finish` returns `Result<ParseResult, NodeBuildError>`.
+- `check_tree_invariants` is exempt: a documented test utility whose *purpose* is
+  asserting — panicking is its API. `debug_assert!` remains fine for crate-internal
+  invariants but is not a substitute for boundary validation of outer-layer input.
+
+*Rationale:* an invariant assertion that can only fire on a core bug is better loud than
+silently wrong; but a panic reachable through an extension author's mistake turns their bug
+into a crash of the host application — an error naming the violated contract is strictly
+more useful, in every build profile.
+*Rejected:* sanctioning the builder's panic-on-caller-bug policy (the Action-04 report's
+original recommendation) — it violates rule 2's "outer layers must not panic the core";
+`Option`-returning tree accessors everywhere — clutters every legitimate traversal for a
+misuse the `get` companions already cover.
+*Revisit if:* profiling shows the always-on builder validation measurably costs on the hot
+staging path (all checks are O(1) per region/payload today).
 
 **Errors carry Arc-based `SourceSpan`, not `'src` lifetimes** — PROPOSED (July 2026).
 The current `ParseError<'src>` / `Result<'src, T>` spreads a lifetime through every signature

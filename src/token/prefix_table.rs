@@ -66,13 +66,14 @@ impl<L: Lang> PrefixTable<L> {
             if delim.is_empty() {
                 return;
             }
-            let entry = match entries.iter_mut().find(|e| e.delim == delim) {
-                Some(entry) => entry,
+            let index = match entries.iter().position(|e| e.delim == delim) {
+                Some(index) => index,
                 None => {
                     entries.push(PrefixEntry { delim: String::from(delim), open: None, close: None });
-                    entries.last_mut().expect("just pushed")
+                    entries.len() - 1
                 }
             };
+            let entry = &mut entries[index];
             let slot = if is_open { &mut entry.open } else { &mut entry.close };
             if slot.is_none() {
                 *slot = Some(Arc::clone(rule));

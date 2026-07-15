@@ -1,6 +1,20 @@
 # Action 04 — Panic policy in library code
 
-**Status: open — one crate-wide convention decision, then a small mechanical sweep.**
+**Status: RESOLVED (user decision + sweep executed, July 2026).** The recorded policy is
+DESIGN_RATIONALE.md §3.8 ("Panic policy"); CLAUDE.md rule 4 was reworded to match. The
+decision is *stricter* than this report's Option A: panics are allowed only for invariants
+verifiable **independent of outer-layer behavior** — a documented-contract violation (e.g.
+by a buggy hook or custom parser) returns an `Err`, so the builder's panic-on-caller-bug
+policy (which this report recommended keeping) was **converted to `Result`**:
+`NodeTreeBuilder::{add, add_with_ext, finish}` return `NodeBuildError` (all checks
+always-on, including the previously debug-only tiling/spanned-content ones), lifted by
+parsers into `ParseError`/`ImplementationError` aborts that bypass tolerant recovery.
+Approved exception class: indexing-style accessors (`NodeTree::node`/`nodes_in`,
+`Span::slice`, `TextContent::resolve`, `ChildRegion`'s resolved-only accessors) keep
+documented panics with non-panicking companions (`NodeTree::get`, `Span::get`). The
+`unreachable!`s and locally-guarded `expect`s below were kept; `test_node_stop` and the
+invocation/body span read-backs were softened; `skip_whitespace` degrades gracefully;
+`Span::len` saturates; the `prefix_table.rs` `expect` was removed structurally.
 
 CLAUDE.md rule 4 says: *use `Result<T,E>` consistently, never panic in lib code (except
 in unreachable paths)*. The codebase contains a handful of `unreachable!`/`expect`

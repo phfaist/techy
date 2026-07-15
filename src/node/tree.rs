@@ -140,17 +140,31 @@ impl<L: Lang> NodeTree<L> {
         self.node(self.make_id(0))
     }
 
-    /// The node with the given id.
+    /// The node with the given id. Use this for ids this tree minted; for ids of
+    /// unknown provenance, use the non-panicking [`get`](NodeTree::get).
     ///
     /// # Panics
     ///
-    /// Panics if `id` is out of range. Ids are only meaningful for the tree that minted
+    /// Panics if `id` is out of range (the approved indexing-style exception, panic
+    /// policy, DESIGN_RATIONALE.md). Ids are only meaningful for the tree that minted
     /// them (or a layout-preserving copy of it): an *in-range* id from a different tree
     /// silently resolves to whatever node sits at that index here — release builds
     /// cannot detect it; debug builds catch it with a provenance-tag assertion.
     pub fn node(&self, id: NodeId) -> NodeRef<'_, L> {
         assert!(id.index() < self.nodes.len(), "node id {:?} out of range", id);
         NodeRef::new(self, id)
+    }
+
+    /// The node with the given id, or `None` if `id` does not belong to this tree —
+    /// the non-panicking companion of [`node`](NodeTree::node), for ids of unknown
+    /// provenance. Debug builds additionally treat an id whose provenance tag names a
+    /// different tree as a miss; release builds store no tags, so an in-range id from a
+    /// different tree resolves to whatever node sits at that index here.
+    pub fn get(&self, id: NodeId) -> Option<NodeRef<'_, L>> {
+        if id.index() >= self.nodes.len() || id.tree_tag() != self.tree_tag() {
+            return None;
+        }
+        Some(NodeRef::new(self, id))
     }
 
     /// This tree's provenance tag (`0` in release builds).

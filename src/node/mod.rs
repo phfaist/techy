@@ -39,7 +39,7 @@ mod tree;
 pub use arguments::{
     ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
 };
-pub use builder::{BuildId, NodeTreeBuilder, StagedNodeView, StagedNodes};
+pub use builder::{BuildId, NodeBuildError, NodeTreeBuilder, StagedNodeView, StagedNodes};
 pub use invariants::check_tree_invariants;
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::NodeRef;
@@ -167,24 +167,24 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
-        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
+        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
 
         let a_chars =
-            b.add(NodeKind::chars(Span::new(7, 8)), spanned(&source, 7..8), st.clone(), vec![]);
+            b.add(NodeKind::chars(Span::new(7, 8)), spanned(&source, 7..8), st.clone(), vec![]).unwrap();
         let a_group = b.add(
             NodeKind::group(brace_group(6..7, 8..9)),
             spanned(&source, 6..9),
             st.clone(),
             vec![a_chars],
-        );
+        ).unwrap();
         let b_chars =
-            b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]);
+            b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]).unwrap();
         let b_group = b.add(
             NodeKind::group(brace_group(9..10, 11..12)),
             spanned(&source, 9..12),
             st.clone(),
             vec![b_chars],
-        );
+        ).unwrap();
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
@@ -213,25 +213,25 @@ mod tests {
             spanned(&source, 1..12),
             st.clone(),
             vec![a_group, b_group],
-        );
+        ).unwrap();
 
         let ws =
-            b.add(NodeKind::chars(Span::new(12, 13)), spanned(&source, 12..13), st.clone(), vec![]);
+            b.add(NodeKind::chars(Span::new(12, 13)), spanned(&source, 12..13), st.clone(), vec![]).unwrap();
         let comment = b.add(
             // start "%" + content " note" + empty post_space (end of input).
             NodeKind::comment(Span::new(13, 14), Span::new(14, 19), Span::empty(19)),
             spanned(&source, 13..19),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
 
         let root = b.add(
             NodeKind::list(),
             SourceSpan::entire(&source),
             st.clone(),
             vec![x, frac, ws, comment],
-        );
-        b.finish(root)
+        ).unwrap();
+        b.finish(root).unwrap()
     }
 
     #[test]
@@ -335,14 +335,14 @@ mod tests {
         let mut b = NodeTreeBuilder::new();
 
         let star =
-            b.add(NodeKind::chars(Span::new(8, 9)), spanned(&source, 8..9), st.clone(), vec![]);
-        let t = b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]);
+            b.add(NodeKind::chars(Span::new(8, 9)), spanned(&source, 8..9), st.clone(), vec![]).unwrap();
+        let t = b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]).unwrap();
         let title = b.add(
             NodeKind::group(brace_group(9..10, 11..12)),
             spanned(&source, 9..12),
             st.clone(),
             vec![t],
-        );
+        ).unwrap();
 
         let star_spec: Arc<ArgumentSpec<PlainLang>> =
             Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("star"));
@@ -375,8 +375,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![star, title],
-        );
-        let tree = b.finish(section);
+        ).unwrap();
+        let tree = b.finish(section).unwrap();
 
         let node = tree.root();
         // The provided marker is an ordinary Chars child node and counts as its own
@@ -414,8 +414,8 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
-        let hi = b.add(NodeKind::chars(Span::new(10, 12)), spanned(&source, 10..12), st.clone(), vec![]);
-        let body = b.add(NodeKind::list(), spanned(&source, 10..12), st.clone(), vec![hi]);
+        let hi = b.add(NodeKind::chars(Span::new(10, 12)), spanned(&source, 10..12), st.clone(), vec![]).unwrap();
+        let body = b.add(NodeKind::list(), spanned(&source, 10..12), st.clone(), vec![hi]).unwrap();
 
         let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
         let spec: Arc<dyn CallableSpec<PlainLang>> =
@@ -437,8 +437,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![body],
-        );
-        let tree = b.finish(env);
+        ).unwrap();
+        let tree = b.finish(env).unwrap();
 
         let node = tree.root();
         // The wrapper node: the body `List`, exposed as the slot's content parent.
@@ -472,7 +472,7 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
-        let hi = b.add(NodeKind::chars(Span::new(0, 2)), spanned(&source, 0..2), st.clone(), vec![]);
+        let hi = b.add(NodeKind::chars(Span::new(0, 2)), spanned(&source, 0..2), st.clone(), vec![]).unwrap();
         let slot_spec: Arc<SlotSpec<PlainLang>> = Arc::new(SlotSpec::new().named("body"));
         let spec: Arc<dyn CallableSpec<PlainLang>> =
             Arc::new(StdCallableSpec::new(vec![], vec![slot_spec.clone()]));
@@ -489,8 +489,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![hi],
-        );
-        let tree = b.finish(env);
+        ).unwrap();
+        let tree = b.finish(env).unwrap();
 
         let node = tree.root();
         // The record itself still anchors the content at the callable:
@@ -526,29 +526,29 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
-        let ws1 = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![]);
+        let ws1 = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![]).unwrap();
         let com = b.add(
             // start "%" + content "h" + post_space "\n" (the node's span covers all three).
             NodeKind::comment(Span::new(6, 7), Span::new(7, 8), Span::new(8, 9)),
             spanned(&source, 6..9),
             st.clone(),
             vec![],
-        );
-        let ws2 = b.add(NodeKind::chars(Span::new(9, 10)), spanned(&source, 9..10), st.clone(), vec![]);
-        let a = b.add(NodeKind::chars(Span::new(11, 12)), spanned(&source, 11..12), st.clone(), vec![]);
+        ).unwrap();
+        let ws2 = b.add(NodeKind::chars(Span::new(9, 10)), spanned(&source, 9..10), st.clone(), vec![]).unwrap();
+        let a = b.add(NodeKind::chars(Span::new(11, 12)), spanned(&source, 11..12), st.clone(), vec![]).unwrap();
         let a_group = b.add(
             NodeKind::group(brace_group(10..11, 12..13)),
             spanned(&source, 10..13),
             st.clone(),
             vec![a],
-        );
-        let bb = b.add(NodeKind::chars(Span::new(14, 15)), spanned(&source, 14..15), st.clone(), vec![]);
+        ).unwrap();
+        let bb = b.add(NodeKind::chars(Span::new(14, 15)), spanned(&source, 14..15), st.clone(), vec![]).unwrap();
         let b_group = b.add(
             NodeKind::group(brace_group(13..14, 15..16)),
             spanned(&source, 13..16),
             st.clone(),
             vec![bb],
-        );
+        ).unwrap();
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
@@ -576,8 +576,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![ws1, com, ws2, a_group, b_group],
-        );
-        let tree = b.finish(frac);
+        ).unwrap();
+        let tree = b.finish(frac).unwrap();
 
         let frac = tree.root();
         let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
@@ -610,13 +610,13 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
 
-        let x = b.add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![]);
+        let x = b.add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![]).unwrap();
         let inner = b.add(
             NodeKind::group(brace_group(3..4, 5..6)),
             spanned(&source, 3..6),
             st.clone(),
             vec![x],
-        );
+        ).unwrap();
         let outer = b.add(
             NodeKind::group(GroupData::new(
                 GT_BRACKET,
@@ -626,7 +626,7 @@ mod tests {
             spanned(&source, 2..7),
             st.clone(),
             vec![inner],
-        );
+        ).unwrap();
 
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
@@ -648,8 +648,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![outer],
-        );
-        let tree = b.finish(m);
+        ).unwrap();
+        let tree = b.finish(m).unwrap();
 
         let m = tree.root();
         let region: Vec<_> = m.argument_nodes(0).unwrap().collect();
@@ -676,7 +676,7 @@ mod tests {
             spanned(&source, 2..4),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
             Arc::new(StdCallableSpec::new(vec![arg_spec.clone()], vec![]));
@@ -697,8 +697,8 @@ mod tests {
             SourceSpan::entire(&source),
             st.clone(),
             vec![group],
-        );
-        let tree = b.finish(m);
+        ).unwrap();
+        let tree = b.finish(m).unwrap();
 
         let record = tree.root().arguments().unwrap().get(0).unwrap().region.clone().unwrap();
         assert!(record.content_range().is_empty());
@@ -707,6 +707,9 @@ mod tests {
     }
 
     // --- builder contract violations around regions -----------------------------------
+    //
+    // Contract violations return `NodeBuildError` — extension-implementation bugs must
+    // never panic core code (panic policy, DESIGN_RATIONALE.md).
 
     /// Helper: a one-argument callable staged over the given children with the given
     /// region record (drives the builder's region checks).
@@ -716,7 +719,7 @@ mod tests {
         st: &Arc<ParsingState<PlainLang>>,
         args: Vec<ParsedArgument<PlainLang>>,
         children: Vec<BuildId>,
-    ) -> BuildId {
+    ) -> Result<BuildId, NodeBuildError> {
         let specs: Vec<_> = args.iter().map(|a| a.spec.clone()).collect();
         let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(specs, vec![]));
         b.add(
@@ -736,18 +739,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of bounds")]
-    fn region_out_of_bounds_panics() {
+    fn region_out_of_bounds_errors() {
         let source: Arc<Source> = Arc::new(Source::new("\\m"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
         let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0))];
-        stage_callable_with_arg(&mut b, &source, &st, args, vec![]);
+        let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![]);
+        assert_eq!(
+            result,
+            Err(NodeBuildError::RegionOutOfBounds { region: 0..1, n_children: 0 })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "in order and non-overlapping")]
-    fn overlapping_regions_panic() {
+    fn overlapping_regions_error() {
         let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
@@ -756,18 +761,20 @@ mod tests {
             spanned(&source, 2..4),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let args = vec![
             ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
             ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
         ];
-        stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
+        let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
+        assert_eq!(
+            result,
+            Err(NodeBuildError::RegionNotTiling { region: 0..1, expected_start: 1 })
+        );
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "tile the child list exactly")]
-    fn region_gaps_panic_in_debug() {
+    fn region_gaps_error() {
         let source: Arc<Source> = Arc::new(Source::new("\\m{}{}"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
@@ -776,21 +783,47 @@ mod tests {
             spanned(&source, 2..4),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let g2 = b.add(
             NodeKind::group(brace_group(4..5, 5..6)),
             spanned(&source, 4..6),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         // One argument claiming only the second child: the first belongs to no region.
         let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(1))];
-        stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
+        let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
+        assert_eq!(
+            result,
+            Err(NodeBuildError::RegionNotTiling { region: 1..2, expected_start: 0 })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "not reachable from the root")]
-    fn dangling_content_parent_panics() {
+    fn trailing_children_outside_regions_error() {
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let g1 = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        ).unwrap();
+        let g2 = b.add(
+            NodeKind::group(brace_group(4..5, 5..6)),
+            spanned(&source, 4..6),
+            st.clone(),
+            vec![],
+        ).unwrap();
+        // One argument claiming only the first child: the second belongs to no region.
+        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0))];
+        let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
+        assert_eq!(result, Err(NodeBuildError::ChildrenNotInRegions { unassigned: 1..2 }));
+    }
+
+    #[test]
+    fn dangling_content_parent_errors() {
         let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
@@ -799,20 +832,22 @@ mod tests {
             spanned(&source, 2..4),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         // Content designated inside a staged node that never becomes part of the tree:
-        let stray = b.add(NodeKind::list(), spanned(&source, 0..0), st.clone(), vec![]);
+        let stray = b.add(NodeKind::list(), spanned(&source, 0..0), st.clone(), vec![]).unwrap();
         let args = vec![ParsedArgument::provided(
             brace_arg_spec(),
             ChildRegion::new(0..1, ContentNodes::InChildrenOf(stray, 0..0)),
         )];
-        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
-        b.finish(m);
+        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]).unwrap();
+        assert_eq!(
+            b.finish(m).unwrap_err(),
+            NodeBuildError::ContentParentUnreachable { parent: stray }
+        );
     }
 
     #[test]
-    #[should_panic(expected = "outside its own argument/slot region")]
-    fn content_parent_outside_its_region_panics() {
+    fn content_parent_outside_its_region_errors() {
         let source: Arc<Source> = Arc::new(Source::new("\\m{}{}"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
@@ -821,13 +856,13 @@ mod tests {
             spanned(&source, 2..4),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let g2 = b.add(
             NodeKind::group(brace_group(4..5, 5..6)),
             spanned(&source, 4..6),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         // Argument 0's content designated inside argument 1's group:
         let args = vec![
             ParsedArgument::provided(
@@ -839,13 +874,15 @@ mod tests {
                 ChildRegion::new(1..2, ContentNodes::InChildrenOf(g2, 0..0)),
             ),
         ];
-        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
-        b.finish(m);
+        let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]).unwrap();
+        assert_eq!(
+            b.finish(m).unwrap_err(),
+            NodeBuildError::ContentParentOutsideRegion { parent: g2 }
+        );
     }
 
     #[test]
-    #[should_panic(expected = "already-resolved region")]
-    fn restaging_resolved_records_panics() {
+    fn restaging_resolved_records_errors() {
         let tree = example_tree();
         let frac = tree.root().child(1).unwrap();
         // Records from a finished tree hold that tree's node-index ranges; staging them
@@ -854,7 +891,8 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::<PlainLang>::new();
-        b.add(NodeKind::callable(data), SourceSpan::entire(&source), st, vec![]);
+        let result = b.add(NodeKind::callable(data), SourceSpan::entire(&source), st, vec![]);
+        assert_eq!(result, Err(NodeBuildError::RegionAlreadyResolved));
     }
 
     #[test]
@@ -883,10 +921,10 @@ mod tests {
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
         let _abandoned =
-            b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
-        let kept = b.add(NodeKind::chars(Span::new(1, 2)), spanned(&source, 1..2), st.clone(), vec![]);
-        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![kept]);
-        let tree = b.finish(root);
+            b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let kept = b.add(NodeKind::chars(Span::new(1, 2)), spanned(&source, 1..2), st.clone(), vec![]).unwrap();
+        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![kept]).unwrap();
+        let tree = b.finish(root).unwrap();
         assert_eq!(tree.node_count(), 2);
         assert_eq!(tree.root().child(0).unwrap().chars(), Some("b"));
     }
@@ -940,14 +978,14 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("y"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
-        let y = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
+        let y = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
         let g = b.add(
             NodeKind::group(GroupData::untyped(TextContent::from("{"), TextContent::from("}"))),
             spanned(&source, 0..1),
             st.clone(),
             vec![y],
-        );
-        let tree = b.finish(g);
+        ).unwrap();
+        let tree = b.finish(g).unwrap();
 
         let group = tree.root();
         assert!(group.is_group());
@@ -999,9 +1037,9 @@ mod tests {
             st.clone(),
             vec![],
             42u16,
-        );
-        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![y]);
-        let tree = b.finish(root);
+        ).unwrap();
+        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![y]).unwrap();
+        let tree = b.finish(root).unwrap();
 
         let y = tree.root().child(0).unwrap();
         assert_eq!(*y.ext(), 42);
@@ -1071,20 +1109,20 @@ mod tests {
         let before = FINALIZE_CALLS.load(Ordering::Relaxed);
         let mut b = NodeTreeBuilder::new();
 
-        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
-        let a = b.add(NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), st.clone(), vec![]);
+        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let a = b.add(NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), st.clone(), vec![]).unwrap();
         let g = b.add(
             NodeKind::group(brace_group(1..2, 3..4)),
             spanned(&source, 1..4),
             st.clone(),
             vec![a],
-        );
+        ).unwrap();
         let c = b.add(
             NodeKind::comment(Span::new(4, 5), Span::new(5, 6), Span::new(6, 7)),
             spanned(&source, 4..7),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let spec: Arc<dyn CallableSpec<FinalizeLang>> = Arc::new(StdCallableSpec::default());
         let m = b.add(
             NodeKind::callable(CallableData {
@@ -1099,14 +1137,14 @@ mod tests {
             spanned(&source, 7..7),
             st.clone(),
             vec![],
-        );
+        ).unwrap();
         let root = b.add(
             NodeKind::list(),
             SourceSpan::entire(&source),
             st.clone(),
             vec![x, g, c, m],
-        );
-        let tree = b.finish(root);
+        ).unwrap();
+        let tree = b.finish(root).unwrap();
 
         // One run per add(), all five kinds included.
         assert_eq!(FINALIZE_CALLS.load(Ordering::Relaxed) - before, 6);
@@ -1127,8 +1165,8 @@ mod tests {
         let mut b = NodeTreeBuilder::new();
         assert!(b.staged_nodes().is_empty());
 
-        let a = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
-        let l = b.add(NodeKind::list(), spanned(&source, 0..2), st.clone(), vec![a]);
+        let a = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let l = b.add(NodeKind::list(), spanned(&source, 0..2), st.clone(), vec![a]).unwrap();
 
         let staged = b.staged_nodes();
         assert_eq!(staged.len(), 2);
@@ -1159,9 +1197,9 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("z"));
         let st = state::<NoDeriveLang>();
         let mut b = NodeTreeBuilder::new();
-        let z = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
-        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![z]);
-        let tree = b.finish(root);
+        let z = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let root = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![z]).unwrap();
+        let tree = b.finish(root).unwrap();
 
         let cloned = tree.clone();
         let dump = alloc::format!("{:?}", cloned);
@@ -1171,13 +1209,82 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "already has a parent")]
     fn a_node_cannot_have_two_parents() {
         let source: Arc<Source> = Arc::new(Source::new("w"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
-        let w = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]);
-        let _l1 = b.add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![w]);
-        let _l2 = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![w]);
+        let w = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let _l1 = b.add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![w]).unwrap();
+        let result = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![w]);
+        assert_eq!(result.unwrap_err(), NodeBuildError::ChildAlreadyClaimed { child: w });
+    }
+
+    #[test]
+    fn unstaged_children_and_roots_error() {
+        let source: Arc<Source> = Arc::new(Source::new("w"));
+        let st = state::<PlainLang>();
+        // A foreign BuildId (minted by another builder) is an implementation bug the
+        // empty builder diagnoses as not-staged — as child and as root alike.
+        let mut other = NodeTreeBuilder::<PlainLang>::new();
+        let foreign = other
+            .add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![])
+            .unwrap();
+
+        let mut b = NodeTreeBuilder::<PlainLang>::new();
+        let result =
+            b.add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![foreign]);
+        assert_eq!(result.unwrap_err(), NodeBuildError::ChildNotStaged { child: foreign });
+
+        let b = NodeTreeBuilder::<PlainLang>::new();
+        assert_eq!(
+            b.finish(foreign).unwrap_err(),
+            NodeBuildError::RootNotStaged { root: foreign }
+        );
+    }
+
+    #[test]
+    fn finishing_on_a_claimed_root_errors() {
+        let source: Arc<Source> = Arc::new(Source::new("w"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let w = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![]).unwrap();
+        let _list = b.add(NodeKind::list(), SourceSpan::entire(&source), st, vec![w]).unwrap();
+        assert_eq!(b.finish(w).unwrap_err(), NodeBuildError::RootClaimed { root: w });
+    }
+
+    #[test]
+    fn spanned_content_outside_the_source_errors() {
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::<PlainLang>::new();
+        // A chars payload past the source's end (previously a debug-only assertion;
+        // an always-on error since the panic-policy decision).
+        let result =
+            b.add(NodeKind::chars(Span::new(0, 5)), SourceSpan::entire(&source), st, vec![]);
+        assert_eq!(
+            result.unwrap_err(),
+            NodeBuildError::SpannedContentInvalid {
+                what: "chars content",
+                span: Span::new(0, 5),
+                content_len: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn tree_get_is_the_non_panicking_node_access() {
+        let tree = example_tree();
+        assert!(tree.get(tree.root().id()).is_some());
+        let deep = tree.iter().last().unwrap().id();
+        assert_eq!(tree.get(deep).unwrap().id(), deep);
+
+        // An id from a different tree misses (out of range here; debug builds also
+        // catch in-range foreign ids by provenance tag).
+        let source: Arc<Source> = Arc::new(Source::new("w"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::<PlainLang>::new();
+        let w = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st, vec![]).unwrap();
+        let small = b.finish(w).unwrap();
+        assert!(small.get(deep).is_none());
     }
 }

@@ -151,15 +151,14 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
-        assert!(
-            // ### PhF - FIXME: I turned this from debug_assert!() into an assert!(), but this should really be
-            // a special type of error that is returned.  We want someting like ParseError::MisconfiguredLang
-            // or ParseError::InternalError or something like that for this.
-            self.invocation.spec.slots().is_empty(),
-            "StdInvocationParser is macro-shaped: a spec declaring slots overrides \
-             make_invocation_parser with a composition that knows its terminator syntax \
-             (e.g., EnvironmentBodyParser)"
-        );
+        if !self.invocation.spec.slots().is_empty() {
+            return Err(cx.implementation_error(
+                "StdInvocationParser is macro-shaped: a spec declaring slots overrides \
+                 make_invocation_parser with a composition that knows its terminator \
+                 syntax (e.g., EnvironmentBodyParser)",
+                self.invocation.token.span,
+            ));
+        }
 
         let token = self.invocation.token;
         // The invocation spelling (trigger minus syntactic post-space) titles the
@@ -169,14 +168,14 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
             parse_declared_arguments(cx, self.invocation.spec, name_span)?;
 
         // Span: trigger through the last child (regions are span-contiguous); the
-        // trigger's span alone for argument-less shapes (6.4 parity).
-        let end = match children.last() {
-            Some(last) => {
-                let staged = cx.session.builder.staged_nodes();
-                staged.get(*last).expect("the child was just staged").span().end()
-            }
-            None => token.span.end,
-        };
+        // trigger's span alone for argument-less shapes (6.4 parity). A last child an
+        // argument parser never staged (an implementation bug) falls back to the
+        // trigger's span — the builder diagnoses the foreign id in `add` below.
+        let end = children
+            .last()
+            .and_then(|last| cx.session.builder.staged_nodes().get(*last))
+            .map(|child| child.span().end())
+            .unwrap_or(token.span.end);
 
         let data = CallableData {
             callable_type: self.invocation.callable_type,
@@ -188,12 +187,16 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
             post_space: TextContent::Spanned(token.post_space()),
             ext: Default::default(),
         };
-        let id = cx.session.builder.add(
-            NodeKind::callable(data),
-            SourceSpan::new(&cx.source, token.span.start..end),
-            Arc::clone(&cx.state),
-            children,
-        );
+        let id = cx
+            .session
+            .builder
+            .add(
+                NodeKind::callable(data),
+                SourceSpan::new(&cx.source, token.span.start..end),
+                Arc::clone(&cx.state),
+                children,
+            )
+            .map_err(|error| cx.implementation_error(error, Span::new(token.span.start, end)))?;
         Ok((id, None))
     }
 }

@@ -84,10 +84,10 @@ pub mod token;
 pub use constructs::{
     ChildStateSpec, ConstructParser, ConstructParserResult, EnvironmentTerminatorMismatch,
     ExpectedExpressionArgument, ExpressionCallableTakesArguments, GroupChildState,
-    GroupParser, Invocation, InvocationChildState, MalformedEnvironmentTerminator,
-    MissingEnvironmentTerminator, MissingMandatoryArgument, MissingTerminatorFound,
-    NodesOutcome, NodesParser, ParseContext, StopCause, StopSpec, TokenStopCondition,
-    TokenStopKind, UnclosedGroup, UnclosedGroupFound, UnresolvableCommand,
+    GroupParser, ImplementationError, Invocation, InvocationChildState,
+    MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,
+    MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, StopCause, StopSpec,
+    TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound, UnresolvableCommand,
     UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 pub use engine::{Frame, FrameTitle, ParseResult, ParserSession};
@@ -101,9 +101,9 @@ pub use source::{
 };
 pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{
-    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, GroupData, NodeData,
-    NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
-    ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
+    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, GroupData,
+    NodeBuildError, NodeData, NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder,
+    ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
 };
 pub use spec::{
     ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes, SlotSpec,

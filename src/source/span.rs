@@ -32,15 +32,20 @@ impl Span {
     }
 
     /// Length of the range in bytes.
+    ///
+    /// Saturating: an inverted span (`start > end`, constructible through the public
+    /// fields — a caller bug `Span::new` debug-asserts against) has length 0 rather
+    /// than wrapping (panic policy, DESIGN_RATIONALE.md).
     #[inline]
     pub fn len(&self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
-    /// Whether the range is empty.
+    /// Whether the range is empty (length 0 — consistent with [`len`](Span::len) on
+    /// inverted spans).
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.start == self.end
+        self.len() == 0
     }
 
     /// The range as a standard `Range<usize>`.
@@ -51,13 +56,25 @@ impl Span {
 
     /// Borrow the spanned text out of the content the span refers into.
     ///
+    /// Use this for spans minted from `content` itself; for spans of unknown
+    /// provenance, use the non-panicking [`get`](Span::get).
+    ///
     /// # Panics
     ///
     /// Panics if the span is out of bounds for `content` or not on `char` boundaries
-    /// (same contract as `&content[range]`).
+    /// (same contract as `&content[range]` — the approved indexing-style exception,
+    /// panic policy, DESIGN_RATIONALE.md).
     #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]
+    }
+
+    /// Borrow the spanned text, or `None` if the span is out of bounds for `content`
+    /// or not on `char` boundaries — the non-panicking companion of
+    /// [`slice`](Span::slice) (same contract as `content.get(range)`).
+    #[inline]
+    pub fn get<'s>(&self, content: &'s str) -> Option<&'s str> {
+        content.get(self.range())
     }
 }
 
@@ -100,5 +117,22 @@ mod tests {
     fn span_from_range() {
         let span: Span = (2..4).into();
         assert_eq!(span, Span::new(2, 4));
+    }
+
+    #[test]
+    fn span_get_is_the_non_panicking_slice() {
+        let span = Span::new(3, 7);
+        assert_eq!(span.get("abcdefghij"), Some("defg"));
+        assert_eq!(span.get("ab"), None); // out of bounds
+        assert_eq!(Span::new(0, 1).get("é!"), None); // mid-char boundary
+    }
+
+    #[test]
+    fn inverted_span_has_len_zero() {
+        // An inverted span is a caller bug (`Span::new` debug-asserts), but the public
+        // fields make it constructible; `len`/`is_empty` stay consistent and benign.
+        let inverted = Span { start: 7, end: 3 };
+        assert_eq!(inverted.len(), 0);
+        assert!(inverted.is_empty());
     }
 }

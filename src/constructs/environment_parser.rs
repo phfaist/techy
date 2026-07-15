@@ -452,14 +452,15 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
         debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
 
         // The body's content interior: the staged nodes tile it exactly (a stop token's
-        // pre-space is already flushed as body content).
-        let body_end = match outcome.nodes.last() {
-            Some(&last) => {
-                let staged = cx.session.builder.staged_nodes();
-                staged.get(last).expect("the node was just staged").span().end()
-            }
-            None => body_start,
-        };
+        // pre-space is already flushed as body content). A last node no one staged (a
+        // child construct parser's implementation bug) falls back to the body's start —
+        // the builder diagnoses the foreign id when the body list is staged below.
+        let body_end = outcome
+            .nodes
+            .last()
+            .and_then(|&last| cx.session.builder.staged_nodes().get(last))
+            .map(|node| node.span().end())
+            .unwrap_or(body_start);
 
         let end = match outcome.stop {
             StopCause::TokenCondition { .. } => self.finish_terminator(cx, body_end)?,
@@ -491,12 +492,16 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
             }
         };
 
-        let body = cx.session.builder.add(
-            NodeKind::list(),
-            SourceSpan::new(&cx.source, body_start..body_end),
-            Arc::clone(&cx.state),
-            outcome.nodes,
-        );
+        let body = cx
+            .session
+            .builder
+            .add(
+                NodeKind::list(),
+                SourceSpan::new(&cx.source, body_start..body_end),
+                Arc::clone(&cx.state),
+                outcome.nodes,
+            )
+            .map_err(|error| cx.implementation_error(error, Span::new(body_start, body_end)))?;
         Ok((EnvironmentBody { body, end }, None))
     }
 }
@@ -710,7 +715,7 @@ mod tests {
                     SourceSpan::new(&cx.source, trigger.span.range()),
                     Arc::clone(&cx.state),
                     vec![],
-                );
+                ).unwrap();
                 return Ok((id, None));
             };
             let source = Arc::clone(&cx.source);
@@ -792,7 +797,7 @@ mod tests {
                 SourceSpan::new(&cx.source, trigger.span.start..body.end),
                 Arc::clone(&cx.state),
                 children,
-            );
+            ).unwrap();
             Ok((id, None))
         }
     }
@@ -893,7 +898,7 @@ mod tests {
                     SourceSpan::new(&cx.source, body_start..body_end),
                     Arc::clone(&cx.state),
                     vec![],
-                ));
+                ).unwrap());
             }
             let body_children = body_nodes.len() as u32;
             let list = cx.session.builder.add(
@@ -901,7 +906,7 @@ mod tests {
                 SourceSpan::new(&cx.source, body_start..body_end),
                 Arc::clone(&cx.state),
                 body_nodes,
-            );
+            ).unwrap();
             // The slot record is minted by the parser: the spec declares no slots —
             // the records are self-describing (§3.5).
             let slots = ParsedSlots::from(vec![ParsedSlot::new(
@@ -922,7 +927,7 @@ mod tests {
                 SourceSpan::new(&cx.source, trigger.span.start..end),
                 Arc::clone(&cx.state),
                 vec![list],
-            );
+            ).unwrap();
             Ok((id, None))
         }
     }
@@ -1074,8 +1079,8 @@ mod tests {
             SourceSpan::new(&source, root_span.range()),
             Arc::clone(state),
             outcome.nodes,
-        );
-        let result = session.finish(root);
+        ).unwrap();
+        let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
         Ok(Parsed { result, pos })
     }
@@ -1659,7 +1664,7 @@ mod tests {
         assert_eq!(body.end, 15);
         assert_eq!(cx.tokens.pos(), 15);
 
-        let result = session.finish(body.body);
+        let result = session.finish(body.body).unwrap();
         crate::node::check_tree_invariants(&result.tree);
         assert_eq!(result.tree.root().span().range(), 0..1);
         assert_eq!(result.tree.root().child(0).unwrap().chars(), Some("x"));
