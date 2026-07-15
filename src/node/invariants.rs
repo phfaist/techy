@@ -408,7 +408,6 @@ mod tests {
     use crate::source::{Source, SourceSpan, Span};
     use crate::state::{ParsingState, SimpleLang, StateData};
     use crate::token::{TokenRules, WhitespaceRules};
-    use alloc::string::String;
     use alloc::sync::Arc;
 
     #[derive(Debug, Clone, Copy)]
@@ -428,7 +427,7 @@ mod tests {
                 enable_comments: true,
                 comments: alloc::vec::Vec::new(),
                 enable_specials: true,
-                forbidden_chars: String::new(),
+                forbidden_chars: "".into(),
                 expecting_group_close: None,
             },
             libraries: LibraryStack::new(),

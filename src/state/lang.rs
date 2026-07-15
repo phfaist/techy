@@ -162,7 +162,7 @@ pub trait Lang: Sized {
         StateData {
             rules: TokenRules {
                 enable_whitespace: false,
-                whitespace: WhitespaceRules { chars: String::new() },
+                whitespace: WhitespaceRules { chars: "".into() },
                 enable_multi_newline_paragraphs: false,
                 enable_groups: false,
                 groups: Vec::new(),
@@ -171,7 +171,7 @@ pub trait Lang: Sized {
                 enable_comments: false,
                 comments: Vec::new(),
                 enable_specials: false,
-                forbidden_chars: String::new(),
+                forbidden_chars: "".into(),
                 expecting_group_close: None,
             },
             libraries: LibraryStack::new(),
@@ -190,10 +190,12 @@ pub trait Lang: Sized {
     ///
     /// **Must be a deterministic pure function of `(new, prev, events)`** — no side
     /// effects, no interior mutability, no dependence on call count. Derivations are
-    /// deduplicated (the session's group-interior memo), so this runs once per unique
-    /// *derivation*, not once per transition: `{a}{b}` under one state runs it **once**
-    /// for two descents. Anything history-shaped (counters, caches keyed by occurrence)
-    /// belongs in [`observe_transition`](Lang::observe_transition), which fires on every
+    /// deduplicated (the session's derivation memo — rules-only deltas, keyed by `Arc`
+    /// identity), so this runs once per unique *derivation*, not once per transition:
+    /// `{a}{b}` under one state runs it **once** for two descents. That purity is also
+    /// what makes the memo sound: a pointer-keyed hit substitutes a previous run's
+    /// result. Anything history-shaped (counters, caches keyed by occurrence) belongs
+    /// in [`observe_transition`](Lang::observe_transition), which fires on every
     /// transition, memo hits included.
     fn finalize_transition(
         new: &mut StateData<Self>,

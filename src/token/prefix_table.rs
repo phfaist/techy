@@ -49,7 +49,6 @@ impl<L: Lang> PrefixEntry<L> {
 /// delimiter string in the same direction, the earlier entry wins.
 pub struct PrefixTable<L: Lang> {
     entries: Vec<PrefixEntry<L>>,
-    first_chars: String,
 }
 
 impl<L: Lang> PrefixTable<L> {
@@ -60,7 +59,7 @@ impl<L: Lang> PrefixTable<L> {
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
         if !rules.enable_groups {
-            return PrefixTable { entries, first_chars: String::new() };
+            return PrefixTable { entries };
         }
 
         let mut add = |delim: &str, rule: &Arc<GroupRule<L>>, is_open: bool| {
@@ -89,26 +88,12 @@ impl<L: Lang> PrefixTable<L> {
         // Longest first, for greedy matching; stable, so equal lengths keep declaration order.
         entries.sort_by_key(|entry| core::cmp::Reverse(entry.delim.len()));
 
-        let mut first_chars = String::new();
-        for entry in &entries {
-            let c = entry.delim.chars().next().expect("empty delimiters were skipped");
-            if !first_chars.contains(c) {
-                first_chars.push(c);
-            }
-        }
-
-        PrefixTable { entries, first_chars }
+        PrefixTable { entries }
     }
 
     /// The longest entry whose delimiter is a prefix of `rest`, if any.
     pub fn match_at(&self, rest: &str) -> Option<&PrefixEntry<L>> {
         self.entries.iter().find(|e| rest.starts_with(e.delim.as_str()))
-    }
-
-    /// The distinct first characters of all delimiters (used to bound content-character
-    /// runs: a run stops at any character that might start a delimiter).
-    pub fn first_chars(&self) -> &str {
-        &self.first_chars
     }
 
     /// The entries, longest delimiter first.
@@ -150,7 +135,7 @@ impl<L: Lang> Eq for PrefixEntry<L> {}
 
 impl<L: Lang> Clone for PrefixTable<L> {
     fn clone(&self) -> Self {
-        PrefixTable { entries: self.entries.clone(), first_chars: self.first_chars.clone() }
+        PrefixTable { entries: self.entries.clone() }
     }
 }
 
@@ -158,14 +143,13 @@ impl<L: Lang> fmt::Debug for PrefixTable<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrefixTable")
             .field("entries", &self.entries)
-            .field("first_chars", &self.first_chars)
             .finish()
     }
 }
 
 impl<L: Lang> PartialEq for PrefixTable<L> {
     fn eq(&self, other: &Self) -> bool {
-        self.entries == other.entries && self.first_chars == other.first_chars
+        self.entries == other.entries
     }
 }
 
@@ -195,7 +179,7 @@ mod tests {
             enable_comments: true,
             comments: Vec::new(),
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }
@@ -251,19 +235,6 @@ mod tests {
         ]));
         let entry = table.match_at("{").unwrap();
         assert_eq!(entry.open(), Some(&first));
-    }
-
-    #[test]
-    fn first_chars_deduplicated() {
-        let table = PrefixTable::for_rules(&rules_with_groups(vec![
-            group(0, "{", "}"),
-            group(2, "$", "$"),
-            group(3, "$$", "$$"),
-            group(4, r"\(", r"\)"),
-        ]));
-        let mut chars: Vec<char> = table.first_chars().chars().collect();
-        chars.sort_unstable();
-        assert_eq!(chars, vec!['$', '\\', '{', '}']);
     }
 
     #[test]

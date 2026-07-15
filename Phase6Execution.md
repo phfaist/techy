@@ -413,6 +413,9 @@ body; verbatim-style body via the takeover hatch; scaffolding reconstruction che
   is fine) parsing a macro-heavy document, compared against a hand-inlined default path.
   Record the result in the §3.6 *Revisit if* note (either "measured, negligible" or open
   an issue to special-case the default path).
+  *Deferred (user decision, July 2026 performance-review session):* no benchmarks for
+  now; the obligation stands open, recorded in DESIGN_RATIONALE §3.6 (rules-only memo
+  entry, companions note).
 - NAMING_STRATEGY.md: add the §3.10 Phase 6 names.
 - ARCHITECTURE.md §9: mark Phase 6 ✅ with the shipped/deferred split (mirroring earlier
   phase entries).

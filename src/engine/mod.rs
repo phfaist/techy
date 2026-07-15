@@ -11,6 +11,8 @@
 //! convenience is demonstrable. Consequently `ParseResult` carries no `'env` lifetime
 //! and no `Language` reference.
 
+mod state_memo;
+
 use core::fmt;
 
 use crate::error::{
@@ -27,6 +29,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use state_memo::{StateMemo, StateMemoKey, StateMemoProbe};
 
 /// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md §3.8):
 /// pushed at the descent points through
@@ -133,12 +137,13 @@ pub struct ParserSession<L: Lang> {
     /// `Default`-initialized): the preset-owned mutable object of a parse — transition
     /// observation counters ([`Lang::observe_transition`]), parse-global caches.
     pub ext: L::SessionExt,
-    /// The group-interior-state memo (DESIGN_RATIONALE.md §3.6): `(base, rule, interior)`
-    /// triples matched by `Arc` pointer identity, consulted only by
-    /// [`group_interior_state`](ParserSession::group_interior_state) — the one derivation
-    /// whose inputs recur with `Arc` identity. Entries hold their key `Arc`s alive, so
-    /// pointer keys cannot be reused (no ABA hazard).
-    group_interior_memo: GroupInteriorMemo<L>,
+    /// The derivation memo (DESIGN_RATIONALE.md §3.6, revised July 2026): rules-only
+    /// derivations deduplicated by [`derived_state`](ParserSession::derived_state),
+    /// keyed on base-state `Arc` identity plus the delta's overrides with payloads by
+    /// `Arc` identity (see [`state_memo`]). Entries hold their key `Arc`s alive, so
+    /// pointer keys cannot be reused (no ABA hazard); retention is bounded by the
+    /// session — one transient parse.
+    state_memo: StateMemo<L>,
     /// The live parse-frame stack, outermost first (DESIGN_RATIONALE.md §3.8):
     /// maintained exclusively by
     /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame)
@@ -148,9 +153,6 @@ pub struct ParserSession<L: Lang> {
     frames: Vec<Frame<L>>,
 }
 
-type GroupInteriorMemo<L> =
-    Vec<(Arc<ParsingState<L>>, Arc<GroupRule<L>>, Arc<ParsingState<L>>)>;
-
 impl<L: Lang> ParserSession<L> {
     /// A fresh session under the given recovery policy.
     pub fn new(recovery: Recovery) -> ParserSession<L> {
@@ -159,7 +161,7 @@ impl<L: Lang> ParserSession<L> {
             diagnostics: Diagnostics::new(),
             recovery,
             ext: Default::default(),
-            group_interior_memo: Vec::new(),
+            state_memo: StateMemo::new(),
             frames: Vec::new(),
         }
     }
@@ -187,10 +189,20 @@ impl<L: Lang> ParserSession<L> {
     /// §3.6): within a parse frame, construct parsers derive states through this seam so
     /// every transition event reaches [`Lang::observe_transition`] (with the session's
     /// [`ext`](ParserSession::ext)). **Data-equivalent to
-    /// [`ParsingState::derived`]** — the session layer may observe, never alter the
-    /// resulting state — and **never memoized**: an arbitrary delta has no identity to
-    /// key a memo on (keyed helpers exist where derivation inputs have `Arc` identity —
-    /// [`group_interior_state`](ParserSession::group_interior_state)).
+    /// [`ParsingState::derived`]** — the session layer may deduplicate and observe,
+    /// never alter the resulting state.
+    ///
+    /// **Rules-only deltas are memoized** (revised July 2026, superseding the earlier
+    /// never-memoize rule): when the delta carries no ext replacement, no events, and
+    /// no library pushes, the derivation is keyed on the base state's `Arc` identity
+    /// plus the overrides (payloads by `Arc` identity, gates by value — see the
+    /// `state_memo` module) and deduplicated across the session. `derived()` is a pure
+    /// function of (base data, delta, events) — [`Lang::finalize_transition`]'s purity
+    /// contract — so a pointer-keyed hit is exact; identity keying can only miss on
+    /// value-equal-but-distinct `Arc`s, never falsely hit. Deltas carrying
+    /// ext/events/library-pushes always derive fresh: those payloads have no identity
+    /// to key on. [`Lang::observe_transition`] fires on **every** call, memo hits
+    /// included; [`Lang::finalize_transition`] runs once per unique derivation.
     ///
     /// Out-of-parse code (initial states, tests, tree transforms) keeps calling
     /// `derived()` directly.
@@ -199,48 +211,49 @@ impl<L: Lang> ParserSession<L> {
         base: &Arc<ParsingState<L>>,
         delta: &ParsingStateDelta<L>,
     ) -> Arc<ParsingState<L>> {
+        let memoizable =
+            delta.ext.is_none() && delta.events.is_empty() && delta.push_libraries.is_empty();
+        if memoizable {
+            if let Some(hit) = self.state_memo.get(&StateMemoProbe { base, rules: &delta.rules })
+            {
+                let new = Arc::clone(hit);
+                L::observe_transition(&mut self.ext, base, &new, delta);
+                return new;
+            }
+        }
         let new = Arc::new(base.derived(delta));
+        if memoizable {
+            self.state_memo.insert(
+                StateMemoKey { base: Arc::clone(base), rules: delta.rules.clone() },
+                Arc::clone(&new),
+            );
+        }
         L::observe_transition(&mut self.ext, base, &new, delta);
         new
     }
 
-    /// The group-interior derivation, deduplicated (DESIGN_RATIONALE.md §3.6): the state
-    /// a group's interior is parsed under is always `base` + `expecting_group_close =
-    /// rule` — the uniform invariant that guarantees the close delimiter stays
-    /// recognizable — and sibling groups under one state repeat the identical
-    /// derivation, the dominant state-cloning cost in deep documents. This helper keeps
-    /// always-derive *semantics* but consults a `(base, rule)` pointer-identity memo, so
-    /// one `StateData` clone (and one [`Lang::finalize_transition`] run) serves every
-    /// sibling descent; [`Lang::observe_transition`] still fires on **every** call, memo
-    /// hits included.
+    /// The group-interior derivation: the state a group's interior is parsed under is
+    /// always `base` + `expecting_group_close = rule` — the uniform invariant that
+    /// guarantees the close delimiter stays recognizable — and sibling groups under one
+    /// state repeat the identical derivation, the dominant state-cloning cost in deep
+    /// documents.
     pub fn group_interior_state(
         &mut self,
         base: &Arc<ParsingState<L>>,
         rule: &Arc<GroupRule<L>>,
     ) -> Arc<ParsingState<L>> {
+        // Deliberately a thin wrapper: the memoization *policy* is uniform (the gated
+        // memo inside `derived_state`), but this helper guarantees a memoizable delta
+        // shape by construction — the canonical expecting-close override, nothing else.
+        // Hand-built deltas can silently fall off the memo path (one added event
+        // disables dedup with no warning, a perf cliff no test catches); routing the
+        // group descent through this wrapper makes its dedup a compile-time contract
+        // instead of an emergent property of delta shape (decided July 2026).
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             expecting_group_close: Some(Some(Arc::clone(rule))),
             ..TokenRulesOverrides::default()
         });
-        let memoized = self
-            .group_interior_memo
-            .iter()
-            .find(|(b, r, _)| Arc::ptr_eq(b, base) && Arc::ptr_eq(r, rule))
-            .map(|(_, _, interior)| Arc::clone(interior));
-        let interior = match memoized {
-            Some(interior) => interior,
-            None => {
-                let interior = Arc::new(base.derived(&delta));
-                self.group_interior_memo.push((
-                    Arc::clone(base),
-                    Arc::clone(rule),
-                    Arc::clone(&interior),
-                ));
-                interior
-            }
-        };
-        L::observe_transition(&mut self.ext, base, &interior, &delta);
-        interior
+        self.derived_state(base, &delta)
     }
 
     /// The raw record-or-abort primitive of detection-site recovery
@@ -285,7 +298,7 @@ impl<L: Lang> fmt::Debug for ParserSession<L> {
             .field("diagnostics", &self.diagnostics)
             .field("recovery", &self.recovery)
             .field("ext", &self.ext)
-            .field("group_interior_memo", &self.group_interior_memo.len())
+            .field("state_memo", &self.state_memo.len())
             .field("frames", &self.frames.len())
             .finish()
     }
@@ -362,7 +375,7 @@ mod tests {
             enable_comments: true,
             comments: Vec::new(),
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }
@@ -654,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn derived_state_is_data_equivalent_and_observed_but_never_memoized() {
+    fn derived_state_is_data_equivalent_observed_and_memoizes_rules_only_deltas() {
         let base: Arc<ParsingState<ObserverLang>> = state();
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             enable_comments: Some(false),
@@ -668,11 +681,70 @@ mod tests {
         // …with the transition event observed.
         assert_eq!(session.ext.transitions, 1);
 
-        // Never memoized: an identical call derives a fresh state (an arbitrary delta
-        // has no identity to key a memo on).
+        // Rules-only deltas are memoized: the identical derivation returns the shared
+        // state, and the transition is still observed (hits included).
         let again = session.derived_state(&base, &delta);
-        assert!(!Arc::ptr_eq(&via_session, &again));
+        assert!(Arc::ptr_eq(&via_session, &again));
         assert_eq!(session.ext.transitions, 2);
+
+        // A different base misses (keys carry the base's identity).
+        let other_base = Arc::new(base.derived(&ParsingStateDelta::new()));
+        let elsewhere = session.derived_state(&other_base, &delta);
+        assert!(!Arc::ptr_eq(&via_session, &elsewhere));
+    }
+
+    #[test]
+    fn derived_state_keys_payloads_by_arc_identity() {
+        let base: Arc<ParsingState<ObserverLang>> = state();
+        let rule: Arc<GroupRule<ObserverLang>> =
+            Arc::new(GroupRule { group_type: 5, open: "[".into(), close: "]".into() });
+        let mut session: ParserSession<ObserverLang> = ParserSession::new(Recovery::Strict);
+
+        // The optional-argument shape: a groups override whose Vec is rebuilt per call
+        // but whose *elements* are the same Arcs — hits (elementwise identity keying).
+        let delta_a = ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: Some(vec![Arc::clone(&rule)]),
+            ..TokenRulesOverrides::default()
+        });
+        let delta_b = ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: Some(vec![Arc::clone(&rule)]),
+            ..TokenRulesOverrides::default()
+        });
+        let first = session.derived_state(&base, &delta_a);
+        let second = session.derived_state(&base, &delta_b);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // A value-equal but Arc-distinct payload misses: identity keying is
+        // conservative, never falsely shared.
+        let equal_rule: Arc<GroupRule<ObserverLang>> =
+            Arc::new(GroupRule { group_type: 5, open: "[".into(), close: "]".into() });
+        let delta_c = ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: Some(vec![equal_rule]),
+            ..TokenRulesOverrides::default()
+        });
+        let third = session.derived_state(&base, &delta_c);
+        assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn derived_state_never_memoizes_ext_or_event_deltas() {
+        let base: Arc<ParsingState<ObserverLang>> = state();
+        let mut session: ParserSession<ObserverLang> = ParserSession::new(Recovery::Strict);
+
+        // An event payload has no identity to key on — always a fresh derivation.
+        let with_event = ParsingStateDelta::new().event(());
+        let first = session.derived_state(&base, &with_event);
+        let second = session.derived_state(&base, &with_event);
+        assert!(!Arc::ptr_eq(&first, &second));
+
+        // Same for an ext replacement.
+        let with_ext = ParsingStateDelta::new().ext(());
+        let third = session.derived_state(&base, &with_ext);
+        let fourth = session.derived_state(&base, &with_ext);
+        assert!(!Arc::ptr_eq(&third, &fourth));
+
+        // All four transitions were observed.
+        assert_eq!(session.ext.transitions, 4);
     }
 
     #[test]

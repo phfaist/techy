@@ -619,8 +619,14 @@ C→B is the intended one-way door).
 Implementation notes (Phase 3, July 2026): the derived caches (`PrefixTable`,
 `TriggerChars`) are built **eagerly** when a state is frozen, not `OnceLock`-lazily as the
 ARCHITECTURE sketch had it — the crate is `no_std` (`core` has no `OnceLock`; `OnceCell`
-would cost `Sync`), and both derivations are cheap relative to a transition; revisit only if
-transition cost ever shows up in profiles. `TokenRulesOverrides` collections are replaced
+would cost `Sync`). Eager rebuilds turned out to be a real fraction of a transition's cost
+(the July 2026 performance review), so `derived()` reuses the parent's `PrefixTable`
+(`Arc`-held) whenever its inputs — `enable_groups`, and `groups` by elementwise `Arc`
+identity — are unchanged; the dominant group-interior transition (only
+`expecting_group_close` overridden, deliberately not a table input) always takes the reuse
+path. No analogous generic rule exists for `TriggerChars`: its inputs include
+`L::StateExt`, which carries no `Eq` bound — the per-transition cost expectation is
+documented on the hook instead. `TokenRulesOverrides` collections are replaced
 wholesale, not merged — "current group types plus one" is built by the party holding the
 current state; merge semantics inside the override would smuggle policy into the choke
 point. One honest cost of the specials-scan hook (recorded for fairness): `dbg!(state)` no
@@ -1538,6 +1544,9 @@ gets the savings without the semantic wrinkle).
 *Revisit if:* profiling shows the linear memo scan or memory growth under pathological
 nesting (one entry per depth level) warrants a map or a cap — or 6.3 implementation
 friction appears, in which case ship plain always-derive and flag for performance review.
+*Amended (July 2026, performance review):* generalized — the memo now lives uniformly in
+`derived_state` (see the rules-only memo entry below); `group_interior_state` stays as a
+shape-guaranteed wrapper, and the linear `Vec` scan became a `hashbrown` map.
 
 **Session-mediated derivation is the in-parse standard; transitions have two levels** —
 DECIDED (user, July 2026, child-state design session follow-up; extends the memo entry
@@ -1587,6 +1596,58 @@ stage nodes and emit diagnostics, and the loop's borrows tangle — purity uphel
 precompute-and-select covers context-dependent policies with full `Arc` sharing, and the
 designated first relaxation, should a consumer demand latching state, is `Fn` → `FnMut` on
 the node-condition precedent, not session injection).
+*Amended (July 2026, performance review):* "never memoizes" no longer holds — rules-only
+deltas are memoized inside `derived_state` itself (next entry). The original reasoning
+(arbitrary deltas have no identity) survives as the *gate*: deltas carrying
+ext/events/library pushes still always derive fresh.
+
+**Rules-only derivations are memoized uniformly in `derived_state`; retention accepted;
+`hashbrown` adopted** — DECIDED (user, July 2026, performance-review session; supersedes
+the never-memoize rule of the two entries above — `derived_state` is now the single
+memoization seam, narrow helpers are wrappers over it).
+The gate is decidable without payload equality — the insight that unblocked this: the
+three fields that kill general delta comparability (`ext: Option<L::StateExt>`, `events`,
+`push_libraries`) only need **emptiness** checks. A delta carrying none of them is a pure
+rules transition, and `derived()` is a pure function of (base data, delta, events) by
+`finalize_transition`'s purity contract. Keys are (base state by `Arc` identity,
+`TokenRulesOverrides` with payloads by `Arc` identity and gates by value): pointer-equal
+implies value-equal, so identity keying can only miss, never falsely hit. Enabled by
+making every override payload `Arc`-shaped: `CommandRule`/`CommentRule` symmetrized with
+`GroupRule` (`Vec<Arc<…>>`, inner `String`s stay plain), `Arc<str>` for
+`whitespace.chars`/`forbidden_chars` — independently motivated, since the `StateData`
+clone at every transition becomes refcount bumps (a consequence for `Lang` authors:
+`finalize_transition` rewrites a shared rule via `Arc::make_mut`, clone-on-write).
+Consequences: the optional-argument probe (`\item[a]`, and the more common bare `\item`)
+hits the memo from its second occurrence under a given loop state — the measured worst
+case (four `\item[a]` siblings: 8 derivations, 4 permanent misses) collapses with no
+argument-parser cooperation. `group_interior_state` remains as a thin wrapper that
+guarantees a memoizable delta shape *by construction*: hand-built hot deltas can silently
+fall off the memo path (one added event kills dedup with no warning, a perf cliff no test
+catches), so the wrapper makes group-descent dedup a compile-time contract rather than an
+emergent property of delta shape.
+*Retention:* entries pin their key `Arc`s for the session's lifetime — deliberate and
+load-bearing, not a leak to fix: pinning is what makes pointer keys ABA-sound (an evicted
+key's address could be reused by a new state, silently returning a wrong memoized state).
+Accepted (user): a session is one transient parse, and most memoized states end up pinned
+by the node tree anyway.
+*Dependency:* `hashbrown` (std's own `HashMap` implementation, no_std) — the first
+mandatory dependency; ARCHITECTURE.md Decision 5 amended accordingly. Probes are
+allocation-free (`Equivalent`-keyed lookup; the owned key is materialized only on
+insert). Pitfall recorded: a **hash may never replace the stored key** — equality on the
+key is what makes collisions harmless; a hash-only "key" would return a wrong state on
+collision with no diagnostic.
+*Rejected:* restructuring `ParsingStateDelta` for the memo's sake — the flat all-`Option`
+struct is already the canonical sparse form (one slot per field, no ordering, no
+duplicates), and a stored what-changed mask desyncs against the public fields and breaks
+struct-literal construction (E0451).
+*Companions (same session):* `PrefixTable::first_chars` **removed** (dead public API
+describing the rejected maximal-run design, §3.2/§4; premature to wire in as a `match_at`
+guard — §6 open question 1b can reintroduce a merged table if profiling demands);
+`PrefixTable` reuse across derivations (see the §3.3 implementation notes); the benchmark
+harness (Phase6Execution §6.7 obligation) consciously deferred, not dropped.
+*Revisit if:* profiling shows memo overhead dominating on non-recurring deltas, or
+per-parse memory growth hurts on pathological documents — eviction is unsound with
+pointer keys, so that would need a different key design.
 
 **Optional-group arguments balance their delimiters; brace protection via the descent
 policy (pylatexenc's `make_child_parsing_state` semantics)** — DECIDED (user, July 2026,
@@ -1637,7 +1698,7 @@ a resulting state). Stripping lives in the **pure derivation path**, keyed on th
 clears the temporary rules. The trigger self-disambiguates — a nested minted `[` installs
 the temporary rule (kept, so brackets keep balancing), a brace installs a normal one
 (stripped, so braces protect at any depth) — and remains a pure function of
-`(base, rule)`, so the group-interior memo is untouched. With it, `\item[a[b{c]}]]`
+`(base, rule)`, so the session's derivation memo is untouched. With it, `\item[a[b{c]}]]`
 parses as expected — beyond pylatexenc, which mangles exactly that input (3.0a33
 checked: childless nested group, leaked `]`). Open sub-questions for the implementing
 session (the seam ships whole, 6.3 precedent): (i) the stripping site — a `derived()`

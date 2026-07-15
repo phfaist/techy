@@ -19,27 +19,32 @@ pub struct Span {
 
 impl Span {
     /// Create a span covering `start..end`.
+    #[inline]
     pub fn new(start: usize, end: usize) -> Span {
         debug_assert!(start <= end, "span start {} is after end {}", start, end);
         Span { start, end }
     }
 
     /// Create an empty span positioned at `pos`.
+    #[inline]
     pub fn empty(pos: usize) -> Span {
         Span { start: pos, end: pos }
     }
 
     /// Length of the range in bytes.
+    #[inline]
     pub fn len(&self) -> usize {
         self.end - self.start
     }
 
     /// Whether the range is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
     /// The range as a standard `Range<usize>`.
+    #[inline]
     pub fn range(&self) -> Range<usize> {
         self.start..self.end
     }
@@ -50,6 +55,7 @@ impl Span {
     ///
     /// Panics if the span is out of bounds for `content` or not on `char` boundaries
     /// (same contract as `&content[range]`).
+    #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]
     }

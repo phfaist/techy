@@ -621,13 +621,22 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         // inherited states of deeper levels), while any other child descent — a brace
         // group, an invocation — reverts to the argument's own state, where the close
         // delimiter is an ordinary character (`[{arg with ]}]`).
-        let keep_or_revert = |contents: &Arc<ParsingState<L>>, token: &Token<'_, L>| {
+        //
+        // The callback's first parameter is the state at the *descent site* — the group
+        // interior state, not the contents state. Returning the captured contents state
+        // instead is data-equivalent (the interior derivation overrides
+        // expecting_group_close either way) and keys every nested same-rule descent on
+        // (contents state, rule) — the same derivation as the outer descent, an
+        // immediate memo hit.
+        let contents_for_children = Arc::clone(&contents_state);
+        let argument_for_children = Arc::clone(&argument_state);
+        let keep_or_revert = move |_descent: &Arc<ParsingState<L>>, token: &Token<'_, L>| {
             if let TokenKind::GroupOpen { rule, .. } = &token.kind {
                 if Arc::ptr_eq(rule, &self.rule) {
-                    return Arc::clone(contents);
+                    return Arc::clone(&contents_for_children);
                 }
             }
-            Arc::clone(&argument_state)
+            Arc::clone(&argument_for_children)
         };
         let child_states = ChildStateSpec {
             group: GroupChildState::Compute(&keep_or_revert),
@@ -816,14 +825,14 @@ mod tests {
                 close: "}".into(),
             })],
             enable_commands: true,
-            commands: vec![CommandRule {
+            commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            }],
+            })],
             enable_comments: true,
-            comments: vec![CommentRule { start: "%".into() }],
+            comments: vec![Arc::new(CommentRule { start: "%".into() })],
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }

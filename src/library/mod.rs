@@ -356,7 +356,7 @@ mod tests {
             enable_comments: true,
             comments: vec![],
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }

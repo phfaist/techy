@@ -237,7 +237,6 @@ mod tests {
     use crate::token::{
         StdTokenReader, Token, TokenKind, TokenReader, TokenRules, WhitespaceRules,
     };
-    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -261,7 +260,7 @@ mod tests {
             enable_comments: true,
             comments: Vec::new(),
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }

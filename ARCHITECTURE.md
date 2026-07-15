@@ -1142,6 +1142,11 @@ not obvious.
    derive only covered the trivial part) and drop `log` entirely (library conditions surface
    through the diagnostics sink / `ParseResult`, not a logging side channel; can be reintroduced
    later as an optional feature if internal tracing proves useful).
+   **Amended (July 2026, performance review):** a dependency may be added in very specific,
+   exceptional cases, for widely used, lightweight, `no_std`-capable crates — decided case by
+   case. First (and so far only) instance: `hashbrown` (the implementation inside std's own
+   `HashMap`), backing the engine's derivation memo (DESIGN_RATIONALE.md §3.6); `no_std` has
+   no `std::collections::HashMap`, and a hand-rolled map would be worse on every axis.
 6. **RESOLVED (July 2026): no `ConflictStrategy`** — library resolution = ordered
    stack with lexical shadowing, no built-in mode tables. The deferred `SpecLookup`
    semantics were settled in the Phase 4 design session (July 2026): `CallableQuery`-based

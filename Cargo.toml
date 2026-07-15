@@ -12,9 +12,13 @@ repository = "https://github.com/phfaist/techy"
 keywords = ["latex", "parser", "flm", "markup"]
 categories = ["parser-implementations", "text-processing"]
 
-# Zero mandatory dependencies (ARCHITECTURE.md, Decision 5):
-# hand-written Display/Error impls; library conditions flow through diagnostics, not logging.
+# Near-zero mandatory dependencies (ARCHITECTURE.md, Decision 5, amended July 2026):
+# hand-written Display/Error impls; library conditions flow through diagnostics, not
+# logging. Exceptional, case-by-case additions of widely used, lightweight, no_std-capable
+# crates are allowed — hashbrown (std's own HashMap implementation) backs the engine's
+# derivation memo (no_std has no std::collections::HashMap).
 [dependencies]
+hashbrown = "0.15"
 
 [dev-dependencies]
 criterion = "0.5"

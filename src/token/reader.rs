@@ -508,14 +508,14 @@ mod tests {
                 group(MATH_DISPLAY_BRACKET, r"\[", r"\]"),
             ],
             enable_commands: true,
-            commands: vec![CommandRule {
+            commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            }],
+            })],
             enable_comments: true,
-            comments: vec![CommentRule { start: "%".into() }],
+            comments: vec![Arc::new(CommentRule { start: "%".into() })],
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }
@@ -713,12 +713,12 @@ mod tests {
         let text = r"\zzz1234567890-haha_works! is a macro here";
         let mut tr = StdTokenReader::new(text);
         let st = state(TokenRules {
-            commands: vec![CommandRule {
+            commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
                 name_chars: "0123456789abcdefghijklmnopqrstuvwxyz\
                              ABCDEFGHIJKLMNOPQRSTUVWXYZ_+!-"
                     .into(),
-            }],
+            })],
             ..latex_rules()
         });
 
@@ -744,8 +744,8 @@ mod tests {
         let names = "abcdefghijklmnopqrstuvwxyz";
         let st = state(TokenRules {
             commands: vec![
-                CommandRule { escape_char: '\\', name_chars: names.into() },
-                CommandRule { escape_char: '@', name_chars: names.into() },
+                Arc::new(CommandRule { escape_char: '\\', name_chars: names.into() }),
+                Arc::new(CommandRule { escape_char: '@', name_chars: names.into() }),
             ],
             ..latex_rules()
         });
@@ -1089,8 +1089,8 @@ mod tests {
         let mut tr = StdTokenReader::new(text);
         let st = state(TokenRules {
             comments: vec![
-                CommentRule { start: "%".into() },
-                CommentRule { start: "%!!COMMENT!!".into() },
+                Arc::new(CommentRule { start: "%".into() }),
+                Arc::new(CommentRule { start: "%!!COMMENT!!".into() }),
             ],
             ..latex_rules()
         });

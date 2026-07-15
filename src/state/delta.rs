@@ -1,6 +1,5 @@
 //! [`ParsingStateDelta`] and [`TokenRulesOverrides`]: reified state changes.
 
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -36,15 +35,15 @@ pub struct TokenRulesOverrides<L: Lang> {
     /// Override the command-syntax gate.
     pub enable_commands: Option<bool>,
     /// Replace the command syntaxes.
-    pub commands: Option<Vec<CommandRule>>,
+    pub commands: Option<Vec<Arc<CommandRule>>>,
     /// Override the comment-syntax gate.
     pub enable_comments: Option<bool>,
     /// Replace the comment syntaxes.
-    pub comments: Option<Vec<CommentRule>>,
+    pub comments: Option<Vec<Arc<CommentRule>>>,
     /// Override the specials-scan gate.
     pub enable_specials: Option<bool>,
     /// Replace the forbidden-character set.
-    pub forbidden_chars: Option<String>,
+    pub forbidden_chars: Option<Arc<str>>,
     /// Override the expected group close (`Some(None)` clears it).
     pub expecting_group_close: Option<Option<Arc<GroupRule<L>>>>,
 }

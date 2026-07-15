@@ -941,14 +941,14 @@ mod tests {
                 close: "}".into(),
             })],
             enable_commands: true,
-            commands: vec![CommandRule {
+            commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            }],
+            })],
             enable_comments: true,
-            comments: vec![CommentRule { start: "%".into() }],
+            comments: vec![Arc::new(CommentRule { start: "%".into() })],
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }

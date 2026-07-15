@@ -55,8 +55,9 @@ pub struct GroupRule<L: Lang> {
 /// access mode).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WhitespaceRules {
-    /// The characters treated as whitespace (e.g. `" \t\n\r"`).
-    pub chars: String,
+    /// The characters treated as whitespace (e.g. `" \t\n\r"`). Shared (`Arc<str>`) so
+    /// state derivations clone rules data by refcount, not by content (July 2026).
+    pub chars: Arc<str>,
 }
 
 /// One command syntax: an escape character introducing a named invocation (`\textbf`,
@@ -139,13 +140,16 @@ pub struct TokenRules<L: Lang> {
     /// Whether command syntax is recognized; disabled = escape characters are ordinary
     /// content characters.
     pub enable_commands: bool,
-    /// Command syntaxes; empty = no command recognition.
-    pub commands: Vec<CommandRule>,
+    /// Command syntaxes; empty = no command recognition. `Arc`-shared like
+    /// [`groups`](Self::groups) (symmetrized July 2026): state derivations clone the
+    /// rule list by refcount, and the shared rules carry pointer identity.
+    pub commands: Vec<Arc<CommandRule>>,
     /// Whether comment syntax is recognized; disabled = comment starts are ordinary
     /// content characters.
     pub enable_comments: bool,
-    /// Comment syntaxes; empty = no comment recognition.
-    pub comments: Vec<CommentRule>,
+    /// Comment syntaxes; empty = no comment recognition. `Arc`-shared like
+    /// [`groups`](Self::groups) (symmetrized July 2026).
+    pub comments: Vec<Arc<CommentRule>>,
     /// Whether the specials scan runs. The specials *data* lives with the language
     /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → libraries), but the
     /// gate is rules data so a delta can switch it: disabled states freeze with the empty
@@ -153,8 +157,9 @@ pub struct TokenRules<L: Lang> {
     pub enable_specials: bool,
     /// Characters that may not appear as content; encountering one yields a recoverable
     /// [`TokenError`](super::TokenError). Empty = off (deliberately no `enable_*` gate:
-    /// one trivially restorable string, not a feature toggle).
-    pub forbidden_chars: String,
+    /// one trivially restorable string, not a feature toggle). Shared (`Arc<str>`) so
+    /// state derivations clone it by refcount (July 2026).
+    pub forbidden_chars: Arc<str>,
     /// The group rule whose *close* delimiter takes precedence over all other delimiter
     /// matches — set (via a state delta) by the group construct parser upon entering a
     /// group whose delimiters are ambiguous. This is how `$…$` inside `$$…$$` resolves:

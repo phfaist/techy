@@ -1,5 +1,6 @@
 //! [`ParsingState`] and its stored [`StateData`].
 
+use alloc::sync::Arc;
 use core::fmt;
 
 use crate::library::LibraryStack;
@@ -34,11 +35,15 @@ pub struct StateData<L: Lang> {
 /// The delimiter [`PrefixTable`] and the specials [`TriggerChars`] filter are computed
 /// eagerly when the state is frozen (constructor / end of `derived()`), not lazily on
 /// first use: the crate is `no_std` (`core` has no `OnceLock`, and `OnceCell` would make
-/// states non-`Sync`), and both derivations are cheap relative to a transition. Revisit
-/// only if profiling shows transition cost matters.
+/// states non-`Sync`). Eager rebuilds are a real fraction of a transition's cost, so
+/// [`derived()`](ParsingState::derived) reuses the parent's `PrefixTable` (held behind
+/// `Arc`) whenever its inputs — `enable_groups` and the `groups` rules, by `Arc`
+/// identity — are unchanged (July 2026). No analogous generic reuse rule exists for
+/// `TriggerChars`: its inputs include `L::StateExt`, which carries no `Eq` bound (see
+/// [`Lang::specials_trigger_chars`]).
 pub struct ParsingState<L: Lang> {
     data: StateData<L>,
-    prefix_table: PrefixTable<L>,
+    prefix_table: Arc<PrefixTable<L>>,
     trigger_chars: TriggerChars,
 }
 
@@ -66,13 +71,31 @@ impl<L: Lang> ParsingState<L> {
     /// The sole constructor of non-initial states — the transition choke point.
     ///
     /// Applies the delta's overrides to a copy of this state's data, runs
-    /// [`Lang::finalize_transition`] exactly once, and freezes the result (derived
-    /// caches rebuilt). Functional contract: `self` is never observably mutated.
+    /// [`Lang::finalize_transition`] exactly once, and freezes the result. Derived
+    /// caches are rebuilt — except the [`PrefixTable`], which is reused from `self`
+    /// (an `Arc` clone) when its inputs are unchanged: same `enable_groups`, same
+    /// `groups` rules by elementwise `Arc` identity. The dominant transition — a group
+    /// interior overriding only `expecting_group_close`, which is deliberately not a
+    /// table input — takes the reuse path. Functional contract: `self` is never
+    /// observably mutated.
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> ParsingState<L> {
         let mut data = self.data.clone();
         delta.apply_overrides(&mut data);
         L::finalize_transition(&mut data, self, &delta.events);
-        ParsingState::freeze(data)
+        // Checked *after* finalize_transition: the customizer may rewrite `groups` too.
+        let table_inputs_unchanged = data.rules.enable_groups == self.data.rules.enable_groups
+            && data.rules.groups.len() == self.data.rules.groups.len()
+            && data
+                .rules
+                .groups
+                .iter()
+                .zip(&self.data.rules.groups)
+                .all(|(new, old)| Arc::ptr_eq(new, old));
+        if table_inputs_unchanged {
+            ParsingState::freeze_with_table(data, Arc::clone(&self.prefix_table))
+        } else {
+            ParsingState::freeze(data)
+        }
     }
 
     /// The tokenization rules in effect.
@@ -104,7 +127,11 @@ impl<L: Lang> ParsingState<L> {
     }
 
     fn freeze(data: StateData<L>) -> ParsingState<L> {
-        let prefix_table = PrefixTable::for_rules(&data.rules);
+        let prefix_table = Arc::new(PrefixTable::for_rules(&data.rules));
+        ParsingState::freeze_with_table(data, prefix_table)
+    }
+
+    fn freeze_with_table(data: StateData<L>, prefix_table: Arc<PrefixTable<L>>) -> ParsingState<L> {
         // The enable_specials gate is baked in here: a disabled state stores the empty
         // filter, so `Lang::scan_specials` is unreachable and the hot path never
         // branches on the flag (same treatment as enable_groups in the prefix table).
@@ -144,7 +171,7 @@ impl<L: Lang> Clone for ParsingState<L> {
     fn clone(&self) -> Self {
         ParsingState {
             data: self.data.clone(),
-            prefix_table: self.prefix_table.clone(),
+            prefix_table: Arc::clone(&self.prefix_table),
             trigger_chars: self.trigger_chars.clone(),
         }
     }
@@ -185,14 +212,14 @@ mod tests {
                 close: "}".into(),
             })],
             enable_commands: true,
-            commands: vec![CommandRule {
+            commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
                 name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
-            }],
+            })],
             enable_comments: true,
             comments: Vec::new(),
             enable_specials: true,
-            forbidden_chars: String::new(),
+            forbidden_chars: "".into(),
             expecting_group_close: None,
         }
     }
@@ -216,7 +243,7 @@ mod tests {
         let derived = state.derived(&delta);
 
         assert!(!derived.rules().enable_multi_newline_paragraphs);
-        assert_eq!(derived.rules().forbidden_chars, "$");
+        assert_eq!(&*derived.rules().forbidden_chars, "$");
         // Unchanged fields kept; the original state is untouched.
         assert_eq!(derived.rules().commands, state.rules().commands);
         assert!(state.rules().enable_multi_newline_paragraphs);
@@ -239,6 +266,43 @@ mod tests {
         let derived = state.derived(&delta);
         assert!(derived.prefix_table().match_at("[x").is_some());
         assert!(derived.prefix_table().match_at("{x").is_none()); // whole-value override
+    }
+
+    #[test]
+    fn derived_reuses_prefix_table_when_inputs_unchanged() {
+        let state: ParsingState<PlainLang> =
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+
+        // A transition that touches neither enable_groups nor groups (by Arc identity)
+        // shares the parent's table instance…
+        let same = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_comments: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(core::ptr::eq(state.prefix_table(), same.prefix_table()));
+
+        // …and so does the dominant group-interior transition (expecting_group_close is
+        // deliberately not a table input)…
+        let interior = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(Arc::clone(&state.rules().groups[0]))),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(core::ptr::eq(state.prefix_table(), interior.prefix_table()));
+
+        // …while a groups override — even one value-equal to the current rules — builds
+        // a fresh table (reuse is keyed on Arc identity, not content).
+        let equal_groups: Vec<Arc<GroupRule<PlainLang>>> = state
+            .rules()
+            .groups
+            .iter()
+            .map(|rule| Arc::new(GroupRule::clone(rule)))
+            .collect();
+        let rebuilt = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: Some(equal_groups),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(!core::ptr::eq(state.prefix_table(), rebuilt.prefix_table()));
+        assert_eq!(state.prefix_table(), rebuilt.prefix_table()); // same contents
     }
 
     #[test]
@@ -377,9 +441,10 @@ mod tests {
                     MathEvent::LeaveMath => new.ext.in_math = false,
                 }
             }
-            // Pure normalization: the escape char is a function of the mode.
+            // Pure normalization: the escape char is a function of the mode. Rules are
+            // Arc-shared; rewriting one is clone-on-write.
             for rule in &mut new.rules.commands {
-                rule.escape_char = if new.ext.in_math { '#' } else { '\\' };
+                Arc::make_mut(rule).escape_char = if new.ext.in_math { '#' } else { '\\' };
             }
         }
     }
@@ -411,7 +476,7 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
 
         let mut custom = base_rules::<MathLang>().commands;
-        custom[0].escape_char = '@';
+        Arc::make_mut(&mut custom[0]).escape_char = '@';
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             commands: Some(custom),
             ..TokenRulesOverrides::default()
