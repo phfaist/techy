@@ -54,7 +54,7 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle};
-use crate::error::DiagnosticInfo;
+use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingStateDelta};
@@ -67,8 +67,13 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
 /// so an enclosing level can claim its own terminator (decision 8,
 /// DESIGN_RATIONALE.md §3.8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.environment_parser.terminator-mismatch",
+    message = "missing terminator of environment ‘{expected}’: found the terminator of \
+               ‘{found}’ instead"
+)]
 pub struct EnvironmentTerminatorMismatch {
     /// The environment being parsed, whose terminator was expected.
     pub expected: String,
@@ -76,65 +81,25 @@ pub struct EnvironmentTerminatorMismatch {
     pub found: String,
 }
 
-impl EnvironmentTerminatorMismatch {
-    /// The condition for the environment `expected` running into `found`'s terminator.
-    pub fn new(
-        expected: impl Into<String>,
-        found: impl Into<String>,
-    ) -> EnvironmentTerminatorMismatch {
-        EnvironmentTerminatorMismatch { expected: expected.into(), found: found.into() }
-    }
-}
-
-impl fmt::Display for EnvironmentTerminatorMismatch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "missing terminator of environment ‘{}’: found the terminator of ‘{}’ instead",
-            self.expected, self.found
-        )
-    }
-}
-
-impl DiagnosticInfo for EnvironmentTerminatorMismatch {
-    const IDENTIFIER: &'static str = "core.environment_parser.terminator-mismatch";
-}
-
 /// Condition: the terminator command was not followed immediately by its rigid name
 /// group (`\end[y]`, `\end{ A }`) — the command alone is consumed and the body closes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.environment_parser.malformed-terminator",
+    message = "malformed terminator of environment ‘{environment}’: expected its name \
+               group immediately after the command"
+)]
 pub struct MalformedEnvironmentTerminator {
     /// The environment being parsed.
     pub environment: String,
 }
 
-impl MalformedEnvironmentTerminator {
-    /// The condition for the given environment.
-    pub fn new(environment: impl Into<String>) -> MalformedEnvironmentTerminator {
-        MalformedEnvironmentTerminator { environment: environment.into() }
-    }
-}
-
-impl fmt::Display for MalformedEnvironmentTerminator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "malformed terminator of environment ‘{}’: expected its name group \
-             immediately after the command",
-            self.environment
-        )
-    }
-}
-
-impl DiagnosticInfo for MalformedEnvironmentTerminator {
-    const IDENTIFIER: &'static str = "core.environment_parser.malformed-terminator";
-}
-
 /// Condition: an environment's body ended without its terminator ever appearing — at
 /// end of input, or unwound by a stray group close nobody at the body's level asked for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.environment_parser.missing-terminator")]
 pub struct MissingEnvironmentTerminator {
     /// The environment being parsed.
     pub environment: String,
@@ -143,7 +108,7 @@ pub struct MissingEnvironmentTerminator {
 }
 
 /// What ended a body missing its terminator ([`MissingEnvironmentTerminator`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum MissingTerminatorFound {
     /// The input ended inside the body.
@@ -153,16 +118,8 @@ pub enum MissingTerminatorFound {
     StrayGroupClose,
 }
 
-impl MissingEnvironmentTerminator {
-    /// The condition for the given environment.
-    pub fn new(
-        environment: impl Into<String>,
-        found: MissingTerminatorFound,
-    ) -> MissingEnvironmentTerminator {
-        MissingEnvironmentTerminator { environment: environment.into(), found }
-    }
-}
-
+// Hand-written wording: the message varies by what ended the body (a match, which the
+// message format string cannot express).
 impl fmt::Display for MissingEnvironmentTerminator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.found {
@@ -176,10 +133,6 @@ impl fmt::Display for MissingEnvironmentTerminator {
             }
         }
     }
-}
-
-impl DiagnosticInfo for MissingEnvironmentTerminator {
-    const IDENTIFIER: &'static str = "core.environment_parser.missing-terminator";
 }
 
 /// A successfully read rigid name group: the name's byte span (the exact content between
@@ -624,53 +577,39 @@ mod tests {
         }
     }
 
-    // --- EnvLang's own conditions: third-party-style `DiagnosticInfo` impls (the
+    // --- EnvLang's own conditions: third-party-style derived conditions (the
     // --- extension surface demonstration, §3.8) — plain data structs under the
-    // --- language's "envlang." namespace, structurally identical to core conditions ---
+    // --- language's "envlang." namespace, structurally identical to core conditions
+    // --- (`no_constructor`: the tests build them with struct literals) ---------------
 
     /// `\begin` not followed immediately by its rigid name group.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, DiagnosticInfo)]
+    #[diagnostic(
+        id = "envlang.begin.malformed-begin",
+        message = "malformed ‘\\begin’: expected its name group immediately",
+        no_constructor
+    )]
     struct MalformedBegin;
 
-    impl fmt::Display for MalformedBegin {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("malformed ‘\\begin’: expected its name group immediately")
-        }
-    }
-
-    impl DiagnosticInfo for MalformedBegin {
-        const IDENTIFIER: &'static str = "envlang.begin.malformed-begin";
-    }
-
     /// `\begin{name}` naming an environment no library defines.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, DiagnosticInfo)]
+    #[diagnostic(
+        id = "envlang.begin.unknown-environment",
+        message = "unknown environment ‘{name}’",
+        no_constructor
+    )]
     struct UnknownEnvironment {
         name: String,
     }
 
-    impl fmt::Display for UnknownEnvironment {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "unknown environment ‘{}’", self.name)
-        }
-    }
-
-    impl DiagnosticInfo for UnknownEnvironment {
-        const IDENTIFIER: &'static str = "envlang.begin.unknown-environment";
-    }
-
     /// A `\raw` verbatim block missing its `\endraw` terminator.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, DiagnosticInfo)]
+    #[diagnostic(
+        id = "envlang.raw.missing-terminator",
+        message = "missing ‘\\endraw’ before end of input",
+        no_constructor
+    )]
     struct MissingRawTerminator;
-
-    impl fmt::Display for MissingRawTerminator {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("missing ‘\\endraw’ before end of input")
-        }
-    }
-
-    impl DiagnosticInfo for MissingRawTerminator {
-        const IDENTIFIER: &'static str = "envlang.raw.missing-terminator";
-    }
 
     // --- the environment-shaped invocation composition (the plan's "test-lang
     // --- EnvironmentSpec analog"): rigid `\begin{name}` scaffolding, environment lookup,

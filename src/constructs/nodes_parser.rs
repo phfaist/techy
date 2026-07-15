@@ -81,7 +81,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 
-use crate::error::{DiagnosticInfo, ParseError};
+use crate::error::{DiagnosticInfo, ParseError, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
@@ -97,8 +97,12 @@ use super::{
 /// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
 /// ([`Lang::resolve_command`] returned `None`) — the content loop recovers with a
 /// span-backed chars fallback (DESIGN_RATIONALE.md §3.8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.nodes_parser.unresolvable-command",
+    message = "cannot resolve command ‘{escape_char}{name}’"
+)]
 pub struct UnresolvableCommand {
     /// The command name, as written (without the escape character).
     pub name: String,
@@ -106,55 +110,21 @@ pub struct UnresolvableCommand {
     pub escape_char: char,
 }
 
-impl UnresolvableCommand {
-    /// The condition for the command `escape_char` + `name`.
-    pub fn new(name: impl Into<String>, escape_char: char) -> UnresolvableCommand {
-        UnresolvableCommand { name: name.into(), escape_char }
-    }
-}
-
-impl fmt::Display for UnresolvableCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot resolve command ‘{}{}’", self.escape_char, self.name)
-    }
-}
-
-impl DiagnosticInfo for UnresolvableCommand {
-    const IDENTIFIER: &'static str = "core.nodes_parser.unresolvable-command";
-}
-
 /// Condition: a callable whose invocation requires content — a mandatory argument, a
 /// body ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content))
 /// — was used *bare* where a single expression was required (pylatexenc's
 /// requires-arguments diagnostic) — the expression position recovers by staging the
 /// bare single-token callable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.nodes_parser.expression-callable-requires-content",
+    message = "cannot use ‘{callable}’ as a single expression: it requires content \
+               (arguments or a body)"
+)]
 pub struct ExpressionCallableRequiresContent {
     /// The callable's invocation spelling, as written (`\frac`, `~`).
     pub callable: String,
-}
-
-impl ExpressionCallableRequiresContent {
-    /// The condition for the callable spelled `callable`.
-    pub fn new(callable: impl Into<String>) -> ExpressionCallableRequiresContent {
-        ExpressionCallableRequiresContent { callable: callable.into() }
-    }
-}
-
-impl fmt::Display for ExpressionCallableRequiresContent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "cannot use ‘{}’ as a single expression: it requires content \
-             (arguments or a body)",
-            self.callable
-        )
-    }
-}
-
-impl DiagnosticInfo for ExpressionCallableRequiresContent {
-    const IDENTIFIER: &'static str = "core.nodes_parser.expression-callable-requires-content";
 }
 
 /// Condition: a [`TokenRecovery`](crate::token::TokenRecovery) placeholder token of a
@@ -162,8 +132,9 @@ impl DiagnosticInfo for ExpressionCallableRequiresContent {
 /// placeholder). The placeholder stands in for a failed read — it has no real source
 /// bytes behind it — so it cannot be dispatched or parsed as a construct; the loop
 /// recovers with a chars fallback over the error's span.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.nodes_parser.unusable-recovery-token")]
 pub struct UnusableRecoveryToken {
     /// The placeholder's spelling (the specials trigger or open delimiter as written).
     pub spelling: String,
@@ -172,7 +143,7 @@ pub struct UnusableRecoveryToken {
 }
 
 /// Which token kind an [`UnusableRecoveryToken`] placeholder had.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnusableRecoveryTokenKind {
     /// A `Specials` placeholder (a recognized trigger cannot be invoked without real
@@ -183,16 +154,8 @@ pub enum UnusableRecoveryTokenKind {
     GroupOpen,
 }
 
-impl UnusableRecoveryToken {
-    /// The condition for a placeholder spelled `spelling`.
-    pub fn new(
-        spelling: impl Into<String>,
-        kind: UnusableRecoveryTokenKind,
-    ) -> UnusableRecoveryToken {
-        UnusableRecoveryToken { spelling: spelling.into(), kind }
-    }
-}
-
+// Hand-written wording: the message varies by placeholder kind (a match, which the
+// message format string cannot express).
 impl fmt::Display for UnusableRecoveryToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
@@ -211,10 +174,6 @@ impl fmt::Display for UnusableRecoveryToken {
             ),
         }
     }
-}
-
-impl DiagnosticInfo for UnusableRecoveryToken {
-    const IDENTIFIER: &'static str = "core.nodes_parser.unusable-recovery-token";
 }
 
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
@@ -1851,19 +1810,14 @@ mod tests {
     // --- TokenErrorKind::Custom (§3.8: one extension mechanism serves both layers) --------
 
     /// A language-defined token condition, carried by `TokenErrorKind::Custom`.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+    #[diagnostic(
+        id = "taboolang.token.taboo-char",
+        message = "the character ‘{ch}’ is taboo here",
+        no_constructor
+    )]
     struct TabooChar {
         ch: char,
-    }
-
-    impl fmt::Display for TabooChar {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "the character ‘{}’ is taboo here", self.ch)
-        }
-    }
-
-    impl DiagnosticInfo for TabooChar {
-        const IDENTIFIER: &'static str = "taboolang.token.taboo-char";
     }
 
     /// A `scan_specials` reporting a recoverable `Custom` token error on `!` — the
@@ -2045,23 +1999,14 @@ mod tests {
 
     /// The refinement demonstration's own condition: structured, so tools see it — not
     /// just better prose.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+    #[diagnostic(
+        id = "refinelang.commands.not-available",
+        message = "command ‘\\{name}’ is not available: this language defines no commands",
+        no_constructor
+    )]
     struct CommandsNotAvailable {
         name: String,
-    }
-
-    impl fmt::Display for CommandsNotAvailable {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(
-                f,
-                "command ‘\\{}’ is not available: this language defines no commands",
-                self.name
-            )
-        }
-    }
-
-    impl DiagnosticInfo for CommandsNotAvailable {
-        const IDENTIFIER: &'static str = "refinelang.commands.not-available";
     }
 
     /// A Lang that refines the core's [`UnresolvableCommand`] into its own condition —
@@ -2742,19 +2687,14 @@ mod tests {
         //
         // The condition is the driver's own, third-party style (§3.8): a root driver
         // defines its diagnoses like any downstream language would.
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, DiagnosticInfo)]
+        #[diagnostic(
+            id = "test.root-driver.stray-group-close",
+            message = "unexpected closing ‘{delim}’",
+            no_constructor
+        )]
         struct StrayGroupClose {
             delim: String,
-        }
-
-        impl fmt::Display for StrayGroupClose {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "unexpected closing ‘{}’", self.delim)
-            }
-        }
-
-        impl DiagnosticInfo for StrayGroupClose {
-            const IDENTIFIER: &'static str = "test.root-driver.stray-group-close";
         }
 
         let content = "a}b";

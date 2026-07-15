@@ -162,6 +162,33 @@ fn enum_derive_serializes_kebab_cased_variant_names() {
 }
 
 #[test]
+fn migrated_core_conditions_serialize_their_payload() {
+    // The built-in conditions use the derive (migration, July 2026): their
+    // `serializable_data()` now emits every payload field instead of the empty-map
+    // default — including payload enums via `#[derive(ToDiagnosticValue)]`.
+    let unresolvable = techy::UnresolvableCommand::new("frac", '\\');
+    assert_eq!(
+        DiagnosticInfo::serializable_data(&unresolvable),
+        DiagnosticValue::Map(vec![
+            ("name".into(), DiagnosticValue::Str("frac".into())),
+            ("escape_char".into(), DiagnosticValue::Str("\\".into())),
+        ])
+    );
+
+    let missing = techy::MissingEnvironmentTerminator::new(
+        "itemize",
+        techy::MissingTerminatorFound::EndOfInput,
+    );
+    assert_eq!(
+        DiagnosticInfo::serializable_data(&missing),
+        DiagnosticValue::Map(vec![
+            ("environment".into(), DiagnosticValue::Str("itemize".into())),
+            ("found".into(), DiagnosticValue::Str("end-of-input".into())),
+        ])
+    );
+}
+
+#[test]
 fn derived_condition_flows_through_diagnostic_carriers() {
     let source: Arc<Source> = Arc::new(Source::new("hello"));
     let diagnostic = Diagnostic::error(sample(), SourceSpan::new(&source, 0..2));
