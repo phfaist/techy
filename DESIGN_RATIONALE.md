@@ -1912,11 +1912,30 @@ identity.
 from impls, so no wrapper is needed; a wrapper would make downcasts target the wrapper,
 splitting each condition's identity in two); getters over pub fields (invariant-free
 records).
-*Future:* `#[derive(DiagnosticInfo)]` proc-macro, thiserror-style (`#[diagnostic(id = "…",
-message = "…{field}…")]`; rustc's internal `derive(Diagnostic)` is prior art) — generates
-identifier, message wording, and serialization keys from the struct definition, making drift
-between them impossible; build-time dependency only, runtime stays zero-dep. Unsealing later
-is non-breaking; re-sealing is not.
+(Unsealing `DiagnosticData` later is non-breaking; re-sealing is not.)
+
+**Condition-declaration derive: `#[derive(DiagnosticInfo)]`, syn accepted** — DECIDED (user +
+design session, July 2026; realizes the derive previously noted as *Future* here; the
+generated surface is specified in ARCHITECTURE.md §"Condition declaration via derive").
+Key points from the discussion: **(1)** derive over a `macro_rules!` DSL — the struct stays
+plain Rust (rustdoc, IDE, "the struct is the schema" stays literally true), and a DSL would
+be a third declaration style to migrate once the derive lands. **(2)** Serializability is
+enforced by the *compiler*, not the macro: `serializable_data()` routes fields through the
+`ToDiagnosticValue` helper trait, so the macro never parses types and an unserializable field
+is a field-spanned bound error. Field names as wire keys is safe coupling — renaming a `pub`
+field is already breaking, so the cadences align (unlike type-name vs. identifier). **(3)**
+Enum fields cannot be covered by the struct's derive: a proc macro cannot see other items'
+definitions, and shared payload enums would emit duplicate impls (coherence). The
+annotation-free alternative — an autoref-specialization `Debug` fallback — was rejected: it
+dissolves the enforcement and couples wire output to unstable `Debug` formatting. Hence
+`#[derive(ToDiagnosticValue)]` on payload enums (one word on an existing derive line).
+**(4)** Why syn is acceptable despite the zero-dep stance: it is build-time only (runtime
+stays zero-dep), and the alternative was examined seriously — a hand-rolled derive over raw
+`proc_macro` is feasible (spans live on raw token trees), but the requirements that decided
+it were error-message quality (spanned validation at every attribute site, field-spanned
+generation) and scope (constructor, message DSL, `serializable_data`, the enum derive):
+together they re-derive syn's machinery at ~600+ hand-rolled lines that grow with every
+grammar extension.
 
 **Two identities: the type in-process, an explicit string on the wire** — DECIDED (user +
 design sessions, July 2026). In-process identity is the concrete type (downcast via `Any` —

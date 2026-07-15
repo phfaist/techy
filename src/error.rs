@@ -33,6 +33,11 @@ use core::fmt;
 use crate::source::{SourceOrigin, SourceProvenance, SourceSpan};
 use crate::token::TokenErrorKind;
 
+// The condition-declaration derives (ARCHITECTURE.md "Condition declaration via
+// derive"), re-exported next to the traits they implement: `#[derive(DiagnosticInfo)]`
+// for condition structs, `#[derive(ToDiagnosticValue)]` for field-less payload enums.
+pub use techy_derive::{DiagnosticInfo, ToDiagnosticValue};
+
 /// A structured parse condition, as implemented on a plain public-field data struct
 /// (DESIGN_RATIONALE.md §3.8).
 ///
@@ -150,6 +155,111 @@ impl DiagnosticValue {
     /// that serializes nothing.
     pub fn empty_map() -> DiagnosticValue {
         DiagnosticValue::Map(Vec::new())
+    }
+}
+
+/// Conversion of one payload field into its [`DiagnosticValue`] projection — the
+/// serialization bridge behind `#[derive(DiagnosticInfo)]`'s generated
+/// [`serializable_data`](DiagnosticInfo::serializable_data)
+/// (DESIGN_RATIONALE.md §3.8).
+///
+/// Implemented for the payload primitives below (booleans, integers, `char`, strings,
+/// `Option`, slices/`Vec`, references, and `DiagnosticValue` itself). The derive routes
+/// every field through this trait, so a field of any other type is rejected by the
+/// *compiler* with an error at the field's declaration — serializability of the whole
+/// payload is enforced by trait bounds, not by a macro-side type check. Field-less
+/// payload enums implement it via `#[derive(ToDiagnosticValue)]` (the kebab-cased
+/// variant name); anything else can implement it by hand.
+pub trait ToDiagnosticValue {
+    /// This value's serialization-boundary projection.
+    fn to_diagnostic_value(&self) -> DiagnosticValue;
+}
+
+impl ToDiagnosticValue for bool {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        DiagnosticValue::Bool(*self)
+    }
+}
+
+/// Integers that fit `i64` losslessly.
+macro_rules! int_to_diagnostic_value {
+    ($($t:ty),*) => {$(
+        impl ToDiagnosticValue for $t {
+            fn to_diagnostic_value(&self) -> DiagnosticValue {
+                DiagnosticValue::Int(i64::from(*self))
+            }
+        }
+    )*};
+}
+int_to_diagnostic_value!(i8, i16, i32, i64, u8, u16, u32);
+
+/// Integers that may exceed `i64`: saturate (never panic — CLAUDE.md panic policy).
+macro_rules! saturating_int_to_diagnostic_value {
+    ($($t:ty),*) => {$(
+        impl ToDiagnosticValue for $t {
+            fn to_diagnostic_value(&self) -> DiagnosticValue {
+                DiagnosticValue::Int(i64::try_from(*self).unwrap_or(i64::MAX))
+            }
+        }
+    )*};
+}
+saturating_int_to_diagnostic_value!(u64, usize);
+
+impl ToDiagnosticValue for isize {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        // isize is at most 64 bits on every supported target; the cast is lossless.
+        DiagnosticValue::Int(*self as i64)
+    }
+}
+
+impl ToDiagnosticValue for char {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        DiagnosticValue::Str(String::from(*self))
+    }
+}
+
+impl ToDiagnosticValue for str {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        DiagnosticValue::Str(String::from(self))
+    }
+}
+
+impl ToDiagnosticValue for String {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        DiagnosticValue::Str(self.clone())
+    }
+}
+
+impl<T: ToDiagnosticValue> ToDiagnosticValue for Option<T> {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        match self {
+            Some(value) => value.to_diagnostic_value(),
+            None => DiagnosticValue::Null,
+        }
+    }
+}
+
+impl<T: ToDiagnosticValue> ToDiagnosticValue for [T] {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        DiagnosticValue::List(self.iter().map(T::to_diagnostic_value).collect())
+    }
+}
+
+impl<T: ToDiagnosticValue> ToDiagnosticValue for Vec<T> {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        self.as_slice().to_diagnostic_value()
+    }
+}
+
+impl<T: ToDiagnosticValue + ?Sized> ToDiagnosticValue for &T {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        (**self).to_diagnostic_value()
+    }
+}
+
+impl ToDiagnosticValue for DiagnosticValue {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        self.clone()
     }
 }
 
@@ -861,4 +971,29 @@ mod tests {
 
     // Exceeds LineIndex's default max scan length of 100_000 bytes ("a\n" is 2 bytes).
     const DEFAULT_MAX_TEST_LEN: usize = 60_000;
+
+    /// The derive works *inside* the defining crate too (via `extern crate self as
+    /// techy` in lib.rs) — the in-crate migration of the built-in conditions relies on
+    /// this. The full derive surface is exercised from the consumer side in
+    /// tests/derive_conditions.rs.
+    #[derive(Debug, Clone, PartialEq, Eq, crate::error::DiagnosticInfo)]
+    #[non_exhaustive]
+    #[diagnostic(id = "test.error.derived-condition", message = "derived: {detail}")]
+    struct DerivedCondition {
+        detail: String,
+    }
+
+    #[test]
+    fn derive_works_in_crate() {
+        let condition = DerivedCondition::new("boom");
+        assert_eq!(DerivedCondition::IDENTIFIER, "test.error.derived-condition");
+        assert_eq!(condition.to_string(), "derived: boom");
+        assert_eq!(
+            DiagnosticInfo::serializable_data(&condition),
+            DiagnosticValue::Map(vec![(
+                "detail".to_string(),
+                DiagnosticValue::Str("boom".to_string())
+            )])
+        );
+    }
 }
