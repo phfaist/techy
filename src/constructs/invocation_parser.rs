@@ -50,17 +50,22 @@
 //!
 //! # Slots
 //!
-//! `StdInvocationParser` is macro-shaped: it parses no slots and debug-asserts that the
-//! spec declares none. Slot content is inseparable from terminator syntax, which is
-//! parser business, not spec data (§3.6) — an environment-shaped spec overrides
+//! `StdInvocationParser` is macro-shaped: it parses no body and records empty
+//! [`ParsedSlots`]. Slots are record-level vocabulary with no spec-side declaration
+//! (decided July 2026, slots session — there is nothing a spec could declare that this
+//! parser wouldn't parse): body content is inseparable from terminator syntax and from
+//! invocation facts like the `\end{name}` back-reference, so a body-bearing spec
+//! overrides
 //! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) with a
-//! composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser)
-//! (Phase 6.6; the argument half is shared as [`parse_declared_arguments`]).
+//! composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser) and
+//! mints its own [`ParsedSlot`](crate::node::ParsedSlot) records (Phase 6.6; the
+//! argument half is shared as [`parse_declared_arguments`]) — and says "I take
+//! material" via [`requires_content`](crate::spec::CallableSpec::requires_content), the
+//! expression-position guard's channel.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
-use core::mem;
 
 use crate::engine::{Frame, FrameTitle};
 use crate::node::{
@@ -86,8 +91,14 @@ use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
 ///
 /// Each argument runs under its traceback frame (`argument #N of ‘\frac’`, §3.8):
 /// `name_span` is the invocation spelling's span, quoted into the title at snapshot
-/// time — the spec is de-keyed, so the spelling must come from the caller.
-pub(crate) fn parse_declared_arguments<L: Lang>(
+/// time — the spec is de-keyed, so the spelling must come from the caller (an
+/// environment composition passes its *name*'s span, so frames quote `align`, not
+/// `\begin`).
+///
+/// Public as a takeover-composition building block (decided July 2026, slots session):
+/// an environment-shaped `make_invocation_parser` override runs this same loop between
+/// its scaffolding read and its body parse.
+pub fn parse_declared_arguments<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     callable_spec: &Arc<dyn CallableSpec<L>>,
     name_span: Span,
@@ -105,15 +116,15 @@ pub(crate) fn parse_declared_arguments<L: Lang>(
             title: FrameTitle::Callable {
                 spec: Arc::clone(callable_spec),
                 role: FrameRole::Argument { index },
-                name: SourceSpan::new(&cx.source, name_span.range()),
+                name: SourceSpan::new(&cx.source, name_span),
             },
-            span: SourceSpan::new(&cx.source, Span::empty(cx.tokens.pos()).range()),
+            span: SourceSpan::new(&cx.source, Span::empty(cx.tokens.pos())),
         };
-        let outer_state = mem::replace(&mut cx.state, argument_state);
         let result = cx.with_frame(frame, |cx| {
-            argument_spec.parser.parse_argument(cx, argument_spec)
+            cx.with_scoped_state(argument_state, |cx| {
+                argument_spec.parser.parse_argument(cx, argument_spec)
+            })
         });
-        cx.state = outer_state;
         match result? {
             Some(region) => {
                 let start = children.len() as u32;
@@ -151,19 +162,10 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
-        if !self.invocation.spec.slots().is_empty() {
-            return Err(cx.implementation_error(
-                "StdInvocationParser is macro-shaped: a spec declaring slots overrides \
-                 make_invocation_parser with a composition that knows its terminator \
-                 syntax (e.g., EnvironmentBodyParser)",
-                self.invocation.token.span,
-            ));
-        }
-
         let token = self.invocation.token;
         // The invocation spelling (trigger minus syntactic post-space) titles the
         // argument frames.
-        let name_span = Span::new(token.span.start, token.post_space().start);
+        let name_span = Span::new(token.span.start(), token.post_space().start());
         let (children, arguments) =
             parse_declared_arguments(cx, self.invocation.spec, name_span)?;
 
@@ -175,7 +177,7 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
             .last()
             .and_then(|last| cx.session.builder.staged_nodes().get(*last))
             .map(|child| child.span().end())
-            .unwrap_or(token.span.end);
+            .unwrap_or(token.span.end());
 
         let data = CallableData {
             callable_type: self.invocation.callable_type,
@@ -192,11 +194,11 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
             .builder
             .add(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, token.span.start..end),
+                SourceSpan::new(&cx.source, token.span.start()..end),
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.implementation_error(error, Span::new(token.span.start, end)))?;
+            .map_err(|error| cx.implementation_error(error, Span::new(token.span.start(), end)))?;
         Ok((id, None))
     }
 }

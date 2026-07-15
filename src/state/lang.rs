@@ -88,7 +88,10 @@ impl NodeExtTypes for () {
 /// All associated types are `Send + Sync`: thread-safe states and trees are a core
 /// contract (decided July 2026; see DESIGN_RATIONALE.md) — in practice these types are
 /// enums, flags, and `Arc`s, so the bounds are nearly free.
-pub trait Lang: Sized {
+// `'static` because a `Lang` is a compile-time type bundle (a unit marker type in
+// practice) and `CallableSpec<L>: Any` (the downcast contract) requires every spec
+// type — including generic ones like `StdCallableSpec<L>` — to be `'static`.
+pub trait Lang: Sized + 'static {
     /// Identifier of a group *class* — the language-native taxonomy of "a delimited
     /// region viewed as one object" (the latexlike preset: content group vs. math
     /// group), **fully detached from delimiter spellings** (revised July 2026; formerly
@@ -422,7 +425,7 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
 ///
 /// A language needing *any* customization implements [`Lang`] directly instead (the
 /// blanket impl makes the two mutually exclusive).
-pub trait SimpleLang: Sized {}
+pub trait SimpleLang: Sized + 'static {}
 
 impl<T: SimpleLang> Lang for T {
     type GroupTypeId = u32;

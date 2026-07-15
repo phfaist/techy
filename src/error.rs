@@ -441,8 +441,10 @@ impl<O: SourceOrigin> ParseError<O> {
         ParseError { data, span, frames }
     }
 
-    /// Attach a traceback snapshot (the direct-abort sites, where no funnel runs).
-    pub(crate) fn with_frames(mut self, frames: Vec<TraceFrame<O>>) -> ParseError<O> {
+    /// Attach a traceback snapshot (the direct-abort sites, where no funnel runs) —
+    /// typically [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames),
+    /// its public companion for custom parser code.
+    pub fn with_frames(mut self, frames: Vec<TraceFrame<O>>) -> ParseError<O> {
         self.frames = frames;
         self
     }

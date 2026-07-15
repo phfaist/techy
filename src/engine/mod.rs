@@ -180,8 +180,12 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
-    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md §3.8).
-    pub(crate) fn snapshot_frames(&self) -> Vec<TraceFrame<L::SourceOrigin>> {
+    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md §3.8). Public for
+    /// custom parser code building its own [`ParseError`]s
+    /// ([`ParseError::with_frames`](crate::error::ParseError::with_frames)); the
+    /// stack itself is only mutated through
+    /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame).
+    pub fn snapshot_frames(&self) -> Vec<TraceFrame<L::SourceOrigin>> {
         self.frames.iter().rev().map(Frame::render).collect()
     }
 
@@ -452,7 +456,7 @@ mod tests {
             let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };
             let id = cx.session.builder.add(
                 NodeKind::chars(token.span),
-                crate::source::SourceSpan::new(&cx.source, token.span.range()),
+                crate::source::SourceSpan::new(&cx.source, token.span),
                 cx.state.clone(),
                 vec![],
             ).unwrap();
@@ -469,12 +473,7 @@ mod tests {
         let mut reader = TokenListReader::new(tokens);
         let mut session = ParserSession::new(Recovery::Tolerant);
 
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: source.clone(),
-            state: st.clone(),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, source.clone(), st.clone(), &mut session);
         let mut parser = OneCharParser;
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
@@ -491,12 +490,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new(Recovery::Tolerant);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: source.clone(),
-            state: st,
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session);
 
         let condition = TestUnresolvable { name: "boom".into() };
         assert!(cx.recover(condition, span(&source, 0..1)).is_ok());
@@ -511,12 +505,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new(Recovery::Tolerant);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: st,
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session);
 
         let frame =
             Frame { title: FrameTitle::Static("test frame"), span: span(&source, 0..1) };
@@ -541,12 +530,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new(Recovery::Strict);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: st,
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session);
 
         // The closure body aborts (strict recover); with_frame still pops — the pop
         // after the closure returns covers the Err path by construction.

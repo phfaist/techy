@@ -46,13 +46,14 @@ pub use argument_parsers::{
 };
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use environment_parser::{
-    EnvironmentBody, EnvironmentBodyParser, EnvironmentTerminatorMismatch,
-    MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingTerminatorFound,
+    read_rigid_name_group, EnvironmentBody, EnvironmentBodyParser,
+    EnvironmentTerminatorMismatch, MalformedEnvironmentTerminator,
+    MissingEnvironmentTerminator, MissingTerminatorFound, NameGroup,
 };
 pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
-pub use invocation_parser::StdInvocationParser;
+pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};
 pub use nodes_parser::{
-    ExpressionCallableTakesArguments, NodesOutcome, NodesParser, StopCause, StopSpec,
+    ExpressionCallableRequiresContent, NodesOutcome, NodesParser, StopCause, StopSpec,
     TokenStopCondition, TokenStopKind, UnresolvableCommand, UnusableRecoveryToken,
     UnusableRecoveryTokenKind,
 };
@@ -69,32 +70,6 @@ use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenReader};
 
-/// Peek under the current state, mapping a tokenizer error per the recovery policy:
-/// strict mode aborts with the token error (mirroring the content loop); tolerant mode
-/// reports `None` **without diagnosing or consuming** — the caller treats the position
-/// as unusable (argument absent, terminator malformed) and the enclosing content loop
-/// re-reads the error and applies its own token recovery, avoiding a double report.
-///
-/// A token error carrying **no** recovery is unrecoverable and aborts even under
-/// [`Recovery::Tolerant`] — mirroring the content loop, whose re-read would abort
-/// anyway; reporting `None` first would only add a spurious absent-position recovery
-/// (and its diagnostic) on the way down.
-pub(crate) fn try_peek<'s, L: Lang>(
-    cx: &mut ParseContext<'_, 's, L>,
-) -> ConstructParserResult<L, Option<Token<'s, L>>> {
-    match cx.tokens.peek(&cx.state) {
-        Ok(token) => Ok(Some(token)),
-        Err(error) => {
-            if cx.session.recovery == Recovery::Tolerant && error.recovery().is_some() {
-                return Ok(None);
-            }
-            let span = SourceSpan::new(&cx.source, error.span().range());
-            Err(ParseError::from_token_error(error.kind().clone(), span)
-                .with_frames(cx.session.snapshot_frames()))
-        }
-    }
-}
-
 /// The live frame covering a resolved invocation's parse (the dispatch push site,
 /// DESIGN_RATIONALE.md §3.8): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
@@ -105,14 +80,14 @@ pub(crate) fn invocation_frame<L: Lang>(
     invocation: &Invocation<'_, '_, L>,
 ) -> Frame<L> {
     let token = invocation.token;
-    let name_span = Span::new(token.span.start, token.post_space().start);
+    let name_span = Span::new(token.span.start(), token.post_space().start());
     Frame {
         title: FrameTitle::Callable {
             spec: Arc::clone(invocation.spec),
             role: FrameRole::Invocation,
-            name: SourceSpan::new(&cx.source, name_span.range()),
+            name: SourceSpan::new(&cx.source, name_span),
         },
-        span: SourceSpan::new(&cx.source, token.span.range()),
+        span: SourceSpan::new(&cx.source, token.span),
     }
 }
 
@@ -138,7 +113,90 @@ pub struct ParseContext<'a, 's, L: Lang> {
     pub session: &'a mut ParserSession<L>,
 }
 
-impl<L: Lang> ParseContext<'_, '_, L> {
+impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
+    /// Bundle the four parse inputs into a context. Prefer this over a struct literal
+    /// (the fields stay public for access): the context is the type's stated "one place
+    /// to grow" (depth limits, cancellation), and construction through `new` keeps
+    /// future fields from breaking every driver.
+    pub fn new(
+        tokens: &'a mut dyn TokenReader<'s, L>,
+        source: Arc<Source<L::SourceOrigin>>,
+        state: Arc<ParsingState<L>>,
+        session: &'a mut ParserSession<L>,
+    ) -> ParseContext<'a, 's, L> {
+        ParseContext { tokens, source, state, session }
+    }
+
+    /// Probe the token at the current position under `state`, mapping a tokenizer error
+    /// per the recovery policy — the **probing peek** of the argument-probe protocol:
+    /// strict mode aborts with the token error (mirroring the content loop); tolerant
+    /// mode reports `None` **without diagnosing or consuming** — the caller treats the
+    /// position as unusable (argument absent, terminator malformed) and the enclosing
+    /// content loop re-reads the error and applies its own token recovery, avoiding a
+    /// double report.
+    ///
+    /// A token error carrying **no** recovery is unrecoverable and aborts even under
+    /// [`Recovery::Tolerant`] — mirroring the content loop, whose re-read would abort
+    /// anyway; reporting `None` first would only add a spurious absent-position recovery
+    /// (and its diagnostic) on the way down.
+    ///
+    /// `state` is passed explicitly (usually `&Arc::clone(&cx.state)`; peeking never
+    /// consumes) so a parser can probe under a derived state — an optional-argument
+    /// parser peeking with its minted group rule in force — without swapping
+    /// [`state`](ParseContext::state).
+    pub fn probe_token(
+        &mut self,
+        state: &Arc<ParsingState<L>>,
+    ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
+        match self.tokens.peek(state) {
+            Ok(token) => Ok(Some(token)),
+            Err(error) => {
+                if self.session.recovery == Recovery::Tolerant && error.recovery().is_some() {
+                    return Ok(None);
+                }
+                let span = SourceSpan::new(&self.source, error.span());
+                Err(ParseError::from_token_error(error.kind().clone(), span)
+                    .with_frames(self.session.snapshot_frames()))
+            }
+        }
+    }
+
+    /// Run `parser` with [`state`](ParseContext::state) scoped to `state` for the
+    /// duration of the sub-parse, restoring the outer state afterwards — the **descent
+    /// primitive** for every construct that parses child content under a derived state
+    /// (group interiors, argument extents, slot bodies; the pylatexenc
+    /// `walker.parse_content(parser, …, parsing_state)` analog).
+    ///
+    /// This is ordering enforcement, not unwind safety: hand-rolled swap/restore must
+    /// remember to restore **before** `?`-propagating the result; here the restore is
+    /// structural. The returned [`ParsingStateDelta`] is the construct's after-effect
+    /// for the caller, passed through **unapplied** — whether and where it applies is
+    /// caller business (the §state "caller applies deltas" law).
+    pub fn parse_scoped<P>(
+        &mut self,
+        state: Arc<ParsingState<L>>,
+        parser: &mut P,
+    ) -> ConstructParserResult<L, (P::Output, Option<ParsingStateDelta<L>>)>
+    where
+        P: ConstructParser<L> + ?Sized,
+    {
+        self.with_scoped_state(state, |cx| parser.parse(cx))
+    }
+
+    /// The scoped-state primitive under [`parse_scoped`](ParseContext::parse_scoped),
+    /// for the descents that are not `ConstructParser`-shaped (the per-argument
+    /// delta around `ArgumentParser::parse_argument`).
+    pub(crate) fn with_scoped_state<R>(
+        &mut self,
+        state: Arc<ParsingState<L>>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = core::mem::replace(&mut self.state, state);
+        let result = f(self);
+        self.state = outer;
+        result
+    }
+
     /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md §3.8):
     /// boxes the condition and hands it to the session's record-or-abort primitive
     /// ([`ParserSession::recover`]). Tolerant mode records the condition as an
@@ -197,7 +255,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     ) -> ParseError<L::SourceOrigin> {
         ParseError::new(
             ImplementationError::new(detail.to_string()),
-            SourceSpan::new(&self.source, span.range()),
+            SourceSpan::new(&self.source, span),
         )
         .with_frames(self.session.snapshot_frames())
     }
@@ -288,7 +346,9 @@ pub trait ConstructParser<L: Lang> {
 pub struct Invocation<'a, 's, L: Lang> {
     /// The invocation form the trigger resolved to.
     pub callable_type: L::CallableTypeId,
-    /// The invocation spelling, as written (the node stores an owned copy).
+    /// The trigger's invocation spelling, as written. The *standard* parser stores an
+    /// owned copy on the node; a takeover composition may store a name of its own
+    /// (an environment node records the environment's name, not `begin`).
     pub name: &'s str,
     /// The behavior spec driving the parse.
     pub spec: &'a Arc<dyn CallableSpec<L>>,

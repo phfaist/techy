@@ -42,7 +42,6 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
-use core::mem;
 
 use crate::engine::{Frame, FrameTitle};
 use crate::error::DiagnosticInfo;
@@ -164,24 +163,22 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
         let frame = Frame {
             title: FrameTitle::Quoted {
                 label: "group",
-                name: SourceSpan::new(&cx.source, self.open_span.range()),
+                name: SourceSpan::new(&cx.source, self.open_span),
             },
-            span: SourceSpan::new(&cx.source, self.open_span.range()),
+            span: SourceSpan::new(&cx.source, self.open_span),
         };
-        let outer_state = mem::replace(&mut cx.state, interior_state);
-        let result = cx.with_frame(frame, |cx| interior.parse(cx));
-        cx.state = outer_state;
-        let (outcome, delta) = result?;
+        let (outcome, delta) =
+            cx.with_frame(frame, |cx| cx.parse_scoped(interior_state, &mut interior))?;
         debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
 
         let (close, end) = match outcome.stop {
             // The close was consumed at match time; its span becomes the recorded
             // delimiter (it cannot be re-peeked — hence the span on the cause).
-            StopCause::TokenCondition { span } => (TextContent::Spanned(span), span.end),
+            StopCause::TokenCondition { span } => (TextContent::Spanned(span), span.end()),
             StopCause::EndOfInput => {
                 cx.recover(
                     UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::EndOfInput),
-                    SourceSpan::new(&cx.source, self.open_span.range()),
+                    SourceSpan::new(&cx.source, self.open_span),
                 )?;
                 (TextContent::empty(), cx.tokens.pos())
             }
@@ -190,9 +187,9 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             StopCause::UnexpectedGroupClose { span } => {
                 cx.recover(
                     UnclosedGroup::new(&*self.rule.close, UnclosedGroupFound::StrayClose),
-                    SourceSpan::new(&cx.source, span.range()),
+                    SourceSpan::new(&cx.source, span),
                 )?;
-                (TextContent::empty(), span.start)
+                (TextContent::empty(), span.start())
             }
             StopCause::NodeCondition => {
                 unreachable!("the group parser sets no node stop condition")
@@ -205,13 +202,13 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             close,
             ext: Default::default(),
         };
-        let span = Span::new(self.open_span.start, end);
+        let span = Span::new(self.open_span.start(), end);
         let id = cx
             .session
             .builder
             .add(
                 NodeKind::group(data),
-                SourceSpan::new(&cx.source, span.range()),
+                SourceSpan::new(&cx.source, span),
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
@@ -293,12 +290,7 @@ mod tests {
         let rule = Arc::clone(rule);
         reader.move_past(&open, true);
         let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: Arc::clone(&st),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
         let mut parser = GroupParser::new(open.span, rule);
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());

@@ -152,7 +152,7 @@ impl<'s, L: Lang> Token<'s, L> {
     /// Create a token.
     pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
         debug_assert!(
-            pre_space.end == span.start,
+            pre_space.end() == span.start(),
             "pre_space {:?} must end exactly at span start {:?}",
             pre_space,
             span
@@ -161,7 +161,7 @@ impl<'s, L: Lang> Token<'s, L> {
             &kind
         {
             debug_assert!(
-                post_space.end == span.end && post_space.start >= span.start,
+                post_space.end() == span.end() && post_space.start() >= span.start(),
                 "post_space {:?} must be a trailing sub-range of span {:?}",
                 post_space,
                 span
@@ -169,7 +169,7 @@ impl<'s, L: Lang> Token<'s, L> {
         }
         if let TokenKind::Comment { start, post_space, .. } = &kind {
             debug_assert!(
-                start.start == span.start && start.end <= post_space.start,
+                start.start() == span.start() && start.end() <= post_space.start(),
                 "comment start {:?} must be a leading sub-range of span {:?} ending before post_space {:?}",
                 start,
                 span,
@@ -188,7 +188,7 @@ impl<'s, L: Lang> Token<'s, L> {
             TokenKind::Command { post_space, .. } | TokenKind::Comment { post_space, .. } => {
                 *post_space
             }
-            _ => Span::empty(self.span.end),
+            _ => Span::empty(self.span.end()),
         }
     }
 }

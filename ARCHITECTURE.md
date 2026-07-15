@@ -389,15 +389,19 @@ systematic across the crate: `…Kind` = closed core enum, exhaustively matchabl
 /// no invocation form; one spec may back several names (\emph and \textit can share).
 pub trait CallableSpec<L: Lang> {
     // (amended July 2026: an argument IS a parser — pylatexenc's LatexArgumentSpec.
-    // ArgumentSpec<L> = { parser: ArgumentParserSpec<L>, name, parsing_state_delta };
-    // SlotSpec<L> = { name, parsing_state_delta }. Arc-shared so parsed nodes record
-    // which spec each argument was parsed against. See DESIGN_RATIONALE §3.4.)
+    // ArgumentSpec<L> = { parser: Arc<dyn ArgumentParser<L>>, name, parsing_state_delta },
+    // Arc-shared so parsed nodes record which spec each argument was parsed against.
+    // See DESIGN_RATIONALE §3.4.)
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>];
-    fn slots(&self) -> &[Arc<SlotSpec<L>>];
+    /// Would a bare use as a single-token expression argument be malformed? Default
+    /// derives from arguments() (any argument whose parser cannot match empty); a
+    /// body-bearing takeover spec (\begin, \verb) overrides to true — the only spec-side
+    /// channel for "I take material" (slots session, July 2026; DESIGN_RATIONALE §3.6).
+    fn requires_content(&self) -> bool;
     /// Factory: a fresh, single-use construct parser for one invocation of this callable,
     /// ownership moved to the caller (amended July 2026, Phase 6 plan session — was a
     /// stored-parser accessor; DESIGN_RATIONALE §3.6). Default: the standard declarative
-    /// parser driven by arguments() + slots(). Overriding it is the full-takeover escape
+    /// parser driven by arguments(). Overriding it is the full-takeover escape
     /// hatch (\verb, tabular preambles, FLM constructs) — pylatexenc's most valuable
     /// extensibility property, preserved (its get_node_parser(token) has exactly this
     /// build-a-parser-for-this-token shape).
@@ -409,20 +413,26 @@ pub trait CallableSpec<L: Lang> {
 }
 ```
 
-**Arguments vs. slots.** All callables can have both. *Arguments* configure (each
-`ArgumentSpec` carries its parser: group-delimited / optional / marker / custom / …); *slots*
-contain content regions. Terminators — where the pattern may reference the invocation name
-(`\end{align}` must match the `align` that opened; a `---` fence closes with `---`) — are
-*parser* business, not spec vocabulary (decided July 2026, Phase 6 plan session): the
-terminator data parameterizes the core `EnvironmentBodyParser`, and `SlotSpec` stays
-`{ name, parsing_state_delta }` (DESIGN_RATIONALE §3.6). A macro has no slots; an
-environment has exactly one (its body); specials
-usually have none but may have any number (a fence-block construct with `+++` separators is
-expressible as a specials callable with multiple slots). The boundary is a guideline, not a
-theorem (`\verb`'s delimited content could be argued either way); the spec decides, and the
-machinery underneath is shared, so nothing breaks structurally either way.
+**Arguments vs. slots.** *Arguments* configure an invocation (each `ArgumentSpec` carries
+its parser: group-delimited / optional / marker / custom / …) and are declared spec-side.
+*Slots* — a parsed callable's content regions — are **record-level vocabulary only**
+(slots session, July 2026; supersedes the earlier spec-side `SlotSpec` list): body parsing
+needs invocation facts no declarative list can supply (the `\end{name}` back-reference,
+the arguments parsed so far — pylatexenc's `make_body_parser(token, nodeargd, …)`
+precedent), so a body-bearing spec's `make_invocation_parser` takeover parses the body and
+mints the `ParsedSlot { name, region, ext }` records directly. Terminators — where the
+pattern may reference the invocation name (`\end{align}` must match the `align` that
+opened; a `---` fence closes with `---`) — are *parser* business, not spec vocabulary
+(decided July 2026, Phase 6 plan session): the terminator data parameterizes the core
+`EnvironmentBodyParser`, and a body state delta is an ordinary field of the preset spec
+type that drives the parse (DESIGN_RATIONALE §3.6). A macro has no slots; an environment
+has exactly one (its body); specials usually have none but may have any number (a
+fence-block construct with `+++` separators is expressible as a specials callable with
+multiple slots). The boundary is a guideline, not a theorem (`\verb`'s delimited content
+could be argued either way); the spec decides, and the record machinery underneath is
+shared, so nothing breaks structurally either way.
 
-The core ships one standard implementation (`StdCallableSpec`: the two structure specs +
+The core ships one standard implementation (`StdCallableSpec`: the argument list +
 optional parser override). The familiar `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` names
 survive as constructor helpers in the preset stratum (S2) — "macro" and "environment" are
 invocation forms, not core concepts.

@@ -1,4 +1,4 @@
-//! Argument and slot specs: the declarative description of a callable's invocation shape.
+//! Argument specs: the declarative description of a callable's invocation shape.
 //!
 //! **Modeled on pylatexenc's `LatexArgumentSpec`** (decided July 2026, replacing the
 //! Phase 4 `ArgumentKind` skeleton): an argument *is* a parser, optionally named, and may
@@ -12,17 +12,20 @@
 //! supplies the one-liners resolving pylatexenc's `'{'` / `'['` / `'*'` shorthands into
 //! configured instances (Phase 7).
 //!
-//! Slot terminators are parser business, not spec data (Phase 6 decision): [`SlotSpec`]
-//! stays `{ name, parsing_state_delta }`, and terminator handling (including the
-//! invocation-name back-reference that makes `\end{align}` match the `align` that
-//! opened) parameterizes the core `EnvironmentBodyParser`
-//! (`constructs::environment_parser`).
-//!
 //! **Arguments vs. slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
-//! `\item[label]`); slots contain *content regions* (an environment's body). A macro has
-//! no slots; an environment has exactly one; a fence-block specials construct may have
-//! several. The boundary is a spec-owned guideline, not core law — the machinery
-//! underneath is shared.
+//! `\item[label]`) and are declared here, spec-side. Slots — the *content regions* of a
+//! parsed callable (an environment's body; a fence-block construct may have several) —
+//! are pure **record-level** vocabulary: there is no `SlotSpec` (decided July 2026,
+//! slots session; supersedes the Phase 6 spec-side slot list). Body parsing needs
+//! invocation facts no declarative list can supply — the `\end{name}` back-reference,
+//! the arguments parsed so far (pylatexenc's `EnvironmentSpec.make_body_parser(token,
+//! nodeargd, …)` precedent) — so a body-bearing callable's sanctioned
+//! `make_invocation_parser` takeover parses its body with whatever parsers it chooses
+//! (terminator syntax parameterizes the core `EnvironmentBodyParser`,
+//! `constructs::environment_parser`) and mints the
+//! [`ParsedSlot`](crate::node::ParsedSlot) records directly. Arguments and slots are
+//! thus the same thing at the *record* level (region + name + ext), not at the
+//! spec/parser level.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -110,6 +113,23 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>>;
+
+    /// Can this argument be satisfied consuming nothing — is reporting it absent a
+    /// *valid* outcome rather than a diagnosed recovery? An optional group or `*`
+    /// marker: yes; a mandatory group or expression: no (decided July 2026, slots
+    /// session; pylatexenc's `LatexParserBase.contents_can_be_empty`).
+    ///
+    /// Consulted by [`CallableSpec::requires_content`](super::CallableSpec::requires_content)'s
+    /// default, which the expression position's guard uses to decide whether a callable
+    /// may appear *bare* as a single-token argument (`\frac\mymacro 2` is fine when
+    /// `\mymacro`'s arguments can all match empty). Defaults to `true` (the pylatexenc
+    /// base-class polarity): a parser that *requires* syntax must override to `false` —
+    /// leaving the default costs its callables the guard diagnostic (they dispatch
+    /// fully, parsing their arguments greedily in expression position), whereas a
+    /// wrongly-`false` answer would spuriously diagnose valid input.
+    fn can_match_empty(&self) -> bool {
+        true
+    }
 }
 
 /// One argument accepted by a callable (pylatexenc's `LatexArgumentSpec`).
@@ -146,47 +166,6 @@ impl<L: Lang> ArgumentSpec<L> {
     }
 }
 
-/// One content region of a callable.
-///
-/// Separators and terminators — where terminator patterns may reference the invocation
-/// name (`\end{align}` must match the `align` that opened; a `---` fence closes with
-/// `---`) — are parser business, not spec data (Phase 6 decision): they parameterize the
-/// core `EnvironmentBodyParser` rather than living here.
-pub struct SlotSpec<L: Lang> {
-    /// Optional name for by-name access to parsed slots.
-    pub name: Option<Box<str>>,
-    /// Parse this slot's content under a modified state (pylatexenc's
-    /// `make_body_parsing_state_delta`): verbatim environments, `\begin{align}` bodies in
-    /// math mode, FLM's block-level environments. Applied via `derived()` around the
-    /// slot's extent and reverted structurally.
-    pub parsing_state_delta: Option<ParsingStateDelta<L>>,
-}
-
-impl<L: Lang> SlotSpec<L> {
-    /// An unnamed slot with no state delta.
-    pub fn new() -> SlotSpec<L> {
-        SlotSpec { name: None, parsing_state_delta: None }
-    }
-
-    /// Attach a name for by-name access.
-    pub fn named(mut self, name: impl Into<Box<str>>) -> SlotSpec<L> {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Parse the slot's content under the state derived through `delta`.
-    pub fn with_state_delta(mut self, delta: ParsingStateDelta<L>) -> SlotSpec<L> {
-        self.parsing_state_delta = Some(delta);
-        self
-    }
-}
-
-impl<L: Lang> Default for SlotSpec<L> {
-    fn default() -> Self {
-        SlotSpec::new()
-    }
-}
-
 // Manual impls: derives would demand `L:` bounds although only associated types (already
 // bounded in `Lang`) and `Arc`s are stored. No `PartialEq`: a spec carries a parser
 // (behavior has no structural equality) and possibly a state delta.
@@ -211,20 +190,3 @@ impl<L: Lang> fmt::Debug for ArgumentSpec<L> {
     }
 }
 
-impl<L: Lang> Clone for SlotSpec<L> {
-    fn clone(&self) -> Self {
-        SlotSpec {
-            name: self.name.clone(),
-            parsing_state_delta: self.parsing_state_delta.clone(),
-        }
-    }
-}
-
-impl<L: Lang> fmt::Debug for SlotSpec<L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SlotSpec")
-            .field("name", &self.name)
-            .field("parsing_state_delta", &self.parsing_state_delta)
-            .finish()
-    }
-}

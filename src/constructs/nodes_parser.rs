@@ -123,35 +123,38 @@ impl DiagnosticInfo for UnresolvableCommand {
     const IDENTIFIER: &'static str = "core.nodes_parser.unresolvable-command";
 }
 
-/// Condition: a callable declaring arguments or slots was used where a *single
-/// expression* was required (pylatexenc's requires-arguments diagnostic) — the
-/// expression position recovers by staging the bare single-token callable.
+/// Condition: a callable whose invocation requires content — a mandatory argument, a
+/// body ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content))
+/// — was used *bare* where a single expression was required (pylatexenc's
+/// requires-arguments diagnostic) — the expression position recovers by staging the
+/// bare single-token callable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ExpressionCallableTakesArguments {
+pub struct ExpressionCallableRequiresContent {
     /// The callable's invocation spelling, as written (`\frac`, `~`).
     pub callable: String,
 }
 
-impl ExpressionCallableTakesArguments {
+impl ExpressionCallableRequiresContent {
     /// The condition for the callable spelled `callable`.
-    pub fn new(callable: impl Into<String>) -> ExpressionCallableTakesArguments {
-        ExpressionCallableTakesArguments { callable: callable.into() }
+    pub fn new(callable: impl Into<String>) -> ExpressionCallableRequiresContent {
+        ExpressionCallableRequiresContent { callable: callable.into() }
     }
 }
 
-impl fmt::Display for ExpressionCallableTakesArguments {
+impl fmt::Display for ExpressionCallableRequiresContent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "cannot use ‘{}’ as a single expression: it takes arguments",
+            "cannot use ‘{}’ as a single expression: it requires content \
+             (arguments or a body)",
             self.callable
         )
     }
 }
 
-impl DiagnosticInfo for ExpressionCallableTakesArguments {
-    const IDENTIFIER: &'static str = "core.nodes_parser.expression-takes-arguments";
+impl DiagnosticInfo for ExpressionCallableRequiresContent {
+    const IDENTIFIER: &'static str = "core.nodes_parser.expression-callable-requires-content";
 }
 
 /// Condition: a [`TokenRecovery`](crate::token::TokenRecovery) placeholder token of a
@@ -394,12 +397,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         match &mut self.run {
             Some(run) => {
                 debug_assert!(
-                    run.end == pre_space.start,
+                    run.end() == pre_space.start(),
                     "pre-space {:?} is not contiguous with the pending run {:?}",
                     pre_space,
                     run
                 );
-                run.end = pre_space.end;
+                run.extend_to(pre_space.end());
             }
             None => self.run = Some(pre_space),
         }
@@ -411,12 +414,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         match &mut self.run {
             Some(run) => {
                 debug_assert!(
-                    run.end == token.span.start,
+                    run.end() == token.span.start(),
                     "char token {:?} is not contiguous with the pending run {:?}",
                     token.span,
                     run
                 );
-                run.end = token.span.end;
+                run.extend_to(token.span.end());
             }
             None => self.run = Some(token.span),
         }
@@ -477,7 +480,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         let id = cx
             .session
             .builder
-            .add(kind, SourceSpan::new(&cx.source, span.range()), Arc::clone(&cx.state), vec![])
+            .add(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), vec![])
             .map_err(|error| cx.implementation_error(error, span))?;
         self.nodes.push(id);
         Ok(id)
@@ -559,7 +562,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             }
             return Ok(true);
         }
-        cx.recover(condition, SourceSpan::new(&cx.source, token.span.range()))?;
+        cx.recover(condition, SourceSpan::new(&cx.source, token.span))?;
         if !recovered {
             cx.tokens.move_past(token, true);
         }
@@ -592,9 +595,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx.tokens.move_past(invocation.token, true);
         let spec = invocation.spec;
         let mut parser = spec.make_invocation_parser(invocation);
-        let outer_state = mem::replace(&mut cx.state, base);
-        let result = cx.with_frame(frame, |cx| parser.parse(cx));
-        cx.state = outer_state;
+        let result = cx.with_frame(frame, |cx| cx.parse_scoped(base, &mut *parser));
         drop(parser);
         let (id, delta) = result?;
         self.nodes.push(id);
@@ -630,7 +631,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 Ok(token) => (token, false),
                 Err(error) => {
                     let kind = error.kind().clone();
-                    let span = SourceSpan::new(&cx.source, error.span().range());
+                    let span = SourceSpan::new(&cx.source, error.span());
                     match error.into_recovery() {
                         None => {
                             return Err(ParseError::from_token_error(kind, span)
@@ -741,7 +742,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     }
                     // The token's sub-spans tile its span: start delimiter, content,
                     // post-space.
-                    let content_span = Span::new(start.end, post_space.start);
+                    let content_span = Span::new(start.end(), post_space.start());
                     let kind = NodeKind::comment(*start, content_span, *post_space);
                     if !recovered {
                         cx.tokens.move_past(&token, true);
@@ -846,12 +847,9 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // rule); the group parser gets its two facts — open span and rule.
                     cx.tokens.move_past(&token, true);
                     let mut group = GroupParser::new(token.span, Arc::clone(rule));
-                    // The parser's input state is the policy's answer, scoped by
-                    // structural swap/revert.
-                    let outer_state = mem::replace(&mut cx.state, base);
-                    let result = group.parse(cx);
-                    cx.state = outer_state;
-                    let (id, _delta) = result?; // groups have no after-effect
+                    // The parser's input state is the policy's answer, scoped to the
+                    // descent.
+                    let (id, _delta) = cx.parse_scoped(base, &mut group)?; // groups have no after-effect
                     self.nodes.push(id);
                     if self.test_node_stop(cx, id) {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
@@ -1135,12 +1133,7 @@ mod tests {
     ) -> Result<Parsed<L>, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext {
-            tokens,
-            source: Arc::clone(&source),
-            state: Arc::clone(state),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
         let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
@@ -1159,7 +1152,7 @@ mod tests {
         };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::new(&source, root_span.range()),
+            SourceSpan::new(&source, root_span),
             Arc::clone(state),
             outcome.nodes,
         ).unwrap();
@@ -1823,11 +1816,11 @@ mod tests {
         }
 
         fn move_past(&mut self, tok: &Token<'s, TestLang>, _skip_post_space: bool) {
-            self.pos = tok.span.end;
+            self.pos = tok.span.end();
         }
 
         fn move_to(&mut self, tok: &Token<'s, TestLang>, _rewind_pre_space: bool) {
-            self.pos = tok.span.start;
+            self.pos = tok.span.start();
         }
 
         fn move_to_pos(&mut self, pos: usize) {
@@ -2355,19 +2348,19 @@ mod tests {
                 // The trigger is already consumed whole; its span becomes the "open
                 // delimiter". Raw content runs from there to the `!` marker.
                 let open_span = self.invocation.token.span;
-                let mut content = Span::empty(open_span.end);
+                let mut content = Span::empty(open_span.end());
                 let close_span = loop {
                     let token = cx.tokens.peek(&cx.state).expect("clean test content");
                     cx.tokens.move_past(&token, true);
                     match token.kind {
                         TokenKind::Char('!') => break token.span,
                         TokenKind::EndOfStream => panic!("test content has a marker"),
-                        _ => content.end = token.span.end,
+                        _ => content.extend_to(token.span.end()),
                     }
                 };
                 let child = cx.session.builder.add(
                     NodeKind::chars(content),
-                    SourceSpan::new(&cx.source, content.range()),
+                    SourceSpan::new(&cx.source, content),
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap();
@@ -2377,7 +2370,7 @@ mod tests {
                 );
                 let id = cx.session.builder.add(
                     NodeKind::group(data),
-                    SourceSpan::new(&cx.source, open_span.start..close_span.end),
+                    SourceSpan::new(&cx.source, open_span.start()..close_span.end()),
                     Arc::clone(&cx.state),
                     vec![child],
                 ).unwrap();
@@ -2420,9 +2413,10 @@ mod tests {
     #[test]
     fn finalize_node_populates_callable_ext_through_the_dispatch_loop() {
         // FLM pattern rehearsal (§3.6): the builder-run hook sees every staged
-        // `Callable` and attaches derived data as its per-kind ext — a preset would
-        // downcast `data.spec` to its own spec trait; the test derives from the
-        // invocation facts and the spec's declarative surface.
+        // `Callable`, downcasts `data.spec` to the concrete spec type (the `Any`
+        // supertrait contract, Action-05), and attaches derived data as its per-kind
+        // ext. A preset dispatching on an *open* set of spec types funnels them
+        // through one concrete wrapper first (DESIGN_RATIONALE.md §3.4).
         struct ExtBundle;
         impl NodeExtTypes for ExtBundle {
             type NodeExt = ();
@@ -2462,8 +2456,13 @@ mod tests {
                 _staged: &StagedNodes<'_, Self>,
             ) {
                 if let NodeKind::Callable(data) = kind {
+                    // The downcast: trait-upcast the stored spec to `&dyn Any`, then
+                    // recover the concrete type — field access included.
+                    let spec = (&*data.spec as &dyn core::any::Any)
+                        .downcast_ref::<StdCallableSpec<ExtLang>>()
+                        .expect("the test library registers StdCallableSpec");
                     // Idempotent: recomputing from the same facts yields the same ext.
-                    data.ext = format!("{}#{}", data.name, data.spec.arguments().len())
+                    data.ext = format!("{}#{}", data.name, spec.arguments.len())
                         .into_boxed_str();
                 }
             }
@@ -2765,12 +2764,7 @@ mod tests {
         let mut session: ParserSession<TestLang> = ParserSession::new(Recovery::Tolerant);
         let mut nodes = Vec::new();
         let stop = loop {
-            let mut cx = ParseContext {
-                tokens: &mut reader,
-                source: Arc::clone(&source),
-                state: Arc::clone(&st),
-                session: &mut session,
-            };
+            let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
             let mut parser = NodesParser::new(StopSpec::none());
             let (outcome, _) = parser.parse(&mut cx).unwrap();
             nodes.extend(outcome.nodes);
@@ -2779,7 +2773,7 @@ mod tests {
                     session
                         .recover(
                             Box::new(StrayGroupClose { delim: "}".into() }),
-                            SourceSpan::new(&source, span.range()),
+                            SourceSpan::new(&source, span),
                         )
                         .unwrap();
                     let stray: Token<'_, TestLang> =
@@ -2980,12 +2974,7 @@ mod tests {
         let st = state_with(rules::<CountLang>());
         let mut reader = StdTokenReader::new(content);
         let mut session: ParserSession<CountLang> = ParserSession::new(Recovery::Strict);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: Arc::clone(&st),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, _) = parser.parse(&mut cx).unwrap();
         assert!(matches!(outcome.stop, StopCause::EndOfInput));

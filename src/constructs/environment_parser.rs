@@ -5,11 +5,14 @@
 //!
 //! # Design (DESIGN_RATIONALE.md §3.5, §3.6)
 //!
-//! **Slot terminators are parser business**: [`SlotSpec`](crate::spec::SlotSpec) carries
-//! no terminator vocabulary — the terminator data (the stop command's name, the name
-//! group's class, whether the name must back-reference the invocation) parameterizes
-//! this parser instead, so environments stay zero-custom-code for spec authors (the
-//! preset's `EnvironmentSpec` instantiates it from data, Phase 7).
+//! **Slot terminators are parser business** — and slots have no spec-side declaration
+//! at all (decided July 2026, slots session): the terminator data (the stop command's
+//! name, the name group's class, whether the name must back-reference the invocation)
+//! parameterizes this parser, and the composition driving it mints the
+//! [`ParsedSlot`](crate::node::ParsedSlot) records directly. A body state delta
+//! (pylatexenc's `make_body_parsing_state_delta`) lives as an ordinary field on the
+//! preset spec type that drives the parse (Phase 7's `EnvironmentSpec`) — the core
+//! never interprets it. Environments stay zero-custom-code for spec authors.
 //!
 //! **The scaffolding is rigid and reconstructed, not recorded** (decision 6): the
 //! terminator is the stop command followed **immediately** by its name group — no
@@ -49,7 +52,6 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
-use core::mem;
 
 use crate::engine::{Frame, FrameTitle};
 use crate::error::DiagnosticInfo;
@@ -59,7 +61,7 @@ use crate::state::{Lang, ParsingStateDelta};
 use crate::token::{GroupRule, TokenKind};
 
 use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
-use super::{try_peek, ConstructParser, ConstructParserResult, ParseContext};
+use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: an environment's body ran into the terminator of a *different*
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
@@ -183,7 +185,7 @@ impl DiagnosticInfo for MissingEnvironmentTerminator {
 /// A successfully read rigid name group: the name's byte span (the exact content between
 /// the delimiters, possibly empty) and the position just past the close delimiter.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct NameGroup {
+pub struct NameGroup {
     /// The name's span between the delimiters.
     pub name_span: Span,
     /// The position just past the group's close delimiter.
@@ -203,13 +205,17 @@ pub(crate) struct NameGroup {
 /// "not a name group" needs no finer distinction). A tokenizer error while reading
 /// aborts under strict recovery; under tolerant it reports `None` without diagnosing or
 /// consuming — the enclosing content loop re-reads the error and applies its own token
-/// recovery (the argument-probe rule, [`try_peek`]).
-pub(crate) fn read_rigid_name_group<L: Lang>(
+/// recovery (the argument-probe rule, [`ParseContext::probe_token`]).
+///
+/// Public as a takeover-composition building block (decided July 2026, slots session):
+/// a `\begin`-shaped `make_invocation_parser` override reads its scaffolding with this
+/// before resolving the environment and driving [`EnvironmentBodyParser`].
+pub fn read_rigid_name_group<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     name_group_type: L::GroupTypeId,
 ) -> ConstructParserResult<L, Option<NameGroup>> {
     let entry = cx.tokens.pos();
-    let Some(open) = try_peek(cx)? else {
+    let Some(open) = cx.probe_token(&Arc::clone(&cx.state))? else {
         return Ok(None);
     };
     let rule = match &open.kind {
@@ -226,9 +232,7 @@ pub(crate) fn read_rigid_name_group<L: Lang>(
     // derivation the group parser uses), so the close delimiter is guaranteed
     // recognizable regardless of the base's delimiter table.
     let interior_state = cx.session.group_interior_state(&cx.state, &rule);
-    let outer_state = mem::replace(&mut cx.state, interior_state);
-    let result = read_name_chars(cx, &rule);
-    cx.state = outer_state;
+    let result = cx.with_scoped_state(interior_state, |cx| read_name_chars(cx, &rule));
     match result? {
         Some(name_group) => Ok(Some(name_group)),
         None => {
@@ -246,8 +250,9 @@ fn read_name_chars<L: Lang>(
 ) -> ConstructParserResult<L, Option<NameGroup>> {
     let name_start = cx.tokens.pos();
     let mut name_end = name_start;
+    let state = Arc::clone(&cx.state);
     loop {
-        let Some(token) = try_peek(cx)? else {
+        let Some(token) = cx.probe_token(&state)? else {
             return Ok(None);
         };
         if !token.pre_space.is_empty() {
@@ -255,14 +260,14 @@ fn read_name_chars<L: Lang>(
         }
         match &token.kind {
             TokenKind::Char(_) => {
-                name_end = token.span.end;
+                name_end = token.span.end();
                 cx.tokens.move_past(&token, true);
             }
             TokenKind::GroupClose { delim } if **delim == *rule.close => {
                 cx.tokens.move_past(&token, true);
                 return Ok(Some(NameGroup {
                     name_span: Span::new(name_start, name_end),
-                    end: token.span.end,
+                    end: token.span.end(),
                 }));
             }
             _ => return Ok(None),
@@ -360,7 +365,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
         // it sits at its own span start). It was cleanly read under this same state
         // moments ago, so this cannot fail; the defensive arm only guards a misbehaving
         // custom reader.
-        let Some(end_token) = try_peek(cx)? else {
+        let Some(end_token) = cx.probe_token(&Arc::clone(&cx.state))? else {
             debug_assert!(false, "the matched stop token disappeared on re-peek");
             return Ok(body_end);
         };
@@ -386,7 +391,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     // level.
                     cx.recover(
                         EnvironmentTerminatorMismatch::new(self.invocation_name, name),
-                        SourceSpan::new(&cx.source, end_token.span.start..name_group.end),
+                        SourceSpan::new(&cx.source, end_token.span.start()..name_group.end),
                     )?;
                     cx.tokens.move_to(&end_token, false);
                     Ok(body_end)
@@ -399,7 +404,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 debug_assert_eq!(cx.tokens.pos(), after_command);
                 cx.recover(
                     MalformedEnvironmentTerminator::new(self.invocation_name),
-                    SourceSpan::new(&cx.source, end_token.span.range()),
+                    SourceSpan::new(&cx.source, end_token.span),
                 )?;
                 Ok(after_command)
             }
@@ -420,12 +425,12 @@ impl<L: Lang> ConstructParser<L> for EnvironmentBodyParser<'_, L> {
         let title = match self.invocation_name_span {
             Some(name_span) => FrameTitle::Quoted {
                 label: "environment",
-                name: SourceSpan::new(&cx.source, name_span.range()),
+                name: SourceSpan::new(&cx.source, name_span),
             },
             None => FrameTitle::Static("environment body"),
         };
         let frame =
-            Frame { title, span: SourceSpan::new(&cx.source, self.trigger_span.range()) };
+            Frame { title, span: SourceSpan::new(&cx.source, self.trigger_span) };
         cx.with_frame(frame, |cx| self.parse_body(cx))
     }
 }
@@ -470,7 +475,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
                         self.invocation_name,
                         MissingTerminatorFound::EndOfInput,
                     ),
-                    SourceSpan::new(&cx.source, self.trigger_span.range()),
+                    SourceSpan::new(&cx.source, self.trigger_span),
                 )?;
                 body_end
             }
@@ -483,7 +488,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
                         self.invocation_name,
                         MissingTerminatorFound::StrayGroupClose,
                     ),
-                    SourceSpan::new(&cx.source, span.range()),
+                    SourceSpan::new(&cx.source, span),
                 )?;
                 body_end
             }
@@ -535,7 +540,7 @@ mod tests {
         ParsedSlots,
     };
     use crate::source::{Source, TextContent};
-    use crate::spec::{ArgumentSpec, CallableSpec, SlotSpec, StdCallableSpec};
+    use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{
         ParsingState, ResolvedCallable, StateData, TokenRulesOverrides,
     };
@@ -677,6 +682,15 @@ mod tests {
     struct BeginSpec;
 
     impl CallableSpec<EnvLang> for BeginSpec {
+        /// The honest emptiness answer (slots session, decided direction 2): `\begin`
+        /// declares nothing but reads an entire environment — bare use as a
+        /// single-token expression argument must be diagnosed, not dispatched (the
+        /// deliberate divergence from pylatexenc, which dispatches the environment as
+        /// the argument).
+        fn requires_content(&self) -> bool {
+            true
+        }
+
         fn make_invocation_parser<'a, 's>(
             &'a self,
             invocation: Invocation<'a, 's, EnvLang>,
@@ -706,13 +720,13 @@ mod tests {
             let Some(name_group) = read_rigid_name_group(cx, GT_BRACE)? else {
                 cx.recover(
                     MalformedBegin,
-                    SourceSpan::new(&cx.source, trigger.span.range()),
+                    SourceSpan::new(&cx.source, trigger.span),
                 )?;
                 // Chars fallback over the trigger alone (markup in a Chars node is the
                 // accepted tolerant-recovery artifact); nothing past it is consumed.
                 let id = cx.session.builder.add(
                     NodeKind::chars(trigger.span),
-                    SourceSpan::new(&cx.source, trigger.span.range()),
+                    SourceSpan::new(&cx.source, trigger.span),
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap();
@@ -729,14 +743,11 @@ mod tests {
                     None => {
                         cx.recover(
                             UnknownEnvironment { name: name.into() },
-                            SourceSpan::new(&cx.source, name_group.name_span.range()),
+                            SourceSpan::new(&cx.source, name_group.name_span),
                         )?;
                         // Tolerant fallback: an argument-less body-only environment,
                         // so the body still parses to its terminator.
-                        Arc::new(StdCallableSpec::new(
-                            vec![],
-                            vec![Arc::new(SlotSpec::new())],
-                        ))
+                        Arc::new(EnvSpec { arguments: vec![], body_delta: None })
                     }
                 };
 
@@ -745,23 +756,24 @@ mod tests {
             let (mut children, arguments) =
                 parse_declared_arguments(cx, &spec, name_group.name_span)?;
 
-            // The body: the single slot of the standard environment shape, parsed
-            // under the slot's state (its delta stacked on the invocation's base,
-            // session-mediated; structural revert) up to and including the rigid
-            // `\end{name}` terminator.
-            assert_eq!(spec.slots().len(), 1, "the test composition is single-slot");
-            let slot = Arc::clone(&spec.slots()[0]);
-            let slot_state = match &slot.parsing_state_delta {
+            // The body: parsed under the slot's state (the body delta stacked on the
+            // invocation's base, session-mediated; structural revert) up to and
+            // including the rigid `\end{name}` terminator. The delta is the env spec's
+            // own field (the A.3 rehoming), read back through the documented
+            // Any-supertrait downcast — the core never interprets it; the unknown-
+            // environment fallback spec is EnvSpec too, so the downcast only misses
+            // for a non-EnvSpec registration (which has no body delta to offer).
+            let body_delta = (&*spec as &dyn core::any::Any)
+                .downcast_ref::<EnvSpec>()
+                .and_then(|env_spec| env_spec.body_delta.clone());
+            let slot_state = match &body_delta {
                 Some(delta) => cx.session.derived_state(&cx.state, delta),
                 None => Arc::clone(&cx.state),
             };
             let mut body_parser =
                 EnvironmentBodyParser::new(trigger.span, name, "end", GT_BRACE)
                     .with_invocation_name_span(name_group.name_span);
-            let outer_state = mem::replace(&mut cx.state, slot_state);
-            let result = body_parser.parse(cx);
-            cx.state = outer_state;
-            let (body, delta) = result?;
+            let (body, delta) = cx.parse_scoped(slot_state, &mut body_parser)?;
             debug_assert!(delta.is_none());
 
             let body_children = {
@@ -771,8 +783,10 @@ mod tests {
             };
             let offset = children.len() as u32;
             children.push(body.body);
-            let slots = ParsedSlots::from(vec![ParsedSlot::new(
-                slot,
+            // The slot record is pure node vocabulary: minted here, name carried on
+            // the record itself (the A.2 reshape).
+            let slots = ParsedSlots::from(vec![ParsedSlot::named(
+                "body",
                 ChildRegion::new(
                     offset..offset + 1,
                     ContentNodes::InChildrenOf(body.body, 0..body_children),
@@ -794,7 +808,7 @@ mod tests {
             };
             let id = cx.session.builder.add(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, trigger.span.start..body.end),
+                SourceSpan::new(&cx.source, trigger.span.start()..body.end),
                 Arc::clone(&cx.state),
                 children,
             ).unwrap();
@@ -815,6 +829,12 @@ mod tests {
     struct RawBlockSpec;
 
     impl CallableSpec<EnvLang> for RawBlockSpec {
+        /// The `\verb`-shaped honest emptiness answer: declares nothing, consumes a
+        /// raw body — bare expression use must be diagnosed.
+        fn requires_content(&self) -> bool {
+            true
+        }
+
         fn make_invocation_parser<'a, 's>(
             &'a self,
             invocation: Invocation<'a, 's, EnvLang>,
@@ -844,7 +864,7 @@ mod tests {
             // (the uniform `parse` signature cannot tie the stored trigger token to the
             // context's reader): reposition so the trigger's post-space bytes stay raw
             // body content (they are not recorded post-space).
-            cx.tokens.move_to_pos(trigger.post_space().start);
+            cx.tokens.move_to_pos(trigger.post_space().start());
             let body_start = cx.tokens.pos();
 
             // The verbatim state: every feature gate off, and the expected group close
@@ -869,25 +889,26 @@ mod tests {
                 ..TokenRulesOverrides::default()
             });
             let verbatim_state = cx.session.derived_state(&cx.state, &delta);
-            let outer_state = mem::replace(&mut cx.state, verbatim_state);
-            let terminator = loop {
-                let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
-                match &token.kind {
-                    TokenKind::Char(_) => cx.tokens.move_past(&token, true),
-                    TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
-                    other => unreachable!("verbatim state yields only chars, got {}", other),
-                }
-            };
-            cx.tokens.move_past(&terminator, true); // past `\endraw`; no-op at stream end
-            cx.state = outer_state;
+            let terminator = cx.with_scoped_state(verbatim_state, |cx| {
+                let terminator = loop {
+                    let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
+                    match &token.kind {
+                        TokenKind::Char(_) => cx.tokens.move_past(&token, true),
+                        TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
+                        other => unreachable!("verbatim state yields only chars, got {}", other),
+                    }
+                };
+                cx.tokens.move_past(&terminator, true); // past `\endraw`; no-op at stream end
+                terminator
+            });
             let (body_end, end) = match &terminator.kind {
-                TokenKind::GroupClose { .. } => (terminator.span.start, terminator.span.end),
+                TokenKind::GroupClose { .. } => (terminator.span.start(), terminator.span.end()),
                 _ => {
                     cx.recover(
                         MissingRawTerminator,
-                        SourceSpan::new(&cx.source, trigger.span.range()),
+                        SourceSpan::new(&cx.source, trigger.span),
                     )?;
-                    (terminator.span.start, terminator.span.start)
+                    (terminator.span.start(), terminator.span.start())
                 }
             };
 
@@ -907,10 +928,10 @@ mod tests {
                 Arc::clone(&cx.state),
                 body_nodes,
             ).unwrap();
-            // The slot record is minted by the parser: the spec declares no slots —
-            // the records are self-describing (§3.5).
-            let slots = ParsedSlots::from(vec![ParsedSlot::new(
-                Arc::new(SlotSpec::new().named("raw")),
+            // The slot record is minted by the parser — pure node vocabulary, the
+            // name carried on the record itself (§3.5 self-description).
+            let slots = ParsedSlots::from(vec![ParsedSlot::named(
+                "raw",
                 ChildRegion::new(0..1, ContentNodes::InChildrenOf(list, 0..body_children)),
             )]);
             let data = CallableData {
@@ -924,7 +945,7 @@ mod tests {
             };
             let id = cx.session.builder.add(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, trigger.span.start..end),
+                SourceSpan::new(&cx.source, trigger.span.start()..end),
                 Arc::clone(&cx.state),
                 vec![list],
             ).unwrap();
@@ -977,14 +998,30 @@ mod tests {
     }
 
     fn macro_spec(arguments: Vec<Arc<ArgumentSpec<EnvLang>>>) -> Arc<dyn CallableSpec<EnvLang>> {
-        Arc::new(StdCallableSpec::new(arguments, vec![]))
+        Arc::new(StdCallableSpec::new(arguments))
+    }
+
+    /// The test-lang environment spec (Phase 7 `EnvironmentSpec` rehearsal): arguments
+    /// declared spec-side like any callable; the body's state delta an **ordinary
+    /// field** (the A.3 rehoming of pylatexenc's `make_body_parsing_state_delta`),
+    /// read back by the composition that drives the parse — the core never sees it.
+    #[derive(Debug)]
+    struct EnvSpec {
+        arguments: Vec<Arc<ArgumentSpec<EnvLang>>>,
+        body_delta: Option<ParsingStateDelta<EnvLang>>,
+    }
+
+    impl CallableSpec<EnvLang> for EnvSpec {
+        fn arguments(&self) -> &[Arc<ArgumentSpec<EnvLang>>] {
+            &self.arguments
+        }
     }
 
     fn env_spec(
         arguments: Vec<Arc<ArgumentSpec<EnvLang>>>,
-        slot: SlotSpec<EnvLang>,
+        body_delta: Option<ParsingStateDelta<EnvLang>>,
     ) -> Arc<dyn CallableSpec<EnvLang>> {
-        Arc::new(StdCallableSpec::new(arguments, vec![Arc::new(slot)]))
+        Arc::new(EnvSpec { arguments, body_delta })
     }
 
     /// The suite's language definitions: the §G matrix — `\frac`, `\emph`, `\alpha`,
@@ -1004,23 +1041,21 @@ mod tests {
         lib.insert(CT_MACRO, "item", macro_spec(vec![optional_arg()]));
         lib.insert(CT_MACRO, "raw", Arc::new(RawBlockSpec));
 
-        lib.insert(CT_ENVIRONMENT, "itemize", env_spec(vec![], SlotSpec::new()));
-        lib.insert(CT_ENVIRONMENT, "tabular", env_spec(vec![brace_arg()], SlotSpec::new()));
+        lib.insert(CT_ENVIRONMENT, "itemize", env_spec(vec![], None));
+        lib.insert(CT_ENVIRONMENT, "tabular", env_spec(vec![brace_arg()], None));
         lib.insert(
             CT_ENVIRONMENT,
             "nocomments",
             env_spec(
                 vec![],
-                SlotSpec::new().with_state_delta(ParsingStateDelta::new().rules(
-                    TokenRulesOverrides {
-                        enable_comments: Some(false),
-                        ..TokenRulesOverrides::default()
-                    },
-                )),
+                Some(ParsingStateDelta::new().rules(TokenRulesOverrides {
+                    enable_comments: Some(false),
+                    ..TokenRulesOverrides::default()
+                })),
             ),
         );
-        lib.insert(CT_ENVIRONMENT, "A", env_spec(vec![], SlotSpec::new()));
-        lib.insert(CT_ENVIRONMENT, "B", env_spec(vec![], SlotSpec::new()));
+        lib.insert(CT_ENVIRONMENT, "A", env_spec(vec![], None));
+        lib.insert(CT_ENVIRONMENT, "B", env_spec(vec![], None));
 
         let mut libraries = LibraryStack::new();
         libraries.push(Arc::new(lib));
@@ -1053,12 +1088,7 @@ mod tests {
     ) -> Result<Parsed, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext {
-            tokens,
-            source: Arc::clone(&source),
-            state: Arc::clone(state),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
@@ -1076,7 +1106,7 @@ mod tests {
         };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::new(&source, root_span.range()),
+            SourceSpan::new(&source, root_span),
             Arc::clone(state),
             outcome.nodes,
         ).unwrap();
@@ -1225,9 +1255,11 @@ mod tests {
         assert!(body.is_list());
         assert_eq!(body.span().range(), 17..22);
         assert_eq!(body_shapes(env), ["chars 17..22 \" a b \""]);
-        // The records: no arguments, one slot holding the body list.
+        // The records: no arguments, one slot holding the body list — named on the
+        // record itself (record-level slots, slots session).
         assert_eq!(env.arguments().unwrap().len(), 0);
         assert_eq!(env.slots().unwrap().len(), 1);
+        assert!(env.slots().unwrap().get_named("body").is_some());
         assert!(parsed.result.diagnostics.is_empty());
         assert_eq!(parsed.pos, content.len());
     }
@@ -1651,12 +1683,7 @@ mod tests {
         let st = suite_state();
         let mut reader = StdTokenReader::new(content);
         let mut session = ParserSession::new(Recovery::Strict);
-        let mut cx = ParseContext {
-            tokens: &mut reader,
-            source: Arc::clone(&source),
-            state: Arc::clone(&st),
-            session: &mut session,
-        };
+        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
         let mut parser = EnvironmentBodyParser::new(Span::empty(0), "A", "end", GT_BRACE)
             .with_match_invocation_name(false);
         let (body, delta) = parser.parse(&mut cx).expect("parse");
@@ -1729,6 +1756,43 @@ mod tests {
         assert_eq!(body_shapes(raw), ["chars 4..8 \" abc\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_eq!(diagnostics_mentioning(&parsed, "\\endraw"), 1);
+    }
+
+    // --- the requires_content() override (slots session): `\begin` bare in expression
+    // --- position is diagnosed, not dispatched ----------------------------------------
+
+    /// The documented divergence from pylatexenc (which dispatches the environment as
+    /// the argument): `\emph\begin{A}…` diagnoses the bare `\begin` — `BeginSpec`
+    /// declares nothing but overrides `requires_content()` — and stages it alone as
+    /// `\emph`'s argument. The environment's pieces stay sibling content, its orphan
+    /// `\end` taking the unresolvable-command recovery.
+    #[test]
+    fn bare_begin_in_expression_position_is_diagnosed() {
+        let st = suite_state();
+        //             0....5....1....1....2..
+        //                  0    5    0
+        let content = "\\emph\\begin{A}x\\end{A}";
+        let parsed = parse_both(content, &st, Recovery::Tolerant);
+
+        assert_eq!(
+            shapes(&parsed.result),
+            [
+                "callable 0..11 \"emph\"",
+                "group 11..14",
+                "chars 14..15 \"x\"",
+                "chars 15..19 \"\\\\end\"",
+                "group 19..22",
+            ],
+        );
+        let emph = root_child(&parsed, 0);
+        let bare = emph.argument_content_nodes(0).unwrap().next().unwrap();
+        assert_eq!(bare.name(), Some("begin"));
+        assert_eq!(bare.child_count(), 0);
+        assert_eq!(parsed.result.diagnostics.len(), 2);
+        assert_eq!(
+            parsed.result.diagnostics.iter().next().unwrap().identifier(),
+            crate::constructs::ExpressionCallableRequiresContent::IDENTIFIER,
+        );
     }
 
     // --- the end-to-end §G suite ------------------------------------------------------------

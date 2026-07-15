@@ -1,6 +1,7 @@
 //! [`ParsedArguments`] / [`ParsedSlots`]: the per-invocation record of a `Callable`
-//! node — which spec'd arguments were provided, where each one's region and content
-//! nodes live in the tree, and which spec each region was parsed against.
+//! node — which spec'd arguments were provided, where each argument's/slot's region and
+//! content nodes live in the tree, and (for arguments) which spec each region was
+//! parsed against.
 //!
 //! **Modeled on pylatexenc's `ParsedArguments`** (decided July 2026, replacing the
 //! Phase 5 `ArgsLayout`/`SlotsLayout` offset maps): pylatexenc keeps two parallel lists —
@@ -57,13 +58,13 @@
 //! flattening) remain *computed* views (Phase 7); extensions that want to cache derived
 //! data per argument use the [`ext`](ParsedArgument::ext) slot instead.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
 use crate::spec::ArgumentSpec;
-use crate::spec::SlotSpec;
 use crate::state::Lang;
 
 use super::builder::BuildId;
@@ -310,13 +311,23 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
     }
 }
 
-/// One slot of one invocation. Slots always have a region (a region that *exists*, with
-/// possibly empty content — unlike an absent optional argument): for the standard
-/// environment shape it holds the body `List` node, whose children are the content;
-/// separator/terminator syntax records arrive with `SlotsParser` (Phase 6).
+/// One content region ("slot") of one invocation. Slots always have a region (a region
+/// that *exists*, with possibly empty content — unlike an absent optional argument):
+/// for the standard environment shape it holds the body `List` node, whose children are
+/// the content.
+///
+/// Slots are pure **record-level** vocabulary (decided July 2026, slots session): there
+/// is no spec-side slot declaration — the invocation parser that reads a callable's
+/// body (the spec's sanctioned `make_invocation_parser` composition) mints these
+/// records directly, with whatever parsers it drives internally. Self-description
+/// (§3.5) therefore means carrying the `name` on the record itself — a deliberate
+/// asymmetry with [`ParsedArgument`], which points at its `Arc<ArgumentSpec>`: an
+/// argument spec carries parser/name/delta worth pointing at; a slot record has no
+/// spec-side counterpart.
 pub struct ParsedSlot<L: Lang> {
-    /// The spec this slot was parsed against.
-    pub spec: Arc<SlotSpec<L>>,
+    /// Optional name for by-name access (an environment's `"body"`; a fence-block
+    /// multi-slot construct may name several). Owned — slots are few per node.
+    pub name: Option<Box<str>>,
     /// The slot's child region.
     pub region: ChildRegion,
     /// Extension data attached to this slot (`Lang::NodeExts::SlotExt`) — e.g. a tabular
@@ -325,19 +336,25 @@ pub struct ParsedSlot<L: Lang> {
 }
 
 impl<L: Lang> ParsedSlot<L> {
-    /// A slot parsed against `spec` occupying `region`, with default ext.
-    pub fn new(spec: Arc<SlotSpec<L>>, region: ChildRegion) -> ParsedSlot<L> {
-        ParsedSlot { spec, region, ext: Default::default() }
+    /// An unnamed slot occupying `region`, with default ext.
+    pub fn new(region: ChildRegion) -> ParsedSlot<L> {
+        ParsedSlot { name: None, region, ext: Default::default() }
     }
 
-    /// The slot's name, per its spec.
+    /// A named slot occupying `region`, with default ext.
+    pub fn named(name: impl Into<Box<str>>, region: ChildRegion) -> ParsedSlot<L> {
+        ParsedSlot { name: Some(name.into()), region, ext: Default::default() }
+    }
+
+    /// The slot's name ([`get_named`](ParsedSlots::get_named) symmetry with
+    /// [`ParsedArgument::name`]).
     pub fn name(&self) -> Option<&str> {
-        self.spec.name.as_deref()
+        self.name.as_deref()
     }
 }
 
-/// The parsed slots of one callable invocation: one [`ParsedSlot`] per spec'd slot, in
-/// source order.
+/// The parsed slots of one callable invocation: one [`ParsedSlot`] per content region,
+/// in source order.
 pub struct ParsedSlots<L: Lang> {
     /// The per-slot entries.
     pub slots: Vec<ParsedSlot<L>>,
@@ -419,7 +436,7 @@ impl<L: Lang> fmt::Debug for ParsedArguments<L> {
 impl<L: Lang> Clone for ParsedSlot<L> {
     fn clone(&self) -> Self {
         ParsedSlot {
-            spec: Arc::clone(&self.spec),
+            name: self.name.clone(),
             region: self.region.clone(),
             ext: self.ext.clone(),
         }
@@ -429,7 +446,7 @@ impl<L: Lang> Clone for ParsedSlot<L> {
 impl<L: Lang> fmt::Debug for ParsedSlot<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedSlot")
-            .field("spec", &self.spec)
+            .field("name", &self.name)
             .field("region", &self.region)
             .field("ext", &self.ext)
             .finish()
