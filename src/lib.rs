@@ -65,6 +65,10 @@
 
 extern crate alloc;
 
+// The `techy-derive` macros emit `::techy::…` paths so that generated code resolves in
+// downstream crates; this self-alias makes those paths resolve inside techy itself.
+extern crate self as techy;
+
 pub mod constructs;
 pub mod engine;
 pub mod error;
@@ -74,6 +78,14 @@ pub mod source;
 pub mod spec;
 pub mod state;
 pub mod token;
+
+/// Support module for `techy-derive`-generated code only: `alloc` paths spelled so they
+/// resolve from both `std` and `no_std` consumer crates. Not public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use alloc::string::String;
+    pub use alloc::vec::Vec;
+}
 
 // The remaining module of the previous exploratory implementation (`parser`) is kept in
 // the tree as a quarry but is not compiled; it is rebuilt phase-by-phase per
@@ -93,7 +105,8 @@ pub use constructs::{
 pub use engine::{Frame, FrameTitle, ParseResult, ParserSession};
 pub use error::{
     format_position, format_traceback, Diagnostic, DiagnosticData, DiagnosticInfo,
-    DiagnosticValue, Diagnostics, ParseError, Recovery, Severity, TraceFrame,
+    DiagnosticValue, Diagnostics, ParseError, Recovery, Severity, ToDiagnosticValue,
+    TraceFrame,
 };
 pub use source::{
     resolve_source, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,

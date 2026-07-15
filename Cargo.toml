@@ -12,13 +12,19 @@ repository = "https://github.com/phfaist/techy"
 keywords = ["latex", "parser", "flm", "markup"]
 categories = ["parser-implementations", "text-processing"]
 
+[workspace]
+members = ["techy-derive"]
+
 # Near-zero mandatory dependencies (ARCHITECTURE.md, Decision 5, amended July 2026):
 # hand-written Display/Error impls; library conditions flow through diagnostics, not
 # logging. Exceptional, case-by-case additions of widely used, lightweight, no_std-capable
 # crates are allowed — hashbrown (std's own HashMap implementation) backs the engine's
 # derivation memo (no_std has no std::collections::HashMap).
+# techy-derive is our own proc-macro companion (condition-declaration derives,
+# DESIGN_RATIONALE.md §3.8): build-time only — the runtime stays zero-dep.
 [dependencies]
 hashbrown = "0.15"
+techy-derive = { version = "0.1.0", path = "techy-derive" }
 
 [dev-dependencies]
 criterion = "0.5"
