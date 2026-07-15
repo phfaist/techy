@@ -266,28 +266,15 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 /// implementation bug to fix, not a source-input problem: it aborts the parse even
 /// under [`Recovery::Tolerant`] (built through
 /// [`ParseContext::implementation_error`], which bypasses the recover funnel).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.constructs.implementation-error",
+    message = "implementation error (extension contract violation): {detail}"
+)]
 pub struct ImplementationError {
     /// Description of the violated contract.
     pub detail: String,
-}
-
-impl ImplementationError {
-    /// The condition for the given contract-violation description.
-    pub fn new(detail: impl Into<String>) -> ImplementationError {
-        ImplementationError { detail: detail.into() }
-    }
-}
-
-impl fmt::Display for ImplementationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "implementation error (extension contract violation): {}", self.detail)
-    }
-}
-
-impl DiagnosticInfo for ImplementationError {
-    const IDENTIFIER: &'static str = "core.constructs.implementation-error";
 }
 
 impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {

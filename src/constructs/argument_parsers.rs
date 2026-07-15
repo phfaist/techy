@@ -65,20 +65,16 @@ use super::{
 /// parsers, which report the argument absent after recording it
 /// (DESIGN_RATIONALE.md §3.8). No callable name in the payload: the frame stack renders
 /// the enclosing invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.argument_parsers.missing-mandatory-argument")]
 pub struct MissingMandatoryArgument {
     /// The argument's declared name, when the spec has one.
     pub argument_name: Option<String>,
 }
 
-impl MissingMandatoryArgument {
-    /// The condition for the (optionally named) argument.
-    pub fn new(argument_name: Option<String>) -> MissingMandatoryArgument {
-        MissingMandatoryArgument { argument_name }
-    }
-}
-
+// Hand-written wording: the name is appended only when the spec declares one (a
+// conditional, which the message format string cannot express).
 impl fmt::Display for MissingMandatoryArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "missing mandatory argument")?;
@@ -89,26 +85,17 @@ impl fmt::Display for MissingMandatoryArgument {
     }
 }
 
-impl DiagnosticInfo for MissingMandatoryArgument {
-    const IDENTIFIER: &'static str = "core.argument_parsers.missing-mandatory-argument";
-}
-
 /// Condition: no expression could start at a mandatory single-expression argument's
 /// position ([`ExpressionParser`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.argument_parsers.expected-expression-argument")]
 pub struct ExpectedExpressionArgument {
     /// The argument's declared name, when the spec has one.
     pub argument_name: Option<String>,
 }
 
-impl ExpectedExpressionArgument {
-    /// The condition for the (optionally named) argument.
-    pub fn new(argument_name: Option<String>) -> ExpectedExpressionArgument {
-        ExpectedExpressionArgument { argument_name }
-    }
-}
-
+// Hand-written wording: same conditional shape as [`MissingMandatoryArgument`].
 impl fmt::Display for ExpectedExpressionArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "expected an expression argument")?;
@@ -117,10 +104,6 @@ impl fmt::Display for ExpectedExpressionArgument {
         }
         Ok(())
     }
-}
-
-impl DiagnosticInfo for ExpectedExpressionArgument {
-    const IDENTIFIER: &'static str = "core.argument_parsers.expected-expression-argument";
 }
 
 /// The argument's declared name as an owned payload field

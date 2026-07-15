@@ -28,57 +28,33 @@ pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 /// name (DESIGN_RATIONALE.md §3.8 — the token layer's conditions are ordinary
 /// [`DiagnosticInfo`] data structs, wrapped by [`TokenErrorKind`] for the recovery
 /// protocol).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(
+    id = "core.token.end-of-stream-after-escape",
+    message = "expected command name after escape character ‘{escape_char}’ but reached \
+               end of input"
+)]
 pub struct EndOfStreamAfterEscape {
     /// The escape character that was read.
     pub escape_char: char,
 }
 
-impl EndOfStreamAfterEscape {
-    /// The condition for the given escape character.
-    pub fn new(escape_char: char) -> EndOfStreamAfterEscape {
-        EndOfStreamAfterEscape { escape_char }
-    }
-}
-
-impl fmt::Display for EndOfStreamAfterEscape {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "expected command name after escape character ‘{}’ but reached end of input",
-            self.escape_char
-        )
-    }
-}
-
-impl DiagnosticInfo for EndOfStreamAfterEscape {
-    const IDENTIFIER: &'static str = "core.token.end-of-stream-after-escape";
-}
-
 /// Condition: a character listed in `TokenRules::forbidden_chars` appeared as content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.token.forbidden-char")]
 pub struct ForbiddenChar {
     /// The forbidden character encountered.
     pub ch: char,
 }
 
-impl ForbiddenChar {
-    /// The condition for the given character.
-    pub fn new(ch: char) -> ForbiddenChar {
-        ForbiddenChar { ch }
-    }
-}
-
+// Hand-written wording: the code-point rendering needs a cast (`as u32`), which the
+// message format string cannot express.
 impl fmt::Display for ForbiddenChar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "character is forbidden here: ‘{}’ (U+{:04X})", self.ch, self.ch as u32)
     }
-}
-
-impl DiagnosticInfo for ForbiddenChar {
-    const IDENTIFIER: &'static str = "core.token.forbidden-char";
 }
 
 /// What went wrong while reading a token.

@@ -700,6 +700,9 @@ mod tests {
 
     /// A third-party-style condition — the extension surface demonstration: a plain
     /// data struct, a `Display` for the wording, and a `DiagnosticInfo` impl.
+    /// Deliberately hand-written (no derive): this exercises the manual trait path and
+    /// the defaulted `serializable_data()` (see
+    /// `serializable_data_defaults_to_an_empty_map`).
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct TestCondition {
         detail: String,
@@ -722,18 +725,13 @@ mod tests {
     }
 
     /// A second condition type, for filtering/downcast tests.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, crate::error::DiagnosticInfo)]
+    #[diagnostic(
+        id = "test.error.other-condition",
+        message = "other condition",
+        no_constructor
+    )]
     struct OtherCondition;
-
-    impl fmt::Display for OtherCondition {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("other condition")
-        }
-    }
-
-    impl DiagnosticInfo for OtherCondition {
-        const IDENTIFIER: &'static str = "test.error.other-condition";
-    }
 
     fn origin(url: &str) -> Option<String> {
         Some(url.to_string())

@@ -44,7 +44,7 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle};
-use crate::error::DiagnosticInfo;
+use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, GroupData, NodeKind};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingStateDelta};
@@ -57,8 +57,9 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 /// Condition: a delimited group was never closed with its expected delimiter — detected
 /// by [`GroupParser`], which defines the condition next to its detection site
 /// (DESIGN_RATIONALE.md §3.8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
+#[diagnostic(id = "core.group_parser.unclosed-group")]
 pub struct UnclosedGroup {
     /// The close delimiter the group expected (as written, e.g. `}`).
     pub expected_close: String,
@@ -67,7 +68,7 @@ pub struct UnclosedGroup {
 }
 
 /// What an [`UnclosedGroup`] ran into instead of its close delimiter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToDiagnosticValue)]
 #[non_exhaustive]
 pub enum UnclosedGroupFound {
     /// The input ended inside the group.
@@ -77,13 +78,8 @@ pub enum UnclosedGroupFound {
     StrayClose,
 }
 
-impl UnclosedGroup {
-    /// The condition for a group expecting `expected_close`.
-    pub fn new(expected_close: impl Into<String>, found: UnclosedGroupFound) -> UnclosedGroup {
-        UnclosedGroup { expected_close: expected_close.into(), found }
-    }
-}
-
+// Hand-written wording: the message varies by what blocked the close (a match, which
+// the message format string cannot express).
 impl fmt::Display for UnclosedGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.found {
@@ -97,10 +93,6 @@ impl fmt::Display for UnclosedGroup {
             }
         }
     }
-}
-
-impl DiagnosticInfo for UnclosedGroup {
-    const IDENTIFIER: &'static str = "core.group_parser.unclosed-group";
 }
 
 /// The group construct parser: a tier-2 temporary, constructed per group descent from
