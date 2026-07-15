@@ -68,7 +68,7 @@ use crate::state::Lang;
 
 use super::builder::BuildId;
 use super::tree::NodeId;
-use super::ArgumentExt;
+use super::{ArgumentExt, SlotExt};
 
 /// Parser-side designation of a region's content nodes, in staging coordinates. Both
 /// forms name a contiguous run of one node's children *by construction* — contiguity in
@@ -319,12 +319,15 @@ pub struct ParsedSlot<L: Lang> {
     pub spec: Arc<SlotSpec<L>>,
     /// The slot's child region.
     pub region: ChildRegion,
+    /// Extension data attached to this slot (`Lang::NodeExts::SlotExt`) — e.g. a tabular
+    /// extension caching the cell structure derived from a body slot's content.
+    pub ext: SlotExt<L>,
 }
 
 impl<L: Lang> ParsedSlot<L> {
-    /// A slot parsed against `spec` occupying `region`.
+    /// A slot parsed against `spec` occupying `region`, with default ext.
     pub fn new(spec: Arc<SlotSpec<L>>, region: ChildRegion) -> ParsedSlot<L> {
-        ParsedSlot { spec, region }
+        ParsedSlot { spec, region, ext: Default::default() }
     }
 
     /// The slot's name, per its spec.
@@ -415,7 +418,11 @@ impl<L: Lang> fmt::Debug for ParsedArguments<L> {
 
 impl<L: Lang> Clone for ParsedSlot<L> {
     fn clone(&self) -> Self {
-        ParsedSlot { spec: Arc::clone(&self.spec), region: self.region.clone() }
+        ParsedSlot {
+            spec: Arc::clone(&self.spec),
+            region: self.region.clone(),
+            ext: self.ext.clone(),
+        }
     }
 }
 
@@ -424,6 +431,7 @@ impl<L: Lang> fmt::Debug for ParsedSlot<L> {
         f.debug_struct("ParsedSlot")
             .field("spec", &self.spec)
             .field("region", &self.region)
+            .field("ext", &self.ext)
             .finish()
     }
 }

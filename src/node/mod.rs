@@ -61,6 +61,8 @@ pub type CommentNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::CommentNod
 pub type ListNodeExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ListNodeExt;
 /// The parsed-argument ext type of a language (attached to [`ParsedArgument`] records).
 pub type ArgumentExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::ArgumentExt;
+/// The parsed-slot ext type of a language (attached to [`ParsedSlot`] records).
+pub type SlotExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::SlotExt;
 
 #[cfg(test)]
 mod tests {
@@ -1009,6 +1011,7 @@ mod tests {
         type CommentNodeExt = ();
         type ListNodeExt = ();
         type ArgumentExt = ();
+        type SlotExt = u8; // e.g. a derived cell/item count
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1051,6 +1054,18 @@ mod tests {
         assert_eq!(*tree.root().ext(), 0);
     }
 
+    /// The slot-side symmetry of `ArgumentExt` (decided July 2026): per-instance derived
+    /// data about one content region (tabular cells, enumerate items) rides on the
+    /// `ParsedSlot` record itself, not on the whole-callable ext.
+    #[test]
+    fn parsed_slot_carries_ext() {
+        let mut slot: ParsedSlot<ExtLang> =
+            ParsedSlot::new(Arc::new(SlotSpec::new().named("body")), ChildRegion::single(0));
+        assert_eq!(slot.ext, 0); // `new()` Default-initializes the ext
+        slot.ext = 3;
+        assert_eq!(slot.clone().ext, 3);
+    }
+
     // --- Lang::finalize_node (the centralized finalization hook) ---------------------
 
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -1068,6 +1083,7 @@ mod tests {
         type CommentNodeExt = ();
         type ListNodeExt = ();
         type ArgumentExt = ();
+        type SlotExt = ();
     }
 
     #[derive(Debug, Clone, Copy)]

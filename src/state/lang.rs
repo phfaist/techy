@@ -58,6 +58,12 @@ pub trait NodeExtTypes {
     /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
     /// derives from, instead of re-parsing the argument node (decided July 2026).
     type ArgumentExt: Clone + fmt::Debug + Default + Send + Sync;
+    /// Ext of a *parsed slot* record (not a node kind): per-instance derived data about
+    /// one content region of one invocation — e.g. a tabular extension caching the cell
+    /// structure of an environment's body slot, or an itemize extension caching item
+    /// boundaries (decided July 2026; the slot-side symmetry of
+    /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)).
+    type SlotExt: Clone + fmt::Debug + Default + Send + Sync;
 }
 
 /// The no-ext bundle: every ext type is `()`.
@@ -69,6 +75,7 @@ impl NodeExtTypes for () {
     type CommentNodeExt = ();
     type ListNodeExt = ();
     type ArgumentExt = ();
+    type SlotExt = ();
 }
 
 /// The compile-time type bundle of a language definition. Every core type takes one

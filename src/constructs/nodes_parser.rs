@@ -2432,6 +2432,7 @@ mod tests {
             type CommentNodeExt = ();
             type ListNodeExt = ();
             type ArgumentExt = ();
+            type SlotExt = ();
         }
 
         #[derive(Debug, Clone, Copy)]

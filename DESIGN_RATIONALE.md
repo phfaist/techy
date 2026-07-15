@@ -962,6 +962,15 @@ stored" point is refined: extraction conveniences stay computed, but *which node
 content* is now recorded per argument — parser-designated, eliminating pylatexenc's
 lone-group unwrap heuristics.)*
 
+**`SlotExt` — slot records carry per-instance ext, symmetric with `ArgumentExt`** — DECIDED
+(user, July 2026, Action-05 session). `ParsedSlot` gains `ext: SlotExt<L>`
+(`Lang::NodeExts::SlotExt`, `()` under the no-ext bundle), mirroring
+`ParsedArgument.ext`. Rationale: the asymmetry bit exactly where FLM is richest — an
+environment's *body* is a slot, and per-instance derived data about a body (tabular cell
+structure, enumerate item boundaries) had no home except the whole-callable ext. Added
+while cheap: one associated type on the bundle, one field on the record; retrofitting after
+downstream `NodeExtTypes` implementors exist would break them all.
+
 **Argument/slot child *regions* with parser-designated content, resolved to global node
 ranges by the builder (`ChildRegion`, `ContentNodes`)** — DECIDED (user, July 2026, regions
 session; supersedes one-node-per-argument and `pre_space`). A callable's children range is
