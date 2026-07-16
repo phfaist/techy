@@ -1,35 +1,22 @@
-[package]
-name = "techy"
+[workspace]
+# A virtual workspace root has no `edition` to infer the resolver from, so pin it
+# explicitly: v1 would unify features across the no_std-leaning core and std-linking
+# members.
+resolver = "2"
+members = ["techy", "techy-derive"]
+
+# Shared metadata inherited by member crates (`<field>.workspace = true`).
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 # Dyn trait upcasting to `dyn Any` (diagnostics condition payloads, DESIGN_RATIONALE.md
 # §3.8) stabilized in 1.86; core::error::Error, the previous pin, needed only 1.81.
 rust-version = "1.86"
 authors = ["Philippe Faist"]
-description = "A fast, extensible LaTeX parser for Rust"
 license = "MIT"
 repository = "https://github.com/phfaist/techy"
-keywords = ["latex", "parser", "flm", "markup"]
-categories = ["parser-implementations", "text-processing"]
 
-[workspace]
-members = ["techy-derive"]
-
-# Near-zero mandatory dependencies (ARCHITECTURE.md, Decision 5, amended July 2026):
-# hand-written Display/Error impls; library conditions flow through diagnostics, not
-# logging. Exceptional, case-by-case additions of widely used, lightweight, no_std-capable
-# crates are allowed — hashbrown (std's own HashMap implementation) backs the engine's
-# derivation memo (no_std has no std::collections::HashMap).
-# techy-derive is our own proc-macro companion (condition-declaration derives,
-# DESIGN_RATIONALE.md §3.8): build-time only — the runtime stays zero-dep.
-[dependencies]
-hashbrown = "0.15"
-techy-derive = { version = "0.1.0", path = "techy-derive" }
-
-[dev-dependencies]
-criterion = "0.5"
-proptest = "1.0"
-
+# Profiles apply workspace-wide and are only honored in the workspace root manifest.
 [profile.release]
 lto = true
 codegen-units = 1

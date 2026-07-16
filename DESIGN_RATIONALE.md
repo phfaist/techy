@@ -2615,6 +2615,31 @@ DAGs; S0 is the natural split candidate, while S1 cannot be split along topic li
 
 ---
 
+**Repo layout: virtual workspace, every crate in its own subfolder** — DECIDED (user-led,
+July 2026). The root `Cargo.toml` is a virtual manifest (`[workspace]` only); `techy` lives
+in `techy/`, alongside `techy-derive/`, with a future CLI/instantiation crate as a third
+sibling. Shared metadata (version, edition, `rust-version`, authors, license, repository) is
+inherited via `[workspace.package]`; profiles live in the root manifest (the only place
+they are honored). *Rationale:* the previous root-package layout (`techy` at the repo root
+hosting `[workspace]`) is fine for "lib + satellite" (cf. thiserror, regex) but degrades at
+three crates: root-level `cargo build`/`test` target the root package only, silently
+skipping other members, whereas a virtual workspace targets all members by default; and
+with the package root equal to the repo root, every repo-level file (ARCHITECTURE.md,
+dev-docs/, TODO_Big.md, …) is a packaging candidate needing a perpetually-honest `exclude`
+list — with a subfolder, `cargo package` ships exactly the crate's files. This is the
+serde/tokio/clap layout, and serde is precisely our shape (lib + derive companion).
+Non-obvious pitfalls pinned during the move: (1) a virtual root has no `edition` to infer
+the dependency resolver from, so `resolver = "2"` must be explicit — v1 would unify
+features across the no_std-leaning core and std-linking members; (2) `include_str!`'d docs
+(`docs/guide.md`, `docs/parsing-model.md`) must live *inside* the package directory or
+`cargo package` breaks, so `docs/` moved into `techy/docs/`; (3) `readme = "../README.md"`
+works from a subfolder (cargo copies it into the package). The CLI "linking std" is
+orthogonal to layout — governed per-crate by features, not folder placement. *Rejected:*
+keeping the root-package layout until the CLI lands (the move only gets more expensive);
+a `crates/` super-directory (needless nesting at three crates; plain siblings suffice).
+
+---
+
 ### 3.12 Documentation
 
 **Narrative docs included with rustdoc, not a separate site** — DECIDED (user-led, July 2026).

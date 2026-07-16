@@ -1,12 +1,12 @@
 [package]
 name = "techy-derive"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.86"
-authors = ["Philippe Faist"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Derive macros for techy's structured diagnostic conditions"
-license = "MIT"
-repository = "https://github.com/phfaist/techy"
+license.workspace = true
+repository.workspace = true
 
 # Build-time companion crate of `techy` (DESIGN_RATIONALE.md §3.8): the derives are
 # re-exported from `techy::error`, next to the traits they implement. Publish this crate
