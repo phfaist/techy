@@ -10,7 +10,7 @@
 
 - "Temporary group delimiter pushed" for OptionalGroupArgumentParser, allow '['/']' to be restored to normal char in any subgroup again also at depth >= 2
 
-- Clean up DOC --> DESIGN_RATIONALE.md  has grown too much, IMO.
+- Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
 
 
 ## More targeted items
