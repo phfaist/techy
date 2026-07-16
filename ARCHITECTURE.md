@@ -949,7 +949,7 @@ Deliberately **not** generic (for now):
 - Content backing is a plain `String` on `Source` (the once-planned `SourceContent` trait
   was retired July 2026 as information-equivalent to `&str` — a UTF-8 mmap can be handed
   in as text by the embedder; DESIGN_RATIONALE §3.1. The old mmap feasibility notes remain
-  in `docs/archive/SOURCE_ARCHITECTURE.md`).
+  in `dev-docs/archive/SOURCE_ARCHITECTURE.md`).
 
 ---
 
@@ -1045,7 +1045,7 @@ hardcoded `TokenRules` value).
 
 - **Phase 0 — decisions & doc hygiene.** Resolve [DECISION 1–7] — ✅ done, July 2026
   (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10) —
-  ✅ done, July 2026 (stale docs archived to `docs/archive/`; `NAMING_STRATEGY.md`
+  ✅ done, July 2026 (stale docs archived to `dev-docs/archive/`; `NAMING_STRATEGY.md`
   rewritten per §7).
 - **Phase 1 — `source` + `error`.** Rewrite per §source; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
@@ -1166,7 +1166,7 @@ Too many overlapping documents; several are stale or superseded. Proposal:
 **Keep, as living documents:** `ARCHITECTURE.md` (this file), `DESIGN_RATIONALE.md`,
 `NAMING_STRATEGY.md` (✅ updated per §7, July 2026), `CLAUDE.md`, `README.md`.
 
-**Archive to `docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,
+**Archive to `dev-docs/archive/`** (history, no longer authoritative): `TRAIT_BASED_ARCHITECTURE.md`,
 `TRAIT_ARCHITECTURE_QUICKREF.md`, `ALIGNMENT_AUDIT.md`, `PROJECT_SUMMARY.md`, `QUICKSTART.md`,
 `DEVELOPMENT.md`, `PARSING_STRATEGY.md` (its decisions are absorbed here),
 `pylatexenc_to_rust_strategy.md` and `PROPOSALS.md` (keep accessible as pylatexenc feature

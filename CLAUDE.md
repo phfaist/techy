@@ -80,7 +80,7 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    Full policy: DESIGN_RATIONALE.md §3.8 ("Panic policy"). New exceptions need explicit
    user approval.
 5. **Always check naming strategy** before suggesting names
-6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in `docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
+6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in `dev-docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
 7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion with a concise paragraph in DESIGN_RATIONALE.md.
 8. **Add tests** for new functionality
 9. **Keep it simple**: No over-engineering or premature optimization

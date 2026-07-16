@@ -25,7 +25,7 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10
   here in the same session** — with date, rationale, and the alternatives considered. An
   undocumented decision will be re-argued from scratch in six months.
 - Documentation precedence when documents conflict: this file and ARCHITECTURE.md >
-  NAMING_STRATEGY.md > everything in `docs/archive/` (which includes SOURCE_ARCHITECTURE.md,
+  NAMING_STRATEGY.md > everything in `dev-docs/archive/` (which includes SOURCE_ARCHITECTURE.md,
   folded into ARCHITECTURE.md and archived July 2026). Newer beats older; user-authored beats
   generated.
 
