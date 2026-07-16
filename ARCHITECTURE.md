@@ -628,6 +628,15 @@ fabricating sources). The concrete transformation/visitor APIs are deliberately 
 undesigned (post-Phase-6); post-processing may equally produce non-tree outputs (HTML, JSON,
 analysis results) by walking the tree via `NodeRef`.
 
+**Indices are `u32` internally (hardcoded).**  Keep u32 because it's the settled ecosystem
+choice for arena indices (rustc, cranelift, la-arena) and the id space can't overflow in
+practice — memory runs out long before 2^32 nodes. The newtype's private field is the real
+abstraction boundary: representation stays out of the public API (index() -> usize), so
+changing width later is a small, confined diff, and a typedef or generic parameter would add
+indirection or API complexity for flexibility nobody realistically uses. Users who need
+narrower ids can compress at their own boundary via the usize seam, and the one safeguard
+that matters is a checked usize → u32 conversion at the single mint site.
+
 ### constructs (S1) — construct parsers
 
 The single most important trait in the system. To avoid pylatexenc's three-argument threading
