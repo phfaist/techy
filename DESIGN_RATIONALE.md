@@ -2532,6 +2532,29 @@ collections only (`MapResolver` uses `BTreeMap`, not `HashMap`); error types imp
 from `alloc::sync`, so targets must support atomics. A plain `cargo build` compiles the
 library with `no_std` active and thus guards the policy without a bare-metal CI target.
 
+**Map containers after hashbrown (`BTreeMap` vs `HashMap`)** — DECIDED in part (user +
+discussion, July 2026). hashbrown entered the tree for the engine's `StateMemo` (which needed
+its `Equivalent` borrowed-key seam); that does not make it the default map. Choose per map by
+use: `MapResolver` and the `CallableTypeId`-keyed maps stay `BTreeMap`; `Library`'s inner
+name→spec map is the one hash-worthy candidate (string keys, one lookup per callable
+invocation, potentially hundreds of entries) but is deferred to the planned structural revisit
+of `library`.
+*Rationale:* the `CallableTypeId`-keyed maps hold a handful of entries, where a `BTreeMap`
+lookup is one or two integer comparisons — hashing gains nothing. Two non-obvious costs of
+hashing to weigh whenever this is reopened: (a) iteration order becomes nondeterministic and
+varies per process (hashbrown's default foldhash seeds from a static's address under
+`no_std`), which any future "list defined names" API or snapshot test would inherit — sort at
+the boundary if so; (b) `no_std` hash seeding has no OS entropy, so if untrusted documents
+ever *insert* into a map (e.g. `\newcommand` definitions into a runtime library), collision
+DoS becomes theoretically possible, whereas `BTreeMap` guarantees O(log n) worst case.
+*Also decided:* public APIs must not name a concrete map type — `MapResolver`'s
+`From<BTreeMap<String, String>>` was generalized to `From<I: IntoIterator<Item = (String,
+String)>>` (July 2026) so the backing container stays an implementation detail; exposing
+`hashbrown::HashMap` in a signature would couple the public API to hashbrown's 0.x semver
+churn (0.14→0.15 already swapped default hashers).
+*Revisit if:* profiling flags `Library` name-lookup cost, or the `library` structural revisit
+lands.
+
 
 ### 3.10 Naming
 
