@@ -8,16 +8,12 @@
 
 - Read/extraction API for content: callable arguments by name, callable argument contents nodes, helpers like get_content_as_chars(), parse_keyval(), etc. etc. [cf also pylatexenc/latexnodes/nodes.py]
 
-- "Temporary group delimiter pushed" for OptionalGroupArgumentParser, allow '['/']' to be restored to normal char in any subgroup again also at depth >= 2
-
 - Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
 
 - Fully gated language features (specials, callables, groups, temporary groups ...) with corresponding memory saving in ParsingState/TokenRules fields??
 
 
 ## More targeted items
-
-- Make the default `resolve_command()` print a warning on debug builds. """Since forgetting to implement the hook resolve_command() produces a runtime "cannot resolve" for every command rather than any compile-time signal, you might want a SimpleLang-style preset (or a documented "you must implement resolve_command" note) so downstream users don't hit this same wall."""
 
 - Perhaps a compile-time optimization of languages that don't want to implement libraries and keep a parsing_state with a zero-sized libraries field. Lang should provide a trait for Libraries implementing the relevant lookup functions?
 
@@ -34,6 +30,4 @@
 - Parsers that are worth implementing: verbatim, trailing-macro-information (TackOnMacro...), [maybe not CommaChars... -> parse argument content instead]
 
 - Should I be worried about hard-coded u32 for indices... should we have a global typedef at least?
-
-- 
 
