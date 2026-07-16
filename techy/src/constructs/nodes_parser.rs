@@ -3,12 +3,12 @@
 //!
 //! The parser peeks one token at a time and dispatches on its kind — never on parser
 //! registries (§2.6). The content arms (6.2) cover chars accumulation, paragraph breaks
-//! (via [`Lang::make_paragraph_break_node`]), comments, and end of stream. The
+//! (via [`ParseDriver::make_paragraph_break_node`]), comments, and end of stream. The
 //! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
 //! [`GroupParser`] under the policy's state (structural swap/revert). The
 //! `Command`/`Specials` invocation arms (6.4) descend the same way: a `Command` token
-//! resolves through [`Lang::resolve_command`] under the loop's own state (resolution
+//! resolves through [`ParseDriver::resolve_command`] under the loop's own state (resolution
 //! precedes the descent policy — §3.6), a `Specials` token carries its resolution; the
 //! arm consumes the trigger whole, builds the [`Invocation`], and runs the parser
 //! returned by the spec's
@@ -84,19 +84,19 @@ use core::mem;
 use crate::error::{DiagnosticInfo, ParseError, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
-use crate::state::{CommandResolution, Lang, ParsingState, ParsingStateDelta};
+use crate::engine::{CommandResolution, ParseDriver};
+use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-use super::group_parser::GroupParser;
 use super::{
     invocation_frame, ConstructParser, ConstructParserResult, Invocation,
     ParseContext,
 };
 
 /// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
-/// ([`Lang::resolve_command`] returned no
-/// [`Resolved`](crate::state::CommandResolution::Resolved)) — the content loop recovers
+/// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
+/// [`Resolved`](crate::engine::CommandResolution::Resolved)) — the content loop recovers
 /// with a span-backed chars fallback (DESIGN_RATIONALE.md §3.8).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -107,7 +107,7 @@ pub struct UnresolvableCommand {
     /// The escape character that introduced the command.
     pub escape_char: char,
     /// Optional detail on why resolution failed, straight from
-    /// [`CommandResolution::Unresolved`](crate::state::CommandResolution::Unresolved):
+    /// [`CommandResolution::Unresolved`](crate::engine::CommandResolution::Unresolved):
     /// the trait's default hook reports that command resolution is not implemented;
     /// a resolver may report where it searched or hint at a fix. Appended to the
     /// message.
@@ -568,8 +568,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         // the factory, pushed around the parser run (the dispatch push site, §3.8).
         let frame = invocation_frame(cx, &invocation);
         cx.tokens.move_past(invocation.token, true);
-        let spec = invocation.spec;
-        let mut parser = spec.make_invocation_parser(invocation);
+        // The parser comes from the driver's interception seam (default: the spec's
+        // own factory) — Phase 7.2.
+        let driver = cx.driver;
+        let mut parser = driver.make_invocation_parser(invocation);
         let result = cx.with_frame(frame, |cx| cx.parse_scoped(base, &mut *parser));
         drop(parser);
         let (id, delta) = result?;
@@ -578,7 +580,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             // The after-effect applies to the loop's own state, not the policy base
             // (decided semantics 4, §3.6 — §3.3's outward propagation blesses applying
             // a delta to a base the producer never saw).
-            cx.state = cx.session.derived_state(&cx.state, &delta);
+            cx.state = cx.derived_state(&delta);
         }
         Ok(self.test_node_stop(cx, id))
     }
@@ -697,9 +699,9 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
                     }
                     // Invariant 2: the break is its own node — the hook's kind, staged
-                    // by the loop over the full token span (a `Lang` cannot stage nodes
+                    // by the loop over the full token span (a driver cannot stage nodes
                     // itself); runs never merge across it.
-                    let kind = L::make_paragraph_break_node(&cx.state, &token);
+                    let kind = cx.driver.make_paragraph_break_node(&cx.state, &token);
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }
@@ -736,7 +738,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     let resolved = if recovered {
                         CommandResolution::Unresolved { detail: None }
                     } else {
-                        L::resolve_command(&cx.state, &token)
+                        cx.driver.resolve_command(&cx.state, &token)
                     };
                     match resolved {
                         CommandResolution::Resolved(resolved) => {
@@ -825,10 +827,15 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // under the state that tokenized it (the at-match-time atomicity
                     // rule); the group parser gets its two facts — open span and rule.
                     cx.tokens.move_past(&token, true);
-                    let mut group = GroupParser::new(token.span, Arc::clone(rule));
                     // The parser's input state is the policy's answer, scoped to the
-                    // descent.
-                    let (id, _delta) = cx.parse_scoped(base, &mut group)?; // groups have no after-effect
+                    // descent; the parser itself comes from the driver's factory
+                    // (Phase 7.2 uniform routing).
+                    let (id, _delta) = cx.parse_group(
+                        base,
+                        token.span,
+                        Arc::clone(rule),
+                        ChildStateSpec::inherit(),
+                    )?; // groups have no after-effect
                     self.nodes.push(id);
                     if self.test_node_stop(cx, id) {
                         return Ok((self.outcome(StopCause::NodeCondition), None));
@@ -907,16 +914,15 @@ impl<L: Lang> fmt::Debug for NodesParser<'_, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ParseResult, ParserSession};
+    use crate::engine::{ParseResult, ParserSession, StdParseDriver};
     use crate::error::Recovery;
     use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
     use crate::node::{GroupData, NodeExt, StagedNodes};
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
-    use crate::state::{
-        NodeExtTypes, ResolvedCallable, SimpleLang, StateData, TokenRulesOverrides,
-    };
+    use crate::engine::ResolvedCallable;
+    use crate::state::{NodeExtTypes, SimpleLang, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
@@ -957,8 +963,20 @@ mod tests {
             .into()
     }
 
+    /// Test-side driver factory: the generic run helpers construct each lang's
+    /// driver from the recovery knob alone (drivers carry the policy since 7.2).
+    trait TestDriver {
+        fn with_recovery(recovery: Recovery) -> Self;
+    }
+
+    impl TestDriver for StdParseDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            StdParseDriver::new(recovery)
+        }
+    }
+
     /// Test lang resolving `Command` tokens against the state's libraries under the
-    /// `CT_MACRO` form.
+    /// `CT_MACRO` form (the hook lives on its driver since 7.2).
     #[derive(Debug, Clone, Copy)]
     struct CmdLang;
     impl Lang for CmdLang {
@@ -970,11 +988,30 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = CmdDriver;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct CmdDriver {
+        recovery: Recovery,
+    }
+
+    impl TestDriver for CmdDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            CmdDriver { recovery }
+        }
+    }
+
+    impl ParseDriver<CmdLang> for CmdDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
 
         fn resolve_command(
-            state: &ParsingState<Self>,
-            token: &Token<'_, Self>,
-        ) -> CommandResolution<Self> {
+            &self,
+            state: &ParsingState<CmdLang>,
+            token: &Token<'_, CmdLang>,
+        ) -> CommandResolution<CmdLang> {
             resolve_macro_via_libraries(state, token)
         }
     }
@@ -992,6 +1029,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
 
         fn scan_specials<'s>(
             _state: &ParsingState<Self>,
@@ -1104,7 +1142,10 @@ mod tests {
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
         stop: StopSpec<'_, L>,
-    ) -> Result<Parsed<L>, ParseError> {
+    ) -> Result<Parsed<L>, ParseError>
+    where
+        L::Driver: TestDriver,
+    {
         try_run_with(content, tokens, state, recovery, stop, ChildStateSpec::inherit())
     }
 
@@ -1116,10 +1157,15 @@ mod tests {
         recovery: Recovery,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Result<Parsed<L>, ParseError> {
+    ) -> Result<Parsed<L>, ParseError>
+    where
+        L::Driver: TestDriver,
+    {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
+        let mut session = ParserSession::new();
+        let driver = L::Driver::with_recovery(recovery);
+        let mut cx =
+            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
@@ -1172,7 +1218,10 @@ mod tests {
         recovery: Recovery,
         stop_std: StopSpec<'p, L>,
         stop_list: StopSpec<'p, L>,
-    ) -> Parsed<L> {
+    ) -> Parsed<L>
+    where
+        L::Driver: TestDriver,
+    {
         run_both_with(content, state, recovery, stop_std, stop_list, ChildStateSpec::inherit())
     }
 
@@ -1185,7 +1234,10 @@ mod tests {
         stop_std: StopSpec<'p, L>,
         stop_list: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Parsed<L> {
+    ) -> Parsed<L>
+    where
+        L::Driver: TestDriver,
+    {
         let mut std_reader = StdTokenReader::new(content);
         let a = try_run_with(
             content,
@@ -1302,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_break_node_comes_from_the_lang_hook() {
+    fn paragraph_break_node_comes_from_the_driver_hook() {
         #[derive(Debug, Clone, Copy)]
         struct MarkLang;
         impl Lang for MarkLang {
@@ -1314,11 +1366,30 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type Driver = MarkDriver;
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct MarkDriver {
+            recovery: Recovery,
+        }
+
+        impl TestDriver for MarkDriver {
+            fn with_recovery(recovery: Recovery) -> Self {
+                MarkDriver { recovery }
+            }
+        }
+
+        impl ParseDriver<MarkLang> for MarkDriver {
+            fn recovery(&self) -> Recovery {
+                self.recovery
+            }
 
             fn make_paragraph_break_node(
-                _state: &ParsingState<Self>,
-                _token: &Token<'_, Self>,
-            ) -> NodeKind<Self> {
+                &self,
+                _state: &ParsingState<MarkLang>,
+                _token: &Token<'_, MarkLang>,
+            ) -> NodeKind<MarkLang> {
                 NodeKind::chars("¶") // owned content, unlike the spanned default
             }
         }
@@ -1861,6 +1932,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
 
         fn scan_specials<'s>(
             _state: &ParsingState<Self>,
@@ -1966,7 +2038,8 @@ mod tests {
         assert_eq!(
             diagnostic.message(),
             "cannot resolve command ‘\\foo’ (command resolution is not implemented by \
-             this language — implement ‘Lang::resolve_command’ or use a preset)"
+             this language’s driver — implement ‘ParseDriver::resolve_command’ or use \
+             a preset)"
         );
         assert!(
             diagnostic
@@ -2051,7 +2124,7 @@ mod tests {
         assert_partition(&parsed.result, 0..8);
     }
 
-    /// A Lang whose resolver supplies its own failure detail — the channel a
+    /// A driver whose resolver supplies its own failure detail — the channel a
     /// library-backed resolver would use for hints like "load this library".
     #[derive(Debug, Clone, Copy)]
     struct HintLang;
@@ -2064,11 +2137,30 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = HintDriver;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct HintDriver {
+        recovery: Recovery,
+    }
+
+    impl TestDriver for HintDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            HintDriver { recovery }
+        }
+    }
+
+    impl ParseDriver<HintLang> for HintDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
 
         fn resolve_command(
-            _state: &ParsingState<Self>,
-            _token: &Token<'_, Self>,
-        ) -> CommandResolution<Self> {
+            &self,
+            _state: &ParsingState<HintLang>,
+            _token: &Token<'_, HintLang>,
+        ) -> CommandResolution<HintLang> {
             CommandResolution::Unresolved {
                 detail: Some("load the {amsmath} library for this command".into()),
             }
@@ -2087,7 +2179,7 @@ mod tests {
         );
     }
 
-    // --- Lang::refine_diagnostic (§3.8) -----------------------------------------------------
+    // --- ParseDriver::refine_diagnostic (§3.8) ----------------------------------------------
 
     /// The refinement demonstration's own condition: structured, so tools see it — not
     /// just better prose.
@@ -2114,10 +2206,29 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = RefineDriver;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct RefineDriver {
+        recovery: Recovery,
+    }
+
+    impl TestDriver for RefineDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            RefineDriver { recovery }
+        }
+    }
+
+    impl ParseDriver<RefineLang> for RefineDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
 
         fn refine_diagnostic(
+            &self,
             data: alloc::boxed::Box<dyn crate::error::DiagnosticData>,
-            _state: &ParsingState<Self>,
+            _state: &ParsingState<RefineLang>,
         ) -> alloc::boxed::Box<dyn crate::error::DiagnosticData> {
             match data.downcast_ref::<UnresolvableCommand>() {
                 Some(condition) => alloc::boxed::Box::new(CommandsNotAvailable {
@@ -2469,6 +2580,32 @@ mod tests {
 
         #[derive(Debug, Clone, Copy)]
         struct ExtLang;
+
+        #[derive(Debug, Clone, Copy)]
+        struct ExtDriver {
+            recovery: Recovery,
+        }
+
+        impl TestDriver for ExtDriver {
+            fn with_recovery(recovery: Recovery) -> Self {
+                ExtDriver { recovery }
+            }
+        }
+
+        impl ParseDriver<ExtLang> for ExtDriver {
+            fn recovery(&self) -> Recovery {
+                self.recovery
+            }
+
+            fn resolve_command(
+                &self,
+                state: &ParsingState<ExtLang>,
+                token: &Token<'_, ExtLang>,
+            ) -> CommandResolution<ExtLang> {
+                resolve_macro_via_libraries(state, token)
+            }
+        }
+
         impl Lang for ExtLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
@@ -2478,13 +2615,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ExtBundle;
-
-            fn resolve_command(
-                state: &ParsingState<Self>,
-                token: &Token<'_, Self>,
-            ) -> CommandResolution<Self> {
-                resolve_macro_via_libraries(state, token)
-            }
+            type Driver = ExtDriver;
 
             fn finalize_node(
                 kind: &mut NodeKind<Self>,
@@ -2795,10 +2926,17 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state();
         let mut reader = StdTokenReader::new(content);
-        let mut session: ParserSession<TestLang> = ParserSession::new(Recovery::Tolerant);
+        let mut session: ParserSession<TestLang> = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Tolerant);
         let mut nodes = Vec::new();
         let stop = loop {
-            let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
+            let mut cx = ParseContext::new(
+                &mut reader,
+                Arc::clone(&source),
+                Arc::clone(&st),
+                &mut session,
+                &driver,
+            );
             let mut parser = NodesParser::new(StopSpec::none());
             let (outcome, _) = parser.parse(&mut cx).unwrap();
             nodes.extend(outcome.nodes);
@@ -2806,6 +2944,7 @@ mod tests {
                 StopCause::UnexpectedGroupClose { span } => {
                     session
                         .recover(
+                            Recovery::Tolerant,
                             Box::new(StrayGroupClose { delim: "}".into() }),
                             SourceSpan::new(&source, span),
                         )
@@ -2984,6 +3123,7 @@ mod tests {
             type SessionExt = Counts;
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type Driver = CountDriver;
 
             fn finalize_transition(
                 _new: &mut StateData<Self>,
@@ -2992,12 +3132,20 @@ mod tests {
             ) {
                 FINALIZE_RUNS.fetch_add(1, Ordering::Relaxed);
             }
+        }
 
+        /// Counts observations (the hook moved to the driver in 7.2); strict by
+        /// default, which is what the manual drive below wants.
+        #[derive(Debug, Clone, Copy)]
+        struct CountDriver;
+
+        impl ParseDriver<CountLang> for CountDriver {
             fn observe_transition(
+                &self,
                 ext: &mut Counts,
-                _prev: &ParsingState<Self>,
-                _new: &ParsingState<Self>,
-                _delta: &ParsingStateDelta<Self>,
+                _prev: &ParsingState<CountLang>,
+                _new: &ParsingState<CountLang>,
+                _delta: &ParsingStateDelta<CountLang>,
             ) {
                 ext.observed += 1;
             }
@@ -3008,8 +3156,15 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state_with(rules::<CountLang>());
         let mut reader = StdTokenReader::new(content);
-        let mut session: ParserSession<CountLang> = ParserSession::new(Recovery::Strict);
-        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
+        let mut session: ParserSession<CountLang> = ParserSession::new();
+        let driver = CountDriver;
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, _) = parser.parse(&mut cx).unwrap();
         assert!(matches!(outcome.stop, StopCause::EndOfInput));
@@ -3064,5 +3219,166 @@ mod tests {
         assert_eq!(parsed.stop, StopCause::EndOfInput);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         assert_partition(&parsed.result, 0..content.len());
+    }
+
+    // --- the driver's construct provision + descent-delta channel, end to end (7.2) -----
+
+    /// One custom driver exercising every provision seam at once: all three factories
+    /// intercepted (counted, then delegating to the standard parsers), command
+    /// resolution via libraries, and the D2 math plug — `group_interior_delta` returns
+    /// a mode-entering delta for the math group class, so `$…$` interiors parse (and
+    /// record their nodes) in math mode with zero core changes.
+    #[test]
+    fn custom_driver_intercepts_every_factory_and_math_groups_enter_math_mode() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::super::GroupParser;
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+        enum Mode {
+            #[default]
+            Text,
+            Math,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct DriveLang;
+        impl Lang for DriveLang {
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = Mode;
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type Driver = DriveDriver;
+        }
+
+        #[derive(Debug, Default)]
+        struct DriveDriver {
+            nodes_parsers: AtomicUsize,
+            group_parsers: AtomicUsize,
+            invocation_parsers: AtomicUsize,
+        }
+
+        impl ParseDriver<DriveLang> for DriveDriver {
+            fn resolve_command(
+                &self,
+                state: &ParsingState<DriveLang>,
+                token: &Token<'_, DriveLang>,
+            ) -> CommandResolution<DriveLang> {
+                resolve_macro_via_libraries(state, token)
+            }
+
+            fn group_interior_delta(
+                &self,
+                _base: &ParsingState<DriveLang>,
+                rule: &Arc<GroupRule<DriveLang>>,
+            ) -> Option<ParsingStateDelta<DriveLang>> {
+                (rule.group_type == GT_MATH)
+                    .then(|| ParsingStateDelta::new().mode(Mode::Math))
+            }
+
+            fn make_nodes_parser<'p>(
+                &'p self,
+                stop: StopSpec<'p, DriveLang>,
+                child_states: ChildStateSpec<'p, DriveLang>,
+            ) -> Box<dyn ConstructParser<DriveLang, Output = NodesOutcome> + 'p> {
+                self.nodes_parsers.fetch_add(1, Ordering::Relaxed);
+                Box::new(NodesParser::new(stop).with_child_states(child_states))
+            }
+
+            fn make_group_parser<'p>(
+                &'p self,
+                open_span: Span,
+                rule: Arc<GroupRule<DriveLang>>,
+                child_states: ChildStateSpec<'p, DriveLang>,
+            ) -> Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'p> {
+                self.group_parsers.fetch_add(1, Ordering::Relaxed);
+                Box::new(GroupParser::new(open_span, rule).with_child_states(child_states))
+            }
+
+            fn make_invocation_parser<'a, 's>(
+                &'a self,
+                invocation: Invocation<'a, 's, DriveLang>,
+            ) -> Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'a>
+            where
+                's: 'a,
+            {
+                self.invocation_parsers.fetch_add(1, Ordering::Relaxed);
+                let spec = invocation.spec;
+                spec.make_invocation_parser(invocation)
+            }
+        }
+
+        // `{a}$m$\m {y}`: a brace group, a math group, a zero-arg macro, a sibling
+        // brace group — one root drive, three group descents, one invocation.
+        let content = "{a}$m$\\m {y}";
+        let mut rules = rules::<DriveLang>();
+        rules.groups.push(math_rule());
+        let mut libraries = LibraryStack::new();
+        libraries.push(macro_library::<DriveLang>(&["m"]));
+        let st = Arc::new(ParsingState::new(StateData {
+            rules,
+            libraries,
+            mode: Mode::Text,
+            ext: (),
+        }));
+        let st = Arc::new(st.derived(&ParsingStateDelta::new())); // through the choke point
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(content);
+        let mut session: ParserSession<DriveLang> = ParserSession::new();
+        let driver = DriveDriver::default();
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
+
+        // The top-level drive goes through the same seam as every interior descent.
+        let (outcome, delta) = cx
+            .parse_nodes(Arc::clone(&st), StopSpec::none(), ChildStateSpec::inherit())
+            .unwrap();
+        assert!(delta.is_none());
+        assert!(matches!(outcome.stop, StopCause::EndOfInput));
+
+        let root = session
+            .builder
+            .add(
+                NodeKind::list(),
+                SourceSpan::new(&source, 0..content.len()),
+                Arc::clone(&st),
+                outcome.nodes,
+            )
+            .unwrap();
+        let result = session.finish(root).unwrap();
+        crate::node::check_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(
+            shapes(&result),
+            ["group 0..3", "group 3..6", "callable 6..9", "group 9..12"]
+        );
+
+        // Factory counts: 1 root + 3 group interiors = 4 nodes descents; 3 group
+        // descents; 1 invocation.
+        assert_eq!(driver.nodes_parsers.load(Ordering::Relaxed), 4);
+        assert_eq!(driver.group_parsers.load(Ordering::Relaxed), 3);
+        assert_eq!(driver.invocation_parsers.load(Ordering::Relaxed), 1);
+
+        // The math plug: the `$…$` interior's nodes record a Math-mode state; the
+        // brace interiors stay in Text mode (the driver's delta keyed on the class).
+        let math_child = result.tree.root().child(1).unwrap().child(0).unwrap();
+        assert_eq!(math_child.chars(), Some("m"));
+        assert_eq!(math_child.parsing_state().mode(), Mode::Math);
+        let brace_child = result.tree.root().child(0).unwrap().child(0).unwrap();
+        assert_eq!(brace_child.chars(), Some("a"));
+        assert_eq!(brace_child.parsing_state().mode(), Mode::Text);
+        // The mode scoped structurally: content after the math group is Text again.
+        let after = result.tree.root().child(3).unwrap().child(0).unwrap();
+        assert_eq!(after.chars(), Some("y"));
+        assert_eq!(after.parsing_state().mode(), Mode::Text);
     }
 }

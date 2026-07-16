@@ -2305,6 +2305,31 @@ updates — mechanical but broad.
 *Revisit if:* a real consumer needs runtime driver swapping for one `Lang` (add a dyn
 override on top of the associated-type default), or per-invocation `Box` provision shows
 up in profiles (the §6.7 benchmark obligation).
+*Landed (subphase 7.2, July 2026)*, with these in-flight decisions (user-checkpointed):
+**Module home `engine::driver`** (user choice over constructs); `CommandResolution`/
+`ResolvedCallable` relocated there next to `resolve_command` (crate-root re-exports
+keep `techy::…` paths; module paths changed `state::` → `engine::`). **The
+group-interior memo is a second, dedicated session map** keyed `(base, rule)` by `Arc`
+identity: "hook runs on memo miss only" needs a pre-hook probe key, and sharing the
+7.1 memo would let a hand-built expecting-close delta collide with a driver-augmented
+descent under one key (unsound). Entries store the *merged* delta so
+`observe_transition` sees the true delta on hits; keying on `(base, rule)` also keeps
+descents deduplicated when the driver's delta carries events/ext (sound — the hook is
+pure per `(base, rule)`). The canonical `expecting_group_close` is forced *after* the
+driver's delta merges: the descent invariant is not driver-displaceable. **The
+memoized helpers stay non-overridable `ParserSession` methods taking `&L::Driver`**
+(user-confirmed after discussion): the memo is per-parse mutable state — driver-hosted
+it would need hot-path locking, retain `Arc`-pinned entries across parses, and leak
+derivations between concurrent documents ("define once, parse many") — and memo
+soundness + observe-on-every-transition are invariants, not policy, so they must not
+be trait-overridable; `cx.derived_state(&delta)`/`cx.group_interior_state(&rule)`
+sugar (base = `cx.state`, the only shape call sites use) hides the driver parameter.
+**Box-per-descent accepted** for the `make_nodes_parser`/`make_group_parser` defaults
+(uniform with the per-invocation Box; §6.7 benchmark covers it; a fast path could hide
+behind the same cx wrappers later). `ParserSession::new()` takes no arguments
+(`Default` added); `ParserSession::recover` takes the policy per call — the channel a
+custom driver `recover` uses for per-condition decisions. The default
+`resolve_command` detail now names `ParseDriver::resolve_command`.
 
 ### 3.7 Generics strategy
 

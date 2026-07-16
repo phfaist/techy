@@ -40,7 +40,7 @@ pub struct SpecialsMatch<'s, L: Lang> {
     /// The invocation form the trigger resolved to (recorded on the token; the dispatch
     /// loop needs it to build an `Invocation`). Recognition = resolution, and a
     /// resolution is the *(callable type, spec)* pair — the same shape as
-    /// [`ResolvedCallable`](crate::state::ResolvedCallable) (added July 2026, Phase 6.4,
+    /// [`ResolvedCallable`](crate::engine::ResolvedCallable) (added July 2026, Phase 6.4,
     /// user-approved).
     pub callable_type: L::CallableTypeId,
     /// The specials name recorded on the token and later on the node — usually the matched

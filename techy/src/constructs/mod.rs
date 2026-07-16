@@ -63,12 +63,13 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::engine::{Frame, FrameTitle, ParserSession};
-use crate::error::{DiagnosticData, DiagnosticInfo, ParseError, Recovery};
+use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession};
+use crate::error::{DiagnosticData, DiagnosticInfo, ParseError};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
+use crate::node::BuildId;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenReader};
+use crate::token::{GroupRule, Token, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site,
 /// DESIGN_RATIONALE.md §3.8): the spec's title hook with the invocation spelling — the
@@ -109,22 +110,28 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).
     pub state: Arc<ParsingState<L>>,
-    /// The session: node building, diagnostics, and the [`Recovery`] policy.
+    /// The session: node building, diagnostics, derivation memos, frames.
     pub session: &'a mut ParserSession<L>,
+    /// The language's [`ParseDriver`] (Phase 7.2): recovery policy, parse-time hooks,
+    /// the descent-delta channel, construct provision. **Concretely typed through
+    /// `L`** — preset parsers reach preset helper methods (inherent methods on the
+    /// driver type) with zero downcasts; generic code sees only the trait.
+    pub driver: &'a L::Driver,
 }
 
 impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
-    /// Bundle the four parse inputs into a context. Prefer this over a struct literal
+    /// Bundle the five parse inputs into a context. Prefer this over a struct literal
     /// (the fields stay public for access): the context is the type's stated "one place
     /// to grow" (depth limits, cancellation), and construction through `new` keeps
-    /// future fields from breaking every driver.
+    /// future fields from breaking every embedder.
     pub fn new(
         tokens: &'a mut dyn TokenReader<'s, L>,
         source: Arc<Source<L::SourceOrigin>>,
         state: Arc<ParsingState<L>>,
         session: &'a mut ParserSession<L>,
+        driver: &'a L::Driver,
     ) -> ParseContext<'a, 's, L> {
-        ParseContext { tokens, source, state, session }
+        ParseContext { tokens, source, state, session, driver }
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error
@@ -136,7 +143,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// double report.
     ///
     /// A token error carrying **no** recovery is unrecoverable and aborts even under
-    /// [`Recovery::Tolerant`] — mirroring the content loop, whose re-read would abort
+    /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) — mirroring the content loop, whose re-read would abort
     /// anyway; reporting `None` first would only add a spurious absent-position recovery
     /// (and its diagnostic) on the way down.
     ///
@@ -144,21 +151,14 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// consumes) so a parser can probe under a derived state — an optional-argument
     /// parser peeking with its minted group rule in force — without swapping
     /// [`state`](ParseContext::state).
+    ///
+    /// Thin sugar over [`ParseDriver::probe_token`], where the policy is defined
+    /// (Phase 7.2).
     pub fn probe_token(
         &mut self,
         state: &Arc<ParsingState<L>>,
     ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
-        match self.tokens.peek(state) {
-            Ok(token) => Ok(Some(token)),
-            Err(error) => {
-                if self.session.recovery == Recovery::Tolerant && error.recovery().is_some() {
-                    return Ok(None);
-                }
-                let span = SourceSpan::new(&self.source, error.span());
-                Err(ParseError::from_token_error(error.kind().clone(), span)
-                    .with_frames(self.session.snapshot_frames()))
-            }
-        }
+        self.driver.probe_token(self.tokens, &self.source, self.session, state)
     }
 
     /// Run `parser` with [`state`](ParseContext::state) scoped to `state` for the
@@ -198,13 +198,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md §3.8):
-    /// boxes the condition and hands it to the session's record-or-abort primitive
-    /// ([`ParserSession::recover`]). Tolerant mode records the condition as an
-    /// error-severity diagnostic and returns `Ok(())` (the caller continues with its
-    /// local recovery); strict mode returns the condition as a [`ParseError`] to bubble.
-    ///
-    /// The funnel lives here, not on the session, because condition refinement
-    /// (`Lang::refine_diagnostic`) needs the context's parsing state.
+    /// boxes the condition and hands it to [`ParseDriver::recover`], where the policy
+    /// is defined (Phase 7.2) — the default driver path applies
+    /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once (it needs
+    /// this context's parsing state) and then records the condition as an
+    /// error-severity diagnostic and returns `Ok(())` (tolerant — the caller continues
+    /// with its local recovery) or returns it as a [`ParseError`] to bubble (strict).
     pub fn recover(
         &mut self,
         condition: impl DiagnosticInfo,
@@ -215,15 +214,74 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 
     /// The funnel's boxed entry — for payloads that already live behind the dyn facade
     /// (the token-error lift, where a `Custom` payload must not be double-boxed).
-    /// Applies [`Lang::refine_diagnostic`] exactly once — this is why the funnel sits on
-    /// the context: refinement needs the parsing state.
     pub(crate) fn recover_boxed(
         &mut self,
         data: Box<dyn DiagnosticData>,
         span: SourceSpan<L::SourceOrigin>,
     ) -> Result<(), ParseError<L::SourceOrigin>> {
-        let data = L::refine_diagnostic(data, &self.state);
-        self.session.recover(data, span)
+        self.driver.recover(self.session, &self.state, data, span)
+    }
+
+    /// Session-mediated derivation from the **current** state
+    /// ([`state`](ParseContext::state)) — sugar over
+    /// [`ParserSession::derived_state`] supplying this context's driver, so every
+    /// transition reaches [`ParseDriver::observe_transition`]. The dominant descent
+    /// shape; derive from another base via the session method directly
+    /// (`cx.session.derived_state(cx.driver, &base, &delta)`).
+    pub fn derived_state(&mut self, delta: &ParsingStateDelta<L>) -> Arc<ParsingState<L>> {
+        self.session.derived_state(self.driver, &self.state, delta)
+    }
+
+    /// The group-interior derivation from the **current** state — sugar over
+    /// [`ParserSession::group_interior_state`] supplying this context's driver: the
+    /// canonical expecting-close override merged with the driver's
+    /// [`group_interior_delta`](ParseDriver::group_interior_delta), memoized per
+    /// `(base, rule)`.
+    pub fn group_interior_state(&mut self, rule: &Arc<GroupRule<L>>) -> Arc<ParsingState<L>> {
+        self.session.group_interior_state(self.driver, &self.state, rule)
+    }
+
+    /// Parse one **nodes descent** (a content run: group interior, environment body,
+    /// top-level drive) under `state`, with the parser obtained from the driver's
+    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser) factory — the uniform
+    /// routing that makes one driver override apply to every descent site
+    /// (Phase 7.2). State scoping and restoration follow
+    /// [`parse_scoped`](ParseContext::parse_scoped).
+    // The output-plus-delta pair is the decided ConstructParser signature (§3.6).
+    #[allow(clippy::type_complexity)]
+    pub fn parse_nodes<'p>(
+        &mut self,
+        state: Arc<ParsingState<L>>,
+        stop: StopSpec<'p, L>,
+        child_states: ChildStateSpec<'p, L>,
+    ) -> ConstructParserResult<L, (NodesOutcome, Option<ParsingStateDelta<L>>)>
+    where
+        'a: 'p,
+    {
+        let driver = self.driver;
+        let mut parser = driver.make_nodes_parser(stop, child_states);
+        self.parse_scoped(state, &mut *parser)
+    }
+
+    /// Parse one **group descent** (the consumed `GroupOpen` token's facts: open span
+    /// and resolved rule) with `base` as the group's input state, the parser obtained
+    /// from the driver's [`make_group_parser`](ParseDriver::make_group_parser)
+    /// factory — the uniform routing of every group descent site (Phase 7.2).
+    // Same decided pair as above.
+    #[allow(clippy::type_complexity)]
+    pub fn parse_group<'p>(
+        &mut self,
+        base: Arc<ParsingState<L>>,
+        open_span: Span,
+        rule: Arc<GroupRule<L>>,
+        child_states: ChildStateSpec<'p, L>,
+    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)>
+    where
+        'a: 'p,
+    {
+        let driver = self.driver;
+        let mut parser = driver.make_group_parser(open_span, rule, child_states);
+        self.parse_scoped(base, &mut *parser)
     }
 
     /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point
@@ -246,8 +304,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// or a literal contract description.
     ///
     /// Deliberately **not** the recover funnel: an implementation bug is not a source
-    /// condition — it aborts even under [`Recovery::Tolerant`], and no
-    /// [`Lang::refine_diagnostic`] pass applies.
+    /// condition — it aborts even under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant), and no
+    /// [`ParseDriver::refine_diagnostic`] pass applies.
     pub fn implementation_error(
         &self,
         detail: impl fmt::Display,
@@ -264,7 +322,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 /// Condition: an implementation of an extension point — an argument or construct
 /// parser, a [`Lang`] hook, a spec factory — violated a library contract. An
 /// implementation bug to fix, not a source-input problem: it aborts the parse even
-/// under [`Recovery::Tolerant`] (built through
+/// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) (built through
 /// [`ParseContext::implementation_error`], which bypasses the recover funnel).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -321,7 +379,7 @@ pub trait ConstructParser<L: Lang> {
 
 /// One resolved callable invocation, as handed to
 /// [`CallableSpec::make_invocation_parser`]: the dispatch loop resolves the trigger
-/// token (via [`Lang::resolve_command`], or the
+/// token (via [`ParseDriver::resolve_command`], or the
 /// resolution riding on a `Specials` token), builds this value, and moves it into the
 /// invocation parser the spec's factory returns.
 ///

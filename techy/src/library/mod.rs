@@ -343,6 +343,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
     }
 
     fn min_rules<L: Lang>() -> TokenRules<L> {
@@ -541,6 +542,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
     }
 
     #[test]

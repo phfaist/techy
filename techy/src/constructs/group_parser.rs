@@ -51,7 +51,7 @@ use crate::state::{Lang, ParsingStateDelta};
 use crate::token::GroupRule;
 
 use super::child_state::ChildStateSpec;
-use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
+use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
@@ -140,9 +140,10 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
-        // The interior state: base + expecting_group_close, session-memoized (one
-        // derivation per (base, rule); every descent still reaches observe_transition).
-        let interior_state = cx.session.group_interior_state(&cx.state, &self.rule);
+        // The interior state: base + expecting_group_close + the driver's descent
+        // delta, session-memoized (one derivation per (base, rule); every descent
+        // still reaches observe_transition).
+        let interior_state = cx.group_interior_state(&self.rule);
 
         // Recurse under the interior state (structural swap/revert — §2 state-threading
         // convention). The stop condition names the exact pairing the group opened with,
@@ -154,7 +155,6 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             },
             true,
         );
-        let mut interior = NodesParser::new(stop).with_child_states(self.child_states.clone());
         // The group-interior traceback frame (§3.8): conditions detected inside the
         // group carry `group ‘{’` @ the open delimiter in their snapshot.
         let frame = Frame {
@@ -164,8 +164,10 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             },
             span: SourceSpan::new(&cx.source, self.open_span),
         };
-        let (outcome, delta) =
-            cx.with_frame(frame, |cx| cx.parse_scoped(interior_state, &mut interior))?;
+        let child_states = self.child_states.clone();
+        let (outcome, delta) = cx.with_frame(frame, |cx| {
+            cx.parse_nodes(interior_state, stop, child_states)
+        })?;
         debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
 
         let (close, end) = match outcome.stop {
@@ -288,8 +290,15 @@ mod tests {
         };
         let rule = Arc::clone(rule);
         reader.move_past(&open, true);
-        let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
+        let mut session = ParserSession::new();
+        let driver = crate::engine::StdParseDriver::new(recovery);
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
         let mut parser = GroupParser::new(open.span, rule);
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());

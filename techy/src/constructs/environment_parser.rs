@@ -60,7 +60,8 @@ use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingStateDelta};
 use crate::token::{GroupRule, TokenKind};
 
-use super::nodes_parser::{NodesParser, StopCause, StopSpec, TokenStopKind};
+use super::child_state::ChildStateSpec;
+use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: an environment's body ran into the terminator of a *different*
@@ -182,9 +183,10 @@ pub fn read_rigid_name_group<L: Lang>(
     cx.tokens.move_past(&open, true);
 
     // The interior tokens are read under base + expecting_group_close (the memoized
-    // derivation the group parser uses), so the close delimiter is guaranteed
-    // recognizable regardless of the base's delimiter table.
-    let interior_state = cx.session.group_interior_state(&cx.state, &rule);
+    // derivation the group parser uses — the driver's descent delta included), so the
+    // close delimiter is guaranteed recognizable regardless of the base's delimiter
+    // table.
+    let interior_state = cx.group_interior_state(&rule);
     let result = cx.with_scoped_state(interior_state, |cx| read_name_chars(cx, &rule));
     match result? {
         Some(name_group) => Ok(Some(name_group)),
@@ -405,8 +407,11 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
             TokenStopKind::Command { name: self.stop_command_name },
             false,
         );
-        let mut content = NodesParser::new(stop);
-        let (outcome, delta) = content.parse(cx)?;
+        // The body runs under the caller-prepared cx.state (the spec's body delta is
+        // the driving invocation parser's business); the content-loop parser comes
+        // from the driver's factory (Phase 7.2 uniform routing).
+        let body_state = Arc::clone(&cx.state);
+        let (outcome, delta) = cx.parse_nodes(body_state, stop, ChildStateSpec::inherit())?;
         debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
 
         // The body's content interior: the staged nodes tile it exactly (a stop token's
@@ -485,7 +490,9 @@ mod tests {
         OptionalGroupArgumentParser, StopSpec,
     };
     use super::*;
-    use crate::engine::{ParseResult, ParserSession};
+    use crate::engine::{
+        CommandResolution, ParseDriver, ParseResult, ParserSession, ResolvedCallable,
+    };
     use crate::error::{ParseError, Recovery};
     use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
     use crate::node::{
@@ -494,9 +501,7 @@ mod tests {
     };
     use crate::source::{Source, TextContent};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
-    use crate::state::{
-        CommandResolution, ParsingState, ResolvedCallable, StateData, TokenRulesOverrides,
-    };
+    use crate::state::{ParsingState, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, SpecialsMatch, StdTokenReader, Token, TokenListReader,
         TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
@@ -527,11 +532,46 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = EnvDriver;
+
+        // The tokenizer-layer hooks stay on `Lang` (7.2 placement doctrine).
+        fn scan_specials<'s>(
+            _state: &ParsingState<Self>,
+            content: &'s str,
+            pos: usize,
+        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            if content[pos..].starts_with('~') {
+                Ok(Some(SpecialsMatch {
+                    end: pos + 1,
+                    callable_type: CT_SPECIALS,
+                    name: &content[pos..pos + 1],
+                    spec: Arc::new(StdCallableSpec::default()),
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("~".into())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct EnvDriver {
+        recovery: Recovery,
+    }
+
+    impl ParseDriver<EnvLang> for EnvDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
 
         fn resolve_command(
-            state: &ParsingState<Self>,
-            token: &Token<'_, Self>,
-        ) -> CommandResolution<Self> {
+            &self,
+            state: &ParsingState<EnvLang>,
+            token: &Token<'_, EnvLang>,
+        ) -> CommandResolution<EnvLang> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
                 return CommandResolution::Unresolved { detail: None };
             };
@@ -557,27 +597,6 @@ mod tests {
                 .resolve(&query, state)
                 .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
                 .into()
-        }
-
-        fn scan_specials<'s>(
-            _state: &ParsingState<Self>,
-            content: &'s str,
-            pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
-            if content[pos..].starts_with('~') {
-                Ok(Some(SpecialsMatch {
-                    end: pos + 1,
-                    callable_type: CT_SPECIALS,
-                    name: &content[pos..pos + 1],
-                    spec: Arc::new(StdCallableSpec::default()),
-                }))
-            } else {
-                Ok(None)
-            }
-        }
-
-        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
-            TriggerChars::Only("~".into())
         }
     }
 
@@ -710,7 +729,7 @@ mod tests {
                 .downcast_ref::<EnvSpec>()
                 .and_then(|env_spec| env_spec.body_delta.clone());
             let slot_state = match &body_delta {
-                Some(delta) => cx.session.derived_state(&cx.state, delta),
+                Some(delta) => cx.derived_state(delta),
                 None => Arc::clone(&cx.state),
             };
             let mut body_parser =
@@ -831,7 +850,7 @@ mod tests {
                 expecting_group_close: Some(Some(raw_rule)),
                 ..TokenRulesOverrides::default()
             });
-            let verbatim_state = cx.session.derived_state(&cx.state, &delta);
+            let verbatim_state = cx.derived_state(&delta);
             let terminator = cx.with_scoped_state(verbatim_state, |cx| {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
@@ -1031,8 +1050,10 @@ mod tests {
         recovery: Recovery,
     ) -> Result<Parsed, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
+        let mut session = ParserSession::new();
+        let driver = EnvDriver { recovery };
+        let mut cx =
+            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
@@ -1626,8 +1647,15 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = suite_state();
         let mut reader = StdTokenReader::new(content);
-        let mut session = ParserSession::new(Recovery::Strict);
-        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
+        let mut session = ParserSession::new();
+        let driver = EnvDriver { recovery: Recovery::Strict };
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
         let mut parser = EnvironmentBodyParser::new(Span::empty(0), "A", "end", GT_BRACE)
             .with_match_invocation_name(false);
         let (body, delta) = parser.parse(&mut cx).expect("parse");

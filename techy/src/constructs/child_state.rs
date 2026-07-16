@@ -18,7 +18,7 @@
 //!
 //! Decided semantics (§3.6):
 //!
-//! 1. *Resolution precedes policy* — `Lang::resolve_command` runs under the loop's own
+//! 1. *Resolution precedes policy* — `ParseDriver::resolve_command` runs under the loop's own
 //!    state (coherent with the state that tokenized the token); the policy only shapes
 //!    what happens after.
 //! 2. *The policy provides the base; spec deltas stack on top* — the group parser's

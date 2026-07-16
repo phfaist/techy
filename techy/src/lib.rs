@@ -118,7 +118,10 @@ pub use constructs::{
     TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound, UnresolvableCommand,
     UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
-pub use engine::{Frame, FrameTitle, ParseResult, ParserSession};
+pub use engine::{
+    CommandResolution, Frame, FrameTitle, ParseDriver, ParseResult, ParserSession,
+    ResolvedCallable, StdParseDriver,
+};
 pub use error::{
     format_position, format_traceback, Diagnostic, DiagnosticData, DiagnosticInfo,
     DiagnosticValue, Diagnostics, ParseError, Recovery, Severity, ToDiagnosticValue,
@@ -140,8 +143,8 @@ pub use spec::{
     StdCallableSpec,
 };
 pub use state::{
-    CommandResolution, Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable,
-    SimpleLang, StateData, TokenRulesOverrides,
+    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
+    TokenRulesOverrides,
 };
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,

@@ -50,13 +50,14 @@ use crate::node::{
 };
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
-use crate::state::{CommandResolution, Lang, ParsingStateDelta, TokenRulesOverrides};
+use crate::engine::{CommandResolution, ParseDriver};
+use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
-use super::group_parser::GroupParser;
+use super::child_state::ChildStateSpec;
 use super::nodes_parser::{ExpressionCallableRequiresContent, UnresolvableCommand};
 use super::{
-    ConstructParser, ConstructParserResult, Invocation, ParseContext,
+    ConstructParserResult, Invocation, ParseContext,
 };
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
@@ -256,8 +257,9 @@ fn parse_expression_node<'s, L: Lang>(
             stage_pre_space(cx, nodes, next.pre_space)?;
             let rule = Arc::clone(rule);
             cx.tokens.move_past(next, true);
-            let mut group = GroupParser::new(next.span, rule);
-            let (id, _delta) = group.parse(cx)?; // groups have no after-effect
+            let base = Arc::clone(&cx.state);
+            let (id, _delta) =
+                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?; // groups have no after-effect
             nodes.push(id);
             Ok(Some(id))
         }
@@ -265,7 +267,7 @@ fn parse_expression_node<'s, L: Lang>(
         TokenKind::Command { name, escape_char, .. } => {
             // Resolution under the current state, coherent with the state that
             // tokenized the token (§3.6).
-            match L::resolve_command(&cx.state, next) {
+            match cx.driver.resolve_command(&cx.state, next) {
                 CommandResolution::Resolved(resolved) => {
                     let invocation = Invocation {
                         callable_type: resolved.callable_type,
@@ -363,10 +365,11 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     stage_pre_space(cx, nodes, token.pre_space)?;
     // The invocation's traceback frame (the expression-position dispatch site, §3.8).
     let frame = super::invocation_frame(cx, &invocation);
-    // Consume the trigger whole before the parser runs (the dispatch contract, §3.6).
+    // Consume the trigger whole before the parser runs (the dispatch contract, §3.6);
+    // the parser comes from the driver's interception seam (Phase 7.2).
     cx.tokens.move_past(token, true);
-    let spec = invocation.spec;
-    let mut parser = spec.make_invocation_parser(invocation);
+    let driver = cx.driver;
+    let mut parser = driver.make_invocation_parser(invocation);
     let result = cx.with_frame(frame, |cx| parser.parse(cx));
     drop(parser);
     let (id, _delta) = result?; // after-effect deltas have no scope here (fn docs)
@@ -476,8 +479,9 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
                 stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
                 let rule = Arc::clone(rule);
                 cx.tokens.move_past(&next, true);
-                let mut group = GroupParser::new(next.span, rule);
-                let (id, _delta) = group.parse(cx)?;
+                let base = Arc::clone(&cx.state);
+                let (id, _delta) =
+                    cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?;
                 let child_count = staged_child_count(cx, id);
                 noise.nodes.push(id);
                 return Ok(Some(ParsedArgumentNodes {
@@ -615,7 +619,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             temporary_groups: Some(alloc::vec![Arc::clone(&self.rule)]),
             ..TokenRulesOverrides::default()
         });
-        let contents_state = cx.session.derived_state(&cx.state, &delta);
+        let contents_state = cx.derived_state(&delta);
         let matched = match cx.probe_token(&contents_state)? {
             Some(token)
                 if matches!(
@@ -638,8 +642,12 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         // the 6.5 policy translation of pylatexenc's `make_child_parsing_state`): the
         // temporary rule's state-scoped lifecycle covers both halves of that policy at
         // every depth (see the type docs).
-        let mut group = GroupParser::new(open.span, Arc::clone(&self.rule));
-        let (id, _delta) = cx.parse_scoped(contents_state, &mut group)?;
+        let (id, _delta) = cx.parse_group(
+            contents_state,
+            open.span,
+            Arc::clone(&self.rule),
+            ChildStateSpec::inherit(),
+        )?;
 
         // Content: the option group's children, or a lone protective child group's.
         let (content_parent, content_len) = {
@@ -770,13 +778,13 @@ mod tests {
         UnclosedGroupFound,
     };
     use super::*;
-    use crate::engine::{ParseResult, ParserSession};
+    use crate::engine::{ParseResult, ParserSession, ResolvedCallable};
     use crate::error::{ParseError, Recovery};
     use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
     use crate::node::NodeRef;
     use crate::source::Source;
     use crate::spec::{CallableSpec, StdCallableSpec};
-    use crate::state::{ParsingState, ResolvedCallable, StateData};
+    use crate::state::{ParsingState, StateData};
     use crate::token::{
         CommandRule, CommentRule, StdTokenReader, TokenListReader, TokenReader, TokenRules,
         WhitespaceRules,
@@ -801,11 +809,24 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = ArgDriver;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct ArgDriver {
+        recovery: Recovery,
+    }
+
+    impl ParseDriver<ArgLang> for ArgDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
 
         fn resolve_command(
-            state: &ParsingState<Self>,
-            token: &Token<'_, Self>,
-        ) -> CommandResolution<Self> {
+            &self,
+            state: &ParsingState<ArgLang>,
+            token: &Token<'_, ArgLang>,
+        ) -> CommandResolution<ArgLang> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
                 return CommandResolution::Unresolved { detail: None };
             };
@@ -929,8 +950,10 @@ mod tests {
         recovery: Recovery,
     ) -> Result<Parsed, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut session = ParserSession::new(recovery);
-        let mut cx = ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session);
+        let mut session = ParserSession::new();
+        let driver = ArgDriver { recovery };
+        let mut cx =
+            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none())
             .with_child_states(ChildStateSpec::inherit());
         let (outcome, delta) = parser.parse(&mut cx)?;
@@ -1433,12 +1456,14 @@ mod tests {
         let content = r"\item[{a]b}]";
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(content);
-        let mut session = ParserSession::new(Recovery::Tolerant);
+        let mut session = ParserSession::new();
+        let driver = ArgDriver { recovery: Recovery::Tolerant };
         let mut cx = ParseContext::new(
             &mut reader,
             Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
+            &driver,
         );
         let mut parser =
             NodesParser::new(StopSpec::none()).with_child_states(ChildStateSpec::inherit());
@@ -1547,8 +1572,15 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let st = state_with(&[]);
         let mut reader = BrokenReader;
-        let mut session = ParserSession::new(Recovery::Tolerant);
-        let mut cx = ParseContext::new(&mut reader, Arc::clone(&source), Arc::clone(&st), &mut session);
+        let mut session = ParserSession::new();
+        let driver = ArgDriver { recovery: Recovery::Tolerant };
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
 
         let spec = brace_arg();
         let err = spec

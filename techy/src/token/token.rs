@@ -79,7 +79,7 @@ pub enum TokenKind<'s, L: Lang> {
     /// `Lang::scan_specials` hook — recognition is a lookup, so the token carries the
     /// full resolution: the invocation form *and* the spec (never absent; unknown-name
     /// fallback is the scan's business). Exactly a
-    /// [`ResolvedCallable`](crate::state::ResolvedCallable)'s pair — what the dispatch
+    /// [`ResolvedCallable`](crate::engine::ResolvedCallable)'s pair — what the dispatch
     /// loop needs to build an `Invocation` (`callable_type` added July 2026, Phase 6.4,
     /// user-approved).
     Specials {

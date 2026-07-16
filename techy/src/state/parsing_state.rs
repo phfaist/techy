@@ -470,6 +470,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
 
         fn initial_state_data() -> StateData<Self> {
             StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () }
@@ -562,6 +563,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
 
         fn finalize_transition(
             new: &mut StateData<Self>,
@@ -659,6 +661,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
 
         fn initial_state_data() -> StateData<Self> {
             // Coherent seed: text mode with comments enabled — exactly what
@@ -700,6 +703,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type Driver = crate::engine::StdParseDriver;
         }
         let state: ParsingState<DefaultSeedLang> = ParsingState::initial();
         assert_eq!(state.mode(), Mode::Text);

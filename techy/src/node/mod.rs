@@ -1028,6 +1028,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ExtBundle;
+        type Driver = crate::engine::StdParseDriver;
     }
 
     #[test]
@@ -1101,6 +1102,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = FinalizeExts;
+        type Driver = crate::engine::StdParseDriver;
 
         fn finalize_node(
             _kind: &mut NodeKind<Self>,

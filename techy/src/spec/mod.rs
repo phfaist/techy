@@ -53,6 +53,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
     }
 
     /// Stand-in for the standard argument parsers (delimited group, optional group,

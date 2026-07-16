@@ -27,10 +27,71 @@ use core::hash::{Hash, Hasher};
 
 use hashbrown::Equivalent;
 
-use crate::state::{Lang, ParsingState, TokenRulesOverrides};
+use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
+use crate::token::GroupRule;
 
 /// The memo map: owned keys → memoized derived states.
 pub(super) type StateMemo<L> = hashbrown::HashMap<StateMemoKey<L>, Arc<ParsingState<L>>>;
+
+/// The **group-interior** memo map (Phase 7.2): one entry per `(base, rule)` descent,
+/// deliberately separate from [`StateMemo`]. The group-interior derivation is its own
+/// operation — the canonical `expecting_group_close` override *plus* the driver's
+/// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta), which
+/// runs on memo **miss** only. Sharing [`StateMemo`] would be unsound: a hand-built
+/// expecting-close-only delta and a driver-augmented descent would collide under one
+/// key while deriving different states. Keyed on `(base, rule)` `Arc` identities
+/// (sound because the driver hook is pure per `(state, rule)`); the entry stores the
+/// merged delta so hits can hand the true delta to `observe_transition`. Keys own
+/// their `Arc`s for the same no-ABA reason as [`StateMemoKey`].
+pub(super) type GroupInteriorMemo<L> =
+    hashbrown::HashMap<GroupInteriorKey<L>, GroupInteriorEntry<L>>;
+
+/// One memoized group-interior derivation: the frozen interior state and the merged
+/// delta that produced it (canonical expecting-close + driver descent delta).
+pub(super) struct GroupInteriorEntry<L: Lang> {
+    pub(super) state: Arc<ParsingState<L>>,
+    pub(super) delta: Arc<ParsingStateDelta<L>>,
+}
+
+/// Owned key of one group-interior memo entry.
+pub(super) struct GroupInteriorKey<L: Lang> {
+    pub(super) base: Arc<ParsingState<L>>,
+    pub(super) rule: Arc<GroupRule<L>>,
+}
+
+/// Borrowed probe view of a [`GroupInteriorKey`].
+pub(super) struct GroupInteriorProbe<'a, L: Lang> {
+    pub(super) base: &'a Arc<ParsingState<L>>,
+    pub(super) rule: &'a Arc<GroupRule<L>>,
+}
+
+impl<L: Lang> PartialEq for GroupInteriorKey<L> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.base, &other.base) && Arc::ptr_eq(&self.rule, &other.rule)
+    }
+}
+
+impl<L: Lang> Eq for GroupInteriorKey<L> {}
+
+impl<L: Lang> Hash for GroupInteriorKey<L> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        arc_addr(&self.base).hash(state);
+        arc_addr(&self.rule).hash(state);
+    }
+}
+
+impl<L: Lang> Hash for GroupInteriorProbe<'_, L> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        arc_addr(self.base).hash(state);
+        arc_addr(self.rule).hash(state);
+    }
+}
+
+impl<L: Lang> Equivalent<GroupInteriorKey<L>> for GroupInteriorProbe<'_, L> {
+    fn equivalent(&self, key: &GroupInteriorKey<L>) -> bool {
+        Arc::ptr_eq(self.base, &key.base) && Arc::ptr_eq(self.rule, &key.rule)
+    }
+}
 
 /// Owned key of one memo entry (see the module docs for the pinning rationale).
 pub(super) struct StateMemoKey<L: Lang> {

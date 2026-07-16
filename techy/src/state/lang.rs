@@ -6,7 +6,6 @@
 //! and moving it there would recreate a module cycle for cosmetics (ARCHITECTURE.md
 //! §engine stratum note).
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
@@ -14,16 +13,15 @@ use core::hash::Hash;
 
 use alloc::vec::Vec;
 
-use crate::error::DiagnosticData;
+use crate::engine::{ParseDriver, StdParseDriver};
 use crate::library::LibraryStack;
 use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
 use crate::source::{SourceOrigin, SourceSpan};
-use crate::spec::CallableSpec;
 use crate::token::{
-    SpecialsMatch, Token, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+    SpecialsMatch, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
 };
 
-use super::delta::ParsingStateDelta;
+
 use super::parsing_state::{ParsingState, StateData};
 
 /// The bundle of node extension types of a language: the **two-tier ext system** of
@@ -119,7 +117,7 @@ pub trait Lang: Sized + 'static {
     /// [`CallableTypeId`](Lang::CallableTypeId), though deliberately not a `…TypeId`:
     /// it names the mode a state *is in*, not a classification of a syntactic object
     /// (NAMING_STRATEGY.md principle 5). Stored as plain state data
-    /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`] override
+    /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`](super::ParsingStateDelta::mode) override
     /// channel: deltas *initiate* mode changes, and
     /// [`finalize_transition`](Lang::finalize_transition) *interprets* them
     /// (DESIGN_RATIONALE.md §3.3). Mode is not lookup-private: definition visibility
@@ -153,7 +151,8 @@ pub trait Lang: Sized + 'static {
     /// Parse-global **mutable** extension, `Default`-initialized and stored on
     /// [`ParserSession`](crate::engine::ParserSession) — the preset-owned mutable object
     /// of a parse, and the home for parse-history accumulation
-    /// ([`observe_transition`](Lang::observe_transition)) and parse-global caches
+    /// ([`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition))
+    /// and parse-global caches
     /// (decided July 2026, DESIGN_RATIONALE.md §3.6). `()` if unused.
     ///
     /// Unlike [`StateExt`](Lang::StateExt) this is not `Clone`: sessions are transient
@@ -168,6 +167,23 @@ pub trait Lang: Sized + 'static {
     /// The node extension type bundle ([`NodeExtTypes`]); `()` for languages without
     /// custom node data.
     type NodeExts: NodeExtTypes;
+
+    /// The language's [`ParseDriver`] type — the **instance** face of parse-time
+    /// behavior (Phase 7.2, DESIGN_RATIONALE.md §3.6): recovery policy, command
+    /// resolution, the group descent-delta channel, construct provision. Reached by
+    /// construct parsers as
+    /// [`ParseContext::driver`](crate::constructs::ParseContext::driver), **concretely
+    /// typed** — preset parsers call preset helper methods on it with no downcasts.
+    ///
+    /// Placement doctrine: `Lang` keeps the static hooks of layers callable outside a
+    /// driven parse — [`initial_state_data`](Lang::initial_state_data)/
+    /// [`finalize_transition`](Lang::finalize_transition) (state layer; `derived()` is
+    /// out-of-parse-callable), [`scan_specials`](Lang::scan_specials)/
+    /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (tokenizer layer),
+    /// [`finalize_node`](Lang::finalize_node) (builder/transform layer). Everything
+    /// that only runs while a parse is driven lives on the driver. [`SimpleLang`]
+    /// defaults this to [`StdParseDriver`].
+    type Driver: ParseDriver<Self>;
 
     /// The language's canonical initial (seed) state data: base token rules, seed
     /// libraries (unknown-callable fallbacks included), and the initial state ext.
@@ -223,7 +239,7 @@ pub trait Lang: Sized + 'static {
     /// default does nothing.
     ///
     /// **Mode transitions are interpreted here** (Phase 7, DESIGN_RATIONALE.md §3.3):
-    /// a delta's [`mode`](ParsingStateDelta::mode) override is already applied to
+    /// a delta's [`mode`](super::ParsingStateDelta::mode) override is already applied to
     /// `new.mode` when this hook runs — the override *is* the signal, no
     /// [`Event`](Lang::Event) needed for mode-shaped transitions. Compare
     /// [`prev.mode()`](ParsingState::mode) with `new.mode` to react to the change
@@ -236,7 +252,8 @@ pub trait Lang: Sized + 'static {
     /// transition: `{a}{b}` under one state runs it **once** for two descents. That
     /// purity is also what makes the memo sound: a pointer-keyed hit substitutes a
     /// previous run's result. Anything history-shaped (counters, caches keyed by
-    /// occurrence) belongs in [`observe_transition`](Lang::observe_transition), which
+    /// occurrence) belongs in
+    /// [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition), which
     /// fires on every transition, memo hits included.
     fn finalize_transition(
         new: &mut StateData<Self>,
@@ -244,30 +261,6 @@ pub trait Lang: Sized + 'static {
         events: &[Self::Event],
     ) {
         let _ = (new, prev, events);
-    }
-
-    /// Per-event transition **observation** (decided July 2026, DESIGN_RATIONALE.md
-    /// §3.6): called by the session-mediated derivation helpers
-    /// ([`ParserSession::derived_state`](crate::engine::ParserSession::derived_state),
-    /// [`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state))
-    /// on **every** transition event — memo hits included, which is what
-    /// [`finalize_transition`](Lang::finalize_transition) structurally cannot see (it
-    /// runs once per unique *derivation*, not once per transition). Parse-history
-    /// accumulation ("how many times did the parse enter math mode") belongs here, in
-    /// the session's [`SessionExt`](Lang::SessionExt) — never in `finalize_transition`,
-    /// where structural scope reverts and memoization would make counts wrong twice
-    /// over.
-    ///
-    /// Observational only: it receives the already-frozen `new` state and cannot alter
-    /// the transition's outcome (the session layer is data-equivalent to
-    /// [`ParsingState::derived`]). The default does nothing.
-    fn observe_transition(
-        ext: &mut Self::SessionExt,
-        prev: &ParsingState<Self>,
-        new: &ParsingState<Self>,
-        delta: &ParsingStateDelta<Self>,
-    ) {
-        let _ = (ext, prev, new, delta);
     }
 
     /// Specials scan: is a callable-triggering character sequence at `content[pos..]`?
@@ -331,81 +324,12 @@ pub trait Lang: Sized + 'static {
         TriggerChars::default()
     }
 
-    // --- Phase 6 dispatch/finalization hooks (July 2026, DESIGN_RATIONALE.md §3.6) ------
-
-    /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its invocation
-    /// form and behavior spec. Typically implemented by a preset dispatching to the
-    /// state's libraries via a [`CallableQuery`](crate::library::CallableQuery) — the
-    /// token carries the fired escape character for syntax disambiguation. `Specials`
-    /// tokens need no hook: recognition = resolution, the token already carries its spec.
-    ///
-    /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
-    /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) — the parse
-    /// loops then diagnose the command as unresolvable and recover (span-backed
-    /// chars-node fallback, DESIGN_RATIONALE.md §3.8). The failure's optional `detail`
-    /// string is surfaced on that diagnostic: the place for a resolver to say *why*
-    /// ("searched libraries x, y, z"; "load the {amsmath} library for this command").
-    ///
-    /// The default resolves nothing, with a detail reporting that command resolution
-    /// is not implemented by this language. A missing implementation has no
-    /// compile-time signal — a language that enables commands but never overrides this
-    /// hook would otherwise see every command fail with a bare "cannot resolve",
-    /// nothing pointing at the actual cause (decided July 2026).
-    fn resolve_command(
-        state: &ParsingState<Self>,
-        token: &Token<'_, Self>,
-    ) -> CommandResolution<Self> {
-        let _ = (state, token);
-        CommandResolution::Unresolved {
-            detail: Some(
-                "command resolution is not implemented by this language — implement \
-                 ‘Lang::resolve_command’ or use a preset"
-                    .into(),
-            ),
-        }
-    }
-
-    /// The node kind representing a paragraph break. The *core* stages the returned kind
-    /// with the token's span and the current state (a `Lang` cannot stage nodes itself);
-    /// a preset may return a callable-shaped kind (FLM's paragraph constructs) without
-    /// any core change.
-    ///
-    /// **Constraint:** the kind is staged with *no children*, so a callable-shaped kind
-    /// must carry no argument regions and no slots — the builder's region-tiling assert
-    /// panics otherwise. (Structurally intrinsic: this hook has no session/builder and
-    /// cannot stage children.)
-    ///
-    /// The default preserves the whitespace-as-chars invariant (§3.5): a whitespace-only
-    /// `Chars` kind, span-backed over the full token span (newlines included).
-    fn make_paragraph_break_node(
-        state: &ParsingState<Self>,
-        token: &Token<'_, Self>,
-    ) -> NodeKind<Self> {
-        let _ = state;
-        NodeKind::chars(token.span)
-    }
-
-    /// Condition refinement (DESIGN_RATIONALE.md §3.8): replace a condition payload with
-    /// a language-specific one before it is recorded. Applied exactly once, in the
-    /// recover funnel ([`ParseContext::recover`](crate::constructs::ParseContext::recover)
-    /// — at the context level, where the parsing state is in scope). The default is the
-    /// identity.
-    ///
-    /// A `Lang` downcasts `data`, decides from the state, and returns either the
-    /// original box or its own [`DiagnosticInfo`](crate::error::DiagnosticInfo) type —
-    /// e.g. FLM mapping a forbidden-`$` token condition to a `DollarMathDisabled` whose
-    /// `Display` explains the configuration option. The replacement is *structured*:
-    /// tools see (and can attach quickfixes to) the refined condition, not just better
-    /// prose. State-dependent information the message needs is baked into the refined
-    /// payload's fields here — conditions stay self-contained after the parse (no state
-    /// references inside errors, no lazy rendering).
-    fn refine_diagnostic(
-        data: Box<dyn DiagnosticData>,
-        state: &ParsingState<Self>,
-    ) -> Box<dyn DiagnosticData> {
-        let _ = state;
-        data
-    }
+    // --- Phase 6 finalization hook (July 2026, DESIGN_RATIONALE.md §3.6) ---------------
+    //
+    // The parse-time dispatch hooks that used to sit here — `resolve_command`,
+    // `make_paragraph_break_node`, `refine_diagnostic`, `observe_transition` — migrated
+    // to the `ParseDriver` in Phase 7.2 (placement doctrine, DESIGN_RATIONALE.md §3.6):
+    // `Lang` keeps only hooks of layers callable outside a driven parse.
 
     /// Centralized node finalization, run by
     /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add) for **every** staged
@@ -432,93 +356,6 @@ pub trait Lang: Sized + 'static {
     }
 }
 
-/// A successful command resolution (the payload of [`CommandResolution::Resolved`]):
-/// which invocation form the command resolved to, and the behavior spec to drive its
-/// parse — exactly what the dispatch loop needs to build an `Invocation` (the core
-/// cannot know a preset's type ids).
-pub struct ResolvedCallable<L: Lang> {
-    /// The invocation form (latexlike: macro / environment / …).
-    pub callable_type: L::CallableTypeId,
-    /// The resolved behavior spec.
-    pub spec: Arc<dyn CallableSpec<L>>,
-}
-
-// Manual impls: derives would demand `L:` bounds although only associated types (already
-// bounded) and an `Arc` are stored.
-
-impl<L: Lang> Clone for ResolvedCallable<L> {
-    fn clone(&self) -> Self {
-        ResolvedCallable { callable_type: self.callable_type, spec: Arc::clone(&self.spec) }
-    }
-}
-
-impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResolvedCallable")
-            .field("callable_type", &self.callable_type)
-            .field("spec", &self.spec)
-            .finish()
-    }
-}
-
-/// The result of [`Lang::resolve_command`]: a resolution to dispatch, or an
-/// [`Unresolved`](CommandResolution::Unresolved) failure whose optional `detail` says
-/// *why* — surfaced verbatim on the unresolvable-command diagnostic. Any resolution
-/// layer may fill it in: the trait's default hook reports that command resolution is
-/// not implemented at all; a library-backed resolver might report where it searched
-/// ("searched libraries x, y, z") or hint at a fix ("load the {amsmath} library for
-/// this command").
-#[non_exhaustive]
-pub enum CommandResolution<L: Lang> {
-    /// The command resolved: dispatch this invocation.
-    Resolved(ResolvedCallable<L>),
-    /// The command did not resolve; the parse loops diagnose it as unresolvable and
-    /// recover (span-backed chars fallback, DESIGN_RATIONALE.md §3.8).
-    Unresolved {
-        /// Optional human-facing detail on why resolution failed, appended to the
-        /// diagnostic's message and serialized with the condition. `None` when there
-        /// is nothing to say beyond "the name did not resolve".
-        detail: Option<String>,
-    },
-}
-
-/// `Some`/`None` from a lookup maps to `Resolved`/`Unresolved` with no detail — the
-/// bridge for resolvers built on `Option`-returning queries (library lookups).
-impl<L: Lang> From<Option<ResolvedCallable<L>>> for CommandResolution<L> {
-    fn from(resolved: Option<ResolvedCallable<L>>) -> Self {
-        match resolved {
-            Some(resolved) => CommandResolution::Resolved(resolved),
-            None => CommandResolution::Unresolved { detail: None },
-        }
-    }
-}
-
-impl<L: Lang> Clone for CommandResolution<L> {
-    fn clone(&self) -> Self {
-        match self {
-            CommandResolution::Resolved(resolved) => {
-                CommandResolution::Resolved(resolved.clone())
-            }
-            CommandResolution::Unresolved { detail } => {
-                CommandResolution::Unresolved { detail: detail.clone() }
-            }
-        }
-    }
-}
-
-impl<L: Lang> fmt::Debug for CommandResolution<L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CommandResolution::Resolved(resolved) => {
-                f.debug_tuple("Resolved").field(resolved).finish()
-            }
-            CommandResolution::Unresolved { detail } => {
-                f.debug_struct("Unresolved").field("detail", detail).finish()
-            }
-        }
-    }
-}
-
 /// All-defaults language marker: `impl SimpleLang for MyLang {}` yields a [`Lang`] with
 /// every associated type defaulted (`ModeId`/`StateExt`/`Event`/`SessionExt`/`NodeExts`
 /// = `()`, `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`)
@@ -541,4 +378,5 @@ impl<T: SimpleLang> Lang for T {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = ();
+    type Driver = StdParseDriver;
 }
