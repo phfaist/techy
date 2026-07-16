@@ -596,7 +596,7 @@ mod tests {
     // --- the Phase 6 Lang hook defaults ------------------------------------------------
 
     #[test]
-    fn default_resolve_command_is_unimplemented() {
+    fn default_resolve_command_reports_unimplemented_resolution() {
         let st = state();
         let token: Token<'static, PlainLang> = Token::new(
             TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
@@ -604,7 +604,12 @@ mod tests {
             Span::empty(0),
         );
         let resolved: CommandResolution<PlainLang> = PlainLang::resolve_command(&st, &token);
-        assert!(matches!(resolved, CommandResolution::Unimplemented));
+        match resolved {
+            CommandResolution::Unresolved { detail } => {
+                assert!(detail.unwrap().contains("command resolution is not implemented"));
+            }
+            CommandResolution::Resolved(_) => panic!("the default must not resolve"),
+        }
     }
 
     #[test]

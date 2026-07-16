@@ -1448,38 +1448,42 @@ remember to call it); a `ParseContext`-side helper (forgettable, and transforms 
 **`Lang::resolve_command` hook** — DECIDED (user, July 2026, Phase 6 plan session; Phase 6
 notes item C1 as sketched; return type amended July 2026, next entry). `Command` tokens
 resolve through `fn resolve_command(state, &token) -> CommandResolution<Self>`
-(`Resolved(ResolvedCallable { callable_type, spec })` / `Unknown` / `Unimplemented`);
+(`Resolved(ResolvedCallable { callable_type, spec })` / `Unresolved { detail }`);
 typically dispatches to the state's libraries via
 `CallableQuery { syntax: Command { escape_char }, … }` — the token now carries its escape
-char (§3.2). An unresolved answer → the nodes parser diagnoses and recovers (§3.8).
+char (§3.2). An `Unresolved` answer → the nodes parser diagnoses and recovers (§3.8).
 Specials need no hook: recognition = resolution; the token already carries its spec.
 *Rationale:* the dispatch loop needs `(CallableTypeId, spec)` for command tokens and the
 core cannot know a preset's type ids; follows the `scan_specials` precedent (a `Lang` hook,
 recognition kept close to resolution).
 
-**`CommandResolution`: the unimplemented default `resolve_command` is distinguishable, and
-the diagnostic says so** — DECIDED (user, July 2026). Forgetting to implement
-`resolve_command` has no compile-time signal: a language that enables commands but keeps
-the default hook sees every command fail with a bare "cannot resolve", nothing pointing at
-the actual cause. The first idea — the default hook prints a warning in debug builds — is
-unimplementable as stated: the crate is `no_std` with no `std` feature (no `eprintln!`),
-the dependency policy routes conditions through diagnostics, not logging, Rust cannot
-detect "default method not overridden", and a side-effectful default body (a global
-`AtomicBool` marker the dispatch sites consult) would contradict the hooks' purity
-doctrine and misattribute across concurrent `Lang`s. Decided instead: make the failure
-mode part of the hook's *type* — the return type is the three-valued `CommandResolution`
-(`Resolved`/`Unknown`/`Unimplemented`), the default body answers `Unimplemented`, and both
-dispatch sites record it on the `UnresolvableCommand` condition
-(`resolver_unimplemented: bool`; hand-written `Display` appends a hint naming the hook).
-The hint ships in **all** builds: it is precise by construction (it can only fire when the
-default — or a deliberate `Unimplemented` override — actually answered), so debug-gating
-it buys nothing. `Unknown` is the honest answer for "a resolver ran but does not know this
-name" — `From<Option<ResolvedCallable>>` maps `None` there, never to `Unimplemented` — so
-real languages' library misses keep the bare message.
-*Rejected:* debug-build `eprintln!` behind a new `std` feature (silent exactly for no_std
-consumers; off-policy logging); the global marker flag (impure, racy attribution); an
-unconditional hint on every unresolvable command (wrong and noisy for real languages where
-the miss is a typo'd name, and every preset would have to scrub it via
+**`CommandResolution` carries a failure `detail` string; the unimplemented default
+`resolve_command` reports itself through it** — DECIDED (user, July 2026). Two needs, one
+channel. (1) Forgetting to implement `resolve_command` has no compile-time signal: a
+language that enables commands but keeps the default hook saw every command fail with a
+bare "cannot resolve", nothing pointing at the actual cause. (2) Resolvers that *are*
+implemented often know why a name failed and had nowhere to say it ("searched libraries
+x, y, z"; "load the {amsmath} library for this command"). Decided: the hook's return type
+is `CommandResolution` — `Resolved(ResolvedCallable)` or `Unresolved { detail:
+Option<String> }` — and the dispatch sites hand the detail to the `UnresolvableCommand`
+condition (field `detail`, serialized; hand-written `Display` appends it parenthetically).
+The trait default answers `Unresolved` with a core-provided detail ("command resolution is
+not implemented by this language — implement `Lang::resolve_command` or use a preset"),
+so the forgot-the-hook wall names its own cause; `From<Option<ResolvedCallable>>` maps
+lookup misses to detail-less `Unresolved`, so implemented resolvers stay bare unless they
+opt in. The detail ships in **all** builds — it is precise by construction (only the
+answering resolver produces it), so debug-gating buys nothing.
+*Why not the debug-build warning first envisioned:* the crate is `no_std` with no `std`
+feature (no `eprintln!`), the dependency policy routes conditions through diagnostics, not
+logging; Rust cannot detect "default method not overridden", and the workaround — a global
+`AtomicBool` the default body sets and dispatch sites consult — would make a hook
+side-effectful (against the hooks' purity doctrine) with racy cross-`Lang` attribution.
+*Rejected along the way:* a `resolver_unimplemented: bool` on the condition (subsumed: the
+general string is strictly more expressive, and "unimplemented" is just one detail value);
+a separate `Unknown`/`Unimplemented` variant pair (once the detail string exists the
+distinction is prose, not structure — and "Unknown" would be a misnomer for hints like
+"load {amsmath}", where the name *is* known); an unconditional hint on every unresolvable
+command (wrong and noisy for real languages, and every preset would have to scrub it via
 `refine_diagnostic`); docs-only (the runtime wall stays).
 
 **`Lang::make_paragraph_break_node` hook** — DECIDED (user, July 2026, Phase 6 plan

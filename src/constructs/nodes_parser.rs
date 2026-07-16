@@ -106,24 +106,21 @@ pub struct UnresolvableCommand {
     pub name: String,
     /// The escape character that introduced the command.
     pub escape_char: char,
-    /// Whether the failure came from a language with no command resolution at all
-    /// ([`Unimplemented`](crate::state::CommandResolution::Unimplemented), the trait
-    /// default's answer) rather than from a resolver that did not know the name; the
-    /// message then carries a hint naming the missing hook.
-    pub resolver_unimplemented: bool,
+    /// Optional detail on why resolution failed, straight from
+    /// [`CommandResolution::Unresolved`](crate::state::CommandResolution::Unresolved):
+    /// the trait's default hook reports that command resolution is not implemented;
+    /// a resolver may report where it searched or hint at a fix. Appended to the
+    /// message.
+    pub detail: Option<String>,
 }
 
-// Hand-written wording: the unimplemented-resolver hint is conditional (a branch the
-// derive's message format string cannot express).
+// Hand-written wording: the detail suffix is conditional (a branch the derive's
+// message format string cannot express).
 impl fmt::Display for UnresolvableCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "cannot resolve command ‘{}{}’", self.escape_char, self.name)?;
-        if self.resolver_unimplemented {
-            write!(
-                f,
-                " (this language implements no ‘Lang::resolve_command’ — the default \
-                 resolves nothing; implement the hook or use a preset)"
-            )?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
         }
         Ok(())
     }
@@ -735,10 +732,9 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     // state that tokenized the token (resolution precedes policy,
                     // §3.6). A recovery placeholder is never dispatched: its site
                     // already diagnosed it, and a token with no real bytes behind it
-                    // cannot be consumed by the arm (`Unknown`, not `Unimplemented`:
-                    // the hook never ran).
+                    // cannot be consumed by the arm (no detail: the hook never ran).
                     let resolved = if recovered {
-                        CommandResolution::Unknown
+                        CommandResolution::Unresolved { detail: None }
                     } else {
                         L::resolve_command(&cx.state, &token)
                     };
@@ -758,15 +754,11 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                                 return Ok((self.outcome(StopCause::NodeCondition), None));
                             }
                         }
-                        unresolved @ (CommandResolution::Unknown
-                        | CommandResolution::Unimplemented) => {
+                        CommandResolution::Unresolved { detail } => {
                             // Unresolvable command (§3.8): diagnostic plus span-backed
                             // chars fallback.
-                            let condition = UnresolvableCommand::new(
-                                *name,
-                                *escape_char,
-                                matches!(unresolved, CommandResolution::Unimplemented),
-                            );
+                            let condition =
+                                UnresolvableCommand::new(*name, *escape_char, detail);
                             if self.recover_as_chars(cx, &token, recovered, condition)? {
                                 return Ok((self.outcome(StopCause::NodeCondition), None));
                             }
@@ -950,7 +942,7 @@ mod tests {
         token: &Token<'_, L>,
     ) -> CommandResolution<L> {
         let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-            return CommandResolution::Unknown;
+            return CommandResolution::Unresolved { detail: None };
         };
         let query = CallableQuery::new(
             CT_MACRO,
@@ -1963,21 +1955,21 @@ mod tests {
             ["chars 0..2 \"a \"", "chars 2..8 \"\\\\foo  \"", "chars 8..9 \"b\""]
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        // `TestLang` keeps the default `resolve_command`: the condition records the
-        // unimplemented resolver and the message carries the hint.
+        // `TestLang` keeps the default `resolve_command`: its detail — command
+        // resolution is not implemented — rides the condition into the message.
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
         assert_eq!(
             diagnostic.message(),
-            "cannot resolve command ‘\\foo’ (this language implements no \
-             ‘Lang::resolve_command’ — the default resolves nothing; implement the hook \
-             or use a preset)"
+            "cannot resolve command ‘\\foo’ (command resolution is not implemented by \
+             this language — implement ‘Lang::resolve_command’ or use a preset)"
         );
         assert!(
             diagnostic
                 .data()
                 .downcast_ref::<UnresolvableCommand>()
                 .unwrap()
-                .resolver_unimplemented
+                .detail
+                .is_some()
         );
         assert_eq!(parsed.stop, StopCause::EndOfInput);
         assert_partition(&parsed.result, 0..9);
@@ -2020,10 +2012,10 @@ mod tests {
         let mut reader = StdTokenReader::new("a \\foo  b");
         let err = try_run("a \\foo  b", &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
-        // Exact hint wording pinned in unresolved_command_recovers_as_a_chars_fallback.
+        // Exact detail wording pinned in unresolved_command_recovers_as_a_chars_fallback.
         let message = err.to_string();
         assert!(message.starts_with("cannot resolve command ‘\\foo’"));
-        assert!(message.contains("implements no ‘Lang::resolve_command’"));
+        assert!(message.contains("command resolution is not implemented"));
         assert_eq!(err.span().range(), 2..8);
     }
 
@@ -2039,18 +2031,54 @@ mod tests {
             ["chars 0..2 \"a \"", "chars 2..7 \"\\\\foo \"", "chars 7..8 \"b\""]
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        // `CmdLang` implements the hook: a library miss is `Unknown` — the message
-        // stays bare, no unimplemented-resolver hint.
+        // `CmdLang` implements the hook and supplies no failure detail: the message
+        // stays bare — in particular, no unimplemented-resolution hint.
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.message(), "cannot resolve command ‘\\foo’");
         assert!(
-            !diagnostic
+            diagnostic
                 .data()
                 .downcast_ref::<UnresolvableCommand>()
                 .unwrap()
-                .resolver_unimplemented
+                .detail
+                .is_none()
         );
         assert_partition(&parsed.result, 0..8);
+    }
+
+    /// A Lang whose resolver supplies its own failure detail — the channel a
+    /// library-backed resolver would use for hints like "load this library".
+    #[derive(Debug, Clone, Copy)]
+    struct HintLang;
+    impl Lang for HintLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn resolve_command(
+            _state: &ParsingState<Self>,
+            _token: &Token<'_, Self>,
+        ) -> CommandResolution<Self> {
+            CommandResolution::Unresolved {
+                detail: Some("load the {amsmath} library for this command".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn resolver_supplied_detail_rides_the_diagnostic() {
+        let st = state_with(rules::<HintLang>());
+        let parsed =
+            run_both("a \\foo b", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.result.diagnostics.iter().next().unwrap().message(),
+            "cannot resolve command ‘\\foo’ (load the {amsmath} library for this command)"
+        );
     }
 
     // --- Lang::refine_diagnostic (§3.8) -----------------------------------------------------

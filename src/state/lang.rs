@@ -310,22 +310,29 @@ pub trait Lang: Sized + 'static {
     /// tokens need no hook: recognition = resolution, the token already carries its spec.
     ///
     /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
-    /// the invocation, or [`Unknown`](CommandResolution::Unknown) for a name it does not
-    /// know — the parse loops then diagnose the command as unresolvable and recover
-    /// (span-backed chars-node fallback, DESIGN_RATIONALE.md §3.8).
+    /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) — the parse
+    /// loops then diagnose the command as unresolvable and recover (span-backed
+    /// chars-node fallback, DESIGN_RATIONALE.md §3.8). The failure's optional `detail`
+    /// string is surfaced on that diagnostic: the place for a resolver to say *why*
+    /// ("searched libraries x, y, z"; "load the {amsmath} library for this command").
     ///
-    /// The default returns [`Unimplemented`](CommandResolution::Unimplemented): the same
-    /// diagnose-and-recover path, but the diagnostic carries a hint naming this hook.
-    /// A missing implementation has no compile-time signal — a language that enables
-    /// commands but never overrides this hook would otherwise see every command fail
-    /// with a bare "cannot resolve", with nothing pointing at the actual cause (decided
-    /// July 2026).
+    /// The default resolves nothing, with a detail reporting that command resolution
+    /// is not implemented by this language. A missing implementation has no
+    /// compile-time signal — a language that enables commands but never overrides this
+    /// hook would otherwise see every command fail with a bare "cannot resolve",
+    /// nothing pointing at the actual cause (decided July 2026).
     fn resolve_command(
         state: &ParsingState<Self>,
         token: &Token<'_, Self>,
     ) -> CommandResolution<Self> {
         let _ = (state, token);
-        CommandResolution::Unimplemented
+        CommandResolution::Unresolved {
+            detail: Some(
+                "command resolution is not implemented by this language — implement \
+                 ‘Lang::resolve_command’ or use a preset"
+                    .into(),
+            ),
+        }
     }
 
     /// The node kind representing a paragraph break. The *core* stages the returned kind
@@ -424,35 +431,34 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
     }
 }
 
-/// The result of [`Lang::resolve_command`]: a resolution to dispatch, or one of two
-/// distinguishable failure modes — the resolver did not know the name, or the language
-/// provides no command resolution at all. Both failures take the same
-/// diagnose-and-recover path; the distinction only refines the diagnostic (an
-/// `Unimplemented` failure carries a hint naming the missing hook), so an implementation
-/// unsure of the difference loses nothing by answering `Unknown`.
+/// The result of [`Lang::resolve_command`]: a resolution to dispatch, or an
+/// [`Unresolved`](CommandResolution::Unresolved) failure whose optional `detail` says
+/// *why* — surfaced verbatim on the unresolvable-command diagnostic. Any resolution
+/// layer may fill it in: the trait's default hook reports that command resolution is
+/// not implemented at all; a library-backed resolver might report where it searched
+/// ("searched libraries x, y, z") or hint at a fix ("load the {amsmath} library for
+/// this command").
 #[non_exhaustive]
 pub enum CommandResolution<L: Lang> {
     /// The command resolved: dispatch this invocation.
     Resolved(ResolvedCallable<L>),
-    /// The resolver ran but does not know this name; the parse loops diagnose the
-    /// command as unresolvable and recover (span-backed chars fallback,
-    /// DESIGN_RATIONALE.md §3.8).
-    Unknown,
-    /// The language provides no command resolution — the trait default's only answer
-    /// (an override may also return it where resolution is deliberately absent).
-    /// Diagnosed like [`Unknown`](CommandResolution::Unknown), plus a hint naming
-    /// [`Lang::resolve_command`] as the missing piece.
-    Unimplemented,
+    /// The command did not resolve; the parse loops diagnose it as unresolvable and
+    /// recover (span-backed chars fallback, DESIGN_RATIONALE.md §3.8).
+    Unresolved {
+        /// Optional human-facing detail on why resolution failed, appended to the
+        /// diagnostic's message and serialized with the condition. `None` when there
+        /// is nothing to say beyond "the name did not resolve".
+        detail: Option<String>,
+    },
 }
 
-/// `Some`/`None` from a lookup maps to `Resolved`/`Unknown` — absence of a *name* is
-/// [`Unknown`](CommandResolution::Unknown), never
-/// [`Unimplemented`](CommandResolution::Unimplemented) (a resolver ran).
+/// `Some`/`None` from a lookup maps to `Resolved`/`Unresolved` with no detail — the
+/// bridge for resolvers built on `Option`-returning queries (library lookups).
 impl<L: Lang> From<Option<ResolvedCallable<L>>> for CommandResolution<L> {
     fn from(resolved: Option<ResolvedCallable<L>>) -> Self {
         match resolved {
             Some(resolved) => CommandResolution::Resolved(resolved),
-            None => CommandResolution::Unknown,
+            None => CommandResolution::Unresolved { detail: None },
         }
     }
 }
@@ -463,8 +469,9 @@ impl<L: Lang> Clone for CommandResolution<L> {
             CommandResolution::Resolved(resolved) => {
                 CommandResolution::Resolved(resolved.clone())
             }
-            CommandResolution::Unknown => CommandResolution::Unknown,
-            CommandResolution::Unimplemented => CommandResolution::Unimplemented,
+            CommandResolution::Unresolved { detail } => {
+                CommandResolution::Unresolved { detail: detail.clone() }
+            }
         }
     }
 }
@@ -475,8 +482,9 @@ impl<L: Lang> fmt::Debug for CommandResolution<L> {
             CommandResolution::Resolved(resolved) => {
                 f.debug_tuple("Resolved").field(resolved).finish()
             }
-            CommandResolution::Unknown => f.write_str("Unknown"),
-            CommandResolution::Unimplemented => f.write_str("Unimplemented"),
+            CommandResolution::Unresolved { detail } => {
+                f.debug_struct("Unresolved").field("detail", detail).finish()
+            }
         }
     }
 }

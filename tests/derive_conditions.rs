@@ -166,13 +166,24 @@ fn migrated_core_conditions_serialize_their_payload() {
     // The built-in conditions use the derive (migration, July 2026): their
     // `serializable_data()` now emits every payload field instead of the empty-map
     // default — including payload enums via `#[derive(ToDiagnosticValue)]`.
-    let unresolvable = techy::UnresolvableCommand::new("frac", '\\', false);
+    let unresolvable = techy::UnresolvableCommand::new("frac", '\\', None);
     assert_eq!(
         DiagnosticInfo::serializable_data(&unresolvable),
         DiagnosticValue::Map(vec![
             ("name".into(), DiagnosticValue::Str("frac".into())),
             ("escape_char".into(), DiagnosticValue::Str("\\".into())),
-            ("resolver_unimplemented".into(), DiagnosticValue::Bool(false)),
+            ("detail".into(), DiagnosticValue::Null),
+        ])
+    );
+
+    let unresolvable =
+        techy::UnresolvableCommand::new("frac", '\\', "searched libraries x, y".to_string());
+    assert_eq!(
+        DiagnosticInfo::serializable_data(&unresolvable),
+        DiagnosticValue::Map(vec![
+            ("name".into(), DiagnosticValue::Str("frac".into())),
+            ("escape_char".into(), DiagnosticValue::Str("\\".into())),
+            ("detail".into(), DiagnosticValue::Str("searched libraries x, y".into())),
         ])
     );
 

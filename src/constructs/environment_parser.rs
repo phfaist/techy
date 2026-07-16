@@ -532,7 +532,7 @@ mod tests {
             token: &Token<'_, Self>,
         ) -> CommandResolution<Self> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unknown;
+                return CommandResolution::Unresolved { detail: None };
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
             // factory returns the composition parser. `\end` deliberately resolves to

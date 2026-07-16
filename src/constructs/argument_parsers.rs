@@ -275,17 +275,12 @@ fn parse_expression_node<'s, L: Lang>(
                     };
                     dispatch_expression_invocation(cx, nodes, invocation)
                 }
-                unresolved @ (CommandResolution::Unknown
-                | CommandResolution::Unimplemented) => {
+                CommandResolution::Unresolved { detail } => {
                     // The decided unresolvable-command recovery (§3.8), in expression
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
                     cx.recover(
-                        UnresolvableCommand::new(
-                            *name,
-                            *escape_char,
-                            matches!(unresolved, CommandResolution::Unimplemented),
-                        ),
+                        UnresolvableCommand::new(*name, *escape_char, detail),
                         SourceSpan::new(&cx.source, next.span),
                     )?;
                     stage_pre_space(cx, nodes, next.pre_space)?;
@@ -811,7 +806,7 @@ mod tests {
             token: &Token<'_, Self>,
         ) -> CommandResolution<Self> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unknown;
+                return CommandResolution::Unresolved { detail: None };
             };
             let query = CallableQuery::new(
                 CT_MACRO,
