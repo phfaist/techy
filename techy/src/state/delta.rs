@@ -115,6 +115,12 @@ pub struct ParsingStateDelta<L: Lang> {
     /// scope reversion is structural — the caller keeps the previous
     /// `Arc<ParsingState>` (ARCHITECTURE.md §specs).
     pub push_libraries: Vec<Arc<dyn SpecLookup<L>>>,
+    /// Override the parsing mode ([`StateData::mode`]); `None` = leave unchanged.
+    /// The override *is* the mode-change signal (DESIGN_RATIONALE.md §3.3):
+    /// [`Lang::finalize_transition`] sees it applied on the new data and interprets it
+    /// against the previous state's [`mode()`](super::ParsingState::mode) — no
+    /// [`Lang::Event`] needed for mode-shaped transitions.
+    pub mode: Option<L::ModeId>,
     /// Whole-value replacement of the language-specific state extension; generic code
     /// leaves this `None` (presets prefer events + `finalize_transition`).
     pub ext: Option<L::StateExt>,
@@ -128,6 +134,7 @@ impl<L: Lang> ParsingStateDelta<L> {
         ParsingStateDelta {
             rules: TokenRulesOverrides::default(),
             push_libraries: Vec::new(),
+            mode: None,
             ext: None,
             events: Vec::new(),
         }
@@ -145,6 +152,12 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
+    /// Set the parsing-mode override.
+    pub fn mode(mut self, mode: L::ModeId) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
     /// Set the state-extension replacement.
     pub fn ext(mut self, ext: L::StateExt) -> Self {
         self.ext = Some(ext);
@@ -157,12 +170,15 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Apply overrides (rules + ext) to `data`. Internal, pre-freeze: called only from
-    /// `derived()`, before `finalize_transition` runs.
+    /// Apply overrides (rules + mode + ext) to `data`. Internal, pre-freeze: called only
+    /// from `derived()`, before `finalize_transition` runs.
     pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) {
         self.rules.apply(&mut data.rules);
         for lookup in &self.push_libraries {
             data.libraries.push(lookup.clone());
+        }
+        if let Some(mode) = self.mode {
+            data.mode = mode;
         }
         if let Some(ext) = &self.ext {
             data.ext = ext.clone();
@@ -263,6 +279,7 @@ impl<L: Lang> Clone for ParsingStateDelta<L> {
         ParsingStateDelta {
             rules: self.rules.clone(),
             push_libraries: self.push_libraries.clone(),
+            mode: self.mode,
             ext: self.ext.clone(),
             events: self.events.clone(),
         }
@@ -274,6 +291,7 @@ impl<L: Lang> fmt::Debug for ParsingStateDelta<L> {
         f.debug_struct("ParsingStateDelta")
             .field("rules", &self.rules)
             .field("push_libraries", &self.push_libraries)
+            .field("mode", &self.mode)
             .field("ext", &self.ext)
             .field("events", &self.events)
             .finish()

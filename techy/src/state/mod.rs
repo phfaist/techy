@@ -3,14 +3,15 @@
 //! This implements ARCHITECTURE.md §state ("Option C", Decision 1):
 //!
 //! - [`ParsingState<L>`] holds [`StateData<L>`] (the plain stored settings:
-//!   [`TokenRules`](crate::token::TokenRules) plus the language-specific `L::StateExt`)
-//!   behind a getter-only public surface, together with per-instance derived caches (the
-//!   delimiter [`PrefixTable`](crate::token::PrefixTable) and the specials
+//!   [`TokenRules`](crate::token::TokenRules), the first-class parsing mode
+//!   `L::ModeId`, and the language-specific `L::StateExt`) behind a getter-only public
+//!   surface, together with per-instance derived caches (the delimiter
+//!   [`PrefixTable`](crate::token::PrefixTable) and the specials
 //!   [`TriggerChars`](crate::token::TriggerChars) set).
 //! - [`ParsingStateDelta<L>`] is the reified change value — typed optional overrides
-//!   ([`TokenRulesOverrides`]) plus semantic `L::Event`s. Deltas are data, not closures:
-//!   mergeable, inspectable, and applicable by a *caller* to a base state the producer
-//!   never saw (the producer/scope split of ARCHITECTURE.md §state).
+//!   ([`TokenRulesOverrides`], the mode channel) plus semantic `L::Event`s. Deltas are
+//!   data, not closures: mergeable, inspectable, and applicable by a *caller* to a base
+//!   state the producer never saw (the producer/scope split of ARCHITECTURE.md §state).
 //! - [`ParsingState::derived`] is the **sole constructor of non-initial states**: it
 //!   applies the overrides, runs the [`Lang::finalize_transition`] customizer exactly
 //!   once, and freezes the result (caches rebuilt). Cross-cutting rules ("in math mode

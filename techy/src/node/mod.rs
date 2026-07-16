@@ -112,6 +112,7 @@ mod tests {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
             libraries: LibraryStack::new(),
+            mode: Default::default(),
             ext: (),
         }))
     }
@@ -1021,6 +1022,7 @@ mod tests {
     impl Lang for ExtLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -1093,6 +1095,7 @@ mod tests {
     impl Lang for FinalizeLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();

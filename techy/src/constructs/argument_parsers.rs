@@ -795,6 +795,7 @@ mod tests {
     impl Lang for ArgLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -900,7 +901,7 @@ mod tests {
         }
         let mut libraries = LibraryStack::new();
         libraries.push(Arc::new(lib));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }))
+        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
     }
 
     // --- harness (the 6.2 driving pattern, compact) -------------------------------------
@@ -1418,6 +1419,7 @@ mod tests {
         let st = Arc::new(ParsingState::new(StateData {
             rules: bracket_rules,
             libraries,
+            mode: (),
             ext: (),
         }));
 

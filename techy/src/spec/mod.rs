@@ -47,6 +47,7 @@ mod tests {
     impl Lang for PlainLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();

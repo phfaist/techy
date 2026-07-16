@@ -964,6 +964,7 @@ mod tests {
     impl Lang for CmdLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -985,6 +986,7 @@ mod tests {
     impl Lang for TildeLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -1028,7 +1030,7 @@ mod tests {
     fn state_with_macros(names: &[&str]) -> Arc<ParsingState<CmdLang>> {
         let mut libraries = LibraryStack::new();
         libraries.push(macro_library(names));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }))
+        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
     }
 
     fn math_rule<L: Lang<GroupTypeId = u32>>() -> Arc<GroupRule<L>> {
@@ -1066,6 +1068,7 @@ mod tests {
         Arc::new(ParsingState::new(StateData {
             rules,
             libraries: LibraryStack::new(),
+            mode: Default::default(),
             ext: (),
         }))
     }
@@ -1305,6 +1308,7 @@ mod tests {
         impl Lang for MarkLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
+            type ModeId = ();
             type StateExt = ();
             type Event = ();
             type SessionExt = ();
@@ -1851,6 +1855,7 @@ mod tests {
     impl Lang for TabooLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -2053,6 +2058,7 @@ mod tests {
     impl Lang for HintLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -2102,6 +2108,7 @@ mod tests {
     impl Lang for RefineLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -2305,7 +2312,7 @@ mod tests {
         let mut libraries = LibraryStack::new();
         libraries.push(Arc::new(lib));
         let st: Arc<ParsingState<CmdLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
 
         let parsed = run_both(
             "\\def \\late x",
@@ -2418,7 +2425,7 @@ mod tests {
         let mut libraries = LibraryStack::new();
         libraries.push(Arc::new(lib));
         let st: Arc<ParsingState<CmdLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
 
         // `a{b` would normally open a group (and diagnose it unclosed); the takeover
         // parser consumes it raw. ` %c` would normally be a comment; the returned
@@ -2465,6 +2472,7 @@ mod tests {
         impl Lang for ExtLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
+            type ModeId = ();
             type StateExt = ();
             type Event = ();
             type SessionExt = ();
@@ -2502,7 +2510,7 @@ mod tests {
         let mut libraries = LibraryStack::new();
         libraries.push(macro_library::<ExtLang>(&["foo"]));
         let st: Arc<ParsingState<ExtLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
 
         let parsed =
             run_both("\\foo x", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
@@ -2970,6 +2978,7 @@ mod tests {
         impl Lang for CountLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
+            type ModeId = ();
             type StateExt = ();
             type Event = ();
             type SessionExt = Counts;

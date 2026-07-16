@@ -268,6 +268,7 @@ mod tests {
         Arc::new(ParsingState::new(StateData {
             rules: rules(),
             libraries: LibraryStack::new(),
+            mode: (),
             ext: (),
         }))
     }

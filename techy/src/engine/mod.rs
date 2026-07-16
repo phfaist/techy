@@ -137,10 +137,11 @@ pub struct ParserSession<L: Lang> {
     /// `Default`-initialized): the preset-owned mutable object of a parse — transition
     /// observation counters ([`Lang::observe_transition`]), parse-global caches.
     pub ext: L::SessionExt,
-    /// The derivation memo (DESIGN_RATIONALE.md §3.6, revised July 2026): rules-only
-    /// derivations deduplicated by [`derived_state`](ParserSession::derived_state),
-    /// keyed on base-state `Arc` identity plus the delta's overrides with payloads by
-    /// `Arc` identity (see [`state_memo`]). Entries hold their key `Arc`s alive, so
+    /// The derivation memo (DESIGN_RATIONALE.md §3.6, revised July 2026):
+    /// overrides-only derivations (token rules and/or mode) deduplicated by
+    /// [`derived_state`](ParserSession::derived_state), keyed on base-state `Arc`
+    /// identity plus the delta's overrides — rule payloads by `Arc` identity, the mode
+    /// override by value (see [`state_memo`]). Entries hold their key `Arc`s alive, so
     /// pointer keys cannot be reused (no ABA hazard); retention is bounded by the
     /// session — one transient parse.
     state_memo: StateMemo<L>,
@@ -196,17 +197,19 @@ impl<L: Lang> ParserSession<L> {
     /// [`ParsingState::derived`]** — the session layer may deduplicate and observe,
     /// never alter the resulting state.
     ///
-    /// **Rules-only deltas are memoized** (revised July 2026, superseding the earlier
-    /// never-memoize rule): when the delta carries no ext replacement, no events, and
-    /// no library pushes, the derivation is keyed on the base state's `Arc` identity
-    /// plus the overrides (payloads by `Arc` identity, gates by value — see the
+    /// **Overrides-only deltas are memoized** (revised July 2026, superseding the
+    /// earlier never-memoize rule): when the delta carries no ext replacement, no
+    /// events, and no library pushes — i.e. only token-rules overrides and/or a mode
+    /// override — the derivation is keyed on the base state's `Arc` identity plus the
+    /// overrides (rule payloads by `Arc` identity, gates and mode by value — see the
     /// `state_memo` module) and deduplicated across the session. `derived()` is a pure
     /// function of (base data, delta, events) — [`Lang::finalize_transition`]'s purity
     /// contract — so a pointer-keyed hit is exact; identity keying can only miss on
-    /// value-equal-but-distinct `Arc`s, never falsely hit. Deltas carrying
-    /// ext/events/library-pushes always derive fresh: those payloads have no identity
-    /// to key on. [`Lang::observe_transition`] fires on **every** call, memo hits
-    /// included; [`Lang::finalize_transition`] runs once per unique derivation.
+    /// value-equal-but-distinct `Arc`s, never falsely hit (and the mode key, a
+    /// `Copy + Eq` value, cannot even miss). Deltas carrying ext/events/library-pushes
+    /// always derive fresh: those payloads have no identity to key on.
+    /// [`Lang::observe_transition`] fires on **every** call, memo hits included;
+    /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
     /// Out-of-parse code (initial states, tests, tree transforms) keeps calling
     /// `derived()` directly.
@@ -218,8 +221,11 @@ impl<L: Lang> ParserSession<L> {
         let memoizable =
             delta.ext.is_none() && delta.events.is_empty() && delta.push_libraries.is_empty();
         if memoizable {
-            if let Some(hit) = self.state_memo.get(&StateMemoProbe { base, rules: &delta.rules })
-            {
+            if let Some(hit) = self.state_memo.get(&StateMemoProbe {
+                base,
+                mode: delta.mode,
+                rules: &delta.rules,
+            }) {
                 let new = Arc::clone(hit);
                 L::observe_transition(&mut self.ext, base, &new, delta);
                 return new;
@@ -228,7 +234,11 @@ impl<L: Lang> ParserSession<L> {
         let new = Arc::new(base.derived(delta));
         if memoizable {
             self.state_memo.insert(
-                StateMemoKey { base: Arc::clone(base), rules: delta.rules.clone() },
+                StateMemoKey {
+                    base: Arc::clone(base),
+                    mode: delta.mode,
+                    rules: delta.rules.clone(),
+                },
                 Arc::clone(&new),
             );
         }
@@ -391,6 +401,7 @@ mod tests {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
             libraries: LibraryStack::new(),
+            mode: Default::default(),
             ext: (),
         }))
     }
@@ -636,11 +647,19 @@ mod tests {
         transitions: usize,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    enum TestMode {
+        #[default]
+        Text,
+        Math,
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct ObserverLang;
     impl Lang for ObserverLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = TestMode;
         type StateExt = ();
         type Event = ();
         type SessionExt = Observed;
@@ -715,6 +734,52 @@ mod tests {
         });
         let third = session.derived_state(&base, &delta_c);
         assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn derived_state_memoizes_mode_overrides_by_value() {
+        let base: Arc<ParsingState<ObserverLang>> = state();
+        let mut session: ParserSession<ObserverLang> = ParserSession::new(Recovery::Strict);
+
+        // A mode override is memo-key material by *value* (modes are `Copy + Eq`
+        // vocabulary, unlike the identity-keyed rule payloads): two independently
+        // built deltas hit one entry, with the hits observed.
+        let math = session.derived_state(&base, &ParsingStateDelta::new().mode(TestMode::Math));
+        assert_eq!(math.mode(), TestMode::Math);
+        let again = session.derived_state(&base, &ParsingStateDelta::new().mode(TestMode::Math));
+        assert!(Arc::ptr_eq(&math, &again));
+        assert_eq!(session.ext.transitions, 2);
+
+        // Distinct modes are distinct keys — no false sharing on the same base (and a
+        // mode-less delta, `mode: None`, is a third key still).
+        let text = session.derived_state(&base, &ParsingStateDelta::new().mode(TestMode::Text));
+        assert!(!Arc::ptr_eq(&math, &text));
+        assert_eq!(text.mode(), TestMode::Text);
+
+        // Mode and rules overrides combine into one keyed derivation.
+        let overrides = || TokenRulesOverrides {
+            enable_comments: Some(false),
+            ..TokenRulesOverrides::default()
+        };
+        let combo = session.derived_state(
+            &base,
+            &ParsingStateDelta::new().mode(TestMode::Math).rules(overrides()),
+        );
+        assert_eq!(combo.mode(), TestMode::Math);
+        assert!(!combo.rules().enable_comments);
+        assert!(!Arc::ptr_eq(&math, &combo)); // differs from the mode-only entry
+        let combo_again = session.derived_state(
+            &base,
+            &ParsingStateDelta::new().mode(TestMode::Math).rules(overrides()),
+        );
+        assert!(Arc::ptr_eq(&combo, &combo_again));
+
+        // Carrying an ext replacement still disables the memo, mode or not (same for
+        // events and library pushes: those payloads have no identity to key on).
+        let with_ext = ParsingStateDelta::new().mode(TestMode::Math).ext(());
+        let fresh_a = session.derived_state(&base, &with_ext);
+        let fresh_b = session.derived_state(&base, &with_ext);
+        assert!(!Arc::ptr_eq(&fresh_a, &fresh_b));
     }
 
     #[test]

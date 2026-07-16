@@ -18,7 +18,13 @@ pub struct StateData<L: Lang> {
     /// The definitions visible in this state (extendable mid-parse via
     /// [`push_library`](super::ParsingStateDelta::push_library) — `\newcommand`).
     pub libraries: LibraryStack<L>,
-    /// Language-specific state (e.g. a math-mode flag).
+    /// The parsing mode this state is in ([`Lang::ModeId`]) — first-class core data:
+    /// deltas *initiate* mode changes ([`mode`](super::ParsingStateDelta::mode)
+    /// override channel) and [`Lang::finalize_transition`] *interprets* them
+    /// (DESIGN_RATIONALE.md §3.3).
+    pub mode: L::ModeId,
+    /// Language-specific state (e.g. feature-toggle flags; modal state lives in
+    /// [`mode`](StateData::mode) instead).
     pub ext: L::StateExt,
 }
 
@@ -146,6 +152,12 @@ impl<L: Lang> ParsingState<L> {
         &self.data.libraries
     }
 
+    /// The parsing mode this state is in ([`Lang::ModeId`]; by value — modes are
+    /// `Copy`).
+    pub fn mode(&self) -> L::ModeId {
+        self.data.mode
+    }
+
     /// The language-specific state extension.
     pub fn ext(&self) -> &L::StateExt {
         &self.data.ext
@@ -196,6 +208,7 @@ impl<L: Lang> Clone for StateData<L> {
         StateData {
             rules: self.rules.clone(),
             libraries: self.libraries.clone(),
+            mode: self.mode,
             ext: self.ext.clone(),
         }
     }
@@ -206,6 +219,7 @@ impl<L: Lang> fmt::Debug for StateData<L> {
         f.debug_struct("StateData")
             .field("rules", &self.rules)
             .field("libraries", &self.libraries)
+            .field("mode", &self.mode)
             .field("ext", &self.ext)
             .finish()
     }
@@ -218,6 +232,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
         f.debug_struct("ParsingState")
             .field("rules", &self.data.rules)
             .field("libraries", &self.data.libraries)
+            .field("mode", &self.data.mode)
             .field("ext", &self.data.ext)
             .finish_non_exhaustive()
     }
@@ -268,7 +283,7 @@ mod tests {
     #[test]
     fn derived_applies_overrides_and_keeps_the_rest() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             enable_multi_newline_paragraphs: Some(false),
@@ -287,7 +302,7 @@ mod tests {
     #[test]
     fn derived_rebuilds_prefix_table() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
         assert!(state.prefix_table().match_at("[x").is_none());
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -306,7 +321,7 @@ mod tests {
     #[test]
     fn derived_reuses_prefix_table_when_inputs_unchanged() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
 
         // A transition that touches neither enable_groups nor groups (by Arc identity)
         // shares the parent's table instance…
@@ -343,7 +358,7 @@ mod tests {
     #[test]
     fn derived_scopes_temporary_group_rules() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
         let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
         let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
             temporary_groups: Some(vec![Arc::clone(&temporary)]),
@@ -396,7 +411,7 @@ mod tests {
     #[test]
     fn temporary_groups_are_prefix_table_inputs() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
         let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
         let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
             temporary_groups: Some(vec![Arc::clone(&temporary)]),
@@ -424,7 +439,7 @@ mod tests {
     #[test]
     fn empty_delta_is_a_clean_copy() {
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
         let derived = state.derived(&ParsingStateDelta::new());
         assert_eq!(derived.rules(), state.rules());
     }
@@ -449,6 +464,7 @@ mod tests {
     impl Lang for SeededLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -456,7 +472,7 @@ mod tests {
         type NodeExts = ();
 
         fn initial_state_data() -> StateData<Self> {
-            StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () }
+            StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () }
         }
     }
 
@@ -478,7 +494,7 @@ mod tests {
         // The restore problem the enable_* gates exist for (DESIGN_RATIONALE §3.2): the
         // re-enabling delta names no CommandRules — the data survived the disabled scope.
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
 
         let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
             enable_commands: Some(false),
@@ -500,7 +516,7 @@ mod tests {
         // The gate is baked into the per-state table at freeze time; toggling it through
         // deltas empties and rebuilds the table with the (untouched) group rules.
         let state: ParsingState<PlainLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: () });
         assert!(state.prefix_table().match_at("{x").is_some());
 
         let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -540,6 +556,7 @@ mod tests {
     impl Lang for MathLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = MathState;
         type Event = MathEvent;
         type SessionExt = ();
@@ -568,7 +585,7 @@ mod tests {
     #[test]
     fn finalize_centralizes_cross_cutting_rules() {
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: MathState::default() });
 
         let in_math = state.derived(&ParsingStateDelta::new().event(MathEvent::EnterMath));
         assert!(in_math.ext().in_math);
@@ -589,7 +606,7 @@ mod tests {
         // transition — an explicit escape-char override is clobbered. That trade-off is
         // the customizer author's documented choice (ARCHITECTURE.md §state).
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: MathState::default() });
 
         let mut custom = base_rules::<MathLang>().commands;
         Arc::make_mut(&mut custom[0]).escape_char = '@';
@@ -604,10 +621,154 @@ mod tests {
     #[test]
     fn ext_replacement_via_delta() {
         let state: ParsingState<MathLang> =
-            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: MathState::default() });
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), mode: (), ext: MathState::default() });
         let derived = state.derived(&ParsingStateDelta::new().ext(MathState { in_math: true }));
         assert!(derived.ext().in_math);
         // finalize also ran on the replaced ext:
         assert_eq!(derived.rules().commands[0].escape_char, '#');
+    }
+
+    // --- a lang with a first-class parsing mode (Phase 7.1, DESIGN_RATIONALE §3.3) -----
+    //
+    // Mode-shaped transitions need no `L::Event`: the delta's mode override *is* the
+    // signal. `finalize_transition` interprets it — level normalization recomputed from
+    // the (already overridden) `new.mode`, with `prev.mode()` available for
+    // edge-sensitive reactions.
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    enum Mode {
+        #[default]
+        Text,
+        Math,
+    }
+
+    /// What finalize saw of the transition edge (proves prev/new mode visibility).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    struct SeenEdge {
+        entered_math: bool,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct ModedLang;
+    impl Lang for ModedLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = Mode;
+        type StateExt = SeenEdge;
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+
+        fn initial_state_data() -> StateData<Self> {
+            // Coherent seed: text mode with comments enabled — exactly what
+            // finalize_transition would normalize to (the hook's coherence contract).
+            StateData {
+                rules: base_rules(),
+                libraries: LibraryStack::new(),
+                mode: Mode::Text,
+                ext: SeenEdge::default(),
+            }
+        }
+
+        fn finalize_transition(
+            new: &mut StateData<Self>,
+            prev: &ParsingState<Self>,
+            _events: &[()],
+        ) {
+            // Level normalization: comments are a text-mode feature in this toy
+            // language — a pure function of the incoming mode.
+            new.rules.enable_comments = new.mode == Mode::Text;
+            // Edge visibility: the hook compares prev.mode() with the applied override.
+            new.ext =
+                SeenEdge { entered_math: prev.mode() == Mode::Text && new.mode == Mode::Math };
+        }
+    }
+
+    #[test]
+    fn default_seed_mode_is_the_mode_ids_default() {
+        // A lang with an enum mode that keeps the *default* initial_state_data: the
+        // seed's mode is `ModeId::default()` (the `Default` bound exists for this).
+        #[derive(Debug, Clone, Copy)]
+        struct DefaultSeedLang;
+        impl Lang for DefaultSeedLang {
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = Mode;
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+        }
+        let state: ParsingState<DefaultSeedLang> = ParsingState::initial();
+        assert_eq!(state.mode(), Mode::Text);
+        // SimpleLang languages are modeless: `ModeId = ()`.
+        let plain: ParsingState<PlainLang> = ParsingState::initial();
+        assert_eq!(plain.mode(), ());
+    }
+
+    #[test]
+    fn moded_seed_is_coherent_under_the_empty_delta() {
+        // The mechanical pin of the coherence contract, mode included.
+        let seed: ParsingState<ModedLang> = ParsingState::initial();
+        assert_eq!(seed.mode(), Mode::Text);
+        assert!(seed.rules().enable_comments);
+        let derived = seed.derived(&ParsingStateDelta::new());
+        assert_eq!(derived.rules(), seed.rules());
+        assert_eq!(derived.mode(), seed.mode());
+        assert_eq!(derived.ext(), seed.ext());
+    }
+
+    #[test]
+    fn mode_overrides_via_delta_and_is_inherited_otherwise() {
+        let state: ParsingState<ModedLang> = ParsingState::initial();
+
+        let math = state.derived(&ParsingStateDelta::new().mode(Mode::Math));
+        assert_eq!(math.mode(), Mode::Math);
+        assert_eq!(state.mode(), Mode::Text); // functional contract: base untouched
+
+        // A delta that says nothing about the mode carries it over…
+        let inherited = math.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_whitespace: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert_eq!(inherited.mode(), Mode::Math);
+
+        // …and a mode override travels with rules overrides in one delta — one
+        // transition, one finalize run.
+        let combo =
+            state.derived(&ParsingStateDelta::new().mode(Mode::Math).rules(TokenRulesOverrides {
+                enable_whitespace: Some(false),
+                ..TokenRulesOverrides::default()
+            }));
+        assert_eq!(combo.mode(), Mode::Math);
+        assert!(!combo.rules().enable_whitespace);
+        assert!(!combo.rules().enable_comments); // finalize interpreted the mode too
+    }
+
+    #[test]
+    fn finalize_interprets_mode_changes_seeing_prev_and_new() {
+        let state: ParsingState<ModedLang> = ParsingState::initial();
+
+        // Entering math: level normalization applies (comments off), and the hook saw
+        // the Text→Math edge.
+        let math = state.derived(&ParsingStateDelta::new().mode(Mode::Math));
+        assert!(!math.rules().enable_comments);
+        assert!(math.ext().entered_math);
+
+        // A mode-silent transition inside math: still normalized (level, not edge)…
+        let still_math = math.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_whitespace: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(!still_math.rules().enable_comments);
+        // …and no Text→Math edge was seen (prev is already Math).
+        assert!(!still_math.ext().entered_math);
+
+        // Leaving math re-enables the text-mode feature (recomputed, not restored).
+        let text_again = still_math.derived(&ParsingStateDelta::new().mode(Mode::Text));
+        assert!(text_again.rules().enable_comments);
+        assert!(!text_again.ext().entered_math);
     }
 }

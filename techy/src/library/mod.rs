@@ -337,6 +337,7 @@ mod tests {
     impl Lang for PlainLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -363,7 +364,7 @@ mod tests {
     }
 
     fn state_with(libraries: LibraryStack<PlainLang>) -> ParsingState<PlainLang> {
-        ParsingState::new(StateData { rules: min_rules(), libraries, ext: () })
+        ParsingState::new(StateData { rules: min_rules(), libraries, mode: (), ext: () })
     }
 
     fn new_spec() -> Arc<dyn CallableSpec<PlainLang>> {
@@ -534,6 +535,7 @@ mod tests {
     impl Lang for MathLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = MathState;
         type Event = ();
         type SessionExt = ();
@@ -569,6 +571,7 @@ mod tests {
         let text_state: ParsingState<MathLang> = ParsingState::new(StateData {
             rules: min_rules(),
             libraries,
+            mode: (),
             ext: MathState::default(),
         });
         let math_state = text_state.derived(&ParsingStateDelta::new().ext(MathState { in_math: true }));

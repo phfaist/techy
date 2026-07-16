@@ -497,6 +497,7 @@ mod tests {
     impl Lang for TestLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -543,7 +544,7 @@ mod tests {
     }
 
     fn state(rules: TokenRules<TestLang>) -> Arc<ParsingState<TestLang>> {
-        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () }))
+        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), mode: (), ext: () }))
     }
 
     /// The `latex_rules` rule of the given class (unique per rule in these tests).
@@ -1207,6 +1208,7 @@ mod tests {
     impl Lang for SpecialsLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -1239,7 +1241,7 @@ mod tests {
     }
 
     fn specials_state(rules: TokenRules<SpecialsLang>) -> Arc<ParsingState<SpecialsLang>> {
-        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), ext: () }))
+        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), mode: (), ext: () }))
     }
 
     #[test]
@@ -1301,6 +1303,7 @@ mod tests {
         impl Lang for PanickyLang {
             type GroupTypeId = u32;
             type CallableTypeId = u32;
+            type ModeId = ();
             type StateExt = ();
             type Event = ();
             type SessionExt = ();
@@ -1320,6 +1323,7 @@ mod tests {
         let st: Arc<ParsingState<PanickyLang>> = Arc::new(ParsingState::new(StateData {
             rules: latex_rules(),
             libraries: LibraryStack::new(),
+            mode: (),
             ext: (),
         }));
         let mut tr = StdTokenReader::new("x");

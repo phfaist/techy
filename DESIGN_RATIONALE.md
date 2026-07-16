@@ -779,6 +779,15 @@ data-first candidate — `GroupRule` feeds elementwise prefix-table comparisons 
 definitions instead of centralizing in finalize).
 *Revisit if:* a language needs several orthogonal mode axes at once (composite enums
 cover the known cases; if they explode, mode may need to become a small struct).
+*Landed (subphase 7.1, July 2026)* with two bound additions forced in flight: `ModeId:
+… + Hash + Default`. `Hash` because the mode override joins the session derivation-memo
+key — keyed *by value* (exact — modes are `Copy + Eq` vocabulary), unlike the
+identity-keyed rule payloads, so mode-bearing descent deltas stay memoizable (the D1/7.2
+math plug depends on this; `GroupTypeId`/`CallableTypeId` carry `Hash` for the same
+map-key reason). `Default` supplies the seed's mode in the default
+`initial_state_data()` (the exact precedent of `StateExt: Default`); a real language's
+`#[default]` variant names its canonical initial mode. The memoizable-delta *gate* is
+unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
 ### 3.4 Specs and libraries
 

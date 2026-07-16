@@ -432,6 +432,7 @@ mod tests {
                 expecting_group_close: None,
             },
             libraries: LibraryStack::new(),
+            mode: (),
             ext: (),
         }))
     }

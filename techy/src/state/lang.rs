@@ -113,8 +113,29 @@ pub trait Lang: Sized + 'static {
     /// libraries key their maps by it. [`SimpleLang`] defaults this to `u32`.
     type CallableTypeId: Copy + Ord + Hash + fmt::Debug + Send + Sync;
 
-    /// Language-specific parsing state (e.g. a math-mode flag). Typed — no `Any` maps;
-    /// `()` for languages without extra state.
+    /// Identifier of the **parsing mode** a state is in (the latexlike preset: text /
+    /// math; verbatim-ish modes are candidates) — the third closed per-language
+    /// vocabulary after [`GroupTypeId`](Lang::GroupTypeId) and
+    /// [`CallableTypeId`](Lang::CallableTypeId), though deliberately not a `…TypeId`:
+    /// it names the mode a state *is in*, not a classification of a syntactic object
+    /// (NAMING_STRATEGY.md principle 5). Stored as plain state data
+    /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`] override
+    /// channel: deltas *initiate* mode changes, and
+    /// [`finalize_transition`](Lang::finalize_transition) *interprets* them
+    /// (DESIGN_RATIONALE.md §3.3). Mode is not lookup-private: definition visibility
+    /// and any content-interpretation decision may key on it.
+    ///
+    /// `Copy + Eq + Hash` because modes are memo-key material — the session's
+    /// derivation memo keys the delta's mode override *by value* (exact, unlike the
+    /// identity-keyed rule payloads); `Default` supplies the seed state's mode (the
+    /// default [`initial_state_data`](Lang::initial_state_data)). [`SimpleLang`]
+    /// defaults this to `()` — no modes.
+    type ModeId: Copy + Eq + Hash + Default + fmt::Debug + Send + Sync;
+
+    /// Language-specific parsing state (e.g. feature-toggle flags). Typed — no `Any`
+    /// maps; `()` for languages without extra state. Modal state belongs in the
+    /// first-class [`ModeId`](Lang::ModeId) field instead — a preset needs no
+    /// `in_math_mode` flag here.
     ///
     /// **Must be a plain value type — no interior mutability** (no `Mutex`, no atomics
     /// used for mutation): states are frozen at construction and their derived caches
@@ -160,14 +181,15 @@ pub trait Lang: Sized + 'static {
     /// **Coherence contract:** `finalize_transition` does *not* run on the seed (it has
     /// no previous state), so the returned data must already satisfy every invariant the
     /// customizer maintains — if `finalize_transition` installs a `$…$` group rule
-    /// whenever the ext says math mode, a seed whose ext says math mode must come with
-    /// that rule in place. Both hooks have the same author, which keeps the contract
-    /// local; a test asserting `initial().derived(&ParsingStateDelta::new())` is
-    /// data-equivalent to `initial()` pins it mechanically.
+    /// whenever the mode is math, a seed whose mode is math must come with that rule in
+    /// place. Both hooks have the same author, which keeps the contract local; a test
+    /// asserting `initial().derived(&ParsingStateDelta::new())` is data-equivalent to
+    /// `initial()` pins it mechanically.
     ///
     /// The default is the most neutral data: every syntax gate off (character-level
     /// content — no whitespace handling, groups, commands, comments, or specials), no
-    /// libraries, default ext. Real languages return their canonical rules instead.
+    /// libraries, default mode and ext. Real languages return their canonical rules
+    /// instead.
     fn initial_state_data() -> StateData<Self> {
         StateData {
             rules: TokenRules {
@@ -186,6 +208,7 @@ pub trait Lang: Sized + 'static {
                 expecting_group_close: None,
             },
             libraries: LibraryStack::new(),
+            mode: Default::default(),
             ext: Default::default(),
         }
     }
@@ -199,15 +222,22 @@ pub trait Lang: Sized + 'static {
     /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
     /// default does nothing.
     ///
+    /// **Mode transitions are interpreted here** (Phase 7, DESIGN_RATIONALE.md §3.3):
+    /// a delta's [`mode`](ParsingStateDelta::mode) override is already applied to
+    /// `new.mode` when this hook runs — the override *is* the signal, no
+    /// [`Event`](Lang::Event) needed for mode-shaped transitions. Compare
+    /// [`prev.mode()`](ParsingState::mode) with `new.mode` to react to the change
+    /// (adjust rules, disable features); events remain for non-modal semantics.
+    ///
     /// **Must be a deterministic pure function of `(new, prev, events)`** — no side
     /// effects, no interior mutability, no dependence on call count. Derivations are
-    /// deduplicated (the session's derivation memo — rules-only deltas, keyed by `Arc`
-    /// identity), so this runs once per unique *derivation*, not once per transition:
-    /// `{a}{b}` under one state runs it **once** for two descents. That purity is also
-    /// what makes the memo sound: a pointer-keyed hit substitutes a previous run's
-    /// result. Anything history-shaped (counters, caches keyed by occurrence) belongs
-    /// in [`observe_transition`](Lang::observe_transition), which fires on every
-    /// transition, memo hits included.
+    /// deduplicated (the session's derivation memo — overrides-only deltas, keyed by
+    /// `Arc` identity), so this runs once per unique *derivation*, not once per
+    /// transition: `{a}{b}` under one state runs it **once** for two descents. That
+    /// purity is also what makes the memo sound: a pointer-keyed hit substitutes a
+    /// previous run's result. Anything history-shaped (counters, caches keyed by
+    /// occurrence) belongs in [`observe_transition`](Lang::observe_transition), which
+    /// fires on every transition, memo hits included.
     fn finalize_transition(
         new: &mut StateData<Self>,
         prev: &ParsingState<Self>,
@@ -490,9 +520,10 @@ impl<L: Lang> fmt::Debug for CommandResolution<L> {
 }
 
 /// All-defaults language marker: `impl SimpleLang for MyLang {}` yields a [`Lang`] with
-/// every associated type defaulted (`StateExt`/`Event`/`SessionExt`/`NodeExts` = `()`,
-/// `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`) and the
-/// default method behavior — the workaround for associated-type defaults being unstable.
+/// every associated type defaulted (`ModeId`/`StateExt`/`Event`/`SessionExt`/`NodeExts`
+/// = `()`, `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`)
+/// and the default method behavior — the workaround for associated-type defaults being
+/// unstable.
 ///
 /// The `u32` type ids are the quick-start escape from declaring id enums; a real language
 /// definition should implement [`Lang`] directly and give both ids closed enum types.
@@ -504,6 +535,7 @@ pub trait SimpleLang: Sized + 'static {}
 impl<T: SimpleLang> Lang for T {
     type GroupTypeId = u32;
     type CallableTypeId = u32;
+    type ModeId = ();
     type StateExt = ();
     type Event = ();
     type SessionExt = ();

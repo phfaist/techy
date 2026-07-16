@@ -183,6 +183,7 @@ mod tests {
         Arc::new(ParsingState::new(StateData {
             rules: latex_rules(),
             libraries: LibraryStack::new(),
+            mode: (),
             ext: (),
         }))
     }

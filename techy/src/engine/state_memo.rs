@@ -2,12 +2,13 @@
 //!
 //! [`ParserSession::derived_state`](super::ParserSession::derived_state) memoizes the
 //! *gated* subset of state derivations — deltas that carry only token-rules overrides
-//! (no ext replacement, no events, no library pushes) — keyed on the base state's `Arc`
-//! identity plus the overrides, with every override payload taken by `Arc` identity and
-//! the `enable_*` gates by value. Pointer-equal inputs imply value-equal inputs, and
-//! `derived()` is a pure function of (base data, delta, events), so identity keying is
-//! conservatively correct: it can only miss (value-equal but distinct `Arc`s), never
-//! falsely hit.
+//! and/or a mode override (no ext replacement, no events, no library pushes) — keyed on
+//! the base state's `Arc` identity plus the overrides, with every rule payload taken by
+//! `Arc` identity and the `enable_*` gates and the mode override by value (modes are
+//! `Copy + Eq` vocabulary — value keying is *exact* for them, not conservative).
+//! Pointer-equal inputs imply value-equal inputs, and `derived()` is a pure function of
+//! (base data, delta, events), so identity keying is conservatively correct: it can
+//! only miss (value-equal but distinct `Arc`s), never falsely hit.
 //!
 //! **Why keys own their `Arc`s:** an entry pins the allocations of its base state and
 //! payload rules, so a live `Arc` that compares pointer-equal to a stored key is
@@ -34,19 +35,21 @@ pub(super) type StateMemo<L> = hashbrown::HashMap<StateMemoKey<L>, Arc<ParsingSt
 /// Owned key of one memo entry (see the module docs for the pinning rationale).
 pub(super) struct StateMemoKey<L: Lang> {
     pub(super) base: Arc<ParsingState<L>>,
+    pub(super) mode: Option<L::ModeId>,
     pub(super) rules: TokenRulesOverrides<L>,
 }
 
 /// Borrowed probe view of a [`StateMemoKey`]: hashes and compares exactly like the
-/// owned key without cloning anything.
+/// owned key without cloning anything (the mode override is `Copy` — carried by value).
 pub(super) struct StateMemoProbe<'a, L: Lang> {
     pub(super) base: &'a Arc<ParsingState<L>>,
+    pub(super) mode: Option<L::ModeId>,
     pub(super) rules: &'a TokenRulesOverrides<L>,
 }
 
 impl<L: Lang> PartialEq for StateMemoKey<L> {
     fn eq(&self, other: &Self) -> bool {
-        keys_eq(&self.base, &self.rules, &other.base, &other.rules)
+        keys_eq(&self.base, self.mode, &self.rules, &other.base, other.mode, &other.rules)
     }
 }
 
@@ -54,19 +57,19 @@ impl<L: Lang> Eq for StateMemoKey<L> {}
 
 impl<L: Lang> Hash for StateMemoKey<L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_key(&self.base, &self.rules, state)
+        hash_key(&self.base, self.mode, &self.rules, state)
     }
 }
 
 impl<L: Lang> Hash for StateMemoProbe<'_, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_key(self.base, self.rules, state)
+        hash_key(self.base, self.mode, self.rules, state)
     }
 }
 
 impl<L: Lang> Equivalent<StateMemoKey<L>> for StateMemoProbe<'_, L> {
     fn equivalent(&self, key: &StateMemoKey<L>) -> bool {
-        keys_eq(self.base, self.rules, &key.base, &key.rules)
+        keys_eq(self.base, self.mode, self.rules, &key.base, key.mode, &key.rules)
     }
 }
 
@@ -80,10 +83,12 @@ fn str_addr(arc: &Arc<str>) -> usize {
 
 fn hash_key<L: Lang, H: Hasher>(
     base: &Arc<ParsingState<L>>,
+    mode: Option<L::ModeId>,
     rules: &TokenRulesOverrides<L>,
     h: &mut H,
 ) {
     arc_addr(base).hash(h);
+    mode.hash(h);
     rules.enable_whitespace.hash(h);
     match &rules.whitespace {
         None => h.write_u8(0),
@@ -133,11 +138,14 @@ fn hash_arc_slice<T, H: Hasher>(field: &Option<Vec<Arc<T>>>, h: &mut H) {
 
 fn keys_eq<L: Lang>(
     a_base: &Arc<ParsingState<L>>,
+    a_mode: Option<L::ModeId>,
     a: &TokenRulesOverrides<L>,
     b_base: &Arc<ParsingState<L>>,
+    b_mode: Option<L::ModeId>,
     b: &TokenRulesOverrides<L>,
 ) -> bool {
     Arc::ptr_eq(a_base, b_base)
+        && a_mode == b_mode
         && a.enable_whitespace == b.enable_whitespace
         && opt_eq_by(&a.whitespace, &b.whitespace, |x, y| Arc::ptr_eq(&x.chars, &y.chars))
         && a.enable_multi_newline_paragraphs == b.enable_multi_newline_paragraphs

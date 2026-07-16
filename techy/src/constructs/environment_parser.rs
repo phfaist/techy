@@ -521,6 +521,7 @@ mod tests {
     impl Lang for EnvLang {
         type GroupTypeId = u32;
         type CallableTypeId = u32;
+        type ModeId = ();
         type StateExt = ();
         type Event = ();
         type SessionExt = ();
@@ -1002,7 +1003,7 @@ mod tests {
 
         let mut libraries = LibraryStack::new();
         libraries.push(Arc::new(lib));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, ext: () }))
+        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
     }
 
     // --- harness (the established driving pattern) --------------------------------------
