@@ -82,15 +82,16 @@ pub mod spec;
 pub mod state;
 pub mod token;
 
-// Narrative documentation: markdown pages in `docs/` rendered as doc-only modules.
-// `cfg(doc)` keeps them out of compiled code; rustdoc (including doctest collection)
-// builds with `--cfg doc`, so code blocks in these pages still run as doctests.
-// The docs sidebar pins these pages in a "Guide" section (docs/rustdoc-header.html,
-// wired up in .cargo/config.toml); new chapters must also be added to GUIDE_PAGES there.
+// Narrative documentation: markdown pages in the workspace-level `docs/` rendered as
+// doc-only modules. `cfg(doc)` keeps them out of compiled code; rustdoc (including
+// doctest collection) builds with `--cfg doc`, so code blocks in these pages still run
+// as doctests. The docs sidebar pins these pages in a "Guide" section
+// (docs/rustdoc-header.html, wired up in .cargo/config.toml); new chapters must also be
+// added to GUIDE_PAGES there.
 #[cfg(doc)]
-#[doc = include_str!("../docs/guide.md")]
+#[doc = include_str!("../../docs/guide.md")]
 pub mod guide {
-    #[doc = include_str!("../docs/parsing-model.md")]
+    #[doc = include_str!("../../docs/parsing-model.md")]
     pub mod parsing_model {}
 }
 

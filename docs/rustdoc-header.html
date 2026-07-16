@@ -3,12 +3,15 @@
      Injected into every generated page via the `html-in-header` rustdoc flag
      (wired up in `.cargo/config.toml`; build with `cargo docs`). It
      restructures the sidebar into two top-level sections: "Guide" (the
-     narrative pages, pinned on top) and "API" (everything rustdoc generates),
-     and it removes rustdoc's "Crates" list.
+     narrative pages, pinned on top) and "API" (the workspace crates and
+     everything rustdoc generates for them), and it removes rustdoc's own
+     "Crates" list (which would also list dependencies from stale doc builds).
 
-     When adding a guide chapter (markdown page in `docs/` plus a module under
-     `guide` in `src/lib.rs`), also add it to GUIDE_PAGES below, in reading
-     order.
+     Maintenance:
+       - adding a guide chapter (markdown page in `docs/` plus a module under
+         `guide` in `techy/src/lib.rs`): add it to GUIDE_PAGES below, in
+         reading order;
+       - adding a workspace crate: add it to CRATES below.
 
      This relies only on coarse, stable parts of rustdoc's page structure (the
      `rustdoc-vars` meta tag, `.sidebar-elems`, `#rustdoc-toc`,
@@ -16,8 +19,8 @@
      degrades to rustdoc's default rendering rather than breaking.
 -->
 <style>
-/* Fallback (and anti-flash) rule: hide the "Crates" list even before the
-   script below removes it from the DOM. */
+/* Fallback (and anti-flash) rule: hide rustdoc's "Crates" list even before
+   the script below removes it from the DOM. */
 .sidebar-elems ul.block.crate,
 .sidebar-elems h3:has(+ ul.block.crate) {
     display: none;
@@ -45,9 +48,11 @@
     font-size: 1rem;
 }
 
-/* Highlight the guide chapter being read (rustdoc's `li.current` already sets
-   the font weight; add the background it uses for the current crate). */
-.sidebar .techy-guide-nav li.current a {
+/* Highlight the guide chapter being read and the current crate (rustdoc's
+   `li.current` already sets the font weight; add the background it uses for
+   its own current-crate entry). */
+.sidebar .techy-guide-nav li.current a,
+.sidebar ul.techy-crates li.current a {
     background-color: var(--sidebar-current-link-background-color);
 }
 </style>
@@ -61,6 +66,8 @@ document.addEventListener("DOMContentLoaded", () => {
         ["", "Overview"],
         ["parsing_model/", "The parsing model"],
     ];
+    /* The workspace crates: the entry points of the "API" section. */
+    const CRATES = ["techy", "techy_derive"];
 
     const vars = document.querySelector("meta[name='rustdoc-vars']");
     const elems = document.querySelector("nav.sidebar .sidebar-elems");
@@ -85,8 +92,9 @@ document.addEventListener("DOMContentLoaded", () => {
         return item;
     };
 
-    /* Drop the "Crates" list (rustdoc lists every crate in the doc bundle,
-       including dependencies); the CSS above already hides it. */
+    /* Drop rustdoc's own "Crates" list (it lists every crate in the doc
+       bundle, including stale dependency builds); the CSS above already
+       hides it. The curated CRATES list below replaces it. */
     for (const crateList of elems.querySelectorAll("ul.block.crate")) {
         const heading = crateList.previousElementSibling;
         if (heading && heading.tagName === "H3") {
@@ -120,10 +128,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     guide.appendChild(chapters);
 
+    /* The workspace crates, current one highlighted. */
+    const crates = document.createElement("ul");
+    crates.className = "block techy-crates";
+    for (const name of CRATES) {
+        const item = linkItem(href(name + "/index.html"), name);
+        if (name === vars.getAttribute("data-current-crate")) {
+            item.className = "current";
+        }
+        crates.appendChild(item);
+    }
+
     if (onGuidePage) {
         /* On a guide page, keep the page outline under "Guide" (the location
            header and the module-items index just duplicate the chapter list)
-           and reduce "API" to a single entry point into the reference. */
+           and reduce "API" to the crate list. */
         const toc = api.querySelector("#rustdoc-toc");
         if (toc) {
             for (const child of Array.from(toc.children)) {
@@ -137,14 +156,11 @@ document.addEventListener("DOMContentLoaded", () => {
             guide.appendChild(toc);
         }
         api.textContent = "";
-        const apiList = document.createElement("ul");
-        apiList.className = "block";
-        apiList.appendChild(linkItem(href("techy/index.html"), "Crate techy"));
-        api.appendChild(apiList);
     }
 
     elems.appendChild(guide);
     elems.appendChild(sectionHeader("API"));
+    elems.appendChild(crates);
     elems.appendChild(api);
 });
 </script>

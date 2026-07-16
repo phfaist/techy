@@ -5,7 +5,7 @@
 # reference grouped under a single "API" section, no "Crates" list) into every
 # rustdoc-generated page. Cargo spawns rustdoc from the workspace root, so the
 # relative path resolves from there no matter where cargo is invoked.
-rustdocflags = ["--html-in-header", "techy/docs/rustdoc-header.html"]
+rustdocflags = ["--html-in-header", "docs/rustdoc-header.html"]
 
 [alias]
 # Build the workspace documentation. `--no-deps` keeps dependencies (syn,
