@@ -309,16 +309,23 @@ pub trait Lang: Sized + 'static {
     /// token carries the fired escape character for syntax disambiguation. `Specials`
     /// tokens need no hook: recognition = resolution, the token already carries its spec.
     ///
-    /// The default resolves nothing; the nodes parser then diagnoses the command as
-    /// unresolvable and recovers (span-backed chars-node fallback, DESIGN_RATIONALE.md
-    /// §3.8).
+    /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
+    /// the invocation, or [`Unknown`](CommandResolution::Unknown) for a name it does not
+    /// know — the parse loops then diagnose the command as unresolvable and recover
+    /// (span-backed chars-node fallback, DESIGN_RATIONALE.md §3.8).
+    ///
+    /// The default returns [`Unimplemented`](CommandResolution::Unimplemented): the same
+    /// diagnose-and-recover path, but the diagnostic carries a hint naming this hook.
+    /// A missing implementation has no compile-time signal — a language that enables
+    /// commands but never overrides this hook would otherwise see every command fail
+    /// with a bare "cannot resolve", with nothing pointing at the actual cause (decided
+    /// July 2026).
     fn resolve_command(
         state: &ParsingState<Self>,
         token: &Token<'_, Self>,
-    ) -> Option<ResolvedCallable<Self>> {
+    ) -> CommandResolution<Self> {
         let _ = (state, token);
-        // ### PhF-Review: It might be good to produce a diagnostic here, so that user's are alerted to missing command resolution machinery in case of "unknown command" errors
-        None
+        CommandResolution::Unimplemented
     }
 
     /// The node kind representing a paragraph break. The *core* stages the returned kind
@@ -388,9 +395,10 @@ pub trait Lang: Sized + 'static {
     }
 }
 
-/// The result of [`Lang::resolve_command`]: which invocation form the command resolved
-/// to, and the behavior spec to drive its parse — exactly what the dispatch loop needs
-/// to build an `Invocation` (the core cannot know a preset's type ids).
+/// A successful command resolution (the payload of [`CommandResolution::Resolved`]):
+/// which invocation form the command resolved to, and the behavior spec to drive its
+/// parse — exactly what the dispatch loop needs to build an `Invocation` (the core
+/// cannot know a preset's type ids).
 pub struct ResolvedCallable<L: Lang> {
     /// The invocation form (latexlike: macro / environment / …).
     pub callable_type: L::CallableTypeId,
@@ -413,6 +421,63 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
             .field("callable_type", &self.callable_type)
             .field("spec", &self.spec)
             .finish()
+    }
+}
+
+/// The result of [`Lang::resolve_command`]: a resolution to dispatch, or one of two
+/// distinguishable failure modes — the resolver did not know the name, or the language
+/// provides no command resolution at all. Both failures take the same
+/// diagnose-and-recover path; the distinction only refines the diagnostic (an
+/// `Unimplemented` failure carries a hint naming the missing hook), so an implementation
+/// unsure of the difference loses nothing by answering `Unknown`.
+#[non_exhaustive]
+pub enum CommandResolution<L: Lang> {
+    /// The command resolved: dispatch this invocation.
+    Resolved(ResolvedCallable<L>),
+    /// The resolver ran but does not know this name; the parse loops diagnose the
+    /// command as unresolvable and recover (span-backed chars fallback,
+    /// DESIGN_RATIONALE.md §3.8).
+    Unknown,
+    /// The language provides no command resolution — the trait default's only answer
+    /// (an override may also return it where resolution is deliberately absent).
+    /// Diagnosed like [`Unknown`](CommandResolution::Unknown), plus a hint naming
+    /// [`Lang::resolve_command`] as the missing piece.
+    Unimplemented,
+}
+
+/// `Some`/`None` from a lookup maps to `Resolved`/`Unknown` — absence of a *name* is
+/// [`Unknown`](CommandResolution::Unknown), never
+/// [`Unimplemented`](CommandResolution::Unimplemented) (a resolver ran).
+impl<L: Lang> From<Option<ResolvedCallable<L>>> for CommandResolution<L> {
+    fn from(resolved: Option<ResolvedCallable<L>>) -> Self {
+        match resolved {
+            Some(resolved) => CommandResolution::Resolved(resolved),
+            None => CommandResolution::Unknown,
+        }
+    }
+}
+
+impl<L: Lang> Clone for CommandResolution<L> {
+    fn clone(&self) -> Self {
+        match self {
+            CommandResolution::Resolved(resolved) => {
+                CommandResolution::Resolved(resolved.clone())
+            }
+            CommandResolution::Unknown => CommandResolution::Unknown,
+            CommandResolution::Unimplemented => CommandResolution::Unimplemented,
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for CommandResolution<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandResolution::Resolved(resolved) => {
+                f.debug_tuple("Resolved").field(resolved).finish()
+            }
+            CommandResolution::Unknown => f.write_str("Unknown"),
+            CommandResolution::Unimplemented => f.write_str("Unimplemented"),
+        }
     }
 }
 

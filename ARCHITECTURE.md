@@ -670,7 +670,8 @@ loop:
     ParagraphBreak  -> own node via Lang::make_paragraph_break_node (default: whitespace Chars)
     GroupOpen(rule) -> group parser (derived state expecting_group_close; recurse NodesParser)
     Comment         -> comment node built directly from the token (whole-comment tokens)
-    Command(name)   -> Lang::resolve_command (typically via libraries; None -> diagnose+recover)
+    Command(name)   -> Lang::resolve_command (typically via libraries; Unknown/Unimplemented
+                       -> diagnose+recover, Unimplemented hinting at the missing hook)
                        -> spec.make_invocation_parser(invocation).parse(cx)
     Specials(..)    -> make_invocation_parser likewise (resolution — type + spec — on the token)
     GroupClose(t)   -> stop-condition match? stop : StopCause::UnexpectedGroupClose (caller decides)
@@ -738,9 +739,11 @@ pub trait Lang: Sized {                 // the compile-time bundle (was: Languag
     // Phase 6 plan session hooks (July 2026; DESIGN_RATIONALE §3.6):
 
     /// Resolve a Command token to (callable_type, spec). Typically dispatches to the
-    /// state's libraries via CallableQuery. Default: None → diagnose + recover.
+    /// state's libraries via CallableQuery. Returns Resolved / Unknown / Unimplemented;
+    /// default: Unimplemented → diagnose + recover, the diagnostic hinting at the
+    /// missing hook (amended July 2026; DESIGN_RATIONALE §3.6).
     fn resolve_command(state: &ParsingState<Self>, token: &Token<'_, Self>)
-        -> Option<ResolvedCallable<Self>> { None }
+        -> CommandResolution<Self> { CommandResolution::Unimplemented }
     /// Node kind representing a paragraph break; the core stages it with the token's
     /// span. Default: whitespace-only Chars over the full token span.
     fn make_paragraph_break_node(state: &ParsingState<Self>, token: &Token<'_, Self>)

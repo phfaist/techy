@@ -336,7 +336,7 @@ mod tests {
     use crate::node::NodeKind;
     use crate::source::{Source, Span};
     use crate::state::{
-        Lang, ParsingState, ParsingStateDelta, ResolvedCallable, SimpleLang, StateData,
+        CommandResolution, Lang, ParsingState, ParsingStateDelta, SimpleLang, StateData,
         TokenRulesOverrides,
     };
     use crate::token::{
@@ -596,16 +596,15 @@ mod tests {
     // --- the Phase 6 Lang hook defaults ------------------------------------------------
 
     #[test]
-    fn default_resolve_command_resolves_nothing() {
+    fn default_resolve_command_is_unimplemented() {
         let st = state();
         let token: Token<'static, PlainLang> = Token::new(
             TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
             Span::new(0, 4),
             Span::empty(0),
         );
-        let resolved: Option<ResolvedCallable<PlainLang>> =
-            PlainLang::resolve_command(&st, &token);
-        assert!(resolved.is_none());
+        let resolved: CommandResolution<PlainLang> = PlainLang::resolve_command(&st, &token);
+        assert!(matches!(resolved, CommandResolution::Unimplemented));
     }
 
     #[test]

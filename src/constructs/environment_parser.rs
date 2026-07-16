@@ -495,7 +495,7 @@ mod tests {
     use crate::source::{Source, TextContent};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{
-        ParsingState, ResolvedCallable, StateData, TokenRulesOverrides,
+        CommandResolution, ParsingState, ResolvedCallable, StateData, TokenRulesOverrides,
     };
     use crate::token::{
         CommandRule, CommentRule, SpecialsMatch, StdTokenReader, Token, TokenListReader,
@@ -530,9 +530,9 @@ mod tests {
         fn resolve_command(
             state: &ParsingState<Self>,
             token: &Token<'_, Self>,
-        ) -> Option<ResolvedCallable<Self>> {
+        ) -> CommandResolution<Self> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return None;
+                return CommandResolution::Unknown;
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
             // factory returns the composition parser. `\end` deliberately resolves to
@@ -540,7 +540,7 @@ mod tests {
             // dispatch arms), and an orphan at the root takes the
             // unresolvable-command recovery (§3.6, decision 8).
             if *name == "begin" {
-                return Some(ResolvedCallable {
+                return CommandResolution::Resolved(ResolvedCallable {
                     callable_type: CT_ENVIRONMENT,
                     spec: Arc::new(BeginSpec),
                 });
@@ -551,8 +551,11 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            let spec = state.libraries().resolve(&query, state)?;
-            Some(ResolvedCallable { callable_type: CT_MACRO, spec })
+            state
+                .libraries()
+                .resolve(&query, state)
+                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                .into()
         }
 
         fn scan_specials<'s>(

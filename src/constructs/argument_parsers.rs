@@ -50,7 +50,7 @@ use crate::node::{
 };
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
-use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{CommandResolution, Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::group_parser::GroupParser;
@@ -266,7 +266,7 @@ fn parse_expression_node<'s, L: Lang>(
             // Resolution under the current state, coherent with the state that
             // tokenized the token (§3.6).
             match L::resolve_command(&cx.state, next) {
-                Some(resolved) => {
+                CommandResolution::Resolved(resolved) => {
                     let invocation = Invocation {
                         callable_type: resolved.callable_type,
                         name,
@@ -275,12 +275,17 @@ fn parse_expression_node<'s, L: Lang>(
                     };
                     dispatch_expression_invocation(cx, nodes, invocation)
                 }
-                None => {
+                unresolved @ (CommandResolution::Unknown
+                | CommandResolution::Unimplemented) => {
                     // The decided unresolvable-command recovery (§3.8), in expression
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
                     cx.recover(
-                        UnresolvableCommand::new(*name, *escape_char),
+                        UnresolvableCommand::new(
+                            *name,
+                            *escape_char,
+                            matches!(unresolved, CommandResolution::Unimplemented),
+                        ),
                         SourceSpan::new(&cx.source, next.span),
                     )?;
                     stage_pre_space(cx, nodes, next.pre_space)?;
@@ -804,9 +809,9 @@ mod tests {
         fn resolve_command(
             state: &ParsingState<Self>,
             token: &Token<'_, Self>,
-        ) -> Option<ResolvedCallable<Self>> {
+        ) -> CommandResolution<Self> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return None;
+                return CommandResolution::Unknown;
             };
             let query = CallableQuery::new(
                 CT_MACRO,
@@ -814,8 +819,11 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            let spec = state.libraries().resolve(&query, state)?;
-            Some(ResolvedCallable { callable_type: CT_MACRO, spec })
+            state
+                .libraries()
+                .resolve(&query, state)
+                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                .into()
         }
     }
 

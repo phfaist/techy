@@ -100,7 +100,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Stop machinery | `StopSpec`, `TokenStopCondition { kind, consume }`, `TokenStopKind`, `StopCause` | abnormal endings are data, not errors; `StopCause` = `TokenCondition`/`NodeCondition`/`EndOfInput`/`UnexpectedGroupClose` (token-bearing causes carry the matched span) |
 | Descent-state policy | `ChildStateSpec`, `GroupChildState`, `InvocationChildState` | per-use config on `NodesParser` (child-state session, July 2026) |
 | Group parser | `GroupParser` | engine temporary (tier 2), per-use config, dropped with the frame |
-| Invocation dispatch | `Invocation`, `ResolvedCallable`, `Lang::resolve_command` | `Invocation` = the resolved-invocation value moved into the parser; `ResolvedCallable` = invocation form + spec pair |
+| Invocation dispatch | `Invocation`, `CommandResolution`, `ResolvedCallable`, `Lang::resolve_command` | `Invocation` = the resolved-invocation value moved into the parser; `CommandResolution` = the hook's outcome (`Resolved`/`Unknown`/`Unimplemented`, July 2026); `ResolvedCallable` = invocation form + spec pair |
 | Default invocation parser | `StdInvocationParser` | `Std…` prefix per `StdTokenReader`/`StdCallableSpec`; `parse_declared_arguments` = its shared argument half (pub, slots session) |
 | Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session) |
 | Node finalization hook | `Lang::finalize_node` | run by `NodeTreeBuilder::add` for every staged node, all kinds |

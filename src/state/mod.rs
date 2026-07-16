@@ -39,5 +39,5 @@ mod lang;
 mod parsing_state;
 
 pub use delta::{ParsingStateDelta, TokenRulesOverrides};
-pub use lang::{Lang, NodeExtTypes, ResolvedCallable, SimpleLang};
+pub use lang::{CommandResolution, Lang, NodeExtTypes, ResolvedCallable, SimpleLang};
 pub use parsing_state::{ParsingState, StateData};

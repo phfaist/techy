@@ -124,8 +124,8 @@ pub use spec::{
     StdCallableSpec,
 };
 pub use state::{
-    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable, SimpleLang, StateData,
-    TokenRulesOverrides,
+    CommandResolution, Lang, NodeExtTypes, ParsingState, ParsingStateDelta, ResolvedCallable,
+    SimpleLang, StateData, TokenRulesOverrides,
 };
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,
