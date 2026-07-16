@@ -2049,6 +2049,40 @@ own parsers.
 materializes (the generalization/name question reopens), or `EnvironmentSpec`'s
 body-customization design finds it genuinely needs invocation-level takeover.
 
+**Parser-library gap list vs pylatexenc's `latexnodes.parsers` settled; tack-on
+information fields parse as a construct, not postprocessing** — DECIDED (user, July
+2026, parser-library survey session; full table with per-parser strategies in
+ParserLibraryParity.md). Key rulings and their reasons:
+- **Tack-on information-field macros** (`\label` after `\section`, pylatexenc's
+  `LatexTackOnInformationFieldMacrosParser`): a construct parser, *not* a
+  postprocessing pass, for two reasons (user). First, postprocessing means tree surgery
+  over siblings, where the parser gets the association for free at parse time —
+  attaching the `\label` calls directly to the `\section` invocation node. Second,
+  postprocessing forces `\label` to be a primary language command with defined
+  attach-to-*something* behavior everywhere; recognizing it only where a spec requests
+  tack-ons lets a language cleanly disallow that LaTeX quirk.
+- **The `LatexMathParser` lesson**: presets need an easy *pluggable* way to attach an
+  interior state change/event to a group class (math mode entering on `$…$`); the
+  direction is a contents-parsing-state/state-delta plug. `ChildStateSpec` is not that
+  mechanism — it is per-use call-site config and deliberately one-level-deep (decided
+  semantics 3 above). The plug's shape (an interior `ParsingStateDelta` on `GroupRule`
+  vs a `Lang`/preset hook keyed on `GroupTypeId`) is an open Phase 7 design question.
+- **Ready-made argument-parser conveniences are wanted even where composition
+  suffices** (user): a multi-delimited group parser (any of several delimiter pairs at
+  one argument position — port pylatexenc's contents-state subtlety of keeping only
+  default delimiters plus the encountered pair) and an embellishment parser (xparse
+  `e{tokens}`-type), which subsumes generalizing `MarkerArgumentParser` beyond the
+  single-literal `*` case. A node-staging chars-group parser is likewise wanted,
+  deliberately distinct from `read_rigid_name_group`: the environment-name reader is
+  value-returning scaffolding (reconstructed, never recorded, §3.5), while the
+  chars-group parser stages nodes for `\label{…}`-style chars-only argument groups.
+- **Comma-separated chars list**: discarded as a construct parser in favor of a
+  split-at-chars read/extraction helper over parsed children (pylatexenc's own
+  docstring recommends this route).
+*Revisit if:* the tack-on parser's absorption of following siblings turns out to
+interact badly with enclosing stop conditions in practice, or a preset's interior-state
+plug proves to need more context than the group rule/class provides.
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
