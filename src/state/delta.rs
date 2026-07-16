@@ -32,6 +32,12 @@ pub struct TokenRulesOverrides<L: Lang> {
     pub enable_groups: Option<bool>,
     /// Replace the recognizable group delimiter rules.
     pub groups: Option<Vec<Arc<GroupRule<L>>>>,
+    /// Replace the temporary (scoped-lifecycle) group rules
+    /// ([`TokenRules::temporary_groups`]). An explicit override wins over the
+    /// derivation-path stripping rule: a delta that sets this field *and* installs an
+    /// [`expecting_group_close`](TokenRules::expecting_group_close) keeps exactly the
+    /// list it names (see [`ParsingState::derived`](super::ParsingState::derived)).
+    pub temporary_groups: Option<Vec<Arc<GroupRule<L>>>>,
     /// Override the command-syntax gate.
     pub enable_commands: Option<bool>,
     /// Replace the command syntaxes.
@@ -65,6 +71,9 @@ impl<L: Lang> TokenRulesOverrides<L> {
         }
         if let Some(v) = &self.groups {
             rules.groups = v.clone();
+        }
+        if let Some(v) = &self.temporary_groups {
+            rules.temporary_groups = v.clone();
         }
         if let Some(v) = self.enable_commands {
             rules.enable_commands = v;
@@ -177,6 +186,7 @@ impl<L: Lang> Default for TokenRulesOverrides<L> {
             enable_multi_newline_paragraphs: None,
             enable_groups: None,
             groups: None,
+            temporary_groups: None,
             enable_commands: None,
             commands: None,
             enable_comments: None,
@@ -196,6 +206,7 @@ impl<L: Lang> Clone for TokenRulesOverrides<L> {
             enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
             enable_groups: self.enable_groups,
             groups: self.groups.clone(),
+            temporary_groups: self.temporary_groups.clone(),
             enable_commands: self.enable_commands,
             commands: self.commands.clone(),
             enable_comments: self.enable_comments,
@@ -215,6 +226,7 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
             .field("enable_multi_newline_paragraphs", &self.enable_multi_newline_paragraphs)
             .field("enable_groups", &self.enable_groups)
             .field("groups", &self.groups)
+            .field("temporary_groups", &self.temporary_groups)
             .field("enable_commands", &self.enable_commands)
             .field("commands", &self.commands)
             .field("enable_comments", &self.enable_comments)
@@ -233,6 +245,7 @@ impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
             && self.enable_multi_newline_paragraphs == other.enable_multi_newline_paragraphs
             && self.enable_groups == other.enable_groups
             && self.groups == other.groups
+            && self.temporary_groups == other.temporary_groups
             && self.enable_commands == other.enable_commands
             && self.commands == other.commands
             && self.enable_comments == other.enable_comments

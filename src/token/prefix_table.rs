@@ -45,16 +45,20 @@ impl<L: Lang> PrefixEntry<L> {
 /// Sorted delimiter-matching table derived from a [`TokenRules`] value.
 ///
 /// Entries are sorted longest-first so matching is greedy (`$$` before `$`); entries of
-/// equal length keep the [`TokenRules::groups`] order. When two rules claim the same
-/// delimiter string in the same direction, the earlier entry wins.
+/// equal length keep the declaration order — [`TokenRules::temporary_groups`] before
+/// [`TokenRules::groups`], each in list order. When two rules claim the same delimiter
+/// string in the same direction, the earlier entry wins.
 pub struct PrefixTable<L: Lang> {
     entries: Vec<PrefixEntry<L>>,
 }
 
 impl<L: Lang> PrefixTable<L> {
-    /// Build the table for the group rules of `rules`. Empty delimiter strings are
-    /// ignored. With [`TokenRules::enable_groups`] off the table is empty — the gate is
-    /// baked in here (per state, at freeze time) so the hot path never branches on it;
+    /// Build the table for the group rules of `rules` —
+    /// [`temporary_groups`](TokenRules::temporary_groups) first, then
+    /// [`groups`](TokenRules::groups), so temporary rules win same-spelling ties (the
+    /// minted-rule "prepended wins" semantics). Empty delimiter strings are ignored.
+    /// With [`TokenRules::enable_groups`] off the table is empty — the gate is baked in
+    /// here (per state, at freeze time) so the hot path never branches on it;
     /// `expecting_group_close` is checked separately by the reader and is *not* gated.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
@@ -81,7 +85,7 @@ impl<L: Lang> PrefixTable<L> {
             // An occupied slot is left alone: earlier rules win.
         };
 
-        for rule in &rules.groups {
+        for rule in rules.temporary_groups.iter().chain(&rules.groups) {
             add(&rule.open, rule, true);
             add(&rule.close, rule, false);
         }
@@ -175,6 +179,7 @@ mod tests {
             enable_multi_newline_paragraphs: false,
             enable_groups: true,
             groups,
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: Vec::new(),
             enable_comments: true,
@@ -236,6 +241,19 @@ mod tests {
         ]));
         let entry = table.match_at("{").unwrap();
         assert_eq!(entry.open(), Some(&first));
+    }
+
+    #[test]
+    fn temporary_rules_win_same_spelling_ties() {
+        // Temporaries are added ahead of `groups` — the minted-rule "prepended wins"
+        // semantics (an optional-argument `[` beats a language's own `[` pairing).
+        let permanent = group(0, "[", "]");
+        let temporary = group(9, "[", "]");
+        let mut rules = rules_with_groups(vec![permanent]);
+        rules.temporary_groups = vec![temporary.clone()];
+        let table = PrefixTable::for_rules(&rules);
+        assert_eq!(table.match_at("[x").unwrap().open(), Some(&temporary));
+        assert_eq!(table.match_at("]x").unwrap().close(), Some(&temporary));
     }
 
     #[test]

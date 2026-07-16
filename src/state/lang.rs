@@ -176,6 +176,7 @@ pub trait Lang: Sized + 'static {
                 enable_multi_newline_paragraphs: false,
                 enable_groups: false,
                 groups: Vec::new(),
+                temporary_groups: Vec::new(),
                 enable_commands: false,
                 commands: Vec::new(),
                 enable_comments: false,

@@ -520,6 +520,7 @@ mod tests {
                 group(MATH_INLINE_PAREN, r"\(", r"\)"),
                 group(MATH_DISPLAY_BRACKET, r"\[", r"\]"),
             ],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',

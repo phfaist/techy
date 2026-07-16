@@ -1139,10 +1139,12 @@ hardcoded `TokenRules` value).
   hooks, `TokenListReader`, `check_tree_invariants()`, and the §G end-to-end suite.
   Deferred as planned (Phase6Execution.md §4): `Language<L>`/`parse()`, verbatim +
   preset one-liner specs and the `\begin` composition's home (test-side meanwhile),
-  content-extraction views, temporary state-scoped group rules; the per-invocation-`Box`
+  content-extraction views; the per-invocation-`Box`
   benchmark check is consciously deferred, not dropped (DESIGN_RATIONALE §3.6). Post-6.6
   sessions already amended the shipped shape in place (slots session: `SlotSpec` deleted,
-  composition building blocks promoted `pub`; emptiness surface; condition-derive).
+  composition building blocks promoted `pub`; emptiness surface; condition-derive;
+  temporary state-scoped group rules — `TokenRules::temporary_groups`, July 2026 — with
+  the optional-group parser detached from `ChildStateSpec`).
 - **Phase 7 — `latexlike` preset.** Environments via `\begin`/`\end` specs, math group types +
   mode-aware lookup, verbatim, std library; tolerant-parsing behavior tests; port a slice of
   pylatexenc's walker test suite as acceptance tests.

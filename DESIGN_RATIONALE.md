@@ -1844,36 +1844,29 @@ expects, and the brace-protection idiom survives either way.
 *Pitfall recorded:* the protection policy rides one bracket level, as in pylatexenc —
 whose depth-2 behavior already contradicts its own docstring (`\item[a[{x]y}b]` mangles
 silently there: the nested group comes back childless; checked against 3.0a33). techy
-mangles the same pathological shape *with* diagnostics (the brace group inside the
-nested bracket level surfaces `UnexpectedGroupClose` and decision-8 unwinding takes
-over). A consumer needing every-depth protection drives the nesting recursion itself —
-the parser-composition escape hatch above.
+mangled the same pathological shape *with* diagnostics — **closed by the
+temporary-group-rules entry below** (July 2026), which supersedes this entry's
+`ChildStateSpec` wiring entirely.
 *Revisit — planned mechanism, direction decided (user, July 2026, follow-up
-discussion):* the one-level pitfall is to be closed by **temporary group rules scoped in
-state data** — reversion by reconstruction (stripping), the only vehicle that reaches
-depth N: the outer `Arc` sits N frames up and is unknowable to the descending site, and
-caller-side descent policies are one level deep by design. Direction pinned: temporariness
-is reified in **core rules data** (a `temporary_groups` list next to `TokenRules::groups`,
-or a `transient` flag on `GroupRule`) — *not* a `Lang` callback recording a `StateExt`
-flag (a core parser's parsing correctness must not depend on `Lang` cooperation — the
-same ground the ChildStateSpec entry's `StateExt`-routing rejection stands on;
-`finalize_transition` stays reserved for genuine language semantics) and *not* the
-session (the session layer is pinned data-equivalent to `derived()` and may never alter
-a resulting state). Stripping lives in the **pure derivation path**, keyed on the
-`expecting_group_close` change: a derivation installing a *non-temporary* expected close
-clears the temporary rules. The trigger self-disambiguates — a nested minted `[` installs
-the temporary rule (kept, so brackets keep balancing), a brace installs a normal one
-(stripped, so braces protect at any depth) — and remains a pure function of
-`(base, rule)`, so the session's derivation memo is untouched. With it, `\item[a[b{c]}]]`
-parses as expected — beyond pylatexenc, which mangles exactly that input (3.0a33
-checked: childless nested group, leaked `]`). Open sub-questions for the implementing
-session (the seam ships whole, 6.3 precedent): (i) the stripping site — a `derived()`
-core rule vs. the `group_interior_state` delta construction; (ii) the fate of the
-optional parser's `ChildStateSpec` wiring — the group half becomes redundant, and the
-invocation half's `Fixed(outer)` revert differs observably from state-carried stripping
-(an invocation inside `[…]` would tokenize its non-group tokens with the bracket rule
-still in force), needing its own ruling; (iii) the encoding — rules-list vs. rule flag
-(both mechanically break struct literals).
+discussion; since implemented — entry below):* the one-level pitfall is to be closed by
+**temporary group rules scoped in state data** — reversion by reconstruction
+(stripping), the only vehicle that reaches depth N: the outer `Arc` sits N frames up
+and is unknowable to the descending site, and caller-side descent policies are one
+level deep by design. Direction pinned: temporariness is reified in **core rules data**
+(a `temporary_groups` list next to `TokenRules::groups`, or a `transient` flag on
+`GroupRule`) — *not* a `Lang` callback recording a `StateExt` flag (a core parser's
+parsing correctness must not depend on `Lang` cooperation — the same ground the
+ChildStateSpec entry's `StateExt`-routing rejection stands on; `finalize_transition`
+stays reserved for genuine language semantics) and *not* the session (the session layer
+is pinned data-equivalent to `derived()` and may never alter a resulting state).
+Stripping lives in the **pure derivation path**, keyed on the `expecting_group_close`
+change: a derivation installing a *non-temporary* expected close clears the temporary
+rules. The trigger self-disambiguates — a nested minted `[` installs the temporary rule
+(kept, so brackets keep balancing), a brace installs a normal one (stripped, so braces
+protect at any depth) — and remains a pure function of `(base, rule)`, so the session's
+derivation memo is untouched. With it, `\item[a[b{c]}]]` parses as expected — beyond
+pylatexenc, which mangles exactly that input (3.0a33 checked: childless nested group,
+leaked `]`).
 
 **Brace protection presupposes the minted close spelling is not a group delimiter of
 the argument state — no active suppression** — DECIDED (user, July 2026, Action-06
@@ -1885,13 +1878,61 @@ brace group surfaces `UnclosedGroup`/stray-close unwinding, with diagnostics), e
 like `{a]b}` anywhere else in that language. Intended, not degradation: the revert
 idiom restores the language's own reading; it never overrides the language. The clean
 `\item[a]` case is unaffected either way (the minted rule is prepended, winning the
-same-spelling tie in the contents state). Note the planned temporary-group-rules
-mechanism (previous entry) does not change this: stripping removes *temporary* rules,
-and the bracket pairing here is a permanent base rule. Pinned by
+same-spelling tie in the contents state). Note the temporary-group-rules mechanism
+(next entry) does not change this: stripping removes *temporary* rules, and the
+bracket pairing here is a permanent base rule. Pinned by
 `brackets_as_language_groups_defeat_brace_protection_by_design` (argument_parsers.rs).
 *Rejected:* making the revert state actively suppress the close spelling — `]` would
 then parse differently inside a brace group under an option than in every other brace
 group of the same language: an inconsistency masquerading as robustness.
+
+**Temporary group rules: a state-scoped delimiter lifecycle, enforced at the
+derivation choke point** — DECIDED & implemented (user, July 2026; executes the
+planned mechanism two entries up and supersedes the optional parser's `ChildStateSpec`
+wiring). `TokenRules` gains **`temporary_groups`**, a second rules list that tokenizes
+exactly like `groups` (same `enable_groups` gate; listed *first* in the `PrefixTable`,
+so temporaries win same-spelling ties — the minted-rule "prepended wins" semantics) but
+whose lifecycle is scoped in state data: `ParsingState::derived()` — after
+`apply_overrides`, before `finalize_transition` — clears the carried-over temporaries
+whenever the delta installs an `expecting_group_close` that is not one of the base's
+temporary rules by `Arc` identity (`Some(None)` clears too; a delta that explicitly
+overrides `temporary_groups` is exempt — the delta author spoke). Every group descent
+passes through that derivation, so entering the temporary rule's own group keeps it
+(nested `[…]` balance recursively) while entering any other group drops it for that
+whole subtree: brace protection at depth N — `\item[a[b{c]}]]` parses correctly, beyond
+pylatexenc. Nothing restores the rule after the inner group closes — scope reversion is
+structural (`\item[a{b}[c]d]` pinned). Nested minted rules scope by the exemption:
+`\item[\mm[x]]`'s inner parser *replaces* the temporaries for the inner argument's
+extent.
+*Sub-rulings (the three open questions of the planning entry):* **(i) stripping site**
+= the `derived()` core rule, not `group_interior_state` delta construction: extensions
+install expected closes through hand-built deltas (the `\verb`-idiom raw-block test
+pattern), in-parse and out-of-parse derivations must agree (the session stays
+data-equivalent to raw `derived()`), and the thin group-descent delta leaves the
+derivation memo untouched — the rule is a pure function of `(base, delta)`, so identity
+keying stays sound and memo hits return the already-stripped state. **(ii) encoding** =
+the rules list, not a `transient` flag on `GroupRule`: temporariness is a property of
+the rule's *installation in a state*, not of the rule value; the minted delta becomes
+one `Arc` instead of a whole-`groups` clone, and the strip an `is_empty` check. **No
+`Lang` gate for now** (user; reconsider later): Rust cannot const-gate a field's
+existence without type gymnastics, non-use is already free (empty list end-to-end), and
+infallible `derived()` has no `Err` channel for an unsupported-feature violation.
+**(iii) `OptionalGroupArgumentParser` detaches from `ChildStateSpec`** (plain
+`GroupParser` descent; the mechanism itself stays for genuinely per-level policies —
+the chars-except-groups pattern). The group half was exactly data-equivalent to
+inherit-plus-strip; dropping the invocation half (`Fixed(argument_state)`) is a
+deliberate, narrow **divergence from pylatexenc** (user-accepted): an invocation inside
+`[…]` now inherits the minted rule for its *non-group* token consumption (a bare `]` in
+expression-argument position reads as a stray close, not a char), while its
+group-delimited arguments protect via stripping at every depth (`\item[\m{a]b}]`
+unchanged, re-pinned as `optional_child_invocation_brace_arguments_protect_by_stripping`).
+To revisit when the preset argument-parser helpers are defined: a mandatory-argument
+parser could reset `groups` to exactly the delimiters it wants to see, or reset the
+temporaries itself, through its own deltas.
+*Pitfall recorded:* `temporary_groups` is a **prefix-table input** — `derived()`'s
+table-reuse check compares it elementwise like `groups`; omitting that would reuse a
+stale table across a strip and keep tokenizing the dead delimiters (pinned by
+`temporary_groups_are_prefix_table_inputs`).
 
 **`ParseContext::parse_scoped` and `ParseContext::probe_token` replace the hand-rolled
 state swap/restore and the crate-private `try_peek`** — DECIDED (user, July 2026,

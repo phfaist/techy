@@ -169,7 +169,7 @@ FLM's feature definitions):
 | `m` / `{` | `ExpressionParser` | implemented (the `expression_single_token_requiring_arg_is_error` switch is absorbed by the emptiness surface) |
 | `o` / `[` | `OptionalGroupArgumentParser` | implemented |
 | `s` / `*`, `t<char>` | `MarkerArgumentParser` | implemented (`t` = same parser, other marker char) |
-| `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser` / `OptionalGroupArgumentParser` with per-use arbitrary delimiters | todo — needs the 6.5 minted-bracket-rule machinery generalized to arbitrary char pairs; a second consumer of the planned temporary-group-rules mechanism (DESIGN_RATIONALE.md §3.6), sequencing open |
+| `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser` / `OptionalGroupArgumentParser` with per-use arbitrary delimiters | todo — a second consumer of the temporary-group-rules mechanism (implemented July 2026, DESIGN_RATIONALE.md §3.6: `TokenRules::temporary_groups`), which already handles arbitrary char pairs; the per-use constructors remain to be written |
 | `e{<chars>}` | embellishment-args parser | todo [N3]; record shape to settle before implementing — one `ParsedArgument` per embellishment char vs. one structured entry |
 | `v` / `v<c1><c2>` | delimited-verbatim argument parser | todo [N7] (`v` alone = autodetected delimiter) |
 | `AnyDelimited` / `AnyDelimitedOptional` | multi-delim group parser | todo [N2] |

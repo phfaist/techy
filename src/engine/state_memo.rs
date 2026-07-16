@@ -95,6 +95,7 @@ fn hash_key<L: Lang, H: Hasher>(
     rules.enable_multi_newline_paragraphs.hash(h);
     rules.enable_groups.hash(h);
     hash_arc_slice(&rules.groups, h);
+    hash_arc_slice(&rules.temporary_groups, h);
     rules.enable_commands.hash(h);
     hash_arc_slice(&rules.commands, h);
     rules.enable_comments.hash(h);
@@ -142,6 +143,7 @@ fn keys_eq<L: Lang>(
         && a.enable_multi_newline_paragraphs == b.enable_multi_newline_paragraphs
         && a.enable_groups == b.enable_groups
         && opt_eq_by(&a.groups, &b.groups, |x, y| arc_slices_eq(x, y))
+        && opt_eq_by(&a.temporary_groups, &b.temporary_groups, |x, y| arc_slices_eq(x, y))
         && a.enable_commands == b.enable_commands
         && opt_eq_by(&a.commands, &b.commands, |x, y| arc_slices_eq(x, y))
         && a.enable_comments == b.enable_comments

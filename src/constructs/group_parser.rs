@@ -109,9 +109,11 @@ pub struct GroupParser<'p, L: Lang> {
     /// Descent-state policy handed to the interior [`NodesParser`]; defaults to
     /// inherit-everywhere (§3.6 decided semantics 3: policies are one level deep, so a
     /// plain arm-driven descent never propagates one). A parser that scopes the group's
-    /// interior state sets it per use — the optional-group argument parser's
-    /// brace-protection policy is the motivating consumer
-    /// ([`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)).
+    /// interior state sets it per use — e.g. the chars-except-groups argument pattern,
+    /// whose group interiors revert to the outer, unrestricted state. (The 6.5
+    /// motivating consumer, the optional-group argument parser's brace protection,
+    /// detached in July 2026 in favor of the state-scoped
+    /// [`TokenRules::temporary_groups`](crate::token::TokenRules) lifecycle.)
     child_states: ChildStateSpec<'p, L>,
 }
 
@@ -251,6 +253,7 @@ mod tests {
                 open: "{".into(),
                 close: "}".into(),
             })],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: Vec::new(),
             enable_comments: true,

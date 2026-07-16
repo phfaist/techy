@@ -70,17 +70,48 @@ impl<L: Lang> ParsingState<L> {
 
     /// The sole constructor of non-initial states — the transition choke point.
     ///
-    /// Applies the delta's overrides to a copy of this state's data, runs
+    /// Applies the delta's overrides to a copy of this state's data, strips temporary
+    /// group rules when the delta ends their scope (below), runs
     /// [`Lang::finalize_transition`] exactly once, and freezes the result. Derived
     /// caches are rebuilt — except the [`PrefixTable`], which is reused from `self`
     /// (an `Arc` clone) when its inputs are unchanged: same `enable_groups`, same
-    /// `groups` rules by elementwise `Arc` identity. The dominant transition — a group
-    /// interior overriding only `expecting_group_close`, which is deliberately not a
-    /// table input — takes the reuse path. Functional contract: `self` is never
-    /// observably mutated.
+    /// `groups` and `temporary_groups` rules by elementwise `Arc` identity. The
+    /// dominant transition — a group interior overriding only `expecting_group_close`,
+    /// which is deliberately not a table input — takes the reuse path. Functional
+    /// contract: `self` is never observably mutated.
+    ///
+    /// # Temporary group rules (July 2026, DESIGN_RATIONALE.md §3.6)
+    ///
+    /// [`TokenRules::temporary_groups`] is scoped in state data, and this choke point
+    /// enforces the scope — every group descent passes through here (installing the
+    /// entered rule as `expecting_group_close`), including hand-built deltas that never
+    /// touch the session helpers. A delta that overrides `expecting_group_close` ends
+    /// the temporaries' scope unless the installed close **is** one of the base's
+    /// temporary rules (by `Arc` identity — the same-delimiter descent that keeps
+    /// nested minted brackets balancing); installing any other rule, or clearing the
+    /// expectation, yields a derived state with `temporary_groups` emptied, and
+    /// interior inheritance then keeps it empty for the whole subtree (brace protection
+    /// at any depth). A delta that explicitly overrides `temporary_groups` itself is
+    /// exempt — the delta author spoke. The rule is a pure function of `(base, delta)`,
+    /// so identity-keyed derivation memos stay sound.
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> ParsingState<L> {
         let mut data = self.data.clone();
         delta.apply_overrides(&mut data);
+        let ends_temporary_scope = match &delta.rules.expecting_group_close {
+            None => false,
+            Some(installed) => !matches!(
+                installed,
+                Some(rule) if self
+                    .data
+                    .rules
+                    .temporary_groups
+                    .iter()
+                    .any(|temporary| Arc::ptr_eq(temporary, rule))
+            ),
+        };
+        if ends_temporary_scope && delta.rules.temporary_groups.is_none() {
+            data.rules.temporary_groups.clear();
+        }
         L::finalize_transition(&mut data, self, &delta.events);
         // Checked *after* finalize_transition: the customizer may rewrite `groups` too.
         let table_inputs_unchanged = data.rules.enable_groups == self.data.rules.enable_groups
@@ -90,6 +121,13 @@ impl<L: Lang> ParsingState<L> {
                 .groups
                 .iter()
                 .zip(&self.data.rules.groups)
+                .all(|(new, old)| Arc::ptr_eq(new, old))
+            && data.rules.temporary_groups.len() == self.data.rules.temporary_groups.len()
+            && data
+                .rules
+                .temporary_groups
+                .iter()
+                .zip(&self.data.rules.temporary_groups)
                 .all(|(new, old)| Arc::ptr_eq(new, old));
         if table_inputs_unchanged {
             ParsingState::freeze_with_table(data, Arc::clone(&self.prefix_table))
@@ -207,6 +245,7 @@ mod tests {
                 open: "{".into(),
                 close: "}".into(),
             })],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
@@ -299,6 +338,87 @@ mod tests {
         }));
         assert!(!core::ptr::eq(state.prefix_table(), rebuilt.prefix_table()));
         assert_eq!(state.prefix_table(), rebuilt.prefix_table()); // same contents
+    }
+
+    #[test]
+    fn derived_scopes_temporary_group_rules() {
+        let state: ParsingState<PlainLang> =
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+        let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
+        let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            temporary_groups: Some(vec![Arc::clone(&temporary)]),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(with_temp.prefix_table().match_at("[x").is_some());
+
+        // A delta that says nothing about the expected close carries them over…
+        let untouched = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            enable_comments: Some(false),
+            ..TokenRulesOverrides::default()
+        }));
+        assert_eq!(untouched.rules().temporary_groups.len(), 1);
+
+        // …and so does entering the temporary rule's own group (nested delimiters
+        // keep balancing).
+        let same_rule = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(Arc::clone(&temporary))),
+            ..TokenRulesOverrides::default()
+        }));
+        assert_eq!(same_rule.rules().temporary_groups.len(), 1);
+
+        // Entering any other group ends the scope: the derived interior has no
+        // temporaries (and inheritance keeps it that way for the whole subtree).
+        let brace = Arc::clone(&state.rules().groups[0]);
+        let stripped = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(Arc::clone(&brace))),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(stripped.rules().temporary_groups.is_empty());
+        assert!(stripped.prefix_table().match_at("[x").is_none());
+
+        // Clearing the expectation strips too.
+        let cleared = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(None),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(cleared.rules().temporary_groups.is_empty());
+
+        // An explicit temporaries override wins over stripping: the delta author spoke.
+        let other = Arc::new(GroupRule { group_type: 8, open: "<".into(), close: ">".into() });
+        let overridden = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(brace)),
+            temporary_groups: Some(vec![Arc::clone(&other)]),
+            ..TokenRulesOverrides::default()
+        }));
+        assert_eq!(overridden.rules().temporary_groups, vec![other]);
+    }
+
+    #[test]
+    fn temporary_groups_are_prefix_table_inputs() {
+        let state: ParsingState<PlainLang> =
+            ParsingState::new(StateData { rules: base_rules(), libraries: LibraryStack::new(), ext: () });
+        let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
+        let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            temporary_groups: Some(vec![Arc::clone(&temporary)]),
+            ..TokenRulesOverrides::default()
+        }));
+        // Installing the temporaries rebuilt the table…
+        assert!(!core::ptr::eq(state.prefix_table(), with_temp.prefix_table()));
+
+        // …the keep-path descent (into the temporary rule itself) reuses it…
+        let same_rule = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(Arc::clone(&temporary))),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(core::ptr::eq(with_temp.prefix_table(), same_rule.prefix_table()));
+
+        // …and the strip-path descent rebuilds: a stale reuse here would keep
+        // tokenizing the stripped delimiters.
+        let stripped = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+            expecting_group_close: Some(Some(Arc::clone(&state.rules().groups[0]))),
+            ..TokenRulesOverrides::default()
+        }));
+        assert!(!core::ptr::eq(with_temp.prefix_table(), stripped.prefix_table()));
     }
 
     #[test]

@@ -376,6 +376,7 @@ mod tests {
             enable_multi_newline_paragraphs: true,
             enable_groups: true,
             groups: Vec::new(),
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: Vec::new(),
             enable_comments: true,

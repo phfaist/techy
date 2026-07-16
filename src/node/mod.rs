@@ -97,6 +97,7 @@ mod tests {
                 open: "{".into(),
                 close: "}".into(),
             })],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: Vec::new(),
             enable_comments: true,

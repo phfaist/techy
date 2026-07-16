@@ -137,6 +137,19 @@ pub struct TokenRules<L: Lang> {
     /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
     /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
     pub groups: Vec<Arc<GroupRule<L>>>,
+    /// Group rules with a *scoped lifecycle* (July 2026, DESIGN_RATIONALE.md §3.6): they
+    /// tokenize exactly like [`groups`](Self::groups) — same gate, listed **first** in
+    /// the [`PrefixTable`](super::PrefixTable), so they win same-spelling ties — but a
+    /// state derivation that installs an
+    /// [`expecting_group_close`](Self::expecting_group_close) which is *not* one of
+    /// these rules (by `Arc` identity) clears this list in the derived state. Descending
+    /// into a temporary rule's own group keeps them (nested delimiters balance
+    /// recursively); descending into any other group drops them for that whole subtree
+    /// (see [`ParsingState::derived`](crate::state::ParsingState::derived)). This is how
+    /// a construct parser mints delimiters "for the occasion" — an optional `[`…`]`
+    /// argument — with brace protection at any depth: the minted rule dies at the first
+    /// descent into a group that is not itself.
+    pub temporary_groups: Vec<Arc<GroupRule<L>>>,
     /// Whether command syntax is recognized; disabled = escape characters are ordinary
     /// content characters.
     pub enable_commands: bool,
@@ -213,6 +226,7 @@ impl<L: Lang> Clone for TokenRules<L> {
             enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
             enable_groups: self.enable_groups,
             groups: self.groups.clone(),
+            temporary_groups: self.temporary_groups.clone(),
             enable_commands: self.enable_commands,
             commands: self.commands.clone(),
             enable_comments: self.enable_comments,
@@ -232,6 +246,7 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
             .field("enable_multi_newline_paragraphs", &self.enable_multi_newline_paragraphs)
             .field("enable_groups", &self.enable_groups)
             .field("groups", &self.groups)
+            .field("temporary_groups", &self.temporary_groups)
             .field("enable_commands", &self.enable_commands)
             .field("commands", &self.commands)
             .field("enable_comments", &self.enable_comments)
@@ -250,6 +265,7 @@ impl<L: Lang> PartialEq for TokenRules<L> {
             && self.enable_multi_newline_paragraphs == other.enable_multi_newline_paragraphs
             && self.enable_groups == other.enable_groups
             && self.groups == other.groups
+            && self.temporary_groups == other.temporary_groups
             && self.enable_commands == other.enable_commands
             && self.commands == other.commands
             && self.enable_comments == other.enable_comments

@@ -351,6 +351,7 @@ mod tests {
             enable_multi_newline_paragraphs: false,
             enable_groups: true,
             groups: vec![],
+            temporary_groups: vec![],
             enable_commands: true,
             commands: vec![],
             enable_comments: true,

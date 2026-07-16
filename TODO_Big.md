@@ -12,6 +12,8 @@
 
 - Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
 
+- Fully gated language features (specials, callables, groups, temporary groups ...) with corresponding memory saving in ParsingState/TokenRules fields??
+
 
 ## More targeted items
 

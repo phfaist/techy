@@ -1023,6 +1023,7 @@ mod tests {
                 open: "{".into(),
                 close: "}".into(),
             })],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',

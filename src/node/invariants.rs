@@ -422,6 +422,7 @@ mod tests {
                 enable_multi_newline_paragraphs: true,
                 enable_groups: true,
                 groups: alloc::vec::Vec::new(),
+                temporary_groups: alloc::vec::Vec::new(),
                 enable_commands: true,
                 commands: alloc::vec::Vec::new(),
                 enable_comments: true,

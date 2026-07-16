@@ -50,10 +50,9 @@ use crate::node::{
 };
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
-use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
-use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::group_parser::GroupParser;
 use super::nodes_parser::{ExpressionCallableRequiresContent, UnresolvableCommand};
 use super::{
@@ -533,30 +532,36 @@ fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32
 /// (noise skipped), and absent otherwise — silently, consuming nothing.
 ///
 /// The delimiters are **minted for the occasion**: the parser carries its own
-/// [`GroupRule`] (say `[`…`]` under a preset's option class), prepended to the current
-/// group rules (prepended so it wins ties against a same-spelling rule already in
-/// scope) in a derived state that scopes the argument's **whole extent** — the probing
-/// peek and the group's contents alike, so nested brackets **balance**:
-/// `[with[recursive[use]of]brackets]` is one argument with nested group nodes
-/// (user-decided July 2026, pylatexenc parity; supersedes the briefly-shipped
-/// LaTeX-style first-`]`-closes rule).
+/// [`GroupRule`] (say `[`…`]` under a preset's option class), installed as a
+/// **temporary group rule** ([`TokenRules::temporary_groups`]) in a derived state that
+/// scopes the argument's **whole extent** — the probing peek and the group's contents
+/// alike. Temporary rules win same-spelling ties, and the derivation choke point
+/// ([`ParsingState::derived`](crate::state::ParsingState::derived)) scopes their
+/// lifecycle (July 2026; supersedes the 6.5 [`ChildStateSpec`] wiring that translated
+/// pylatexenc's `make_child_parsing_state` and protected one bracket level only):
 ///
-/// Child descents from the contents are policy-steered ([`ChildStateSpec`] through
-/// [`GroupParser::with_child_states`] — the direct translation of pylatexenc's
-/// `LatexDelimitedGroupParserInfo.make_child_parsing_state`): a nested group opened by
-/// the minted rule keeps the contents state (that is what balances recursively), while
-/// **any other child** — a brace group, an invocation — reverts to the argument's own
-/// state, where `]` is an ordinary character: braces protect, `[{arg with ]}]` holds.
-/// (As in pylatexenc, the protection policy rides one bracket level: pathological
-/// mixtures like `[a[{x]y}b]` mangle there silently and mangle here *with*
-/// diagnostics.)
+/// - **Nested brackets balance**: a descent into the minted rule's own group keeps
+///   the rule, so `[with[recursive[use]of]brackets]` is one argument with nested
+///   group nodes (user-decided July 2026, pylatexenc parity; supersedes the
+///   briefly-shipped LaTeX-style first-`]`-closes rule).
+/// - **Braces protect, at any depth**: a descent into any *other* group strips the
+///   rule for that whole subtree — `]` is an ordinary character inside
+///   `[{arg with ]}]`, and equally at depth two, `[a[b{c]}]]` — beyond pylatexenc,
+///   which mangles that shape (3.0a33-checked).
+///
+/// Invocations inside the option inherit the contents state as-is: their
+/// group-delimited arguments protect through the same stripping (`[\m{a]b}]` holds),
+/// while their **non-group** token consumption sees the minted rule in force — a
+/// deliberate, narrow divergence from pylatexenc's revert-to-outer-state semantics
+/// (user-decided July 2026; to be revisited with the preset argument-parser helpers,
+/// which may reset `groups` or the temporaries through their own deltas).
 ///
 /// **Protection presupposes the close spelling is not otherwise special in the
 /// argument state.** If the base rules class `[`/`]` as a genuine group pairing of the
-/// language, the reverted state reads `]` as a real close token, and `\item[{a]b}]`
-/// genuinely fails — stray-close unwinding with diagnostics, exactly like `{a]b}`
-/// anywhere else in that language. Intended, not degradation: the revert restores the
-/// language's own reading, it never overrides it (user-decided July 2026,
+/// language, the stripped state still reads `]` as a real close token, and
+/// `\item[{a]b}]` genuinely fails — stray-close unwinding with diagnostics, exactly
+/// like `{a]b}` anywhere else in that language. Intended, not degradation: stripping
+/// restores the language's own reading, it never overrides it (user-decided July 2026,
 /// DESIGN_RATIONALE.md §3.6).
 ///
 /// Content designation: the option group's children — except that a **lone child group
@@ -565,6 +570,7 @@ fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32
 /// pylatexenc's post-hoc `unwrap_double_group` accessor hack (§3.5).
 ///
 /// [`ChildStateSpec`]: super::ChildStateSpec
+/// [`TokenRules::temporary_groups`]: crate::token::TokenRules::temporary_groups
 pub struct OptionalGroupArgumentParser<L: Lang> {
     rule: Arc<GroupRule<L>>,
     unwrap_lone_group: Option<L::GroupTypeId>,
@@ -598,17 +604,18 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         };
 
         // The state with the minted rule in force — used for the probing peek and,
-        // when the argument is present, for the group's contents (type docs). `Arc`
-        // identity of the matched rule is the match criterion — the delta supplied
-        // exactly this `Arc`.
-        let mut groups = alloc::vec![Arc::clone(&self.rule)];
-        groups.extend(cx.state.rules().groups.iter().cloned());
+        // when the argument is present, for the group's contents (type docs). It is a
+        // *temporary* group rule: it wins same-spelling ties (temporaries precede
+        // `groups` in the prefix table), and the derivation choke point scopes its
+        // lifecycle — kept through descents into its own group (nested brackets
+        // balance), stripped at the first descent into any other group (brace
+        // protection, at any depth). `Arc` identity of the matched rule is the match
+        // criterion — the delta supplied exactly this `Arc`.
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(groups),
+            temporary_groups: Some(alloc::vec![Arc::clone(&self.rule)]),
             ..TokenRulesOverrides::default()
         });
         let contents_state = cx.session.derived_state(&cx.state, &delta);
-        let argument_state = Arc::clone(&cx.state);
         let matched = match cx.probe_token(&contents_state)? {
             Some(token)
                 if matches!(
@@ -627,35 +634,11 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
 
         stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
         cx.tokens.move_past(&open, true);
-        // pylatexenc's `make_child_parsing_state`, expressed as the decided §3.6
-        // descent policy: a nested group opened by the minted rule keeps the contents
-        // state (nested brackets balance recursively — the rule then rides the
-        // inherited states of deeper levels), while any other child descent — a brace
-        // group, an invocation — reverts to the argument's own state, where the close
-        // delimiter is an ordinary character (`[{arg with ]}]`).
-        //
-        // The callback's first parameter is the state at the *descent site* — the group
-        // interior state, not the contents state. Returning the captured contents state
-        // instead is data-equivalent (the interior derivation overrides
-        // expecting_group_close either way) and keys every nested same-rule descent on
-        // (contents state, rule) — the same derivation as the outer descent, an
-        // immediate memo hit.
-        let contents_for_children = Arc::clone(&contents_state);
-        let argument_for_children = Arc::clone(&argument_state);
-        let keep_or_revert = move |_descent: &Arc<ParsingState<L>>, token: &Token<'_, L>| {
-            if let TokenKind::GroupOpen { rule, .. } = &token.kind {
-                if Arc::ptr_eq(rule, &self.rule) {
-                    return Arc::clone(&contents_for_children);
-                }
-            }
-            Arc::clone(&argument_for_children)
-        };
-        let child_states = ChildStateSpec {
-            group: GroupChildState::Compute(&keep_or_revert),
-            invocation: InvocationChildState::Fixed(Arc::clone(&argument_state)),
-        };
-        let mut group =
-            GroupParser::new(open.span, Arc::clone(&self.rule)).with_child_states(child_states);
+        // Plain descent — no `ChildStateSpec` wiring (detached July 2026, superseding
+        // the 6.5 policy translation of pylatexenc's `make_child_parsing_state`): the
+        // temporary rule's state-scoped lifecycle covers both halves of that policy at
+        // every depth (see the type docs).
+        let mut group = GroupParser::new(open.span, Arc::clone(&self.rule));
         let (id, _delta) = cx.parse_scoped(contents_state, &mut group)?;
 
         // Content: the option group's children, or a lone protective child group's.
@@ -847,6 +830,7 @@ mod tests {
                 open: "{".into(),
                 close: "}".into(),
             })],
+            temporary_groups: Vec::new(),
             enable_commands: true,
             commands: vec![Arc::new(CommandRule {
                 escape_char: '\\',
@@ -1332,10 +1316,64 @@ mod tests {
     }
 
     #[test]
-    fn optional_child_invocations_revert_to_the_argument_state() {
-        // pylatexenc's make_child_parsing_state semantics: a child that is not a
-        // minted-rule group parses under the argument's own state — inside `\m`'s
-        // brace argument, `]` is an ordinary character and cannot close the option.
+    fn optional_brace_protection_reaches_nested_bracket_levels() {
+        // The temporary-rule lifecycle (user-decided July 2026, DESIGN_RATIONALE.md
+        // §3.6): the brace descent at bracket depth two strips the minted rule, so its
+        // `]` is an ordinary character — beyond pylatexenc, whose one-level policy
+        // mangles exactly this shape (3.0a33-checked: childless nested group, leaked
+        // `]`).
+        let st = state_with(&[("item", vec![optional_arg()])]);
+        let parsed = parse_std(r"\item[a[b{c]}]] x", &st, Recovery::Strict);
+
+        let item = root_child(&parsed, 0);
+        assert_eq!(item.span().range(), 0..15);
+        let content = content_of(item, 0);
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0].chars(), Some("a"));
+        let nested = content[1];
+        assert_eq!(nested.span().range(), 7..14);
+        assert_eq!(nested.group_type(), Some(GT_OPTION));
+        assert_eq!(nested.child_count(), 2);
+        assert_eq!(nested.child(0).unwrap().chars(), Some("b"));
+        let brace = nested.child(1).unwrap();
+        assert_eq!(brace.span().range(), 9..13);
+        assert_eq!(brace.group_type(), Some(GT_BRACE));
+        assert_eq!(brace.child(0).unwrap().chars(), Some("c]"));
+
+        assert_eq!(root_child(&parsed, 1).chars(), Some(" x"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn optional_brackets_still_balance_after_a_protective_group() {
+        // Stripping happens in the *interior* derivation; the contents level keeps its
+        // own state structurally, so the minted rule is back in force after a brace
+        // group closes — nothing needs restoring.
+        let st = state_with(&[("item", vec![optional_arg()])]);
+        let parsed = parse_std(r"\item[a{b}[c]d] x", &st, Recovery::Strict);
+
+        let item = root_child(&parsed, 0);
+        assert_eq!(item.span().range(), 0..15);
+        let content = content_of(item, 0);
+        assert_eq!(content.len(), 4);
+        assert_eq!(content[0].chars(), Some("a"));
+        assert_eq!(content[1].group_type(), Some(GT_BRACE));
+        assert_eq!(content[1].span().range(), 7..10);
+        assert_eq!(content[2].group_type(), Some(GT_OPTION));
+        assert_eq!(content[2].span().range(), 10..13);
+        assert_eq!(content[3].chars(), Some("d"));
+
+        assert_eq!(root_child(&parsed, 1).chars(), Some(" x"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn optional_child_invocation_brace_arguments_protect_by_stripping() {
+        // The invocation inherits the contents state (no ChildStateSpec revert since
+        // the July 2026 detach — its non-group tokens see the minted rule, the decided
+        // narrow divergence from pylatexenc); its *brace argument* installs a
+        // non-temporary expected close, so the derivation strips the minted rule and
+        // `]` inside the braces is an ordinary character that cannot close the option.
         let st = state_with(&[("item", vec![optional_arg()]), ("m", vec![brace_arg()])]);
         let parsed = parse_std(r"\item[\m{a]b}] x", &st, Recovery::Strict);
 
