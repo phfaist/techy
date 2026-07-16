@@ -79,6 +79,16 @@ pub mod spec;
 pub mod state;
 pub mod token;
 
+// Narrative documentation: markdown pages in `docs/` rendered as doc-only modules.
+// `cfg(doc)` keeps them out of compiled code; rustdoc (including doctest collection)
+// builds with `--cfg doc`, so code blocks in these pages still run as doctests.
+#[cfg(doc)]
+#[doc = include_str!("../docs/guide.md")]
+pub mod guide {
+    #[doc = include_str!("../docs/parsing-model.md")]
+    pub mod parsing_model {}
+}
+
 /// Support module for `techy-derive`-generated code only: `alloc` paths spelled so they
 /// resolve from both `std` and `no_std` consumer crates. Not public API.
 #[doc(hidden)]

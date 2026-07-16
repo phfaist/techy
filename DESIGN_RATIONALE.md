@@ -2615,6 +2615,23 @@ DAGs; S0 is the natural split candidate, while S1 cannot be split along topic li
 
 ---
 
+### 3.12 Documentation
+
+**Narrative docs included with rustdoc, not a separate site** — DECIDED (user-led, July 2026).
+API documentation is rustdoc; narrative pages (usage, concepts, design patterns — the role
+of pylatexenc's Sphinx pages) are markdown files in `docs/`, rendered as doc-only modules
+under `techy::guide` via `#[cfg(doc)]` + `#[doc = include_str!(...)]` in `lib.rs` (the clap
+pattern). Stubs landed July 2026.
+*Rationale:* one site and one search index, and — decisively — compiler-checked intra-doc
+links plus doctest-compiled examples: during the ongoing review-and-rename churn, links and
+code samples in a separate book would silently rot, whereas rustdoc breaks the docs build
+instead. Zero extra toolchain; docs.rs hosts it on publish.
+*Rejected:* mdBook alongside rustdoc — proper book navigation, but a second toolchain and
+unchecked book→API links. Not precluded: the `docs/*.md` sources move into mdBook chapters
+nearly verbatim if the narrative later outgrows rustdoc.
+*Revisit if:* the guide needs ordered, book-style chapter navigation that rustdoc's
+module-shaped layout can't carry.
+
 ## 4. Rejected patterns — do not reintroduce
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section
