@@ -28,6 +28,3 @@
 - Delimited Group Parser Helper Utility! (Expand GroupParser [src/constructs/group_parser.rs] or new class? Unclear to me) Optional argument, auto delimiter detection, group/content/child parsing states, not necessarily group token types, ...
 
 - Parsers that are worth implementing: verbatim, trailing-macro-information (TackOnMacro...), [maybe not CommaChars... -> parse argument content instead]
-
-- Should I be worried about hard-coded u32 for indices... should we have a global typedef at least?
-
