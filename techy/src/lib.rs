@@ -7,6 +7,9 @@
 //! (no built-in math mode, `{`/`}`, `%`, or `\`); the familiar LaTeX behavior is provided by
 //! a preset, and custom LaTeX-like languages are defined with the same machinery.
 //!
+//! New to techy? Start with the [`guide`] — the narrative documentation; the modules
+//! below are the API reference.
+//!
 //! ## no_std
 //!
 //! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
@@ -82,6 +85,8 @@ pub mod token;
 // Narrative documentation: markdown pages in `docs/` rendered as doc-only modules.
 // `cfg(doc)` keeps them out of compiled code; rustdoc (including doctest collection)
 // builds with `--cfg doc`, so code blocks in these pages still run as doctests.
+// The docs sidebar pins these pages in a "Guide" section (docs/rustdoc-header.html,
+// wired up in .cargo/config.toml); new chapters must also be added to GUIDE_PAGES there.
 #[cfg(doc)]
 #[doc = include_str!("../docs/guide.md")]
 pub mod guide {
