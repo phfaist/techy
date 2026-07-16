@@ -1955,7 +1955,9 @@ level — "slots" become pure node vocabulary. Consequences shipped together:
 *Open (deliberately):* where the standard `\begin` composition lives — core (a generic
 name-indexed delegating dispatcher) vs. the latexlike preset (Phase 7 owns the
 `\begin`/`\end` spelling). It stays test-side meanwhile (plan item A.5), as does the C
-batch (builder sugar, crate-root re-exports).
+batch (builder sugar, crate-root re-exports). *(Settled July 2026, Phase 7 plan
+session: preset-owned — see the `\begin`-composition entry at the end of this
+section.)*
 
 **The emptiness surface: `ArgumentParser::can_match_empty()` +
 `CallableSpec::requires_content()`; the expression guard consults the spec** — DECIDED
@@ -1994,6 +1996,58 @@ of PlanSlotsAndConvenienceSurface.md; pylatexenc precedent:
   content (arguments or a body)" — the old "it takes arguments" would be a false
   message for a body-bearing takeover that declares none. *(Implementation-forced
   naming consequence, flagged for user sign-off in the session report.)*
+
+**The `\begin` composition is preset-owned; core contributes parameterized building
+blocks only; environments customize through their spec (data or hooks), not invocation
+takeover** — DECIDED (user, July 2026, Phase 7 plan session; settles the
+deliberately-open home question of the no-spec-side-slots entry above).
+The standard `\begin`/`\end` composition (rehearsed test-side in
+`environment_parser.rs`) rehomes to the latexlike preset in Phase 7: the preset
+registers a `BeginSpec` dispatcher whose invocation parser contains minimal/no scanning
+code of its own — it reads the rigid name group (`read_rigid_name_group`), resolves the
+environment's spec from the state's libraries under the preset's ENVIRONMENT callable
+type, parses declared arguments (`parse_declared_arguments`), drives the core
+`EnvironmentBodyParser`, and assembles the callable node. The *notion* of "environment"
+is preset property; core owns each individual parsing task as data-parameterized
+machinery (the §2.3 ground `EnvironmentBodyParser`'s core placement already stands on).
+Consequences made explicit:
+- **Invocation-level takeover is out; amending `Invocation` is declined.** An
+  environment spec's own `make_invocation_parser` is never invoked (the 6.6
+  `Invocation<'s>` finding stands as a permanent boundary, not a bug to fix); all
+  per-environment variation flows through the preset's `EnvironmentSpec` surface.
+  That surface is *not* constrained to plain data (user, same session — "spec-as-data"
+  would overstate the ruling): behavior-shaped customization via defaulted methods is
+  legitimate, per §2.1 and the factory precedent of `make_invocation_parser` itself.
+  For the body-parsing choice (verbatim-like bodies) the user leans to a defaulted
+  `make_body_parser()` method (pylatexenc's `EnvironmentSpec.make_body_parser`) over a
+  plain field — final shape remains a Phase 7 preset-side design question.
+- **`EnvironmentBodyParser` keeps its name** (rename raised and reconsidered, user):
+  its contract is hardwired to the rigid COMMAND + CHARS_GROUP terminator shape, and
+  environments are the one role it is designed for — a generic name
+  (`TerminatedBodyParser`) would over-promise arbitrary terminator conditions. Honest
+  single-purpose labeling beats false generality; strata rule 2 constrains imports,
+  not descriptive vocabulary.
+- **`read_rigid_name_group` stays a value-returning scaffolding helper**, deliberately
+  separate from the node-staging chars-group *argument* parser (pylatexenc's
+  `LatexCharsGroupParser` analog) that Phase 7's std library adds for `\label`-style
+  chars-only arguments: scaffolding is reconstructed, never recorded (§3.5), so the
+  name reader must not stage nodes — the two roles differ in kind, not configuration.
+- Preset-side strays that rehome with the composition: registering an `end` spec so an
+  orphan `\end` diagnoses well; the name reader's rigidity contract (trigger post-space
+  tolerated and normalized away — `\begin {itemize}`) is a documented knob, not a
+  behavior change.
+*Rejected:* a core "read-marked-delimited-content" callable spec generalizing
+environments (declared arguments + body up to constructor-specified terminator
+syntax). The killing flaw is not lookup — a core spec could query a parameterized
+`L::CallableTypeId` generically — but *interpretation*: the body delta and body
+customization live on the preset's concrete spec type (the slots-session rehoming) and
+are invisible through the core `CallableSpec` trait, so a core driver would need
+spec-side body vocabulary back in core — exactly what the no-spec-side-slots ruling
+rejected. No plausible second consumer either: fence-block-style constructs wire their
+own parsers.
+*Revisit if:* a second core-worthy consumer of command+name-group termination
+materializes (the generalization/name question reopens), or `EnvironmentSpec`'s
+body-customization design finds it genuinely needs invocation-level takeover.
 
 ### 3.7 Generics strategy
 

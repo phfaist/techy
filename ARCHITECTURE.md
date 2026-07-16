@@ -1011,6 +1011,10 @@ A module (`techy::latexlike`), not a separate crate, providing:
   `MACRO` / `ENVIRONMENT` / `SPECIALS` and the standard group types; provides `MacroSpec` /
   `EnvironmentSpec` / `SpecialsSpec` constructor helpers and `NodeRef` accessor sugar
   (`as_math()`-style, environment/macro views over `Callable` nodes).
+- A standard-argument factory: a plain constructor function mapping xparse-like string
+  codes to configured standard `ArgumentParser`s (pylatexenc's
+  `LatexStandardArgumentParser` reshaped as a factory, not replicated as a parser type —
+  decided July 2026; per-code inventory in ParserLibraryParity.md).
 - Default `TokenRules`: `\` escape, `{}` groups, `[]` optional-argument group type, `$ $$ \( \[`
   math group types, `%` comments, standard specials strings (`~ & # ^ _` …).
 - A standard `Library`: common macros/environments/accents (the "easy wins" list from
