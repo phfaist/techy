@@ -238,9 +238,9 @@ impl MapResolver {
     }
 }
 
-impl From<BTreeMap<String, String>> for MapResolver {
-    fn from(contents: BTreeMap<String, String>) -> Self {
-        MapResolver { contents, reference_as_origin: false }
+impl<I: IntoIterator<Item = (String, String)>> From<I> for MapResolver {
+    fn from(contents: I) -> Self {
+        MapResolver { contents: contents.into_iter().collect(), reference_as_origin: false }
     }
 }
 
@@ -330,6 +330,20 @@ mod tests {
             }
             other => panic!("expected Resolved provenance on both, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn map_resolver_builds_from_any_pair_iterator() {
+        let resolver = MapResolver::from([
+            ("chapter.tex".to_string(), "chapter content".to_string()),
+            ("appendix.tex".to_string(), "appendix content".to_string()),
+        ]);
+
+        let trigger = trigger_span();
+        let resolved = resolve_source(&resolver, "appendix.tex", &trigger).unwrap();
+        assert_eq!(resolved.content(), "appendix content");
+        // Origin labeling defaults to off, same as `MapResolver::new()`.
+        assert_eq!(resolved.origin().label(), None);
     }
 
     #[test]
