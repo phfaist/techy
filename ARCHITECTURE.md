@@ -1123,6 +1123,22 @@ hardcoded `TokenRules` value).
   deferred** — `ParserSession` is the root object. End-to-end tests on LaTeX-ish snippets
   under test langs (the real preset is Phase 7).
   DESIGN_RATIONALE §3.2/§3.5/§3.6/§3.8/§3.10.
+  — ✅ done, July 2026 (subphases 6.0–6.7; per-subphase record in Phase6Execution.md's
+  progress table, amendments in the DESIGN_RATIONALE sections above). Ships the full scope
+  as amended in execution: the dispatch loop with all arms + detection-site tolerant
+  recovery, stop machinery (`StopCause`; consume switch, 6.2), `ChildStateSpec` + the
+  session state-derivation seam with the memoized group-interior states (6.3),
+  `Invocation`/`make_invocation_parser`/`StdInvocationParser` with post-space = the
+  trigger token's own syntactic post-space (6.4 amendment — no claiming helper), the
+  standard argument parsers with balanced optional-group delimiters (6.5 review), the core
+  `EnvironmentBodyParser` (rigid scaffolding, decision-8 recovery matrix, 6.6), `Lang`
+  hooks, `TokenListReader`, `check_tree_invariants()`, and the §G end-to-end suite.
+  Deferred as planned (Phase6Execution.md §4): `Language<L>`/`parse()`, verbatim +
+  preset one-liner specs and the `\begin` composition's home (test-side meanwhile),
+  content-extraction views, temporary state-scoped group rules; the per-invocation-`Box`
+  benchmark check is consciously deferred, not dropped (DESIGN_RATIONALE §3.6). Post-6.6
+  sessions already amended the shipped shape in place (slots session: `SlotSpec` deleted,
+  composition building blocks promoted `pub`; emptiness surface; condition-derive).
 - **Phase 7 — `latexlike` preset.** Environments via `\begin`/`\end` specs, math group types +
   mode-aware lookup, verbatim, std library; tolerant-parsing behavior tests; port a slice of
   pylatexenc's walker test suite as acceptance tests.

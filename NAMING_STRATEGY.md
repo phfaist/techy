@@ -28,6 +28,9 @@ of earlier revisions lives in git.
    registry ids interned in `Language`; then per-delimiter-pair identities.)
 6. **Transitions read as adjectives** — `ParsingState::derived()` per Rust's
    `to_uppercase` convention: signals a *transition* producing a new value, not a field copy.
+7. **`make_*` for factory hooks** (Phase 6 plan session, July 2026) — hooks that
+   construct and hand over a fresh value: `CallableSpec::make_invocation_parser`,
+   `Lang::make_paragraph_break_node`.
 
 ## Current Authoritative Names (July 2026)
 
@@ -91,7 +94,20 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
-| Parser context | `ParseContext<'a, 's, L>` | bundles tokens + state + session |
+| Parser context | `ParseContext<'a, 's, L>` | bundles tokens + source + state + session (source added 6.4 — factory-created parsers have no ctor to thread it) |
+| Construct-parser result | `ConstructParserResult<L, T>` | `= Result<T, ParseError>`; lang-first like `TokenResult` (6.1); over the sketched `ParseOutcome` — unambiguous next to the engine-level `ParseResult` |
+| Content-run parser | `NodesParser`, `NodesOutcome` | over `ContentParser`: the regions session gave "content" a precise technical meaning (designated argument/slot content) |
+| Stop machinery | `StopSpec`, `TokenStopCondition { kind, consume }`, `TokenStopKind`, `StopCause` | abnormal endings are data, not errors; `StopCause` = `TokenCondition`/`NodeCondition`/`EndOfInput`/`UnexpectedGroupClose` (token-bearing causes carry the matched span) |
+| Descent-state policy | `ChildStateSpec`, `GroupChildState`, `InvocationChildState` | per-use config on `NodesParser` (child-state session, July 2026) |
+| Group parser | `GroupParser` | engine temporary (tier 2), per-use config, dropped with the frame |
+| Invocation dispatch | `Invocation`, `ResolvedCallable`, `Lang::resolve_command` | `Invocation` = the resolved-invocation value moved into the parser; `ResolvedCallable` = invocation form + spec pair |
+| Default invocation parser | `StdInvocationParser` | `Std…` prefix per `StdTokenReader`/`StdCallableSpec`; `parse_declared_arguments` = its shared argument half (pub, slots session) |
+| Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session) |
+| Node finalization hook | `Lang::finalize_node` | run by `NodeTreeBuilder::add` for every staged node, all kinds |
+| Staged read views | `StagedNodes`, `StagedNodeView` | read-only builder views for `finalize_node` and node stop predicates |
+| Tree invariant checker | `check_tree_invariants` | public test utility in `node` (span partition, `Spanned` residency, region tiling) |
+| Pre-scanned token reader | `TokenListReader` | `TokenReader` over a pre-built token list; unit-test isolation (documented re-tokenization fidelity limit) |
+| Construct-level error | `ParseError<O>` | abort-only (`Err` means abort, §3.8); carries no recovery payload |
 | Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeId`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
 | Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: argument entry = `Arc`'d spec + optional child region + ext (regions session, July 2026); slot entry = own `name` + region + ext (slots session, July 2026 — no spec pointer) |
@@ -153,6 +169,11 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `ParsedArgument.child` + `.pre_space`; `ParsedSlot.child` | `.region` (`ChildRegion` with `children`/`content_range`/`content_parent`) | regions session July 2026: inter-argument noise (comments, whitespace) kept as region nodes, content parser-designated; `NodeRef::argument()`/`argument_named()` → `argument_nodes()`/`argument_content_nodes()` |
 | open `GroupTypeId`/`CallableTypeId` (u32, interned in `Language`) | `Lang::GroupTypeId`/`Lang::CallableTypeId` associated types | forms and group *classes* are static per language definition; closed enums, no ids floating around (July 2026; `GroupTypeId` reframed identity → class the same month — delimiter pairings are runtime `GroupRule`s, not enum variants) |
 | `Parser` trait (in `constructs`) | `ConstructParser` | avoids clash with high-level parser type |
+| `ContentParser` (Phase 6 notes) | `NodesParser` | regions session gave "content" a precise meaning (designated argument/slot content) a general nodes parser doesn't have |
+| `ParseOutcome` (Phase 6 notes) | `ConstructParserResult<L, T>` | unambiguous next to the engine-level `ParseResult`; clarity over brevity |
+| `TokenStopCondition` (closed enum, Phase 6 plan) | `TokenStopKind` + `TokenStopCondition { kind, consume }` | 6.2 amendment: the consume switch is bound to the condition |
+| `claim_post_space` (planned 6.4 helper) | (nothing) | superseded before shipping: `post_space` = exactly the trigger token's own syntactic post-space, nothing beyond it is ever claimed (§3.5 invariant 3) |
+| `peek_argument_token` | `try_peek` (pub(crate)) | hoisted in 6.6 — the same probe policy also serves the terminator flow |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
 | `SourceContent`, `SourceCursor`, `Source::cursor()` | (nothing — `StdTokenReader` scans `&str` directly) | retired July 2026 (Action 06): the scanner needs random-access slicing, not a char cursor; the borrow-returning trait was information-equivalent to `&str` (DESIGN_RATIONALE §3.1) |
 | "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; `…TypeId` = per-language id type |

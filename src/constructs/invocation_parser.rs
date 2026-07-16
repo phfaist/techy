@@ -11,8 +11,10 @@
 //! [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
 //! since no invocation parser can forget to consume its trigger). The token's pre-space
 //! is likewise the caller's (housed as sibling content). A takeover parser that needs
-//! the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself
-//! via `move_past(invocation.token, false)`.
+//! the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself,
+//! positionally — `move_to_pos(token.post_space().start())`: the stored trigger token
+//! cannot be handed back to the reader through the uniform `parse` signature
+//! (Phase 6.6 finding; see DESIGN_RATIONALE.md §3.6).
 //!
 //! `cx.state` is the invocation's **base** state: the caller resolves any
 //! [`InvocationChildState`](super::InvocationChildState) policy first and scopes the

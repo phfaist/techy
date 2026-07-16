@@ -1404,10 +1404,23 @@ spanning every spec and every dispatch — the regions two-phase records accepte
 of invariant only because it is contained in one component at one point); a generic
 `with_invocation_parser(inv, closure)` (stack allocation, but kills `dyn CallableSpec`
 object safety).
-*Revisit if — **flagged, to check before Phase 6 closes**:* the per-invocation `Box`
-allocation shows up in parse-throughput profiles (run a micro-benchmark; see
-Phase6Execution.md). If it ever matters, the dispatch loop can special-case the default
-path without touching the trait.
+*Revisit if:* the per-invocation `Box` allocation shows up in parse-throughput profiles
+(run a micro-benchmark; see Phase6Execution.md §6.7). If it ever matters, the dispatch
+loop can special-case the default path without touching the trait. *(Phase 6 close, July
+2026: the pre-close benchmark check this note originally flagged was consciously deferred,
+not dropped — user decision, performance-review session; see the state-memo entry's
+companions note. The obligation stands open, unscheduled.)*
+*(Phase 6.6 finding, recorded for Phase 7's `EnvironmentSpec`:* a composition running
+*inside* `parse(cx)` cannot mint a **new** `Invocation` for a construct it resolves
+mid-parse — `Invocation.name: &'s str`, and the `'s` source content is unreachable through
+`cx` (the source is `Arc`-owned; tokens and readers carry only byte spans, §3.8). So a
+two-level dispatch — a `\begin` spec's parser calling the resolved environment spec's own
+`make_invocation_parser` — does not work with the current `Invocation` shape; the 6.6
+test composition instead drives `EnvironmentBodyParser` directly under the resolved spec.
+Relatedly, a *stored* trigger token cannot be handed back to `cx.tokens` (the uniform
+`parse` signature cannot tie it to the context's reader — the 6.3 finding), so the
+takeover post-space reposition idiom is expressed positionally:
+`move_to_pos(token.post_space().start())`.)*
 
 **`Lang::finalize_node` — one centralized finalization hook, run by the builder for every
 staged node** — DECIDED (user, July 2026, Phase 6 plan session; supersedes the spec-level
@@ -1563,6 +1576,21 @@ path and left terminator syntax neither recorded nor reconstructible).
 spec-side declaration at all; see the no-spec-side-slots entry below. The core of this
 ruling — terminator data as `EnvironmentBodyParser` constructor parameters — stands
 unchanged; the body state delta rehomes to the preset spec type that drives the parse.)*
+*(Amended July 2026, subphase 6.6 / Phase 6 close: the shipped constructor is
+`EnvironmentBodyParser::new(trigger_span, invocation_name, stop_command_name,
+name_group_type)` — two approved adjustments to the sketched parameter set. `trigger_span`
+anchors the missing-terminator diagnostic at the `\begin{…}` that opened (the
+`GroupParser` unclosed-at-open precedent); `invocation_name` is always required — every
+terminator diagnostic names the environment — with the name *check* a builder switch,
+`with_match_invocation_name(bool)`, default true (disabled = any rigid name group closes).
+"Rule/type" resolved to **type**, matching `GroupArgumentParser`'s parameterization.
+Behavior pins from the same review: body and terminator are both read under `cx.state` =
+the slot's state (caller-scoped, like arguments), and the body `List` records that state —
+the interior state is the honest one for a delimiter-less region (a `Group`, by contrast,
+records the outer state; the environment node itself records the invocation's base state).
+A token error mid-terminator follows the 6.5 probe rule: strict aborts; tolerant treats
+the position as a malformed terminator without diagnosing the token error — the enclosing
+loop re-reads it and applies its own recovery, no double report.)*
 
 **Terminator mismatch recovery: close without consuming** — DECIDED (user, July 2026,
 Phase 6 plan session). `\begin{A}…\begin{B}…\end{A}`: B's body parser stops at `\end`,
@@ -1576,6 +1604,15 @@ enclosing level. Loop safety: every level either consumes the token or unwinds o
 own frame; the root always consumes.
 Accepted consequence: "was this environment properly terminated?" lives in `Diagnostics`,
 not on the node — a preset wanting it on the node flags it in ext via `Lang::finalize_node`.
+*(Amended July 2026, subphase 6.6: the malformed-terminator "consume" is pinned to the
+terminator **command alone**, its post-space included — whatever follows re-parses as
+enclosing content (`\end[y]` → sibling `[y]`; `\end{ A }` → sibling group). The command is
+the token whose re-cascading this decision forbids; consuming beyond it would eat content
+on a guess. And a stray group close *inside the body* — a case the 6.6 plan's recovery
+list omitted — resolves by the loop-safety rule: missing-terminator diagnostic + close
+**without consuming**, the `GroupParser` unwinding analog; the stray close then reaches a
+level that claims it (an enclosing group consumes it silently — one honest diagnostic
+total; at the root, the root's diagnose-and-skip adds its own).)*
 
 **No `Language<L>` type in Phase 6; `ParserSession` is the root object** — DECIDED (user,
 July 2026, Phase 6 plan session; amends Phase 6 notes item C5 and the §engine timing).
