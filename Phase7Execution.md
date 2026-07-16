@@ -303,7 +303,7 @@ implementation — ask, don't assume.
 
 | Subphase | Status | Notes |
 |---|---|---|
-| 7.0 docs & setup | — | |
+| 7.0 docs & setup | ✅ done (July 2026) | DESIGN_RATIONALE: new entries §3.3 (parsing mode), §3.4 (scope-stack redesign), §3.6 (ParseDriver) + settle-notes on superseded entries; §6 open question 7 closed. ARCHITECTURE: amendment notes at §state/§specs/§constructs/§engine, §9 Phase 7 scope rewritten, decision 9 added. NAMING_STRATEGY: new names + superseded rows + `ModeId` naming note. ParserLibraryParity: N1 settled, N8 Phase 7 code subset noted. CLAUDE.md pointer → this file. |
 | 7.1 parsing_mode | — | |
 | 7.2 ParseDriver | — | |
 | 7.3 scope stack | — | |

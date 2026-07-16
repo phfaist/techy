@@ -32,9 +32,9 @@ embellishments, chars groups, …) **are** in scope.
 | `LatexSingleNodeParser` | `NodesParser` with a node-stop condition | absorbed |
 | `LatexDelimitedExpressionParser` + `…ParserInfo` | composition: `GroupParser` + minted `GroupRule` + `ChildStateSpec` | absorbed |
 | `LatexDelimitedExpressionParserOpeningDelimiterNotFound` | argument-probe protocol (`Ok(None)` + noise rewind) | absorbed |
-| `LatexDelimitedGroupParser` + `…ParserInfo` | `GroupParser` | implemented — plus todo: preset-pluggable interior state delta [N1] |
+| `LatexDelimitedGroupParser` + `…ParserInfo` | `GroupParser` | implemented — interior-state plug settled by design, Phase 7 plan session [N1] |
 | `LatexDelimitedMultiDelimGroupParser` + `…ParserInfo` | — | todo [N2] |
-| `LatexMathParser` | `Group` node under a preset math group class + state event | absorbed (core, by design) / todo (Phase 7 preset wiring) [N1] |
+| `LatexMathParser` | `Group` node under a preset math group class + parsing-mode delta | absorbed (core, by design) / todo (Phase 7 preset wiring; plug settled — see N1) [N1] |
 | `LatexExpressionParser` | `ExpressionParser` | implemented |
 | `LatexOptionalSquareBracketsParser` | `OptionalGroupArgumentParser` | implemented |
 | `LatexOptionalCharsMarkerParser` | `MarkerArgumentParser` | implemented (single-marker case; full generality folds into [N3]) |
@@ -73,6 +73,14 @@ preset-wide mechanism. The plug's shape is an open Phase 7 design question; cand
 
 `LatexMathParser`'s remaining jobs (inline/display record, math-node accessors) stay
 preset business per ARCHITECTURE.md §nodes (no core math concept).
+
+**Settled (July 2026, Phase 7 plan session): neither candidate.** The plug is the
+`ParseDriver`'s `group_interior_delta(prev, rule)` hook (pure per `(state, rule)`, merged
+into the memoized `group_interior_state` derivation), and the payload is a first-class
+parsing-mode override (`StateData.mode: L::ModeId`, interpreted by
+`Lang::finalize_transition`) — a math group's interior delta is one line of data.
+`GroupRule` stays pure comparable data. DESIGN_RATIONALE.md §3.3/§3.6;
+Phase7Execution.md D1/D2.
 
 ### N2 — multi-delimited group parser
 
@@ -178,3 +186,7 @@ Constructor knobs that do **not** carry over — the factory is deliberately thi
 than the original: `return_full_node_list` (superseded by parser-designated
 `ContentNodes`), `allow_pre_space` (the regions machinery records pre-argument
 whitespace as noise nodes), the single-token-error switch (emptiness surface).
+
+Phase 7 implements the `m`/`{`, `o`/`[`, `s`/`*`, `t<c>`, `r<c1><c2>`/`d<c1><c2>`, and
+`v` codes; `e{…}` [N3] and `AnyDelimited` [N2] stay deferred beyond Phase 7 (plan
+session, July 2026 — Phase7Execution.md §1).

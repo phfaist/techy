@@ -753,6 +753,33 @@ the seed contract), or a preset needs `finalize_transition`-grade normalization 
 seed itself — the `derived(&empty)`-at-seed trick (one extra freeze at session start)
 is the cheap mechanical option before any signature change.
 
+**Parsing mode is first-class state data: `StateData.mode: L::ModeId`** — DECIDED (user,
+July 2026, Phase 7 plan session; settles ParserLibraryParity.md N1 jointly with the
+`ParseDriver` entry, §3.6).
+`Lang` gains `type ModeId` (`Copy + Eq + Debug + Send + Sync`; `()` under `SimpleLang`) —
+the third closed per-language vocabulary after `GroupTypeId`/`CallableTypeId` — stored as
+a plain field on `StateData` with a matching `ParsingStateDelta.mode: Option<L::ModeId>`
+override channel. Mode is deliberately not lookup-private: the scope stack reads it for
+package visibility (§3.4), and a preset may key any content-interpretation decision on it
+(text/math; verbatim/listing-ish modes are candidates).
+*Division of labor:* the driver *initiates* mode changes (its `group_interior_delta`
+returns a mode-bearing delta for a math group class — the whole math plug is one line of
+data); `Lang::finalize_transition` *interprets* them (disable features, adjust rules — it
+sees `prev.mode()` and the incoming override). The consequence hook must NOT live on the
+driver: `derived()` is callable out-of-parse where no driver exists, and a state must
+remain a pure function of base + delta (airtightness, reader memoization) —
+driver-dependent states would break both.
+*Consequences:* mode-shaped transitions need no `L::Event` (the override is the signal;
+events remain for non-modal semantics); the latexlike preset likely needs no
+`in_math_mode` in its `StateExt` (single source of truth).
+*Rejected:* computing the mode at freeze from `ext` (a hidden derivation for what is
+honestly plain data); an interior delta or events payload on `GroupRule` (the N1
+data-first candidate — `GroupRule` feeds elementwise prefix-table comparisons and derives
+`Eq`, which a delta payload breaks; and cross-rule policy would smear across rule
+definitions instead of centralizing in finalize).
+*Revisit if:* a language needs several orthogonal mode axes at once (composite enums
+cover the known cases; if they explode, mode may need to become a small struct).
+
 ### 3.4 Specs and libraries
 
 **Unified `CallableSpec` with self-supplied invocation parser** — PROPOSED (July 2026,
@@ -791,6 +818,10 @@ sometimes there is no token).
 on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
 token alike. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which
 contradicted §2.3.
+*(Amended July 2026, Phase 7 plan session: the lookup contract rehomes to
+`SpecsProvider::retrieve_spec` — fallible, part of a richer provider trait — with
+`CallableQuery` and its rationale carried over unchanged; see the scope-stack redesign
+entry below.)*
 
 **Unknown-callable fallbacks are built into `LibraryStack`; its own `SpecLookup` impl is
 stack-only** — DECIDED (July 2026, Phase 4 design session; open question §6.1(b)).
@@ -806,6 +837,9 @@ alone.
 *Storage note:* `Library` keys are nested `BTreeMap`s — the crate is `no_std` and `alloc` has
 no `HashMap`; also sidesteps the tuple-key `Borrow` problem. Revisit only if profiling flags
 lookup cost.
+*(Superseded July 2026, Phase 7 plan session: fallbacks become ordinary bottom-of-stack
+providers, and the stack no longer nests as a provider at all — the preemption hazard is
+removed rather than mitigated. See the scope-stack redesign entry below.)*
 
 **Phase 4 ships structure-spec skeletons; `invocation_parser()` waits for Phase 6** — DECIDED
 (July 2026, Phase 4 design session).
@@ -958,6 +992,63 @@ wrapper covers; recorded here as the upgrade path if the wrapper proves annoying
 FLM practice. This also unblocks the flagged default-factory escape hatch (§3.6): the
 dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
 profiling ever asks for it.
+
+**Scope-stack redesign: dyn `SpecsProvider` entries, `Package`/`Scope` standard impls,
+in-stack fallbacks** — DECIDED (user, July 2026, Phase 7 plan session; closes §6 open
+question 7 and supersedes the `SpecLookup`/`LibraryStack` entries above).
+Driving requirements (user): definition visibility that switches with the parsing mode;
+deltas expressive enough to add/remove definitions and load/unload/replace collections up
+to wholesale stack replacement; fallbacks no longer delta-inexpressible; deep
+customization kept easy. `Library`/`LibraryStack`/`SpecLookup` become:
+- **`SpecsProvider`** (dyn, multi-method) — the stack-entry contract: `name()`, fallible
+  `retrieve_spec(query, state) -> Result<Option<Arc<dyn CallableSpec>>, _>` (`Ok(None)` =
+  not here, continue outward; a misbehaving provider is an `Err`, never a panic),
+  specials participation (`scan_specials` + `specials_trigger_chars`, unioned at state
+  freeze — pylatexenc's `test_for_specials` precedent meant the trait was never going to
+  be single-method), functional `with_definitions(ops)` updates, best-effort
+  `iter_symbols()`. All-dyn entries won over a closed entry enum: a well-specified
+  multi-method contract keeps generic ops and diagnostics available while admitting
+  lazy-loading providers (large spec databases) that closed data precludes. The `with_…`
+  methods returning a fresh provider ARE the copy-on-write mechanism — `Arc::make_mut`
+  does not exist for `dyn` types.
+- **`Package`** (standard impl) — immutable, built once, loaded wholesale (preset driver
+  helpers like `load_package(name)` are called by parsers when *building* deltas; the
+  state choke point never needs the driver). Mode visibility is a package field checked
+  in its own `retrieve_spec`; the stack is visibility-blind.
+- **`Scope`** (standard impl) — the definition target; `Define`/`Remove` delta ops
+  address a provider by name and route to `with_definitions`. Scopes are created lazily
+  on first `Define`; scoped reversion stays structural (outer states hold the old Arcs),
+  so lexical scoping falls out of state immutability with zero per-group cost.
+- **Fallbacks are ordinary bottom-of-stack providers** (answering any name of their
+  callable types). The stack carries no fallback map, and **no longer implements the
+  provider contract itself** — stacks don't nest, which *removes* the Phase 4
+  nested-fallback-preemption hazard instead of re-mitigating it. Exhausting the stack is
+  a structured miss carrying the searched provider names (feeding the
+  `UnresolvableCommand` "searched: …" detail).
+- **No `Masked` outcome** (user): "undefined on purpose" is an ordinary definition — an
+  `ErrorCallableSpec` whose invocation parser diagnoses, with a better message than a
+  mask could carry. Shadowing with it suppresses lower entries *and* the fallback purely
+  by search order (a theorem of ordering, not an extra rule). `Remove` genuinely deletes,
+  from `Scope`s only.
+*Rejected:* evicting definitions from core entirely ("skeletal" — core already owns
+`CallableSpec` and the never-`None` node-spec guarantee, and the generic delta channel
+for definitions must be core or every `Lang` rebuilds the same machinery where generic
+code cannot reach it); the status quo ("minimal" — opaque single-method callbacks
+degenerate into multiplexed `resolve_command`: no introspection, no targeted ops, no
+removal, no diagnostics); a `Masked` resolution outcome (a third behavior path every
+consumer carries forever, for a rarely-wanted operation); a closed entry enum with a
+`Custom` escape variant (makes customization second-class and precludes lazy-loading
+packages); eager scope-per-group pushes (churn — CoW makes them unnecessary);
+interior-mutable scopes for `\global\def` (observable mutation of frozen states; breaks
+the reader-memoization contract) — `\global` is DEFERRED, sketched as upward propagation
+of definition ops through the existing parser after-effect return channel.
+*Consequences to settle at implementation (Phase 7.3 checkpoints):* `derived()` likely
+becomes fallible (delta ops can fail: non-mutable target, absent provider name); the
+specials fold rule across providers (lean: longest match wins, ties innermost —
+preserves pylatexenc's `---`-beats-`--`); `ProviderError`/miss-report shapes.
+*Revisit if:* per-definition mode visibility is needed beyond what custom providers
+cover, or provider-fold resolution cost shows up in profiles (a freeze-time merged map
+à la `PrefixTable` is the prepared answer).
 
 ### 3.5 Nodes and AST
 
@@ -2091,7 +2182,8 @@ Consequences made explicit:
   legitimate, per §2.1 and the factory precedent of `make_invocation_parser` itself.
   For the body-parsing choice (verbatim-like bodies) the user leans to a defaulted
   `make_body_parser()` method (pylatexenc's `EnvironmentSpec.make_body_parser`) over a
-  plain field — final shape remains a Phase 7 preset-side design question.
+  plain field — final shape remains a Phase 7 preset-side design question. *(Settled July
+  2026, Phase 7 plan session: the defaulted `make_body_parser()` method, confirmed.)*
 - **`EnvironmentBodyParser` keeps its name** (rename raised and reconsidered, user):
   its contract is hardwired to the rigid COMMAND + CHARS_GROUP terminator shape, and
   environments are the one role it is designed for — a generic name
@@ -2138,6 +2230,9 @@ ParserLibraryParity.md). Key rulings and their reasons:
   mechanism — it is per-use call-site config and deliberately one-level-deep (decided
   semantics 3 above). The plug's shape (an interior `ParsingStateDelta` on `GroupRule`
   vs a `Lang`/preset hook keyed on `GroupTypeId`) is an open Phase 7 design question.
+  *(Settled July 2026, Phase 7 plan session: neither candidate — the `ParseDriver`'s
+  `group_interior_delta` hook returning a parsing-mode delta; see the `ParseDriver`
+  entry below and §3.3.)*
 - **Ready-made argument-parser conveniences are wanted even where composition
   suffices** (user): a multi-delimited group parser (any of several delimiter pairs at
   one argument position — port pylatexenc's contents-state subtlety of keeping only
@@ -2153,6 +2248,54 @@ ParserLibraryParity.md). Key rulings and their reasons:
 *Revisit if:* the tack-on parser's absorption of following siblings turns out to
 interact badly with enclosing stop conditions in practice, or a preset's interior-state
 plug proves to need more context than the group rule/class provides.
+
+**`ParseDriver`: parse-driving behavior is a Lang-provided instance, not static hooks or
+session state** — DECIDED (user, July 2026, Phase 7 plan session).
+New core trait `ParseDriver<L>`, defaulted methods only (`StdParseDriver` = the trivial
+impl carrying the `Recovery` knob), bound into the bundle as `Lang::Driver`;
+`ParseContext` gains `driver: &'a L::Driver`. The field is concretely typed through `L`,
+so preset parsers reach preset helper methods (a future `LatexlikeDriver::load_package`)
+fully typed — no downcasts; generic code sees only the trait. The driver owns:
+- **construct provision** — `make_nodes_parser` / `make_group_parser` / a
+  `make_invocation_parser` interception defaulting to the spec's own factory. Every
+  descent site (dispatch-loop GroupOpen arm, group interiors, environment bodies,
+  argument parsers, top-level drive) routes through `ParseContext` wrappers
+  (`cx.parse_nodes`/`cx.parse_group`), so one override applies everywhere — the
+  ARCHITECTURE "custom nodes parser" nuclear option becomes a supported seam;
+- **the group descent-delta channel** — `group_interior_delta(prev, rule)`, pure per
+  `(state, rule)`, merged into the memoized `session.group_interior_state` derivation
+  (the cache stays in session; the hook runs on memo miss only). With §3.3's parsing
+  mode this closes ParserLibraryParity.md N1;
+- **recovery policy** — `Recovery` leaves `ParserSession`, which returns to pure
+  scratch/output (builder, diagnostics, frames, memo, `SessionExt`); overriding the
+  driver's recover path admits richer policies than the strict/tolerant enum;
+- **the migrated parse-time hooks** — `resolve_command`, `make_paragraph_break_node`,
+  `refine_diagnostic` (folds into the recover path), `observe_transition`.
+*The load-bearing placement doctrine:* `Lang` keeps hooks of layers callable outside or
+below a driven parse — `initial_state_data`/`finalize_transition` (state layer:
+`derived()` is out-of-parse-callable), `scan_specials`/`specials_trigger_chars`
+(tokenizer layer), `finalize_node` (builder/transform layer). Everything that only runs
+while a parse is driven lives on the driver — instance methods, so behavior can carry
+configuration that static `Lang` hooks never could. Accepted asymmetry: specials
+resolution stays `Lang` (token time); command resolution is driver (parse time).
+*`ParseContext` doctrine:* cx returns to a data struct (tokens, source, state, session,
+driver). Policy helpers (`recover`, `probe_token`) are defined on the driver with thin
+delegating sugar kept on cx; invariant-bearing plumbing (`parse_scoped`, `with_frame`,
+`implementation_error`) stays as non-overridable cx methods — pairing invariants must
+not be overridable.
+*Rationale:* the session-purity argument (user) — `ParserSession` is organized scratch
+space, and a parser *provider* conceptually drives the parse; it was misfiled there, as
+was `Recovery`. One seam for provision + one home for parse behavior + typed preset
+helper access were unreachable from static hooks or a session field.
+*Rejected:* a session-installed `dyn` provider (a second customization surface beside
+`Lang`; preset helpers invisible behind the trait object — Any-funnel required); more
+static `Lang` hooks (no instance configuration; `Lang` was accreting parse behavior
+foreign to its layers); overridable `parse_scoped`/`with_frame` (invariant footgun).
+*Cost accepted:* every Phase 6 `ParseContext`/`ParserSession::new(recovery)` call site
+updates — mechanical but broad.
+*Revisit if:* a real consumer needs runtime driver swapping for one `Lang` (add a dyn
+override on top of the associated-type default), or per-invocation `Box` provision shows
+up in profiles (the §6.7 benchmark obligation).
 
 ### 3.7 Generics strategy
 
@@ -2784,15 +2927,11 @@ Current list — remove entries as they are settled (move the outcome into §3):
    follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
    stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
    moved to §3.2.
-7. **LibraryStack structure and delta expressiveness** (opened July 2026, code-review
-   follow-up session; the seed-path half is settled — outcome moved to §3.3, "Seed
-   states are crate-frozen `Lang` data"). The delta vocabulary for libraries is push-only
-   (`push_libraries`); the July 2026 audit found `LibraryStack::fallbacks`
-   (per-`CallableTypeId` unknown-callable fallback specs) entirely delta-inexpressible,
-   and the user wants deltas to become much more expressive about library manipulation
-   generally — up to replacing the library wholesale in a state transition. Requires
-   revisiting `LibraryStack`'s structure itself; until then, seed-side library/fallback
-   setup is the `Lang` author's business inside `initial_state_data`.
+7. ~~**LibraryStack structure and delta expressiveness**~~ — settled July 2026 (Phase 7
+   plan session): the scope-stack redesign — dyn `SpecsProvider` entries,
+   `Package`/`Scope` standard impls, in-stack fallback providers, definition/stack delta
+   ops replacing `push_libraries`. Outcome moved to §3.4. (The seed-path half had been
+   settled earlier — §3.3, "Seed states are crate-frozen `Lang` data".)
 8. **Structured-diagnostics implementation details** (opened July 2026 — decisions in §3.8,
    plan in CodeReportAction_01.md). Sub-items settled July 2026: MSRV bumped to 1.86 (dyn
    trait upcasting); `FrameTitle` variants as sketched; `DiagnosticValue` barebones with no

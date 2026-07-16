@@ -26,6 +26,9 @@ of earlier revisions lives in git.
    language definition, `u32` under `SimpleLang`; classifies (group classes, invocation
    forms), never identifies a delimiter spelling. (July 2026 revisions: formerly open
    registry ids interned in `Language`; then per-delimiter-pair identities.)
+   `Lang::ModeId` (Phase 7 plan session, July 2026) is the third closed per-language
+   vocabulary but deliberately **not** a `…TypeId`: it names the mode a parsing state
+   *is in*, not a classification of a syntactic object.
 6. **Transitions read as adjectives** — `ParsingState::derived()` per Rust's
    `to_uppercase` convention: signals a *transition* producing a new value, not a field copy.
 7. **`make_*` for factory hooks** (Phase 6 plan session, July 2026) — hooks that
@@ -42,7 +45,7 @@ of earlier revisions lives in git.
 | S1 | `engine` | `Language<L>`, `ParserSession`, `ParseResult`, `NodeRef` |
 | S1 | `constructs` | `ConstructParser` trait + standard construct parsers |
 | S1 | `node` | `NodeTree`, `NodeKind<L>`, `GroupData`, `CallableData`, `ParsedArguments`/`ParsedSlots`, `NodeRef`, `NodeTreeBuilder`, ext aliases |
-| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `ArgumentSpec`, `ArgumentParser`, `Library`, `LibraryStack`, `CallableQuery` |
+| S1 | `spec` + `library` | `CallableSpec`, `StdCallableSpec`, `ArgumentSpec`, `ArgumentParser`, `CallableQuery`; `SpecsProvider`, `Package`, `Scope`, `ScopeStack` (Phase 7 redesign of `Library`/`LibraryStack`) |
 | S1 | `state` | `Lang`, `ParsingState<L>`, `StateData`, `ParsingStateDelta` |
 | S1 | `token` | `Token<'s, L>`, `TokenKind`, `TokenRules`, `TokenReader`, `StdTokenReader` |
 | S0 | `source` | `Source`, `Span`, `SourceSpan`, `SourceProvenance`, `SourceResolver`, `LineIndex`, `TextContent` |
@@ -91,7 +94,10 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Argument structure | `Vec<Arc<ArgumentSpec<L>>>` on the spec (slice accessor) | args configure; `Arc`d so parsed records share them. Slots are record-level only — no `SlotSpec` (slots session, July 2026) |
 | Emptiness surface | `ArgumentParser::can_match_empty()`, `CallableSpec::requires_content()` | user-decided names (July 2026): "absent" is the record word, "contents" reads oddly for a parser; negative spec-side polarity so takeover overrides read `true` |
 | Argument parsing | `ArgumentParser<L>` (trait; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser>`) | an argument *is* a parser (pylatexenc `LatexArgumentSpec`); no core data variants — the standard parsers ship in the core, parameterized (`GroupArgumentParser`, `OptionalGroupArgumentParser`, `MarkerArgumentParser`, `ExpressionParser`); the preset adds one-liner constructors (Phase 7) |
-| Definition lookup | `SpecLookup<L>` (trait), `Library<L>`, `LibraryStack<L>` | ordered stack, lexical shadowing; no `ConflictStrategy` |
+| Definition providers | `SpecsProvider<L>` (trait), `Package<L>`, `Scope<L>`, `ScopeStack<L>` | Phase 7 plan session: package = immutable loaded collection; scope = delta-targeted definitions (CoW via `with_…` methods); innermost-wins shadowing kept (no `ConflictStrategy`); fallbacks = ordinary bottom-of-stack providers |
+| Undefined-on-purpose spec | `ErrorCallableSpec` | an ordinary definition whose invocation parser diagnoses; replaces any `Masked` lookup outcome |
+| Parsing mode | `Lang::ModeId`; `StateData.mode`; `ParsingStateDelta.mode` | third closed per-language vocabulary (see principle 5); deltas initiate mode changes, `finalize_transition` interprets them |
+| Parse driving | `ParseDriver<L>` (trait), `StdParseDriver`, `Lang::Driver`; `ParseContext.driver` | defaulted-methods trait (Phase 7 plan session); construct provision (`make_nodes_parser`/`make_group_parser`/`make_invocation_parser`), `group_interior_delta`, recovery policy, migrated parse-time hooks |
 | Lookup request | `CallableQuery<'a, 's, L>`, `CallableSyntax` | query struct: invocation form + name + syntax context + optional token (Phase 4) |
 | Construct parser trait | `ConstructParser<L>` | avoids clashing with any high-level parser type |
 | Parser context | `ParseContext<'a, 's, L>` | bundles tokens + source + state + session (source added 6.4 — factory-created parsers have no ctor to thread it) |
@@ -100,7 +106,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Stop machinery | `StopSpec`, `TokenStopCondition { kind, consume }`, `TokenStopKind`, `StopCause` | abnormal endings are data, not errors; `StopCause` = `TokenCondition`/`NodeCondition`/`EndOfInput`/`UnexpectedGroupClose` (token-bearing causes carry the matched span) |
 | Descent-state policy | `ChildStateSpec`, `GroupChildState`, `InvocationChildState` | per-use config on `NodesParser` (child-state session, July 2026) |
 | Group parser | `GroupParser` | engine temporary (tier 2), per-use config, dropped with the frame |
-| Invocation dispatch | `Invocation`, `CommandResolution`, `ResolvedCallable`, `Lang::resolve_command` | `Invocation` = the resolved-invocation value moved into the parser; `CommandResolution` = the hook's outcome (`Resolved`/`Unresolved { detail }`, July 2026); `ResolvedCallable` = invocation form + spec pair |
+| Invocation dispatch | `Invocation`, `CommandResolution`, `ResolvedCallable`, `ParseDriver::resolve_command` (moved off `Lang`, Phase 7 plan session) | `Invocation` = the resolved-invocation value moved into the parser; `CommandResolution` = the hook's outcome (`Resolved`/`Unresolved { detail }`, July 2026); `ResolvedCallable` = invocation form + spec pair |
 | Default invocation parser | `StdInvocationParser` | `Std…` prefix per `StdTokenReader`/`StdCallableSpec`; `parse_declared_arguments` = its shared argument half (pub, slots session) |
 | Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session) |
 | Node finalization hook | `Lang::finalize_node` | run by `NodeTreeBuilder::add` for every staged node, all kinds |
@@ -128,8 +134,11 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 familiar names survive in the preset layer only:
 
 - `Latexlike` — ZST implementing `Lang`.
+- `LatexlikeDriver` — the preset's `ParseDriver` (preset helper methods like
+  `load_package`; Phase 7 plan session).
 - `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — constructor helpers producing
-  `StdCallableSpec`s.
+  `StdCallableSpec`s. (`EnvironmentSpec` carries the body state delta and the defaulted
+  `make_body_parser()` — Phase 7 plan session.)
 - `MACRO` / `ENVIRONMENT` / `SPECIALS` — the variants of the preset's `CallableTypeId` enum.
 - `NodeRef` accessor sugar (`as_math()`-style environment/macro views over `Callable` nodes).
 
@@ -176,6 +185,8 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `peek_argument_token` | `try_peek` (pub(crate)) | hoisted in 6.6 — the same probe policy also serves the terminator flow |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
 | `SourceContent`, `SourceCursor`, `Source::cursor()` | (nothing — `StdTokenReader` scans `&str` directly) | retired July 2026 (Action 06): the scanner needs random-access slicing, not a char cursor; the borrow-returning trait was information-equivalent to `&str` (DESIGN_RATIONALE §3.1) |
+| `SpecLookup`, `Library`, `LibraryStack`; `ParsingStateDelta::push_libraries` | `SpecsProvider`, `Package` + `Scope`, `ScopeStack`; definition/stack delta ops | Phase 7 plan session: data-first multi-method provider contract (fallible, specials-participating, functionally updatable via `with_…`); package/scope role split (immutable loadable vs delta-mutable); fallbacks in-stack |
+| parse-time `Lang` hooks (`resolve_command`, `make_paragraph_break_node`, `observe_transition`, `refine_diagnostic`); `ParserSession.recovery` | `ParseDriver` methods; driver-held `Recovery` | placement doctrine (Phase 7 plan session): what only runs while a parse is driven lives on the driver; the session stays pure scratch/output |
 | "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; `…TypeId` = per-language id type |
 | `GroupExt`, `NodeGroupExt` | `GroupNodeExt` (etc.) | `GroupExt` too vague; `NodeGroupExt` parses wrong |
 | `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md §3 |

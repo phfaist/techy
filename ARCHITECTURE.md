@@ -326,6 +326,13 @@ impl<L: Lang> ParsingState<L> {
 }
 ```
 
+*(Amended July 2026, Phase 7 plan session: `StateData` gains a first-class **parsing
+mode** — `mode: L::ModeId`, a third closed per-language vocabulary — with a matching
+`ParsingStateDelta.mode` override channel; deltas initiate mode changes (e.g. the
+driver's group descent-delta for math groups) and `Lang::finalize_transition` interprets
+them. `libraries: LibraryStack<L>` becomes the redesigned scope stack (§specs).
+DESIGN_RATIONALE.md §3.3/§3.4.)*
+
 Properties, roughly in decreasing order of importance:
 
 - **Functional contract, no observable mutation.** `derived()` is state-in/state-out; the
@@ -463,6 +470,17 @@ pub struct Library<L: Lang> { /* name; nested BTreeMaps: CallableTypeId → name
 pub struct LibraryStack<L: Lang> { /* ordered Vec<Arc<dyn SpecLookup<L>>>, innermost last;
                                       per-CallableTypeId fallback map behind resolve() */ }
 ```
+
+*(Revised July 2026, Phase 7 plan session — **scope-stack redesign**, superseding the
+`SpecLookup`/`Library`/`LibraryStack` sketch above and the fallback bullets below: stack
+entries become `Arc<dyn SpecsProvider<L>>` (fallible `retrieve_spec`, specials
+participation, functional `with_definitions` updates, best-effort introspection), with
+standard impls `Package` (immutable, loaded wholesale, mode-visibility field) and `Scope`
+(delta-targeted definitions, copy-on-write); fallbacks are ordinary bottom-of-stack
+providers and the stack itself no longer nests; `ParsingStateDelta` grows
+definition/stack ops replacing `push_libraries`. `CallableQuery` and innermost-wins
+shadowing carry over unchanged. Design: Phase7Execution.md D3; rationale:
+DESIGN_RATIONALE.md §3.4.)*
 
 - **Keys are `(CallableTypeId, name)`, many-to-one**: several names may map to one shared
   behavior spec (flyweight). Library keys hold the *normalized* name; the node records the
@@ -662,6 +680,11 @@ pub trait ConstructParser<L: Lang> {
 }
 ```
 
+*(Amended July 2026, Phase 7 plan session: `ParseContext` gains `driver: &'a L::Driver`
+— the `ParseDriver`, home of construct-parser provision, descent deltas, and the
+`Recovery` policy (moved off `ParserSession`); descent call sites route through
+`cx.parse_nodes(…)`/`cx.parse_group(…)`. See the §engine note; DESIGN_RATIONALE.md §3.6.)*
+
 Construct parsers are **temporaries** (July 2026, Phase 6 plan session): constructed with
 their per-use configuration, `&mut self` so working state lives in fields, dropped when the
 frame ends — never stored in specs (two-tier ownership model, DESIGN_RATIONALE §3.6).
@@ -780,6 +803,18 @@ point are **deferred** — Phase 6 ships `ParserSession` (builder + diagnostics 
 as the root object, driven directly; `Language` arrives with the phase that demonstrates
 the need, Phase 7 at the earliest. Type-id interning stays deferred with it.
 DESIGN_RATIONALE §3.6.)*
+
+*(Phase 7 plan session amendment, July 2026: `Language<L>` + `parse()` are **scheduled for
+Phase 7**. `Lang` gains `type ModeId` (§state) and `type Driver: ParseDriver<Self>`; the
+parse-time hooks sketched above — `resolve_command`, `make_paragraph_break_node`,
+`observe_transition`, plus `refine_diagnostic` — migrate to the **`ParseDriver`**
+(instance methods; also home of construct-parser provision via
+`make_nodes_parser`/`make_group_parser`/`make_invocation_parser` interception, the
+`group_interior_delta` descent channel, and the `Recovery` policy, moved off
+`ParserSession`). `Lang` keeps the state-, tokenizer-, and builder-layer hooks
+(`initial_state_data`/`finalize_transition`, `scan_specials`/`specials_trigger_chars`,
+`finalize_node`). Design: Phase7Execution.md D1/D2; rationale: DESIGN_RATIONALE.md
+§3.3/§3.6.)*
 
 **Stratum note** (July 2026): the `Lang` trait and its bound-trait `NodeExtTypes` are
 *documented* here as the compile-time bundle, but their *definitions* live in the S1 core next
@@ -1159,9 +1194,19 @@ hardcoded `TokenRules` value).
   composition building blocks promoted `pub`; emptiness surface; condition-derive;
   temporary state-scoped group rules — `TokenRules::temporary_groups`, July 2026 — with
   the optional-group parser detached from `ChildStateSpec`).
-- **Phase 7 — `latexlike` preset.** Environments via `\begin`/`\end` specs, math group types +
-  mode-aware lookup, verbatim, std library; tolerant-parsing behavior tests; port a slice of
-  pylatexenc's walker test suite as acceptance tests.
+- **Phase 7 — driver, scope stack & `latexlike` preset.** Execution plan:
+  **Phase7Execution.md** (July 2026 plan session; supersedes the original one-line scope —
+  "environments, math modes, verbatim, std library, ported walker tests"). Scope as
+  amended there: parsing mode as first-class state data (`L::ModeId`); the `ParseDriver`
+  object (`Lang::Driver` — construct-parser provision, descent deltas, recovery policy,
+  migrated parse-time hooks); the scope-stack redesign (`SpecsProvider`,
+  `Package`/`Scope`, in-stack fallbacks, definition/stack delta ops); `Language<L>` +
+  `parse()`; the latexlike preset (environments via `\begin`/`\end` specs, math modes,
+  verbatim, argument-code factory) with a **minimal test-driven spec set**; the
+  extraction/view API (R7); ported pylatexenc walker acceptance tests + tolerant-parsing
+  behavior tests. **Deferred out of Phase 7:** the std spec-database port, parse-level
+  `\newcommand`, `^`/`_` specials, `\global` definitions.
+  DESIGN_RATIONALE §3.3/§3.4/§3.6.
 - **Phase 8 — FLM spike.** Minimal `Flm` lang in a scratch crate exercising: custom `StateExt`,
   custom node payloads, custom invocation parser, resolver, post-processing traversal. This
   validates goal 3 before FLM proper begins.
@@ -1245,3 +1290,13 @@ not obvious.
    Rationale: DESIGN_RATIONALE.md §3.11.) *Revised July 2026: the token topic — originally
    split S0 data / S1 trait — moved wholly to S1, and `Span` to the source topic
    (token-design review; DESIGN_RATIONALE.md §3.2).*
+9. **DECIDED (July 2026, Phase 7 plan session): `ParseDriver` + first-class parsing mode +
+   scope-stack redesign.** Parse-driving behavior (construct-parser provision, the group
+   descent-delta channel, recovery policy, and the migrated hooks `resolve_command` /
+   `make_paragraph_break_node` / `observe_transition` / `refine_diagnostic`) lives on a
+   Lang-provided `ParseDriver` instance (`Lang::Driver`); `Lang` keeps the state-,
+   tokenizer-, and builder-layer hooks. `StateData` gains `mode: L::ModeId` (deltas
+   initiate mode changes; `finalize_transition` interprets them).
+   `Library`/`LibraryStack`/`SpecLookup` are redesigned as `Package`/`Scope`/`ScopeStack`
+   over a dyn `SpecsProvider` contract with in-stack fallbacks and definition/stack delta
+   ops. (Plan: Phase7Execution.md. Rationale: DESIGN_RATIONALE.md §3.3/§3.4/§3.6.)
