@@ -1,0 +1,1858 @@
+//! The scope stack: how callable names resolve to [`CallableSpec`]s.
+//!
+//! Implements the Phase 7.3 scope-stack redesign (ARCHITECTURE.md §specs revision;
+//! DESIGN_RATIONALE.md §3.4), replacing the Phase 4 `SpecLookup`/`Library`/`LibraryStack`
+//! design:
+//!
+//! - [`SpecsProvider`] is the stack-entry contract: a named, fallible resolver
+//!   ([`retrieve_spec`](SpecsProvider::retrieve_spec)) that may also participate in the
+//!   tokenizer's specials scan ([`scan_specials`](SpecsProvider::scan_specials) +
+//!   [`specials_trigger_chars`](SpecsProvider::specials_trigger_chars)) and accept
+//!   functional definition updates ([`with_definitions`](SpecsProvider::with_definitions)).
+//! - [`Package`] is the immutable standard implementation: built once, loaded wholesale,
+//!   with optional per-mode visibility and a data-driven specials table.
+//! - [`Scope`] is the mutable-by-replacement standard implementation — the target of
+//!   definition ops, updated copy-on-write through `with_definitions`.
+//! - [`FallbackProvider`] answers *any* name of its registered callable types — the
+//!   unknown-callable policy expressed as an ordinary bottom-of-stack provider.
+//! - [`ErrorCallableSpec`] makes "defined to be an error" an ordinary definition: its
+//!   invocation parser records a diagnostic ([`CallableDefinedAsError`]) and recovers.
+//! - [`ScopeStack`] is the ordered stack stored in the parsing state
+//!   ([`StateData::scopes`](crate::state::StateData)), searched **innermost
+//!   (last-pushed) first** — lexical shadowing, no `ConflictStrategy`. The stack itself
+//!   is *not* a provider (stacks do not nest — this removes the Phase 4
+//!   nested-fallback-preemption hazard instead of re-mitigating it), and it is
+//!   visibility-blind: mode visibility is each provider's own business.
+//!
+//! # Extending definitions mid-parse
+//!
+//! Deltas carry [`ScopeOp`]s ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta)):
+//! stack-shape ops (push / unload / replace / replace-stack) and definition ops routed to
+//! a named provider's `with_definitions` ([`DefinitionOp`]). Ops carry `Arc`s directly —
+//! the core has no name→package registry (a by-name `load("amsmath")` belongs to preset
+//! driver helpers, which construct the `Arc` when *building* the delta). Scoped reversion
+//! stays structural: outer states hold the old `Arc`s, so both a pushed provider and a
+//! copy-on-write update of an outer scope revert when the group ends — lexical scoping
+//! falls out of state immutability with zero per-group cost. Op failures surface through
+//! the fallible [`ParsingState::derived`](crate::state::ParsingState::derived) (see
+//! [`ScopeOpError`] and [`DeriveError`](crate::state::DeriveError)).
+//!
+//! # Specials across providers
+//!
+//! [`ScopeStack::scan_specials`] folds over every provider innermost-first: the
+//! **longest match wins; ties go innermost** — exact pylatexenc `test_for_specials`
+//! parity (`---` beats `--` wherever they are defined), and since equal-length matches
+//! at one position are the *same spelling*, the tie rule is what makes shadowing a
+//! redefined special work. A provider's scan error aborts the fold and propagates.
+
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
+
+use hashbrown::HashMap;
+
+use crate::constructs::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use crate::error::DiagnosticInfo;
+use crate::node::{BuildId, NodeKind};
+use crate::source::SourceSpan;
+use crate::spec::CallableSpec;
+use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
+
+/// The syntax through which a callable invocation was recognized.
+///
+/// Carried on a [`CallableQuery`] so resolvers can disambiguate between coexisting
+/// command syntaxes — with several [`CommandRule`](crate::token::CommandRule)s in scope,
+/// `\foo` and `#foo` both tokenize as `Command { name: "foo" }`, and the escape character
+/// is *not* recoverable from the token alone (a resolver has no access to the source
+/// content behind the token's span).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallableSyntax {
+    /// A command token: escape character + name (`\foo`).
+    Command {
+        /// The escape character that fired ([`CommandRule::escape_char`](crate::token::CommandRule)).
+        escape_char: char,
+    },
+    /// A specials trigger (queried from inside a `Lang::scan_specials` implementation,
+    /// before any token exists).
+    Specials,
+    /// Anything else — synthesized invocations, preset-defined resolution paths.
+    Other,
+}
+
+/// A callable resolution request: everything a [`SpecsProvider`] may dispatch on, minus
+/// the parsing state (passed alongside).
+///
+/// The `token` is present when resolution happens for an already-scanned token (the nodes
+/// parser resolving a `Command`, Phase 6) and lets providers inspect `pre_space` and
+/// spans; it is `None` where no token exists yet (specials scan, synthesized
+/// invocations). Plain data providers ignore everything but `callable_type` and `name`.
+pub struct CallableQuery<'a, 's, L: Lang> {
+    /// The invocation form being resolved (e.g. the preset's macro form).
+    pub callable_type: L::CallableTypeId,
+    /// The name to resolve. Providers store *normalized* names; normalization is the
+    /// caller's (preset's) business — the core matches exactly.
+    pub name: &'a str,
+    /// The syntax context of the invocation.
+    pub syntax: CallableSyntax,
+    /// The triggering token, when one exists.
+    pub token: Option<&'a Token<'s, L>>,
+}
+
+impl<'a, 's, L: Lang> CallableQuery<'a, 's, L> {
+    /// A query without token context.
+    pub fn new(
+        callable_type: L::CallableTypeId,
+        name: &'a str,
+        syntax: CallableSyntax,
+    ) -> CallableQuery<'a, 's, L> {
+        CallableQuery { callable_type, name, syntax, token: None }
+    }
+
+    /// Attach the triggering token.
+    pub fn with_token(mut self, token: &'a Token<'s, L>) -> CallableQuery<'a, 's, L> {
+        self.token = Some(token);
+        self
+    }
+}
+
+// Manual impls: derives would demand `L: Clone`/`L: Debug` although only references and
+// plain data are stored.
+
+impl<L: Lang> Clone for CallableQuery<'_, '_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Lang> Copy for CallableQuery<'_, '_, L> {}
+
+impl<L: Lang> fmt::Debug for CallableQuery<'_, '_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CallableQuery")
+            .field("callable_type", &self.callable_type)
+            .field("name", &self.name)
+            .field("syntax", &self.syntax)
+            .field("token", &self.token)
+            .finish()
+    }
+}
+
+// --- provider failure shapes ---------------------------------------------------------
+
+/// A [`SpecsProvider`] operation failed — the provider-level error of
+/// [`retrieve_spec`](SpecsProvider::retrieve_spec) and
+/// [`with_definitions`](SpecsProvider::with_definitions) (decided July 2026, Phase 7.3
+/// checkpoint). Structured for testability; custom providers report anything beyond the
+/// named cases through [`Failed`](ProviderError::Failed).
+///
+/// A provider error is an *operational* failure (misconfiguration, extension bug, backing
+/// I/O), never a source condition: source-shaped failures of the specials scan travel as
+/// [`TokenError`](crate::token::TokenError)s instead, and "this name is an error" is
+/// expressed as an ordinary [`ErrorCallableSpec`] definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProviderError {
+    /// The provider does not accept definition ops (the default
+    /// [`with_definitions`](SpecsProvider::with_definitions) — e.g. a [`Package`]).
+    NotMutable,
+    /// An op referenced a name the provider does not define
+    /// ([`DefinitionOp::Remove`] of an absent definition).
+    UndefinedName {
+        /// The name the op referenced.
+        name: Box<str>,
+    },
+    /// A provider-specific failure, rendered as a message.
+    Failed(Box<str>),
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProviderError::NotMutable => {
+                write!(f, "the provider does not accept definition ops")
+            }
+            ProviderError::UndefinedName { name } => {
+                write!(f, "no definition named ‘{name}’ in this provider")
+            }
+            ProviderError::Failed(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+/// A provider *within a stack* failed: the [`ProviderError`] plus which provider it was.
+/// The `Err` of [`ScopeStack::retrieve_spec`] (a failing provider aborts the resolution
+/// fold), and the payload of [`ScopeOpError::Provider`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeStackError {
+    /// The name of the provider that failed.
+    pub provider: Box<str>,
+    /// What went wrong.
+    pub error: ProviderError,
+}
+
+impl fmt::Display for ScopeStackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "provider ‘{}’: {}", self.provider, self.error)
+    }
+}
+
+impl core::error::Error for ProviderError {}
+
+impl core::error::Error for ScopeStackError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// One [`ScopeOp`] failed while a delta was applied — the per-op failure record
+/// collected by the fallible [`ParsingState::derived`](crate::state::ParsingState::derived)
+/// into a [`DeriveError`](crate::state::DeriveError) (decided July 2026, Phase 7.3
+/// checkpoint). Mechanical, not classified: the *caller* decides what a failure means —
+/// the in-parse seam treats it as a recoverable condition through the recover funnel
+/// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder applying a delta
+/// out of parse treats it as its own input error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScopeOpError {
+    /// The op targeted a provider name not on the stack ([`ScopeOp::Unload`],
+    /// [`ScopeOp::Replace`], [`ScopeOp::Remove`]; [`ScopeOp::Define`] instead creates
+    /// the scope lazily).
+    UnknownProvider {
+        /// The name the op targeted.
+        name: Box<str>,
+    },
+    /// The targeted provider rejected or failed the op.
+    Provider(ScopeStackError),
+}
+
+impl fmt::Display for ScopeOpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScopeOpError::UnknownProvider { name } => {
+                write!(f, "no provider named ‘{name}’ on the scope stack")
+            }
+            ScopeOpError::Provider(error) => fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl core::error::Error for ScopeOpError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            ScopeOpError::UnknownProvider { .. } => None,
+            ScopeOpError::Provider(error) => Some(error),
+        }
+    }
+}
+
+// --- ops -------------------------------------------------------------------------------
+
+/// A definition operation as a [`SpecsProvider`] receives it
+/// ([`with_definitions`](SpecsProvider::with_definitions)): the provider *is* the scope,
+/// so — unlike the delta-level [`ScopeOp`] — no target name is carried.
+pub enum DefinitionOp<L: Lang> {
+    /// Define `name` under the invocation form `callable_type` (replacing any existing
+    /// definition under that key — shadowing within one provider is replacement).
+    Define {
+        /// The invocation form the definition answers.
+        callable_type: L::CallableTypeId,
+        /// The (normalized) name being defined.
+        name: Box<str>,
+        /// The behavior spec.
+        spec: Arc<dyn CallableSpec<L>>,
+    },
+    /// Remove the definition of `name` under `callable_type`. Removing an absent
+    /// definition is an error ([`ProviderError::UndefinedName`]), never a silent no-op —
+    /// the op builder can always check the visible state first.
+    Remove {
+        /// The invocation form the definition answers.
+        callable_type: L::CallableTypeId,
+        /// The (normalized) name to remove.
+        name: Box<str>,
+    },
+}
+
+impl<L: Lang> Clone for DefinitionOp<L> {
+    fn clone(&self) -> Self {
+        match self {
+            DefinitionOp::Define { callable_type, name, spec } => DefinitionOp::Define {
+                callable_type: *callable_type,
+                name: name.clone(),
+                spec: Arc::clone(spec),
+            },
+            DefinitionOp::Remove { callable_type, name } => {
+                DefinitionOp::Remove { callable_type: *callable_type, name: name.clone() }
+            }
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for DefinitionOp<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DefinitionOp::Define { callable_type, name, spec } => f
+                .debug_struct("Define")
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .field("spec", spec)
+                .finish(),
+            DefinitionOp::Remove { callable_type, name } => f
+                .debug_struct("Remove")
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
+
+/// One scope-stack operation of a state delta
+/// ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta), replacing Phase
+/// 4's `push_libraries`): stack-shape ops plus definition ops routed to a named
+/// provider. Ops apply in delta order, each on the result of the previous; failures are
+/// collected per op (the rest still apply) and surface through the fallible
+/// [`derived()`](crate::state::ParsingState::derived).
+///
+/// Name-targeted ops address the **innermost** provider with that name.
+pub enum ScopeOp<L: Lang> {
+    /// Push a provider as the new innermost entry.
+    Push(Arc<dyn SpecsProvider<L>>),
+    /// Remove the innermost provider named `name` from the stack. Absent name: error.
+    Unload {
+        /// The provider name to unload.
+        name: Box<str>,
+    },
+    /// Replace the innermost provider named `name` with `provider` (same stack
+    /// position). Absent name: error.
+    Replace {
+        /// The provider name to replace.
+        name: Box<str>,
+        /// The replacement.
+        provider: Arc<dyn SpecsProvider<L>>,
+    },
+    /// Replace the whole stack, outermost first.
+    ReplaceStack(Vec<Arc<dyn SpecsProvider<L>>>),
+    /// Define `(callable_type, name)` in the provider named `scope`, through its
+    /// [`with_definitions`](SpecsProvider::with_definitions) (copy-on-write: the stack
+    /// entry is replaced by the returned provider). If no provider named `scope` is on
+    /// the stack, a fresh [`Scope`] with that name is created **innermost**, holding
+    /// the definition — scopes are created lazily on first `Define`, never eagerly per
+    /// group (DESIGN_RATIONALE.md §3.4). Targeting an immutable provider (a
+    /// [`Package`]) is an error.
+    Define {
+        /// The name of the provider to define into.
+        scope: Box<str>,
+        /// The invocation form the definition answers.
+        callable_type: L::CallableTypeId,
+        /// The (normalized) name being defined.
+        name: Box<str>,
+        /// The behavior spec.
+        spec: Arc<dyn CallableSpec<L>>,
+    },
+    /// Remove the definition of `(callable_type, name)` from the provider named
+    /// `scope` (via `with_definitions`, copy-on-write). Absent provider or absent
+    /// definition: error. Note that removal deletes from that provider only — a
+    /// definition shadowed by *other* providers stays resolvable; "removing" a
+    /// [`Package`] definition is expressed by shadowing it with an
+    /// [`ErrorCallableSpec`] or unloading the package.
+    Remove {
+        /// The name of the provider to remove from.
+        scope: Box<str>,
+        /// The invocation form the definition answers.
+        callable_type: L::CallableTypeId,
+        /// The (normalized) name to remove.
+        name: Box<str>,
+    },
+}
+
+impl<L: Lang> Clone for ScopeOp<L> {
+    fn clone(&self) -> Self {
+        match self {
+            ScopeOp::Push(provider) => ScopeOp::Push(Arc::clone(provider)),
+            ScopeOp::Unload { name } => ScopeOp::Unload { name: name.clone() },
+            ScopeOp::Replace { name, provider } => {
+                ScopeOp::Replace { name: name.clone(), provider: Arc::clone(provider) }
+            }
+            ScopeOp::ReplaceStack(providers) => ScopeOp::ReplaceStack(providers.clone()),
+            ScopeOp::Define { scope, callable_type, name, spec } => ScopeOp::Define {
+                scope: scope.clone(),
+                callable_type: *callable_type,
+                name: name.clone(),
+                spec: Arc::clone(spec),
+            },
+            ScopeOp::Remove { scope, callable_type, name } => ScopeOp::Remove {
+                scope: scope.clone(),
+                callable_type: *callable_type,
+                name: name.clone(),
+            },
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ScopeOp<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScopeOp::Push(provider) => f.debug_tuple("Push").field(provider).finish(),
+            ScopeOp::Unload { name } => {
+                f.debug_struct("Unload").field("name", name).finish()
+            }
+            ScopeOp::Replace { name, provider } => f
+                .debug_struct("Replace")
+                .field("name", name)
+                .field("provider", provider)
+                .finish(),
+            ScopeOp::ReplaceStack(providers) => {
+                f.debug_tuple("ReplaceStack").field(providers).finish()
+            }
+            ScopeOp::Define { scope, callable_type, name, spec } => f
+                .debug_struct("Define")
+                .field("scope", scope)
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .field("spec", spec)
+                .finish(),
+            ScopeOp::Remove { scope, callable_type, name } => f
+                .debug_struct("Remove")
+                .field("scope", scope)
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
+
+// --- the provider contract -------------------------------------------------------------
+
+/// A scope-stack entry: a named source of callable definitions, with optional specials
+/// participation and optional functional updates (Phase 7.3, DESIGN_RATIONALE.md §3.4).
+///
+/// Entries are **all-dyn** — the multi-method contract keeps generic ops and diagnostics
+/// available while admitting lazy-loading providers (large spec databases) that closed
+/// data would preclude. Standard implementations: [`Package`], [`Scope`],
+/// [`FallbackProvider`].
+///
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits; see
+/// [`CallableSpec`]'s note): every method takes `&self`, so a stateful implementation (a
+/// memo cache, a database connection) needs interior mutability regardless — under this
+/// contract that means `Mutex`/`RwLock`, not `RefCell` (DESIGN_RATIONALE.md).
+pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
+    /// The provider's name: how definition ops target it ([`ScopeOp::Define`] routing),
+    /// and how it appears in diagnostics (the miss detail of
+    /// [`ScopeStack::searched_providers`], the provider context of a
+    /// [`ScopeStackError`]). Names need not be unique on a stack; name-targeted ops
+    /// address the innermost match.
+    fn name(&self) -> &str;
+
+    /// Resolve `query` in this provider: `Ok(Some(spec))` on a hit, `Ok(None)` for "not
+    /// defined here — continue outward" (which includes "not *visible* here": per-mode
+    /// visibility is the provider's own business, checked against
+    /// [`state.mode()`](ParsingState::mode); the stack is visibility-blind). `Err` means
+    /// the provider itself failed — an operational error that aborts the resolution
+    /// fold, never a panic.
+    fn retrieve_spec(
+        &self,
+        query: &CallableQuery<'_, '_, L>,
+        state: &ParsingState<L>,
+    ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError>;
+
+    /// Specials participation: is a callable-triggering character sequence of this
+    /// provider at `content[pos..]`? Same contract as the
+    /// [`Lang::scan_specials`] hook it feeds through
+    /// the [`ScopeStack::scan_specials`] fold — including the [`SpecialsMatch::end`]
+    /// obligations and the recovery-token protocol (the `TokenResult` shape is
+    /// deliberate: a scanning provider keeps the tokenizer's recoverable-failure
+    /// channel, which a [`ProviderError`] could not express; decided July 2026, Phase
+    /// 7.3 checkpoint). Implementations should return their **longest** match at `pos`.
+    /// The default recognizes nothing.
+    fn scan_specials<'s>(
+        &self,
+        state: &ParsingState<L>,
+        content: &'s str,
+        pos: usize,
+    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+        let _ = (state, content, pos);
+        Ok(None)
+    }
+
+    /// The characters that may start one of this provider's specials triggers — unioned
+    /// over the stack at state freeze ([`ScopeStack::specials_trigger_chars`]) into the
+    /// per-state filter. Must be a conservative superset of the first characters of
+    /// every trigger [`scan_specials`](SpecsProvider::scan_specials) can match,
+    /// *regardless of state* (there is deliberately no state parameter: the union is
+    /// cached on frozen states — a mode-invisible provider's chars stay in the filter
+    /// and its scan declines instead). The default: no specials.
+    fn specials_trigger_chars(&self) -> TriggerChars {
+        TriggerChars::default()
+    }
+
+    /// Apply definition ops **functionally**: return a fresh provider reflecting `ops`,
+    /// leaving `self` untouched. This is the copy-on-write mechanism (`Arc::make_mut`
+    /// does not exist for `dyn` types): the stack replaces its entry with the returned
+    /// `Arc`, and outer states keep holding the old one — scoped reversion stays
+    /// structural. Atomic per call: on `Err`, no partial application may be observable.
+    ///
+    /// The default refuses ([`ProviderError::NotMutable`]) — correct for immutable
+    /// providers ([`Package`], [`FallbackProvider`]); [`Scope`] implements it.
+    fn with_definitions(
+        &self,
+        ops: &[DefinitionOp<L>],
+    ) -> Result<Arc<dyn SpecsProvider<L>>, ProviderError> {
+        let _ = ops;
+        Err(ProviderError::NotMutable)
+    }
+
+    // `iter_symbols` (best-effort introspection) is deliberately absent: deferred to the
+    // Phase 7.8 view-API session, where its consumers will shape the item type (decided
+    // July 2026, Phase 7.3 checkpoint). Adding a defaulted method later is non-breaking.
+}
+
+// --- Package ----------------------------------------------------------------------------
+
+/// One data-driven specials entry of a [`Package`]: a trigger string resolving to a
+/// callable — pylatexenc's specials-as-category-data, kept as plain data so packages are
+/// loadable wholesale (ligature specials like `---`, `~`, `&`).
+struct PackageSpecials<L: Lang> {
+    trigger: Box<str>,
+    callable_type: L::CallableTypeId,
+    spec: Arc<dyn CallableSpec<L>>,
+}
+
+impl<L: Lang> Clone for PackageSpecials<L> {
+    fn clone(&self) -> Self {
+        PackageSpecials {
+            trigger: self.trigger.clone(),
+            callable_type: self.callable_type,
+            spec: Arc::clone(&self.spec),
+        }
+    }
+}
+
+/// An immutable, wholesale-loaded collection of definitions — the standard
+/// [`SpecsProvider`] for preset/library data (Phase 7.3, DESIGN_RATIONALE.md §3.4).
+///
+/// Built once (insertions while owned), then shared behind an `Arc` on scope stacks;
+/// it never mutates afterwards — its [`with_definitions`](SpecsProvider::with_definitions)
+/// is the default refusal. Keys are `(Lang::CallableTypeId, normalized name)`,
+/// **many-to-one**: several names may map to one shared spec (flyweight — `\emph` and
+/// `\textit` can share an `Arc`). Inserting an existing key replaces the previous spec.
+///
+/// **Mode visibility** is a package field checked inside its own
+/// [`retrieve_spec`](SpecsProvider::retrieve_spec)/[`scan_specials`](SpecsProvider::scan_specials)
+/// (the stack is visibility-blind): a package restricted via
+/// [`set_visible_modes`](Package::set_visible_modes) answers `Ok(None)` — invisible, not
+/// an error — in any other mode.
+///
+/// **Specials as data**: a package may carry trigger-string definitions
+/// ([`insert_specials`](Package::insert_specials)); its scan returns the longest
+/// matching trigger.
+pub struct Package<L: Lang> {
+    name: Box<str>,
+    specs: HashMap<L::CallableTypeId, HashMap<Box<str>, Arc<dyn CallableSpec<L>>>>,
+    /// Sorted by trigger byte length, longest first (the package-internal longest-match
+    /// rule); one entry per trigger string.
+    specials: Vec<PackageSpecials<L>>,
+    /// `None` = visible in every mode.
+    visible_modes: Option<Vec<L::ModeId>>,
+}
+
+impl<L: Lang> Package<L> {
+    /// An empty package. The name identifies it on stacks, in ops, and in diagnostics.
+    pub fn new(name: impl Into<Box<str>>) -> Package<L> {
+        Package {
+            name: name.into(),
+            specs: HashMap::new(),
+            specials: Vec::new(),
+            visible_modes: None,
+        }
+    }
+
+    /// This package's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Define `name` (normalized spelling) under the invocation form `callable_type`.
+    /// Returns the spec previously defined under that key, if any.
+    pub fn insert(
+        &mut self,
+        callable_type: L::CallableTypeId,
+        name: impl Into<Box<str>>,
+        spec: Arc<dyn CallableSpec<L>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.specs.entry(callable_type).or_default().insert(name.into(), spec)
+    }
+
+    /// Define the specials `trigger` (e.g. `"---"`) as resolving to `spec` under the
+    /// invocation form `callable_type`. One entry per trigger string: inserting an
+    /// existing trigger replaces it (and returns the previous spec).
+    pub fn insert_specials(
+        &mut self,
+        trigger: impl Into<Box<str>>,
+        callable_type: L::CallableTypeId,
+        spec: Arc<dyn CallableSpec<L>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        let trigger = trigger.into();
+        if let Some(existing) =
+            self.specials.iter_mut().find(|entry| entry.trigger == trigger)
+        {
+            existing.callable_type = callable_type;
+            return Some(core::mem::replace(&mut existing.spec, spec));
+        }
+        self.specials.push(PackageSpecials { trigger, callable_type, spec });
+        // Longest first; the stable sort keeps insertion order among equal lengths
+        // (irrelevant for matching — equal-length triggers differ in content).
+        self.specials.sort_by(|a, b| b.trigger.len().cmp(&a.trigger.len()));
+        None
+    }
+
+    /// Restrict the package to the given parsing modes (`None` = visible everywhere,
+    /// the default). Visibility is checked by the package itself, against
+    /// [`ParsingState::mode`]: outside its modes the package answers "not here" for
+    /// resolution and specials alike.
+    pub fn set_visible_modes(&mut self, modes: Option<Vec<L::ModeId>>) {
+        self.visible_modes = modes;
+    }
+
+    /// The spec defined under `(callable_type, name)`, if any (visibility-blind: this
+    /// is the raw data accessor; mode checks apply only on the provider paths).
+    pub fn get(
+        &self,
+        callable_type: L::CallableTypeId,
+        name: &str,
+    ) -> Option<&Arc<dyn CallableSpec<L>>> {
+        self.specs.get(&callable_type)?.get(name)
+    }
+
+    /// Number of definitions across all callable types (specials entries included).
+    pub fn len(&self) -> usize {
+        self.specs.values().map(HashMap::len).sum::<usize>() + self.specials.len()
+    }
+
+    /// Whether the package holds no definitions at all.
+    pub fn is_empty(&self) -> bool {
+        self.specs.values().all(HashMap::is_empty) && self.specials.is_empty()
+    }
+
+    fn visible_in(&self, mode: L::ModeId) -> bool {
+        match &self.visible_modes {
+            None => true,
+            Some(modes) => modes.contains(&mode),
+        }
+    }
+}
+
+impl<L: Lang> SpecsProvider<L> for Package<L> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn retrieve_spec(
+        &self,
+        query: &CallableQuery<'_, '_, L>,
+        state: &ParsingState<L>,
+    ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
+        if !self.visible_in(state.mode()) {
+            return Ok(None);
+        }
+        Ok(self.get(query.callable_type, query.name).cloned())
+    }
+
+    fn scan_specials<'s>(
+        &self,
+        state: &ParsingState<L>,
+        content: &'s str,
+        pos: usize,
+    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+        if !self.visible_in(state.mode()) {
+            return Ok(None);
+        }
+        let rest = &content[pos..];
+        // Entries are sorted longest-first: the first hit is the package's longest.
+        for entry in &self.specials {
+            if rest.starts_with(&*entry.trigger) {
+                let end = pos + entry.trigger.len();
+                return Ok(Some(SpecialsMatch {
+                    end,
+                    callable_type: entry.callable_type,
+                    name: &content[pos..end],
+                    spec: Arc::clone(&entry.spec),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn specials_trigger_chars(&self) -> TriggerChars {
+        let mut chars = String::new();
+        for entry in &self.specials {
+            if let Some(first) = entry.trigger.chars().next() {
+                if !chars.contains(first) {
+                    chars.push(first);
+                }
+            }
+        }
+        TriggerChars::Only(chars)
+    }
+}
+
+impl<L: Lang> Clone for Package<L> {
+    fn clone(&self) -> Self {
+        Package {
+            name: self.name.clone(),
+            specs: self.specs.clone(),
+            specials: self.specials.clone(),
+            visible_modes: self.visible_modes.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for Package<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Package")
+            .field("name", &self.name)
+            .field("definitions", &self.len())
+            .field("visible_modes", &self.visible_modes)
+            .finish()
+    }
+}
+
+// --- Scope -------------------------------------------------------------------------------
+
+/// The definition target: the standard mutable-by-replacement [`SpecsProvider`] that
+/// [`ScopeOp::Define`]/[`ScopeOp::Remove`] address (Phase 7.3, DESIGN_RATIONALE.md
+/// §3.4).
+///
+/// "Mutable" means **copy-on-write**: [`with_definitions`](SpecsProvider::with_definitions)
+/// returns a fresh `Scope` and the stack swaps its entry, while outer states keep the
+/// old `Arc` — group-local definition semantics fall out of structural reversion, even
+/// when the targeted scope sits below other providers. Storage is a `BTreeMap` (like
+/// the Phase 4 `Library`: `no_std`, and deterministic iteration); keys are
+/// `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs.
+pub struct Scope<L: Lang> {
+    name: Box<str>,
+    specs: BTreeMap<L::CallableTypeId, BTreeMap<Box<str>, Arc<dyn CallableSpec<L>>>>,
+}
+
+impl<L: Lang> Scope<L> {
+    /// An empty scope. The name is how definition ops target it.
+    pub fn new(name: impl Into<Box<str>>) -> Scope<L> {
+        Scope { name: name.into(), specs: BTreeMap::new() }
+    }
+
+    /// This scope's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Define `name` under `callable_type` directly (builder-style, while the scope is
+    /// still owned — seeding initial states, tests). Returns the previously defined
+    /// spec, if any. Mid-parse definitions go through [`ScopeOp::Define`] instead.
+    pub fn insert(
+        &mut self,
+        callable_type: L::CallableTypeId,
+        name: impl Into<Box<str>>,
+        spec: Arc<dyn CallableSpec<L>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.specs.entry(callable_type).or_default().insert(name.into(), spec)
+    }
+
+    /// Remove the definition of `name` under `callable_type` directly (builder-style).
+    /// Returns the removed spec, or `None` if it was not defined.
+    pub fn remove(
+        &mut self,
+        callable_type: L::CallableTypeId,
+        name: &str,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.specs.get_mut(&callable_type)?.remove(name)
+    }
+
+    /// The spec defined under `(callable_type, name)`, if any.
+    pub fn get(
+        &self,
+        callable_type: L::CallableTypeId,
+        name: &str,
+    ) -> Option<&Arc<dyn CallableSpec<L>>> {
+        self.specs.get(&callable_type)?.get(name)
+    }
+
+    /// Number of definitions across all callable types.
+    pub fn len(&self) -> usize {
+        self.specs.values().map(BTreeMap::len).sum()
+    }
+
+    /// Whether the scope holds no definitions.
+    pub fn is_empty(&self) -> bool {
+        self.specs.values().all(BTreeMap::is_empty)
+    }
+}
+
+impl<L: Lang> SpecsProvider<L> for Scope<L> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn retrieve_spec(
+        &self,
+        query: &CallableQuery<'_, '_, L>,
+        _state: &ParsingState<L>,
+    ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
+        Ok(self.get(query.callable_type, query.name).cloned())
+    }
+
+    /// Copy-on-write: clone the maps, apply `ops` in order, return a fresh `Scope`.
+    /// Atomic — the first failing op discards the copy and nothing is observable.
+    fn with_definitions(
+        &self,
+        ops: &[DefinitionOp<L>],
+    ) -> Result<Arc<dyn SpecsProvider<L>>, ProviderError> {
+        let mut fresh = self.clone();
+        for op in ops {
+            match op {
+                DefinitionOp::Define { callable_type, name, spec } => {
+                    fresh.insert(*callable_type, name.clone(), Arc::clone(spec));
+                }
+                DefinitionOp::Remove { callable_type, name } => {
+                    if fresh.remove(*callable_type, name).is_none() {
+                        return Err(ProviderError::UndefinedName { name: name.clone() });
+                    }
+                }
+            }
+        }
+        Ok(Arc::new(fresh))
+    }
+}
+
+impl<L: Lang> Clone for Scope<L> {
+    fn clone(&self) -> Self {
+        Scope { name: self.name.clone(), specs: self.specs.clone() }
+    }
+}
+
+impl<L: Lang> fmt::Debug for Scope<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Scope")
+            .field("name", &self.name)
+            .field("definitions", &self.len())
+            .finish()
+    }
+}
+
+// --- FallbackProvider --------------------------------------------------------------------
+
+/// The unknown-callable policy as an ordinary provider: answers **any** name of its
+/// registered callable types with that type's shared fallback singleton (Phase 7.3,
+/// DESIGN_RATIONALE.md §3.4 — fallbacks live *in* the stack, at the bottom, so
+/// suppression by shadowing is a theorem of search order, and the stack needs no
+/// separate fallback map).
+///
+/// Fallback specs are shared singletons (possible because specs are de-keyed), so
+/// "unknown `\foo`" costs no per-instance allocation, and a callable node's spec can be
+/// guaranteed never-`None` for every callable type registered here.
+pub struct FallbackProvider<L: Lang> {
+    name: Box<str>,
+    fallbacks: BTreeMap<L::CallableTypeId, Arc<dyn CallableSpec<L>>>,
+}
+
+impl<L: Lang> FallbackProvider<L> {
+    /// An empty fallback provider.
+    pub fn new(name: impl Into<Box<str>>) -> FallbackProvider<L> {
+        FallbackProvider { name: name.into(), fallbacks: BTreeMap::new() }
+    }
+
+    /// Register the fallback spec answering every name of `callable_type` (typically a
+    /// shared singleton). Returns the previously registered fallback, if any.
+    pub fn set(
+        &mut self,
+        callable_type: L::CallableTypeId,
+        spec: Arc<dyn CallableSpec<L>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.fallbacks.insert(callable_type, spec)
+    }
+
+    /// The registered fallback for `callable_type`, if any.
+    pub fn get(&self, callable_type: L::CallableTypeId) -> Option<&Arc<dyn CallableSpec<L>>> {
+        self.fallbacks.get(&callable_type)
+    }
+}
+
+impl<L: Lang> SpecsProvider<L> for FallbackProvider<L> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn retrieve_spec(
+        &self,
+        query: &CallableQuery<'_, '_, L>,
+        _state: &ParsingState<L>,
+    ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ProviderError> {
+        Ok(self.fallbacks.get(&query.callable_type).cloned())
+    }
+}
+
+impl<L: Lang> Clone for FallbackProvider<L> {
+    fn clone(&self) -> Self {
+        FallbackProvider { name: self.name.clone(), fallbacks: self.fallbacks.clone() }
+    }
+}
+
+impl<L: Lang> fmt::Debug for FallbackProvider<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FallbackProvider")
+            .field("name", &self.name)
+            .field("callable_types", &self.fallbacks.len())
+            .finish()
+    }
+}
+
+// --- ErrorCallableSpec ---------------------------------------------------------------------
+
+/// Condition: a callable that is *defined to be an error* was invoked — the
+/// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition,
+/// DESIGN_RATIONALE.md §3.4). The invocation recovers as a span-backed chars fallback.
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(id = "core.scopes.callable-defined-as-error")]
+pub struct CallableDefinedAsError {
+    /// The invocation spelling, as written.
+    pub name: String,
+    /// Optional detail configured on the spec — *why* this name is an error ("removed
+    /// by {package}", "not available in this mode").
+    pub detail: Option<String>,
+}
+
+// Hand-written wording: the detail suffix is conditional (a branch the derive's message
+// format string cannot express).
+impl fmt::Display for CallableDefinedAsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "‘{}’ is defined to be an error", self.name)?;
+        if let Some(detail) = &self.detail {
+            write!(f, ": {detail}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A [`CallableSpec`] whose invocation is an error: the core-provided utility behind
+/// "defined to be an error" (no `Masked` resolution outcome exists — shadowing lower
+/// entries *and* the fallback with this spec suppresses them purely by search order,
+/// with a better message than a mask could carry; DESIGN_RATIONALE.md §3.4).
+///
+/// Its invocation parser records a [`CallableDefinedAsError`] through the recover funnel
+/// (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
+/// fallback, consuming nothing further.
+#[derive(Debug, Clone, Default)]
+pub struct ErrorCallableSpec {
+    /// Optional detail for the diagnostic — *why* the name is an error.
+    pub detail: Option<Box<str>>,
+}
+
+impl ErrorCallableSpec {
+    /// An error spec with no detail beyond the standard message.
+    pub fn new() -> ErrorCallableSpec {
+        ErrorCallableSpec { detail: None }
+    }
+
+    /// An error spec whose diagnostic carries `detail`.
+    pub fn with_detail(detail: impl Into<Box<str>>) -> ErrorCallableSpec {
+        ErrorCallableSpec { detail: Some(detail.into()) }
+    }
+}
+
+impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
+    fn make_invocation_parser<'a, 's>(
+        &'a self,
+        invocation: Invocation<'a, 's, L>,
+    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    where
+        's: 'a,
+    {
+        Box::new(ErrorInvocationParser { invocation, detail: self.detail.as_deref() })
+    }
+}
+
+/// The invocation parser of [`ErrorCallableSpec`]: diagnose, stage the trigger as chars,
+/// consume nothing further (the dispatch arm already consumed the trigger token whole).
+struct ErrorInvocationParser<'a, 's, L: Lang> {
+    invocation: Invocation<'a, 's, L>,
+    detail: Option<&'a str>,
+}
+
+impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
+    type Output = BuildId;
+
+    fn parse(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
+        let token = self.invocation.token;
+        cx.recover(
+            CallableDefinedAsError {
+                name: self.invocation.name.into(),
+                detail: self.detail.map(String::from),
+            },
+            SourceSpan::new(&cx.source, token.span),
+        )?;
+        // Tolerant continuation: markup in a Chars node is the accepted recovery
+        // artifact (DESIGN_RATIONALE.md §3.8).
+        let id = cx
+            .session
+            .builder
+            .add(
+                NodeKind::chars(token.span),
+                SourceSpan::new(&cx.source, token.span),
+                Arc::clone(&cx.state),
+                Vec::new(),
+            )
+            .map_err(|error| cx.implementation_error(error, token.span))?;
+        Ok((id, None))
+    }
+}
+
+// --- ScopeStack ---------------------------------------------------------------------------
+
+/// The ordered provider stack stored in the parsing state
+/// ([`StateData::scopes`](crate::state::StateData)): resolution and specials fold over
+/// `Arc<dyn SpecsProvider<L>>` entries, **innermost (last-pushed) first** — lexical
+/// shadowing (`\newcommand` semantics; no `ConflictStrategy`).
+///
+/// The stack is deliberately **not** a [`SpecsProvider`] (stacks do not nest — the
+/// Phase 4 nested-fallback-preemption hazard is removed rather than re-mitigated) and
+/// carries **no** fallback map: unknown-callable policy is an ordinary bottom
+/// [`FallbackProvider`]. It is also visibility-blind — a mode-restricted [`Package`]
+/// declines inside its own methods.
+///
+/// Mid-parse changes go through [`ScopeOp`]s in a state delta; [`apply_op`](ScopeStack::apply_op)
+/// is the primitive behind them (also usable directly on an owned stack, e.g. while
+/// seeding an initial state).
+pub struct ScopeStack<L: Lang> {
+    /// Outermost first; folds iterate in reverse.
+    stack: Vec<Arc<dyn SpecsProvider<L>>>,
+}
+
+impl<L: Lang> ScopeStack<L> {
+    /// An empty stack: no definitions at all.
+    pub fn new() -> ScopeStack<L> {
+        ScopeStack { stack: Vec::new() }
+    }
+
+    /// Push a provider as the new innermost entry.
+    pub fn push(&mut self, provider: Arc<dyn SpecsProvider<L>>) {
+        self.stack.push(provider);
+    }
+
+    /// The providers, outermost first (the storage order; folds run innermost-first).
+    pub fn providers(&self) -> &[Arc<dyn SpecsProvider<L>>] {
+        &self.stack
+    }
+
+    /// The provider names, **innermost first** (the search order — the order the miss
+    /// detail reports).
+    pub fn provider_names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.stack.iter().rev().map(|provider| provider.name())
+    }
+
+    /// A [`Display`](fmt::Display) adapter rendering the searched-provider detail for
+    /// resolution misses (the `UnresolvableCommand` "searched: …" detail): exhausting
+    /// the stack always searched *every* provider (the stack is visibility-blind), so
+    /// the searched set is a property of the stack itself.
+    pub fn searched_providers(&self) -> SearchedProviders<'_, L> {
+        SearchedProviders { stack: self }
+    }
+
+    /// Number of providers on the stack.
+    pub fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// Whether the stack holds no providers.
+    pub fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+
+    /// Resolve `query`: fold over the providers innermost-first; the first hit wins.
+    /// `Ok(None)` is the structured miss — the whole stack was searched (compose the
+    /// diagnostic detail via [`searched_providers`](ScopeStack::searched_providers)).
+    /// A provider `Err` aborts the fold and propagates with the provider's name
+    /// attached.
+    pub fn retrieve_spec(
+        &self,
+        query: &CallableQuery<'_, '_, L>,
+        state: &ParsingState<L>,
+    ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ScopeStackError> {
+        for provider in self.stack.iter().rev() {
+            match provider.retrieve_spec(query, state) {
+                Ok(Some(spec)) => return Ok(Some(spec)),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(ScopeStackError { provider: provider.name().into(), error })
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The specials fold (the standard body of a preset's
+    /// [`Lang::scan_specials`]): consult **every**
+    /// provider innermost-first; the **longest** match wins, ties go **innermost**
+    /// (pylatexenc `test_for_specials` parity — `---` beats `--` across providers, and
+    /// an equal-length match is the same spelling, so the tie rule implements
+    /// shadowing). A provider's scan `Err` aborts the fold and propagates.
+    pub fn scan_specials<'s>(
+        &self,
+        state: &ParsingState<L>,
+        content: &'s str,
+        pos: usize,
+    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+        let mut best: Option<SpecialsMatch<'s, L>> = None;
+        for provider in self.stack.iter().rev() {
+            if let Some(matched) = provider.scan_specials(state, content, pos)? {
+                // Strictly longer wins; an equal-length later (outer) match loses.
+                if best.as_ref().is_none_or(|current| matched.end > current.end) {
+                    best = Some(matched);
+                }
+            }
+        }
+        Ok(best)
+    }
+
+    /// The trigger-character union over all providers (the standard body of a preset's
+    /// [`Lang::specials_trigger_chars`]) —
+    /// computed at state freeze and cached on the state, like every trigger filter.
+    pub fn specials_trigger_chars(&self) -> TriggerChars {
+        let mut union = TriggerChars::default();
+        for provider in &self.stack {
+            union = union.union(&provider.specials_trigger_chars());
+        }
+        union
+    }
+
+    /// Apply one [`ScopeOp`] — the primitive behind
+    /// [`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta). Name-targeted
+    /// ops address the innermost provider with that name; failures are reported, never
+    /// silent (see the per-variant docs on [`ScopeOp`]).
+    pub fn apply_op(&mut self, op: &ScopeOp<L>) -> Result<(), ScopeOpError> {
+        match op {
+            ScopeOp::Push(provider) => {
+                self.stack.push(Arc::clone(provider));
+                Ok(())
+            }
+            ScopeOp::Unload { name } => {
+                let index = self.innermost_position(name).ok_or_else(|| {
+                    ScopeOpError::UnknownProvider { name: name.clone() }
+                })?;
+                self.stack.remove(index);
+                Ok(())
+            }
+            ScopeOp::Replace { name, provider } => {
+                let index = self.innermost_position(name).ok_or_else(|| {
+                    ScopeOpError::UnknownProvider { name: name.clone() }
+                })?;
+                self.stack[index] = Arc::clone(provider);
+                Ok(())
+            }
+            ScopeOp::ReplaceStack(providers) => {
+                self.stack = providers.clone();
+                Ok(())
+            }
+            ScopeOp::Define { scope, callable_type, name, spec } => {
+                let op = DefinitionOp::Define {
+                    callable_type: *callable_type,
+                    name: name.clone(),
+                    spec: Arc::clone(spec),
+                };
+                match self.innermost_position(scope) {
+                    Some(index) => self.route_definition(index, scope, op),
+                    None => {
+                        // Lazy creation: the first Define into an absent scope name
+                        // creates it, innermost (DESIGN_RATIONALE.md §3.4).
+                        let mut fresh = Scope::new(scope.clone());
+                        fresh.insert(*callable_type, name.clone(), Arc::clone(spec));
+                        self.stack.push(Arc::new(fresh));
+                        Ok(())
+                    }
+                }
+            }
+            ScopeOp::Remove { scope, callable_type, name } => {
+                let op = DefinitionOp::Remove {
+                    callable_type: *callable_type,
+                    name: name.clone(),
+                };
+                let index = self.innermost_position(scope).ok_or_else(|| {
+                    ScopeOpError::UnknownProvider { name: scope.clone() }
+                })?;
+                self.route_definition(index, scope, op)
+            }
+        }
+    }
+
+    /// Route one definition op to the provider at `index` (copy-on-write entry swap).
+    fn route_definition(
+        &mut self,
+        index: usize,
+        scope: &str,
+        op: DefinitionOp<L>,
+    ) -> Result<(), ScopeOpError> {
+        match self.stack[index].with_definitions(&[op]) {
+            Ok(fresh) => {
+                self.stack[index] = fresh;
+                Ok(())
+            }
+            Err(error) => Err(ScopeOpError::Provider(ScopeStackError {
+                provider: scope.into(),
+                error,
+            })),
+        }
+    }
+
+    /// Index of the innermost provider named `name`, if any.
+    fn innermost_position(&self, name: &str) -> Option<usize> {
+        self.stack.iter().rposition(|provider| provider.name() == name)
+    }
+}
+
+impl<L: Lang> Default for ScopeStack<L> {
+    fn default() -> Self {
+        ScopeStack::new()
+    }
+}
+
+// Manual impls: derives would demand `L: Clone`/`L: Debug`; cloning is cheap (`Arc`s).
+
+impl<L: Lang> Clone for ScopeStack<L> {
+    fn clone(&self) -> Self {
+        ScopeStack { stack: self.stack.clone() }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ScopeStack<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScopeStack").field("providers", &self.stack).finish()
+    }
+}
+
+/// [`Display`](fmt::Display) adapter over a stack's searched providers — see
+/// [`ScopeStack::searched_providers`].
+pub struct SearchedProviders<'a, L: Lang> {
+    stack: &'a ScopeStack<L>,
+}
+
+impl<L: Lang> fmt::Display for SearchedProviders<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.stack.is_empty() {
+            return write!(f, "no providers on the scope stack");
+        }
+        write!(f, "searched providers: ")?;
+        for (i, name) in self.stack.provider_names().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{name}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<L: Lang> fmt::Debug for SearchedProviders<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::StdCallableSpec;
+    use crate::state::{ParsingStateDelta, StateData};
+    use crate::token::{TokenError, TokenErrorKind, TokenRules, WhitespaceRules};
+    use alloc::string::{String, ToString};
+    use alloc::vec;
+
+    const MACRO: u32 = 0;
+    const ENVIRONMENT: u32 = 1;
+
+    #[derive(Debug, Clone, Copy)]
+    struct PlainLang;
+    impl crate::state::SimpleLang for PlainLang {}
+
+    fn min_rules<L: Lang>() -> TokenRules<L> {
+        TokenRules {
+            enable_whitespace: false,
+            whitespace: WhitespaceRules::default(),
+            enable_multi_newline_paragraphs: false,
+            enable_groups: true,
+            groups: vec![],
+            temporary_groups: vec![],
+            enable_commands: true,
+            commands: vec![],
+            enable_comments: true,
+            comments: vec![],
+            enable_specials: true,
+            forbidden_chars: "".into(),
+            expecting_group_close: None,
+        }
+    }
+
+    fn state_with(scopes: ScopeStack<PlainLang>) -> ParsingState<PlainLang> {
+        ParsingState::new(StateData { rules: min_rules(), scopes, mode: (), ext: () })
+    }
+
+    fn new_spec<L: Lang>() -> Arc<dyn CallableSpec<L>> {
+        Arc::new(StdCallableSpec::default())
+    }
+
+    fn macro_query(name: &str) -> CallableQuery<'_, 'static, PlainLang> {
+        CallableQuery::new(MACRO, name, CallableSyntax::Command { escape_char: '\\' })
+    }
+
+    fn package_with(name: &str, definitions: &[(&str, &Arc<dyn CallableSpec<PlainLang>>)]) -> Package<PlainLang> {
+        let mut package = Package::new(name);
+        for (defined, spec) in definitions {
+            package.insert(MACRO, *defined, Arc::clone(spec));
+        }
+        package
+    }
+
+    // --- Package data surface -----------------------------------------------------------
+
+    #[test]
+    fn package_insert_get_replace() {
+        let mut package: Package<PlainLang> = Package::new("test");
+        assert!(package.is_empty());
+
+        let first = new_spec();
+        let second = new_spec();
+        assert!(package.insert(MACRO, "foo", first.clone()).is_none());
+        assert!(Arc::ptr_eq(package.get(MACRO, "foo").unwrap(), &first));
+
+        // Same key replaces (shadowing within one provider = replacement) and returns
+        // the previous spec; other callable types are separate key spaces.
+        let previous = package.insert(MACRO, "foo", second.clone()).unwrap();
+        assert!(Arc::ptr_eq(&previous, &first));
+        assert!(package.get(ENVIRONMENT, "foo").is_none());
+        assert_eq!(package.len(), 1);
+    }
+
+    #[test]
+    fn specs_are_flyweights_across_names() {
+        let mut package: Package<PlainLang> = Package::new("test");
+        let shared = new_spec();
+        package.insert(MACRO, "emph", shared.clone());
+        package.insert(MACRO, "textit", shared.clone());
+
+        let a = package.get(MACRO, "emph").unwrap();
+        let b = package.get(MACRO, "textit").unwrap();
+        assert!(Arc::ptr_eq(a, b));
+    }
+
+    // --- stack retrieval: shadowing, fallbacks, error specs, provider errors ------------
+
+    #[test]
+    fn stack_retrieval_innermost_wins() {
+        let outer_spec = new_spec();
+        let inner_spec = new_spec();
+
+        let outer = package_with("outer", &[("foo", &outer_spec), ("bar", &outer_spec)]);
+        let inner = package_with("inner", &[("foo", &inner_spec)]);
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(outer));
+        stack.push(Arc::new(inner));
+        let st = state_with(ScopeStack::new());
+
+        // "foo" shadowed by the innermost; "bar" falls through to the outer package;
+        // a full miss is the structured Ok(None).
+        let foo = stack.retrieve_spec(&macro_query("foo"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&foo, &inner_spec));
+        let bar = stack.retrieve_spec(&macro_query("bar"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&bar, &outer_spec));
+        assert!(stack.retrieve_spec(&macro_query("nope"), &st).unwrap().is_none());
+    }
+
+    #[test]
+    fn fallback_provider_is_ordinary_bottom_of_stack_policy() {
+        let defined = new_spec();
+        let unknown_macro = new_spec();
+
+        let mut fallbacks: FallbackProvider<PlainLang> = FallbackProvider::new("fallbacks");
+        assert!(fallbacks.set(MACRO, unknown_macro.clone()).is_none());
+        assert!(Arc::ptr_eq(fallbacks.get(MACRO).unwrap(), &unknown_macro));
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(fallbacks)); // bottom: pushed first
+        stack.push(Arc::new(package_with("base", &[("known", &defined)])));
+        let st = state_with(ScopeStack::new());
+
+        // Stack hit above the fallback: the fallback never answers.
+        let known = stack.retrieve_spec(&macro_query("known"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&known, &defined));
+
+        // Miss above: the fallback answers *any* name of its type — same singleton.
+        let a = stack.retrieve_spec(&macro_query("nope"), &st).unwrap().unwrap();
+        let b = stack.retrieve_spec(&macro_query("also-nope"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&a, &unknown_macro));
+        assert!(Arc::ptr_eq(&a, &b));
+
+        // No fallback registered for ENVIRONMENT: a true miss.
+        let env_query =
+            CallableQuery::new(ENVIRONMENT, "nope", CallableSyntax::Command { escape_char: '\\' });
+        assert!(stack.retrieve_spec(&env_query, &st).unwrap().is_none());
+    }
+
+    #[test]
+    fn error_spec_shadowing_suppresses_lower_entries_and_fallback() {
+        // "Defined to be an error" is an ordinary definition: shadowing with an
+        // ErrorCallableSpec suppresses the package definition *and* the fallback purely
+        // by search order (a theorem of ordering, not an extra rule).
+        let real = new_spec();
+        let error_spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(ErrorCallableSpec::with_detail("removed on purpose"));
+
+        let mut fallbacks: FallbackProvider<PlainLang> = FallbackProvider::new("fallbacks");
+        fallbacks.set(MACRO, new_spec());
+        let mut shadow: Scope<PlainLang> = Scope::new("shadow");
+        shadow.insert(MACRO, "gone", Arc::clone(&error_spec));
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(fallbacks));
+        stack.push(Arc::new(package_with("base", &[("gone", &real)])));
+        stack.push(Arc::new(shadow));
+        let st = state_with(ScopeStack::new());
+
+        let resolved = stack.retrieve_spec(&macro_query("gone"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&resolved, &error_spec));
+    }
+
+    #[test]
+    fn provider_error_aborts_retrieval_with_the_providers_name() {
+        #[derive(Debug)]
+        struct Failing;
+        impl SpecsProvider<PlainLang> for Failing {
+            fn name(&self) -> &str {
+                "failing"
+            }
+            fn retrieve_spec(
+                &self,
+                _query: &CallableQuery<'_, '_, PlainLang>,
+                _state: &ParsingState<PlainLang>,
+            ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
+                Err(ProviderError::Failed("backing store unavailable".into()))
+            }
+        }
+
+        let answer = new_spec();
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(package_with("outer", &[("foo", &answer)])));
+        stack.push(Arc::new(Failing)); // innermost: hit first, aborts the fold
+        let st = state_with(ScopeStack::new());
+
+        let error = stack.retrieve_spec(&macro_query("foo"), &st).unwrap_err();
+        assert_eq!(&*error.provider, "failing");
+        assert_eq!(error.error, ProviderError::Failed("backing store unavailable".into()));
+        assert!(error.to_string().contains("failing"));
+    }
+
+    #[test]
+    fn searched_providers_reports_innermost_first() {
+        let mut stack: ScopeStack<PlainLang> = ScopeStack::new();
+        assert_eq!(stack.searched_providers().to_string(), "no providers on the scope stack");
+
+        stack.push(Arc::new(package_with("outer", &[])));
+        stack.push(Arc::new(package_with("inner", &[])));
+        assert_eq!(
+            stack.searched_providers().to_string(),
+            "searched providers: inner, outer"
+        );
+        assert_eq!(stack.provider_names().collect::<Vec<_>>(), vec!["inner", "outer"]);
+    }
+
+    // --- custom-provider dispatch (carried over from the Phase 4 lookup contract) --------
+
+    #[test]
+    fn provider_can_dispatch_on_syntax() {
+        // `\foo` and `#foo` resolve to different specs (open question §6(a), decided
+        // July 2026; the query carries the fired escape char).
+        #[derive(Debug)]
+        struct BySyntax {
+            backslash: Arc<dyn CallableSpec<PlainLang>>,
+            hash: Arc<dyn CallableSpec<PlainLang>>,
+        }
+        impl SpecsProvider<PlainLang> for BySyntax {
+            fn name(&self) -> &str {
+                "by-syntax"
+            }
+            fn retrieve_spec(
+                &self,
+                query: &CallableQuery<'_, '_, PlainLang>,
+                _state: &ParsingState<PlainLang>,
+            ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
+                Ok(match query.syntax {
+                    CallableSyntax::Command { escape_char: '\\' } => Some(self.backslash.clone()),
+                    CallableSyntax::Command { escape_char: '#' } => Some(self.hash.clone()),
+                    _ => None,
+                })
+            }
+        }
+
+        let by_syntax = BySyntax { backslash: new_spec(), hash: new_spec() };
+        let backslash_spec = by_syntax.backslash.clone();
+        let hash_spec = by_syntax.hash.clone();
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(by_syntax));
+        let st = state_with(ScopeStack::new());
+
+        let via_backslash = stack.retrieve_spec(&macro_query("foo"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&via_backslash, &backslash_spec));
+
+        let hash_query =
+            CallableQuery::new(MACRO, "foo", CallableSyntax::Command { escape_char: '#' });
+        let via_hash = stack.retrieve_spec(&hash_query, &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&via_hash, &hash_spec));
+    }
+
+    // --- mode visibility ------------------------------------------------------------------
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, core::hash::Hash, Default)]
+    enum Mode {
+        #[default]
+        Text,
+        Math,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct ModedLang;
+    impl Lang for ModedLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = Mode;
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
+    }
+
+    fn moded_state(scopes: ScopeStack<ModedLang>, mode: Mode) -> ParsingState<ModedLang> {
+        ParsingState::new(StateData { rules: min_rules(), scopes, mode, ext: () })
+    }
+
+    #[test]
+    fn package_mode_visibility_is_checked_by_the_package_itself() {
+        let math_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+        let text_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+
+        let mut math_pkg: Package<ModedLang> = Package::new("math-only");
+        math_pkg.insert(MACRO, "vec", Arc::clone(&math_spec));
+        math_pkg.insert_specials("&", MACRO, Arc::clone(&math_spec));
+        math_pkg.set_visible_modes(Some(vec![Mode::Math]));
+
+        let mut base: Package<ModedLang> = Package::new("base");
+        base.insert(MACRO, "vec", Arc::clone(&text_spec));
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(base));
+        stack.push(Arc::new(math_pkg)); // innermost, but mode-restricted
+        let text_state = moded_state(stack.clone(), Mode::Text);
+        let math_state = moded_state(stack.clone(), Mode::Math);
+
+        let query: CallableQuery<'_, '_, ModedLang> =
+            CallableQuery::new(MACRO, "vec", CallableSyntax::Command { escape_char: '\\' });
+
+        // Text mode: the restricted package answers "not here" — the stack is
+        // visibility-blind and simply continues outward.
+        let in_text = stack.retrieve_spec(&query, &text_state).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&in_text, &text_spec));
+        // Math mode: the innermost package answers.
+        let in_math = stack.retrieve_spec(&query, &math_state).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&in_math, &math_spec));
+
+        // Specials scan respects the same visibility; the trigger-char union does NOT
+        // (chars stay in the filter regardless of state — the scan declines instead).
+        assert!(stack.scan_specials(&text_state, "&x", 0).unwrap().is_none());
+        assert!(stack.scan_specials(&math_state, "&x", 0).unwrap().is_some());
+        assert_eq!(stack.specials_trigger_chars(), TriggerChars::Only("&".into()));
+    }
+
+    // --- Scope: copy-on-write definition updates ------------------------------------------
+
+    #[test]
+    fn scope_with_definitions_is_functional_and_atomic() {
+        let original_spec = new_spec();
+        let mut scope: Scope<PlainLang> = Scope::new("user");
+        scope.insert(MACRO, "foo", Arc::clone(&original_spec));
+        let scope: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(scope);
+        let st = state_with(ScopeStack::new());
+
+        // Define returns a fresh provider; the original is untouched (CoW).
+        let added = new_spec();
+        let fresh = scope
+            .with_definitions(&[DefinitionOp::Define {
+                callable_type: MACRO,
+                name: "bar".into(),
+                spec: Arc::clone(&added),
+            }])
+            .unwrap();
+        assert!(fresh.retrieve_spec(&macro_query("bar"), &st).unwrap().is_some());
+        assert!(scope.retrieve_spec(&macro_query("bar"), &st).unwrap().is_none());
+
+        // Remove works on the fresh copy; removing an absent name is an error…
+        let removed = fresh
+            .with_definitions(&[DefinitionOp::Remove { callable_type: MACRO, name: "foo".into() }])
+            .unwrap();
+        assert!(removed.retrieve_spec(&macro_query("foo"), &st).unwrap().is_none());
+        let error = removed
+            .with_definitions(&[DefinitionOp::Remove { callable_type: MACRO, name: "foo".into() }])
+            .unwrap_err();
+        assert_eq!(error, ProviderError::UndefinedName { name: "foo".into() });
+
+        // …and a failing op anywhere in the batch discards the whole batch (atomic).
+        let error = scope
+            .with_definitions(&[
+                DefinitionOp::Define {
+                    callable_type: MACRO,
+                    name: "baz".into(),
+                    spec: new_spec(),
+                },
+                DefinitionOp::Remove { callable_type: MACRO, name: "absent".into() },
+            ])
+            .unwrap_err();
+        assert_eq!(error, ProviderError::UndefinedName { name: "absent".into() });
+        assert!(scope.retrieve_spec(&macro_query("baz"), &st).unwrap().is_none());
+    }
+
+    #[test]
+    fn immutable_providers_refuse_definition_ops() {
+        let package: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(package_with("pkg", &[]));
+        let error = package
+            .with_definitions(&[DefinitionOp::Remove { callable_type: MACRO, name: "x".into() }])
+            .unwrap_err();
+        assert_eq!(error, ProviderError::NotMutable);
+    }
+
+    // --- ScopeStack::apply_op ---------------------------------------------------------------
+
+    #[test]
+    fn apply_op_stack_shapes() {
+        let mut stack: ScopeStack<PlainLang> = ScopeStack::new();
+        let a: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(package_with("a", &[]));
+        let b: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(package_with("b", &[]));
+        let b2: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(package_with("b", &[]));
+
+        stack.apply_op(&ScopeOp::Push(Arc::clone(&a))).unwrap();
+        stack.apply_op(&ScopeOp::Push(Arc::clone(&b))).unwrap();
+        assert_eq!(stack.provider_names().collect::<Vec<_>>(), vec!["b", "a"]);
+
+        // Replace swaps in place (innermost match).
+        stack.apply_op(&ScopeOp::Replace { name: "b".into(), provider: Arc::clone(&b2) }).unwrap();
+        assert!(Arc::ptr_eq(&stack.providers()[1], &b2));
+
+        // Unload removes; unknown names are errors, never silent no-ops.
+        stack.apply_op(&ScopeOp::Unload { name: "b".into() }).unwrap();
+        assert_eq!(stack.len(), 1);
+        let error = stack.apply_op(&ScopeOp::Unload { name: "b".into() }).unwrap_err();
+        assert_eq!(error, ScopeOpError::UnknownProvider { name: "b".into() });
+        let error = stack
+            .apply_op(&ScopeOp::Replace { name: "zz".into(), provider: Arc::clone(&b2) })
+            .unwrap_err();
+        assert_eq!(error, ScopeOpError::UnknownProvider { name: "zz".into() });
+
+        // ReplaceStack swaps wholesale.
+        stack.apply_op(&ScopeOp::ReplaceStack(vec![Arc::clone(&b2)])).unwrap();
+        assert_eq!(stack.provider_names().collect::<Vec<_>>(), vec!["b"]);
+    }
+
+    #[test]
+    fn apply_op_define_routes_cow_and_lazily_creates() {
+        let st = state_with(ScopeStack::new());
+        let mut stack: ScopeStack<PlainLang> = ScopeStack::new();
+        let mut user: Scope<PlainLang> = Scope::new("user");
+        user.insert(MACRO, "foo", new_spec());
+        stack.push(Arc::new(user));
+        stack.push(Arc::new(package_with("pkg", &[])));
+        let before = stack.clone(); // shares the Arcs — the structural-reversion stand-in
+
+        // Define routed to the (non-innermost) named scope: CoW entry swap — the
+        // cloned stack still holds the old provider and never sees the definition.
+        let added = new_spec();
+        stack
+            .apply_op(&ScopeOp::Define {
+                scope: "user".into(),
+                callable_type: MACRO,
+                name: "bar".into(),
+                spec: Arc::clone(&added),
+            })
+            .unwrap();
+        let bar = stack.retrieve_spec(&macro_query("bar"), &st).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&bar, &added));
+        assert!(before.retrieve_spec(&macro_query("bar"), &st).unwrap().is_none());
+        assert!(!Arc::ptr_eq(&stack.providers()[0], &before.providers()[0]));
+        assert!(Arc::ptr_eq(&stack.providers()[1], &before.providers()[1]));
+
+        // Define into an absent scope name creates it lazily, innermost.
+        stack
+            .apply_op(&ScopeOp::Define {
+                scope: "local".into(),
+                callable_type: MACRO,
+                name: "baz".into(),
+                spec: new_spec(),
+            })
+            .unwrap();
+        assert_eq!(stack.provider_names().collect::<Vec<_>>(), vec!["local", "pkg", "user"]);
+        assert!(stack.retrieve_spec(&macro_query("baz"), &st).unwrap().is_some());
+
+        // Define routed to an immutable provider fails with the provider's refusal.
+        let error = stack
+            .apply_op(&ScopeOp::Define {
+                scope: "pkg".into(),
+                callable_type: MACRO,
+                name: "x".into(),
+                spec: new_spec(),
+            })
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ScopeOpError::Provider(ScopeStackError {
+                provider: "pkg".into(),
+                error: ProviderError::NotMutable,
+            })
+        );
+
+        // Remove routes the same way; an absent *provider* is UnknownProvider.
+        stack
+            .apply_op(&ScopeOp::Remove {
+                scope: "user".into(),
+                callable_type: MACRO,
+                name: "bar".into(),
+            })
+            .unwrap();
+        assert!(stack.retrieve_spec(&macro_query("bar"), &st).unwrap().is_none());
+        let error = stack
+            .apply_op(&ScopeOp::Remove {
+                scope: "nowhere".into(),
+                callable_type: MACRO,
+                name: "bar".into(),
+            })
+            .unwrap_err();
+        assert_eq!(error, ScopeOpError::UnknownProvider { name: "nowhere".into() });
+    }
+
+    // --- specials: package data, the stack fold, trigger unions ---------------------------
+
+    fn specials_package(
+        name: &str,
+        triggers: &[(&str, &Arc<dyn CallableSpec<PlainLang>>)],
+    ) -> Package<PlainLang> {
+        let mut package = Package::new(name);
+        for (trigger, spec) in triggers {
+            package.insert_specials(*trigger, MACRO, Arc::clone(spec));
+        }
+        package
+    }
+
+    #[test]
+    fn package_specials_match_longest_within_the_package() {
+        let short = new_spec();
+        let long = new_spec();
+        let mut package = specials_package("lig", &[("--", &short), ("---", &long)]);
+        let st = state_with(ScopeStack::new());
+
+        let matched = package.scan_specials(&st, "---x", 0).unwrap().unwrap();
+        assert_eq!(matched.end, 3);
+        assert_eq!(matched.name, "---");
+        assert!(Arc::ptr_eq(&matched.spec, &long));
+
+        let matched = package.scan_specials(&st, "--x", 0).unwrap().unwrap();
+        assert_eq!((matched.end, matched.name), (2, "--"));
+        assert!(package.scan_specials(&st, "x--", 0).unwrap().is_none());
+
+        // Positions are absolute; matching mid-content works on byte offsets.
+        let matched = package.scan_specials(&st, "a--b", 1).unwrap().unwrap();
+        assert_eq!((matched.end, matched.name), (3, "--"));
+
+        // Re-inserting an existing trigger replaces its resolution.
+        let replacement = new_spec();
+        let previous = package.insert_specials("---", MACRO, Arc::clone(&replacement)).unwrap();
+        assert!(Arc::ptr_eq(&previous, &long));
+        let matched = package.scan_specials(&st, "---", 0).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&matched.spec, &replacement));
+
+        assert_eq!(package.specials_trigger_chars(), TriggerChars::Only("-".into()));
+    }
+
+    #[test]
+    fn stack_specials_fold_longest_wins_ties_innermost() {
+        let inner_short = new_spec();
+        let outer_long = new_spec();
+        let outer_short = new_spec();
+
+        // Inner provider defines `--`; outer defines `--` AND `---`.
+        let inner = specials_package("inner", &[("--", &inner_short)]);
+        let outer = specials_package("outer", &[("--", &outer_short), ("---", &outer_long)]);
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(outer));
+        stack.push(Arc::new(inner));
+        let st = state_with(ScopeStack::new());
+
+        // Longest wins across providers: `---` (outer) beats `--` (inner) — the
+        // pylatexenc parity case.
+        let matched = stack.scan_specials(&st, "---", 0).unwrap().unwrap();
+        assert_eq!(matched.name, "---");
+        assert!(Arc::ptr_eq(&matched.spec, &outer_long));
+
+        // Equal length is the same spelling: the tie goes innermost — shadowing.
+        let matched = stack.scan_specials(&st, "--x", 0).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&matched.spec, &inner_short));
+
+        // Union of trigger chars over providers, deduplicated.
+        assert_eq!(stack.specials_trigger_chars(), TriggerChars::Only("-".into()));
+    }
+
+    #[test]
+    fn stack_specials_fold_propagates_provider_scan_errors() {
+        #[derive(Debug)]
+        struct FailingScan;
+        impl SpecsProvider<PlainLang> for FailingScan {
+            fn name(&self) -> &str {
+                "failing-scan"
+            }
+            fn retrieve_spec(
+                &self,
+                _query: &CallableQuery<'_, '_, PlainLang>,
+                _state: &ParsingState<PlainLang>,
+            ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
+                Ok(None)
+            }
+            fn scan_specials<'s>(
+                &self,
+                _state: &ParsingState<PlainLang>,
+                _content: &'s str,
+                _pos: usize,
+            ) -> TokenResult<'s, PlainLang, Option<SpecialsMatch<'s, PlainLang>>> {
+                Err(TokenError::new(
+                    TokenErrorKind::Custom(Box::new(
+                        crate::constructs::ImplementationError::new("scan broke".to_string()),
+                    )),
+                    crate::source::Span::new(0, 1),
+                    None,
+                ))
+            }
+            fn specials_trigger_chars(&self) -> TriggerChars {
+                TriggerChars::Any
+            }
+        }
+
+        let ok = new_spec();
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(specials_package("outer", &[("-", &ok)])));
+        stack.push(Arc::new(FailingScan));
+        let st = state_with(ScopeStack::new());
+
+        let error = stack.scan_specials(&st, "-", 0).unwrap_err();
+        assert!(error.to_string().contains("scan broke"));
+        assert_eq!(stack.specials_trigger_chars(), TriggerChars::Any);
+    }
+}

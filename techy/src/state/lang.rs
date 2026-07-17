@@ -14,8 +14,8 @@ use core::hash::Hash;
 use alloc::vec::Vec;
 
 use crate::engine::{ParseDriver, StdParseDriver};
-use crate::library::LibraryStack;
 use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
+use crate::scopes::ScopeStack;
 use crate::source::{SourceOrigin, SourceSpan};
 use crate::token::{
     SpecialsMatch, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
@@ -107,8 +107,8 @@ pub trait Lang: Sized + 'static {
     /// Identifier of a callable *type* — an invocation form (the latexlike preset:
     /// macro / environment / specials). **Closed per language** (decided July 2026):
     /// new invocation *forms* are never registered at runtime (new *callables* are —
-    /// via libraries), so this is a per-language enum, not an open id. `Ord` because
-    /// libraries key their maps by it. [`SimpleLang`] defaults this to `u32`.
+    /// via the scope stack), so this is a per-language enum, not an open id. `Ord`
+    /// because providers key their maps by it. [`SimpleLang`] defaults this to `u32`.
     type CallableTypeId: Copy + Ord + Hash + fmt::Debug + Send + Sync;
 
     /// Identifier of the **parsing mode** a state is in (the latexlike preset: text /
@@ -185,8 +185,8 @@ pub trait Lang: Sized + 'static {
     /// defaults this to [`StdParseDriver`].
     type Driver: ParseDriver<Self>;
 
-    /// The language's canonical initial (seed) state data: base token rules, seed
-    /// libraries (unknown-callable fallbacks included), and the initial state ext.
+    /// The language's canonical initial (seed) state data: base token rules, the seed
+    /// scope stack (fallback providers included), and the initial state ext.
     /// The crate freezes the returned data into the seed state
     /// ([`ParsingState::initial`]) — the data→state step is crate-owned, so every other
     /// state a parse sees comes from [`derived()`](ParsingState::derived) and passes
@@ -203,9 +203,9 @@ pub trait Lang: Sized + 'static {
     /// `initial()` pins it mechanically.
     ///
     /// The default is the most neutral data: every syntax gate off (character-level
-    /// content — no whitespace handling, groups, commands, comments, or specials), no
-    /// libraries, default mode and ext. Real languages return their canonical rules
-    /// instead.
+    /// content — no whitespace handling, groups, commands, comments, or specials), an
+    /// empty scope stack, default mode and ext. Real languages return their canonical
+    /// rules instead.
     fn initial_state_data() -> StateData<Self> {
         StateData {
             rules: TokenRules {
@@ -223,7 +223,7 @@ pub trait Lang: Sized + 'static {
                 forbidden_chars: "".into(),
                 expecting_group_close: None,
             },
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: Default::default(),
             ext: Default::default(),
         }
@@ -268,7 +268,8 @@ pub trait Lang: Sized + 'static {
     /// Recognition and resolution happen in one call — a [`SpecialsMatch`] carries both
     /// the name and the resolved spec (unknown-name fallback policy included), which
     /// makes scanning/lookup mismatches impossible by construction. Typically implemented
-    /// by a preset dispatching to the state's libraries (Phase 4+). Positions are
+    /// as a fold over the state's scope stack
+    /// ([`ScopeStack::scan_specials`](crate::scopes::ScopeStack::scan_specials)). Positions are
     /// absolute byte offsets into `content`.
     ///
     /// **Implementer obligations:**

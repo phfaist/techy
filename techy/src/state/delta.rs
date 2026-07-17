@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::library::SpecLookup;
+use crate::scopes::{ScopeOp, ScopeOpError, SpecsProvider};
 use crate::token::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};
 
 use super::lang::Lang;
@@ -110,11 +110,15 @@ impl<L: Lang> TokenRulesOverrides<L> {
 pub struct ParsingStateDelta<L: Lang> {
     /// Overrides of the stored token rules; every field optional.
     pub rules: TokenRulesOverrides<L>,
-    /// Lookups to push onto the state's library stack, in order (the last one pushed
-    /// ends up innermost). This is how definitions extend mid-parse (`\newcommand`);
-    /// scope reversion is structural — the caller keeps the previous
-    /// `Arc<ParsingState>` (ARCHITECTURE.md §specs).
-    pub push_libraries: Vec<Arc<dyn SpecLookup<L>>>,
+    /// Scope-stack operations, applied in order (Phase 7.3, replacing Phase 4's
+    /// `push_libraries`): stack-shape ops and definition ops routed to a named
+    /// provider — see [`ScopeOp`]. This is how definitions extend mid-parse
+    /// (`\newcommand`); scope reversion is structural — the caller keeps the previous
+    /// `Arc<ParsingState>` (ARCHITECTURE.md §specs). Ops can **fail** (absent target
+    /// name, immutable provider): failures are collected per op — the rest still
+    /// apply — and surface through the fallible
+    /// [`derived()`](super::ParsingState::derived).
+    pub scope_ops: Vec<ScopeOp<L>>,
     /// Override the parsing mode ([`StateData::mode`]); `None` = leave unchanged.
     /// The override *is* the mode-change signal (DESIGN_RATIONALE.md §3.3):
     /// [`Lang::finalize_transition`] sees it applied on the new data and interprets it
@@ -133,7 +137,7 @@ impl<L: Lang> ParsingStateDelta<L> {
     pub fn new() -> ParsingStateDelta<L> {
         ParsingStateDelta {
             rules: TokenRulesOverrides::default(),
-            push_libraries: Vec::new(),
+            scope_ops: Vec::new(),
             mode: None,
             ext: None,
             events: Vec::new(),
@@ -146,9 +150,16 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Push a lookup onto the state's library stack (innermost = pushed last).
-    pub fn push_library(mut self, lookup: Arc<dyn SpecLookup<L>>) -> Self {
-        self.push_libraries.push(lookup);
+    /// Add a scope-stack operation (ops apply in the order added).
+    pub fn scope_op(mut self, op: ScopeOp<L>) -> Self {
+        self.scope_ops.push(op);
+        self
+    }
+
+    /// Push a provider onto the state's scope stack (innermost = pushed last) — sugar
+    /// for the dominant [`ScopeOp::Push`] shape.
+    pub fn push_provider(mut self, provider: Arc<dyn SpecsProvider<L>>) -> Self {
+        self.scope_ops.push(ScopeOp::Push(provider));
         self
     }
 
@@ -170,12 +181,17 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Apply overrides (rules + mode + ext) to `data`. Internal, pre-freeze: called only
-    /// from `derived()`, before `finalize_transition` runs.
-    pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) {
+    /// Apply overrides (rules + scope ops + mode + ext) to `data`. Internal, pre-freeze:
+    /// called only from `derived()`, before `finalize_transition` runs. Scope-op
+    /// failures are collected (the failing op is skipped, the rest still apply) and
+    /// returned for `derived()` to report — an empty vec is full success.
+    pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) -> Vec<ScopeOpError> {
         self.rules.apply(&mut data.rules);
-        for lookup in &self.push_libraries {
-            data.libraries.push(lookup.clone());
+        let mut failures = Vec::new();
+        for op in &self.scope_ops {
+            if let Err(failure) = data.scopes.apply_op(op) {
+                failures.push(failure);
+            }
         }
         if let Some(mode) = self.mode {
             data.mode = mode;
@@ -183,6 +199,7 @@ impl<L: Lang> ParsingStateDelta<L> {
         if let Some(ext) = &self.ext {
             data.ext = ext.clone();
         }
+        failures
     }
 }
 
@@ -278,7 +295,7 @@ impl<L: Lang> Clone for ParsingStateDelta<L> {
     fn clone(&self) -> Self {
         ParsingStateDelta {
             rules: self.rules.clone(),
-            push_libraries: self.push_libraries.clone(),
+            scope_ops: self.scope_ops.clone(),
             mode: self.mode,
             ext: self.ext.clone(),
             events: self.events.clone(),
@@ -290,7 +307,7 @@ impl<L: Lang> fmt::Debug for ParsingStateDelta<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsingStateDelta")
             .field("rules", &self.rules)
-            .field("push_libraries", &self.push_libraries)
+            .field("scope_ops", &self.scope_ops)
             .field("mode", &self.mode)
             .field("ext", &self.ext)
             .field("events", &self.events)

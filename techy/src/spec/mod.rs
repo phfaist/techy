@@ -4,9 +4,9 @@
 //! `LatexArgumentSpec`, July 2026). A [`CallableSpec`] records *callable behavior*, not
 //! the form or name under which it is invoked — specs are **de-keyed**: the invocation
 //! form is the language's closed [`Lang::CallableTypeId`](crate::state::Lang) and the
-//! name lives in the library key (normalized) and on the node (invocation spelling). One
-//! spec may back several names (flyweight), including the per-type unknown-callable
-//! fallback singletons of [`LibraryStack`](crate::library::LibraryStack).
+//! name lives in the provider key (normalized) and on the node (invocation spelling).
+//! One spec may back several names (flyweight), including the per-type unknown-callable
+//! fallback singletons of a [`FallbackProvider`](crate::scopes::FallbackProvider).
 //!
 //! The declarative surface is the [`ArgumentSpec`] list exposed by the spec (arguments
 //! *configure* an invocation), with [`StdCallableSpec`] as the standard implementation.
@@ -25,8 +25,9 @@
 //!
 //! [`parse_argument`]: ArgumentParser::parse_argument
 //!
-//! Definition lookup — [`Library`](crate::library::Library) and friends — lives in the
-//! neighboring [`library`](crate::library) topic.
+//! Definition resolution — [`SpecsProvider`](crate::scopes::SpecsProvider),
+//! [`ScopeStack`](crate::scopes::ScopeStack) and friends — lives in the neighboring
+//! [`scopes`](crate::scopes) topic.
 
 mod callable;
 mod structure;

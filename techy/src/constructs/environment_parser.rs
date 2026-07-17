@@ -186,7 +186,7 @@ pub fn read_rigid_name_group<L: Lang>(
     // derivation the group parser uses — the driver's descent delta included), so the
     // close delimiter is guaranteed recognizable regardless of the base's delimiter
     // table.
-    let interior_state = cx.group_interior_state(&rule);
+    let interior_state = cx.group_interior_state(&rule)?;
     let result = cx.with_scoped_state(interior_state, |cx| read_name_chars(cx, &rule));
     match result? {
         Some(name_group) => Ok(Some(name_group)),
@@ -494,7 +494,7 @@ mod tests {
         CommandResolution, ParseDriver, ParseResult, ParserSession, ResolvedCallable,
     };
     use crate::error::{ParseError, Recovery};
-    use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
+    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::{
         CallableData, ChildRegion, ContentNodes, NodeRef, ParsedArguments, ParsedSlot,
         ParsedSlots,
@@ -592,11 +592,14 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            state
-                .libraries()
-                .resolve(&query, state)
-                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
-                .into()
+            match state.scopes().retrieve_spec(&query, state) {
+                Ok(resolved) => resolved
+                    .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                    .into(),
+                Err(error) => {
+                    CommandResolution::Unresolved { detail: Some(error.to_string()) }
+                }
+            }
         }
     }
 
@@ -697,21 +700,27 @@ mod tests {
             let source = Arc::clone(&cx.source);
             let name = &source.content()[name_group.name_span.range()];
 
-            // Resolve the environment's spec by name.
+            // Resolve the environment's spec by name. A provider failure is an
+            // operational error, not a source condition — abort via the
+            // implementation-error path.
             let query = CallableQuery::new(CT_ENVIRONMENT, name, CallableSyntax::Other);
-            let spec: Arc<dyn CallableSpec<EnvLang>> =
-                match cx.state.libraries().resolve(&query, &cx.state) {
-                    Some(spec) => spec,
-                    None => {
-                        cx.recover(
-                            UnknownEnvironment { name: name.into() },
-                            SourceSpan::new(&cx.source, name_group.name_span),
-                        )?;
-                        // Tolerant fallback: an argument-less body-only environment,
-                        // so the body still parses to its terminator.
-                        Arc::new(EnvSpec { arguments: vec![], body_delta: None })
-                    }
-                };
+            let resolved = cx
+                .state
+                .scopes()
+                .retrieve_spec(&query, &cx.state)
+                .map_err(|error| cx.implementation_error(error, name_group.name_span))?;
+            let spec: Arc<dyn CallableSpec<EnvLang>> = match resolved {
+                Some(spec) => spec,
+                None => {
+                    cx.recover(
+                        UnknownEnvironment { name: name.into() },
+                        SourceSpan::new(&cx.source, name_group.name_span),
+                    )?;
+                    // Tolerant fallback: an argument-less body-only environment,
+                    // so the body still parses to its terminator.
+                    Arc::new(EnvSpec { arguments: vec![], body_delta: None })
+                }
+            };
 
             // Arguments: the 6.5 machinery, shared with StdInvocationParser. The
             // argument frames quote the *environment's* name, not `\begin`'s.
@@ -729,7 +738,7 @@ mod tests {
                 .downcast_ref::<EnvSpec>()
                 .and_then(|env_spec| env_spec.body_delta.clone());
             let slot_state = match &body_delta {
-                Some(delta) => cx.derived_state(delta),
+                Some(delta) => cx.derived_state(delta)?,
                 None => Arc::clone(&cx.state),
             };
             let mut body_parser =
@@ -850,7 +859,7 @@ mod tests {
                 expecting_group_close: Some(Some(raw_rule)),
                 ..TokenRulesOverrides::default()
             });
-            let verbatim_state = cx.derived_state(&delta);
+            let verbatim_state = cx.derived_state(&delta)?;
             let terminator = cx.with_scoped_state(verbatim_state, |cx| {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
@@ -992,7 +1001,7 @@ mod tests {
     /// `itemize` (plain), `tabular` (one mandatory argument), `nocomments` (slot delta
     /// disabling comment tokenization in the body), and the plain pair `A`/`B`.
     fn suite_state() -> Arc<ParsingState<EnvLang>> {
-        let mut lib = Library::new("test-definitions");
+        let mut lib = Package::new("test-definitions");
         lib.insert(CT_MACRO, "frac", macro_spec(vec![brace_arg(), brace_arg()]));
         lib.insert(CT_MACRO, "emph", macro_spec(vec![brace_arg()]));
         lib.insert(CT_MACRO, "alpha", macro_spec(vec![]));
@@ -1020,9 +1029,9 @@ mod tests {
         lib.insert(CT_ENVIRONMENT, "A", env_spec(vec![], None));
         lib.insert(CT_ENVIRONMENT, "B", env_spec(vec![], None));
 
-        let mut libraries = LibraryStack::new();
-        libraries.push(Arc::new(lib));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
+        Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }))
     }
 
     // --- harness (the established driving pattern) --------------------------------------

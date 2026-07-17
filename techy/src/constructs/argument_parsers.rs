@@ -619,7 +619,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             temporary_groups: Some(alloc::vec![Arc::clone(&self.rule)]),
             ..TokenRulesOverrides::default()
         });
-        let contents_state = cx.derived_state(&delta);
+        let contents_state = cx.derived_state(&delta)?;
         let matched = match cx.probe_token(&contents_state)? {
             Some(token)
                 if matches!(
@@ -780,7 +780,7 @@ mod tests {
     use super::*;
     use crate::engine::{ParseResult, ParserSession, ResolvedCallable};
     use crate::error::{ParseError, Recovery};
-    use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
+    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::NodeRef;
     use crate::source::Source;
     use crate::spec::{CallableSpec, StdCallableSpec};
@@ -836,11 +836,14 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            state
-                .libraries()
-                .resolve(&query, state)
-                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
-                .into()
+            match state.scopes().retrieve_spec(&query, state) {
+                Ok(resolved) => resolved
+                    .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                    .into(),
+                Err(error) => {
+                    CommandResolution::Unresolved { detail: Some(error.to_string()) }
+                }
+            }
         }
     }
 
@@ -916,13 +919,13 @@ mod tests {
     fn state_with_specs(
         macros: &[(&str, Arc<dyn CallableSpec<ArgLang>>)],
     ) -> Arc<ParsingState<ArgLang>> {
-        let mut lib = Library::new("test-macros");
+        let mut lib = Package::new("test-macros");
         for (name, spec) in macros {
             lib.insert(CT_MACRO, *name, Arc::clone(spec));
         }
-        let mut libraries = LibraryStack::new();
-        libraries.push(Arc::new(lib));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
+        Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }))
     }
 
     // --- harness (the 6.2 driving pattern, compact) -------------------------------------
@@ -1430,18 +1433,18 @@ mod tests {
             open: "[".into(),
             close: "]".into(),
         }));
-        let mut lib = Library::new("test-macros");
+        let mut lib = Package::new("test-macros");
         lib.insert(
             CT_MACRO,
             "item",
             Arc::new(StdCallableSpec::new(vec![optional_arg_unwrapping()]))
                 as Arc<dyn CallableSpec<ArgLang>>,
         );
-        let mut libraries = LibraryStack::new();
-        libraries.push(Arc::new(lib));
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
         let st = Arc::new(ParsingState::new(StateData {
             rules: bracket_rules,
-            libraries,
+            scopes,
             mode: (),
             ext: (),
         }));

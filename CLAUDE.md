@@ -17,7 +17,7 @@ token → constructs → node (AST)
 - **constructs**: Parsers for individual constructs (ConstructParser trait + standard parsers)
 - **engine**: High-level machinery (ParserSession, ParseResult; `Language::parse()` arrives Phase 7)
 - **node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData)
-- **spec** + **library**: Extensibility (CallableSpec, StdCallableSpec, ArgumentSpec, ArgumentParser; Library, LibraryStack)
+- **spec** + **scopes**: Extensibility (CallableSpec, StdCallableSpec, ArgumentSpec, ArgumentParser; SpecsProvider, Package, Scope, ScopeStack)
 - **state**: Parsing context (Lang, ParsingState, ParsingStateDelta)
 - **error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery)
 

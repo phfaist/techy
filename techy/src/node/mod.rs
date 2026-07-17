@@ -67,7 +67,7 @@ pub type SlotExt<L> = <<L as Lang>::NodeExts as NodeExtTypes>::SlotExt;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::source::{Source, SourceSpan, Span, TextContent};
     use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{Lang, ParsingState, SimpleLang, StateData};
@@ -111,7 +111,7 @@ mod tests {
     fn state<L: Lang<StateExt = (), GroupTypeId = u32>>() -> Arc<ParsingState<L>> {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: Default::default(),
             ext: (),
         }))

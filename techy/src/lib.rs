@@ -31,10 +31,10 @@
 //!   the standard state-driven reader. **Implemented (Phases 2–3).**
 //! - [`state`] (S1) — the `Lang` trait, parsing state, and reified state deltas.
 //!   **Implemented (Phase 3).**
-//! - [`spec`] + [`library`] (S1) — de-keyed callable specs (argument/slot structures)
-//!   and definition libraries (query-based lookup, lexical shadowing, per-type
-//!   unknown-callable fallbacks). **Implemented (Phase 4)**; the structure specs and the
-//!   `invocation_parser()` escape hatch grow with their consumers in Phase 6.
+//! - [`spec`] + [`scopes`] (S1) — de-keyed callable specs (argument/slot structures)
+//!   and the definition scope stack (dyn `SpecsProvider` entries, lexical shadowing,
+//!   in-stack fallback providers, definition/stack delta ops). **Implemented (Phase 4;
+//!   reworked in Phase 7.3)**.
 //! - [`node`] (S1) — the flat, immutable node tree: closed structural [`NodeKind`],
 //!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy access.
 //!   **Implemented (Phase 5)**; the whitespace/span invariants and the concrete
@@ -75,8 +75,8 @@ extern crate self as techy;
 pub mod constructs;
 pub mod engine;
 pub mod error;
-pub mod library;
 pub mod node;
+pub mod scopes;
 pub mod source;
 pub mod spec;
 pub mod state;
@@ -114,9 +114,9 @@ pub use constructs::{
     ExpectedExpressionArgument, ExpressionCallableRequiresContent, GroupChildState,
     GroupParser, ImplementationError, Invocation, InvocationChildState,
     MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,
-    MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, StopCause, StopSpec,
-    TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound, UnresolvableCommand,
-    UnusableRecoveryToken, UnusableRecoveryTokenKind,
+    MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, ScopeOpFailed, StopCause,
+    StopSpec, TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
+    UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 pub use engine::{
     CommandResolution, Frame, FrameTitle, ParseDriver, ParseResult, ParserSession,
@@ -132,18 +132,22 @@ pub use source::{
     ResolvedContent, Source, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
     Span, TextContent,
 };
-pub use library::{CallableQuery, CallableSyntax, Library, LibraryStack, SpecLookup};
 pub use node::{
     check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, GroupData,
     NodeBuildError, NodeData, NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder,
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
+};
+pub use scopes::{
+    CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
+    FallbackProvider, Package, ProviderError, Scope, ScopeOp, ScopeOpError, ScopeStack,
+    ScopeStackError, SearchedProviders, SpecsProvider,
 };
 pub use spec::{
     ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes,
     StdCallableSpec,
 };
 pub use state::{
-    Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
+    DeriveError, Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
     TokenRulesOverrides,
 };
 pub use token::{

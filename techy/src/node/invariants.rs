@@ -404,7 +404,7 @@ mod tests {
     use super::super::builder::NodeTreeBuilder;
     use super::super::kind::{GroupData, NodeKind};
     use super::*;
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::source::{Source, SourceSpan, Span};
     use crate::state::{ParsingState, SimpleLang, StateData};
     use crate::token::{TokenRules, WhitespaceRules};
@@ -431,7 +431,7 @@ mod tests {
                 forbidden_chars: "".into(),
                 expecting_group_close: None,
             },
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: (),
             ext: (),
         }))

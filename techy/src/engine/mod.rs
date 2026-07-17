@@ -8,7 +8,7 @@
 //! *behavior* — the [`Recovery`] policy included, moved off the session in 7.2 — lives
 //! on the language's [`ParseDriver`] (see its docs for the placement doctrine).
 //!
-//! The `Language<L>` runtime bundle (long-lived defaults + libraries, with a `parse()`
+//! The `Language<L>` runtime bundle (long-lived defaults + scope stack, with a `parse()`
 //! convenience entry point) is **deferred** past Phase 6 (DESIGN_RATIONALE.md §3.6):
 //! Phase 6 drives sessions directly, and convenience code is not written before its
 //! convenience is demonstrable. Consequently `ParseResult` carries no `'env` lifetime
@@ -25,7 +25,7 @@ use crate::error::{
 use crate::node::{BuildId, NodeBuildError, NodeTree, NodeTreeBuilder};
 use crate::source::SourceSpan;
 use crate::spec::{CallableSpec, FrameRole};
-use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta};
 use crate::token::GroupRule;
 
 use alloc::boxed::Box;
@@ -218,17 +218,26 @@ impl<L: Lang> ParserSession<L> {
     ///
     /// **Overrides-only deltas are memoized** (revised July 2026, superseding the
     /// earlier never-memoize rule): when the delta carries no ext replacement, no
-    /// events, and no library pushes — i.e. only token-rules overrides and/or a mode
+    /// events, and no scope ops — i.e. only token-rules overrides and/or a mode
     /// override — the derivation is keyed on the base state's `Arc` identity plus the
     /// overrides (rule payloads by `Arc` identity, gates and mode by value — see the
     /// `state_memo` module) and deduplicated across the session. `derived()` is a pure
     /// function of (base data, delta, events) — [`Lang::finalize_transition`]'s purity
     /// contract — so a pointer-keyed hit is exact; identity keying can only miss on
     /// value-equal-but-distinct `Arc`s, never falsely hit (and the mode key, a
-    /// `Copy + Eq` value, cannot even miss). Deltas carrying ext/events/library-pushes
+    /// `Copy + Eq` value, cannot even miss). Deltas carrying ext/events/scope-ops
     /// always derive fresh: those payloads have no identity to key on.
     /// [`ParseDriver::observe_transition`] fires on **every** call, memo hits included;
     /// [`Lang::finalize_transition`] runs once per unique derivation.
+    ///
+    /// **Fallibility** (Phase 7.3): scope ops can fail, so this seam is fallible like
+    /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
+    /// also why the memo never caches a failure). On `Err`, no transition is committed:
+    /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
+    /// has **not** fired — a caller that recovers tolerantly and continues under
+    /// [`DeriveError::recovered`](crate::state::DeriveError) observes that transition
+    /// itself (the [`ParseContext`](crate::constructs::ParseContext) sugar does; see
+    /// its recovery path).
     ///
     /// Out-of-parse code (initial states, tests, tree transforms) keeps calling
     /// `derived()` directly.
@@ -237,9 +246,9 @@ impl<L: Lang> ParserSession<L> {
         driver: &L::Driver,
         base: &Arc<ParsingState<L>>,
         delta: &ParsingStateDelta<L>,
-    ) -> Arc<ParsingState<L>> {
+    ) -> Result<Arc<ParsingState<L>>, DeriveError<L>> {
         let memoizable =
-            delta.ext.is_none() && delta.events.is_empty() && delta.push_libraries.is_empty();
+            delta.ext.is_none() && delta.events.is_empty() && delta.scope_ops.is_empty();
         if memoizable {
             if let Some(hit) = self.state_memo.get(&StateMemoProbe {
                 base,
@@ -248,10 +257,10 @@ impl<L: Lang> ParserSession<L> {
             }) {
                 let new = Arc::clone(hit);
                 driver.observe_transition(&mut self.ext, base, &new, delta);
-                return new;
+                return Ok(new);
             }
         }
-        let new = Arc::new(base.derived(delta));
+        let new = Arc::new(base.derived(delta)?);
         if memoizable {
             self.state_memo.insert(
                 StateMemoKey {
@@ -263,7 +272,7 @@ impl<L: Lang> ParserSession<L> {
             );
         }
         driver.observe_transition(&mut self.ext, base, &new, delta);
-        new
+        Ok(new)
     }
 
     /// The group-interior derivation: the state a group's interior is parsed under is
@@ -286,31 +295,40 @@ impl<L: Lang> ParserSession<L> {
     ///
     /// The descent invariant wins over the hook: whatever the driver's delta says, the
     /// interior's `expecting_group_close` is the entered rule.
+    ///
+    /// **Fallibility** (Phase 7.3): a driver descent delta may carry scope ops, which
+    /// can fail. On `Err`, nothing is memoized and no transition was observed (see
+    /// [`derived_state`](ParserSession::derived_state)); the error's
+    /// [`recovered`](crate::state::DeriveError::recovered) state still has the
+    /// descent invariant applied (the forced expecting-close is an override, not an
+    /// op), so a tolerant caller can safely parse the interior under it. Failures are
+    /// *not* cached: every failing descent re-reports — a misbehaving driver stays
+    /// loud.
     pub fn group_interior_state(
         &mut self,
         driver: &L::Driver,
         base: &Arc<ParsingState<L>>,
         rule: &Arc<GroupRule<L>>,
-    ) -> Arc<ParsingState<L>> {
+    ) -> Result<Arc<ParsingState<L>>, DeriveError<L>> {
         if let Some(entry) = self.group_interior_memo.get(&GroupInteriorProbe { base, rule })
         {
             let new = Arc::clone(&entry.state);
             let delta = Arc::clone(&entry.delta);
             driver.observe_transition(&mut self.ext, base, &new, &delta);
-            return new;
+            return Ok(new);
         }
         let mut delta = driver.group_interior_delta(base, rule).unwrap_or_default();
         // The descent invariant, forced last: the interior always expects exactly the
         // entered rule's close — a driver delta cannot displace it.
         delta.rules.expecting_group_close = Some(Some(Arc::clone(rule)));
         let delta = Arc::new(delta);
-        let new = Arc::new(base.derived(&delta));
+        let new = Arc::new(base.derived(&delta)?);
         self.group_interior_memo.insert(
             GroupInteriorKey { base: Arc::clone(base), rule: Arc::clone(rule) },
             GroupInteriorEntry { state: Arc::clone(&new), delta: Arc::clone(&delta) },
         );
         driver.observe_transition(&mut self.ext, base, &new, &delta);
-        new
+        Ok(new)
     }
 
     /// The raw record-or-abort primitive of detection-site recovery
@@ -396,7 +414,7 @@ impl<L: Lang> fmt::Debug for ParseResult<L> {
 mod tests {
     use super::*;
     use crate::constructs::{ConstructParser, ConstructParserResult, ParseContext};
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::node::NodeKind;
     use crate::source::{Source, Span};
     use crate::state::{
@@ -453,7 +471,7 @@ mod tests {
     fn state<L: Lang<GroupTypeId = u32, StateExt = ()>>() -> Arc<ParsingState<L>> {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: Default::default(),
             ext: (),
         }))
@@ -762,21 +780,21 @@ mod tests {
         });
         let mut session: ParserSession<ObserverLang> = ParserSession::new();
 
-        let via_session = session.derived_state(&ObserverDriver, &base, &delta);
+        let via_session = session.derived_state(&ObserverDriver, &base, &delta).unwrap();
         // Data-equivalent to the pure transition…
-        assert_eq!(via_session.rules(), base.derived(&delta).rules());
+        assert_eq!(via_session.rules(), base.derived(&delta).unwrap().rules());
         // …with the transition event observed.
         assert_eq!(session.ext.transitions, 1);
 
         // Rules-only deltas are memoized: the identical derivation returns the shared
         // state, and the transition is still observed (hits included).
-        let again = session.derived_state(&ObserverDriver, &base, &delta);
+        let again = session.derived_state(&ObserverDriver, &base, &delta).unwrap();
         assert!(Arc::ptr_eq(&via_session, &again));
         assert_eq!(session.ext.transitions, 2);
 
         // A different base misses (keys carry the base's identity).
-        let other_base = Arc::new(base.derived(&ParsingStateDelta::new()));
-        let elsewhere = session.derived_state(&ObserverDriver, &other_base, &delta);
+        let other_base = Arc::new(base.derived(&ParsingStateDelta::new()).unwrap());
+        let elsewhere = session.derived_state(&ObserverDriver, &other_base, &delta).unwrap();
         assert!(!Arc::ptr_eq(&via_session, &elsewhere));
     }
 
@@ -797,8 +815,8 @@ mod tests {
             groups: Some(vec![Arc::clone(&rule)]),
             ..TokenRulesOverrides::default()
         });
-        let first = session.derived_state(&ObserverDriver, &base, &delta_a);
-        let second = session.derived_state(&ObserverDriver, &base, &delta_b);
+        let first = session.derived_state(&ObserverDriver, &base, &delta_a).unwrap();
+        let second = session.derived_state(&ObserverDriver, &base, &delta_b).unwrap();
         assert!(Arc::ptr_eq(&first, &second));
 
         // A value-equal but Arc-distinct payload misses: identity keying is
@@ -809,7 +827,7 @@ mod tests {
             groups: Some(vec![equal_rule]),
             ..TokenRulesOverrides::default()
         });
-        let third = session.derived_state(&ObserverDriver, &base, &delta_c);
+        let third = session.derived_state(&ObserverDriver, &base, &delta_c).unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
     }
 
@@ -821,15 +839,15 @@ mod tests {
         // A mode override is memo-key material by *value* (modes are `Copy + Eq`
         // vocabulary, unlike the identity-keyed rule payloads): two independently
         // built deltas hit one entry, with the hits observed.
-        let math = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Math));
+        let math = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Math)).unwrap();
         assert_eq!(math.mode(), TestMode::Math);
-        let again = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Math));
+        let again = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Math)).unwrap();
         assert!(Arc::ptr_eq(&math, &again));
         assert_eq!(session.ext.transitions, 2);
 
         // Distinct modes are distinct keys — no false sharing on the same base (and a
         // mode-less delta, `mode: None`, is a third key still).
-        let text = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Text));
+        let text = session.derived_state(&ObserverDriver, &base, &ParsingStateDelta::new().mode(TestMode::Text)).unwrap();
         assert!(!Arc::ptr_eq(&math, &text));
         assert_eq!(text.mode(), TestMode::Text);
 
@@ -842,7 +860,7 @@ mod tests {
             &ObserverDriver,
             &base,
             &ParsingStateDelta::new().mode(TestMode::Math).rules(overrides()),
-        );
+        ).unwrap();
         assert_eq!(combo.mode(), TestMode::Math);
         assert!(!combo.rules().enable_comments);
         assert!(!Arc::ptr_eq(&math, &combo)); // differs from the mode-only entry
@@ -850,14 +868,14 @@ mod tests {
             &ObserverDriver,
             &base,
             &ParsingStateDelta::new().mode(TestMode::Math).rules(overrides()),
-        );
+        ).unwrap();
         assert!(Arc::ptr_eq(&combo, &combo_again));
 
         // Carrying an ext replacement still disables the memo, mode or not (same for
         // events and library pushes: those payloads have no identity to key on).
         let with_ext = ParsingStateDelta::new().mode(TestMode::Math).ext(());
-        let fresh_a = session.derived_state(&ObserverDriver, &base, &with_ext);
-        let fresh_b = session.derived_state(&ObserverDriver, &base, &with_ext);
+        let fresh_a = session.derived_state(&ObserverDriver, &base, &with_ext).unwrap();
+        let fresh_b = session.derived_state(&ObserverDriver, &base, &with_ext).unwrap();
         assert!(!Arc::ptr_eq(&fresh_a, &fresh_b));
     }
 
@@ -868,14 +886,14 @@ mod tests {
 
         // An event payload has no identity to key on — always a fresh derivation.
         let with_event = ParsingStateDelta::new().event(());
-        let first = session.derived_state(&ObserverDriver, &base, &with_event);
-        let second = session.derived_state(&ObserverDriver, &base, &with_event);
+        let first = session.derived_state(&ObserverDriver, &base, &with_event).unwrap();
+        let second = session.derived_state(&ObserverDriver, &base, &with_event).unwrap();
         assert!(!Arc::ptr_eq(&first, &second));
 
         // Same for an ext replacement.
         let with_ext = ParsingStateDelta::new().ext(());
-        let third = session.derived_state(&ObserverDriver, &base, &with_ext);
-        let fourth = session.derived_state(&ObserverDriver, &base, &with_ext);
+        let third = session.derived_state(&ObserverDriver, &base, &with_ext).unwrap();
+        let fourth = session.derived_state(&ObserverDriver, &base, &with_ext).unwrap();
         assert!(!Arc::ptr_eq(&third, &fourth));
 
         // All four transitions were observed.
@@ -889,7 +907,7 @@ mod tests {
             Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
         let mut session: ParserSession<ObserverLang> = ParserSession::new();
 
-        let first = session.group_interior_state(&ObserverDriver, &base, &rule);
+        let first = session.group_interior_state(&ObserverDriver, &base, &rule).unwrap();
         assert!(first
             .rules()
             .expecting_group_close
@@ -897,7 +915,7 @@ mod tests {
             .is_some_and(|expected| Arc::ptr_eq(expected, &rule)));
 
         // Memo hit: the same interior Arc, and the transition event still observed.
-        let second = session.group_interior_state(&ObserverDriver, &base, &rule);
+        let second = session.group_interior_state(&ObserverDriver, &base, &rule).unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(session.ext.transitions, 2);
 
@@ -905,10 +923,10 @@ mod tests {
         // derivation, and so is a distinct base.
         let equal_rule: Arc<GroupRule<ObserverLang>> =
             Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
-        let third = session.group_interior_state(&ObserverDriver, &base, &equal_rule);
+        let third = session.group_interior_state(&ObserverDriver, &base, &equal_rule).unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
-        let other_base = Arc::new(base.derived(&ParsingStateDelta::new()));
-        let fourth = session.group_interior_state(&ObserverDriver, &other_base, &rule);
+        let other_base = Arc::new(base.derived(&ParsingStateDelta::new()).unwrap());
+        let fourth = session.group_interior_state(&ObserverDriver, &other_base, &rule).unwrap();
         assert!(!Arc::ptr_eq(&first, &fourth));
         assert_eq!(session.ext.transitions, 4);
     }
@@ -979,7 +997,7 @@ mod tests {
 
         // A math-class descent: the driver's delta enters Math mode, and the descent
         // invariant wins over the delta's expecting-close sabotage.
-        let interior = session.group_interior_state(&driver, &base, &math_rule);
+        let interior = session.group_interior_state(&driver, &base, &math_rule).unwrap();
         assert_eq!(interior.mode(), TestMode::Math);
         assert!(interior
             .rules()
@@ -990,13 +1008,13 @@ mod tests {
 
         // Memo hit: the same interior Arc, the hook NOT re-run (miss-only contract),
         // the transition observed on the hit too.
-        let again = session.group_interior_state(&driver, &base, &math_rule);
+        let again = session.group_interior_state(&driver, &base, &math_rule).unwrap();
         assert!(Arc::ptr_eq(&interior, &again));
         assert_eq!(driver.hook_runs.load(Ordering::Relaxed), 1);
         assert_eq!(session.ext.transitions, 2);
 
         // A class the hook declines keeps the canonical descent (and its own entry).
-        let plain = session.group_interior_state(&driver, &base, &brace);
+        let plain = session.group_interior_state(&driver, &base, &brace).unwrap();
         assert_eq!(plain.mode(), TestMode::Text);
         assert_eq!(driver.hook_runs.load(Ordering::Relaxed), 2);
 
@@ -1007,7 +1025,7 @@ mod tests {
             expecting_group_close: Some(Some(Arc::clone(&math_rule))),
             ..TokenRulesOverrides::default()
         });
-        let undriven = session.derived_state(&driver, &base, &hand_built);
+        let undriven = session.derived_state(&driver, &base, &hand_built).unwrap();
         assert_eq!(undriven.mode(), TestMode::Text);
         assert!(!Arc::ptr_eq(&undriven, &interior));
     }
@@ -1101,5 +1119,112 @@ mod tests {
     fn session_ext_is_default_initialized() {
         let session: ParserSession<ObserverLang> = ParserSession::new();
         assert_eq!(session.ext.transitions, 0);
+    }
+
+    // --- scope-op fallibility at the session seam (7.3) --------------------------------
+
+    #[test]
+    fn scope_op_deltas_derive_fresh_and_failures_are_neither_cached_nor_observed() {
+        use crate::scopes::{Package, ScopeOp};
+
+        let base: Arc<ParsingState<ObserverLang>> = state();
+        let mut session: ParserSession<ObserverLang> = ParserSession::new();
+
+        // A delta carrying scope ops is never memoized: two identical derivations are
+        // distinct states (the ops-carrying gate, extending the ext/events rule)…
+        let push = || {
+            ParsingStateDelta::new()
+                .push_provider(Arc::new(Package::<ObserverLang>::new("p")))
+        };
+        let first = session.derived_state(&ObserverDriver, &base, &push()).unwrap();
+        let second = session.derived_state(&ObserverDriver, &base, &push()).unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(session.ext.transitions, 2);
+
+        // …and a failing delta returns the mechanical DeriveError with nothing
+        // committed: no memo entry, no observation.
+        let failing = ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() });
+        let error = session.derived_state(&ObserverDriver, &base, &failing).unwrap_err();
+        assert_eq!(error.failures.len(), 1);
+        assert_eq!(session.ext.transitions, 2);
+        let error = session.derived_state(&ObserverDriver, &base, &failing).unwrap_err();
+        assert_eq!(error.failures.len(), 1); // fails identically — nothing was cached
+        assert_eq!(session.ext.transitions, 2);
+    }
+
+    /// A driver whose descent delta carries a *failing* scope op for group class 9 —
+    /// the group-interior failure path.
+    #[derive(Debug, Clone, Copy, Default)]
+    struct FailingDescentDriver;
+
+    #[derive(Debug, Clone, Copy)]
+    struct FailingDescentLang;
+    impl Lang for FailingDescentLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = Observed;
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = FailingDescentDriver;
+    }
+
+    impl ParseDriver<FailingDescentLang> for FailingDescentDriver {
+        fn observe_transition(
+            &self,
+            ext: &mut Observed,
+            _prev: &ParsingState<FailingDescentLang>,
+            _new: &ParsingState<FailingDescentLang>,
+            _delta: &ParsingStateDelta<FailingDescentLang>,
+        ) {
+            ext.transitions += 1;
+        }
+
+        fn group_interior_delta(
+            &self,
+            _base: &ParsingState<FailingDescentLang>,
+            rule: &Arc<GroupRule<FailingDescentLang>>,
+        ) -> Option<ParsingStateDelta<FailingDescentLang>> {
+            use crate::scopes::ScopeOp;
+            (rule.group_type == 9).then(|| {
+                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() })
+            })
+        }
+    }
+
+    #[test]
+    fn group_interior_failures_repeat_uncached_and_the_recovered_state_expects_the_close() {
+        let base: Arc<ParsingState<FailingDescentLang>> = state();
+        let bad: Arc<GroupRule<FailingDescentLang>> =
+            Arc::new(GroupRule { group_type: 9, open: "$".into(), close: "$".into() });
+        let good: Arc<GroupRule<FailingDescentLang>> =
+            Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        let mut session: ParserSession<FailingDescentLang> = ParserSession::new();
+
+        let error = session.group_interior_state(&FailingDescentDriver, &base, &bad).unwrap_err();
+        // The recovered interior still satisfies the descent invariant (the forced
+        // expecting-close is an override, not an op) — safe to parse under.
+        assert!(error
+            .recovered
+            .rules()
+            .expecting_group_close
+            .as_ref()
+            .is_some_and(|expected| Arc::ptr_eq(expected, &bad)));
+        // The carried delta is the *merged* descent delta (op + forced close).
+        assert_eq!(error.delta.scope_ops.len(), 1);
+        assert!(error.delta.rules.expecting_group_close.is_some());
+        assert_eq!(session.ext.transitions, 0);
+
+        // Failures are not cached: the identical descent fails afresh…
+        assert!(session.group_interior_state(&FailingDescentDriver, &base, &bad).is_err());
+        assert_eq!(session.ext.transitions, 0);
+
+        // …while an unaffected class memoizes as usual.
+        let ok_a = session.group_interior_state(&FailingDescentDriver, &base, &good).unwrap();
+        let ok_b = session.group_interior_state(&FailingDescentDriver, &base, &good).unwrap();
+        assert!(Arc::ptr_eq(&ok_a, &ok_b));
+        assert_eq!(session.ext.transitions, 2);
     }
 }

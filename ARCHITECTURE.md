@@ -106,7 +106,7 @@ Full argument: DESIGN_RATIONALE.md §3.11.)*
 S2  presets      latexlike (module; §8); later: flm (separate crate)
 S1  core         ONE mutually-recursive stratum, organized as topic modules:
                    Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · token/ (Token<'s, L>,
-                   TokenRules, TokenReader, StdTokenReader) · spec/ + library/
+                   TokenRules, TokenReader, StdTokenReader) · spec/ + scopes/
                    · node/ (NodeTree, NodeKind) · constructs/ (ConstructParser + std parsers)
                    · engine/ (Language<L>, ParserSession, ParseResult, NodeRef)
                  Modules are topics for navigation, NOT dependency ranks.
@@ -480,7 +480,9 @@ standard impls `Package` (immutable, loaded wholesale, mode-visibility field) an
 providers and the stack itself no longer nests; `ParsingStateDelta` grows
 definition/stack ops replacing `push_libraries`. `CallableQuery` and innermost-wins
 shadowing carry over unchanged. Design: Phase7Execution.md D3; rationale:
-DESIGN_RATIONALE.md §3.4.)*
+DESIGN_RATIONALE.md §3.4. Landed 7.3 — the module is renamed `library` → `scopes`,
+the state field/getter to `StateData.scopes`/`scopes()`, and `derived()` became
+fallible (`DeriveError`); checkpoint resolutions in the §3.4 landed note.)*
 
 - **Keys are `(CallableTypeId, name)`, many-to-one**: several names may map to one shared
   behavior spec (flyweight). Library keys hold the *normalized* name; the node records the

@@ -228,17 +228,66 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// transition reaches [`ParseDriver::observe_transition`]. The dominant descent
     /// shape; derive from another base via the session method directly
     /// (`cx.session.derived_state(cx.driver, &base, &delta)`).
-    pub fn derived_state(&mut self, delta: &ParsingStateDelta<L>) -> Arc<ParsingState<L>> {
-        self.session.derived_state(self.driver, &self.state, delta)
+    ///
+    /// **Failing scope ops** (Phase 7.3) route through the recover funnel as
+    /// [`ScopeOpFailed`] conditions at the current position: under
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict) the first failure aborts;
+    /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) each failure is
+    /// recorded and the parse continues under the error's
+    /// [`recovered`](crate::state::DeriveError::recovered) state (the failing ops
+    /// skipped, everything else applied), with the transition observed as usual.
+    pub fn derived_state(
+        &mut self,
+        delta: &ParsingStateDelta<L>,
+    ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
+        let base = Arc::clone(&self.state);
+        match self.session.derived_state(self.driver, &base, delta) {
+            Ok(new) => Ok(new),
+            Err(failure) => self.recover_derive_failure(&base, failure),
+        }
     }
 
     /// The group-interior derivation from the **current** state — sugar over
     /// [`ParserSession::group_interior_state`] supplying this context's driver: the
     /// canonical expecting-close override merged with the driver's
     /// [`group_interior_delta`](ParseDriver::group_interior_delta), memoized per
-    /// `(base, rule)`.
-    pub fn group_interior_state(&mut self, rule: &Arc<GroupRule<L>>) -> Arc<ParsingState<L>> {
-        self.session.group_interior_state(self.driver, &self.state, rule)
+    /// `(base, rule)`. Failing scope ops in the driver's descent delta recover exactly
+    /// like [`derived_state`](ParseContext::derived_state)'s (the recovered interior
+    /// still expects the entered rule's close — the descent invariant is an override,
+    /// not an op).
+    pub fn group_interior_state(
+        &mut self,
+        rule: &Arc<GroupRule<L>>,
+    ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
+        let base = Arc::clone(&self.state);
+        match self.session.group_interior_state(self.driver, &base, rule) {
+            Ok(new) => Ok(new),
+            Err(failure) => self.recover_derive_failure(&base, failure),
+        }
+    }
+
+    /// The shared recovery path of the two fallible derivation sugars: report every
+    /// failing op through the recover funnel (strict: the first one aborts), then
+    /// commit the ops-skipped transition — continue under the error's recovered state
+    /// and observe it with the delta the derivation actually applied (which the
+    /// error carries: for group interiors that is the *merged* descent delta this
+    /// context never built).
+    fn recover_derive_failure(
+        &mut self,
+        base: &Arc<ParsingState<L>>,
+        failure: crate::state::DeriveError<L>,
+    ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
+        let pos = self.tokens.pos();
+        let span = SourceSpan::new(&self.source, Span::new(pos, pos));
+        let crate::state::DeriveError { failures, recovered, delta } = failure;
+        for failed_op in &failures {
+            self.recover(ScopeOpFailed::new(failed_op.to_string()), span.clone())?;
+        }
+        // Tolerant continuation: commit the recovered transition — the session seam
+        // observed nothing on the Err path (no transition had been committed).
+        let recovered = Arc::new(recovered);
+        self.driver.observe_transition(&mut self.session.ext, base, &recovered, &delta);
+        Ok(recovered)
     }
 
     /// Parse one **nodes descent** (a content run: group interior, environment body,
@@ -332,6 +381,24 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 )]
 pub struct ImplementationError {
     /// Description of the violated contract.
+    pub detail: String,
+}
+
+/// Condition: a scope op of an in-parse state delta failed
+/// ([`ScopeOpError`](crate::scopes::ScopeOpError), rendered into `detail`) — reported
+/// through the recover funnel by the [`ParseContext`] derivation sugars (Phase 7.3,
+/// decided July 2026): strict parses abort on it; tolerant parses record it and
+/// continue under the ops-skipped state
+/// ([`DeriveError::recovered`](crate::state::DeriveError::recovered)).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.constructs.scope-op-failed",
+    message = "scope op failed: {detail}"
+)]
+pub struct ScopeOpFailed {
+    /// The rendered failure ([`ScopeOpError`](crate::scopes::ScopeOpError)'s
+    /// `Display`).
     pub detail: String,
 }
 

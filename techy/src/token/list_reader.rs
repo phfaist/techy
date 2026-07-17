@@ -141,7 +141,7 @@ impl<L: Lang> core::fmt::Debug for TokenListReader<'_, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::state::{SimpleLang, StateData};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, StdTokenReader, TokenRules, WhitespaceRules,
@@ -182,7 +182,7 @@ mod tests {
     fn state() -> Arc<ParsingState<TestLang>> {
         Arc::new(ParsingState::new(StateData {
             rules: latex_rules(),
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: (),
             ext: (),
         }))

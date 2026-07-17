@@ -19,8 +19,8 @@
 //! The one deliberate omission: **specials trigger strings are not enumerated here.**
 //! Their recognition is delegated to the language via `Lang::scan_specials` (see
 //! [`specials`](super::SpecialsMatch)), because trigger sets can be large and
-//! library-driven. Everything else — commands, comments, groups, whitespace — is rules
-//! data.
+//! provider-driven (the scope stack). Everything else — commands, comments, groups,
+//! whitespace — is rules data.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -164,7 +164,8 @@ pub struct TokenRules<L: Lang> {
     /// [`groups`](Self::groups) (symmetrized July 2026).
     pub comments: Vec<Arc<CommentRule>>,
     /// Whether the specials scan runs. The specials *data* lives with the language
-    /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → libraries), but the
+    /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → the scope stack's
+    /// providers), but the
     /// gate is rules data so a delta can switch it: disabled states freeze with the empty
     /// [`TriggerChars`](super::TriggerChars) filter and the scan hook is never consulted.
     pub enable_specials: bool,

@@ -143,7 +143,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its invocation
     /// form and behavior spec. Typically implemented by a preset dispatching to the
-    /// state's libraries via a [`CallableQuery`](crate::library::CallableQuery) — the
+    /// state's libraries via a [`CallableQuery`](crate::scopes::CallableQuery) — the
     /// token carries the fired escape character for syntax disambiguation. `Specials`
     /// tokens need no hook: recognition = resolution, the token already carries its
     /// spec (that asymmetry is decided — specials resolution is token-time and stays

@@ -472,7 +472,7 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
     use crate::token::{CommentRule, GroupRule, SpecialsMatch, TriggerChars};
@@ -545,7 +545,7 @@ mod tests {
     }
 
     fn state(rules: TokenRules<TestLang>) -> Arc<ParsingState<TestLang>> {
-        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), mode: (), ext: () }))
+        Arc::new(ParsingState::new(StateData { rules, scopes: ScopeStack::new(), mode: (), ext: () }))
     }
 
     /// The `latex_rules` rule of the given class (unique per rule in these tests).
@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     fn specials_state(rules: TokenRules<SpecialsLang>) -> Arc<ParsingState<SpecialsLang>> {
-        Arc::new(ParsingState::new(StateData { rules, libraries: LibraryStack::new(), mode: (), ext: () }))
+        Arc::new(ParsingState::new(StateData { rules, scopes: ScopeStack::new(), mode: (), ext: () }))
     }
 
     #[test]
@@ -1325,7 +1325,7 @@ mod tests {
         }
         let st: Arc<ParsingState<PanickyLang>> = Arc::new(ParsingState::new(StateData {
             rules: latex_rules(),
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: (),
             ext: (),
         }));

@@ -3,7 +3,7 @@
 //!
 //! Specials trigger strings are the one part of tokenization that is *not* plain
 //! [`TokenRules`](super::TokenRules) data: a language may have many trigger strings in
-//! scope, changing with library pushes, so their recognition is delegated to a
+//! scope, changing with scope-stack ops, so their recognition is delegated to a
 //! [`Lang`](crate::state::Lang) hook (`Lang::scan_specials`) instead of being enumerated in
 //! the rules (DESIGN_RATIONALE.md §3.2). Recognition and resolution happen in one call: a
 //! [`SpecialsMatch`] carries both the name and the resolved spec, which removes
@@ -84,6 +84,22 @@ impl TriggerChars {
         match self {
             TriggerChars::Only(chars) => chars.contains(c),
             TriggerChars::Any => true,
+        }
+    }
+
+    /// The union of two filters: a character may start a trigger in the union iff it may
+    /// in either operand ([`Any`](TriggerChars::Any) absorbs). The fold behind a
+    /// multi-provider scan (Phase 7.3): the state caches one filter for the whole
+    /// [`ScopeStack`](crate::scopes::ScopeStack), unioned over its providers at freeze.
+    #[must_use]
+    pub fn union(&self, other: &TriggerChars) -> TriggerChars {
+        match (self, other) {
+            (TriggerChars::Any, _) | (_, TriggerChars::Any) => TriggerChars::Any,
+            (TriggerChars::Only(a), TriggerChars::Only(b)) => {
+                let mut chars = a.clone();
+                chars.extend(b.chars().filter(|&c| !a.contains(c)));
+                TriggerChars::Only(chars)
+            }
         }
     }
 }

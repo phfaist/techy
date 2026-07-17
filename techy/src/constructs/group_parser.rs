@@ -143,7 +143,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
         // The interior state: base + expecting_group_close + the driver's descent
         // delta, session-memoized (one derivation per (base, rule); every descent
         // still reaches observe_transition).
-        let interior_state = cx.group_interior_state(&self.rule);
+        let interior_state = cx.group_interior_state(&self.rule)?;
 
         // Recurse under the interior state (structural swap/revert — §2 state-threading
         // convention). The stop condition names the exact pairing the group opened with,
@@ -231,7 +231,7 @@ mod tests {
     use super::*;
     use crate::engine::ParserSession;
     use crate::error::Recovery;
-    use crate::library::LibraryStack;
+    use crate::scopes::ScopeStack;
     use crate::source::Source;
     use crate::state::{ParsingState, SimpleLang, StateData};
     use crate::token::{
@@ -269,7 +269,7 @@ mod tests {
     fn state() -> Arc<ParsingState<TestLang>> {
         Arc::new(ParsingState::new(StateData {
             rules: rules(),
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: (),
             ext: (),
         }))

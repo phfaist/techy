@@ -192,15 +192,16 @@ impl<L: Lang> GroupData<L> {
 
 /// The payload of a [`Callable`](NodeKind::Callable) node: the **invocation facts** — the
 /// division-of-labor rule of ARCHITECTURE.md §nodes puts shared behavior in the [spec]
-/// (stored once), resolution keys in the library, context in the parsing state, and
+/// (stored once), resolution keys in the scope stack's providers, context in the
+/// parsing state, and
 /// *here* everything specific to this one invocation.
 ///
 /// [spec]: CallableSpec
 pub struct CallableData<L: Lang> {
     /// The invocation form (latexlike: macro / environment / specials).
     pub callable_type: L::CallableTypeId,
-    /// The invocation spelling. Identity-bearing, therefore always owned (library keys
-    /// hold the *normalized* name; this is the name as written).
+    /// The invocation spelling. Identity-bearing, therefore always owned (provider
+    /// keys hold the *normalized* name; this is the name as written).
     pub name: Box<str>,
     /// The behavior spec — shared, de-keyed, and never absent (unknown callables resolve
     /// to per-type fallback singletons, ARCHITECTURE.md §specs).

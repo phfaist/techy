@@ -2,7 +2,7 @@
 //!
 //! [`ParserSession::derived_state`](super::ParserSession::derived_state) memoizes the
 //! *gated* subset of state derivations — deltas that carry only token-rules overrides
-//! and/or a mode override (no ext replacement, no events, no library pushes) — keyed on
+//! and/or a mode override (no ext replacement, no events, no scope ops) — keyed on
 //! the base state's `Arc` identity plus the overrides, with every rule payload taken by
 //! `Arc` identity and the `enable_*` gates and the mode override by value (modes are
 //! `Copy + Eq` vocabulary — value keying is *exact* for them, not conservative).

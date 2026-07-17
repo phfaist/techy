@@ -580,7 +580,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             // The after-effect applies to the loop's own state, not the policy base
             // (decided semantics 4, §3.6 — §3.3's outward propagation blesses applying
             // a delta to a base the producer never saw).
-            cx.state = cx.derived_state(&delta);
+            cx.state = cx.derived_state(&delta)?;
         }
         Ok(self.test_node_stop(cx, id))
     }
@@ -916,7 +916,7 @@ mod tests {
     use super::*;
     use crate::engine::{ParseResult, ParserSession, StdParseDriver};
     use crate::error::Recovery;
-    use crate::library::{CallableQuery, CallableSyntax, Library, LibraryStack};
+    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::{GroupData, NodeExt, StagedNodes};
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
@@ -941,9 +941,9 @@ mod tests {
     impl SimpleLang for TestLang {}
 
     /// The preset resolution pattern, shared by the 6.4 test langs: dispatch a
-    /// `Command` token to the state's libraries under the `CT_MACRO` form
+    /// `Command` token to the state's scope stack under the `CT_MACRO` form
     /// ([`CallableQuery`], escape char included).
-    fn resolve_macro_via_libraries<L: Lang<CallableTypeId = u32>>(
+    fn resolve_macro_via_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
         token: &Token<'_, L>,
     ) -> CommandResolution<L> {
@@ -956,11 +956,12 @@ mod tests {
             CallableSyntax::Command { escape_char: *escape_char },
         )
         .with_token(token);
-        state
-            .libraries()
-            .resolve(&query, state)
-            .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
-            .into()
+        match state.scopes().retrieve_spec(&query, state) {
+            Ok(resolved) => resolved
+                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                .into(),
+            Err(error) => CommandResolution::Unresolved { detail: Some(error.to_string()) },
+        }
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -1012,7 +1013,7 @@ mod tests {
             state: &ParsingState<CmdLang>,
             token: &Token<'_, CmdLang>,
         ) -> CommandResolution<CmdLang> {
-            resolve_macro_via_libraries(state, token)
+            resolve_macro_via_scopes(state, token)
         }
     }
 
@@ -1055,8 +1056,8 @@ mod tests {
 
     /// A library defining each of `names` as a zero-arg `CT_MACRO` callable (one shared
     /// spec — flyweight).
-    fn macro_library<L: Lang<CallableTypeId = u32> + 'static>(names: &[&str]) -> Arc<Library<L>> {
-        let mut lib = Library::new("test-macros");
+    fn macro_library<L: Lang<CallableTypeId = u32> + 'static>(names: &[&str]) -> Arc<Package<L>> {
+        let mut lib = Package::new("test-macros");
         let spec: Arc<dyn CallableSpec<L>> = Arc::new(StdCallableSpec::default());
         for name in names {
             lib.insert(CT_MACRO, *name, Arc::clone(&spec));
@@ -1066,9 +1067,9 @@ mod tests {
 
     /// A `CmdLang` state whose library stack defines `names` as zero-arg macros.
     fn state_with_macros(names: &[&str]) -> Arc<ParsingState<CmdLang>> {
-        let mut libraries = LibraryStack::new();
-        libraries.push(macro_library(names));
-        Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }))
+        let mut scopes = ScopeStack::new();
+        scopes.push(macro_library(names));
+        Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }))
     }
 
     fn math_rule<L: Lang<GroupTypeId = u32>>() -> Arc<GroupRule<L>> {
@@ -1105,7 +1106,7 @@ mod tests {
     ) -> Arc<ParsingState<L>> {
         Arc::new(ParsingState::new(StateData {
             rules,
-            libraries: LibraryStack::new(),
+            scopes: ScopeStack::new(),
             mode: Default::default(),
             ext: (),
         }))
@@ -2284,10 +2285,10 @@ mod tests {
         assert_eq!(node.post_space(), Some(" "));
         let data = node.callable().unwrap();
         assert!(data.arguments.is_empty() && data.slots.is_empty());
-        // The node records the library's spec (the flyweight Arc).
+        // The node records the package's spec (the flyweight Arc).
         let expected = st
-            .libraries()
-            .lookup(
+            .scopes()
+            .retrieve_spec(
                 &CallableQuery::new(
                     CT_MACRO,
                     "foo",
@@ -2295,6 +2296,7 @@ mod tests {
                 ),
                 &st,
             )
+            .unwrap()
             .unwrap();
         assert!(Arc::ptr_eq(&data.spec, &expected));
         assert_eq!(parsed.stop, StopCause::EndOfInput);
@@ -2413,17 +2415,17 @@ mod tests {
             > {
                 let (id, _) = self.inner.parse(cx)?;
                 let delta =
-                    ParsingStateDelta::new().push_library(macro_library(&["late"]));
+                    ParsingStateDelta::new().push_provider(macro_library(&["late"]));
                 Ok((id, Some(delta)))
             }
         }
 
-        let mut lib: Library<CmdLang> = Library::new("base");
+        let mut lib: Package<CmdLang> = Package::new("base");
         lib.insert(CT_MACRO, "def", Arc::new(DefSpec));
-        let mut libraries = LibraryStack::new();
-        libraries.push(Arc::new(lib));
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
         let st: Arc<ParsingState<CmdLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
 
         let parsed = run_both(
             "\\def \\late x",
@@ -2531,12 +2533,12 @@ mod tests {
             }
         }
 
-        let mut lib: Library<CmdLang> = Library::new("base");
+        let mut lib: Package<CmdLang> = Package::new("base");
         lib.insert(CT_MACRO, "take", Arc::new(TakeSpec));
-        let mut libraries = LibraryStack::new();
-        libraries.push(Arc::new(lib));
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
         let st: Arc<ParsingState<CmdLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
 
         // `a{b` would normally open a group (and diagnose it unclosed); the takeover
         // parser consumes it raw. ` %c` would normally be a comment; the returned
@@ -2602,7 +2604,7 @@ mod tests {
                 state: &ParsingState<ExtLang>,
                 token: &Token<'_, ExtLang>,
             ) -> CommandResolution<ExtLang> {
-                resolve_macro_via_libraries(state, token)
+                resolve_macro_via_scopes(state, token)
             }
         }
 
@@ -2638,10 +2640,10 @@ mod tests {
             }
         }
 
-        let mut libraries = LibraryStack::new();
-        libraries.push(macro_library::<ExtLang>(&["foo"]));
+        let mut scopes = ScopeStack::new();
+        scopes.push(macro_library::<ExtLang>(&["foo"]));
         let st: Arc<ParsingState<ExtLang>> =
-            Arc::new(ParsingState::new(StateData { rules: rules(), libraries, mode: (), ext: () }));
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
 
         let parsed =
             run_both("\\foo x", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
@@ -2652,7 +2654,7 @@ mod tests {
     #[test]
     fn invocation_child_state_policy_fixed_and_compute() {
         let st = state_with_macros(&["foo"]);
-        let other = Arc::new(st.derived(&ParsingStateDelta::new()));
+        let other = Arc::new(st.derived(&ParsingStateDelta::new()).unwrap());
 
         // Fixed: the invocation parser runs under (and its node records) the fixed
         // state; the policy scopes the descent only — the next sibling is back on the
@@ -2984,7 +2986,7 @@ mod tests {
         let full = state();
         let restricted = Arc::new(full.derived(&ParsingStateDelta::new().rules(
             TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
-        )));
+        )).unwrap());
         let content = "%x{%y\n}z";
 
         // Under the restricted state alone, `%` is ordinary content everywhere.
@@ -3036,7 +3038,7 @@ mod tests {
         let full = state_with(r);
         let no_comments = Arc::new(full.derived(&ParsingStateDelta::new().rules(
             TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
-        )));
+        )).unwrap());
         let compute = |state: &Arc<ParsingState<TestLang>>, token: &Token<'_, TestLang>| {
             match &token.kind {
                 TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
@@ -3268,7 +3270,7 @@ mod tests {
                 state: &ParsingState<DriveLang>,
                 token: &Token<'_, DriveLang>,
             ) -> CommandResolution<DriveLang> {
-                resolve_macro_via_libraries(state, token)
+                resolve_macro_via_scopes(state, token)
             }
 
             fn group_interior_delta(
@@ -3317,15 +3319,15 @@ mod tests {
         let content = "{a}$m$\\m {y}";
         let mut rules = rules::<DriveLang>();
         rules.groups.push(math_rule());
-        let mut libraries = LibraryStack::new();
-        libraries.push(macro_library::<DriveLang>(&["m"]));
+        let mut scopes = ScopeStack::new();
+        scopes.push(macro_library::<DriveLang>(&["m"]));
         let st = Arc::new(ParsingState::new(StateData {
             rules,
-            libraries,
+            scopes,
             mode: Mode::Text,
             ext: (),
         }));
-        let st = Arc::new(st.derived(&ParsingStateDelta::new())); // through the choke point
+        let st = Arc::new(st.derived(&ParsingStateDelta::new()).unwrap()); // through the choke point
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(content);
         let mut session: ParserSession<DriveLang> = ParserSession::new();
@@ -3380,5 +3382,204 @@ mod tests {
         let after = result.tree.root().child(3).unwrap().child(0).unwrap();
         assert_eq!(after.chars(), Some("y"));
         assert_eq!(after.parsing_state().mode(), Mode::Text);
+    }
+
+    // --- the scope stack in a driven parse (7.3): error specs, op failures, specials ---
+
+    #[test]
+    fn error_callable_spec_diagnoses_and_recovers_as_chars() {
+        use crate::scopes::{CallableDefinedAsError, ErrorCallableSpec};
+
+        let mut package: Package<CmdLang> = Package::new("base");
+        package.insert(
+            CT_MACRO,
+            "gone",
+            Arc::new(ErrorCallableSpec::with_detail("removed upstream"))
+                as Arc<dyn CallableSpec<CmdLang>>,
+        );
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(package));
+        let st: Arc<ParsingState<CmdLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
+
+        // Tolerant: the resolved error spec diagnoses and stages the trigger as a
+        // chars fallback (post-space included — the token was consumed whole); the
+        // parse continues past it.
+        let parsed =
+            run_both("a\\gone b", &st, Recovery::Tolerant, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..1 \"a\"", "chars 1..7 \"\\\\gone \"", "chars 7..8 \"b\""]
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.message(),
+            "\u{2018}gone\u{2019} is defined to be an error: removed upstream"
+        );
+        let condition =
+            diagnostic.data().downcast_ref::<CallableDefinedAsError>().unwrap();
+        assert_eq!(condition.name, "gone");
+        assert_partition(&parsed.result, 0..8);
+
+        // Strict: the same condition aborts (through the recover funnel).
+        let mut reader = StdTokenReader::new("a\\gone b");
+        let error =
+            try_run("a\\gone b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.data().identifier(), CallableDefinedAsError::IDENTIFIER);
+    }
+
+    /// A lang whose driver returns a *failing* scope op as the descent delta of math
+    /// groups — the in-parse op-failure path (7.3).
+    #[derive(Debug, Clone, Copy)]
+    struct FailingMathLang;
+    impl Lang for FailingMathLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = FailingMathDriver;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct FailingMathDriver {
+        recovery: Recovery,
+    }
+
+    impl TestDriver for FailingMathDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            FailingMathDriver { recovery }
+        }
+    }
+
+    impl ParseDriver<FailingMathLang> for FailingMathDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
+
+        fn group_interior_delta(
+            &self,
+            _base: &ParsingState<FailingMathLang>,
+            rule: &Arc<GroupRule<FailingMathLang>>,
+        ) -> Option<ParsingStateDelta<FailingMathLang>> {
+            use crate::scopes::ScopeOp;
+            (rule.group_type == GT_MATH).then(|| {
+                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() })
+            })
+        }
+    }
+
+    #[test]
+    fn descent_scope_op_failure_recovers_tolerantly_and_aborts_strictly() {
+        use crate::constructs::ScopeOpFailed;
+
+        let mut math_rules = rules::<FailingMathLang>();
+        math_rules.groups.push(math_rule());
+        let st = state_with(math_rules);
+
+        // Tolerant: the failure is reported through the recover funnel as a
+        // ScopeOpFailed condition and the group parses under the ops-skipped state.
+        // (Std reader only: a pre-scanned token list cannot disambiguate the closing
+        // `$` of a same-delimiter group — that is expecting_group_close's job.)
+        let mut reader = StdTokenReader::new("a$m$b");
+        let parsed = try_run("a$m$b", &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            .expect("tolerant parse continues");
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..1 \"a\"", "group 1..4", "chars 4..5 \"b\""]
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.message(),
+            "scope op failed: no provider named \u{2018}absent\u{2019} on the scope stack"
+        );
+        assert!(diagnostic.data().is::<ScopeOpFailed>());
+        assert_partition(&parsed.result, 0..5);
+
+        // Strict: the first failing op aborts the parse.
+        let mut reader = StdTokenReader::new("a$m$b");
+        let error = try_run("a$m$b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+            .unwrap_err();
+        assert_eq!(error.data().identifier(), ScopeOpFailed::IDENTIFIER);
+    }
+
+    /// A lang whose specials hooks fold over the state's scope stack — the standard
+    /// preset wiring of the 7.3 provider-based specials.
+    #[derive(Debug, Clone, Copy)]
+    struct StackSpecialsLang;
+    impl Lang for StackSpecialsLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = crate::engine::StdParseDriver;
+
+        fn scan_specials<'s>(
+            state: &ParsingState<Self>,
+            content: &'s str,
+            pos: usize,
+        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            state.scopes().scan_specials(state, content, pos)
+        }
+
+        fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
+            data.scopes.specials_trigger_chars()
+        }
+    }
+
+    #[test]
+    fn package_specials_resolve_through_the_stack_fold_end_to_end() {
+        let inner_short: Arc<dyn CallableSpec<StackSpecialsLang>> =
+            Arc::new(StdCallableSpec::default());
+        let outer_short: Arc<dyn CallableSpec<StackSpecialsLang>> =
+            Arc::new(StdCallableSpec::default());
+        let outer_long: Arc<dyn CallableSpec<StackSpecialsLang>> =
+            Arc::new(StdCallableSpec::default());
+
+        let mut inner: Package<StackSpecialsLang> = Package::new("inner");
+        inner.insert_specials("--", CT_SPECIALS, Arc::clone(&inner_short));
+        let mut outer: Package<StackSpecialsLang> = Package::new("outer");
+        outer.insert_specials("--", CT_SPECIALS, Arc::clone(&outer_short));
+        outer.insert_specials("---", CT_SPECIALS, Arc::clone(&outer_long));
+
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(outer));
+        scopes.push(Arc::new(inner));
+        let st: Arc<ParsingState<StackSpecialsLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
+
+        // `x---y--z`: the longest match wins across providers (`---`, defined outer),
+        // and the equal-length tie goes innermost (`--` resolves to the inner spec).
+        let parsed =
+            run_both("x---y--z", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
+        assert_eq!(
+            shapes(&parsed.result),
+            [
+                "chars 0..1 \"x\"",
+                "callable 1..4",
+                "chars 4..5 \"y\"",
+                "callable 5..7",
+                "chars 7..8 \"z\""
+            ]
+        );
+        let long = parsed.result.tree.root().child(1).unwrap();
+        assert_eq!(long.name(), Some("---"));
+        assert_eq!(long.callable_type(), Some(CT_SPECIALS));
+        assert!(Arc::ptr_eq(&long.callable().unwrap().spec, &outer_long));
+        let short = parsed.result.tree.root().child(3).unwrap();
+        assert_eq!(short.name(), Some("--"));
+        assert!(Arc::ptr_eq(&short.callable().unwrap().spec, &inner_short));
+        assert!(parsed.result.diagnostics.is_empty());
+        assert_partition(&parsed.result, 0..8);
     }
 }

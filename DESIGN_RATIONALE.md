@@ -1058,6 +1058,57 @@ preserves pylatexenc's `---`-beats-`--`); `ProviderError`/miss-report shapes.
 *Revisit if:* per-definition mode visibility is needed beyond what custom providers
 cover, or provider-fold resolution cost shows up in profiles (a freeze-time merged map
 à la `PrefixTable` is the prepared answer).
+*(Landed July 2026, Phase 7.3 — checkpoint session resolutions:)*
+*(a) Fallibility:* `derived()` returns `Result<ParsingState, DeriveError<L>>`; a delta
+without scope ops cannot fail. Failing ops are **skipped** (the rest of the delta still
+applies, in order) and collected; `DeriveError` carries the mechanical failure records
+**plus the fully derived recovered state and the applied delta** (the
+`String::from_utf8` pattern — recovery material rides in the error; the delta is
+carried because the group-interior seam derives with a *merged* delta its caller never
+built, and a recovering caller must still feed `observe_transition` the true
+transition). The error is deliberately *unclassified* — the same failure kind can be an
+extension bug or an embedder input error depending on who built the delta, which the
+type cannot know; **the seam classifies**: the `ParseContext` derivation sugars route
+each failure through the recover funnel as a `ScopeOpFailed` condition (strict parses
+abort on the first one; tolerant parses record them and continue under the recovered
+state, committing the observation themselves), while out-of-parse callers treat `Err`
+as their own input error. User-decided over the abort-only alternative (mapping op
+failures to `ImplementationError`, which bypasses tolerance): op failures behave as
+recoverable source-style conditions so tolerant parses stay alive. Failed derivations
+are never memoized and never observed — the session memo gate extends the old
+`push_libraries` exclusion to `scope_ops`, so the memo caches successes only, and a
+misbehaving driver descent re-reports per descent (loud, not cached away).
+*(b) Specials fold:* longest match wins, ties innermost — verified as *exact*
+pylatexenc parity (`test_for_specials`: a strictly longer match beats an
+earlier-searched category, ties keep the first-searched); since equal-length matches at
+one position are the same spelling, the tie rule *is* redefinition shadowing. One
+deviation from the plan-session sketch: provider-side `scan_specials` returns
+`TokenResult` (the exact shape of the `Lang` hook it feeds), not
+`Result<_, ProviderError>` — scanning providers keep the tokenizer's recoverable-error
+protocol, and the `ScopeStack::scan_specials` fold propagates the first `Err`
+(innermost-first) with no translation. Per-provider trigger chars are deliberately
+state-independent and unioned at freeze: a mode-invisible provider's chars stay in the
+cached filter and its scan declines instead (conservative superset).
+*(c) Shapes:* `ProviderError` is a `#[non_exhaustive]` structured enum (`NotMutable`,
+`UndefinedName{name}`, `Failed(message)` — the `NodeBuildError` precedent);
+`ScopeStackError { provider, error }` attributes in-stack failures; a resolution miss
+is plain `Ok(None)` with the "searched: …" detail composed via
+`ScopeStack::searched_providers()` (a `Display` adapter) — the stack is
+visibility-blind, so a miss always searched the *whole* stack and the searched set is a
+property of the stack, not of one miss (no per-miss allocation).
+*(d)* `iter_symbols` is deferred to the 7.8 view-API session (adding a defaulted trait
+method later is non-breaking; 7.8's consumers will shape the item type).
+*Settled in flight:* module renamed `library` → `scopes` with `StateData.scopes` /
+`state.scopes()` (user choice — no type named `Library` survived); delta-level
+`ScopeOp` is flat (carries the target scope name) while provider-level `DefinitionOp`
+has the routing consumed — the provider *is* the scope; `Define` into an absent scope
+name **lazily creates** a fresh `Scope` innermost (the "lazily on first Define"
+semantics), while `Unload`/`Replace`/`Remove` of absent names are errors, never silent
+no-ops (op builders can always check the visible state first); `with_definitions` is
+atomic per call; `Package` carries **specials as plain data** (`insert_specials`,
+matched longest-first within the package) — pylatexenc's categories hold specials, and
+without it packages would not be wholesale-loadable — with mode visibility checked in
+both `retrieve_spec` and `scan_specials`.
 
 ### 3.5 Nodes and AST
 

@@ -27,10 +27,12 @@
 //!   (DESIGN_RATIONALE.md §3.2).
 //!
 //! The state also stores the definitions visible at this point of the parse
-//! ([`LibraryStack`](crate::library::LibraryStack), Phase 4): construct parsers extend
-//! definitions mid-parse by returning a delta with
-//! [`push_library`](ParsingStateDelta::push_library) (`\newcommand`), and scopes revert
-//! structurally when the caller drops the derived state.
+//! ([`ScopeStack`](crate::scopes::ScopeStack), Phase 7.3): construct parsers extend or
+//! reshape definitions mid-parse by returning a delta carrying
+//! [`scope_ops`](ParsingStateDelta::scope_ops) (`\newcommand`, package loads), and
+//! scopes revert structurally when the caller drops the derived state. Scope ops can
+//! fail, which makes [`derived()`](ParsingState::derived) fallible — see
+//! [`DeriveError`].
 //!
 //! [`Lang::NodeExts`] selects the node extension type bundle ([`NodeExtTypes`], Phase 5);
 //! [`SimpleLang`] is the all-defaults shortcut for languages with no customization.
@@ -41,4 +43,4 @@ mod parsing_state;
 
 pub use delta::{ParsingStateDelta, TokenRulesOverrides};
 pub use lang::{Lang, NodeExtTypes, SimpleLang};
-pub use parsing_state::{ParsingState, StateData};
+pub use parsing_state::{DeriveError, ParsingState, StateData};
