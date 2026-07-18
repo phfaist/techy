@@ -273,14 +273,18 @@ impl<L: Lang> fmt::Debug for Language<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ParseDriver, StdParseDriver};
+    use crate::constructs::{
+        ConstructParser, ConstructParserResult, Invocation, StdInvocationParser,
+    };
+    use crate::engine::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
     use crate::error::{DiagnosticInfo, Recovery};
-    use crate::node::check_tree_invariants;
-    use crate::scopes::{ScopeOp, ScopeStack};
+    use crate::node::{check_tree_invariants, BuildId};
+    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeOp, ScopeStack};
     use crate::source::{MapResolver, SourceProvenance};
+    use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{StateData, TokenRulesOverrides};
     use crate::token::{
-        CommentRule, GroupRule, TokenRules, WhitespaceRules,
+        CommandRule, CommentRule, GroupRule, Token, TokenKind, TokenRules, WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::vec;
@@ -538,5 +542,253 @@ mod tests {
         let language: Language<BogusLang> = Language::new(BogusDriver);
         let err = language.parse("x").unwrap_err();
         assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
+    }
+
+    // --- state threading across tolerant stray-close skips (findings #1–#3) -----------------
+    //
+    // A language whose top-level commands carry a `\newcommand`-style after-effect delta:
+    // processing one evolves the loop's live state, so it diverges from the frozen seed
+    // *before* a later stray close. The scaffolding mirrors the `CmdLang` pattern in the
+    // `constructs::nodes_parser` tests (a driver that resolves commands against the scope
+    // stack, since `StdParseDriver` resolves nothing).
+
+    const CT_MACRO: u32 = 1;
+
+    #[derive(Debug, Clone, Copy)]
+    struct MacroLang;
+    impl Lang for MacroLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = MacroDriver;
+
+        fn initial_state_data() -> StateData<Self> {
+            StateData {
+                rules: macro_rules(vec![brace_rule(), bracket_rule()]),
+                scopes: ScopeStack::new(),
+                mode: (),
+                ext: (),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct MacroDriver {
+        recovery: Recovery,
+    }
+    impl MacroDriver {
+        fn new(recovery: Recovery) -> Self {
+            MacroDriver { recovery }
+        }
+    }
+    impl ParseDriver<MacroLang> for MacroDriver {
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
+        fn resolve_command(
+            &self,
+            state: &ParsingState<MacroLang>,
+            token: &Token<'_, MacroLang>,
+        ) -> CommandResolution<MacroLang> {
+            let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+                return CommandResolution::Unresolved { detail: None };
+            };
+            let query = CallableQuery::new(
+                CT_MACRO,
+                name,
+                CallableSyntax::Command { escape_char: *escape_char },
+            )
+            .with_token(token);
+            match state.scopes().retrieve_spec(&query, state) {
+                Ok(resolved) => resolved
+                    .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
+                    .into(),
+                Err(error) => {
+                    CommandResolution::Unresolved { detail: Some(error.to_string()) }
+                }
+            }
+        }
+    }
+
+    /// A callable whose invocation stages the standard node, then returns `delta` as its
+    /// after-effect for subsequent siblings — the `\newcommand` shape.
+    #[derive(Debug)]
+    struct AfterEffectSpec {
+        delta: ParsingStateDelta<MacroLang>,
+    }
+    impl CallableSpec<MacroLang> for AfterEffectSpec {
+        fn make_invocation_parser<'a, 's>(
+            &'a self,
+            invocation: Invocation<'a, 's, MacroLang>,
+        ) -> alloc::boxed::Box<dyn ConstructParser<MacroLang, Output = BuildId> + 'a>
+        where
+            's: 'a,
+        {
+            alloc::boxed::Box::new(AfterEffectParser {
+                inner: StdInvocationParser::new(invocation),
+                delta: self.delta.clone(),
+            })
+        }
+    }
+    struct AfterEffectParser<'a, 's> {
+        inner: StdInvocationParser<'a, 's, MacroLang>,
+        delta: ParsingStateDelta<MacroLang>,
+    }
+    impl ConstructParser<MacroLang> for AfterEffectParser<'_, '_> {
+        type Output = BuildId;
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, MacroLang>,
+        ) -> ConstructParserResult<MacroLang, (BuildId, Option<ParsingStateDelta<MacroLang>>)>
+        {
+            let (id, _) = self.inner.parse(cx)?;
+            Ok((id, Some(self.delta.clone())))
+        }
+    }
+
+    fn brace_rule() -> Arc<GroupRule<MacroLang>> {
+        Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() })
+    }
+    fn bracket_rule() -> Arc<GroupRule<MacroLang>> {
+        Arc::new(GroupRule { group_type: 1, open: "[".into(), close: "]".into() })
+    }
+    fn angle_rule() -> Arc<GroupRule<MacroLang>> {
+        Arc::new(GroupRule { group_type: 2, open: "<".into(), close: ">".into() })
+    }
+    fn double_bracket_rule() -> Arc<GroupRule<MacroLang>> {
+        Arc::new(GroupRule { group_type: 3, open: "[[".into(), close: "]]".into() })
+    }
+
+    fn macro_rules(groups: Vec<Arc<GroupRule<MacroLang>>>) -> TokenRules<MacroLang> {
+        TokenRules {
+            enable_whitespace: true,
+            whitespace: WhitespaceRules { chars: " \t\n".into() },
+            enable_multi_newline_paragraphs: true,
+            enable_groups: true,
+            groups,
+            temporary_groups: Vec::new(),
+            enable_commands: true,
+            commands: vec![Arc::new(CommandRule {
+                escape_char: '\\',
+                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+            })],
+            enable_comments: true,
+            comments: vec![Arc::new(CommentRule { start: "%".into() })],
+            enable_specials: false,
+            forbidden_chars: "".into(),
+            expecting_group_close: None,
+        }
+    }
+
+    /// A tolerant `MacroLang` whose seed defines `name` as a command with after-effect
+    /// `delta`.
+    fn macro_lang_defining(
+        name: &str,
+        delta: ParsingStateDelta<MacroLang>,
+    ) -> Language<MacroLang> {
+        let mut lib: Package<MacroLang> = Package::new("test");
+        lib.insert(CT_MACRO, name, Arc::new(AfterEffectSpec { delta }));
+        Language::new(MacroDriver::new(Recovery::Tolerant))
+            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(lib)))
+            .unwrap()
+    }
+
+    /// A zero-arg macro package defining `name` — a `\def`-style after-effect payload.
+    fn zero_arg_macro(name: &str) -> Arc<Package<MacroLang>> {
+        let mut lib: Package<MacroLang> = Package::new("defined");
+        lib.insert(CT_MACRO, name, Arc::new(StdCallableSpec::default()));
+        Arc::new(lib)
+    }
+
+    /// A `groups` override keeping the seed's `{}`/`[]` and adding `extra`.
+    fn add_group(extra: Arc<GroupRule<MacroLang>>) -> ParsingStateDelta<MacroLang> {
+        ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: Some(vec![brace_rule(), bracket_rule(), extra]),
+            ..TokenRulesOverrides::default()
+        })
+    }
+
+    /// The callable names among a result's root children, in order (chars/other skipped).
+    fn callable_names(result: &ParseResult<MacroLang>) -> Vec<String> {
+        result
+            .tree
+            .root()
+            .children()
+            .filter_map(|child| child.name().map(String::from))
+            .collect()
+    }
+
+    #[test]
+    fn a_stray_close_of_a_delimiter_a_sibling_delta_added_recovers_tolerantly() {
+        // Finding #1. `\addangle`'s after-effect adds `<`/`>` as a group pair the seed
+        // state lacks, so the `>` that follows is a stray close *only under the loop's
+        // evolved state*. Tolerant parsing must diagnose and skip it. The bug: the old
+        // root loop re-tokenized the close under the frozen `seed`, where `>` is an
+        // ordinary character (not a `GroupClose`), so the recovery misfired into a
+        // spurious `ImplementationError` that aborted the parse even under tolerant
+        // recovery. The delimiter the loop actually saw must drive the diagnosis, never a
+        // re-read under a different state.
+        let language = macro_lang_defining("addangle", add_group(angle_rule()));
+        let result = language.parse("\\addangle >x").unwrap();
+        // Recovery continued past the stray close: `\addangle` staged and `x` reached.
+        assert_eq!(callable_names(&result), ["addangle"]);
+        assert!(
+            result.tree.root().children().any(|c| c.chars() == Some("x")),
+            "content after the stray close should be parsed"
+        );
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
+        assert!(diagnostic.message().contains('>'));
+    }
+
+    #[test]
+    fn definitions_before_a_tolerant_stray_close_stay_in_scope_after_it() {
+        // Finding #2. `\def`'s after-effect defines `\late` for subsequent siblings; a
+        // stray `}` sits between the definition and its use. Tolerant parsing must skip the
+        // `}` and *continue with the definition in scope*, so `\late` resolves. The bug:
+        // the old root loop resumed every descent from the frozen `seed`, so the `\def`
+        // definition was silently dropped across the skip and `\late` came out unresolvable
+        // (a second, spurious diagnostic plus a chars fallback).
+        let language = macro_lang_defining(
+            "def",
+            ParsingStateDelta::new().push_provider(zero_arg_macro("late")),
+        );
+        let result = language.parse("\\def } \\late").unwrap();
+        // `\late` resolved against the definition established before the stray close…
+        assert_eq!(callable_names(&result), ["def", "late"]);
+        // …so the only diagnostic is the stray close itself — no unresolvable-command.
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics.iter().next().unwrap().identifier(),
+            StrayGroupClose::IDENTIFIER
+        );
+    }
+
+    #[test]
+    fn a_stray_close_reports_the_delimiter_the_loop_saw_not_a_reparse() {
+        // Finding #3. `\widen`'s after-effect adds `[[`/`]]`; the seed already closes on a
+        // single `]`. A stray `]]` is one 2-char close under the loop's evolved state, and
+        // the diagnosis must report *that* delimiter. The bug: the old root loop
+        // re-tokenized the close under the frozen `seed`, which only knows the 1-char `]`,
+        // so it reported the wrong (shorter) delimiter and consumed a single byte — leaving
+        // the second `]` to surface as a *second* stray close. Carrying the delimiter on
+        // the stop cause makes the loop report `]]` once and skip both bytes.
+        let language = macro_lang_defining("widen", add_group(double_bracket_rule()));
+        let result = language.parse("\\widen ]]x").unwrap();
+        assert_eq!(callable_names(&result), ["widen"]);
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
+        assert!(
+            diagnostic.message().contains("]]"),
+            "diagnostic should name the 2-char delimiter, got: {}",
+            diagnostic.message()
+        );
     }
 }
