@@ -3044,6 +3044,69 @@ must use an extension trait regardless, and that pattern needs no in-tree demons
 *Rejected:* a `LatexNodeRefExt` trait for the preset (a `use` tax on every consumer, buying
 only symmetry with a constraint the preset does not have).
 
+**`\begin`/`\end` dispatch is scope-stack data: ordinary `Macro` entries of `"base"`** —
+DECIDED (user, July 2026, Phase 7.6 checkpoint, decision (a)).
+`BeginSpec` (the environment composition) and `EndSpec` (orphan-`\end` diagnostics) are
+registered under `begin`/`end` in the seed package like any definition — resolvable
+through the unchanged `LatexlikeDriver::resolve_command`, shadowable, and unloadable
+(`Unload("base")` removes environments along with the specials; pinned in a test).
+Consequence: the `Invocation` arrives typed `Macro`, so the composition stamps
+`CallableType::Environment` (and the environment's own name and spec) on the staged
+node itself — the dispatcher's identity appears nowhere in the tree.
+*Rationale:* the phase's direction is "everything through the stack" (even specials are
+data); a hardcoded `resolve_command` arm would be the one un-shadowable definition in
+the language.
+*Rejected:* the test-lang rehearsal's driver arm (`if name == "begin"`), which made
+`\begin` structural syntax.
+
+**The environment spec surface: `EnvironmentSpec` wraps a dyn `EnvironmentBehavior`;
+`with_body_delta` overrides by adapter** — DECIDED (user, July 2026, Phase 7.6
+checkpoint, decision (b); executes the §3.4 funnel and D4's defaulted
+`make_body_parser()`).
+The concrete wrapper `EnvironmentSpec` is the registration/downcast target (implements
+`CallableSpec` by delegation, titles frames "environment ‘align’"); the inner trait
+carries the behavior as defaulted methods — `arguments()`, `body_state_delta(…)`
+(owned return: behaviors may compute it), `make_body_parser(…)` (default: the core
+`EnvironmentBodyParser` through the rigid `\end{name}` terminator). Hooks receive an
+`EnvironmentInvocation` facts struct (`trigger_span`, `name`, `name_span`) —
+`#[non_exhaustive]`, grown by field as consumers demand; the parsed arguments were
+deliberately left out until a behavior needs them (pylatexenc's `nodeargd` precedent
+noted; adding a field is non-breaking). `EnvironmentSpec::new(arguments)` builds a
+private declarative behavior; `.with_body_delta(delta)` wraps the *current* behavior in
+a delta-overriding adapter — total for custom behaviors too, no fallible builder, no
+second delta field. A non-`EnvironmentSpec` registration under
+`CallableType::Environment` is legitimate: its declared arguments parse and the body
+takes the default handling (the funnel downcast simply misses).
+*Rejected:* a delta field on the wrapper next to the behavior (two sources of truth); a
+`Result`-returning builder gated on the behavior being the standard one (ergonomics
+tax on the 99% case).
+
+**`MacroSpec`/`SpecialsSpec` are real types, not constructor functions** — DECIDED
+(user, July 2026, Phase 7.6 checkpoint, decision (c)).
+Both are `StdCallableSpec`-shaped declarative types whose `stack_frame_title` speaks
+the preset vocabulary ("macro ‘\frac’", "argument #1 of macro ‘\frac’",
+"specials ‘~’"); `base_package()`'s specials switched to a shared `SpecialsSpec`.
+Generic specs remain first-class everywhere.
+*Rationale:* functions returning `StdCallableSpec` would leave tracebacks saying
+"callable ‘…’" — the vocabulary hook exists precisely for presets — and concrete preset
+types are stable downcast targets for later `finalize_node` work.
+
+**Orphan-`\end` recovery: dispatch-time diagnosis, chars over the consumed extent** —
+DECIDED (user, July 2026, Phase 7.6 checkpoint, decisions (d)/(e)).
+Inside a body, `\end` is the stop condition and never reaches resolution, so a
+*dispatched* `\end` is always an orphan: `EndSpec`'s parser reads the rigid name group
+when present, records `OrphanEnd` (message quoting `\end{name}` when the name parsed),
+and tolerantly stages the consumed extent as one `Chars` node — `\end{name}` whole, so
+`{name}` is not re-parsed as a stray group. Preset condition ids are namespaced
+**`latexlike.environments.*`** (`malformed-begin`, `unknown-environment`, `orphan-end`;
+user-chosen over `latexlike.begin.*`/`latexlike.end.*`). Implementation fact worth
+remembering: the tolerant chars fallbacks (malformed `\begin`, nameless orphan `\end`)
+must cover the trigger's syntactic *post-space* too — the token span includes it, and
+trimming it would break the sibling partition invariant; the §G rehearsal had the same
+shape. The body-unwind path that leaves a stray `}` for the root re-crosses the
+recorded root byte-accounting break (stray bytes dropped from the tree) — accepted, no
+new mechanism.
+
 ## 4. Rejected patterns — do not reintroduce
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section

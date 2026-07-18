@@ -11,6 +11,11 @@
 //!   recovery policy, scope-stack command resolution, and the math-mode group plug;
 //! - [`default_token_rules`] and [`base_package`] — the canonical seed data behind
 //!   [`Latexlike::initial_state_data`];
+//! - the callable spec types — [`MacroSpec`] and [`SpecialsSpec`] (declarative,
+//!   with the preset's traceback vocabulary), and [`EnvironmentSpec`] (declared
+//!   arguments plus body behavior via [`EnvironmentBehavior`]) with the
+//!   `\begin`/`\end` composition ([`BeginSpec`]/[`EndSpec`], seeded in
+//!   [`base_package`]);
 //! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
 //!   `NodeRef<'_, Latexlike>`.
@@ -30,15 +35,22 @@
 //! standard spec database (pylatexenc's default-specs port) is a later phase; until
 //! then embedders and tests register the specs they need via scope-stack deltas
 //! ([`Language::with_seed_delta`](crate::engine::Language::with_seed_delta) +
-//! [`ParsingStateDelta::push_provider`](crate::state::ParsingStateDelta::push_provider)).
-//! Environments (`\begin`/`\end`), verbatim, and the argument-code factory arrive in
-//! Phases 7.6–7.7.
+//! [`ParsingStateDelta::push_provider`](crate::state::ParsingStateDelta::push_provider)),
+//! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
+//! [`CallableSpec`]). Verbatim and the argument-code factory arrive in Phase 7.7.
 
 mod driver;
+mod environments;
 mod node_ref;
+mod spec;
 
 pub use driver::LatexlikeDriver;
+pub use environments::{
+    BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
+    MalformedBegin, OrphanEnd, UnknownEnvironment,
+};
 pub use node_ref::MathStyle;
+pub use spec::{MacroSpec, SpecialsSpec};
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -46,7 +58,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::scopes::{Package, ScopeStack};
-use crate::spec::{CallableSpec, StdCallableSpec};
+use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, StateData};
 use crate::token::{
     CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
@@ -82,10 +94,15 @@ pub enum GroupType {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CallableType {
-    /// A macro invocation (`\emph{…}`). Every command token resolves as a macro; the
-    /// `\begin` environment dispatch arrives with the environment subphase (7.6).
+    /// A macro invocation (`\emph{…}`). Every command token resolves as a macro —
+    /// `\begin` and `\end` themselves are ordinary macro entries of the
+    /// [`base_package`] ([`BeginSpec`]/[`EndSpec`]) whose parsers dispatch the
+    /// environment shape.
     Macro,
-    /// An environment (`\begin{itemize}…\end{itemize}`).
+    /// An environment (`\begin{itemize}…\end{itemize}`): entered through
+    /// [`BeginSpec`]'s composition, which resolves the *environment's* spec —
+    /// normally an [`EnvironmentSpec`] — under this callable type by the name in the
+    /// `\begin` name group, and stamps this type on the staged node.
     Environment,
     /// A specials invocation: a trigger character sequence (`~`, `&`, `---`).
     Specials,
@@ -206,19 +223,27 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
     }
 }
 
-/// The seed package `"base"`: the standard specials of pylatexenc's default context —
-/// alignment `&`, non-breaking space `~`, and the ligature specials `` `` ``, `''`,
-/// `--`, `---`, `` !` ``, `` ?` `` — each a zero-argument
-/// [`Specials`](CallableType::Specials) callable sharing one spec (many-to-one is the
-/// package flyweight contract). The multi-character triggers ride the scope-stack
-/// scan's longest-match rule (`---` beats `--`).
+/// The seed package `"base"`: the environment dispatch pair and the standard
+/// specials of pylatexenc's default context.
+///
+/// - The [`Macro`](CallableType::Macro) entries `begin` ([`BeginSpec`] — the
+///   environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics):
+///   ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
+///   not driver code, so they are shadowable and unloadable like anything else.
+/// - The specials: alignment `&`, non-breaking space `~`, and the ligature specials
+///   `` `` ``, `''`, `--`, `---`, `` !` ``, `` ?` `` — each a zero-argument
+///   [`SpecialsSpec`] callable sharing one instance (many-to-one is the package
+///   flyweight contract). The multi-character triggers ride the scope-stack scan's
+///   longest-match rule (`---` beats `--`).
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
-/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"`, or shadow single
-/// triggers by pushing a provider above it.
+/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes
+/// `\begin`/`\end`), or shadow single entries by pushing a provider above it.
 pub fn base_package() -> Package<Latexlike> {
     let mut package = Package::new("base");
-    let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(StdCallableSpec::new(Vec::new()));
+    package.insert(CallableType::Macro, environments::BEGIN_COMMAND_NAME, Arc::new(BeginSpec));
+    package.insert(CallableType::Macro, environments::END_COMMAND_NAME, Arc::new(EndSpec));
+    let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(SpecialsSpec::default());
     for trigger in ["&", "~", "``", "''", "--", "---", "!`", "?`"] {
         package.insert_specials(trigger, CallableType::Specials, Arc::clone(&spec));
     }
@@ -232,6 +257,7 @@ mod tests {
     use crate::error::Recovery;
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::ScopeOp;
+    use crate::spec::StdCallableSpec;
     use crate::state::ParsingStateDelta;
     use alloc::format;
     use alloc::string::ToString;

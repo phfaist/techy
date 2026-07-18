@@ -153,9 +153,20 @@ the core has only the associated types (user-decided, 7.5 checkpoint):
 - All three vocabulary enums are `#[non_exhaustive]` (verbatim-ish variants expected, 7.7).
 - `default_token_rules()` / `base_package()` — the canonical seed data; `"base"` is the
   seeded package of pylatexenc's default specials (user-named, 7.5 checkpoint).
-- `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — constructor helpers producing
-  `StdCallableSpec`-or-wrapper specs (7.6; `EnvironmentSpec` carries the body state delta
-  and the defaulted `make_body_parser()` — Phase 7 plan session.)
+- `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — the preset's spec types (real
+  concrete types, user-decided at the 7.6 checkpoint — they carry the preset's
+  traceback vocabulary "macro ‘\frac’" / "environment ‘align’" / "specials ‘~’" and
+  are stable downcast targets). `MacroSpec`/`SpecialsSpec` are declarative
+  (`StdCallableSpec`-shaped); `EnvironmentSpec` is the §3.4 funnel wrapper over
+  `EnvironmentBehavior` (the inner dyn trait: defaulted `arguments()`,
+  `body_state_delta()`, `make_body_parser()`; hooks receive an
+  `EnvironmentInvocation` facts struct). Builder `with_body_delta(…)` overrides the
+  delta over *any* behavior (adapter-wrapping, total for custom behaviors too).
+- `BeginSpec` / `EndSpec` — the `\begin` dispatcher and the orphan-`\end` diagnoser:
+  ordinary `Macro` entries of `base_package()` (7.6 checkpoint decision (a): dispatch
+  is scope-stack data, not driver code — shadowable/unloadable).
+- Preset condition ids are namespaced `latexlike.environments.*`
+  (`malformed-begin`, `unknown-environment`, `orphan-end`; user-decided 7.6).
 - `NodeRef` accessor sugar as **inherent** methods on `NodeRef<'_, Latexlike>`
   (same-crate privilege, user-decided 7.5; out-of-crate languages use an extension
   trait): `is_math_group`, `math_style`, `macro_name`, `environment_name`,

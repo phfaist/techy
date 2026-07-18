@@ -450,8 +450,9 @@ The core ships one standard implementation (`StdCallableSpec`: the argument list
 data — nothing else; a parser override is not a field but an implementor overriding the
 trait's defaulted `make_invocation_parser` on its own spec type). The familiar
 `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` names
-survive as constructor helpers in the preset stratum (S2) — "macro" and "environment" are
-invocation forms, not core concepts.
+survive as concrete spec types in the preset stratum (S2; landed 7.6 — `EnvironmentSpec`
+wraps a dyn `EnvironmentBehavior` carrying the body state delta and body-parser choice) —
+"macro" and "environment" are invocation forms, not core concepts.
 
 **Libraries** (supersedes `ContextDb`, per PROPOSALS.md but simplified):
 
@@ -1094,14 +1095,20 @@ root. It provides:
   plain characters; optional arguments recognize them via per-spec `temporary_groups`
   rules (7.5 checkpoint).
 - The seed package `"base"` (`base_package()`): pylatexenc's default specials as data
-  (`&`, `~`, ligatures `` `` `` `''` `--` `---` `` !` `` `` ?` ``). Everything else —
-  common macros/environments/accents, `\newcommand` producing definition deltas
-  (parse-level only, no TeX expansion) — waits for the standard spec-database phase.
-- `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` constructor helpers, `\begin`/`\end`
-  environments, verbatim (Phases 7.6–7.7); a standard-argument factory mapping
-  xparse-like code strings to configured standard `ArgumentParser`s (pylatexenc's
-  `LatexStandardArgumentParser` reshaped as a factory — decided July 2026; per-code
-  inventory in ParserLibraryParity.md).
+  (`&`, `~`, ligatures `` `` `` `''` `--` `---` `` !` `` `` ?` ``), plus the environment
+  dispatch pair `begin`/`end` (`BeginSpec`/`EndSpec` — ordinary macro entries, 7.6).
+  Everything else — common macros/environments/accents, `\newcommand` producing
+  definition deltas (parse-level only, no TeX expansion) — waits for the standard
+  spec-database phase.
+- The preset spec types (landed 7.6): `MacroSpec`/`SpecialsSpec` (declarative, preset
+  traceback vocabulary) and `EnvironmentSpec` — the §3.4 funnel wrapper over a dyn
+  `EnvironmentBehavior` (defaulted `arguments`/`body_state_delta`/`make_body_parser`) —
+  driven by `BeginSpec`'s composition over the core building blocks
+  (`read_rigid_name_group` + `parse_declared_arguments` + `EnvironmentBodyParser`).
+  Verbatim (a `make_body_parser` override) in Phase 7.7, with a standard-argument
+  factory mapping xparse-like code strings to configured standard `ArgumentParser`s
+  (pylatexenc's `LatexStandardArgumentParser` reshaped as a factory — decided July
+  2026; per-code inventory in ParserLibraryParity.md).
 - `NodeRef` accessor sugar as inherent methods on `NodeRef<'_, Latexlike>`
   (`is_math_group`, `math_style`, `macro_name`, `environment_name`, `specials_name`).
 - Math handled as group class + first-class mode + mode-visible packages, demonstrating

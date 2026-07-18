@@ -14,9 +14,10 @@ use super::{CallableType, GroupType, Latexlike, Mode};
 
 /// The preset's parse-behavior object ([`Lang::Driver`](crate::state::Lang::Driver)):
 /// carries the tolerant-parsing policy, resolves command tokens through the state's
-/// scope stack (as [`Macro`](CallableType::Macro)s — `\begin` environment dispatch
-/// arrives with the environment subphase), and plugs [`Math`](GroupType::Math) group
-/// interiors into [`Mode::Math`] through the descent-delta channel.
+/// scope stack (as [`Macro`](CallableType::Macro)s — `\begin`/`\end` resolve like any
+/// other command to the [`base_package`](super::base_package)'s dispatch entries),
+/// and plugs [`Math`](GroupType::Math) group interiors into [`Mode::Math`] through
+/// the descent-delta channel.
 ///
 /// Construct-provision and the remaining hooks keep their trait defaults; preset
 /// helper methods (e.g. package loading by name) arrive with the standard spec
@@ -94,7 +95,6 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::Lang;
 
     #[test]
     fn the_default_driver_is_strict() {
