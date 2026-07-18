@@ -283,6 +283,26 @@ impl<L: Lang> Default for StopSpec<'_, L> {
     }
 }
 
+/// Condition: a group close delimiter appeared with no group open — the *root driver's*
+/// diagnosis of [`StopCause::UnexpectedGroupClose`] (defined here, next to the stop
+/// cause that announces the situation, so custom root drivers reuse it; decided
+/// July 2026, Phase 7.4). Inside a group the enclosing [`GroupParser`](super::GroupParser) claims the token
+/// instead ([`UnclosedGroup`](super::UnclosedGroup) covers *that* family) — this condition is for the
+/// outermost level, where nobody claims it: the core
+/// [`Language::parse`](crate::engine::Language::parse) drive loop reports it through
+/// the recover funnel, consumes the token, and resumes (strict parses abort; the
+/// skipped bytes are the accepted tolerant byte-accounting break).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.nodes_parser.stray-group-close",
+    message = "unexpected closing ‘{delim}’ — no group is open"
+)]
+pub struct StrayGroupClose {
+    /// The stray close delimiter as written (e.g. `}`).
+    pub delim: String,
+}
+
 /// How a [`NodesParser`] run ended. Abnormal endings are **data**, not errors — only the
 /// caller knows whether reaching end of input before `\end{align}` is a problem
 /// (DESIGN_RATIONALE.md §3.8 rule 2).
@@ -2907,13 +2927,16 @@ mod tests {
     #[test]
     fn root_driver_skips_a_stray_close_and_continues() {
         // The root always consumes (§3.6): `UnexpectedGroupClose` is data, and the
-        // *root driver* — here the test, later a `Language::parse` entry (Phase 7) —
-        // diagnoses, skips the token, and resumes. The skipped byte is dropped from the
-        // tree: an accepted tolerant byte-accounting break, so this is the one tree the
-        // invariant checker is deliberately not applied to.
+        // *root driver* — here the test; the core `Language::parse` entry drives this
+        // same loop since Phase 7.4 — diagnoses, skips the token, and resumes. The
+        // skipped byte is dropped from the tree: an accepted tolerant byte-accounting
+        // break, so this is the one tree the invariant checker is deliberately not
+        // applied to.
         //
-        // The condition is the driver's own, third-party style (§3.8): a root driver
-        // defines its diagnoses like any downstream language would.
+        // The condition here is deliberately the driver's own, third-party style
+        // (§3.8): a custom root driver defines its diagnoses like any downstream
+        // language would (or reuses the core `StrayGroupClose`, which is what
+        // `Language::parse` reports).
         #[derive(Debug, Clone, DiagnosticInfo)]
         #[diagnostic(
             id = "test.root-driver.stray-group-close",

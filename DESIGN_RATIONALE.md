@@ -2382,6 +2382,51 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
 
+**`Language<L>` + `parse()`: the runtime bundle's landed surface** — DECIDED (user,
+July 2026, Phase 7.4 mini-checkpoint; four API-shape decisions on the deferred-from-
+Phase-6 type). `Language<L>` = `{ driver: L::Driver, initial_state:
+Arc<ParsingState<L>>, resolver: Arc<dyn SourceResolver<O>> }`, long-lived, owning no
+per-parse state (March 2026 principle, kept).
+- **Entry points are two named methods, not a `SourceInput` enum** (rejecting the old
+  §engine sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
+  Into<String>)` mints an anonymous `Source`; `parse_source(Arc<Source<O>>)` takes a
+  pre-minted source (origin/provenance intact — the `resolve_source` round trip feeds
+  it). A conversion enum whose only job is overloading buys one method name at the
+  price of a public type; named methods are self-documenting.
+- **Construction seeds from `Lang::initial_state_data()` and customizes by deriving**:
+  `new(driver)` + fallible `with_seed_delta(delta) -> Result<_, DeriveError<L>>` (the
+  sanctioned seed-customization path — runs `finalize_transition`, so language
+  invariants hold over customized seeds; fallible since 7.3 scope ops; a failing op
+  drops the bundle under construction — an embedder build-time bug, not a source
+  condition) + `with_resolver(…)` (default `NoResolver`); `Default` where `L::Driver:
+  Default`. Wholesale `StateData` replacement deferred until a consumer demonstrates
+  the need. The `Lang` hook remains the seed source for `Language`-less parses.
+- **The advanced path is accessors, not a `session()` method**: `initial_state()`/
+  `driver()`/`resolver()`; the sketch's `session()` dropped — after the Phase 6
+  amendment `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
+  argument-free, so a `Language::session()` would return exactly that (misleading
+  discoverability sugar). `ParseResult` likewise stays borrow-free (nodes are
+  self-contained; results outlive the bundle).
+- **The root drive loop promotes the Phase 6 rehearsal** (nodes_parser
+  `root_driver_skips_a_stray_close_and_continues`): loop `cx.parse_nodes` under
+  `StopSpec::none()` (through the driver factory — the 7.2 uniform-routing contract
+  covers the top-level site); on `UnexpectedGroupClose` diagnose the new core
+  condition **`StrayGroupClose { delim }`** through the recover funnel, consume, and
+  resume; on `EndOfInput` stage the root `List` over `SourceSpan::entire` and
+  `finish()`. The condition lives in `constructs::nodes_parser` **next to
+  `StopCause`** (user choice over engine-side placement): the stop cause announces
+  the situation, and custom root drivers driving `NodesParser` directly reuse the
+  condition without importing from `engine`. Reusing `UnclosedGroup` was rejected —
+  its data shape (`expected_close`) describes an *open* group's missing close, which
+  doesn't exist at the root. `TokenCondition`/`NodeCondition` stops at the root (no
+  conditions were set) are nodes-parser contract violations → implementation error,
+  aborting under any policy; `finish()` failures map through `ImplementationError`
+  likewise. Recorded quirk: each resume after a tolerant stray-close skip re-enters
+  under the **seed** state — sibling-level state changes from before the stray close
+  don't carry across it (the content loop's state is internal per the state-threading
+  convention, and `NodesOutcome` exposes no final state; revisit only if parity
+  demands).
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).

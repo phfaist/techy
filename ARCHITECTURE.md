@@ -791,14 +791,30 @@ pub trait Lang: Sized {                 // the compile-time bundle (was: Languag
 }
 
 pub struct Language<L: Lang> {          // the runtime bundle (was: FLMEnvironment)
-    // base libraries, default TokenRules, default StateExt, settings, resolver
+    driver: L::Driver,                          // the ParseDriver instance
+    initial_state: Arc<ParsingState<L>>,        // frozen seed (from Lang::initial_state_data,
+                                                //   customized via with_seed_delta)
+    resolver: Arc<dyn SourceResolver<L::SourceOrigin>>,  // default NoResolver
 }
 
-impl<L: Lang> Language<L> {
-    pub fn parse(&self, input: impl Into<SourceInput>) -> Result<ParseResult<L>, …>;
-    pub fn session(&self) -> ParserSession<'_, L>;    // advanced path
+impl<L: Lang> Language<L> {             // landed shape (Phase 7.4, July 2026)
+    pub fn parse(&self, content: impl Into<String>) -> Result<ParseResult<L>, ParseError<…>>;
+    pub fn parse_source(&self, source: Arc<Source<…>>) -> Result<ParseResult<L>, ParseError<…>>;
+    // advanced path = accessors (no session(): ParserSession is Language-independent
+    // scratch, ParserSession::new() is the entry):
+    pub fn initial_state(&self) -> &Arc<ParsingState<L>>;
+    pub fn driver(&self) -> &L::Driver;
+    pub fn resolver(&self) -> &Arc<dyn SourceResolver<…>>;
+    pub fn resolve_source(&self, reference: &str, triggered_at: &SourceSpan<…>)
+        -> Result<Arc<Source<…>>, ResolveError>;   // feeds parse_source
 }
 ```
+
+*(Phase 7.4 amendment, July 2026: the sketch above shows the landed surface — two named
+entry methods replace the never-designed `SourceInput` conversion enum, and the advanced
+path is accessors rather than a `session()` method. Root drive loop: `cx.parse_nodes`
+under no stop condition, diagnose-and-skip `StrayGroupClose` on a root-level stray close,
+root `List` over the entire source. DESIGN_RATIONALE §3.6.)*
 
 *(Phase 6 amendment, July 2026: `Language<L>` itself and the `parse()` convenience entry
 point are **deferred** — Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery`)
@@ -833,13 +849,15 @@ by **seeding, not dependency**: at session start it constructs the initial
 `ParserSession` (transient) builds the `NodeTree`, creates `Arc<Source>`s (resolver,
 synthesized sources), collects diagnostics; `finish()` freezes into `ParseResult`.
 
-**Ownership/lifetime model** (March 2026, kept): `Language<L>` is long-lived and user-controlled;
-`ParserSession<'env>` borrows it for one parse; `ParseResult<'env>` owns the frozen `NodeTree`
-and borrows the `Language` (so registry/spec lookups stay available during AST analysis);
-`NodeRef<'pr>` borrows the result. Lifetime parameters stop at these proxy/result types — node
-data itself carries **none** (Arc-wrapped spans, specs, and states make nodes self-contained),
-which is precisely what lets transformed trees outlive the `ParseResult` they came from, and
-lets sources be freed only when the last `SourceSpan` in any tree drops.
+**Ownership/lifetime model** (March 2026; amended by Phase 6/7.4): `Language<L>` is long-lived
+and user-controlled. *The `'env` borrows the March model gave `ParserSession`/`ParseResult` were
+dropped when they landed (Phase 6, kept at 7.4): sessions are Language-independent scratch, and
+`ParseResult` owns its tree and diagnostics with no `Language` reference — nodes are
+self-contained (Arc-wrapped spans, specs, and states), so spec data stays available during AST
+analysis from the nodes themselves.* `NodeRef<'pr>` borrows the result. Lifetime parameters stop
+at these proxy/result types — node data itself carries **none**, which is precisely what lets
+transformed trees outlive the `ParseResult` they came from, and lets sources be freed only when
+the last `SourceSpan` in any tree drops.
 
 ### Errors and tolerant parsing
 

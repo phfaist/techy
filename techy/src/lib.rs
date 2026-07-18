@@ -115,11 +115,11 @@ pub use constructs::{
     GroupParser, ImplementationError, Invocation, InvocationChildState,
     MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,
     MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, ScopeOpFailed, StopCause,
-    StopSpec, TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
-    UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
+    StopSpec, StrayGroupClose, TokenStopCondition, TokenStopKind, UnclosedGroup,
+    UnclosedGroupFound, UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 pub use engine::{
-    CommandResolution, Frame, FrameTitle, ParseDriver, ParseResult, ParserSession,
+    CommandResolution, Frame, FrameTitle, Language, ParseDriver, ParseResult, ParserSession,
     ResolvedCallable, StdParseDriver,
 };
 pub use error::{

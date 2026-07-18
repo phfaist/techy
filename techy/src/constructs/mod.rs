@@ -54,8 +54,8 @@ pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
 pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};
 pub use nodes_parser::{
     ExpressionCallableRequiresContent, NodesOutcome, NodesParser, StopCause, StopSpec,
-    TokenStopCondition, TokenStopKind, UnresolvableCommand, UnusableRecoveryToken,
-    UnusableRecoveryTokenKind,
+    StrayGroupClose, TokenStopCondition, TokenStopKind, UnresolvableCommand,
+    UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 
 use alloc::boxed::Box;

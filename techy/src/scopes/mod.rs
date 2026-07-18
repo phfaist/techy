@@ -1265,7 +1265,7 @@ impl<L: Lang> fmt::Debug for SearchedProviders<'_, L> {
 mod tests {
     use super::*;
     use crate::spec::StdCallableSpec;
-    use crate::state::{ParsingStateDelta, StateData};
+    use crate::state::StateData;
     use crate::token::{TokenError, TokenErrorKind, TokenRules, WhitespaceRules};
     use alloc::string::{String, ToString};
     use alloc::vec;

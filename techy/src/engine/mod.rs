@@ -8,13 +8,14 @@
 //! *behavior* — the [`Recovery`] policy included, moved off the session in 7.2 — lives
 //! on the language's [`ParseDriver`] (see its docs for the placement doctrine).
 //!
-//! The `Language<L>` runtime bundle (long-lived defaults + scope stack, with a `parse()`
-//! convenience entry point) is **deferred** past Phase 6 (DESIGN_RATIONALE.md §3.6):
-//! Phase 6 drives sessions directly, and convenience code is not written before its
-//! convenience is demonstrable. Consequently `ParseResult` carries no `'env` lifetime
-//! and no `Language` reference.
+//! The [`Language<L>`] runtime bundle (Phase 7.4) is the long-lived counterpart: seed
+//! state, driver instance, and source resolver, with the [`parse()`](Language::parse)
+//! convenience entry driving reader → root content loop → root list → `finish()`.
+//! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference
+//! (Phase 6 decision, kept): nodes are self-contained, results outlive their bundle.
 
 mod driver;
+mod language;
 mod state_memo;
 
 use core::fmt;
@@ -40,6 +41,7 @@ use state_memo::{
 };
 
 pub use driver::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
+pub use language::Language;
 
 /// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md §3.8):
 /// pushed at the descent points through
