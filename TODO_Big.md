@@ -4,8 +4,6 @@
 
 - Centralized helpers for accessing parse methods (like parser::parse())
 
-- LibraryStack arch revisit
-
 - Read/extraction API for content: callable arguments by name, callable argument contents nodes, helpers like get_content_as_chars(), parse_keyval(), etc. etc. [cf also pylatexenc/latexnodes/nodes.py]
 
 - Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
