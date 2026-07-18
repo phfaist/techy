@@ -325,21 +325,51 @@ pub enum StopCause {
     EndOfInput,
     /// A group close no condition asked for; the close token is left unconsumed at
     /// `span.start` and the caller decides (diagnose-and-skip at the root, unwind in a
-    /// group parser — §3.8).
+    /// group parser — §3.8). The span covers the delimiter exactly as matched
+    /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
+    /// and nothing more), so a caller diagnosing the close slices it from the source —
+    /// re-peeking under any state but the loop's own could tokenize different bytes.
     UnexpectedGroupClose {
         /// The unexpected close token's span.
         span: Span,
     },
 }
 
-/// What a [`NodesParser`] produces: the staged sibling nodes, in source order, and how
-/// the run ended.
-#[derive(Debug, Clone)]
-pub struct NodesOutcome {
+/// What a [`NodesParser`] produces: the staged sibling nodes, in source order, how the
+/// run ended, and the loop's live state at the stop.
+pub struct NodesOutcome<L: Lang> {
     /// The staged nodes, in source order (the caller claims them as children).
     pub nodes: Vec<BuildId>,
     /// How the parse ended.
     pub stop: StopCause,
+    /// The loop's live state when it returned: the entry state evolved by the sibling
+    /// after-effect deltas applied so far. A caller that resumes content at the stop
+    /// position (the root's tolerant stray-close skip) continues under this state —
+    /// resuming under its own copy of the entry state would silently roll those
+    /// after-effects back (DESIGN_RATIONALE.md §3.8).
+    pub state: Arc<ParsingState<L>>,
+}
+
+// Manual impls: derives would demand `L: Debug`/`L: Clone`, but the state rides behind
+// an `Arc` and `ParsingState` is `Debug` for every `L: Lang`.
+impl<L: Lang> fmt::Debug for NodesOutcome<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodesOutcome")
+            .field("nodes", &self.nodes)
+            .field("stop", &self.stop)
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+impl<L: Lang> Clone for NodesOutcome<L> {
+    fn clone(&self) -> Self {
+        NodesOutcome {
+            nodes: self.nodes.clone(),
+            stop: self.stop,
+            state: Arc::clone(&self.state),
+        }
+    }
 }
 
 /// The main content loop: parses a sequence of sibling nodes until a stop condition,
@@ -351,7 +381,9 @@ pub struct NodesOutcome {
 /// frame. The input parsing state is `cx.state` (the caller sets it); sibling deltas
 /// returned by invocation parsers are applied internally as the loop proceeds, and the
 /// parser itself returns `None` as its pass-through delta (§2 state-threading
-/// convention — no current consumer of a merged delta).
+/// convention — no current consumer of a merged delta). The evolved state is not lost,
+/// though: the outcome exports the loop's live state at the stop
+/// ([`NodesOutcome::state`]) for callers that resume content at the stop position.
 pub struct NodesParser<'p, L: Lang> {
     stop: StopSpec<'p, L>,
     /// Descent-state policy for child constructs (groups and invocations); defaults to
@@ -606,18 +638,22 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     }
 
     /// Drain the collected siblings into the outcome.
-    fn outcome(&mut self, stop: StopCause) -> NodesOutcome {
-        NodesOutcome { nodes: mem::take(&mut self.nodes), stop }
+    fn outcome(&mut self, state: &Arc<ParsingState<L>>, stop: StopCause) -> NodesOutcome<L> {
+        NodesOutcome {
+            nodes: mem::take(&mut self.nodes),
+            stop,
+            state: Arc::clone(state),
+        }
     }
 }
 
 impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
-    type Output = NodesOutcome;
+    type Output = NodesOutcome<L>;
 
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (NodesOutcome, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<ParsingStateDelta<L>>)> {
         loop {
             // Read one token. On a tokenizer error: strict mode aborts, tolerant mode
             // records the diagnostic and adopts the error's recovery — the placeholder
@@ -672,7 +708,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_to(&token, false);
                     }
                     let span = token.span;
-                    return Ok((self.outcome(StopCause::TokenCondition { span }), None));
+                    return Ok((self.outcome(&cx.state, StopCause::TokenCondition { span }), None));
                 }
             }
 
@@ -693,7 +729,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     }
                     let cause =
                         if fired { StopCause::NodeCondition } else { StopCause::EndOfInput };
-                    return Ok((self.outcome(cause), None));
+                    return Ok((self.outcome(&cx.state, cause), None));
                 }
 
                 TokenKind::GroupClose { .. } => {
@@ -708,7 +744,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     } else {
                         StopCause::UnexpectedGroupClose { span: token.span }
                     };
-                    return Ok((self.outcome(cause), None));
+                    return Ok((self.outcome(&cx.state, cause), None));
                 }
 
                 TokenKind::ParagraphBreak => {
@@ -716,7 +752,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // Invariant 2: the break is its own node — the hook's kind, staged
                     // by the loop over the full token span (a driver cannot stage nodes
@@ -726,7 +762,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_past(&token, true);
                     }
                     if self.stage_node(cx, kind, token.span)? {
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
 
@@ -735,7 +771,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
                         }
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // The token's sub-spans tile its span: start delimiter, content,
                     // post-space.
@@ -745,7 +781,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         cx.tokens.move_past(&token, true);
                     }
                     if self.stage_node(cx, kind, token.span)? {
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
 
@@ -764,7 +800,10 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         CommandResolution::Resolved(resolved) => {
                             if self.flush_through(cx, token.pre_space)? {
                                 cx.tokens.move_to(&token, false);
-                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                                return Ok((
+                                    self.outcome(&cx.state, StopCause::NodeCondition),
+                                    None,
+                                ));
                             }
                             let invocation = Invocation {
                                 callable_type: resolved.callable_type,
@@ -773,7 +812,10 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                                 token: &token,
                             };
                             if self.dispatch_invocation(cx, invocation)? {
-                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                                return Ok((
+                                    self.outcome(&cx.state, StopCause::NodeCondition),
+                                    None,
+                                ));
                             }
                         }
                         CommandResolution::Unresolved { detail } => {
@@ -782,7 +824,10 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             let condition =
                                 UnresolvableCommand::new(*name, *escape_char, detail);
                             if self.recover_as_chars(cx, &token, recovered, condition)? {
-                                return Ok((self.outcome(StopCause::NodeCondition), None));
+                                return Ok((
+                                    self.outcome(&cx.state, StopCause::NodeCondition),
+                                    None,
+                                ));
                             }
                         }
                     }
@@ -798,13 +843,13 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             UnusableRecoveryTokenKind::Specials,
                         );
                         if self.recover_as_chars(cx, &token, recovered, condition)? {
-                            return Ok((self.outcome(StopCause::NodeCondition), None));
+                            return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                         }
                         continue;
                     }
                     if self.flush_through(cx, token.pre_space)? {
                         cx.tokens.move_to(&token, false);
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     let invocation = Invocation {
                         callable_type: *callable_type,
@@ -813,7 +858,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         token: &token,
                     };
                     if self.dispatch_invocation(cx, invocation)? {
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
 
@@ -827,13 +872,13 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             UnusableRecoveryTokenKind::GroupOpen,
                         );
                         if self.recover_as_chars(cx, &token, recovered, condition)? {
-                            return Ok((self.outcome(StopCause::NodeCondition), None));
+                            return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                         }
                         continue;
                     }
                     if self.flush_through(cx, token.pre_space)? {
                         cx.tokens.move_to(&token, false);
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // The interior's *base* state per the descent policy (the group
                     // parser derives expecting_group_close from it); `Arc` in, `Arc`
@@ -858,7 +903,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                     )?; // groups have no after-effect
                     self.nodes.push(id);
                     if self.test_node_stop(cx, id) {
-                        return Ok((self.outcome(StopCause::NodeCondition), None));
+                        return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
             }
@@ -3309,7 +3354,7 @@ mod tests {
                 &'p self,
                 stop: StopSpec<'p, DriveLang>,
                 child_states: ChildStateSpec<'p, DriveLang>,
-            ) -> Box<dyn ConstructParser<DriveLang, Output = NodesOutcome> + 'p> {
+            ) -> Box<dyn ConstructParser<DriveLang, Output = NodesOutcome<DriveLang>> + 'p> {
                 self.nodes_parsers.fetch_add(1, Ordering::Relaxed);
                 Box::new(NodesParser::new(stop).with_child_states(child_states))
             }

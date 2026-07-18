@@ -289,7 +289,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         &'p self,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Box<dyn ConstructParser<L, Output = NodesOutcome> + 'p> {
+    ) -> Box<dyn ConstructParser<L, Output = NodesOutcome<L>> + 'p> {
         Box::new(NodesParser::new(stop).with_child_states(child_states))
     }
 

@@ -24,7 +24,7 @@ use crate::source::{
     resolve_source, NoResolver, ResolveError, Source, SourceResolver, SourceSpan, Span,
 };
 use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta};
-use crate::token::{StdTokenReader, TokenKind};
+use crate::token::StdTokenReader;
 
 use super::{ParseResult, ParserSession};
 
@@ -159,11 +159,14 @@ impl<L: Lang> Language<L> {
     ///
     /// **Recovery** follows the driver's policy. A stray group close at the root —
     /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recover
-    /// funnel; tolerant parses consume the token and resume (its bytes are dropped
+    /// funnel; tolerant parses skip the delimiter and resume (its bytes are dropped
     /// from the tree — the accepted tolerant byte-accounting break), strict parses
-    /// abort. Each resume re-enters under the **seed** state: sibling-level state
-    /// changes from before the stray close do not carry across it (the content loop's
-    /// state is internal by the state-threading convention).
+    /// abort. Diagnosis and resume both run under the state the content loop had
+    /// reached at the close (the segment's exit state,
+    /// [`NodesOutcome::state`](crate::constructs::NodesOutcome::state)): the reported
+    /// delimiter is the one the loop's tokenization matched, and sibling-level state
+    /// changes from before the skip — a `\newcommand`-style definition, a group-rule
+    /// change — stay in effect across it, exactly as if the close had not been there.
     ///
     /// `Err` is the strict-mode abort (or an implementation-contract violation, which
     /// aborts under any policy); `Ok` carries the tree plus any tolerantly recorded
@@ -187,36 +190,29 @@ impl<L: Lang> Language<L> {
             // The root descent routes through the driver's factory like every other
             // descent site (Phase 7.2 uniform-routing contract). A pass-through delta
             // has no applicable target at the root and is discarded.
-            let (outcome, _delta) =
-                cx.parse_nodes(Arc::clone(&seed), StopSpec::none(), ChildStateSpec::inherit())?;
+            let (outcome, _delta) = cx.parse_nodes(
+                Arc::clone(&cx.state),
+                StopSpec::none(),
+                ChildStateSpec::inherit(),
+            )?;
             nodes.extend(outcome.nodes);
+            // Thread the segment's exit state: the root context's ambient state
+            // advances with the content, so the recover funnel below and any resume
+            // run under the state the loop actually reached — resuming from the seed
+            // would roll back sibling after-effects (`\newcommand` definitions) across
+            // a tolerant skip.
+            cx.state = outcome.state;
             match outcome.stop {
                 StopCause::EndOfInput => break,
                 StopCause::UnexpectedGroupClose { span } => {
                     // Diagnose-and-skip at the root (DESIGN_RATIONALE.md §3.8): the
-                    // loop left the close token unconsumed at `span.start`.
-                    let stray = match cx.tokens.peek(&seed) {
-                        Ok(token) => token,
-                        Err(error) => {
-                            return Err(ParseError::from_token_error(
-                                error.kind().clone(),
-                                SourceSpan::new(&cx.source, error.span()),
-                            )
-                            .with_frames(cx.session.snapshot_frames()))
-                        }
-                    };
-                    let TokenKind::GroupClose { delim } = stray.kind else {
-                        return Err(cx.implementation_error(
-                            "UnexpectedGroupClose stop without a GroupClose token \
-                             at the stop position (nodes-parser contract violation)",
-                            span,
-                        ));
-                    };
-                    cx.recover(
-                        StrayGroupClose { delim: delim.to_string() },
-                        SourceSpan::new(&cx.source, stray.span),
-                    )?;
-                    cx.tokens.move_past(&stray, true);
+                    // loop left the close unconsumed at `span.start`, and the span is
+                    // the delimiter exactly as matched (`StopCause`'s contract) —
+                    // sliced, not re-peeked: a re-read under any state but the loop's
+                    // own could tokenize different bytes.
+                    let delim = span.slice(cx.source.content()).to_string();
+                    cx.recover(StrayGroupClose { delim }, SourceSpan::new(&cx.source, span))?;
+                    cx.tokens.move_to_pos(span.end());
                 }
                 StopCause::TokenCondition { span } => {
                     return Err(cx.implementation_error(
@@ -507,10 +503,10 @@ mod tests {
 
         struct BogusParser;
         impl ConstructParser<BogusLang> for BogusParser {
-            type Output = NodesOutcome;
+            type Output = NodesOutcome<BogusLang>;
             fn parse(
                 &mut self,
-                _cx: &mut ParseContext<'_, '_, BogusLang>,
+                cx: &mut ParseContext<'_, '_, BogusLang>,
             ) -> ConstructParserResult<
                 BogusLang,
                 (Self::Output, Option<ParsingStateDelta<BogusLang>>),
@@ -519,6 +515,7 @@ mod tests {
                     NodesOutcome {
                         nodes: Vec::new(),
                         stop: StopCause::TokenCondition { span: Span::empty(0) },
+                        state: Arc::clone(&cx.state),
                     },
                     None,
                 ))
@@ -533,8 +530,9 @@ mod tests {
                 &'p self,
                 _stop: StopSpec<'p, BogusLang>,
                 _child_states: ChildStateSpec<'p, BogusLang>,
-            ) -> alloc::boxed::Box<dyn ConstructParser<BogusLang, Output = NodesOutcome> + 'p>
-            {
+            ) -> alloc::boxed::Box<
+                dyn ConstructParser<BogusLang, Output = NodesOutcome<BogusLang>> + 'p,
+            > {
                 alloc::boxed::Box::new(BogusParser)
             }
         }

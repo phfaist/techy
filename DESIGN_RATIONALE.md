@@ -2421,11 +2421,41 @@ per-parse state (March 2026 principle, kept).
   doesn't exist at the root. `TokenCondition`/`NodeCondition` stops at the root (no
   conditions were set) are nodes-parser contract violations → implementation error,
   aborting under any policy; `finish()` failures map through `ImplementationError`
-  likewise. Recorded quirk: each resume after a tolerant stray-close skip re-enters
-  under the **seed** state — sibling-level state changes from before the stray close
-  don't carry across it (the content loop's state is internal per the state-threading
-  convention, and `NodesOutcome` exposes no final state; revisit only if parity
-  demands).
+  likewise. Each tolerant stray-close skip runs **under the loop's evolved state**:
+  `NodesOutcome<L>` exports the segment's exit state (`state:
+  Arc<ParsingState<L>>`), the root threads it into its ambient `cx.state` — so the
+  recover funnel (and any `refine_diagnostic`) and the resume both see the state the
+  loop actually reached — and the diagnosed delimiter is the stop span sliced from
+  the source, never a re-peek.
+
+*(Amended July 2026, stray-close review-fix session: the recorded quirk — each
+tolerant resume re-entered under the frozen **seed**, with the stray token re-peeked
+under it — fired all three of its latent failure modes once after-effect deltas
+became reachable at the root (agent code review; tests
+`engine::language::a_stray_close_of_a_delimiter_a_sibling_delta_added_recovers_tolerantly`
+and siblings). A close only the evolved state knows (`>` added by a sibling's delta)
+re-tokenized under the seed as a plain char, misfiring the `GroupClose` contract
+check into a spurious `ImplementationError` abort even in tolerant mode; a
+seed-known shorter delimiter (`]` where the evolved state matched `]]`) was reported
+and skipped wrong, surfacing a second spurious stray; and definitions established
+before the skip were silently rolled back across it. Two-part fix. (1)
+`NodesOutcome` became `NodesOutcome<L>` and exports the loop's live state at the
+stop — the sanctioned channel for callers that resume content at the stop position;
+the pass-through **delta** channel stays `None` (the exit state is finalized data —
+returning merged deltas instead was rejected because the root would re-derive,
+re-running fallible scope ops and re-firing `observe_transition` on a second,
+divergent path). (2) The root's re-peek is gone: `StopCause::UnexpectedGroupClose`'s
+span covers the delimiter exactly as matched — the tokenizer *defines*
+`GroupClose::delim` as the span's slice — so the root slices the source at the span.
+Carrying a `delim: String` on the stop cause was considered and rejected as a
+redundant copy that could disagree with its own span; re-peeking even under the
+correct evolved state was rejected as re-tokenization whose correctness silently
+rests on reader determinism. Pitfall worth remembering: "recover under the right
+state" includes the **diagnosis**, not just the resume — `ParseDriver::recover` and
+`refine_diagnostic` receive `cx.state`, so the root must thread the exit state
+*before* funneling the condition. Revisit if: a new non-root caller resumes content
+at a stop position — it must thread `outcome.state` the same way, not its own copy
+of the entry state.)*
 
 ### 3.7 Generics strategy
 

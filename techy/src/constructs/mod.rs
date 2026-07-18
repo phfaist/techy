@@ -303,7 +303,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         state: Arc<ParsingState<L>>,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> ConstructParserResult<L, (NodesOutcome, Option<ParsingStateDelta<L>>)>
+    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<ParsingStateDelta<L>>)>
     where
         'a: 'p,
     {
