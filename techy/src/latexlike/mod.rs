@@ -1,0 +1,498 @@
+//! The `latexlike` preset (S2): the familiar LaTeX behavior, assembled from the
+//! generic core.
+//!
+//! The core has no privileged language concepts (no built-in math mode, `{`/`}`, `%`,
+//! or `\`); this module is where the familiar vocabulary returns — as *preset data and
+//! preset code* over the same extension surface any language uses:
+//!
+//! - [`Latexlike`] — the [`Lang`] ZST, with the preset's three closed vocabularies
+//!   [`GroupType`], [`CallableType`], and [`Mode`];
+//! - [`LatexlikeDriver`] — the preset's [`ParseDriver`](crate::engine::ParseDriver):
+//!   recovery policy, scope-stack command resolution, and the math-mode group plug;
+//! - [`default_token_rules`] and [`base_package`] — the canonical seed data behind
+//!   [`Latexlike::initial_state_data`];
+//! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
+//!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
+//!   `NodeRef<'_, Latexlike>`.
+//!
+//! ```
+//! use techy::engine::Language;
+//! use techy::latexlike::{Latexlike, Mode};
+//!
+//! let language: Language<Latexlike> = Language::default();
+//! let result = language.parse("inline $x+y$ math").unwrap();
+//! let math = result.tree.root().child(1).unwrap();
+//! assert!(math.is_math_group());
+//! assert_eq!(math.child(0).unwrap().parsing_state().mode(), Mode::Math);
+//! ```
+//!
+//! **What the preset does not ship yet:** macro and environment *definitions*. The
+//! standard spec database (pylatexenc's default-specs port) is a later phase; until
+//! then embedders and tests register the specs they need via scope-stack deltas
+//! ([`Language::with_seed_delta`](crate::engine::Language::with_seed_delta) +
+//! [`ParsingStateDelta::push_provider`](crate::state::ParsingStateDelta::push_provider)).
+//! Environments (`\begin`/`\end`), verbatim, and the argument-code factory arrive in
+//! Phases 7.6–7.7.
+
+mod driver;
+mod node_ref;
+
+pub use driver::LatexlikeDriver;
+pub use node_ref::MathStyle;
+
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use crate::scopes::{Package, ScopeStack};
+use crate::spec::{CallableSpec, StdCallableSpec};
+use crate::state::{Lang, ParsingState, StateData};
+use crate::token::{
+    CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
+    TriggerChars, WhitespaceRules,
+};
+
+/// The preset's group classes ([`Lang::GroupTypeId`]).
+///
+/// Classes classify **parse behavior**, not delimiter spellings: several delimiter
+/// pairs share one class, and the node's [`GroupData`](crate::node::GroupData) records
+/// the delimiters as written. There is deliberately a *single* math class (decided at
+/// the 7.5 checkpoint): inline and display math parse identically — same interior
+/// [`Mode::Math`], same definition visibility — so inline/display is a delimiter fact,
+/// exposed by [`NodeRef::math_style`](crate::node::NodeRef::math_style), not a class.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GroupType {
+    /// A plain content group (`{…}`, and the argument groups minted by argument
+    /// parsers — e.g. the optional `[…]`): the interior continues in the surrounding
+    /// mode.
+    Content,
+    /// A math group (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`): the interior parses in
+    /// [`Mode::Math`] (the driver's
+    /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
+    /// plug).
+    Math,
+}
+
+/// The preset's invocation forms ([`Lang::CallableTypeId`]): the familiar
+/// macro/environment/specials trichotomy, closed per the core's callable-type
+/// contract — new invocation *forms* are never registered at runtime, new *callables*
+/// are (via the scope stack).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CallableType {
+    /// A macro invocation (`\emph{…}`). Every command token resolves as a macro; the
+    /// `\begin` environment dispatch arrives with the environment subphase (7.6).
+    Macro,
+    /// An environment (`\begin{itemize}…\end{itemize}`).
+    Environment,
+    /// A specials invocation: a trigger character sequence (`~`, `&`, `---`).
+    Specials,
+}
+
+/// The preset's parsing modes ([`Lang::ModeId`]): text vs. math.
+///
+/// The mode is first-class state data ([`ParsingState::mode`]) — the single source of
+/// truth for "am I in math" (no `StateExt` flag): math groups *initiate* the change
+/// through the driver's descent-delta plug, and definition visibility keys on it
+/// ([`Package::set_visible_modes`]). Inline vs. display math is deliberately **not** a
+/// mode (nor a group class): it changes nothing about how the interior parses — see
+/// [`MathStyle`] for the presentation-side accessor.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Mode {
+    /// Ordinary text content — the seed state's mode.
+    #[default]
+    Text,
+    /// Math content (inside `$…$`, `$$…$$`, `\(…\)`, `\[…\]`).
+    Math,
+}
+
+/// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
+/// vocabularies ([`GroupType`], [`CallableType`], [`Mode`]), the canonical seed
+/// ([`default_token_rules`] + the [`base_package`] on the scope stack), and the
+/// scope-stack specials scan. Parse-time behavior lives on [`LatexlikeDriver`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Latexlike;
+
+impl Lang for Latexlike {
+    type GroupTypeId = GroupType;
+    type CallableTypeId = CallableType;
+    type ModeId = Mode;
+    type StateExt = ();
+    type Event = ();
+    type SessionExt = ();
+    type SourceOrigin = Option<String>;
+    type NodeExts = ();
+    type Driver = LatexlikeDriver;
+
+    /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding
+    /// the [`base_package`] (standard specials), [`Mode::Text`].
+    ///
+    /// Coherence contract: `finalize_transition` is not customized (nothing to
+    /// normalize yet — math groups only set the mode), so the seed is trivially
+    /// finalize-coherent; a test pins `initial().derived(&empty) == initial()`
+    /// data-equivalence mechanically.
+    fn initial_state_data() -> StateData<Self> {
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(base_package()));
+        StateData {
+            rules: default_token_rules(),
+            scopes,
+            mode: Mode::Text,
+            ext: (),
+        }
+    }
+
+    /// The standard scope-stack fold: every provider is consulted innermost-first,
+    /// the longest match wins ([`ScopeStack::scan_specials`]).
+    fn scan_specials<'s>(
+        state: &ParsingState<Self>,
+        content: &'s str,
+        pos: usize,
+    ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        state.scopes().scan_specials(state, content, pos)
+    }
+
+    /// The trigger-character union over the state's providers
+    /// ([`ScopeStack::specials_trigger_chars`]), cached per frozen state.
+    fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
+        data.scopes.specials_trigger_chars()
+    }
+}
+
+/// The preset's canonical [`TokenRules`]: `\` + letters commands (single non-letter
+/// characters form single-character commands like `\&` by the tokenizer's standard
+/// rule), `{…}` content groups, the four math delimiter pairs (`$…$`, `$$…$$`,
+/// `\(…\)`, `\[…\]` — all class [`GroupType::Math`]; `$` vs. `$$` at a close position
+/// is disambiguated by the tokenizer's expected-close rule), `%` comments, standard
+/// whitespace with multi-newline paragraph breaks, and specials enabled (recognition
+/// itself lives in the scope stack's providers).
+///
+/// `[`/`]` are deliberately **not** group delimiters: in LaTeX they are plain
+/// characters outside optional-argument positions (`a [b] c` is plain text), and the
+/// optional-argument parser recognizes them through a temporary group rule
+/// ([`TokenRules::temporary_groups`]) exactly where an optional argument may sit
+/// (decided at the 7.5 checkpoint).
+pub fn default_token_rules() -> TokenRules<Latexlike> {
+    fn group(group_type: GroupType, open: &str, close: &str) -> Arc<GroupRule<Latexlike>> {
+        Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
+    }
+
+    TokenRules {
+        enable_whitespace: true,
+        whitespace: WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() },
+        enable_multi_newline_paragraphs: true,
+        enable_groups: true,
+        groups: vec![
+            group(GroupType::Content, "{", "}"),
+            group(GroupType::Math, "$", "$"),
+            group(GroupType::Math, "$$", "$$"),
+            group(GroupType::Math, r"\(", r"\)"),
+            group(GroupType::Math, r"\[", r"\]"),
+        ],
+        temporary_groups: Vec::new(),
+        enable_commands: true,
+        commands: vec![Arc::new(CommandRule {
+            escape_char: '\\',
+            name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+        })],
+        enable_comments: true,
+        comments: vec![Arc::new(CommentRule { start: "%".into() })],
+        enable_specials: true,
+        forbidden_chars: "".into(),
+        expecting_group_close: None,
+    }
+}
+
+/// The seed package `"base"`: the standard specials of pylatexenc's default context —
+/// alignment `&`, non-breaking space `~`, and the ligature specials `` `` ``, `''`,
+/// `--`, `---`, `` !` ``, `` ?` `` — each a zero-argument
+/// [`Specials`](CallableType::Specials) callable sharing one spec (many-to-one is the
+/// package flyweight contract). The multi-character triggers ride the scope-stack
+/// scan's longest-match rule (`---` beats `--`).
+///
+/// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
+/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"`, or shadow single
+/// triggers by pushing a provider above it.
+pub fn base_package() -> Package<Latexlike> {
+    let mut package = Package::new("base");
+    let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(StdCallableSpec::new(Vec::new()));
+    for trigger in ["&", "~", "``", "''", "--", "---", "!`", "?`"] {
+        package.insert_specials(trigger, CallableType::Specials, Arc::clone(&spec));
+    }
+    package
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Language;
+    use crate::error::Recovery;
+    use crate::node::{check_tree_invariants, NodeRef};
+    use crate::scopes::ScopeOp;
+    use crate::state::ParsingStateDelta;
+    use alloc::format;
+    use alloc::string::ToString;
+
+    fn strict() -> Language<Latexlike> {
+        Language::default()
+    }
+
+    fn tolerant() -> Language<Latexlike> {
+        Language::new(LatexlikeDriver::new(Recovery::Tolerant))
+    }
+
+    /// Compact shape strings for a node's children (root list by default):
+    /// `chars(text)`, `group(Math $ $)`, `Macro(emph)`, `Specials(~)`, `comment(text)`.
+    fn shape(node: NodeRef<'_, Latexlike>) -> String {
+        if let Some(text) = node.chars() {
+            format!("chars({text})")
+        } else if node.is_group() {
+            let class = node
+                .group_type()
+                .map_or_else(|| "?".to_string(), |group_type| format!("{group_type:?}"));
+            let (open, close) = node.group_delimiters().unwrap();
+            format!("group({class} {open} {close})")
+        } else if node.is_callable() {
+            format!("{:?}({})", node.callable_type().unwrap(), node.name().unwrap())
+        } else if let Some(text) = node.comment() {
+            format!("comment({text})")
+        } else {
+            "other".to_string()
+        }
+    }
+
+    fn root_shapes(result: &crate::engine::ParseResult<Latexlike>) -> Vec<String> {
+        result.tree.root().children().map(shape).collect()
+    }
+
+    fn parse_shapes(input: &str) -> Vec<String> {
+        let result = strict().parse(input).unwrap();
+        check_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);
+        root_shapes(&result)
+    }
+
+    // --- seed & default rules ---------------------------------------------------------
+
+    #[test]
+    fn the_seed_state_has_the_canonical_defaults() {
+        let language = strict();
+        let seed = language.initial_state();
+        assert_eq!(seed.mode(), Mode::Text);
+        assert_eq!(seed.scopes().provider_names().collect::<Vec<_>>(), ["base"]);
+        assert_eq!(seed.rules(), &default_token_rules());
+    }
+
+    #[test]
+    fn the_seed_is_finalize_coherent() {
+        // The initial_state_data() contract: deriving with an empty delta must be
+        // data-equivalent to the seed itself (pins the coherence obligation).
+        let seed = ParsingState::<Latexlike>::initial();
+        let rederived = seed.derived(&ParsingStateDelta::new()).unwrap();
+        assert_eq!(seed.rules(), rederived.rules());
+        assert_eq!(seed.mode(), rederived.mode());
+        assert_eq!(
+            seed.scopes().provider_names().collect::<Vec<_>>(),
+            rederived.scopes().provider_names().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn default_rules_tokenize_the_latex_shapes() {
+        assert_eq!(
+            parse_shapes("hello {world}!"),
+            ["chars(hello )", "group(Content { })", "chars(!)"]
+        );
+    }
+
+    #[test]
+    fn brackets_are_plain_characters() {
+        // `[`/`]` are not group delimiters in the default rules (7.5 checkpoint):
+        // outside optional-argument positions they are plain text, as in LaTeX.
+        assert_eq!(parse_shapes("a [b] c"), ["chars(a [b] c)"]);
+    }
+
+    #[test]
+    fn comments_parse_to_comment_nodes() {
+        assert_eq!(
+            parse_shapes("a% note\nb"),
+            ["chars(a)", "comment( note)", "chars(b)"]
+        );
+    }
+
+    #[test]
+    fn paragraph_breaks_split_content() {
+        // Multi-newline paragraph break: the default paragraph node is a
+        // whitespace-only chars node over the full break token.
+        assert_eq!(
+            parse_shapes("a\n\nb"),
+            ["chars(a)", "chars(\n\n)", "chars(b)"]
+        );
+    }
+
+    // --- math modes -------------------------------------------------------------------
+
+    #[test]
+    fn math_group_interiors_parse_in_math_mode() {
+        let result = strict().parse("a $x+y$ b").unwrap();
+        check_tree_invariants(&result.tree);
+        assert_eq!(
+            root_shapes(&result),
+            ["chars(a )", "group(Math $ $)", "chars( b)"]
+        );
+
+        let math = result.tree.root().child(1).unwrap();
+        let interior = math.child(0).unwrap();
+        assert_eq!(interior.chars(), Some("x+y"));
+        // Mode entry: the interior's recorded state is math.
+        assert_eq!(interior.parsing_state().mode(), Mode::Math);
+        // The group node itself and the following content are back in text mode
+        // (structural reversion — the outer Arc is restored).
+        assert_eq!(math.parsing_state().mode(), Mode::Text);
+        let after = result.tree.root().child(2).unwrap();
+        assert_eq!(after.parsing_state().mode(), Mode::Text);
+    }
+
+    #[test]
+    fn content_groups_inside_math_stay_in_math_mode() {
+        // `{…}` does not exit math mode: its interior inherits the surrounding state.
+        let result = strict().parse("${a}$").unwrap();
+        let math = result.tree.root().child(0).unwrap();
+        let brace = math.child(0).unwrap();
+        assert_eq!(brace.group_type(), Some(GroupType::Content));
+        assert_eq!(brace.child(0).unwrap().parsing_state().mode(), Mode::Math);
+    }
+
+    #[test]
+    fn dollar_dollar_boundaries_close_before_they_open() {
+        // `$a$$b$` is two inline groups (the expected-close disambiguation), not a
+        // display group — pylatexenc parity.
+        let result = strict().parse("$a$$b$").unwrap();
+        check_tree_invariants(&result.tree);
+        assert_eq!(
+            root_shapes(&result),
+            ["group(Math $ $)", "group(Math $ $)"]
+        );
+        let first = result.tree.root().child(0).unwrap();
+        let second = result.tree.root().child(1).unwrap();
+        assert_eq!(first.child(0).unwrap().chars(), Some("a"));
+        assert_eq!(second.child(0).unwrap().chars(), Some("b"));
+    }
+
+    #[test]
+    fn display_math_delimiters() {
+        assert_eq!(parse_shapes("$$ab$$"), ["group(Math $$ $$)"]);
+        assert_eq!(parse_shapes(r"\[x\]"), [r"group(Math \[ \])"]);
+        assert_eq!(parse_shapes(r"\(x\)"), [r"group(Math \( \))"]);
+    }
+
+    // --- scope stack: commands, visibility, specials ----------------------------------
+
+    /// A test package defining the zero-argument macro `\alpha`, optionally
+    /// math-only.
+    fn alpha_package(math_only: bool) -> Package<Latexlike> {
+        let mut package = Package::new("alphapkg");
+        package.insert(
+            CallableType::Macro,
+            "alpha",
+            Arc::new(StdCallableSpec::new(Vec::new())),
+        );
+        if math_only {
+            package.set_visible_modes(Some(vec![Mode::Math]));
+        }
+        package
+    }
+
+    fn with_alpha(language: Language<Latexlike>, math_only: bool) -> Language<Latexlike> {
+        language
+            .with_seed_delta(
+                ParsingStateDelta::new().push_provider(Arc::new(alpha_package(math_only))),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn commands_resolve_through_the_scope_stack() {
+        let language = with_alpha(strict(), false);
+        let result = language.parse(r"\alpha x").unwrap();
+        check_tree_invariants(&result.tree);
+        assert_eq!(root_shapes(&result), ["Macro(alpha)", "chars(x)"]);
+    }
+
+    #[test]
+    fn mode_visibility_gates_package_definitions() {
+        let language = with_alpha(tolerant(), true);
+
+        // Inside math: the package is visible, `\alpha` resolves.
+        let math = language.parse(r"$\alpha$").unwrap();
+        let group = math.tree.root().child(0).unwrap();
+        assert_eq!(shape(group.child(0).unwrap()), "Macro(alpha)");
+        assert!(math.diagnostics.is_empty());
+
+        // In text mode the package answers "not here": unresolvable, recovered as
+        // chars under the tolerant policy, with the searched providers as detail.
+        let text = language.parse(r"\alpha").unwrap();
+        assert_eq!(root_shapes(&text), [r"chars(\alpha)"]);
+        assert_eq!(text.diagnostics.len(), 1);
+        let message = text.diagnostics.iter().next().unwrap().message();
+        assert!(message.contains("searched providers: alphapkg, base"), "{message}");
+    }
+
+    #[test]
+    fn unknown_commands_abort_strict_and_recover_tolerant() {
+        let err = strict().parse(r"a \foo b").unwrap_err();
+        assert!(err.to_string().contains("cannot resolve command ‘\\foo’"), "{err}");
+
+        let result = tolerant().parse(r"a \foo b").unwrap();
+        assert_eq!(
+            root_shapes(&result),
+            ["chars(a )", r"chars(\foo )", "chars(b)"]
+        );
+        assert_eq!(result.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn base_specials_parse_out_of_the_box() {
+        assert_eq!(
+            parse_shapes("a~b & c"),
+            ["chars(a)", "Specials(~)", "chars(b )", "Specials(&)", "chars( c)"]
+        );
+    }
+
+    #[test]
+    fn ligature_specials_take_the_longest_match() {
+        assert_eq!(
+            parse_shapes("x---y--z"),
+            ["chars(x)", "Specials(---)", "chars(y)", "Specials(--)", "chars(z)"]
+        );
+        assert_eq!(
+            parse_shapes("``q''"),
+            ["Specials(``)", "chars(q)", "Specials('')"]
+        );
+        assert_eq!(
+            parse_shapes("!`Si?`"),
+            ["Specials(!`)", "chars(Si)", "Specials(?`)"]
+        );
+    }
+
+    #[test]
+    fn trigger_chars_without_a_match_stay_plain() {
+        // `!`, `?`, `'`, `` ` `` are trigger *first characters*, but alone (no
+        // following backtick / quote pair) the scan declines and they remain chars.
+        assert_eq!(parse_shapes("a!b?c'd`e"), ["chars(a!b?c'd`e)"]);
+    }
+
+    #[test]
+    fn the_base_package_is_unloadable_by_name() {
+        let language = strict()
+            .with_seed_delta(
+                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
+            )
+            .unwrap();
+        let result = language.parse("a~b --- c").unwrap();
+        assert_eq!(root_shapes(&result), ["chars(a~b --- c)"]);
+    }
+}

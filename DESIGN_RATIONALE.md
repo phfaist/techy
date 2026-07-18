@@ -2983,6 +2983,67 @@ nearly verbatim if the narrative later outgrows rustdoc.
 *Revisit if:* the guide needs ordered, book-style chapter navigation that rustdoc's
 module-shaped layout can't carry.
 
+### 3.13 The latexlike preset
+
+**The preset's group taxonomy is two classes: `Content` and `Math`** — DECIDED (user,
+July 2026, Phase 7.5 checkpoint).
+`GroupType` has a *single* math class covering `$…$`, `$$…$$`, `\(…\)`, `\[…\]`; inline
+vs. display is neither a class nor a mode. Display-ness is a delimiter fact, read off the
+node's recorded delimiters by the preset sugar `NodeRef::math_style()` →
+`MathStyle::{Inline, Display}` (pylatexenc parity: `LatexMathNode.displaytype` is likewise
+delimiter-derived).
+*Rationale:* the class taxonomy cuts at parse-behavior joints, and inline and display math
+parse identically — same interior `Mode::Math`, same definition visibility — so a split
+would do no parse-time work; it would also break the class/mode symmetry (three classes
+over two modes).
+*Rejected:* the plan sketch's `MathInline`/`MathDisplay` split (typed display-ness that a
+rule author declares — its one real advantage: embedder-registered math delimiters would
+classify themselves, where `math_style()`'s table answers `None`); a `Bracket` class and
+`[]` in the default rules — `[`/`]` are plain characters in LaTeX outside
+optional-argument positions (`a [b] c` is text), and `OptionalGroupArgumentParser`
+recognizes them through its own per-spec `temporary_groups` rule, so neither the class nor
+the base rule has a consumer (user-caught; the original plan listed both).
+*Revisit if:* a consumer needs typed display-ness on custom math delimiters (the split
+stays open under `#[non_exhaustive]`).
+
+**Preset vocabulary names are bare and module-scoped** — DECIDED (user, July 2026, Phase
+7.5 checkpoint).
+`GroupType`/`CallableType`/`Mode` with short variants (`Content`/`Math`;
+`Macro`/`Environment`/`Specials`; `Text`/`Math`), reading as `latexlike::Mode::Math`;
+preset items are **not** re-exported at the crate root. All three enums are
+`#[non_exhaustive]` (verbatim-ish variants expected in 7.7); in-crate matches stay
+exhaustive on purpose, so a new variant surfaces every site.
+*Rationale:* NAMING_STRATEGY principle 4 — no sibling vocabulary competes, since the core
+has only the *associated types* (`Lang::GroupTypeId` …), never concrete types with these
+names; the module path disambiguates everywhere else.
+*Rejected:* `Latex`-/`Latexlike`-prefixed enum names (length that does no disambiguation
+work inside a namespaced preset); the `MACRO`/`ENVIRONMENT`/`SPECIALS` spelling (an
+artifact of the u32-const test era, not Rust variant style).
+
+**The seed ships a `"base"` package: pylatexenc's default specials as data** — DECIDED
+(user, July 2026, Phase 7.5 checkpoint; package name user-chosen).
+`Latexlike::initial_state_data()` seeds the scope stack with one package `"base"` holding
+zero-argument specials for `&`, `~`, `` `` ``, `''`, `--`, `---`, `` !` ``, `` ?` `` —
+pylatexenc's default context (its *latex-base* + *nonascii-specials* categories). Droppable
+wholesale by name (`ScopeOp::Unload`), shadowable per-trigger by pushing a provider.
+Macro/environment definitions deliberately stay out until the std-DB port.
+*Rationale:* out-of-the-box parity with pylatexenc's default node shapes, and the
+multi-character ligatures exercise the 7.3 longest-match fold (`---` beats `--`) in real
+defaults rather than only in tests.
+*Rejected:* an empty seed stack (purest, but `~`/`&` would parse as plain chars out of the
+box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
+real-data consumer test-side).
+
+**`NodeRef` preset sugar is inherent, not an extension trait** — DECIDED (user, July 2026,
+Phase 7.5 checkpoint).
+The accessors (`is_math_group`, `math_style`, `macro_name`, `environment_name`,
+`specials_name`) are inherent methods on `NodeRef<'_, Latexlike>`, written in the preset
+module — legal because the preset shares the crate with `node`.
+*Rationale:* zero-import ergonomics on the majority path; an out-of-crate language (FLM)
+must use an extension trait regardless, and that pattern needs no in-tree demonstration.
+*Rejected:* a `LatexNodeRefExt` trait for the preset (a `use` tax on every consumer, buying
+only symmetry with a constraint the preset does not have).
+
 ## 4. Rejected patterns — do not reintroduce
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section

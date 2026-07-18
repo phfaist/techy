@@ -134,19 +134,35 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 ### Preset-layer names (`techy::latexlike`)
 
 "Macro", "environment", and "specials" are **invocation forms, not core concepts**. The
-familiar names survive in the preset layer only:
+familiar names survive in the preset layer only. Preset items are namespaced
+(`techy::latexlike::…`, no crate-root re-exports), and the vocabulary enums use **bare,
+module-scoped names with short variants** — principle 4 applies: no sibling competes,
+the core has only the associated types (user-decided, 7.5 checkpoint):
 
 - `Latexlike` — ZST implementing `Lang`.
-- `LatexlikeDriver` — the preset's `ParseDriver` (preset helper methods like
-  `load_package`; Phase 7 plan session).
+- `LatexlikeDriver` — the preset's `ParseDriver` (scope-stack `resolve_command`, the
+  math-mode `group_interior_delta` plug; landed 7.5 — package-loading helper methods
+  wait for a package registry).
+- `GroupType` (`Content` / `Math`) — group classes. A *single* math class: inline vs.
+  display is a delimiter fact, read by the `NodeRef::math_style()` sugar →
+  `MathStyle` (`Inline` / `Display`). No `Bracket` class: `[]` is not a default group
+  (optional arguments recognize it via per-spec `temporary_groups` rules).
+- `CallableType` (`Macro` / `Environment` / `Specials`) — invocation forms. (CamelCase
+  variants; supersedes the `MACRO`/`ENVIRONMENT`/`SPECIALS` const-era spelling.)
+- `Mode` (`Text` / `Math`; `#[default] Text`) — parsing modes.
+- All three vocabulary enums are `#[non_exhaustive]` (verbatim-ish variants expected, 7.7).
+- `default_token_rules()` / `base_package()` — the canonical seed data; `"base"` is the
+  seeded package of pylatexenc's default specials (user-named, 7.5 checkpoint).
 - `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — constructor helpers producing
-  `StdCallableSpec`s. (`EnvironmentSpec` carries the body state delta and the defaulted
-  `make_body_parser()` — Phase 7 plan session.)
-- `MACRO` / `ENVIRONMENT` / `SPECIALS` — the variants of the preset's `CallableTypeId` enum.
-- `NodeRef` accessor sugar (`as_math()`-style environment/macro views over `Callable` nodes).
+  `StdCallableSpec`-or-wrapper specs (7.6; `EnvironmentSpec` carries the body state delta
+  and the defaulted `make_body_parser()` — Phase 7 plan session.)
+- `NodeRef` accessor sugar as **inherent** methods on `NodeRef<'_, Latexlike>`
+  (same-crate privilege, user-decided 7.5; out-of-crate languages use an extension
+  trait): `is_math_group`, `math_style`, `macro_name`, `environment_name`,
+  `specials_name`.
 
-Type aliases (`type LatexParseResult = ParseResult<Latexlike>` …) keep simple usage
-generics-free.
+Type aliases (`type LatexParseResult = ParseResult<Latexlike>` …) remain a deferred
+bikeshed — none shipped in 7.5; `Language<Latexlike>` reads fine without them.
 
 ## Superseded Names
 

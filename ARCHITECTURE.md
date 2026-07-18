@@ -375,9 +375,12 @@ Properties, roughly in decreasing order of importance:
   with open/close-ambiguity merging, salvaged from the WIP) stay valid for the `Arc`'s
   lifetime because states are immutable — and `dbg!(state)` always shows exactly what the
   tokenizer will do.
-- **Math mode does not exist here.** The latexlike preset defines
-  `StateExt = LatexlikeState { in_math_mode: MathMode, … }` plus its `Event` type; its
-  math-group parser emits the event. The core never asks.
+- **Math mode does not exist here** — as a *privileged concept*: the first-class `mode`
+  field is neutral per-language data (`L::ModeId`). The latexlike preset defines
+  `Mode::{Text, Math}` and needs no `StateExt` flag and no `Event`: its driver's
+  `group_interior_delta` initiates the mode change, `finalize_transition` may interpret
+  it. The core never asks. (Amended July 2026, Phases 7.1/7.5; formerly sketched as
+  `StateExt = { in_math_mode, … }` + events.)
 - `ParsingState` is immutable and cheaply shareable; the engine wraps it in `Arc` and creates
   a new one only at transitions, so nodes record their parse-time state
   (SOURCE_ARCHITECTURE.md decision, kept). No `TypeId` maps, no `dyn Any`.
@@ -1074,24 +1077,35 @@ exists on top is a bikeshed we can defer.
 
 ## 8. The latexlike preset (S2)
 
-A module (`techy::latexlike`), not a separate crate, providing:
+A module (`techy::latexlike`), not a separate crate. Core landed in Phase 7.5 (checkpoint
+decisions in DESIGN_RATIONALE §3.13); items are namespaced, not re-exported at the crate
+root. It provides:
 
-- `Latexlike` ZST implementing `Lang` (`StateExt` with `MathMode`, …); registers callable types
-  `MACRO` / `ENVIRONMENT` / `SPECIALS` and the standard group types; provides `MacroSpec` /
-  `EnvironmentSpec` / `SpecialsSpec` constructor helpers and `NodeRef` accessor sugar
-  (`as_math()`-style, environment/macro views over `Callable` nodes).
-- A standard-argument factory: a plain constructor function mapping xparse-like string
-  codes to configured standard `ArgumentParser`s (pylatexenc's
-  `LatexStandardArgumentParser` reshaped as a factory, not replicated as a parser type —
-  decided July 2026; per-code inventory in ParserLibraryParity.md).
-- Default `TokenRules`: `\` escape, `{}` groups, `[]` optional-argument group type, `$ $$ \( \[`
-  math group types, `%` comments, standard specials strings (`~ & # ^ _` …).
-- A standard `Library`: common macros/environments/accents (the "easy wins" list from
-  PROPOSALS.md §4), `\begin`/`\end` handling, verbatim environments, `\newcommand` producing
-  library-extension deltas (parse-level only — no TeX expansion engine, per the decided
-  non-goals in PROPOSALS.md).
-- Math handled as group types + state ext + mode-aware `SpecLookup`, demonstrating the pattern
-  FLM will use.
+- `Latexlike` ZST implementing `Lang` with the three closed vocabularies (bare,
+  module-scoped, `#[non_exhaustive]` enums): `GroupType` (`Content`/`Math` — a *single*
+  math class; inline vs. display is a delimiter fact read by the `NodeRef::math_style()`
+  sugar), `CallableType` (`Macro`/`Environment`/`Specials`), `Mode` (`Text`/`Math`).
+  `StateExt = ()` — the first-class `mode` field is the single source of truth.
+- `LatexlikeDriver`: the recovery knob, scope-stack `resolve_command` (miss detail =
+  searched providers), and the math plug (`group_interior_delta` → mode override for
+  math-class rules).
+- Default `TokenRules` (`default_token_rules()`): `\` escape, `{}` content groups,
+  `$ $$ \( \[` math groups, `%` comments. `[]` is deliberately **not** a group type —
+  plain characters; optional arguments recognize them via per-spec `temporary_groups`
+  rules (7.5 checkpoint).
+- The seed package `"base"` (`base_package()`): pylatexenc's default specials as data
+  (`&`, `~`, ligatures `` `` `` `''` `--` `---` `` !` `` `` ?` ``). Everything else —
+  common macros/environments/accents, `\newcommand` producing definition deltas
+  (parse-level only, no TeX expansion) — waits for the standard spec-database phase.
+- `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` constructor helpers, `\begin`/`\end`
+  environments, verbatim (Phases 7.6–7.7); a standard-argument factory mapping
+  xparse-like code strings to configured standard `ArgumentParser`s (pylatexenc's
+  `LatexStandardArgumentParser` reshaped as a factory — decided July 2026; per-code
+  inventory in ParserLibraryParity.md).
+- `NodeRef` accessor sugar as inherent methods on `NodeRef<'_, Latexlike>`
+  (`is_math_group`, `math_style`, `macro_name`, `environment_name`, `specials_name`).
+- Math handled as group class + first-class mode + mode-visible packages, demonstrating
+  the pattern FLM will use.
 
 The TeX-compliance non-goals from PROPOSALS.md §4 (catcodes, expansion, conditionals) remain
 non-goals; the `TokenReader` trait is the documented escape hatch for anyone who truly needs
