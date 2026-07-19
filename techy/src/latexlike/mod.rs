@@ -206,23 +206,33 @@ impl Lang for Latexlike {
 /// optional-argument parser recognizes them through a temporary group rule
 /// ([`TokenRules::temporary_groups`]) exactly where an optional argument may sit
 /// (decided at the 7.5 checkpoint).
+///
+/// Whitespace is the **ASCII** set (space, tab, `\n`, `\r`, vertical tab, form feed) —
+/// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
+/// space (NBSP U+00A0, U+2028, …) is ordinary content here, so e.g. an NBSP after
+/// `\emph` becomes a content char rather than being swallowed as post-macro space
+/// (decided for determinism and a fixed char-set model; DESIGN_RATIONALE.md §3.13).
+///
+/// The four math delimiter pairs come from the shared `MATH_DELIMITERS` table (the
+/// single source of truth also read by [`NodeRef::math_style`](crate::node::NodeRef::math_style)).
 pub fn default_token_rules() -> TokenRules<Latexlike> {
     fn group(group_type: GroupType, open: &str, close: &str) -> Arc<GroupRule<Latexlike>> {
         Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
     }
+
+    let mut groups = vec![group(GroupType::Content, "{", "}")];
+    groups.extend(
+        node_ref::MATH_DELIMITERS
+            .iter()
+            .map(|&(open, close, _style)| group(GroupType::Math, open, close)),
+    );
 
     TokenRules {
         enable_whitespace: true,
         whitespace: WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() },
         enable_multi_newline_paragraphs: true,
         enable_groups: true,
-        groups: vec![
-            group(GroupType::Content, "{", "}"),
-            group(GroupType::Math, "$", "$"),
-            group(GroupType::Math, "$$", "$$"),
-            group(GroupType::Math, r"\(", r"\)"),
-            group(GroupType::Math, r"\[", r"\]"),
-        ],
+        groups,
         temporary_groups: Vec::new(),
         enable_commands: true,
         commands: vec![Arc::new(CommandRule {
@@ -238,7 +248,8 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 }
 
 /// The seed package `"base"`: the environment dispatch pair and the standard
-/// specials of pylatexenc's default context.
+/// specials of pylatexenc's default context (bar the paragraph-break special; see
+/// below).
 ///
 /// - The [`Macro`](CallableType::Macro) entries `begin` ([`BeginSpec`] — the
 ///   environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics):
@@ -251,6 +262,12 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 ///   longest-match rule (`---` beats `--`).
 /// 
 /// ### PhF -- We should not include &, !`, and ?` here ("!`", "?`" already removed)
+///
+/// pylatexenc's default context also ships a `\n\n` paragraph-break special; the
+/// preset deliberately omits it — a multi-newline break is a whitespace chars node
+/// here (via
+/// [`enable_multi_newline_paragraphs`](TokenRules::enable_multi_newline_paragraphs)),
+/// not a specials node (DESIGN_RATIONALE.md §3.13).
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
 /// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes
@@ -271,7 +288,7 @@ pub fn base_package() -> Package<Latexlike> {
 mod tests {
     use super::*;
     use crate::engine::Language;
-    use crate::error::Recovery;
+    use crate::error::{Recovery, Severity};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::ScopeOp;
     use crate::spec::StdCallableSpec;
@@ -495,6 +512,29 @@ mod tests {
             ["chars(a )", r"chars(\foo )", "chars(b)"]
         );
         assert_eq!(result.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn unresolvable_command_diagnostic_carries_span_severity_and_detail() {
+        // The searched-providers detail rides the strict abort error too — not only the
+        // tolerant diagnostic (guards the strict path from silently dropping it).
+        let err = strict().parse(r"a \foo b").unwrap_err();
+        assert!(
+            err.to_string().contains("searched providers: base"),
+            "strict error lost the searched-providers detail: {err}"
+        );
+
+        // The tolerant diagnostic is Error-severity and spans the unresolved command
+        // token exactly (guards against a zero-width or post-space-shifted span).
+        let result = tolerant().parse(r"a \foo b").unwrap();
+        let diag = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diag.severity(), Severity::Error);
+        assert_eq!(diag.span().content(), r"\foo ");
+        assert!(
+            diag.message().contains("searched providers: base"),
+            "{}",
+            diag.message()
+        );
     }
 
     #[test]

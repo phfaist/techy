@@ -21,6 +21,20 @@ pub enum MathStyle {
     Display,
 }
 
+/// The preset's math-delimiter pairs `(open, close, style)` — the single source of
+/// truth shared by [`default_token_rules`](super::default_token_rules), which builds
+/// the [`Math`](GroupType::Math) group rules from `(open, close)`, and
+/// [`math_style`](NodeRef::math_style), which reads the style back off a node's
+/// recorded opening delimiter. Keeping both readers on one table removes the drift
+/// risk of two hand-maintained delimiter lists. Embedder-registered math delimiters
+/// are not listed here, so `math_style` answers `None` for them.
+pub(super) const MATH_DELIMITERS: [(&str, &str, MathStyle); 4] = [
+    ("$", "$", MathStyle::Inline),
+    ("$$", "$$", MathStyle::Display),
+    (r"\(", r"\)", MathStyle::Inline),
+    (r"\[", r"\]", MathStyle::Display),
+];
+
 /// Latexlike accessor sugar (preset vocabulary over the generic accessors).
 impl<'t> NodeRef<'t, Latexlike> {
     /// Whether this node is a math group ([`GroupType::Math`]).
@@ -38,11 +52,10 @@ impl<'t> NodeRef<'t, Latexlike> {
             return None;
         }
         let (open, _close) = self.group_delimiters()?;
-        match open {
-            "$" | r"\(" => Some(MathStyle::Inline),
-            "$$" | r"\[" => Some(MathStyle::Display),
-            _ => None,
-        }
+        MATH_DELIMITERS
+            .iter()
+            .find(|(delim_open, _, _)| *delim_open == open)
+            .map(|&(_, _, style)| style)
     }
 
     /// The macro name, when this node is a macro invocation (`\emph` → `"emph"`).

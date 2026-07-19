@@ -48,9 +48,10 @@
 //!   and environment bodies land in 6.4–6.6.
 //! - [`latexlike`] preset (S2) — the familiar LaTeX behavior: the [`Latexlike`](latexlike::Latexlike)
 //!   lang with text/math modes, scope-stack command resolution, default token rules and
-//!   base specials, `NodeRef` accessor sugar. **In progress (Phase 7.5)**; environments,
-//!   verbatim, and the argument-code factory land in 7.6–7.7. Preset items are
-//!   namespaced (`techy::latexlike::…`), not re-exported at the crate root.
+//!   base specials, environments (`\begin`/`\end`), and `NodeRef` accessor sugar.
+//!   **In progress (Phase 7)**: the preset core landed in 7.5 and environments in 7.6;
+//!   verbatim and the argument-code factory land in 7.7. Preset items are namespaced
+//!   (`techy::latexlike::…`), not re-exported at the crate root.
 //!
 //! ## Quick start (what exists today)
 //!

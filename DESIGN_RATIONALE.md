@@ -3023,16 +3023,32 @@ artifact of the u32-const test era, not Rust variant style).
 **The seed ships a `"base"` package: pylatexenc's default specials as data** — DECIDED
 (user, July 2026, Phase 7.5 checkpoint; package name user-chosen).
 `Latexlike::initial_state_data()` seeds the scope stack with one package `"base"` holding
-zero-argument specials for `&`, `~`, `` `` ``, `''`, `--`, `---`, `` !` ``, `` ?` `` —
+zero-argument specials for `&`, `~`, ``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` `` —
 pylatexenc's default context (its *latex-base* + *nonascii-specials* categories). Droppable
 wholesale by name (`ScopeOp::Unload`), shadowable per-trigger by pushing a provider.
 Macro/environment definitions deliberately stay out until the std-DB port.
-*Rationale:* out-of-the-box parity with pylatexenc's default node shapes, and the
+*Rationale:* out-of-the-box parity with pylatexenc's default node shapes for these
+triggers — with one deliberate exception: the `\n\n` paragraph-break special of
+pylatexenc's *latex-paragraph* category is omitted, so a multi-newline break is a
+whitespace chars node here (`enable_multi_newline_paragraphs`), not a specials node. The
 multi-character ligatures exercise the 7.3 longest-match fold (`---` beats `--`) in real
 defaults rather than only in tests.
 *Rejected:* an empty seed stack (purest, but `~`/`&` would parse as plain chars out of the
 box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
 real-data consumer test-side).
+
+**Default whitespace is the ASCII set, not Unicode-aware** — DECIDED (user, July 2026,
+Phase 7.5 checkpoint).
+`default_token_rules()` sets `WhitespaceRules.chars` to the six ASCII whitespace
+characters (space, tab, `\n`, `\r`, vertical tab, form feed); a Unicode space (NBSP
+U+00A0, U+2028, …) is ordinary content, diverging from pylatexenc's Unicode-aware
+`str.isspace()` (which swallows e.g. an NBSP after `\emph` as post-macro space, yielding a
+different node shape).
+*Rationale:* the `WhitespaceRules` model is a fixed char-set membership test, and an ASCII
+set is deterministic and needs no Unicode tables; the divergence is narrow (only exotic
+Unicode spaces in a source) and now recorded rather than silent.
+*Rejected:* matching pylatexenc by widening `WhitespaceRules` to a `char::is_whitespace`
+predicate — deferred as an unforced core-model change; revisit if real inputs demand it.
 
 **`NodeRef` preset sugar is inherent, not an extension trait** — DECIDED (user, July 2026,
 Phase 7.5 checkpoint).

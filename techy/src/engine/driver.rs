@@ -252,10 +252,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// The extra state delta a group descent applies to its interior, keyed on the
     /// entered rule — the data plug for "entering this group class changes the state"
     /// (the latexlike math plug: a math-class rule returns
-    /// `ParsingStateDelta::new().mode(MathInline)`, and
-    /// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition)
-    /// interprets the mode change). `None` — the default — means the canonical descent
-    /// derivation alone.
+    /// `ParsingStateDelta::new().mode(Mode::Math)`, so the interior parses in math
+    /// mode). `None` — the default — means the canonical descent derivation alone.
     ///
     /// **Must be a deterministic pure function of `(base, rule)`** — the result is
     /// memoized per `(base, rule)` by [`ParserSession::group_interior_state`] (`Arc`

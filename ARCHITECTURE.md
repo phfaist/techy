@@ -1098,7 +1098,7 @@ root. It provides:
   plain characters; optional arguments recognize them via per-spec `temporary_groups`
   rules (7.5 checkpoint).
 - The seed package `"base"` (`base_package()`): pylatexenc's default specials as data
-  (`&`, `~`, ligatures `` `` `` `''` `--` `---` `` !` `` `` ?` ``), plus the environment
+  (`&`, `~`, ligatures ``` `` ``` `''` `--` `---` `` !` `` `` ?` ``), plus the environment
   dispatch pair `begin`/`end` (`BeginSpec`/`EndSpec` — ordinary macro entries, 7.6).
   Everything else — common macros/environments/accents, `\newcommand` producing
   definition deltas (parse-level only, no TeX expansion) — waits for the standard
