@@ -255,13 +255,12 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 ///   environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics):
 ///   ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
 ///   not driver code, so they are shadowable and unloadable like anything else.
-/// - The specials: alignment `&`, non-breaking space `~`, and the ligature specials
-///   ``` `` ```, `''`, `--`, `---` — each a zero-argument
-///   [`SpecialsSpec`] callable sharing one instance (many-to-one is the package
-///   flyweight contract). The multi-character triggers ride the scope-stack scan's
-///   longest-match rule (`---` beats `--`).
-/// 
-/// ### PhF -- We should not include &, !`, and ?` here ("!`", "?`" already removed)
+/// - The specials: alignment `&` and non-breaking space `~` (visible in every mode),
+///   plus the text-only typography ligatures ``` `` ```, `''`, `--`, `---` (visible in
+///   [`Mode::Text`] only — they carry no math meaning, so inside `$…$` they stay plain
+///   chars) — each a zero-argument [`SpecialsSpec`] callable sharing one instance
+///   (many-to-one is the package flyweight contract). The multi-character triggers ride
+///   the scope-stack scan's longest-match rule (`---` beats `--`).
 ///
 /// pylatexenc's default context also ships a `\n\n` paragraph-break special; the
 /// preset deliberately omits it — a multi-newline break is a whitespace chars node
@@ -277,9 +276,20 @@ pub fn base_package() -> Package<Latexlike> {
     package.insert(CallableType::Macro, environments::BEGIN_COMMAND_NAME, Arc::new(BeginSpec));
     package.insert(CallableType::Macro, environments::END_COMMAND_NAME, Arc::new(EndSpec));
     let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(SpecialsSpec::default());
-    for trigger in ["&", "~", "``", "''", "--", "---"] {
-        // ### PhF -- We should not include &, !`, and ?` here ("!`", "?`" already removed)
+    // Alignment `&` and non-breaking space `~` occur in text and math alike.
+    // ### PhF -- We should not include & here
+    for trigger in ["&", "~"] {
         package.insert_specials(trigger, CallableType::Specials, Arc::clone(&spec));
+    }
+    // Typography ligatures are text-mode only (no math meaning): inside `$…$` they stay
+    // plain chars (7.5 review — per-entry mode visibility).
+    for trigger in ["``", "''", "--", "---"] {
+        package.insert_specials_in_modes(
+            trigger,
+            CallableType::Specials,
+            Arc::clone(&spec),
+            Some(vec![Mode::Text]),
+        );
     }
     package
 }
@@ -558,6 +568,21 @@ mod tests {
         // `` !` `` and `` ?` `` were dropped from the base package (PhF, July 2026 —
         // see the `base_package` note): plain characters now.
         assert_eq!(parse_shapes("!`Si?`"), ["chars(!`Si?`)"]);
+    }
+
+    #[test]
+    fn base_ligature_specials_are_text_only() {
+        // Inside math the text-only typography ligatures stay plain chars, while the
+        // universal specials `~`/`&` still fire (7.5 review — per-entry mode visibility).
+        let result = strict().parse("$a~b---c$").unwrap();
+        check_tree_invariants(&result.tree);
+        let math = result.tree.root().child(0).unwrap();
+        assert_eq!(math.group_type(), Some(GroupType::Math));
+        let interior: Vec<String> = math.children().map(shape).collect();
+        assert_eq!(interior, ["chars(a)", "Specials(~)", "chars(b---c)"]);
+
+        // In text mode the same ligature fires as before.
+        assert_eq!(parse_shapes("a---b"), ["chars(a)", "Specials(---)", "chars(b)"]);
     }
 
     #[test]

@@ -3047,7 +3047,11 @@ artifact of the u32-const test era, not Rust variant style).
 zero-argument specials for `&`, `~`, ``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` `` —
 pylatexenc's default context (its *latex-base* + *nonascii-specials* categories). Droppable
 wholesale by name (`ScopeOp::Unload`), shadowable per-trigger by pushing a provider.
-Macro/environment definitions deliberately stay out until the std-DB port.
+Macro/environment definitions deliberately stay out until the std-DB port. The typography
+ligatures (``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` ``) are registered **text-mode
+only** (they carry no math meaning — inside `$…$` they stay plain chars); `&` and `~` are
+visible in every mode (7.5 review; the per-entry mode gate below). `\begin`/`\end` (7.6)
+stay all-modes so math environments still open in math.
 *Rationale:* out-of-the-box parity with pylatexenc's default node shapes for these
 triggers — with one deliberate exception: the `\n\n` paragraph-break special of
 pylatexenc's *latex-paragraph* category is omitted, so a multi-newline break is a
@@ -3057,6 +3061,22 @@ defaults rather than only in tests.
 *Rejected:* an empty seed stack (purest, but `~`/`&` would parse as plain chars out of the
 box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
 real-data consumer test-side).
+
+**Per-definition mode visibility on `Package` — the fine gate under `set_visible_modes`**
+— DECIDED (user, July 2026, Phase 7.5 review).
+`Package::insert_in_modes`/`insert_specials_in_modes` attach an optional mode list to a
+*single* definition; `retrieve_spec`/`scan_specials` check it against `ParsingState::mode`
+under the pre-existing package-level `set_visible_modes` — **both** gates must admit the
+mode (`None` = every mode the package is visible in). One loadable, unloadable package can
+then hold text-only ligatures and (later) math-only `^`/`_` scripts together.
+*Rationale:* the base package must keep `\begin`/`\end` visible in math while hiding the
+text ligatures there — package-level visibility alone cannot express that without splitting
+`"base"` into several names, which would break the single-name `Unload("base")` contract
+and the specials-as-one-category model. Per-entry visibility is the minimal mechanism that
+keeps one package. The trigger-char union deliberately stays mode-blind (a hidden entry's
+first chars remain in the filter; its scan declines) — the established 7.3 caching contract.
+*Rejected:* multiple mode-scoped seed packages (changes the unload semantics, multiplies
+seed names); a whole-package flip to text-only (would hide `\begin`/`\end` in math too).
 
 **Default whitespace is the ASCII set, not Unicode-aware** — DECIDED (user, July 2026,
 Phase 7.5 checkpoint).

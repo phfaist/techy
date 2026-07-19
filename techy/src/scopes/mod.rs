@@ -518,6 +518,8 @@ struct PackageSpecials<L: Lang> {
     trigger: Box<str>,
     callable_type: L::CallableTypeId,
     spec: Arc<dyn CallableSpec<L>>,
+    /// Per-entry mode visibility (`None` = every mode the package is visible in).
+    visible_modes: Option<Vec<L::ModeId>>,
 }
 
 impl<L: Lang> Clone for PackageSpecials<L> {
@@ -526,7 +528,34 @@ impl<L: Lang> Clone for PackageSpecials<L> {
             trigger: self.trigger.clone(),
             callable_type: self.callable_type,
             spec: Arc::clone(&self.spec),
+            visible_modes: self.visible_modes.clone(),
         }
+    }
+}
+
+/// One callable definition of a [`Package`]: the spec plus its per-entry mode
+/// visibility. `None` visible modes = visible in every mode the package itself is (the
+/// package-level [`set_visible_modes`](Package::set_visible_modes) is the coarse gate,
+/// this is the fine one).
+struct PackageEntry<L: Lang> {
+    spec: Arc<dyn CallableSpec<L>>,
+    visible_modes: Option<Vec<L::ModeId>>,
+}
+
+impl<L: Lang> Clone for PackageEntry<L> {
+    fn clone(&self) -> Self {
+        PackageEntry {
+            spec: Arc::clone(&self.spec),
+            visible_modes: self.visible_modes.clone(),
+        }
+    }
+}
+
+/// Whether a per-entry mode restriction admits `mode` (`None` = every mode).
+fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
+    match visible_modes {
+        None => true,
+        Some(modes) => modes.contains(mode),
     }
 }
 
@@ -539,18 +568,21 @@ impl<L: Lang> Clone for PackageSpecials<L> {
 /// **many-to-one**: several names may map to one shared spec (flyweight — `\emph` and
 /// `\textit` can share an `Arc`). Inserting an existing key replaces the previous spec.
 ///
-/// **Mode visibility** is a package field checked inside its own
+/// **Mode visibility** is checked inside the package's own
 /// [`retrieve_spec`](SpecsProvider::retrieve_spec)/[`scan_specials`](SpecsProvider::scan_specials)
-/// (the stack is visibility-blind): a package restricted via
-/// [`set_visible_modes`](Package::set_visible_modes) answers `Ok(None)` — invisible, not
-/// an error — in any other mode.
+/// (the stack is visibility-blind), at two grains: a **package-level** gate
+/// ([`set_visible_modes`](Package::set_visible_modes)) and a **per-entry** gate
+/// ([`insert_in_modes`](Package::insert_in_modes)/[`insert_specials_in_modes`](Package::insert_specials_in_modes)).
+/// Both must admit [`ParsingState::mode`] for a definition to resolve; outside its modes
+/// a package or an entry answers `Ok(None)` — invisible, not an error. So one loadable
+/// package can hold text-only typography specials and math-only scripts side by side.
 ///
 /// **Specials as data**: a package may carry trigger-string definitions
 /// ([`insert_specials`](Package::insert_specials)); its scan returns the longest
 /// matching trigger.
 pub struct Package<L: Lang> {
     name: Box<str>,
-    specs: HashMap<L::CallableTypeId, HashMap<Box<str>, Arc<dyn CallableSpec<L>>>>,
+    specs: HashMap<L::CallableTypeId, HashMap<Box<str>, PackageEntry<L>>>,
     /// Sorted by trigger byte length, longest first (the package-internal longest-match
     /// rule); one entry per trigger string.
     specials: Vec<PackageSpecials<L>>,
@@ -574,44 +606,84 @@ impl<L: Lang> Package<L> {
         &self.name
     }
 
-    /// Define `name` (normalized spelling) under the invocation form `callable_type`.
-    /// Returns the spec previously defined under that key, if any.
+    /// Define `name` (normalized spelling) under the invocation form `callable_type`,
+    /// visible in every mode the package is. Returns the spec previously defined under
+    /// that key, if any.
     pub fn insert(
         &mut self,
         callable_type: L::CallableTypeId,
         name: impl Into<Box<str>>,
         spec: Arc<dyn CallableSpec<L>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
-        self.specs.entry(callable_type).or_default().insert(name.into(), spec)
+        self.insert_in_modes(callable_type, name, spec, None)
+    }
+
+    /// Like [`insert`](Package::insert), but with per-entry mode visibility: the
+    /// definition resolves only when [`ParsingState::mode`] is one of `visible_modes`
+    /// (`None` = every mode the package is visible in — the [`insert`](Package::insert)
+    /// default). This is the fine gate under the package-level
+    /// [`set_visible_modes`](Package::set_visible_modes): both must admit the mode. A
+    /// text-only accent and a math-only script can live in one loadable package.
+    pub fn insert_in_modes(
+        &mut self,
+        callable_type: L::CallableTypeId,
+        name: impl Into<Box<str>>,
+        spec: Arc<dyn CallableSpec<L>>,
+        visible_modes: Option<Vec<L::ModeId>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.specs
+            .entry(callable_type)
+            .or_default()
+            .insert(name.into(), PackageEntry { spec, visible_modes })
+            .map(|previous| previous.spec)
     }
 
     /// Define the specials `trigger` (e.g. `"---"`) as resolving to `spec` under the
-    /// invocation form `callable_type`. One entry per trigger string: inserting an
-    /// existing trigger replaces it (and returns the previous spec).
+    /// invocation form `callable_type`, visible in every mode the package is. One entry
+    /// per trigger string: inserting an existing trigger replaces it (and returns the
+    /// previous spec).
     pub fn insert_specials(
         &mut self,
         trigger: impl Into<Box<str>>,
         callable_type: L::CallableTypeId,
         spec: Arc<dyn CallableSpec<L>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
+        self.insert_specials_in_modes(trigger, callable_type, spec, None)
+    }
+
+    /// Like [`insert_specials`](Package::insert_specials), but with per-entry mode
+    /// visibility: the trigger is recognized only when [`ParsingState::mode`] is one of
+    /// `visible_modes` (`None` = every mode the package is visible in). Text-mode
+    /// typography ligatures (`` `` ``, `---`) and math-mode scripts can share one
+    /// package, each firing only in its own mode.
+    pub fn insert_specials_in_modes(
+        &mut self,
+        trigger: impl Into<Box<str>>,
+        callable_type: L::CallableTypeId,
+        spec: Arc<dyn CallableSpec<L>>,
+        visible_modes: Option<Vec<L::ModeId>>,
+    ) -> Option<Arc<dyn CallableSpec<L>>> {
         let trigger = trigger.into();
         if let Some(existing) =
             self.specials.iter_mut().find(|entry| entry.trigger == trigger)
         {
             existing.callable_type = callable_type;
+            existing.visible_modes = visible_modes;
             return Some(core::mem::replace(&mut existing.spec, spec));
         }
-        self.specials.push(PackageSpecials { trigger, callable_type, spec });
+        self.specials.push(PackageSpecials { trigger, callable_type, spec, visible_modes });
         // Longest first; the stable sort keeps insertion order among equal lengths
         // (irrelevant for matching — equal-length triggers differ in content).
         self.specials.sort_by(|a, b| b.trigger.len().cmp(&a.trigger.len()));
         None
     }
 
-    /// Restrict the package to the given parsing modes (`None` = visible everywhere,
-    /// the default). Visibility is checked by the package itself, against
-    /// [`ParsingState::mode`]: outside its modes the package answers "not here" for
-    /// resolution and specials alike.
+    /// Restrict the *whole package* to the given parsing modes (`None` = visible
+    /// everywhere, the default) — the coarse gate. Visibility is checked by the package
+    /// itself, against [`ParsingState::mode`]: outside its modes the package answers
+    /// "not here" for resolution and specials alike. For per-definition control under
+    /// this gate, see [`insert_in_modes`](Package::insert_in_modes) and
+    /// [`insert_specials_in_modes`](Package::insert_specials_in_modes).
     pub fn set_visible_modes(&mut self, modes: Option<Vec<L::ModeId>>) {
         self.visible_modes = modes;
     }
@@ -623,7 +695,7 @@ impl<L: Lang> Package<L> {
         callable_type: L::CallableTypeId,
         name: &str,
     ) -> Option<&Arc<dyn CallableSpec<L>>> {
-        self.specs.get(&callable_type)?.get(name)
+        self.specs.get(&callable_type)?.get(name).map(|entry| &entry.spec)
     }
 
     /// Number of definitions across all callable types (specials entries included).
@@ -637,10 +709,7 @@ impl<L: Lang> Package<L> {
     }
 
     fn visible_in(&self, mode: L::ModeId) -> bool {
-        match &self.visible_modes {
-            None => true,
-            Some(modes) => modes.contains(&mode),
-        }
+        modes_admit(&self.visible_modes, &mode)
     }
 }
 
@@ -657,7 +726,16 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         if !self.visible_in(state.mode()) {
             return Ok(None);
         }
-        Ok(self.get(query.callable_type, query.name).cloned())
+        let Some(entry) =
+            self.specs.get(&query.callable_type).and_then(|defs| defs.get(query.name))
+        else {
+            return Ok(None);
+        };
+        // Per-entry mode gate under the package-level one (both must admit the mode).
+        if !modes_admit(&entry.visible_modes, &state.mode()) {
+            return Ok(None);
+        }
+        Ok(Some(Arc::clone(&entry.spec)))
     }
 
     fn scan_specials<'s>(
@@ -672,6 +750,12 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         let rest = &content[pos..];
         // Entries are sorted longest-first: the first hit is the package's longest.
         for entry in &self.specials {
+            // A mode-invisible entry is not there: skip it (a shorter visible trigger
+            // may still match). The trigger-char union stays mode-blind, so the
+            // tokenizer still probes here and this scan declines.
+            if !modes_admit(&entry.visible_modes, &state.mode()) {
+                continue;
+            }
             if rest.starts_with(&*entry.trigger) {
                 let end = pos + entry.trigger.len();
                 return Ok(Some(SpecialsMatch {
@@ -1575,6 +1659,43 @@ mod tests {
         assert!(stack.scan_specials(&text_state, "&x", 0).unwrap().is_none());
         assert!(stack.scan_specials(&math_state, "&x", 0).unwrap().is_some());
         assert_eq!(stack.specials_trigger_chars(), TriggerChars::Only("&".into()));
+    }
+
+    #[test]
+    fn per_entry_mode_visibility_gates_within_a_package() {
+        let text_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+        let any_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+
+        // One package, no package-level restriction: a text-only entry and an all-modes
+        // entry side by side — the fine gate (per-entry mode visibility).
+        let mut pkg: Package<ModedLang> = Package::new("mixed");
+        pkg.insert_in_modes(MACRO, "emph", Arc::clone(&text_spec), Some(vec![Mode::Text]));
+        pkg.insert(MACRO, "vec", Arc::clone(&any_spec)); // all modes
+        pkg.insert_specials_in_modes("--", MACRO, Arc::clone(&text_spec), Some(vec![Mode::Text]));
+        pkg.insert_specials("~", MACRO, Arc::clone(&any_spec)); // all modes
+
+        let mut stack = ScopeStack::new();
+        stack.push(Arc::new(pkg));
+        let text_state = moded_state(stack.clone(), Mode::Text);
+        let math_state = moded_state(stack.clone(), Mode::Math);
+
+        let emph: CallableQuery<'_, '_, ModedLang> =
+            CallableQuery::new(MACRO, "emph", CallableSyntax::Command { escape_char: '\\' });
+        let vec_q: CallableQuery<'_, '_, ModedLang> =
+            CallableQuery::new(MACRO, "vec", CallableSyntax::Command { escape_char: '\\' });
+
+        // The text-only definition resolves in text, not in math; the all-modes one in
+        // both.
+        assert!(stack.retrieve_spec(&emph, &text_state).unwrap().is_some());
+        assert!(stack.retrieve_spec(&emph, &math_state).unwrap().is_none());
+        assert!(stack.retrieve_spec(&vec_q, &text_state).unwrap().is_some());
+        assert!(stack.retrieve_spec(&vec_q, &math_state).unwrap().is_some());
+
+        // Specials obey the same per-entry gate; the trigger-char union stays mode-blind.
+        assert!(stack.scan_specials(&text_state, "--x", 0).unwrap().is_some());
+        assert!(stack.scan_specials(&math_state, "--x", 0).unwrap().is_none());
+        assert!(stack.scan_specials(&text_state, "~x", 0).unwrap().is_some());
+        assert!(stack.scan_specials(&math_state, "~x", 0).unwrap().is_some());
     }
 
     // --- Scope: copy-on-write definition updates ------------------------------------------
