@@ -3027,6 +3027,26 @@ the base rule has a consumer (user-caught; the original plan listed both).
 *Revisit if:* a consumer needs typed display-ness on custom math delimiters (the split
 stays open under `#[non_exhaustive]`).
 
+**Inside math the math delimiters stop opening (no nested math); a stray `$` is
+forbidden** — DECIDED (user, July 2026, Phase 7.5 review).
+`LatexlikeDriver::group_interior_delta` for a math rule returns, besides `mode(Mode::Math)`,
+a `TokenRulesOverrides` derived from the **outer** state: the interior's group rules are the
+outer rules minus the `Math` openers, and `$` is merged into the outer `forbidden_chars`.
+The descent invariant still installs `expecting_group_close`, so the current group's close
+works; a `$` that is *not* that close is a forbidden-char diagnostic, not the opener of a
+nested inline group. Example: tolerant `$$a$b$$` is one display group over `a$b` (one
+diagnostic), never a display group left unclosed around a spurious inner `$…$`.
+*Rationale:* LaTeX forbids nested math; without this a lone `$` inside display math opened a
+fresh inline group and consumed the trailing `$$` as two separate closes, leaving the
+display group unclosed (the surprising tree the 7.5 review flagged). Deriving from the outer
+state (not the seed) preserves any embedder rule changes in force at the `$`, and *merging*
+(not replacing) `forbidden_chars` keeps the embedder's forbidden set. `\(`/`\[` inside math,
+their openers likewise gone, fall through to the command path (a stray single-char command)
+— acceptable.
+*Rejected:* leaving the math openers active in math (the pre-review behavior, with its
+unclosed-group trees); a bespoke "no nested math" condition for `\(`/`\[` (the generic
+unresolvable-command / forbidden-char diagnostics already localize the error).
+
 **Preset vocabulary names are bare and module-scoped** — DECIDED (user, July 2026, Phase
 7.5 checkpoint).
 `GroupType`/`CallableType`/`Mode` with short variants (`Content`/`Math`;

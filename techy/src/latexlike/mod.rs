@@ -453,6 +453,25 @@ mod tests {
     }
 
     #[test]
+    fn stray_dollar_in_math_is_forbidden_not_a_nested_open() {
+        // Inside math LaTeX forbids nested math: a lone `$` cannot open a nested group.
+        // Strict aborts on the forbidden `$`; tolerant recovers it as a char and the
+        // enclosing group still closes normally (7.5 review — #9).
+        assert!(strict().parse("$$a$b$$").is_err());
+
+        let result = tolerant().parse("$$a$b$$").unwrap();
+        check_tree_invariants(&result.tree);
+        // One display group at the root — it closes on the trailing `$$`, never leaving
+        // an unclosed nested inline group.
+        assert_eq!(root_shapes(&result), ["group(Math $$ $$)"]);
+        let display = result.tree.root().child(0).unwrap();
+        let interior: String = display.children().filter_map(|child| child.chars()).collect();
+        assert_eq!(interior, "a$b");
+        // Exactly one diagnostic: the forbidden `$`.
+        assert_eq!(result.diagnostics.len(), 1);
+    }
+
+    #[test]
     fn display_math_delimiters() {
         assert_eq!(parse_shapes("$$ab$$"), ["group(Math $$ $$)"]);
         assert_eq!(parse_shapes(r"\[x\]"), [r"group(Math \[ \])"]);

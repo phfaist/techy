@@ -1,11 +1,13 @@
 //! [`LatexlikeDriver`]: the preset's [`ParseDriver`] — recovery policy, scope-stack
 //! command resolution, and the math-mode group plug.
 
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::error::Recovery;
-use crate::state::{ParsingState, ParsingStateDelta};
+use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token};
 
 use super::{CallableType, GroupType, Latexlike, Mode};
@@ -57,18 +59,45 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         CommandResolution::resolve_via_scopes(state, token, CallableType::Macro)
     }
 
-    /// The math plug (DESIGN_RATIONALE.md §3.3/§3.6): a math group's interior parses
-    /// in [`Mode::Math`]. Pure in `(base, rule)` per the memoization contract;
-    /// unconditional on the base mode — re-entering math inside math is a no-op
-    /// override.
+    /// The math plug (DESIGN_RATIONALE.md §3.3/§3.6): a math group's interior parses in
+    /// [`Mode::Math`], and — since LaTeX forbids nested math — the math delimiters stop
+    /// being *openers* inside it. Derived from the **outer** `base` state (not the seed):
+    /// the interior's group rules are `base`'s minus the [`Math`](GroupType::Math)
+    /// openers (the descent invariant still installs `expecting_group_close` for the
+    /// current group's close), and the bare `$` trigger is merged into `base`'s existing
+    /// [`forbidden_chars`](crate::token::TokenRules::forbidden_chars) so a stray `$` is a
+    /// diagnostic rather than the opener of an unclosed nested group. Pure in
+    /// `(base, rule)` per the memoization contract.
     fn group_interior_delta(
         &self,
         base: &ParsingState<Latexlike>,
         rule: &Arc<GroupRule<Latexlike>>,
     ) -> Option<ParsingStateDelta<Latexlike>> {
-        let _ = base;
         match rule.group_type {
-            GroupType::Math => Some(ParsingStateDelta::new().mode(Mode::Math)),
+            GroupType::Math => {
+                let rules = base.rules();
+                // Drop the math openers; keep everything else (content groups, temporary
+                // groups, commands, …) exactly as the outer state has it.
+                let groups: Vec<Arc<GroupRule<Latexlike>>> = rules
+                    .groups
+                    .iter()
+                    .filter(|group_rule| group_rule.group_type != GroupType::Math)
+                    .cloned()
+                    .collect();
+                // Merge `$` into the *current* forbidden chars (at the transition), not a
+                // fresh set — an embedder's forbidden chars must survive into math.
+                let mut forbidden = String::from(&*rules.forbidden_chars);
+                if !forbidden.contains('$') {
+                    forbidden.push('$');
+                }
+                Some(
+                    ParsingStateDelta::new().mode(Mode::Math).rules(TokenRulesOverrides {
+                        groups: Some(groups),
+                        forbidden_chars: Some(forbidden.into()),
+                        ..TokenRulesOverrides::default()
+                    }),
+                )
+            }
             // Verbatim rules never reach a tokenizer descent (the class marks raw
             // regions and minted terminator rules, `GroupType::Verbatim` docs) — the
             // arm exists for match exhaustiveness only.
