@@ -90,24 +90,13 @@ impl<'t> NodeRef<'t, Latexlike> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::test_support::{macro_package, strict, with_provider};
     use crate::engine::Language;
-    use crate::latexlike::LatexlikeDriver;
-    use crate::scopes::Package;
-    use crate::spec::StdCallableSpec;
-    use crate::state::ParsingStateDelta;
-    use alloc::sync::Arc;
     use alloc::vec::Vec;
 
+    /// A latexlike `Language` seeded with the zero-argument macro `\emph`.
     fn language() -> Language<Latexlike> {
-        let mut package = Package::new("testpkg");
-        package.insert(
-            CallableType::Macro,
-            "emph",
-            Arc::new(StdCallableSpec::new(Vec::new())),
-        );
-        Language::new(LatexlikeDriver::default())
-            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-            .unwrap()
+        with_provider(strict(), macro_package("testpkg", "emph", None))
     }
 
     #[test]

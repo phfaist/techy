@@ -634,6 +634,7 @@ impl ConstructParser<Latexlike> for OrphanEndParser<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{root_shapes, shape};
     use super::super::{LatexlikeDriver, MacroSpec, Mode};
     use super::*;
     use crate::constructs::{
@@ -645,7 +646,6 @@ mod tests {
     use crate::scopes::{Package, ScopeOp};
     use crate::state::TokenRulesOverrides;
     use crate::token::GroupRule;
-    use alloc::format;
     use alloc::string::ToString;
 
     // --- the suite's definitions: the §G environment matrix over the real preset ------
@@ -750,26 +750,6 @@ mod tests {
         let result = tolerant().parse(input).unwrap();
         check_tree_invariants(&result.tree);
         result
-    }
-
-    /// Compact shape strings, mirroring the mod-level test helper.
-    fn shape(node: NodeRef<'_, Latexlike>) -> String {
-        if let Some(text) = node.chars() {
-            format!("chars({text})")
-        } else if node.is_group() {
-            let (open, close) = node.group_delimiters().unwrap();
-            format!("group({open} {close})")
-        } else if node.is_callable() {
-            format!("{:?}({})", node.callable_type().unwrap(), node.name().unwrap())
-        } else if let Some(text) = node.comment() {
-            format!("comment({text})")
-        } else {
-            "other".to_string()
-        }
-    }
-
-    fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
-        result.tree.root().children().map(shape).collect()
     }
 
     fn body_shapes(env: NodeRef<'_, Latexlike>) -> Vec<String> {
@@ -879,7 +859,7 @@ mod tests {
         // A math group inside a body, and an environment inside a math group.
         let math_in_body = parse_ok("\\begin{itemize}$x$\\end{itemize}");
         let env = math_in_body.tree.root().child(0).unwrap();
-        assert_eq!(body_shapes(env), ["group($ $)"]);
+        assert_eq!(body_shapes(env), ["group(Math $ $)"]);
 
         let env_in_math = parse_ok("$\\begin{itemize}x\\end{itemize}$");
         let math = env_in_math.tree.root().child(0).unwrap();
@@ -971,7 +951,7 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert!(all[0].contains("cannot resolve command ‘\\begin’"), "{}", all[0]);
         // `\begin` recovered as chars, `{itemize}` an ordinary group.
-        assert_eq!(root_shapes(&result), ["chars(\\begin)", "group({ })"]);
+        assert_eq!(root_shapes(&result), ["chars(\\begin)", "group(Content { })"]);
     }
 
     // --- recovery matrix ---------------------------------------------------------------

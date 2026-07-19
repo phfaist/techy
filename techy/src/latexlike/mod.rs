@@ -49,6 +49,8 @@ mod driver;
 mod environments;
 mod node_ref;
 mod spec;
+#[cfg(test)]
+mod test_support;
 
 pub use arguments::{argument_specs, ArgumentCodeError};
 pub use driver::LatexlikeDriver;
@@ -297,53 +299,14 @@ pub fn base_package() -> Package<Latexlike> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::test_support::{
+        macro_package, parse_shapes, root_shapes, shape, strict, tolerant, with_provider,
+    };
     use crate::engine::Language;
-    use crate::error::{Recovery, Severity};
-    use crate::node::{check_tree_invariants, NodeRef};
+    use crate::error::Severity;
+    use crate::node::check_tree_invariants;
     use crate::scopes::ScopeOp;
-    use crate::spec::StdCallableSpec;
     use crate::state::ParsingStateDelta;
-    use alloc::format;
-    use alloc::string::ToString;
-
-    fn strict() -> Language<Latexlike> {
-        Language::default()
-    }
-
-    fn tolerant() -> Language<Latexlike> {
-        Language::new(LatexlikeDriver::new(Recovery::Tolerant))
-    }
-
-    /// Compact shape strings for a node's children (root list by default):
-    /// `chars(text)`, `group(Math $ $)`, `Macro(emph)`, `Specials(~)`, `comment(text)`.
-    fn shape(node: NodeRef<'_, Latexlike>) -> String {
-        if let Some(text) = node.chars() {
-            format!("chars({text})")
-        } else if node.is_group() {
-            let class = node
-                .group_type()
-                .map_or_else(|| "?".to_string(), |group_type| format!("{group_type:?}"));
-            let (open, close) = node.group_delimiters().unwrap();
-            format!("group({class} {open} {close})")
-        } else if node.is_callable() {
-            format!("{:?}({})", node.callable_type().unwrap(), node.name().unwrap())
-        } else if let Some(text) = node.comment() {
-            format!("comment({text})")
-        } else {
-            "other".to_string()
-        }
-    }
-
-    fn root_shapes(result: &crate::engine::ParseResult<Latexlike>) -> Vec<String> {
-        result.tree.root().children().map(shape).collect()
-    }
-
-    fn parse_shapes(input: &str) -> Vec<String> {
-        let result = strict().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
-        assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);
-        root_shapes(&result)
-    }
 
     // --- seed & default rules ---------------------------------------------------------
 
@@ -480,27 +443,11 @@ mod tests {
 
     // --- scope stack: commands, visibility, specials ----------------------------------
 
-    /// A test package defining the zero-argument macro `\alpha`, optionally
-    /// math-only.
-    fn alpha_package(math_only: bool) -> Package<Latexlike> {
-        let mut package = Package::new("alphapkg");
-        package.insert(
-            CallableType::Macro,
-            "alpha",
-            Arc::new(StdCallableSpec::new(Vec::new())),
-        );
-        if math_only {
-            package.set_visible_modes(Some(vec![Mode::Math]));
-        }
-        package
-    }
-
+    /// `language` seeded with the zero-argument macro `\alpha` in a package
+    /// `"alphapkg"`, optionally math-only (package-level visibility).
     fn with_alpha(language: Language<Latexlike>, math_only: bool) -> Language<Latexlike> {
-        language
-            .with_seed_delta(
-                ParsingStateDelta::new().push_provider(Arc::new(alpha_package(math_only))),
-            )
-            .unwrap()
+        let modes = math_only.then(|| vec![Mode::Math]);
+        with_provider(language, macro_package("alphapkg", "alpha", modes))
     }
 
     #[test]
