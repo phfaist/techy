@@ -54,9 +54,9 @@ pub use environment_parser::{
 pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
 pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};
 pub use nodes_parser::{
-    ExpressionCallableRequiresContent, NodesOutcome, NodesParser, StopCause, StopSpec,
-    StrayGroupClose, TokenStopCondition, TokenStopKind, UnresolvableCommand,
-    UnusableRecoveryToken, UnusableRecoveryTokenKind,
+    CommandResolutionFailed, ExpressionCallableRequiresContent, NodesOutcome, NodesParser,
+    StopCause, StopSpec, StrayGroupClose, TokenStopCondition, TokenStopKind,
+    UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
 };
 pub use verbatim_parser::{
     verbatim_state_delta, ExpectedVerbatimDelimiter, UnterminatedVerbatim,

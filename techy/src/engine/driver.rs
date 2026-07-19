@@ -43,7 +43,7 @@
 //! [`SimpleLang`](crate::state::SimpleLang) default.
 
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use core::fmt;
 
@@ -53,10 +53,11 @@ use crate::constructs::{
 };
 use crate::error::{DiagnosticData, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
+use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, Token, TokenReader};
+use crate::token::{GroupRule, Token, TokenKind, TokenReader};
 
 use super::ParserSession;
 
@@ -409,14 +410,64 @@ impl<L: Lang> fmt::Debug for ResolvedCallable<L> {
 pub enum CommandResolution<L: Lang> {
     /// The command resolved: dispatch this invocation.
     Resolved(ResolvedCallable<L>),
-    /// The command did not resolve; the parse loops diagnose it as unresolvable and
-    /// recover (span-backed chars fallback, DESIGN_RATIONALE.md §3.8).
+    /// The command did not resolve — a clean miss (the name is defined nowhere the
+    /// query could see); the parse loops diagnose it as unresolvable and recover
+    /// (span-backed chars fallback, DESIGN_RATIONALE.md §3.8).
     Unresolved {
         /// Optional human-facing detail on why resolution failed, appended to the
         /// diagnostic's message and serialized with the condition. `None` when there
         /// is nothing to say beyond "the name did not resolve".
         detail: Option<String>,
     },
+    /// Resolution failed *operationally* — a definition provider errored while
+    /// answering the query (a broken or unavailable source), as opposed to a clean
+    /// miss. Diagnosed as a distinct condition
+    /// ([`CommandResolutionFailed`](crate::constructs::CommandResolutionFailed)) so
+    /// tooling can tell "command unknown" from "resolver broken"; recovery is the same
+    /// span-backed chars fallback.
+    Failed {
+        /// Optional human-facing detail on the operational failure (typically the
+        /// provider's rendered error), appended to the diagnostic's message.
+        detail: Option<String>,
+    },
+}
+
+impl<L: Lang> CommandResolution<L> {
+    /// The shared "resolve a command through the scope stack" pattern, under the given
+    /// `callable_type` — the single home for every driver's
+    /// [`resolve_command`](ParseDriver::resolve_command) that dispatches to the state's
+    /// scope stack (the latexlike preset and the test langs), so query construction and
+    /// the miss/failure detail policy live in one place rather than drifting per copy.
+    ///
+    /// A hit is [`Resolved`](CommandResolution::Resolved); a clean miss is
+    /// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers as
+    /// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
+    /// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
+    /// token — a caller-contract violation — yields `Unresolved { detail: None }`.
+    pub fn resolve_via_scopes(
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+        callable_type: L::CallableTypeId,
+    ) -> CommandResolution<L> {
+        let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+            return CommandResolution::Unresolved { detail: None };
+        };
+        let query = CallableQuery::new(
+            callable_type,
+            name,
+            CallableSyntax::Command { escape_char: *escape_char },
+        )
+        .with_token(token);
+        match state.scopes().retrieve_spec(&query, state) {
+            Ok(Some(spec)) => {
+                CommandResolution::Resolved(ResolvedCallable { callable_type, spec })
+            }
+            Ok(None) => CommandResolution::Unresolved {
+                detail: Some(state.scopes().searched_providers().to_string()),
+            },
+            Err(error) => CommandResolution::Failed { detail: Some(error.to_string()) },
+        }
+    }
 }
 
 /// `Some`/`None` from a lookup maps to `Resolved`/`Unresolved` with no detail — the
@@ -439,6 +490,9 @@ impl<L: Lang> Clone for CommandResolution<L> {
             CommandResolution::Unresolved { detail } => {
                 CommandResolution::Unresolved { detail: detail.clone() }
             }
+            CommandResolution::Failed { detail } => {
+                CommandResolution::Failed { detail: detail.clone() }
+            }
         }
     }
 }
@@ -451,6 +505,9 @@ impl<L: Lang> fmt::Debug for CommandResolution<L> {
             }
             CommandResolution::Unresolved { detail } => {
                 f.debug_struct("Unresolved").field("detail", detail).finish()
+            }
+            CommandResolution::Failed { detail } => {
+                f.debug_struct("Failed").field("detail", detail).finish()
             }
         }
     }

@@ -126,6 +126,40 @@ impl fmt::Display for UnresolvableCommand {
     }
 }
 
+/// Condition: a [`Command`](TokenKind::Command) token's resolution *failed
+/// operationally* — a definition provider errored while answering the query
+/// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)
+/// returned [`Failed`](crate::engine::CommandResolution::Failed)) — as opposed to a
+/// clean miss ([`UnresolvableCommand`]). The content loop recovers the same way (a
+/// span-backed chars fallback, DESIGN_RATIONALE.md §3.8), but the distinct condition
+/// lets tooling tell "command unknown" from "resolver broken" (mirrors the
+/// [`ScopeOpFailed`](crate::constructs::ScopeOpFailed) precedent for operational
+/// scope-op failures).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(id = "core.nodes_parser.command-resolution-failed")]
+pub struct CommandResolutionFailed {
+    /// The command name, as written (without the escape character).
+    pub name: String,
+    /// The escape character that introduced the command.
+    pub escape_char: char,
+    /// Optional detail on the operational failure — typically the provider's rendered
+    /// error, straight from [`CommandResolution::Failed`](crate::engine::CommandResolution::Failed).
+    /// Appended to the message.
+    pub detail: Option<String>,
+}
+
+// Hand-written wording: the detail suffix is conditional (as for UnresolvableCommand).
+impl fmt::Display for CommandResolutionFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "command resolution failed for ‘{}{}’", self.escape_char, self.name)?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
+        }
+        Ok(())
+    }
+}
+
 /// Condition: a callable whose invocation requires content — a mandatory argument, a
 /// body ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content))
 /// — was used *bare* where a single expression was required (pylatexenc's
@@ -830,6 +864,18 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                                 ));
                             }
                         }
+                        CommandResolution::Failed { detail } => {
+                            // Operational resolver failure (§3.8): a distinct condition
+                            // from a clean miss, same span-backed chars recovery.
+                            let condition =
+                                CommandResolutionFailed::new(*name, *escape_char, detail);
+                            if self.recover_as_chars(cx, &token, recovered, condition)? {
+                                return Ok((
+                                    self.outcome(&cx.state, StopCause::NodeCondition),
+                                    None,
+                                ));
+                            }
+                        }
                     }
                 }
 
@@ -981,12 +1027,13 @@ mod tests {
     use super::*;
     use crate::engine::{ParseResult, ParserSession, StdParseDriver};
     use crate::error::Recovery;
-    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
+    use crate::scopes::{
+        CallableQuery, CallableSyntax, Package, ProviderError, ScopeStack, SpecsProvider,
+    };
     use crate::node::{GroupData, NodeExt, StagedNodes};
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
-    use crate::engine::ResolvedCallable;
     use crate::state::{NodeExtTypes, SimpleLang, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenError,
@@ -1006,27 +1053,14 @@ mod tests {
     impl SimpleLang for TestLang {}
 
     /// The preset resolution pattern, shared by the 6.4 test langs: dispatch a
-    /// `Command` token to the state's scope stack under the `CT_MACRO` form
-    /// ([`CallableQuery`], escape char included).
+    /// `Command` token to the state's scope stack under the `CT_MACRO` form. Delegates
+    /// to the blessed [`CommandResolution::resolve_via_scopes`] so the test langs and
+    /// the latexlike preset share one query-and-dispatch implementation.
     fn resolve_macro_via_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
         token: &Token<'_, L>,
     ) -> CommandResolution<L> {
-        let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-            return CommandResolution::Unresolved { detail: None };
-        };
-        let query = CallableQuery::new(
-            CT_MACRO,
-            name,
-            CallableSyntax::Command { escape_char: *escape_char },
-        )
-        .with_token(token);
-        match state.scopes().retrieve_spec(&query, state) {
-            Ok(resolved) => resolved
-                .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
-                .into(),
-            Err(error) => CommandResolution::Unresolved { detail: Some(error.to_string()) },
-        }
+        CommandResolution::resolve_via_scopes(state, token, CT_MACRO)
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -2175,19 +2209,82 @@ mod tests {
             ["chars 0..2 \"a \"", "chars 2..7 \"\\\\foo \"", "chars 7..8 \"b\""]
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        // `CmdLang` implements the hook and supplies no failure detail: the message
-        // stays bare — in particular, no unimplemented-resolution hint.
+        // `CmdLang` resolves through the shared `CommandResolution::resolve_via_scopes`,
+        // which reports the searched providers as the miss detail — one behavior across
+        // the test langs and the latexlike preset (unified in the 7.5 review).
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
-        assert_eq!(diagnostic.message(), "cannot resolve command ‘\\foo’");
-        assert!(
+        assert_eq!(
+            diagnostic.message(),
+            "cannot resolve command ‘\\foo’ (searched providers: test-macros)"
+        );
+        assert_eq!(
             diagnostic
                 .data()
                 .downcast_ref::<UnresolvableCommand>()
                 .unwrap()
                 .detail
-                .is_none()
+                .as_deref(),
+            Some("searched providers: test-macros")
         );
         assert_partition(&parsed.result, 0..8);
+    }
+
+    #[test]
+    fn provider_failure_takes_the_command_resolution_failed_recovery() {
+        // An operational provider failure (vs. a clean miss) surfaces the distinct
+        // CommandResolutionFailed condition through resolve_via_scopes, recovered as
+        // chars like an unresolvable command.
+        #[derive(Debug)]
+        struct BrokenProvider;
+        impl SpecsProvider<CmdLang> for BrokenProvider {
+            fn name(&self) -> &str {
+                "broken"
+            }
+            fn retrieve_spec(
+                &self,
+                _query: &CallableQuery<'_, '_, CmdLang>,
+                _state: &ParsingState<CmdLang>,
+            ) -> Result<Option<Arc<dyn CallableSpec<CmdLang>>>, ProviderError> {
+                Err(ProviderError::Failed("provider is down".into()))
+            }
+        }
+
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(BrokenProvider));
+        let st = Arc::new(ParsingState::new(StateData {
+            rules: rules(),
+            scopes,
+            mode: (),
+            ext: (),
+        }));
+
+        let parsed = run_both(
+            "a \\foo b",
+            &st,
+            Recovery::Tolerant,
+            StopSpec::none(),
+            StopSpec::none(),
+        );
+        assert_eq!(
+            shapes(&parsed.result),
+            ["chars 0..2 \"a \"", "chars 2..7 \"\\\\foo \"", "chars 7..8 \"b\""]
+        );
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), CommandResolutionFailed::IDENTIFIER);
+        assert_eq!(
+            diagnostic.message(),
+            "command resolution failed for ‘\\foo’ (provider ‘broken’: provider is down)"
+        );
+        assert_eq!(
+            diagnostic
+                .data()
+                .downcast_ref::<CommandResolutionFailed>()
+                .unwrap()
+                .detail
+                .as_deref(),
+            Some("provider ‘broken’: provider is down")
+        );
     }
 
     /// A driver whose resolver supplies its own failure detail — the channel a

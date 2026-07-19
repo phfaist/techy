@@ -116,7 +116,8 @@ pub mod __private {
 
 // Re-export the public API of the implemented topics.
 pub use constructs::{
-    ChildStateSpec, ConstructParser, ConstructParserResult, EnvironmentTerminatorMismatch,
+    ChildStateSpec, CommandResolutionFailed, ConstructParser, ConstructParserResult,
+    EnvironmentTerminatorMismatch,
     ExpectedExpressionArgument, ExpressionCallableRequiresContent, GroupChildState,
     GroupParser, ImplementationError, Invocation, InvocationChildState,
     MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,

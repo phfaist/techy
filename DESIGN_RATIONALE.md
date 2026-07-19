@@ -1637,6 +1637,27 @@ distinction is prose, not structure — and "Unknown" would be a misnomer for hi
 command (wrong and noisy for real languages, and every preset would have to scrub it via
 `refine_diagnostic`); docs-only (the runtime wall stays).
 
+**A third `CommandResolution::Failed` variant distinguishes an operational resolver
+failure from a clean miss** — DECIDED (user, July 2026, Phase 7.5 review follow-up).
+`resolve_command` now returns three outcomes: `Resolved`, `Unresolved { detail }` (a clean
+miss — the name is defined nowhere the query saw), and `Failed { detail }` (a definition
+*provider* errored while answering — a broken or unavailable source). The dispatch sites
+diagnose `Failed` as a distinct condition — `CommandResolutionFailed`
+(`core.nodes_parser.command-resolution-failed`), separate from `UnresolvableCommand` —
+recovering the same way (span-backed chars). The shared scope-stack resolver
+`CommandResolution::resolve_via_scopes` (the one home for the preset and the test langs)
+maps a provider `Err` to `Failed`, where the per-driver copies previously flattened it into
+`Unresolved`.
+*Rationale:* tooling and `refine_diagnostic` can now tell "command unknown" from "resolver
+broken" by condition identity rather than string-sniffing the detail; this mirrors the 7.3
+`ScopeOpFailed` precedent, which likewise gives operational scope-stack failures their own
+condition. `CommandResolution` is `#[non_exhaustive]`, so the added variant is non-breaking
+downstream (the wildcard obligation already stands).
+*Distinct from* the earlier-rejected `Unknown`/`Unimplemented` variant pair: that split was
+along *miss-reason prose* (subsumed by the detail string); this one is along *miss vs.
+operational error* — an outcome axis a detail string cannot carry to a consumer keying on
+the condition id.
+
 **`Lang::make_paragraph_break_node` hook** — DECIDED (user, July 2026, Phase 6 plan
 session; Phase 6 notes item C3, upgraded from "core default, hook only if Phase 7 needs
 it"). `fn make_paragraph_break_node(state, &token) -> NodeKind<Self>`; default: a

@@ -58,7 +58,9 @@ use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::ChildStateSpec;
-use super::nodes_parser::{ExpressionCallableRequiresContent, UnresolvableCommand};
+use super::nodes_parser::{
+    CommandResolutionFailed, ExpressionCallableRequiresContent, UnresolvableCommand,
+};
 use super::{
     ConstructParserResult, Invocation, ParseContext,
 };
@@ -286,6 +288,19 @@ fn parse_expression_node<'s, L: Lang>(
                     // consumed whole — mirroring the content loop.
                     cx.recover(
                         UnresolvableCommand::new(*name, *escape_char, detail),
+                        SourceSpan::new(&cx.source, next.span),
+                    )?;
+                    stage_pre_space(cx, nodes, next.pre_space)?;
+                    cx.tokens.move_past(next, true);
+                    let id = stage(cx, NodeKind::chars(next.span), next.span)?;
+                    nodes.push(id);
+                    Ok(Some(id))
+                }
+                CommandResolution::Failed { detail } => {
+                    // Operational resolver failure (§3.8), in expression position: a
+                    // distinct condition from a clean miss, same span-backed recovery.
+                    cx.recover(
+                        CommandResolutionFailed::new(*name, *escape_char, detail),
                         SourceSpan::new(&cx.source, next.span),
                     )?;
                     stage_pre_space(cx, nodes, next.pre_space)?;

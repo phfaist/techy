@@ -709,6 +709,9 @@ mod tests {
                 assert!(detail.unwrap().contains("command resolution is not implemented"));
             }
             CommandResolution::Resolved(_) => panic!("the default must not resolve"),
+            CommandResolution::Failed { .. } => {
+                panic!("the default must not fail operationally")
+            }
         }
     }
 

@@ -1,14 +1,12 @@
 //! [`LatexlikeDriver`]: the preset's [`ParseDriver`] — recovery policy, scope-stack
 //! command resolution, and the math-mode group plug.
 
-use alloc::string::ToString;
 use alloc::sync::Arc;
 
-use crate::engine::{CommandResolution, ParseDriver, ResolvedCallable};
+use crate::engine::{CommandResolution, ParseDriver};
 use crate::error::Recovery;
-use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::state::{ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, Token, TokenKind};
+use crate::token::{GroupRule, Token};
 
 use super::{CallableType, GroupType, Latexlike, Mode};
 
@@ -46,33 +44,17 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         self.recovery
     }
 
-    /// Resolve a command token as a [`Macro`](CallableType::Macro) through the
-    /// state's scope stack. A miss reports the searched providers as the
-    /// unresolvable-command detail; a provider failure reports the provider's error.
+    /// Resolve a command token as a [`Macro`](CallableType::Macro) through the state's
+    /// scope stack, via the shared [`CommandResolution::resolve_via_scopes`]: a hit
+    /// dispatches; a clean miss reports the searched providers as the
+    /// unresolvable-command detail; an operational provider failure is a distinct
+    /// [`Failed`](CommandResolution::Failed) resolution.
     fn resolve_command(
         &self,
         state: &ParsingState<Latexlike>,
         token: &Token<'_, Latexlike>,
     ) -> CommandResolution<Latexlike> {
-        let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-            return CommandResolution::Unresolved { detail: None };
-        };
-        let query = CallableQuery::new(
-            CallableType::Macro,
-            name,
-            CallableSyntax::Command { escape_char: *escape_char },
-        )
-        .with_token(token);
-        match state.scopes().retrieve_spec(&query, state) {
-            Ok(Some(spec)) => CommandResolution::Resolved(ResolvedCallable {
-                callable_type: CallableType::Macro,
-                spec,
-            }),
-            Ok(None) => CommandResolution::Unresolved {
-                detail: Some(state.scopes().searched_providers().to_string()),
-            },
-            Err(error) => CommandResolution::Unresolved { detail: Some(error.to_string()) },
-        }
+        CommandResolution::resolve_via_scopes(state, token, CallableType::Macro)
     }
 
     /// The math plug (DESIGN_RATIONALE.md §3.3/§3.6): a math group's interior parses
