@@ -16,6 +16,10 @@
 //!   arguments plus body behavior via [`EnvironmentBehavior`]) with the
 //!   `\begin`/`\end` composition ([`BeginSpec`]/[`EndSpec`], seeded in
 //!   [`base_package`]);
+//! - the argument-code factory [`argument_specs`] (`"o{"` → configured
+//!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s) and the verbatim wiring —
+//!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
+//!   `\verb`-style delimited verbatim arguments (Phase 7.7);
 //! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
 //!   `NodeRef<'_, Latexlike>`.
@@ -37,17 +41,20 @@
 //! ([`Language::with_seed_delta`](crate::engine::Language::with_seed_delta) +
 //! [`ParsingStateDelta::push_provider`](crate::state::ParsingStateDelta::push_provider)),
 //! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
-//! [`CallableSpec`]). Verbatim and the argument-code factory arrive in Phase 7.7.
+//! [`CallableSpec`]) — `\verb` and `verbatim` included: the machinery ships here, the
+//! definitions with the database.
 
+mod arguments;
 mod driver;
 mod environments;
 mod node_ref;
 mod spec;
 
+pub use arguments::{argument_specs, ArgumentCodeError};
 pub use driver::LatexlikeDriver;
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
-    MalformedBegin, OrphanEnd, UnknownEnvironment,
+    MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
 pub use node_ref::MathStyle;
 pub use spec::{MacroSpec, SpecialsSpec};
@@ -85,6 +92,13 @@ pub enum GroupType {
     /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
     /// plug).
     Math,
+    /// A verbatim region's group (Phase 7.7): the `\verb|…|` shape staged by the `v`
+    /// argument codes ([`argument_specs`]), and the class of the terminator rules
+    /// verbatim readers mint. The interior is **raw text** — it is read under a
+    /// features-off derived state, never tokenized — so this class appears on no
+    /// tokenizer-declared rule and never descends through the driver's
+    /// `group_interior_delta`.
+    Verbatim,
 }
 
 /// The preset's invocation forms ([`Lang::CallableTypeId`]): the familiar
@@ -231,10 +245,12 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 ///   ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
 ///   not driver code, so they are shadowable and unloadable like anything else.
 /// - The specials: alignment `&`, non-breaking space `~`, and the ligature specials
-///   `` `` ``, `''`, `--`, `---`, `` !` ``, `` ?` `` — each a zero-argument
+///   ``` `` ```, `''`, `--`, `---` — each a zero-argument
 ///   [`SpecialsSpec`] callable sharing one instance (many-to-one is the package
 ///   flyweight contract). The multi-character triggers ride the scope-stack scan's
 ///   longest-match rule (`---` beats `--`).
+/// 
+/// ### PhF -- We should not include &, !`, and ?` here ("!`", "?`" already removed)
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
 /// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes
@@ -244,7 +260,8 @@ pub fn base_package() -> Package<Latexlike> {
     package.insert(CallableType::Macro, environments::BEGIN_COMMAND_NAME, Arc::new(BeginSpec));
     package.insert(CallableType::Macro, environments::END_COMMAND_NAME, Arc::new(EndSpec));
     let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(SpecialsSpec::default());
-    for trigger in ["&", "~", "``", "''", "--", "---", "!`", "?`"] {
+    for trigger in ["&", "~", "``", "''", "--", "---"] {
+        // ### PhF -- We should not include &, !`, and ?` here ("!`", "?`" already removed)
         package.insert_specials(trigger, CallableType::Specials, Arc::clone(&spec));
     }
     package
@@ -498,10 +515,9 @@ mod tests {
             parse_shapes("``q''"),
             ["Specials(``)", "chars(q)", "Specials('')"]
         );
-        assert_eq!(
-            parse_shapes("!`Si?`"),
-            ["Specials(!`)", "chars(Si)", "Specials(?`)"]
-        );
+        // `` !` `` and `` ?` `` were dropped from the base package (PhF, July 2026 —
+        // see the `base_package` note): plain characters now.
+        assert_eq!(parse_shapes("!`Si?`"), ["chars(!`Si?`)"]);
     }
 
     #[test]

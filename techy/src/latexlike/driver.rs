@@ -87,7 +87,10 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         let _ = base;
         match rule.group_type {
             GroupType::Math => Some(ParsingStateDelta::new().mode(Mode::Math)),
-            GroupType::Content => None,
+            // Verbatim rules never reach a tokenizer descent (the class marks raw
+            // regions and minted terminator rules, `GroupType::Verbatim` docs) — the
+            // arm exists for match exhaustiveness only.
+            GroupType::Content | GroupType::Verbatim => None,
         }
     }
 }

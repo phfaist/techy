@@ -20,8 +20,8 @@
 //!   (DESIGN_RATIONALE.md §3.4): the concrete wrapper holds an
 //!   `Arc<dyn `[`EnvironmentBehavior`]`>`, whose defaulted methods carry the body
 //!   state delta and the body-parser choice (pylatexenc's
-//!   `EnvironmentSpec.make_body_parser` precedent; `verbatim` overrides it in
-//!   Phase 7.7).
+//!   `EnvironmentSpec.make_body_parser` precedent; [`VerbatimBehavior`] overrides it
+//!   for raw bodies).
 //!
 //! An environment spec's own
 //! [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never invoked —
@@ -60,15 +60,17 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
+use alloc::format;
+
 use crate::constructs::{
     parse_declared_arguments, read_rigid_name_group, ConstructParser,
     ConstructParserResult, EnvironmentBody, EnvironmentBodyParser, Invocation,
-    ParseContext,
+    ParseContext, VerbatimBodyParser,
 };
 use crate::error::DiagnosticInfo;
 use crate::node::{
-    BuildId, CallableData, ChildRegion, ContentNodes, NodeKind, ParsedArguments,
-    ParsedSlot, ParsedSlots,
+    BuildId, CallableData, ChildRegion, NodeKind, ParsedArguments, ParsedSlot,
+    ParsedSlots,
 };
 use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{SourceSpan, Span, TextContent};
@@ -191,8 +193,9 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
     /// The parser that reads the environment's body, entered right after the declared
     /// arguments under the body state. Default: the core [`EnvironmentBodyParser`] —
     /// content up to and including the rigid `\end{name}` terminator, staged as one
-    /// body `List`. Override for takeover bodies (`verbatim`, Phase 7.7); the
-    /// returned parser must produce an [`EnvironmentBody`] and no pass-through delta.
+    /// body `List`. Override for takeover bodies ([`VerbatimBehavior`]'s raw read);
+    /// the returned parser must produce an [`EnvironmentBody`] and no pass-through
+    /// delta.
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
@@ -228,6 +231,80 @@ struct StdEnvironmentBehavior {
 impl EnvironmentBehavior for StdEnvironmentBehavior {
     fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
         &self.arguments
+    }
+}
+
+/// The verbatim-environment behavior (Phase 7.7; pylatexenc's
+/// `LatexVerbatimEnvironmentContentsParser` wired as an [`EnvironmentBehavior`]):
+/// declared arguments parse normally — tokenized, before the raw region begins
+/// (`lstlisting`-style options) — and the **body is raw text**, read by the core
+/// [`VerbatimBodyParser`] up to the literal `\end{name}` terminator (composed per
+/// invocation with the preset's canonical `\` escape and `{…}` name group, the same
+/// spellings the `\begin` composition itself is built on). The single newline right
+/// after the begin scaffolding is staged but designated out of the body content
+/// (the gobble rule — see [`VerbatimBodyParser`]).
+///
+/// One behavior instance serves any environment name (the terminator back-reference
+/// comes from the invocation), so `verbatim`, `verbatim*`, and listing-style
+/// environments can share it:
+///
+/// ```
+/// use std::sync::Arc;
+/// use techy::engine::Language;
+/// use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, VerbatimBehavior};
+/// use techy::scopes::Package;
+/// use techy::state::ParsingStateDelta;
+///
+/// let mut package = Package::new("mydefs");
+/// package.insert(
+///     CallableType::Environment,
+///     "verbatim",
+///     Arc::new(EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default()))),
+/// );
+/// let language = Language::<Latexlike>::default()
+///     .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
+///     .unwrap();
+///
+/// let result = language
+///     .parse("\\begin{verbatim}\na % b \\x{\n\\end{verbatim}")
+///     .unwrap();
+/// let env = result.tree.root().child(0).unwrap();
+/// assert_eq!(env.environment_name(), Some("verbatim"));
+/// let body: Vec<_> = env.body().unwrap().collect();
+/// assert_eq!(body.len(), 1);
+/// assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
+/// ```
+#[derive(Debug, Default)]
+pub struct VerbatimBehavior {
+    arguments: Vec<Arc<ArgumentSpec<Latexlike>>>,
+}
+
+impl VerbatimBehavior {
+    /// A verbatim-body environment with the given (ordinarily parsed) argument
+    /// structure ahead of the raw body.
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> VerbatimBehavior {
+        VerbatimBehavior { arguments }
+    }
+}
+
+impl EnvironmentBehavior for VerbatimBehavior {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+        &self.arguments
+    }
+
+    fn make_body_parser<'p>(
+        &'p self,
+        invocation: EnvironmentInvocation<'p>,
+    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody> + 'p> {
+        Box::new(
+            VerbatimBodyParser::new(
+                invocation.trigger_span,
+                invocation.name,
+                format!("\\{}{{{}}}", END_COMMAND_NAME, invocation.name),
+                GroupType::Verbatim,
+            )
+            .with_invocation_name_span(invocation.name_span),
+        )
     }
 }
 
@@ -475,24 +552,15 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         drop(body_parser);
         debug_assert!(passthrough.is_none(), "the body parser returns no pass-through delta");
 
-        let body_children = {
-            let staged = cx.session.builder.staged_nodes();
-            staged
-                .get(body.body)
-                .expect("the body node was staged by the body parser moments ago")
-                .children()
-                .len() as u32
-        };
         let offset = children.len() as u32;
         children.push(body.body);
         // The slot record is pure node vocabulary: minted here, name carried on the
-        // record itself.
+        // record itself; the content designation is the body parser's
+        // (`EnvironmentBody::content` — a verbatim body designates its gobbled
+        // newline out, Phase 7.7).
         let slots = ParsedSlots::from(vec![ParsedSlot::named(
             "body",
-            ChildRegion::new(
-                offset..offset + 1,
-                ContentNodes::InChildrenOf(body.body, 0..body_children),
-            ),
+            ChildRegion::new(offset..offset + 1, body.content),
         )]);
 
         let data = CallableData {
@@ -631,6 +699,20 @@ mod tests {
             CallableType::Macro,
             "frac",
             Arc::new(MacroSpec::new(vec![expr_arg(), expr_arg()])),
+        );
+        // Verbatim bodies (7.7): the plain environment, a starred sibling entry, and
+        // a listing-style one with a tokenized option argument before the raw body.
+        let verbatim = || {
+            Arc::new(EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default())))
+        };
+        package.insert(CallableType::Environment, "verbatim", verbatim());
+        package.insert(CallableType::Environment, "verbatim*", verbatim());
+        package.insert(
+            CallableType::Environment,
+            "lstlisting",
+            Arc::new(EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::new(vec![
+                optional_arg(),
+            ])))),
         );
         package
     }
@@ -1139,5 +1221,130 @@ mod tests {
         assert_eq!(env.environment_name(), Some("gen"));
         assert_eq!(env.arguments().unwrap().len(), 1);
         assert_eq!(body_shapes(env), ["chars(x)"]);
+    }
+
+    // --- verbatim bodies (7.7): `VerbatimBehavior` through the composition ------------
+
+    #[test]
+    fn verbatim_body_is_raw_text_with_the_newline_gobbled() {
+        // pylatexenc test_latexnodes_parsers_verbatim test_simple, through the full
+        // composition: escapes, `\begin`, comments, specials — all raw.
+        let content = "\\begin{verbatim}\nHello world.\\\n\\macro, \\begin! % no comment; ~.\\( x\n\\end{verbatim}\n";
+        let result = parse_ok(content);
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.environment_name(), Some("verbatim"));
+
+        let evpos = content.find("\\end{verbatim}").unwrap();
+        assert_eq!(env.span().range(), 0..evpos + "\\end{verbatim}".len());
+
+        // Body content: everything between the gobbled newline and the terminator.
+        let body: Vec<_> = env.body().unwrap().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some(&content[17..evpos]));
+        // The raw chars node records the features-off verbatim state.
+        assert!(!body[0].parsing_state().rules().enable_commands);
+        assert!(!body[0].parsing_state().rules().enable_comments);
+
+        // The gobbled newline is kept as the body list's first child — every byte
+        // stays in the tree — but designated out of the content.
+        let list = env.slot_content_parent(0).unwrap();
+        assert_eq!(list.child_count(), 2);
+        assert_eq!(list.child(0).unwrap().chars(), Some("\n"));
+
+        // The newline after `\end{verbatim}` is ordinary sibling content.
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("\n"));
+    }
+
+    #[test]
+    fn verbatim_at_stream_end_and_without_a_leading_newline() {
+        // pylatexenc test_simple_nofinaleol; no leading newline means no gobble.
+        let result = parse_ok("\\begin{verbatim}abc %x\\end{verbatim}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.span().range(), 0..36);
+        assert_eq!(body_shapes(env), ["chars(abc %x)"]);
+        let list = env.slot_content_parent(0).unwrap();
+        assert_eq!(list.child_count(), 1);
+    }
+
+    #[test]
+    fn empty_and_newline_only_verbatim_bodies() {
+        let result = parse_ok("\\begin{verbatim}\\end{verbatim}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(body_shapes(env), Vec::<String>::new());
+        assert_eq!(env.slot_content_parent(0).unwrap().child_count(), 0);
+
+        // A body that is just the gobbled newline: the node exists, the content is
+        // empty.
+        let result = parse_ok("\\begin{verbatim}\n\\end{verbatim}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(body_shapes(env), Vec::<String>::new());
+        assert_eq!(env.slot_content_parent(0).unwrap().child_count(), 1);
+    }
+
+    #[test]
+    fn verbatim_terminator_matching_is_literal() {
+        // `\end {verbatim}` (with a space) is not the terminator — the raw scan
+        // matches the literal string, pylatexenc's string-search parity — so the body
+        // runs to end of input and recovers.
+        let result = parse_tolerant("\\begin{verbatim}a\\end {verbatim}");
+        assert_eq!(
+            messages(&result),
+            ["missing terminator of environment ‘verbatim’ before end of input"]
+        );
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(body_shapes(env), ["chars(a\\end {verbatim})"]);
+    }
+
+    #[test]
+    fn verbatim_does_not_nest() {
+        // An inner `\begin{verbatim}` is raw text; the first terminator ends the body.
+        let result = parse_ok("\\begin{verbatim}a\\begin{verbatim}b\\end{verbatim} c");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(body_shapes(env), ["chars(a\\begin{verbatim}b)"]);
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some(" c"));
+    }
+
+    #[test]
+    fn starred_verbatim_terminates_on_its_own_name() {
+        // `verbatim*` is an ordinary separate entry; the terminator back-references
+        // the invocation's name, `*` included.
+        let result = parse_ok("\\begin{verbatim*}a b\\end{verbatim*}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.environment_name(), Some("verbatim*"));
+        assert_eq!(body_shapes(env), ["chars(a b)"]);
+    }
+
+    #[test]
+    fn lstlisting_style_arguments_parse_before_the_raw_body() {
+        // The option group parses tokenized, the raw body follows; the gobbled
+        // newline lives inside the body list, so the callable's children block stays
+        // span-contiguous (option group, then list — invariant 3).
+        let content = "\\begin{lstlisting}[language=Python]\nif a<b: pass\n\\end{lstlisting}";
+        let result = parse_ok(content);
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.child_count(), 2);
+        assert!(env.arguments().unwrap().get(0).unwrap().is_provided());
+        let option: Vec<_> = env.argument_content_nodes(0).unwrap().collect();
+        assert_eq!(option.len(), 1);
+        assert_eq!(option[0].chars(), Some("language=Python"));
+        assert_eq!(body_shapes(env), ["chars(if a<b: pass\n)"]);
+    }
+
+    #[test]
+    fn unterminated_verbatim_environment_recovers() {
+        let err = strict().parse("\\begin{verbatim}\nabc").unwrap_err();
+        assert!(
+            err.to_string().contains("missing terminator of environment ‘verbatim’"),
+            "{err}"
+        );
+
+        let result = parse_tolerant("\\begin{verbatim}\nabc");
+        assert_eq!(
+            messages(&result),
+            ["missing terminator of environment ‘verbatim’ before end of input"]
+        );
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.span().range(), 0..20);
+        assert_eq!(body_shapes(env), ["chars(abc)"]);
     }
 }

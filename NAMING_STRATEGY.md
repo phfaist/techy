@@ -111,7 +111,8 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Group parser | `GroupParser` | engine temporary (tier 2), per-use config, dropped with the frame |
 | Invocation dispatch | `Invocation`, `CommandResolution`, `ResolvedCallable`, `ParseDriver::resolve_command` (moved off `Lang`, Phase 7 plan session) | `Invocation` = the resolved-invocation value moved into the parser; `CommandResolution` = the hook's outcome (`Resolved`/`Unresolved { detail }`, July 2026); `ResolvedCallable` = invocation form + spec pair |
 | Default invocation parser | `StdInvocationParser` | `Std…` prefix per `StdTokenReader`/`StdCallableSpec`; `parse_declared_arguments` = its shared argument half (pub, slots session) |
-| Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session) |
+| Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session); `EnvironmentBody.content` = the parser's slot-content designation (7.7) |
+| Verbatim family (7.7) | `verbatim_state_delta` (the pinned recipe as data), `VerbatimArgumentParser` (delimited `\verb\|…\|`, the `v` codes; family-consistent `…ArgumentParser`), `VerbatimBodyParser` (environment contents to a literal terminator; sibling of `EnvironmentBodyParser`), conditions `UnterminatedVerbatim`/`ExpectedVerbatimDelimiter` | pylatexenc `LatexDelimitedVerbatimParser` / `LatexVerbatimEnvironmentContentsParser`; no `Latex` prefixes, roles named over mechanisms. `GroupArgumentParser::with_rule` = the mandatory minted-rule form (the `r<c1><c2>` code) |
 | Node finalization hook | `Lang::finalize_node` | run by `NodeTreeBuilder::add` for every staged node, all kinds |
 | Staged read views | `StagedNodes`, `StagedNodeView` | read-only builder views for `finalize_node` and node stop predicates |
 | Tree invariant checker | `check_tree_invariants` | public test utility in `node` (span partition, `Spanned` residency, region tiling) |
@@ -143,14 +144,17 @@ the core has only the associated types (user-decided, 7.5 checkpoint):
 - `LatexlikeDriver` — the preset's `ParseDriver` (scope-stack `resolve_command`, the
   math-mode `group_interior_delta` plug; landed 7.5 — package-loading helper methods
   wait for a package registry).
-- `GroupType` (`Content` / `Math`) — group classes. A *single* math class: inline vs.
-  display is a delimiter fact, read by the `NodeRef::math_style()` sugar →
+- `GroupType` (`Content` / `Math` / `Verbatim`) — group classes. A *single* math class:
+  inline vs. display is a delimiter fact, read by the `NodeRef::math_style()` sugar →
   `MathStyle` (`Inline` / `Display`). No `Bracket` class: `[]` is not a default group
-  (optional arguments recognize it via per-spec `temporary_groups` rules).
+  (optional arguments recognize it via per-spec `temporary_groups` rules). `Verbatim`
+  (landed 7.7) marks raw regions (`\verb` groups, minted terminator rules) — never a
+  tokenizer-declared rule.
 - `CallableType` (`Macro` / `Environment` / `Specials`) — invocation forms. (CamelCase
   variants; supersedes the `MACRO`/`ENVIRONMENT`/`SPECIALS` const-era spelling.)
-- `Mode` (`Text` / `Math`; `#[default] Text`) — parsing modes.
-- All three vocabulary enums are `#[non_exhaustive]` (verbatim-ish variants expected, 7.7).
+- `Mode` (`Text` / `Math`; `#[default] Text`) — parsing modes. Deliberately no
+  `Mode::Verbatim`: verbatimness is rules-borne, not a mode (7.7).
+- All three vocabulary enums are `#[non_exhaustive]`.
 - `default_token_rules()` / `base_package()` — the canonical seed data; `"base"` is the
   seeded package of pylatexenc's default specials (user-named, 7.5 checkpoint).
 - `MacroSpec` / `EnvironmentSpec` / `SpecialsSpec` — the preset's spec types (real
@@ -171,6 +175,12 @@ the core has only the associated types (user-decided, 7.5 checkpoint):
   (same-crate privilege, user-decided 7.5; out-of-crate languages use an extension
   trait): `is_math_group`, `math_style`, `macro_name`, `environment_name`,
   `specials_name`.
+- `argument_specs(codes)` / `ArgumentCodeError` — the argument-code factory (7.7,
+  N8): xparse-like code string → configured `ArgumentSpec`s; a plain function (reads
+  as "argument specs for these codes"), error named for the malformed *code*.
+- `VerbatimBehavior` — the raw-body `EnvironmentBehavior` (7.7): one instance serves
+  any environment name (`verbatim`, `verbatim*`, listing-style with arguments); wraps
+  the core `VerbatimBodyParser`.
 
 Type aliases (`type LatexParseResult = ParseResult<Latexlike>` …) remain a deferred
 bikeshed — none shipped in 7.5; `Language<Latexlike>` reads fine without them.

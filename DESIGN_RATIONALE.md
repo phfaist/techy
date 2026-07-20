@@ -3107,6 +3107,99 @@ shape. The body-unwind path that leaves a stray `}` for the root re-crosses the
 recorded root byte-accounting break (stray bytes dropped from the tree) — accepted, no
 new mechanism.
 
+**The verbatim family (Phase 7.7): recipe → production parsers, group+chars shapes** —
+DECIDED (July 2026, 7.7 landing; N7 of ParserLibraryParity.md).
+`constructs::verbatim_parser` promotes the pinned recipe (§3.2 Action-02 entry; the
+test-side `RawBlockParser`): `verbatim_state_delta(rule)` is the recipe as data (all six
+feature gates off + `expecting_group_close` **replaced**), and the two production
+parsers drive it — `VerbatimArgumentParser` (delimited `\verb|…|`; `ArgumentParser`,
+the `v` codes) and `VerbatimBodyParser` (environment contents up to a **literal**
+terminator string; produces `EnvironmentBody`, pluggable via `make_body_parser`).
+Points settled in flight:
+
+- *Delimiter discovery reads one raw char under a second, narrower delta*: whitespace
+  scanning stays on (pre-delimiter blanks are ordinary region noise; pylatexenc
+  `skip_space_chars` parity — a paragraph break may precede the delimiter), everything
+  else off, and the inherited close expectation **cleared** — `\verb}x}` works inside a
+  braces group. Comments are deliberately *not* noise here: `%` is a valid delimiter
+  (the §3.5 "noise policy is inseparable from argument syntax" case in the flesh).
+- *Node shapes* (modern-pylatexenc parity): `\verb` stages a `Group` (class = a
+  language verbatim class; delimiters as written; close **empty** on EOF recovery)
+  holding one raw `Chars` child — omitted when empty, techy-wide convention — with
+  content = the group's children. The raw chars nodes record the **verbatim state**
+  they were read under (pylatexenc marks its verbatim chars nodes the same way); the
+  group/list wrappers record the surrounding state.
+- *Depth counter* (pylatexenc parity): with paired delimiters, nested opens (plain
+  `Char`s under the recipe state) deepen and closes (`GroupClose`s) surface —
+  `\verb{a{b}c}` is one region; identical delimiters end at the first closer.
+- *Terminator matching is literal*: `\end {verbatim}` does not terminate (string-search
+  parity), and verbatim does not nest. The preset's `VerbatimBehavior` composes the
+  terminator as `\` + `end{name}` — the preset's canonical spellings, same doctrine as
+  `BEGIN_COMMAND_NAME`; a language re-ruling the escape char must supply its own
+  behavior.
+- *A tolerated unreadable token* (forbidden char) inside a committed verbatim region
+  ends it like EOF (diagnosed unterminated/missing-terminator); the enclosing loop
+  re-reads the error and applies its own token recovery — the probe protocol, two
+  true diagnostics accepted. A reader yielding any *other* token kind under the recipe
+  state is an implementation-error abort (panic policy: contract violations `Err`).
+
+`GroupType::Verbatim` joins the preset vocabulary (the 7.5 "verbatim-ish variants"
+slot); **no `Mode::Verbatim`** — verbatimness is rules-borne (a derived-state fact
+scoped to the region), not a mode the scope stack or content interpretation keys on.
+*Rejected:* a char-level reader API (pylatexenc `next_chars`; the recipe already
+delivers per-byte `Char` tokens); a shared "base parser" type with pluggable stop
+conditions (two users, one private loop helper + the public delta builder suffice).
+
+**`EnvironmentBody.content`: the body parser designates the slot's content** — DECIDED
+(July 2026, 7.7 landing).
+`EnvironmentBody` gains a `content: ContentNodes` field (and drops `Copy`); the
+`\begin` composition (and the §G test composition) mints the `"body"` slot record from
+it instead of designating all-children itself. Forced by the newline gobble: pylatexenc
+*drops* the newline right after `\begin{verbatim}` from its chars node, but techy trees
+keep every byte — so the gobbled newline is **staged as a leading whitespace `Chars`
+node inside the body `List` and designated out of the content**. Putting it anywhere
+else breaks an invariant: excluded from the `List`'s span it either gaps the callable's
+children block (arguments before the body, the `lstlisting[opts]` shape — invariant 3)
+or un-tiles the `List` interior (invariant 2). The standard `EnvironmentBodyParser`
+designates all children (7.6 behavior unchanged); "which body nodes are content" is the
+staging parser's knowledge, exactly as for arguments (§3.5 parse-time designation).
+*Rejected:* letting the newline ride the scaffolding gap (works only for argument-less
+environments; would weaken invariant 3 to legalize the rest); an `Option`al designation
+field (the default parser knows its answer — make every producer say it).
+
+**The argument-code factory: `latexlike::argument_specs`** — DECIDED (July 2026, 7.7
+landing; N8 of ParserLibraryParity.md).
+A preset **function**, `&str` in → `Result<Vec<Arc<ArgumentSpec>>, ArgumentCodeError>`
+out, eager, per the plan-session shape. The single code string concatenates codes
+(pylatexenc's list form is not mirrored), so the grammar is pinned: optional whitespace
+*between* codes; parameters follow their code immediately and may not be whitespace;
+**`v` takes two delimiter characters exactly when a non-whitespace character follows
+directly** — a bare auto-`v` stands last or before whitespace (`"v {"`), and `"v{"` is
+a loud `TruncatedCode`, never a silent misparse. Per-code resolution as landed:
+
+- `m`/`{` → `GroupArgumentParser::new(Content)` — *refining the survey table's
+  `ExpressionParser` row*: the class parser is the decided parse-time realization of
+  pylatexenc's `'{'`+`unwrap_double_group` semantics (content = group children), is
+  what every preset test/doctest already used, and carries `ExpressionParser` inside as
+  its fallback engine.
+- `o`/`[`, `d<c1><c2>` → `OptionalGroupArgumentParser` with a minted `Content` rule
+  **and lone-`{…}`-group unwrapping on** (the accessor-default parity choice).
+- `r<c1><c2>` → the new **rule form** `GroupArgumentParser::with_rule` (the survey's
+  "per-use constructors remain to be written"): same temporary-rule state scoping as
+  the optional parser — nested pairs balance, braces protect — but mandatory and with
+  **no expression fallback** (pylatexenc's required-delimited has none; `\m x` under
+  `r()` diagnoses missing-mandatory and leaves `x` alone). Asymmetry accepted for now:
+  `r` does no protective-group unwrapping (the class form never did either); revisit
+  with the 7.8 accessor work if extraction wants it.
+- `s`/`*`, `t<c>` → `MarkerArgumentParser`; `v`/`v<c1><c2>` →
+  `VerbatimArgumentParser::new(GroupType::Verbatim)` (+ `.with_delimiters`).
+
+Factory specs carry no names and no per-argument deltas (attach via `ArgumentSpec`
+builders). No flyweight cache and no singletons: specs are built once per language.
+`e{…}` [N3] and `AnyDelimited` [N2] stay deferred with their parsers.
+*Rejected:* accepting a `&[&str]` list-of-codes signature alongside (one grammar, one
+entry; the string form covers the deferred `e{…}` shape too when it arrives).
+
 ## 4. Rejected patterns — do not reintroduce
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section

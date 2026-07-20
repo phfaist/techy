@@ -1,11 +1,13 @@
 //! The standard [`ArgumentParser`] implementations (Phase 6.5) and the shared
-//! noise-scan helper: [`GroupArgumentParser`] (mandatory delimited group with the
-//! single-expression fallback), [`OptionalGroupArgumentParser`] (optional group whose
+//! noise-scan helper: [`GroupArgumentParser`] (mandatory delimited group — by class
+//! with the single-expression fallback, or by a per-use minted rule, Phase 7.7),
+//! [`OptionalGroupArgumentParser`] (optional group whose
 //! delimiters are minted for the occasion), [`MarkerArgumentParser`] (literal markers
 //! like `*`), and [`ExpressionParser`] (one node: group / full invocation / single
 //! char) — pylatexenc's `'{'` / `'['` / `'*'` argument shorthands resolved into core
 //! parsers, parameterized by group types and rules (no privileged spellings, §2.3;
-//! preset one-liner constructors are Phase 7).
+//! the preset one-liner constructor is `latexlike::argument_specs`; the delimited
+//! verbatim sibling lives in [`verbatim_parser`](super::VerbatimArgumentParser)).
 //!
 //! # Regions, noise, and the absent contract (DESIGN_RATIONALE.md §3.5)
 //!
@@ -200,7 +202,7 @@ pub fn stage_pre_space<L: Lang>(
 }
 
 /// Stage a childless node under the context's current state.
-fn stage<L: Lang>(
+pub(super) fn stage<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     kind: NodeKind<L>,
     span: Span,
@@ -440,25 +442,49 @@ fn region_with_last_as_content(nodes: Vec<BuildId>) -> ParsedArgumentNodes {
 }
 
 /// The standard mandatory-argument parser (pylatexenc's `'{'` shorthand as a core
-/// parser): a group of the configured class if one opens at the position — its
-/// delimiters are argument *syntax*, so the content is the group's children — with the
-/// single-expression fallback otherwise (`\frac12`, `\frac1\alpha`; the expression
-/// node is the content).
+/// parser), in one of two forms:
 ///
-/// The delimiters come from the state's own group rules (the language declares `{…}`);
-/// the parser is configured only with the group **class** that counts as this
-/// argument's delimited form. Missing entirely (end of input, a paragraph break, an
-/// enclosing group close): diagnosed here (tolerant) or abort (strict), argument
-/// absent, nothing consumed.
+/// - **Class form** ([`new`](GroupArgumentParser::new)): a group of the configured
+///   class if one opens at the position — its delimiters are argument *syntax*, so the
+///   content is the group's children — with the single-expression fallback otherwise
+///   (`\frac12`, `\frac1\alpha`; the expression node is the content). The delimiters
+///   come from the state's own group rules (the language declares `{…}`); the parser
+///   is configured only with the group **class** that counts as this argument's
+///   delimited form.
+/// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule); Phase 7.7, the
+///   `r<c1><c2>` argument code): the delimiters are **minted for the occasion** — the
+///   parser carries its own [`GroupRule`], installed as a temporary group rule for the
+///   argument's extent exactly like [`OptionalGroupArgumentParser`]'s (same nested-
+///   delimiter balancing, same brace protection — see that type's docs), just
+///   mandatory. Deliberately **no expression fallback**: a prescribed-delimiter
+///   argument either opens with its delimiter or is missing (pylatexenc's
+///   required-delimited behavior).
+///
+/// Missing (end of input, a paragraph break, an enclosing group close, or — rule
+/// form — anything but the minted rule's opener): diagnosed here (tolerant) or abort
+/// (strict), argument absent, nothing consumed.
 pub struct GroupArgumentParser<L: Lang> {
-    group_type: L::GroupTypeId,
+    form: GroupArgumentForm<L>,
+}
+
+/// The two delimited forms of [`GroupArgumentParser`] (see the type docs).
+enum GroupArgumentForm<L: Lang> {
+    Class(L::GroupTypeId),
+    Rule(Arc<GroupRule<L>>),
 }
 
 impl<L: Lang> GroupArgumentParser<L> {
     /// A mandatory argument delimited by any group rule of class `group_type`, with
     /// the single-expression fallback.
     pub fn new(group_type: L::GroupTypeId) -> GroupArgumentParser<L> {
-        GroupArgumentParser { group_type }
+        GroupArgumentParser { form: GroupArgumentForm::Class(group_type) }
+    }
+
+    /// A mandatory argument delimited exactly by `rule`, minted for the occasion as a
+    /// temporary group rule (e.g. `(`…`)` for an `r()` code) — no expression fallback
+    /// (see the type docs).
+    pub fn with_rule(rule: Arc<GroupRule<L>>) -> GroupArgumentParser<L> {
+        GroupArgumentParser { form: GroupArgumentForm::Rule(rule) }
     }
 }
 
@@ -469,13 +495,59 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
         spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
         let mut noise = scan_argument_noise(cx)?;
+
+        // The rule form: probe with the minted rule in force (the temporary-rule
+        // state scoping of `OptionalGroupArgumentParser`, which see); missing means
+        // diagnosed-mandatory, never an expression.
+        if let GroupArgumentForm::Rule(rule) = &self.form {
+            if noise.next.is_none() {
+                return missing_mandatory(cx, noise, spec);
+            }
+            let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
+                temporary_groups: Some(alloc::vec![Arc::clone(rule)]),
+                ..TokenRulesOverrides::default()
+            });
+            let contents_state = cx.derived_state(&delta)?;
+            let matched = match cx.probe_token(&contents_state)? {
+                Some(token)
+                    if matches!(
+                        &token.kind,
+                        TokenKind::GroupOpen { rule: matched, .. } if Arc::ptr_eq(matched, rule)
+                    ) =>
+                {
+                    Some(token)
+                }
+                _ => None,
+            };
+            let Some(open) = matched else {
+                return missing_mandatory(cx, noise, spec);
+            };
+            stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
+            cx.tokens.move_past(&open, true);
+            let (id, _delta) = cx.parse_group(
+                contents_state,
+                open.span,
+                Arc::clone(rule),
+                ChildStateSpec::inherit(),
+            )?;
+            let child_count = staged_child_count(cx, id);
+            noise.nodes.push(id);
+            return Ok(Some(ParsedArgumentNodes {
+                nodes: noise.nodes,
+                content: ContentNodes::InChildrenOf(id, 0..child_count),
+            }));
+        }
+        let GroupArgumentForm::Class(group_type) = &self.form else {
+            unreachable!("the rule form returned above");
+        };
+
         let Some(next) = noise.next.clone() else {
             return missing_mandatory(cx, noise, spec);
         };
 
         // The delimited form: a group open of the configured class.
         if let TokenKind::GroupOpen { rule, .. } = &next.kind {
-            if rule.group_type == self.group_type {
+            if rule.group_type == *group_type {
                 stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
                 let rule = Arc::clone(rule);
                 cx.tokens.move_past(&next, true);
@@ -750,9 +822,12 @@ impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser {
 
 impl<L: Lang> fmt::Debug for GroupArgumentParser<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GroupArgumentParser")
-            .field("group_type", &self.group_type)
-            .finish()
+        let mut s = f.debug_struct("GroupArgumentParser");
+        match &self.form {
+            GroupArgumentForm::Class(group_type) => s.field("group_type", group_type),
+            GroupArgumentForm::Rule(rule) => s.field("rule", rule),
+        };
+        s.finish()
     }
 }
 

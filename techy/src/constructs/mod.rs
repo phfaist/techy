@@ -38,6 +38,7 @@ mod environment_parser;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
+mod verbatim_parser;
 
 pub use argument_parsers::{
     scan_argument_noise, stage_pre_space, ArgumentNoise, ExpectedExpressionArgument,
@@ -56,6 +57,10 @@ pub use nodes_parser::{
     ExpressionCallableRequiresContent, NodesOutcome, NodesParser, StopCause, StopSpec,
     StrayGroupClose, TokenStopCondition, TokenStopKind, UnresolvableCommand,
     UnusableRecoveryToken, UnusableRecoveryTokenKind,
+};
+pub use verbatim_parser::{
+    verbatim_state_delta, ExpectedVerbatimDelimiter, UnterminatedVerbatim,
+    VerbatimArgumentParser, VerbatimBodyParser,
 };
 
 use alloc::boxed::Box;

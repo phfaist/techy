@@ -39,13 +39,13 @@ embellishments, chars groups, …) **are** in scope.
 | `LatexOptionalSquareBracketsParser` | `OptionalGroupArgumentParser` | implemented |
 | `LatexOptionalCharsMarkerParser` | `MarkerArgumentParser` | implemented (single-marker case; full generality folds into [N3]) |
 | `LatexOptionalEmbellishmentArgsParser` | — | todo [N3] |
-| `LatexStandardArgumentParser`, `get_standard_argument_parser` | `ArgumentSpec` → `parse_declared_arguments` + standard `ArgumentParser`s | implemented (excluded dispatch machinery) — plus todo, Phase 7: the preset string-spec factory [N8] |
+| `LatexStandardArgumentParser`, `get_standard_argument_parser` | `ArgumentSpec` → `parse_declared_arguments` + standard `ArgumentParser`s; preset factory `latexlike::argument_specs` | implemented (excluded dispatch machinery; factory landed 7.7, deferred codes noted) [N8] |
 | `LatexCharsGroupParser` | — (`read_rigid_name_group` is a different role) | todo [N4] |
 | `LatexCharsCommaSeparatedListParser` | — | discarded as parser → todo: node-list split helper [N5] |
 | `LatexTackOnInformationFieldMacrosParser` | — | todo — construct parser, decided [N6] |
-| `LatexVerbatimBaseParser` | recipe validated test-side only (`RawBlockParser`) | todo, Phase 7 [N7] |
-| `LatexDelimitedVerbatimParser` | — | todo, Phase 7 [N7] |
-| `LatexVerbatimEnvironmentContentsParser` | — (takeover-hatch demo is test-only) | todo, Phase 7 [N7] |
+| `LatexVerbatimBaseParser` | `verbatim_state_delta` (the recipe as data) | implemented (7.7) [N7] |
+| `LatexDelimitedVerbatimParser` | `VerbatimArgumentParser` | implemented (7.7) [N7] |
+| `LatexVerbatimEnvironmentContentsParser` | `VerbatimBodyParser` + preset `VerbatimBehavior` | implemented (7.7) [N7] |
 
 All techy type names for **todo** rows are placeholders pending a NAMING_STRATEGY.md
 review with the user.
@@ -137,27 +137,30 @@ specified set of trailing info-field macros — per-macro argument parsers (defa
 expression), multiplicity policy per macro name — and attach the parsed fields to the
 construct's node.
 
-### N7 — verbatim family (Phase 7, per ARCHITECTURE.md §constructs)
+### N7 — verbatim family — **implemented (Phase 7.7)**
 
-The recipe is validated test-side (`RawBlockParser` in `environment_parser.rs` tests):
-a features-disabled derived state plus an `expecting_group_close` override makes the
-body arrive as per-byte `Char` tokens and the terminator as one `GroupClose` — no
-char-level reader API is needed, unlike pylatexenc's `next_chars()`. Three pieces:
+Landed in `constructs::verbatim_parser` per the recipe (a features-disabled derived
+state plus an `expecting_group_close` override; no char-level reader API, unlike
+pylatexenc's `next_chars()`). The three pieces resolved as:
 
-- **Base** (`LatexVerbatimBaseParser` analog): reusable raw-content reading under the
-  verbatim state, stop condition pluggable.
-- **Delimited** (`\verb|…|`): auto-matched closing delimiter (`{`→`}`, `[`→`]`,
-  `<`→`>`, `(`→`)`, else same char) with a depth counter for paired delimiters.
-- **Environment contents** (`verbatim` environment body): in scope per refined
-  instructions — a production, reusable body parser plugging in via the Phase 7
-  `EnvironmentSpec` body-parser hook (§3.6 `make_body_parser` leaning), including
-  gobbling the single newline after `\begin{verbatim}`.
+- **Base** → `verbatim_state_delta(rule)`: the recipe as a reusable delta builder
+  (custom raw-content parsers start from it); the pluggable-stop-condition base *type*
+  was not ported — two concrete parsers share one private loop.
+- **Delimited** (`\verb|…|`) → `VerbatimArgumentParser`: auto-matched closing
+  delimiter (`{`→`}`, `[`→`]`, `<`→`>`, `(`→`)`, else same char; table customizable)
+  with the depth counter for paired delimiters; fixed-pair form for `v<c1><c2>`.
+  Stages the group+chars shape, content = group children.
+- **Environment contents** → `VerbatimBodyParser` (core, literal-terminator
+  parameterized, produces `EnvironmentBody`) + `latexlike::VerbatimBehavior` (the
+  `make_body_parser` override composing `\end{name}`); the gobbled newline is staged
+  but designated out of the slot content (`EnvironmentBody.content`, added 7.7 —
+  DESIGN_RATIONALE.md §3.13).
 
-### N8 — the standard-argument factory (xparse-like string codes)
+### N8 — the standard-argument factory (xparse-like string codes) — **implemented (7.7: `latexlike::argument_specs`)**
 
 Decided (user, July 2026, Phase 7 plan session): `LatexStandardArgumentParser`'s code
 interpretation is *not* replicated as a parser type. It becomes a plain constructor
-**function** in the latexlike preset (name pending the naming review): xparse-like
+**function** in the latexlike preset (landed as `argument_specs`): xparse-like
 code string in, configured `Arc<dyn ArgumentParser<L>>` out, resolved eagerly at
 spec-construction time — parser choice depends only on the code, never on parse-time
 facts. No wrapper indirection; `get_standard_argument_parser`'s flyweight cache
@@ -174,12 +177,12 @@ FLM's feature definitions):
 
 | code | parser | status |
 |---|---|---|
-| `m` / `{` | `ExpressionParser` | implemented (the `expression_single_token_requiring_arg_is_error` switch is absorbed by the emptiness surface) |
-| `o` / `[` | `OptionalGroupArgumentParser` | implemented |
-| `s` / `*`, `t<char>` | `MarkerArgumentParser` | implemented (`t` = same parser, other marker char) |
-| `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser` / `OptionalGroupArgumentParser` with per-use arbitrary delimiters | todo — a second consumer of the temporary-group-rules mechanism (implemented July 2026, DESIGN_RATIONALE.md §3.6: `TokenRules::temporary_groups`), which already handles arbitrary char pairs; the per-use constructors remain to be written |
+| `m` / `{` | `GroupArgumentParser` (class form, `Content`) | implemented — factory wired 7.7. *Refines the survey's `ExpressionParser` row:* the class parser is the decided parse-time realization of `'{'` + `unwrap_double_group` (content = group children) and keeps `ExpressionParser` as its fallback engine; the `expression_single_token_requiring_arg_is_error` switch is absorbed by the emptiness surface |
+| `o` / `[` | `OptionalGroupArgumentParser` (+ lone-`{…}` unwrap) | implemented — factory wired 7.7 |
+| `s` / `*`, `t<char>` | `MarkerArgumentParser` | implemented — factory wired 7.7 (`t` = same parser, other marker char) |
+| `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser::with_rule` (7.7: the mandatory minted-rule form, no expression fallback) / `OptionalGroupArgumentParser` with per-use delimiters | implemented (7.7) — the second consumer of `TokenRules::temporary_groups` |
 | `e{<chars>}` | embellishment-args parser | todo [N3]; record shape to settle before implementing — one `ParsedArgument` per embellishment char vs. one structured entry |
-| `v` / `v<c1><c2>` | delimited-verbatim argument parser | todo [N7] (`v` alone = autodetected delimiter) |
+| `v` / `v<c1><c2>` | `VerbatimArgumentParser` | implemented (7.7) — `v` alone = autodetected delimiter; in a code string, `v` takes two delimiter chars exactly when directly followed by a non-whitespace char (the factory's disambiguation rule) |
 | `AnyDelimited` / `AnyDelimitedOptional` | multi-delim group parser | todo [N2] |
 
 Constructor knobs that do **not** carry over — the factory is deliberately thinner
@@ -187,6 +190,6 @@ than the original: `return_full_node_list` (superseded by parser-designated
 `ContentNodes`), `allow_pre_space` (the regions machinery records pre-argument
 whitespace as noise nodes), the single-token-error switch (emptiness surface).
 
-Phase 7 implements the `m`/`{`, `o`/`[`, `s`/`*`, `t<c>`, `r<c1><c2>`/`d<c1><c2>`, and
-`v` codes; `e{…}` [N3] and `AnyDelimited` [N2] stay deferred beyond Phase 7 (plan
+Landed 7.7 as `latexlike::argument_specs` (`Err(ArgumentCodeError)` on malformed
+codes); `e{…}` [N3] and `AnyDelimited` [N2] stay deferred beyond Phase 7 (plan
 session, July 2026 — Phase7Execution.md §1).

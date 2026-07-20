@@ -7,10 +7,11 @@
 //! variants): the core cannot know a language's argument forms — which group class a
 //! `{…}` argument uses, whether `[…]` is a group rule of the current state or a
 //! momentarily-minted one — so the standard parsers (delimited group, optional group,
-//! literal marker, expression) live in [`constructs`](crate::constructs) as core
-//! `ArgumentParser` implementations, parameterized by group types and rules; the preset
-//! supplies the one-liners resolving pylatexenc's `'{'` / `'['` / `'*'` shorthands into
-//! configured instances (Phase 7).
+//! literal marker, expression, delimited verbatim) live in
+//! [`constructs`](crate::constructs) as core `ArgumentParser` implementations,
+//! parameterized by group types and rules; the preset's code factory
+//! (`latexlike::argument_specs`, Phase 7.7) resolves pylatexenc's `'{'` / `'['` /
+//! `'*'` / … shorthands into configured instances.
 //!
 //! **Arguments vs. slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
 //! `\item[label]`) and are declared here, spec-side. Slots — the *content regions* of a

@@ -55,7 +55,7 @@ use core::fmt;
 
 use crate::engine::{Frame, FrameTitle};
 use crate::error::{DiagnosticInfo, ToDiagnosticValue};
-use crate::node::{BuildId, NodeKind};
+use crate::node::{BuildId, ContentNodes, NodeKind};
 use crate::source::{SourceSpan, Span};
 use crate::state::{Lang, ParsingStateDelta};
 use crate::token::{GroupRule, TokenKind};
@@ -231,7 +231,7 @@ fn read_name_chars<L: Lang>(
 }
 
 /// What [`EnvironmentBodyParser`] produces.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EnvironmentBody {
     /// The staged body `List` node: span = the body's content interior, children = the
     /// body's nodes (an empty body is an empty `List` — a region that exists).
@@ -241,6 +241,14 @@ pub struct EnvironmentBody {
     /// unexpected group close, end of input), the body's end. The driving invocation
     /// parser ends the callable's span here.
     pub end: usize,
+    /// The body slot's **content designation**, ready for the driving composition's
+    /// [`ParsedSlot`](crate::node::ParsedSlot) record (added Phase 7.7): which of the
+    /// body's nodes are the slot's content. The standard parser designates all of the
+    /// body `List`'s children; a verbatim body designates its gobbled leading newline
+    /// *out* ([`VerbatimBodyParser`](super::VerbatimBodyParser)) — the parser that
+    /// staged the body is the one that knows, exactly as for arguments
+    /// (DESIGN_RATIONALE.md §3.5 parse-time designation).
+    pub content: ContentNodes,
 }
 
 /// The environment-body construct parser: a tier-2 temporary constructed by the
@@ -455,6 +463,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
             }
         };
 
+        let child_count = outcome.nodes.len() as u32;
         let body = cx
             .session
             .builder
@@ -465,7 +474,14 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
                 outcome.nodes,
             )
             .map_err(|error| cx.implementation_error(error, Span::new(body_start, body_end)))?;
-        Ok((EnvironmentBody { body, end }, None))
+        Ok((
+            EnvironmentBody {
+                body,
+                end,
+                content: ContentNodes::InChildrenOf(body, 0..child_count),
+            },
+            None,
+        ))
     }
 }
 
@@ -747,21 +763,14 @@ mod tests {
             let (body, delta) = cx.parse_scoped(slot_state, &mut body_parser)?;
             debug_assert!(delta.is_none());
 
-            let body_children = {
-                let staged = cx.session.builder.staged_nodes();
-                staged.get(body.body).expect("the body was just staged").children().len()
-                    as u32
-            };
             let offset = children.len() as u32;
             children.push(body.body);
             // The slot record is pure node vocabulary: minted here, name carried on
-            // the record itself (the A.2 reshape).
+            // the record itself (the A.2 reshape); content designation from the body
+            // parser (7.7).
             let slots = ParsedSlots::from(vec![ParsedSlot::named(
                 "body",
-                ChildRegion::new(
-                    offset..offset + 1,
-                    ContentNodes::InChildrenOf(body.body, 0..body_children),
-                ),
+                ChildRegion::new(offset..offset + 1, body.content.clone()),
             )]);
 
             let data = CallableData {

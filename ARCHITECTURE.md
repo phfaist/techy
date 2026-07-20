@@ -733,10 +733,13 @@ parser, `StdInvocationParser` (the default declarative invocation parser: argume
 argument parsers → regions, slots; post_space = the trigger token's own — 6.4 amendment),
 the standard `ArgumentParser`
 implementations (delimited-group / optional-group / marker / expression fallback — core,
-parameterized by group types; presets add one-liner constructors in Phase 7),
+parameterized by group types; the preset one-liner constructor is 7.7's
+`latexlike::argument_specs`),
 `EnvironmentBodyParser` (core, parameterized: stop-command name, name-group type,
-invocation-name back-reference), `ExpressionParser` (single node — `\frac12` acceptance).
-(`VerbatimParser` → Phase 7 with `\verb`, via the escape hatch. No `CommentParser`:
+invocation-name back-reference), `ExpressionParser` (single node — `\frac12` acceptance),
+and the verbatim family (7.7: `verbatim_state_delta`, `VerbatimArgumentParser`,
+`VerbatimBodyParser` — raw regions per the pinned features-off + expected-close recipe).
+(No `CommentParser`:
 whole-comment tokens made it vestigial — comment nodes come straight from tokens.)
 
 ### engine (S1) — orchestration
@@ -1105,10 +1108,10 @@ root. It provides:
   `EnvironmentBehavior` (defaulted `arguments`/`body_state_delta`/`make_body_parser`) —
   driven by `BeginSpec`'s composition over the core building blocks
   (`read_rigid_name_group` + `parse_declared_arguments` + `EnvironmentBodyParser`).
-  Verbatim (a `make_body_parser` override) in Phase 7.7, with a standard-argument
-  factory mapping xparse-like code strings to configured standard `ArgumentParser`s
-  (pylatexenc's `LatexStandardArgumentParser` reshaped as a factory — decided July
-  2026; per-code inventory in ParserLibraryParity.md).
+  Verbatim landed 7.7: `VerbatimBehavior` (the `make_body_parser` override) and the
+  standard-argument factory `argument_specs` mapping xparse-like code strings to
+  configured standard `ArgumentParser`s (pylatexenc's `LatexStandardArgumentParser`
+  reshaped as a factory; per-code inventory in ParserLibraryParity.md).
 - `NodeRef` accessor sugar as inherent methods on `NodeRef<'_, Latexlike>`
   (`is_math_group`, `math_style`, `macro_name`, `environment_name`, `specials_name`).
 - Math handled as group class + first-class mode + mode-visible packages, demonstrating
