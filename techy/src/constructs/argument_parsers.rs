@@ -471,6 +471,7 @@ pub struct GroupArgumentParser<L: Lang> {
 enum GroupArgumentForm<L: Lang> {
     Class(L::GroupTypeId),
     Rule(Arc<GroupRule<L>>),
+    // ### PhF -- we might need "Rules(Vec<Arc<GroupRule<L>>>)" as well, to enable AnyDelimited-style parsing of a group with any allowable delimiter (e.g. any of "(), [], <>, {}").   Actually, Rules() supersedes Rule() since we can construct it to contain only one rule.
 }
 
 impl<L: Lang> GroupArgumentParser<L> {
