@@ -24,6 +24,8 @@ enforced rules — see §3 and DESIGN_RATIONALE.md §3.11 (decision 8 in §11).
 
 ## 1. Assessment of where things stand
 
+(This is outdated!)
+
 Three generations of design coexist in the repo:
 
 1. **Sonnet-generated exploration** (`pylatexenc_to_rust_strategy.md`,
@@ -912,7 +914,7 @@ the last `SourceSpan` in any tree drops.
 Recorded so the reasoning survives; the resulting design is §state. Four candidates were compared
 (discussion of July 2026):
 
-**Per-facet traits (the WIP in `src/state/`)** — each tokenization facet behind its own trait
+**Per-facet traits (the WIP in an earlier source tree)** — each tokenization facet behind its own trait
 + macro-generated data struct, nine associated types on `ParsingStateTrait`. Rejected: the
 facet traits expose only *getters*, so a library-authored standard delta ("set comment start
 to `;`") cannot be implemented generically — the associated types are opaque, with no update
@@ -954,7 +956,7 @@ A simplification fell out of the follow-up `copy_with` discussion: there is **no
 The change-description must remain a *value* (not a closure, not a direct constructor call)
 because producer and scope-decider differ — see the producer/scope split in §state.
 
-What survives from the WIP `src/state/`: the cached sorted delimiter-prefix table
+What survives from the earlier WIP: the cached sorted delimiter-prefix table
 (`cached_prefix_strings`, with the open/close-ambiguity merging — good work, keep it), the
 `detect_*` decomposition of the tokenizer (as private methods of `StdTokenReader`), and the
 recovery-token mechanism.
@@ -1291,7 +1293,7 @@ not obvious.
    Stored `StateData`/`TokenRules` behind getter-only public surface; `ParsingStateDelta<L>`
    overrides-struct (+ `L::Event`s) as the reified change value; `derived()` as the sole
    constructor of non-initial states; `Lang::finalize_transition` as the customizer for
-   cross-cutting rules. Replaces the per-facet trait + macro design in `src/state/`.
+   cross-cutting rules. Replaces the per-facet trait + macro design in earlier source tree.
    (Design: §state. Rationale, including rejected Options A and B: §4.)
 2. **RESOLVED (July 2026): naming.** `Lang` trait + `Language<L>` runtime object (dropping
    `FLMEnvironment` and `LanguageSpecification`). (§7)
