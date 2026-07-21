@@ -42,5 +42,5 @@ mod lang;
 mod parsing_state;
 
 pub use delta::{ParsingStateDelta, TokenRulesOverrides};
-pub use lang::{Lang, NodeExtTypes, SimpleLang};
+pub use lang::{ClosedVocabulary, Lang, NodeExtTypes, SimpleLang};
 pub use parsing_state::{DeriveError, ParsingState, StateData};

@@ -111,7 +111,7 @@ impl core::error::Error for ArgumentCodeError {}
 /// let node = result.tree.root().child(0).unwrap();
 /// assert!(node.arguments().unwrap().get(0).unwrap().is_provided());
 /// assert_eq!(
-///     node.argument_content_nodes(1).unwrap().next().unwrap().chars(),
+///     node.argument_content_nodes(1).unwrap().iter().next().unwrap().chars(),
 ///     Some("fig.png"),
 /// );
 /// ```
@@ -322,7 +322,7 @@ mod tests {
     fn content_chars(node: NodeRef<'_, Latexlike>, i: usize) -> String {
         node.argument_content_nodes(i)
             .expect("provided argument")
-            .map(|child| child.chars().unwrap_or("<non-chars>").to_string())
+            .iter().map(|child| child.chars().unwrap_or("<non-chars>").to_string())
             .collect()
     }
 
@@ -332,7 +332,7 @@ mod tests {
         let result = parse_ok("m", r"\m{mandatory argument} (more stuff)");
         let m = macro_node(&result);
         assert_eq!(m.span().range(), 0..22);
-        let content: Vec<_> = m.argument_content_nodes(0).unwrap().collect();
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("mandatory argument"));
         assert_eq!(content[0].span().range(), 3..21);
@@ -352,7 +352,7 @@ mod tests {
         // and the content designation excludes it.
         let result = parse_ok("m", "\\m %comment here\n{mandatory argument}");
         let m = macro_node(&result);
-        let region: Vec<_> = m.argument_nodes(0).unwrap().collect();
+        let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region.len(), 2);
         assert_eq!(region[0].comment(), Some("comment here"));
         assert_eq!(content_chars(m, 0), "mandatory argument");
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(content_chars(macro_node(&result), 0), "a<non-chars>c");
         let result = parse_ok("r()", r"\m(a{b)c}d)");
         let m = macro_node(&result);
-        let content: Vec<_> = m.argument_content_nodes(0).unwrap().collect();
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content[1].group_delimiters(), Some(("{", "}")));
     }
 

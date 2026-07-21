@@ -504,9 +504,56 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
         Err(ProviderError::NotMutable)
     }
 
-    // `iter_symbols` (best-effort introspection) is deliberately absent: deferred to the
-    // Phase 7.8 view-API session, where its consumers will shape the item type (decided
-    // July 2026, Phase 7.3 checkpoint). Adding a defaulted method later is non-breaking.
+    /// Enumerate this provider's definitions of the invocation form `callable_type`
+    /// that are visible under `mode` (Phase 7.8; the deferral of the 7.3 checkpoint).
+    /// Visibility is the provider's own business, exactly as in
+    /// [`retrieve_spec`](SpecsProvider::retrieve_spec) — and since visibility is
+    /// mode-determined at every grain, the mode alone is passed, not a full state.
+    ///
+    /// `None` = this provider **cannot enumerate** (the default — correct for
+    /// [`FallbackProvider`], which answers *any* name); `Some` of an empty iterator =
+    /// enumerable and nothing visible. Specials definitions enumerate under their
+    /// registered callable type with the **trigger spelling as the name**. Yield order
+    /// within a provider is unspecified.
+    fn iter_symbols(
+        &self,
+        callable_type: L::CallableTypeId,
+        mode: L::ModeId,
+    ) -> Option<Box<dyn Iterator<Item = SymbolEntry<'_, L>> + '_>> {
+        let _ = (callable_type, mode);
+        None
+    }
+}
+
+/// One enumerated definition (see [`SpecsProvider::iter_symbols`]): a borrowed,
+/// self-describing row — callers clone the `Arc` if they keep it.
+pub struct SymbolEntry<'a, L: Lang> {
+    /// The invocation form the definition is registered under.
+    pub callable_type: L::CallableTypeId,
+    /// The defined name — for a specials definition, the trigger spelling (`"--"`).
+    pub name: &'a str,
+    /// The definition's behavior spec.
+    pub spec: &'a Arc<dyn CallableSpec<L>>,
+}
+
+// Manual impls: `SymbolEntry` is Copy regardless of `L` (an id and two borrows).
+
+impl<L: Lang> Clone for SymbolEntry<'_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Lang> Copy for SymbolEntry<'_, L> {}
+
+impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SymbolEntry")
+            .field("callable_type", &self.callable_type)
+            .field("name", &self.name)
+            .field("spec", &self.spec)
+            .finish()
+    }
 }
 
 // --- Package ----------------------------------------------------------------------------
@@ -780,6 +827,42 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         }
         TriggerChars::Only(chars)
     }
+
+    fn iter_symbols(
+        &self,
+        callable_type: L::CallableTypeId,
+        mode: L::ModeId,
+    ) -> Option<Box<dyn Iterator<Item = SymbolEntry<'_, L>> + '_>> {
+        // Outside the package-level gate: enumerable, nothing visible.
+        if !self.visible_in(mode) {
+            return Some(Box::new(core::iter::empty()));
+        }
+        // Both storage tables contribute by their entries' *recorded* type — the
+        // package never asks which type "means" specials.
+        let named = self
+            .specs
+            .get(&callable_type)
+            .into_iter()
+            .flat_map(HashMap::iter)
+            .filter(move |(_, entry)| modes_admit(&entry.visible_modes, &mode))
+            .map(move |(name, entry)| SymbolEntry {
+                callable_type,
+                name: &**name,
+                spec: &entry.spec,
+            });
+        let specials = self
+            .specials
+            .iter()
+            .filter(move |entry| {
+                entry.callable_type == callable_type && modes_admit(&entry.visible_modes, &mode)
+            })
+            .map(move |entry| SymbolEntry {
+                callable_type,
+                name: &entry.trigger,
+                spec: &entry.spec,
+            });
+        Some(Box::new(named.chain(specials)))
+    }
 }
 
 impl<L: Lang> Clone for Package<L> {
@@ -906,6 +989,22 @@ impl<L: Lang> SpecsProvider<L> for Scope<L> {
             }
         }
         Ok(Arc::new(fresh))
+    }
+
+    fn iter_symbols(
+        &self,
+        callable_type: L::CallableTypeId,
+        mode: L::ModeId,
+    ) -> Option<Box<dyn Iterator<Item = SymbolEntry<'_, L>> + '_>> {
+        // Scope definitions carry no visibility — every mode sees them all.
+        let _ = mode;
+        let entries = self
+            .specs
+            .get(&callable_type)
+            .into_iter()
+            .flat_map(BTreeMap::iter)
+            .map(move |(name, spec)| SymbolEntry { callable_type, name: &**name, spec });
+        Some(Box::new(entries))
     }
 }
 
@@ -1211,6 +1310,42 @@ impl<L: Lang> ScopeStack<L> {
             union = union.union(&provider.specials_trigger_chars());
         }
         union
+    }
+
+    /// Enumerate the definitions of the invocation form `callable_type` in scope under
+    /// `mode`, **shadowing applied**: providers are consulted innermost-first (each
+    /// pre-filters by visibility, so this mirrors [`retrieve_spec`](ScopeStack::retrieve_spec)
+    /// resolution under that mode), and the first occurrence of a name wins. For
+    /// specials definitions the "name" is the trigger spelling — identical triggers
+    /// shadow innermost-wins, exactly the [`scan_specials`](ScopeStack::scan_specials)
+    /// tie rule; distinct triggers coexist (longest-match is positional resolution, not
+    /// shadowing).
+    ///
+    /// Providers that cannot enumerate ([`SpecsProvider::iter_symbols`] = `None`, e.g.
+    /// a [`FallbackProvider`] answering *any* name) are skipped: the listing covers the
+    /// enumerable definitions, not the open-ended fallback behavior. For the raw
+    /// per-provider walk without dedup, iterate [`providers`](ScopeStack::providers)
+    /// yourself. To enumerate *every* form, drive this once per type — via
+    /// [`ClosedVocabulary::ALL`](crate::state::ClosedVocabulary) where the language's
+    /// type vocabulary implements it.
+    pub fn iter_symbols(
+        &self,
+        callable_type: L::CallableTypeId,
+        mode: L::ModeId,
+    ) -> Vec<SymbolEntry<'_, L>> {
+        let mut seen: hashbrown::HashSet<&str> = hashbrown::HashSet::new();
+        let mut symbols = Vec::new();
+        for provider in self.stack.iter().rev() {
+            let Some(entries) = provider.iter_symbols(callable_type, mode) else {
+                continue;
+            };
+            for entry in entries {
+                if seen.insert(entry.name) {
+                    symbols.push(entry);
+                }
+            }
+        }
+        symbols
     }
 
     /// Apply one [`ScopeOp`] — the primitive behind
@@ -1975,5 +2110,167 @@ mod tests {
         let error = stack.scan_specials(&st, "-", 0).unwrap_err();
         assert!(error.to_string().contains("scan broke"));
         assert_eq!(stack.specials_trigger_chars(), TriggerChars::Any);
+    }
+
+    // --- iter_symbols (Phase 7.8) -----------------------------------------------------
+
+    fn names_of<'a, L: Lang>(symbols: &[SymbolEntry<'a, L>]) -> Vec<&'a str> {
+        symbols.iter().map(|entry| entry.name).collect()
+    }
+
+    #[test]
+    fn package_enumerates_by_callable_type_including_specials() {
+        let spec = new_spec();
+        let mut pkg: Package<PlainLang> = Package::new("p");
+        pkg.insert(MACRO, "alpha", Arc::clone(&spec));
+        pkg.insert(ENVIRONMENT, "itemize", Arc::clone(&spec));
+        pkg.insert_specials("--", MACRO, Arc::clone(&spec));
+
+        let mut macros = names_of(&pkg.iter_symbols(MACRO, ()).unwrap().collect::<Vec<_>>());
+        macros.sort_unstable();
+        // The by-name table and the specials table both contribute under the entries'
+        // *recorded* type; the specials row's name is the trigger spelling.
+        assert_eq!(macros, ["--", "alpha"]);
+        let environments =
+            names_of(&pkg.iter_symbols(ENVIRONMENT, ()).unwrap().collect::<Vec<_>>());
+        assert_eq!(environments, ["itemize"]);
+        // Rows are self-describing and borrow the stored spec.
+        let row = pkg.iter_symbols(ENVIRONMENT, ()).unwrap().next().unwrap();
+        assert_eq!(row.callable_type, ENVIRONMENT);
+        assert!(Arc::ptr_eq(row.spec, &spec));
+    }
+
+    #[test]
+    fn package_iter_symbols_applies_both_visibility_gates() {
+        let spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+        let mut pkg: Package<ModedLang> = Package::new("mixed");
+        pkg.insert(MACRO, "vec", Arc::clone(&spec)); // all modes
+        pkg.insert_in_modes(MACRO, "emph", Arc::clone(&spec), Some(vec![Mode::Text]));
+        pkg.insert_specials_in_modes("--", MACRO, Arc::clone(&spec), Some(vec![Mode::Text]));
+
+        let mut in_text = names_of(&pkg.iter_symbols(MACRO, Mode::Text).unwrap().collect::<Vec<_>>());
+        in_text.sort_unstable();
+        assert_eq!(in_text, ["--", "emph", "vec"]);
+        // The per-entry gate filters; the all-modes entry stays.
+        assert_eq!(
+            names_of(&pkg.iter_symbols(MACRO, Mode::Math).unwrap().collect::<Vec<_>>()),
+            ["vec"]
+        );
+
+        // The package-level gate: enumerable, nothing visible (Some(empty), not None).
+        let mut gated: Package<ModedLang> = Package::new("math-only");
+        gated.insert(MACRO, "frac", new_spec());
+        gated.set_visible_modes(Some(vec![Mode::Math]));
+        assert_eq!(gated.iter_symbols(MACRO, Mode::Text).unwrap().count(), 0);
+        assert_eq!(gated.iter_symbols(MACRO, Mode::Math).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn scope_enumerates_ignoring_mode() {
+        let mut scope: Scope<ModedLang> = Scope::new("local");
+        scope.insert(MACRO, "beta", new_spec());
+        scope.insert(ENVIRONMENT, "quote", new_spec());
+        // Scope definitions carry no visibility: every mode sees them.
+        assert_eq!(names_of(&scope.iter_symbols(MACRO, Mode::Math).unwrap().collect::<Vec<_>>()), ["beta"]);
+        assert_eq!(names_of(&scope.iter_symbols(MACRO, Mode::Text).unwrap().collect::<Vec<_>>()), ["beta"]);
+        assert_eq!(
+            names_of(&scope.iter_symbols(ENVIRONMENT, Mode::Text).unwrap().collect::<Vec<_>>()),
+            ["quote"]
+        );
+    }
+
+    #[test]
+    fn default_iter_symbols_is_not_enumerable() {
+        // FallbackProvider answers *any* name — it keeps the trait default.
+        let mut fallback: FallbackProvider<PlainLang> = FallbackProvider::new("fallback");
+        fallback.set(MACRO, new_spec());
+        assert!(fallback.iter_symbols(MACRO, ()).is_none());
+    }
+
+    #[test]
+    fn stack_iter_symbols_dedups_innermost_first_and_skips_unenumerable() {
+        let outer_spec = new_spec();
+        let inner_spec = new_spec();
+        let mut outer: Package<PlainLang> = Package::new("outer");
+        outer.insert(MACRO, "alpha", Arc::clone(&outer_spec));
+        outer.insert(MACRO, "omega", Arc::clone(&outer_spec));
+        let mut inner: Scope<PlainLang> = Scope::new("inner");
+        inner.insert(MACRO, "alpha", Arc::clone(&inner_spec)); // shadows outer's
+
+        let mut fallback: FallbackProvider<PlainLang> = FallbackProvider::new("fallback");
+        fallback.set(MACRO, new_spec());
+
+        let mut stack: ScopeStack<PlainLang> = ScopeStack::new();
+        stack.push(Arc::new(fallback)); // unenumerable: skipped, not an error
+        stack.push(Arc::new(outer));
+        stack.push(Arc::new(inner));
+
+        let symbols = stack.iter_symbols(MACRO, ());
+        let mut names = names_of(&symbols);
+        names.sort_unstable();
+        assert_eq!(names, ["alpha", "omega"]);
+        // First (innermost) visible occurrence wins — mirrors retrieve_spec resolution.
+        let alpha = symbols.iter().find(|entry| entry.name == "alpha").unwrap();
+        assert!(Arc::ptr_eq(alpha.spec, &inner_spec));
+        // Innermost entries come first in the listing.
+        assert_eq!(names_of(&symbols)[0], "alpha");
+
+        // A mode-invisible provider's entries fall through to outer ones: the dedup is
+        // "first *visible* wins", because each provider pre-filters by mode.
+        let moded_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+        let text_spec: Arc<dyn CallableSpec<ModedLang>> = new_spec();
+        let mut math_pkg: Package<ModedLang> = Package::new("math-only");
+        math_pkg.insert(MACRO, "vec", Arc::clone(&moded_spec));
+        math_pkg.set_visible_modes(Some(vec![Mode::Math]));
+        let mut base: Package<ModedLang> = Package::new("base");
+        base.insert(MACRO, "vec", Arc::clone(&text_spec));
+        let mut stack: ScopeStack<ModedLang> = ScopeStack::new();
+        stack.push(Arc::new(base));
+        stack.push(Arc::new(math_pkg));
+        let in_text = stack.iter_symbols(MACRO, Mode::Text);
+        assert!(Arc::ptr_eq(in_text[0].spec, &text_spec));
+        let in_math = stack.iter_symbols(MACRO, Mode::Math);
+        assert!(Arc::ptr_eq(in_math[0].spec, &moded_spec));
+    }
+
+    #[test]
+    fn closed_vocabulary_drives_whole_scope_enumeration() {
+        use crate::state::ClosedVocabulary;
+
+        // The tooling pattern the trait exists for: enumerate every invocation form of
+        // a language whose vocabulary is statically listable.
+        fn all_symbols<L: Lang>(stack: &ScopeStack<L>, mode: L::ModeId) -> Vec<(L::CallableTypeId, Box<str>)>
+        where
+            L::CallableTypeId: ClosedVocabulary,
+        {
+            let mut all = Vec::new();
+            for &callable_type in L::CallableTypeId::ALL {
+                for entry in stack.iter_symbols(callable_type, mode) {
+                    all.push((entry.callable_type, Box::from(entry.name)));
+                }
+            }
+            all
+        }
+
+        use crate::latexlike::{CallableType, Latexlike, Mode as LMode};
+        let seed = crate::state::ParsingState::<Latexlike>::new(
+            crate::state::Lang::initial_state_data(),
+        );
+        let symbols = all_symbols(&seed.scopes().clone(), LMode::Text);
+        let has = |ct: CallableType, name: &str| {
+            symbols.iter().any(|(t, n)| *t == ct && &**n == name)
+        };
+        // The base package's \begin/\end are ordinary Macro entries; the typography
+        // ligatures are Specials rows named by their trigger.
+        assert!(has(CallableType::Macro, "begin"));
+        assert!(has(CallableType::Macro, "end"));
+        assert!(has(CallableType::Specials, "--"));
+        assert!(has(CallableType::Specials, "~"));
+        // Base ligatures are text-only: invisible under Math.
+        let in_math = all_symbols(&seed.scopes().clone(), LMode::Math);
+        assert!(!in_math.iter().any(|(t, n)| *t == CallableType::Specials && &**n == "--"));
+        // ALL lists the full vocabularies.
+        assert_eq!(CallableType::ALL.len(), 3);
+        assert_eq!(<() as ClosedVocabulary>::ALL, &[()]);
     }
 }

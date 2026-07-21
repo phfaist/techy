@@ -140,22 +140,23 @@ pub use source::{
     Span, TextContent,
 };
 pub use node::{
-    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, GroupData,
-    NodeBuildError, NodeData, NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder,
-    ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, StagedNodeView, StagedNodes,
+    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, Descendants,
+    GroupData, NodeBuildError, NodeData, NodeId, NodeKind, NodeRef, NodeSlice, NodeSliceIter,
+    NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
+    StagedNodeView, StagedNodes,
 };
 pub use scopes::{
     CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
     FallbackProvider, Package, ProviderError, Scope, ScopeOp, ScopeOpError, ScopeStack,
-    ScopeStackError, SearchedProviders, SpecsProvider,
+    ScopeStackError, SearchedProviders, SpecsProvider, SymbolEntry,
 };
 pub use spec::{
     ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes,
     StdCallableSpec,
 };
 pub use state::{
-    DeriveError, Lang, NodeExtTypes, ParsingState, ParsingStateDelta, SimpleLang, StateData,
-    TokenRulesOverrides,
+    ClosedVocabulary, DeriveError, Lang, NodeExtTypes, ParsingState, ParsingStateDelta,
+    SimpleLang, StateData, TokenRulesOverrides,
 };
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,

@@ -1188,7 +1188,7 @@ mod tests {
 
     /// The resolved content nodes of argument `i`, asserted present.
     fn content_of(callable: NodeRef<'_, ArgLang>, i: usize) -> Vec<NodeRef<'_, ArgLang>> {
-        callable.argument_content_nodes(i).expect("provided argument").collect()
+        callable.argument_content_nodes(i).expect("provided argument").iter().collect()
     }
 
     // --- the delimited form and the expression fallback ---------------------------------
@@ -1236,7 +1236,7 @@ mod tests {
         assert_eq!(frac.child(2).unwrap().chars(), Some("2"));
 
         // Regions: arg 0 = ["1"]; arg 1 = [" ", "2"] with only "2" as content.
-        let region1: Vec<_> = frac.argument_nodes(1).unwrap().collect();
+        let region1: Vec<_> = frac.argument_nodes(1).unwrap().iter().collect();
         assert_eq!(region1.len(), 2);
         let content1 = content_of(frac, 1);
         assert_eq!(content1.len(), 1);
@@ -1374,7 +1374,7 @@ mod tests {
         assert_eq!(frac.span().range(), 0..18);
         // Arg 0's region: the comment node, then the group; content = the group's
         // children only (noise kept, out of content's way).
-        let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
+        let region0: Vec<_> = frac.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region0.len(), 2);
         assert!(region0[0].is_comment());
         assert_eq!(region0[0].comment(), Some("half"));
@@ -1434,7 +1434,7 @@ mod tests {
 
         let x = root_child(&parsed, 0);
         assert_eq!(x.span().range(), 0..7);
-        let region1: Vec<_> = x.argument_nodes(1).unwrap().collect();
+        let region1: Vec<_> = x.argument_nodes(1).unwrap().iter().collect();
         assert_eq!(region1.len(), 2);
         assert_eq!(region1[0].chars(), Some(" "));
         let content1 = content_of(x, 1);

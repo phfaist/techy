@@ -1157,7 +1157,7 @@ mod tests {
             .tree
             .root()
             .children()
-            .map(|node| {
+            .iter().map(|node| {
                 let span = format!("{}..{}", node.span().start(), node.span().end());
                 match node.kind() {
                     NodeKind::Chars { .. } => {
@@ -1184,7 +1184,7 @@ mod tests {
     fn body_shapes(env: NodeRef<'_, EnvLang>) -> Vec<String> {
         env.slot_content_nodes(0)
             .expect("an environment has slot 0")
-            .map(|node| {
+            .iter().map(|node| {
                 let span = format!("{}..{}", node.span().start(), node.span().end());
                 match node.kind() {
                     NodeKind::Chars { .. } => {
@@ -1258,7 +1258,7 @@ mod tests {
         let body = env.slot_content_parent(0).unwrap();
         assert_eq!(body.span().range(), 15..15);
         assert_eq!(body.child_count(), 0);
-        assert_eq!(env.body().unwrap().count(), 0);
+        assert_eq!(env.body().unwrap().iter().count(), 0);
         assert!(parsed.result.diagnostics.is_empty());
     }
 
@@ -1324,7 +1324,7 @@ mod tests {
         assert!(env.child(1).unwrap().is_list());
         // The argument record designates the group's children as content.
         let content_nodes: Vec<_> =
-            env.argument_content_nodes(0).expect("provided").collect();
+            env.argument_content_nodes(0).expect("provided").iter().collect();
         assert_eq!(content_nodes.len(), 1);
         assert_eq!(content_nodes[0].chars(), Some("cc"));
         // The slot record holds the body.
@@ -1348,7 +1348,7 @@ mod tests {
             body_shapes(outer),
             ["chars 9..12 \" x \"", "callable 12..31 \"B\"", "chars 31..34 \" z \""],
         );
-        let inner = outer.body().unwrap().nth(1).unwrap();
+        let inner = outer.body().unwrap().iter().nth(1).unwrap();
         assert_eq!(body_shapes(inner), ["chars 21..24 \" y \""]);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1361,7 +1361,7 @@ mod tests {
 
         let outer = root_child(&parsed, 0);
         assert_eq!(outer.span().range(), 0..33);
-        let inner = outer.body().unwrap().next().unwrap();
+        let inner = outer.body().unwrap().iter().next().unwrap();
         assert_eq!(inner.span().range(), 9..26);
         assert!(parsed.result.diagnostics.is_empty());
     }
@@ -1382,7 +1382,7 @@ mod tests {
             body_shapes(a),
             ["chars 9..10 \"x\"", "callable 10..20 \"B\""],
         );
-        let b = a.body().unwrap().nth(1).unwrap();
+        let b = a.body().unwrap().iter().nth(1).unwrap();
         // B's extent ends at its body's end, before the terminator it did not consume.
         assert_eq!(b.span().range(), 10..20);
         assert_eq!(body_shapes(b), ["chars 19..20 \"y\""]);
@@ -1524,7 +1524,7 @@ mod tests {
         // Both levels diagnose their own missing terminator (loop safety at EOF).
         let a = root_child(&parsed, 0);
         assert_eq!(a.span().range(), 0..19);
-        let b = a.body().unwrap().next().unwrap();
+        let b = a.body().unwrap().iter().next().unwrap();
         assert_eq!(b.span().range(), 9..19);
         assert_eq!(parsed.result.diagnostics.len(), 2);
         assert_eq!(diagnostics_mentioning(&parsed, "before end of input"), 2);
@@ -1775,7 +1775,7 @@ mod tests {
             ],
         );
         let emph = root_child(&parsed, 0);
-        let bare = emph.argument_content_nodes(0).unwrap().next().unwrap();
+        let bare = emph.argument_content_nodes(0).unwrap().iter().next().unwrap();
         assert_eq!(bare.name(), Some("begin"));
         assert_eq!(bare.child_count(), 0);
         assert_eq!(parsed.result.diagnostics.len(), 2);
@@ -1831,13 +1831,13 @@ mod tests {
                 "chars 78..79 \"\\n\"",
             ],
         );
-        let body: Vec<_> = env.body().unwrap().collect();
+        let body: Vec<_> = env.body().unwrap().iter().collect();
         let item_with_option = body[1];
         assert!(item_with_option.arguments().unwrap().get(0).unwrap().is_provided());
         let bare_item = body[4];
         assert!(!bare_item.arguments().unwrap().get(0).unwrap().is_provided());
         let frac = body[6];
-        let ones: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
+        let ones: Vec<_> = frac.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(ones[0].chars(), Some("1"));
 
         // `\section*{Top}`: marker provided (a Chars content node), option absent,
@@ -1846,7 +1846,7 @@ mod tests {
         let args = section.arguments().unwrap();
         assert!(args.get(0).unwrap().is_provided());
         assert!(!args.get(1).unwrap().is_provided());
-        let title: Vec<_> = section.argument_content_nodes(2).unwrap().collect();
+        let title: Vec<_> = section.argument_content_nodes(2).unwrap().iter().collect();
         assert_eq!(title[0].chars(), Some("Top"));
 
         assert!(parsed.result.diagnostics.is_empty());

@@ -48,7 +48,7 @@ pub(super) fn shape(node: NodeRef<'_, Latexlike>) -> String {
 
 /// The root list's child shapes.
 pub(super) fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
-    result.tree.root().children().map(shape).collect()
+    result.tree.root().children().iter().map(shape).collect()
 }
 
 /// Strict-parse `input`, assert no diagnostics and valid tree invariants, and return the

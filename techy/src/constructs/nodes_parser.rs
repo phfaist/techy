@@ -1365,7 +1365,7 @@ mod tests {
             .tree
             .root()
             .children()
-            .map(|node| {
+            .iter().map(|node| {
                 let span = format!("{}..{}", node.span().start(), node.span().end());
                 match node.kind() {
                     NodeKind::Chars { .. } => {
@@ -3135,7 +3135,7 @@ mod tests {
             .tree
             .root()
             .children()
-            .map(|c| c.chars().unwrap().to_string())
+            .iter().map(|c| c.chars().unwrap().to_string())
             .collect();
         assert_eq!(texts, ["a", "b"]);
         assert_eq!(result.diagnostics.len(), 1);
@@ -3160,7 +3160,7 @@ mod tests {
             try_run(content, &mut reader, &restricted, Recovery::Strict, StopSpec::none())
                 .unwrap();
         let group = plain.result.tree.root().child(1).unwrap();
-        assert!(group.children().all(|c| c.is_chars()));
+        assert!(group.children().iter().all(|c| c.is_chars()));
 
         // With `group: Fixed(full)` the interior reverts: `%y` is a comment again.
         let policy = ChildStateSpec {

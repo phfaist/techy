@@ -1097,7 +1097,8 @@ is plain `Ok(None)` with the "searched: …" detail composed via
 visibility-blind, so a miss always searched the *whole* stack and the searched set is a
 property of the stack, not of one miss (no per-miss allocation).
 *(d)* `iter_symbols` is deferred to the 7.8 view-API session (adding a defaulted trait
-method later is non-breaking; 7.8's consumers will shape the item type).
+method later is non-breaking; 7.8's consumers will shape the item type). *(Landed in
+7.8 — the `iter_symbols` entry at the end of this section.)*
 *Settled in flight:* module renamed `library` → `scopes` with `StateData.scopes` /
 `state.scopes()` (user choice — no type named `Library` survived); delta-level
 `ScopeOp` is flat (carries the target scope name) while provider-level `DefinitionOp`
@@ -1109,6 +1110,43 @@ atomic per call; `Package` carries **specials as plain data** (`insert_specials`
 matched longest-first within the package) — pylatexenc's categories hold specials, and
 without it packages would not be wholesale-loadable — with mode visibility checked in
 both `retrieve_spec` and `scan_specials`.
+
+**`iter_symbols`: definition enumeration with a required type filter; `ClosedVocabulary`
+supplies the type universe** — DECIDED (user, July 2026, 7.8 checkpoint session).
+Defaulted `SpecsProvider::iter_symbols(callable_type: L::CallableTypeId, mode:
+L::ModeId) -> Option<Box<dyn Iterator<Item = SymbolEntry<'_, L>>>>` — the enumeration
+counterpart of `retrieve_spec`'s point queries, closing the 7.3 deferral. Key points:
+- **The mode is passed directly, not a `&ParsingState`** (user question, verified in
+  source): visibility is mode-determined at both of `Package`'s grains
+  (package-level + per-entry `visible_modes`), so the mode is the whole input. `Scope`
+  entries carry no visibility and enumerate under every mode; each provider
+  pre-filters, mirroring its own `retrieve_spec`.
+- **The type filter is required, not `Option`** (user choice): "list everything" is
+  driven per type from outside. Specials definitions are ordinary entries *of their
+  recorded type* — both `Package` tables contribute mechanically (the trigger spelling
+  is the row's `name`), and core never learns which type "means" specials.
+- **`None` = cannot enumerate** (the default — `FallbackProvider` answers *any* name);
+  `Some(empty)` = enumerable with nothing visible. `SymbolEntry` is a borrowed
+  self-describing row `{ callable_type, name, spec }`.
+- **`ScopeStack::iter_symbols` dedups by name, first-visible-wins innermost-first** —
+  exactly `retrieve_spec` resolution order. The specials scan-fold's
+  longest-match-wins rule is *positional* resolution between distinct triggers, not
+  definition shadowing; identical triggers tie innermost, which is the same first-wins
+  rule — so one dedup covers both worlds. Unenumerable providers are skipped, not
+  errors.
+- **`ClosedVocabulary` (`const ALL: &'static [Self]`, in `state`)** closes the
+  enumeration gap a required filter creates: `L::CallableTypeId` has no
+  list-the-variants bound, so generic whole-scope tooling states the opt-in bound and
+  iterates `ALL`. Deliberately **not** required by `Lang`: `SimpleLang` defaults the
+  id types to `u32`, which has no value list. The preset implements it for all three
+  vocabularies; `#[non_exhaustive]` enums keep `ALL` in sync by same-change
+  discipline (compiler can't enforce it).
+*Rejected:* an `Option`al type filter (generic listing without the vocabulary bound —
+user preferred always-filtered plus statically listable vocabularies); a
+`&ParsingState` parameter (nothing beyond the mode feeds visibility); state-blind
+enumeration with visibility data carried on entries (information without a consumer);
+excluding specials or a separate `iter_specials` (the recorded-type framing unifies
+the tables with no extra surface).
 
 ### 3.5 Nodes and AST
 
@@ -1464,6 +1502,12 @@ trees). Bare `Range<u32>` node ranges remain uncheckable — they carry no prove
 in debug; `nodes_in()`'s docs say so.
 *Revisit if:* Phase 7 gives ids/regions a first-class cross-tree remapping story — the
 tag then belongs in that design.
+*(Amended July 2026, 7.8: the first cross-tree machinery landed as the crate-internal
+`node::copy::copy_subtree_into` — a finished subtree re-staged through the builder,
+resolved regions translated back to staging coordinates and re-resolved for the new
+layout. Copies get new tags/ids by design (correlation with the original is by span,
+same `Arc<Source>`); the tag design is unchanged. A public transform surface remains a
+later phase's design.)*
 
 **Slot read API: content nodes are primary; the wrapper node is an explicit, optional
 accessor** — DECIDED (user, July 2026, code-review follow-up session).
@@ -1487,6 +1531,67 @@ altogether. Until then, environment bodies still build a `List` and
 parsing state.
 *Revisit if:* the List-free direction lands — `slot_content_parent` then likely
 disappears with the wrapper it exposes.
+
+**Read/extraction API (R7): `NodeSlice` as the node-list currency, free-function
+`node::extract` helpers, and derived results as real minted trees (the "builder
+route")** — DECIDED (user, July 2026, 7.8 checkpoint session).
+- **`NodeSlice<'t, L>`** — a `Copy` view `{&NodeTree, Range<u32>}` over a contiguous
+  sibling run — is what every node-list-returning accessor returns: `children()`, the
+  region/content accessors, and the new by-name family (`argument_nodes_named`,
+  `argument_content_nodes_named`, `slot_content_nodes_named`). Motivation (user): span
+  information belongs **in the return types**, not in a helper recomputing it
+  best-effort — `span()`/`source_text()` are *exact* by the §nodes partition invariant
+  (first node's start to last node's end), and `Option`-returning with `None` in
+  exactly two honest cases (empty run; cross-source siblings of synthesized trees).
+  Iteration via `iter()`/`IntoIterator`; call sites chaining adaptors gained one
+  `.iter()`.
+- **Helpers are free functions in `node::extract`, not methods on core types** (user):
+  the core stays "storage + access", and helpers accrete without touching what a node
+  list is. Input split (in-flight consequence): *readers* (`content_as_chars`) take
+  `impl IntoIterator<Item = NodeRef>`; *builders* (`split_at_chars`, `parse_keyval`)
+  take `NodeSlice`, because an **empty** slice still needs its tree's anchor (state +
+  source) to synthesize a result, which a bare iterator cannot provide.
+- **The builder route**: splitting cuts *through* chars nodes, and trees are frozen —
+  so builder helpers mint a **real `NodeTree`** through `NodeTreeBuilder` (pylatexenc
+  parity in mechanism: its `split_at_chars` mints new `LatexCharsNode`s). Whole nodes
+  are deep-copied (`copy_subtree_into`; spans/states/specs `Arc`-shared, new ids),
+  boundary partials become fresh `Chars` nodes span-backed into the *same* source
+  (exact sub-spans, zero-copy text). Result wrappers (`Split`, `KeyVals`) own their
+  tree privately and expose **primary access** (`segment(i)`, `segments()`,
+  `keyval(i)`, `get(name)`) as `NodeSlice` views (user requirement) — one currency,
+  so every helper composes with every other (re-split a segment, walk `descendants()`
+  of a derived tree). Documented edges: partials of *owned*-content chars nodes
+  (materialized trees) keep the whole original node's span as provenance (no byte
+  mapping exists to subdivide); partial nodes carry default ext; derived trees'
+  sibling spans do not tile (separators omitted) and are exempt from
+  `check_tree_invariants`' byte accounting, while *pure* copies satisfy it fully.
+- **`parse_keyval` has no policy knobs** (user): entries are recorded **in source
+  order with duplicates preserved**, `get(name)` = last occurrence (LaTeX keyval
+  override semantics), `value: Option` distinguishes `x` (no `=`, `None`) from `x=`
+  (explicitly empty — sharper than pylatexenc, which conflates them via
+  `default_value_nodelist`); pylatexenc's `repeated_key_aggregate_action` variants are
+  caller one-liners over `iter()`. The lone-value-group unwrap
+  (`extract_value_group_contents`) became the `value_content()` *accessor* — the raw
+  shape is always kept. Keys flatten via `content_as_chars` and are
+  **whitespace-trimmed** (deliberate pylatexenc deviation; LaTeX's keyval packages
+  trim). `get_combined_with(key, sep)` (user addition) mints a combined tree over all
+  occurrences' values with synthesized separator chars nodes (`Source::synthesized`
+  provenance). No insertion-ordered map dependency: the wrapper scans (the
+  `ParsedArguments` no-name-map precedent).
+- **`descendants()`** (`NodeRef` + `NodeTree` sugar; preorder DFS, self excluded)
+  resolves the Action-05 deferral now that consumers exist (extraction composition,
+  the 7.9 acceptance suite); `iter_storage_order` keeps the breadth-first contrast
+  documented.
+*Rejected:* expanding `NodeRef` into an `InTree`/`AdHoc` enum so split partials could
+be tree-less nodes (user's initial sketch, analyzed): ownership cannot attach to the
+frozen tree's scope, so results must own storage with views constructed on borrow —
+workable, but `id()` loses totality and "a node belonging to no tree" becomes a
+permanent core-model tax on every future consumer; a public `Segment`/`SegmentPiece`
+second node-list type (user: "I don't like a separate structure for another kind of
+node list — that's why we have node lists in the first place"); a slice-level
+covering-span *helper* recomputing spans best-effort (user: return types must carry
+them); `indexmap`-style ordered-map dependency for keyval; keyval aggregation knobs
+(strictly less information than duplicate-preserving entries).
 
 ### 3.6 Construct parsers, dispatch, engine
 

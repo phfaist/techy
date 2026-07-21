@@ -822,12 +822,12 @@ mod tests {
 
     /// The verbatim group node of `\verb`-style argument 0 plus its raw text.
     fn verb_group(node: NodeRef<'_, VerbLang>) -> NodeRef<'_, VerbLang> {
-        let region: Vec<_> = node.argument_nodes(0).expect("provided argument").collect();
+        let region: Vec<_> = node.argument_nodes(0).expect("provided argument").iter().collect();
         *region.last().expect("the group node ends the region")
     }
 
     fn verbatim_text<'t>(node: NodeRef<'t, VerbLang>) -> Option<&'t str> {
-        let content: Vec<_> = node.argument_content_nodes(0)?.collect();
+        let content: Vec<_> = node.argument_content_nodes(0)?.iter().collect();
         match content.as_slice() {
             [] => Some(""),
             [chars] => chars.chars(),
@@ -897,11 +897,11 @@ mod tests {
         assert!(result.diagnostics.is_empty());
 
         let lst = root_child(&result, 0);
-        let region: Vec<_> = lst.argument_nodes(1).unwrap().collect();
+        let region: Vec<_> = lst.argument_nodes(1).unwrap().iter().collect();
         assert_eq!(region.len(), 2);
         assert_eq!(region[0].chars(), Some(" "));
         assert_eq!(region[1].group_delimiters(), Some(("|", "|")));
-        let content: Vec<_> = lst.argument_content_nodes(1).unwrap().collect();
+        let content: Vec<_> = lst.argument_content_nodes(1).unwrap().iter().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("xy"));
     }
@@ -914,13 +914,13 @@ mod tests {
         let result = parse("\\lst{a}\n\n|xy|", &st, Recovery::Strict);
         assert!(result.diagnostics.is_empty());
         let lst = root_child(&result, 0);
-        let region: Vec<_> = lst.argument_nodes(1).unwrap().collect();
+        let region: Vec<_> = lst.argument_nodes(1).unwrap().iter().collect();
         assert_eq!(region[0].chars(), Some("\n\n"));
         assert_eq!(verbatim_text_at(lst, 1), Some("xy"));
     }
 
     fn verbatim_text_at(node: NodeRef<'_, VerbLang>, i: usize) -> Option<&str> {
-        let content: Vec<_> = node.argument_content_nodes(i)?.collect();
+        let content: Vec<_> = node.argument_content_nodes(i)?.iter().collect();
         content.first().and_then(|chars| chars.chars())
     }
 

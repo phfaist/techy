@@ -342,7 +342,7 @@ mod tests {
             .tree
             .root()
             .children()
-            .map(|child| match child.chars() {
+            .iter().map(|child| match child.chars() {
                 Some(text) => alloc::format!("chars({})", text),
                 None if child.group().is_some() => "group".into(),
                 None => "other".into(),
@@ -364,7 +364,7 @@ mod tests {
     fn parse_of_empty_content_is_an_empty_root_list() {
         let result = strict().parse("").unwrap();
         check_tree_invariants(&result.tree);
-        assert_eq!(result.tree.root().children().count(), 0);
+        assert_eq!(result.tree.root().children().iter().count(), 0);
         assert_eq!(result.tree.root().span().range(), 0..0);
         assert!(result.diagnostics.is_empty());
     }
@@ -717,7 +717,7 @@ mod tests {
             .tree
             .root()
             .children()
-            .filter_map(|child| child.name().map(String::from))
+            .iter().filter_map(|child| child.name().map(String::from))
             .collect()
     }
 
@@ -736,7 +736,7 @@ mod tests {
         // Recovery continued past the stray close: `\addangle` staged and `x` reached.
         assert_eq!(callable_names(&result), ["addangle"]);
         assert!(
-            result.tree.root().children().any(|c| c.chars() == Some("x")),
+            result.tree.root().children().iter().any(|c| c.chars() == Some("x")),
             "content after the stray close should be parsed"
         );
         assert_eq!(result.diagnostics.len(), 1);

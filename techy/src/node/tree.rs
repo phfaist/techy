@@ -180,6 +180,13 @@ impl<L: Lang> NodeTree<L> {
         NodeId::new(index, self.tree_tag())
     }
 
+    /// Every node except the root, in **document order** — sugar for
+    /// [`root().descendants()`](super::NodeRef::descendants) (preorder depth-first;
+    /// contrast [`iter_storage_order`](NodeTree::iter_storage_order)).
+    pub fn descendants(&self) -> super::Descendants<'_, L> {
+        self.root().descendants()
+    }
+
     /// The number of nodes stored (at least 1 — the root).
     pub fn node_count(&self) -> usize {
         self.nodes.len()

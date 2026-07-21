@@ -50,7 +50,7 @@
 //! let result = language.parse(r"\begin{itemize} a b \end{itemize}").unwrap();
 //! let env = result.tree.root().child(0).unwrap();
 //! assert_eq!(env.environment_name(), Some("itemize"));
-//! assert_eq!(env.body().unwrap().count(), 1);
+//! assert_eq!(env.body().unwrap().len(), 1);
 //! ```
 
 use alloc::boxed::Box;
@@ -270,7 +270,7 @@ impl EnvironmentBehavior for StdEnvironmentBehavior {
 ///     .unwrap();
 /// let env = result.tree.root().child(0).unwrap();
 /// assert_eq!(env.environment_name(), Some("verbatim"));
-/// let body: Vec<_> = env.body().unwrap().collect();
+/// let body: Vec<_> = env.body().unwrap().iter().collect();
 /// assert_eq!(body.len(), 1);
 /// assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
 /// ```
@@ -753,7 +753,7 @@ mod tests {
     }
 
     fn body_shapes(env: NodeRef<'_, Latexlike>) -> Vec<String> {
-        env.body().expect("an environment node").map(shape).collect()
+        env.body().expect("an environment node").iter().map(shape).collect()
     }
 
     fn messages(result: &ParseResult<Latexlike>) -> Vec<String> {
@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(env.span().range(), 0..28);
         let body = env.slot_content_parent(0).unwrap();
         assert_eq!(body.span().range(), 15..15);
-        assert_eq!(env.body().unwrap().count(), 0);
+        assert_eq!(env.body().unwrap().iter().count(), 0);
     }
 
     #[test]
@@ -850,7 +850,7 @@ mod tests {
             body_shapes(outer),
             ["chars(x)", "Environment(B)", "chars(z)"]
         );
-        let inner = outer.body().unwrap().nth(1).unwrap();
+        let inner = outer.body().unwrap().iter().nth(1).unwrap();
         assert_eq!(body_shapes(inner), ["chars(y)"]);
     }
 
@@ -886,7 +886,7 @@ mod tests {
     fn equation_body_parses_in_math_mode() {
         let result = parse_ok("y\\begin{equation}x\\end{equation}z");
         let env = result.tree.root().child(1).unwrap();
-        let interior = env.body().unwrap().next().unwrap();
+        let interior = env.body().unwrap().iter().next().unwrap();
         assert_eq!(interior.chars(), Some("x"));
         assert_eq!(interior.parsing_state().mode(), Mode::Math);
         // The environment node itself and the following content are text-mode
@@ -1218,7 +1218,7 @@ mod tests {
         assert_eq!(env.span().range(), 0..evpos + "\\end{verbatim}".len());
 
         // Body content: everything between the gobbled newline and the terminator.
-        let body: Vec<_> = env.body().unwrap().collect();
+        let body: Vec<_> = env.body().unwrap().iter().collect();
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some(&content[17..evpos]));
         // The raw chars node records the features-off verbatim state.
@@ -1304,7 +1304,7 @@ mod tests {
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.child_count(), 2);
         assert!(env.arguments().unwrap().get(0).unwrap().is_provided());
-        let option: Vec<_> = env.argument_content_nodes(0).unwrap().collect();
+        let option: Vec<_> = env.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(option.len(), 1);
         assert_eq!(option[0].chars(), Some("language=Python"));
         assert_eq!(body_shapes(env), ["chars(if a<b: pass\n)"]);

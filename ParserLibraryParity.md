@@ -41,7 +41,7 @@ embellishments, chars groups, …) **are** in scope.
 | `LatexOptionalEmbellishmentArgsParser` | — | todo [N3] |
 | `LatexStandardArgumentParser`, `get_standard_argument_parser` | `ArgumentSpec` → `parse_declared_arguments` + standard `ArgumentParser`s; preset factory `latexlike::argument_specs` | implemented (excluded dispatch machinery; factory landed 7.7, deferred codes noted) [N8] |
 | `LatexCharsGroupParser` | — (`read_rigid_name_group` is a different role) | todo [N4] |
-| `LatexCharsCommaSeparatedListParser` | — | discarded as parser → todo: node-list split helper [N5] |
+| `LatexCharsCommaSeparatedListParser` | `node::extract::split_at_chars` (+ `parse_keyval`) | implemented (7.8) — postprocessing helpers, per pylatexenc's own recommendation [N5] |
 | `LatexTackOnInformationFieldMacrosParser` | — | todo — construct parser, decided [N6] |
 | `LatexVerbatimBaseParser` | `verbatim_state_delta` (the recipe as data) | implemented (7.7) [N7] |
 | `LatexDelimitedVerbatimParser` | `VerbatimArgumentParser` | implemented (7.7) [N7] |
@@ -118,6 +118,15 @@ todo lives on the read/extraction side, not in `constructs/`: a
 split-at-delimiter-chars helper over parsed children (cf. TODO_Big.md's
 "Read/extraction API for content" item and pylatexenc's
 `LatexNodeList.split_at_chars`).
+
+**Implemented (Phase 7.8)** as `node::extract::split_at_chars` (segments = `NodeSlice`
+views into a minted result tree; groups protect their interior, empty segments
+dropped — pylatexenc defaults), plus `parse_keyval` (its `parse_keyval_content`,
+no-knobs shape: source-ordered duplicate-preserving entries, `get` = last-wins,
+`value_content()` lone-group unwrap accessor) and `content_as_chars`
+(`get_content_as_chars` — strict, `Cow` fast path). pylatexenc's regex/callable
+separator variants deliberately not ported (its own source marks the method
+"untested code!"); the literal-separator form covers the recommended uses.
 
 ### N6 — tack-on information-field macros parser
 

@@ -31,9 +31,12 @@
 
 mod arguments;
 mod builder;
+mod copy;
+pub mod extract;
 mod invariants;
 mod kind;
 mod node_ref;
+mod slice;
 mod tree;
 
 pub use arguments::{
@@ -42,7 +45,8 @@ pub use arguments::{
 pub use builder::{BuildId, NodeBuildError, NodeTreeBuilder, StagedNodeView, StagedNodes};
 pub use invariants::check_tree_invariants;
 pub use kind::{CallableData, GroupData, NodeKind};
-pub use node_ref::NodeRef;
+pub use node_ref::{Descendants, NodeRef};
+pub use slice::{NodeSlice, NodeSliceIter};
 pub use tree::{NodeData, NodeId, NodeTree};
 
 use crate::state::{Lang, NodeExtTypes};
@@ -284,7 +288,7 @@ mod tests {
         }
         assert!(root.child(usize::MAX).is_none());
         // children() iterates in order:
-        let kinds: Vec<bool> = root.children().map(|c| c.is_callable()).collect();
+        let kinds: Vec<bool> = root.children().iter().map(|c| c.is_callable()).collect();
         assert_eq!(kinds, [false, true, false, false]);
     }
 
@@ -294,7 +298,7 @@ mod tests {
         let frac = tree.root().child(1).unwrap();
 
         // Region nodes: the argument's full syntactic extent (here just the group).
-        let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
+        let region0: Vec<_> = frac.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region0.len(), 1);
         let arg0 = region0[0];
         assert!(arg0.is_group());
@@ -304,7 +308,7 @@ mod tests {
 
         // Content nodes: what the parser designated — the group's children, braces
         // excluded; read back as a plain node range, no unwrap heuristics.
-        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
+        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content0.len(), 1);
         assert_eq!(content0[0].chars(), Some("a"));
 
@@ -387,9 +391,9 @@ mod tests {
         // The provided marker is an ordinary Chars child node and counts as its own
         // content (star-as-content convention); the absent optional has an entry but no
         // region — it consumed nothing.
-        assert_eq!(node.argument_content_nodes(0).unwrap().next().unwrap().chars(), Some("*"));
+        assert_eq!(node.argument_content_nodes(0).unwrap().iter().next().unwrap().chars(), Some("*"));
         assert!(node.argument_nodes(1).is_none());
-        assert_eq!(node.argument_nodes(2).unwrap().next().unwrap().span_content(), "{t}");
+        assert_eq!(node.argument_nodes(2).unwrap().iter().next().unwrap().span_content(), "{t}");
 
         let args = node.arguments().unwrap();
         assert!(args.get(0).unwrap().is_provided());
@@ -455,10 +459,10 @@ mod tests {
         assert!(node.slot_content_parent(1).is_none());
         // Slot content reads as a plain node range — the body List's children;
         // `body()` is the same nodes for slot 0:
-        let content: Vec<_> = node.slot_content_nodes(0).unwrap().collect();
+        let content: Vec<_> = node.slot_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("hi"));
-        let body_nodes: Vec<_> = node.body().unwrap().collect();
+        let body_nodes: Vec<_> = node.body().unwrap().iter().collect();
         assert_eq!(body_nodes.len(), 1);
         assert_eq!(body_nodes[0].id(), content[0].id());
         let slots = node.slots().unwrap();
@@ -503,7 +507,7 @@ mod tests {
         assert_eq!(region.content_parent(), node.id());
         // ... but the read API reports "no wrapper node" instead of the callable:
         assert!(node.slot_content_parent(0).is_none());
-        let body: Vec<_> = node.body().unwrap().collect();
+        let body: Vec<_> = node.body().unwrap().iter().collect();
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some("hi"));
     }
@@ -585,21 +589,21 @@ mod tests {
         let tree = b.finish(frac).unwrap();
 
         let frac = tree.root();
-        let region0: Vec<_> = frac.argument_nodes(0).unwrap().collect();
+        let region0: Vec<_> = frac.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region0.len(), 4);
         assert_eq!(region0[0].chars(), Some(" ")); // whitespace-only Chars node
         assert!(region0[1].is_comment());
         assert_eq!(region0[1].comment(), Some("h"));
         assert!(region0[3].is_group());
         // …while the content is undisturbed by the noise:
-        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().collect();
+        let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content0.len(), 1);
         assert_eq!(content0[0].chars(), Some("a"));
         // The second argument is unaffected by the first one's noise:
-        assert_eq!(frac.argument_content_nodes(1).unwrap().next().unwrap().chars(), Some("b"));
+        assert_eq!(frac.argument_content_nodes(1).unwrap().iter().next().unwrap().chars(), Some("b"));
         // The regions tile the child list: recomposing the children in order
         // reproduces the arguments' text byte-for-byte (partition invariant).
-        let all: String = frac.children().map(|c| c.span_content()).collect();
+        let all: String = frac.children().iter().map(|c| c.span_content()).collect();
         assert_eq!(all, " %h\n {a}{b}");
     }
 
@@ -657,10 +661,10 @@ mod tests {
         let tree = b.finish(m).unwrap();
 
         let m = tree.root();
-        let region: Vec<_> = m.argument_nodes(0).unwrap().collect();
+        let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region.len(), 1);
         assert_eq!(region[0].span_content(), "[{x}]");
-        let content: Vec<_> = m.argument_content_nodes(0).unwrap().collect();
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0].chars(), Some("x"));
         // The content parent is the inner group — a descendant of, not a member of,
@@ -708,7 +712,7 @@ mod tests {
         let record = tree.root().arguments().unwrap().get(0).unwrap().region.clone().unwrap();
         assert!(record.content_range().is_empty());
         assert_eq!(tree.node(record.content_parent()).span_content(), "{}");
-        assert_eq!(tree.root().argument_content_nodes(0).unwrap().count(), 0);
+        assert_eq!(tree.root().argument_content_nodes(0).unwrap().iter().count(), 0);
     }
 
     // --- builder contract violations around regions -----------------------------------
@@ -907,7 +911,7 @@ mod tests {
         // node is the child of exactly one node.
         let mut seen = vec![0usize; tree.node_count()];
         for node in tree.iter_storage_order() {
-            let ids: Vec<usize> = node.children().map(|c| c.id().index()).collect();
+            let ids: Vec<usize> = node.children().iter().map(|c| c.id().index()).collect();
             for pair in ids.windows(2) {
                 assert_eq!(pair[1], pair[0] + 1);
             }
@@ -946,7 +950,7 @@ mod tests {
         assert_eq!(root.child(2).unwrap().chars(), Some(" "));
         assert_eq!(root.child(3).unwrap().comment(), Some(" note"));
         assert_eq!(root.child(3).unwrap().comment_start(), Some("%"));
-        let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().next().unwrap();
+        let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().iter().next().unwrap();
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
         for node in owned.iter_storage_order() {
@@ -1292,6 +1296,284 @@ mod tests {
                 content_len: 2,
             }
         );
+    }
+
+    // --- NodeSlice, descendants, named accessors, subtree copy (Phase 7.8) ------------
+
+    #[test]
+    fn node_slice_basics() {
+        let tree = example_tree();
+        let children = tree.root().children();
+        assert_eq!(children.len(), 4);
+        assert!(!children.is_empty());
+        assert_eq!(children.get(0).unwrap().chars(), Some("x"));
+        assert_eq!(children.first().unwrap().chars(), Some("x"));
+        assert!(children.last().unwrap().is_comment());
+        assert!(children.get(4).is_none());
+
+        // Direct iteration (IntoIterator), adaptor chains (iter()), and reversal.
+        let mut count = 0;
+        for node in children {
+            let _ = node.span_content();
+            count += 1;
+        }
+        assert_eq!(count, 4);
+        let kinds: Vec<bool> = children.iter().map(|c| c.is_callable()).collect();
+        assert_eq!(kinds, [false, true, false, false]);
+        assert_eq!(children.iter().len(), 4); // ExactSizeIterator
+        let backwards: Vec<_> = children.iter().rev().map(|c| c.is_comment()).collect();
+        assert_eq!(backwards, [true, false, false, false]);
+
+        // Slices are Copy; the range is the global node-index coordinate system.
+        let copy = children;
+        assert_eq!(copy.range(), children.range());
+        let leaf = tree.root().child(0).unwrap();
+        assert!(leaf.children().is_empty());
+        assert!(leaf.children().span().is_none());
+    }
+
+    #[test]
+    fn node_slice_spans_are_exact() {
+        let tree = example_tree();
+        let root = tree.root();
+        // The whole child run covers the source.
+        let all = root.children().span().unwrap();
+        assert_eq!(all.range(), 0..19);
+        assert_eq!(root.children().source_text(), Some(r"x\frac{a}{b} % note"));
+
+        // Argument regions and content: exact sub-spans, straight off the nodes.
+        let frac = root.child(1).unwrap();
+        let region = frac.argument_nodes(0).unwrap();
+        assert_eq!(region.span().unwrap().range(), 6..9);
+        assert_eq!(region.source_text(), Some("{a}"));
+        let content = frac.argument_content_nodes(0).unwrap();
+        assert_eq!(content.span().unwrap().range(), 7..8);
+        assert_eq!(content.source_text(), Some("a"));
+        assert_eq!(content.span().unwrap().content(), "a");
+
+        // Empty content (`\m{}`): no source material — None, honestly.
+        let source: Arc<Source> = Arc::new(Source::new("\\m{}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let group = b.add(
+            NodeKind::group(brace_group(2..3, 3..4)),
+            spanned(&source, 2..4),
+            st.clone(),
+            vec![],
+        ).unwrap();
+        let arg_spec = brace_arg_spec();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: vec![ParsedArgument::provided(
+                    arg_spec,
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(group, 0..0)),
+                )]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![group],
+        ).unwrap();
+        let tree = b.finish(m).unwrap();
+        let content = tree.root().argument_content_nodes(0).unwrap();
+        assert!(content.is_empty());
+        assert!(content.span().is_none());
+        assert!(content.source_text().is_none());
+    }
+
+    #[test]
+    fn descendants_walk_in_document_order() {
+        let tree = example_tree();
+        // Storage order is breadth-first (`x`, `\frac…`, ` `, `%…`, `{a}`, `{b}`, `a`,
+        // `b`); document order interleaves the argument groups where they occur.
+        let doc: Vec<_> = tree.root().descendants().map(|n| n.span_content()).collect();
+        assert_eq!(doc, ["x", r"\frac{a}{b}", "{a}", "a", "{b}", "b", " ", "% note"]);
+        // Tree-level sugar walks from the root; subtree walks exclude the start node.
+        let via_tree: Vec<_> = tree.descendants().map(|n| n.id()).collect();
+        let via_root: Vec<_> = tree.root().descendants().map(|n| n.id()).collect();
+        assert_eq!(via_tree, via_root);
+        assert_eq!(via_tree.len(), tree.node_count() - 1);
+        let frac = tree.root().child(1).unwrap();
+        let sub: Vec<_> = frac.descendants().map(|n| n.span_content()).collect();
+        assert_eq!(sub, ["{a}", "a", "{b}", "b"]);
+        assert_eq!(tree.root().child(0).unwrap().descendants().count(), 0);
+    }
+
+    #[test]
+    fn named_accessors_mirror_their_index_twins() {
+        // The `\section*{t}` tree of absent_marker_and_named_arguments, accessed by name.
+        let source: Arc<Source> = Arc::new(Source::new(r"\section*{t}"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let star =
+            b.add(NodeKind::chars(Span::new(8, 9)), spanned(&source, 8..9), st.clone(), vec![]).unwrap();
+        let t = b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]).unwrap();
+        let title = b.add(
+            NodeKind::group(brace_group(9..10, 11..12)),
+            spanned(&source, 9..12),
+            st.clone(),
+            vec![t],
+        ).unwrap();
+        let star_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("star"));
+        let placement_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("placement"));
+        let title_spec: Arc<ArgumentSpec<PlainLang>> =
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("title"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(vec![
+            star_spec.clone(),
+            placement_spec.clone(),
+            title_spec.clone(),
+        ]));
+        let body_chars =
+            b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![]).unwrap();
+        let body = b.add(NodeKind::list(), spanned(&source, 10..11), st.clone(), vec![body_chars]).unwrap();
+        let section = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "section".into(),
+                spec,
+                arguments: vec![
+                    ParsedArgument::provided(star_spec, ChildRegion::single(0)),
+                    ParsedArgument::absent(placement_spec),
+                    ParsedArgument::provided(
+                        title_spec,
+                        ChildRegion::new(1..2, ContentNodes::InChildrenOf(title, 0..1)),
+                    ),
+                ]
+                .into(),
+                slots: vec![ParsedSlot::named(
+                    "annex",
+                    ChildRegion::new(2..3, ContentNodes::InChildrenOf(body, 0..1)),
+                )]
+                .into(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![star, title, body],
+        ).unwrap();
+        let tree = b.finish(section).unwrap();
+        let node = tree.root();
+
+        assert_eq!(node.argument_nodes_named("title").unwrap().source_text(), Some("{t}"));
+        assert_eq!(
+            node.argument_content_nodes_named("title").unwrap().first().unwrap().chars(),
+            Some("t")
+        );
+        assert_eq!(
+            node.argument_content_nodes_named("star").unwrap().first().unwrap().chars(),
+            Some("*")
+        );
+        // Absent argument: entry exists, no region — the accessor answers None.
+        assert!(node.argument_nodes_named("placement").is_none());
+        assert!(node.argument_content_nodes_named("placement").is_none());
+        // No such argument at all: also None (records distinguish, accessors do not).
+        assert!(node.argument_nodes_named("nonsense").is_none());
+        // Slots by name.
+        assert_eq!(
+            node.slot_content_nodes_named("annex").unwrap().first().unwrap().chars(),
+            Some("t")
+        );
+        assert!(node.slot_content_nodes_named("nonsense").is_none());
+        // Non-callables answer None throughout.
+        let leaf = tree.node(tree.root().argument_content_nodes_named("star").unwrap().first().unwrap().id());
+        assert!(leaf.argument_nodes_named("title").is_none());
+    }
+
+    #[test]
+    fn copy_subtree_reproduces_structure_and_records() {
+        let tree = example_tree();
+        let mut b = NodeTreeBuilder::new();
+        let root = super::copy::copy_subtree_into(&mut b, tree.root()).unwrap();
+        let copy = b.finish(root).unwrap();
+
+        // A pure copy is a well-formed tree: full invariants (span partition included).
+        check_tree_invariants(&copy);
+        assert_eq!(copy.node_count(), tree.node_count());
+        // Same document order, same text, same spans (Arc-shared sources).
+        let originals: Vec<_> = tree.descendants().map(|n| n.span_content()).collect();
+        let copies: Vec<_> = copy.descendants().map(|n| n.span_content()).collect();
+        assert_eq!(originals, copies);
+        // Region records were re-staged and re-resolved for the new layout.
+        let frac = copy.root().child(1).unwrap();
+        assert_eq!(frac.argument_content_nodes(0).unwrap().first().unwrap().chars(), Some("a"));
+        assert_eq!(frac.argument_nodes(1).unwrap().source_text(), Some("{b}"));
+        // Specs and states are shared, not cloned.
+        let original_spec = tree.root().child(1).unwrap().spec().unwrap();
+        assert!(Arc::ptr_eq(frac.spec().unwrap(), original_spec));
+        assert!(Arc::ptr_eq(
+            frac.parsing_state(),
+            tree.root().child(1).unwrap().parsing_state()
+        ));
+    }
+
+    #[test]
+    fn copy_subtree_restages_nested_content_designations() {
+        // The `\m[{x}]` shape: content designated inside a *descendant* group of the
+        // region node — the copy must remap the content parent through the id map.
+        const GT_BRACKET: u32 = 1;
+        let source: Arc<Source> = Arc::new(Source::new("\\m[{x}]"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let x = b.add(NodeKind::chars(Span::new(4, 5)), spanned(&source, 4..5), st.clone(), vec![]).unwrap();
+        let inner = b.add(
+            NodeKind::group(brace_group(3..4, 5..6)),
+            spanned(&source, 3..6),
+            st.clone(),
+            vec![x],
+        ).unwrap();
+        let outer = b.add(
+            NodeKind::group(GroupData::new(
+                GT_BRACKET,
+                TextContent::Spanned(Span::new(2, 3)),
+                TextContent::Spanned(Span::new(6, 7)),
+            )),
+            spanned(&source, 2..7),
+            st.clone(),
+            vec![inner],
+        ).unwrap();
+        let arg_spec = brace_arg_spec();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: vec![ParsedArgument::provided(
+                    arg_spec,
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(inner, 0..1)),
+                )]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+                ext: (),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![outer],
+        ).unwrap();
+        let tree = b.finish(m).unwrap();
+
+        let mut b = NodeTreeBuilder::new();
+        let root = super::copy::copy_subtree_into(&mut b, tree.root()).unwrap();
+        let copy = b.finish(root).unwrap();
+        check_tree_invariants(&copy);
+        let content = copy.root().argument_content_nodes(0).unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content.first().unwrap().chars(), Some("x"));
+        let record = copy.root().arguments().unwrap().get(0).unwrap().region.clone().unwrap();
+        assert_eq!(copy.node(record.content_parent()).span_content(), "{x}");
     }
 
     #[test]

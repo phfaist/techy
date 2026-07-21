@@ -68,7 +68,7 @@ use alloc::vec::Vec;
 
 use crate::scopes::{Package, ScopeStack};
 use crate::spec::CallableSpec;
-use crate::state::{Lang, ParsingState, StateData};
+use crate::state::{ClosedVocabulary, Lang, ParsingState, StateData};
 use crate::token::{
     CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
     TriggerChars, WhitespaceRules,
@@ -140,6 +140,25 @@ pub enum Mode {
     Text,
     /// Math content (inside `$…$`, `$$…$$`, `\(…\)`, `\[…\]`).
     Math,
+}
+
+// The preset's vocabularies are statically listable (Phase 7.8): generic tooling
+// enumerates them (e.g. `ScopeStack::iter_symbols` once per `CallableType::ALL` entry).
+// The enums are `#[non_exhaustive]`, so adding a variant means extending `ALL` in the
+// same change (the `ClosedVocabulary` contract).
+
+impl ClosedVocabulary for GroupType {
+    const ALL: &'static [GroupType] =
+        &[GroupType::Content, GroupType::Math, GroupType::Verbatim];
+}
+
+impl ClosedVocabulary for CallableType {
+    const ALL: &'static [CallableType] =
+        &[CallableType::Macro, CallableType::Environment, CallableType::Specials];
+}
+
+impl ClosedVocabulary for Mode {
+    const ALL: &'static [Mode] = &[Mode::Text, Mode::Math];
 }
 
 /// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
@@ -428,7 +447,7 @@ mod tests {
         // an unclosed nested inline group.
         assert_eq!(root_shapes(&result), ["group(Math $$ $$)"]);
         let display = result.tree.root().child(0).unwrap();
-        let interior: String = display.children().filter_map(|child| child.chars()).collect();
+        let interior: String = display.children().iter().filter_map(|child| child.chars()).collect();
         assert_eq!(interior, "a$b");
         // Exactly one diagnostic: the forbidden `$`.
         assert_eq!(result.diagnostics.len(), 1);
@@ -544,7 +563,7 @@ mod tests {
         check_tree_invariants(&result.tree);
         let math = result.tree.root().child(0).unwrap();
         assert_eq!(math.group_type(), Some(GroupType::Math));
-        let interior: Vec<String> = math.children().map(shape).collect();
+        let interior: Vec<String> = math.children().iter().map(shape).collect();
         assert_eq!(interior, ["chars(a)", "Specials(~)", "chars(b---c)"]);
 
         // In text mode the same ligature fires as before.

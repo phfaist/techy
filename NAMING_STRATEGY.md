@@ -122,6 +122,12 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
 | Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: argument entry = `Arc`'d spec + optional child region + ext (regions session, July 2026); slot entry = own `name` + region + ext (slots session, July 2026 — no spec pointer) |
 | Argument/slot region record | `ChildRegion` (two-phase), `ContentNodes` (staged content designation: `InRegion` / `InChildrenOf`) | region = contiguous run of the callable's children (noise + syntax); content parser-designated, resolved to global node-index ranges by `finish()` (July 2026) |
+| Sibling-run view | `NodeSlice<'t, L>` (+ `NodeSliceIter`) | 7.8: the node-list currency — `Copy` view `{tree, range}` returned by `children()` and the region/content accessors; exact `span()`/`source_text()` (partition invariant), `None` for empty/mixed-source runs. Over `NodeRun`/`Siblings`; "List" excluded (collides with `NodeKind::List`) |
+| By-name argument/slot access | `argument_nodes_named` / `argument_content_nodes_named` / `slot_content_nodes_named` | plain `_named` suffixes beside the index twins (7.8; user choice — no polymorphic key type) |
+| Document-order walk | `NodeRef::descendants()`, `NodeTree::descendants()` → `Descendants` | preorder DFS, self excluded; the deliberate contrast to `iter_storage_order` (7.8) |
+| Extraction helpers | `node::extract`: `content_as_chars`, `split_at_chars` → `Split` (`segment(i)`/`segments()`), `parse_keyval` → `KeyVals` (`keyval(i)`/`get`/`get_combined_with`) with `KeyValEntry` (`value`/`value_content`), `ExtractError` | 7.8: free functions, not core methods (user); result wrappers own minted trees privately, primary access returns `NodeSlice` views; strict `Result`s (read-time, no tolerance mode) |
+| Symbol enumeration | `SpecsProvider::iter_symbols(callable_type, mode)`, `ScopeStack::iter_symbols` → `SymbolEntry` | 7.8: required type filter (user; specials rows enumerate under their recorded type, trigger spelling as name); `None` = not enumerable; stack dedup = first-visible-wins innermost-first |
+| Enumerable vocabulary | `ClosedVocabulary` (`const ALL`) | 7.8: opt-in tooling bound making "closed per language" statically listable; deliberately not a `Lang` bound (`SimpleLang`'s `u32` ids have no value list); preset implements for all three vocabularies |
 | Node taxonomy | `NodeKind<L>`: `Chars` / `Group` / `Callable` / `Comment` / `List` | closed structural core; no `Custom` variant |
 | Group payload | `GroupData<L>` | delimiters stored on the node + `Option<Lang::GroupTypeId>` class |
 | Callable payload | `CallableData<L>` | invocation form + spelling + spec + parsed arguments/slots |
@@ -232,6 +238,9 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `GroupExt`, `NodeGroupExt` | `GroupNodeExt` (etc.) | `GroupExt` too vague; `NodeGroupExt` parses wrong |
 | `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md §3 |
 | `apply()` / `copy_with()` | `ParsingState::derived()` | adjective form; signals a transition |
+| `impl Iterator` returns of `children()` and the region/content accessors | `NodeSlice` | 7.8: span information belongs in the return types (exact, partition-invariant-backed); adaptor chains insert `.iter()` |
+| `Segment` / `SegmentPiece` (7.8 shape draft) | (nothing — segments are `NodeSlice` views into minted result trees) | user: no second node-list currency ("that's why we have node lists in the first place"); the builder route mints real trees, pylatexenc-style |
+| `covering_span()` free helper (7.8 shape draft) | `NodeSlice::span()` / `NodeSlice::source_text()` | user: no best-effort recomputation in a helper; typed unavailability (`Option`) on the view itself |
 
 ## Module Rename History
 

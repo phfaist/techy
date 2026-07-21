@@ -381,3 +381,33 @@ impl<T: SimpleLang> Lang for T {
     type NodeExts = ();
     type Driver = StdParseDriver;
 }
+
+/// A closed vocabulary type that can list all of its values — the opt-in tooling bound
+/// for the closed per-language vocabularies ([`Lang::CallableTypeId`],
+/// [`Lang::GroupTypeId`], [`Lang::ModeId`]).
+///
+/// "Closed per language" means the values are known when the `Lang` is written; this
+/// trait makes that closedness *statically listable*, so generic tooling can enumerate
+/// (e.g. drive [`ScopeStack::iter_symbols`](crate::scopes::ScopeStack::iter_symbols)
+/// once per callable type in `L::CallableTypeId::ALL`).
+///
+/// Deliberately **not** a required bound on the `Lang` associated types: [`SimpleLang`]
+/// defaults the type ids to `u32` (the quick-start escape from declaring id enums), and
+/// an open integer type has no value list. Languages with real id enums implement it
+/// (the latexlike preset does for all three vocabularies); tooling that needs
+/// enumeration states the bound where it is used
+/// (`where L::CallableTypeId: ClosedVocabulary`).
+pub trait ClosedVocabulary: Copy + Sized + 'static {
+    /// Every value of the vocabulary, in declaration order.
+    ///
+    /// Implementations must keep this list in sync with the type's variants — for a
+    /// `#[non_exhaustive]` enum, adding a variant means extending `ALL` in the same
+    /// change.
+    const ALL: &'static [Self];
+}
+
+/// The unit vocabulary: one value. (Matches [`SimpleLang`]'s `ModeId = ()` — "no modes"
+/// still has the one mode a state is always in.)
+impl ClosedVocabulary for () {
+    const ALL: &'static [()] = &[()];
+}

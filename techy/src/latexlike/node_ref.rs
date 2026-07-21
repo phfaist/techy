@@ -104,7 +104,7 @@ mod tests {
         let result = language().parse(r"$a$ $$b$$ \(c\) \[d\] {e} f").unwrap();
         let root = result.tree.root();
         let styles: Vec<Option<MathStyle>> =
-            root.children().map(|child| child.math_style()).collect();
+            root.children().iter().map(|child| child.math_style()).collect();
         assert_eq!(
             styles,
             [
