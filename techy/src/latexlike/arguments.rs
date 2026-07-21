@@ -118,6 +118,10 @@ impl core::error::Error for ArgumentCodeError {}
 pub fn argument_specs(
     codes: &str,
 ) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
+
+    // ### PHF -- shouldn't we accept `codes` with Vec<single-code-as-string>?  Accepting a single
+    // string should be a convenience function only.
+
     let mut specs = Vec::new();
     let mut chars = codes.char_indices().peekable();
     while let Some((offset, code)) = chars.next() {

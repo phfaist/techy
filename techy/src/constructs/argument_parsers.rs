@@ -1,6 +1,7 @@
 //! The standard [`ArgumentParser`] implementations (Phase 6.5) and the shared
 //! noise-scan helper: [`GroupArgumentParser`] (mandatory delimited group — by class
-//! with the single-expression fallback, or by a per-use minted rule, Phase 7.7),
+//! or by a per-use minted rule (Phase 7.7) — with a configurable single-expression
+//! fallback: class defaults on, rule off),
 //! [`OptionalGroupArgumentParser`] (optional group whose
 //! delimiters are minted for the occasion), [`MarkerArgumentParser`] (literal markers
 //! like `*`), and [`ExpressionParser`] (one node: group / full invocation / single
@@ -387,6 +388,12 @@ fn dispatch_expression_invocation<'s, L: Lang>(
 /// (its delimiters, where it has any, are part of the value — contrast
 /// [`GroupArgumentParser`], whose matched delimiters are argument syntax).
 ///
+/// **The content designation differs from [`GroupArgumentParser`]'s even on identical
+/// input**: on `{ab}`, this parser designates the `Group` *node* as the content — the
+/// braces belong to the value — where `GroupArgumentParser` designates the group's
+/// *children* (`ab`), its braces being argument syntax. The two coincide only on the
+/// fallback shapes (`\frac12`: the single node is the content either way).
+///
 /// The expression is mandatory: when none can start at the position, the parser
 /// diagnoses (tolerant) or aborts (strict) and reports the argument absent, consuming
 /// nothing. Also the fallback engine of [`GroupArgumentParser`].
@@ -442,29 +449,47 @@ fn region_with_last_as_content(nodes: Vec<BuildId>) -> ParsedArgumentNodes {
 }
 
 /// The standard mandatory-argument parser (pylatexenc's `'{'` shorthand as a core
-/// parser), in one of two forms:
+/// parser). The **delimited form** comes in one of two flavors:
 ///
 /// - **Class form** ([`new`](GroupArgumentParser::new)): a group of the configured
 ///   class if one opens at the position — its delimiters are argument *syntax*, so the
-///   content is the group's children — with the single-expression fallback otherwise
-///   (`\frac12`, `\frac1\alpha`; the expression node is the content). The delimiters
-///   come from the state's own group rules (the language declares `{…}`); the parser
-///   is configured only with the group **class** that counts as this argument's
-///   delimited form.
+///   content is the group's children. The delimiters come from the state's own group
+///   rules (the language declares `{…}`); the parser is configured only with the group
+///   **class** that counts as this argument's delimited form.
 /// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule); Phase 7.7, the
 ///   `r<c1><c2>` argument code): the delimiters are **minted for the occasion** — the
 ///   parser carries its own [`GroupRule`], installed as a temporary group rule for the
 ///   argument's extent exactly like [`OptionalGroupArgumentParser`]'s (same nested-
 ///   delimiter balancing, same brace protection — see that type's docs), just
-///   mandatory. Deliberately **no expression fallback**: a prescribed-delimiter
-///   argument either opens with its delimiter or is missing (pylatexenc's
-///   required-delimited behavior).
+///   mandatory.
 ///
-/// Missing (end of input, a paragraph break, an enclosing group close, or — rule
-/// form — anything but the minted rule's opener): diagnosed here (tolerant) or abort
-/// (strict), argument absent, nothing consumed.
+/// Orthogonal to the form, the **single-expression fallback**
+/// ([`with_expression_fallback`](GroupArgumentParser::with_expression_fallback)): when
+/// no group of the delimited form opens at the position, the argument is the next
+/// single expression instead (`\frac12`, `\frac1\alpha`; the expression node is the
+/// content). The fallback parses under the **plain argument state** — in the rule form
+/// the minted rule is *not* in force there, so its spellings read as the language
+/// reads them (a stray minted closer is an ordinary char, never a stray group close).
+/// The defaults are pylatexenc parity: **on** for the class form (`'{'` always falls
+/// back), **off** for the rule form (required-delimited has none: `\m x` under an
+/// `r()` code diagnoses missing-mandatory and leaves `x` alone). The other two
+/// combinations are techy extensions — notably class form + fallback off: a real
+/// group or a diagnosed missing argument.
+///
+/// **Not [`ExpressionParser`] under another name**: where a group of the argument's
+/// delimited form opens, this parser designates the group's *children* as the content
+/// — the delimiters are argument syntax, consumed but not part of the value — while
+/// `ExpressionParser` on the same `{…}` source designates the group *node* itself,
+/// delimiters included. The expression fallback is the one place the two agree (the
+/// fallback node is the content either way).
+///
+/// Missing — no group of the delimited form opens, and the fallback is off or no
+/// expression can start (end of input, a paragraph break, an enclosing group close):
+/// diagnosed here as missing-mandatory (tolerant) or abort (strict), argument absent,
+/// nothing consumed. The condition is the same with the fallback on or off.
 pub struct GroupArgumentParser<L: Lang> {
     form: GroupArgumentForm<L>,
+    expression_fallback: bool,
 }
 
 /// The two delimited forms of [`GroupArgumentParser`] (see the type docs).
@@ -476,16 +501,23 @@ enum GroupArgumentForm<L: Lang> {
 
 impl<L: Lang> GroupArgumentParser<L> {
     /// A mandatory argument delimited by any group rule of class `group_type`, with
-    /// the single-expression fallback.
+    /// the single-expression fallback on (pylatexenc's `'{'`).
     pub fn new(group_type: L::GroupTypeId) -> GroupArgumentParser<L> {
-        GroupArgumentParser { form: GroupArgumentForm::Class(group_type) }
+        GroupArgumentParser { form: GroupArgumentForm::Class(group_type), expression_fallback: true }
     }
 
     /// A mandatory argument delimited exactly by `rule`, minted for the occasion as a
-    /// temporary group rule (e.g. `(`…`)` for an `r()` code) — no expression fallback
-    /// (see the type docs).
+    /// temporary group rule (e.g. `(`…`)` for an `r()` code), with the expression
+    /// fallback off (pylatexenc's required-delimited — see the type docs).
     pub fn with_rule(rule: Arc<GroupRule<L>>) -> GroupArgumentParser<L> {
-        GroupArgumentParser { form: GroupArgumentForm::Rule(rule) }
+        GroupArgumentParser { form: GroupArgumentForm::Rule(rule), expression_fallback: false }
+    }
+
+    /// Set the single-expression fallback (see the type docs; the constructor defaults
+    /// are class form on, rule form off).
+    pub fn with_expression_fallback(mut self, expression_fallback: bool) -> Self {
+        self.expression_fallback = expression_fallback;
+        self
     }
 }
 
@@ -497,78 +529,80 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
         let mut noise = scan_argument_noise(cx)?;
 
-        // The rule form: probe with the minted rule in force (the temporary-rule
-        // state scoping of `OptionalGroupArgumentParser`, which see); missing means
-        // diagnosed-mandatory, never an expression.
-        if let GroupArgumentForm::Rule(rule) = &self.form {
-            if noise.next.is_none() {
-                return missing_mandatory(cx, noise, spec);
-            }
-            let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-                temporary_groups: Some(alloc::vec![Arc::clone(rule)]),
-                ..TokenRulesOverrides::default()
-            });
-            let contents_state = cx.derived_state(&delta)?;
-            let matched = match cx.probe_token(&contents_state)? {
-                Some(token)
-                    if matches!(
-                        &token.kind,
-                        TokenKind::GroupOpen { rule: matched, .. } if Arc::ptr_eq(matched, rule)
-                    ) =>
-                {
-                    Some(token)
+        match &self.form {
+            // The rule form: probe with the minted rule in force (the temporary-rule
+            // state scoping of `OptionalGroupArgumentParser`, which see).
+            GroupArgumentForm::Rule(rule) => {
+                if noise.next.is_some() {
+                    let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
+                        temporary_groups: Some(alloc::vec![Arc::clone(rule)]),
+                        ..TokenRulesOverrides::default()
+                    });
+                    let contents_state = cx.derived_state(&delta)?;
+                    let matched = match cx.probe_token(&contents_state)? {
+                        Some(token)
+                            if matches!(
+                                &token.kind,
+                                TokenKind::GroupOpen { rule: matched, .. }
+                                    if Arc::ptr_eq(matched, rule)
+                            ) =>
+                        {
+                            Some(token)
+                        }
+                        _ => None,
+                    };
+                    if let Some(open) = matched {
+                        stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
+                        cx.tokens.move_past(&open, true);
+                        let (id, _delta) = cx.parse_group(
+                            contents_state,
+                            open.span,
+                            Arc::clone(rule),
+                            ChildStateSpec::inherit(),
+                        )?;
+                        let child_count = staged_child_count(cx, id);
+                        noise.nodes.push(id);
+                        return Ok(Some(ParsedArgumentNodes {
+                            nodes: noise.nodes,
+                            content: ContentNodes::InChildrenOf(id, 0..child_count),
+                        }));
+                    }
                 }
-                _ => None,
-            };
-            let Some(open) = matched else {
-                return missing_mandatory(cx, noise, spec);
-            };
-            stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
-            cx.tokens.move_past(&open, true);
-            let (id, _delta) = cx.parse_group(
-                contents_state,
-                open.span,
-                Arc::clone(rule),
-                ChildStateSpec::inherit(),
-            )?;
-            let child_count = staged_child_count(cx, id);
-            noise.nodes.push(id);
-            return Ok(Some(ParsedArgumentNodes {
-                nodes: noise.nodes,
-                content: ContentNodes::InChildrenOf(id, 0..child_count),
-            }));
-        }
-        let GroupArgumentForm::Class(group_type) = &self.form else {
-            unreachable!("the rule form returned above");
-        };
-
-        let Some(next) = noise.next.clone() else {
-            return missing_mandatory(cx, noise, spec);
-        };
-
-        // The delimited form: a group open of the configured class.
-        if let TokenKind::GroupOpen { rule, .. } = &next.kind {
-            if rule.group_type == *group_type {
-                stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
-                let rule = Arc::clone(rule);
-                cx.tokens.move_past(&next, true);
-                let base = Arc::clone(&cx.state);
-                let (id, _delta) =
-                    cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?;
-                let child_count = staged_child_count(cx, id);
-                noise.nodes.push(id);
-                return Ok(Some(ParsedArgumentNodes {
-                    nodes: noise.nodes,
-                    content: ContentNodes::InChildrenOf(id, 0..child_count),
-                }));
+            }
+            // The class form: a group open of the configured class.
+            GroupArgumentForm::Class(group_type) => {
+                if let Some(next) = noise.next.clone() {
+                    if let TokenKind::GroupOpen { rule, .. } = &next.kind {
+                        if rule.group_type == *group_type {
+                            stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
+                            let rule = Arc::clone(rule);
+                            cx.tokens.move_past(&next, true);
+                            let base = Arc::clone(&cx.state);
+                            let (id, _delta) =
+                                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?;
+                            let child_count = staged_child_count(cx, id);
+                            noise.nodes.push(id);
+                            return Ok(Some(ParsedArgumentNodes {
+                                nodes: noise.nodes,
+                                content: ContentNodes::InChildrenOf(id, 0..child_count),
+                            }));
+                        }
+                    }
+                }
             }
         }
 
-        // The single-expression fallback.
-        match parse_expression_node(cx, &next, &mut noise.nodes)? {
-            Some(_) => Ok(Some(region_with_last_as_content(noise.nodes))),
-            None => missing_mandatory(cx, noise, spec),
+        // No delimited open: the single-expression fallback where enabled — under the
+        // plain argument state (rule form: the minted rule is not in force here) —
+        // else missing-mandatory.
+        if self.expression_fallback {
+            if let Some(next) = noise.next.clone() {
+                if parse_expression_node(cx, &next, &mut noise.nodes)?.is_some() {
+                    return Ok(Some(region_with_last_as_content(noise.nodes)));
+                }
+            }
         }
+        missing_mandatory(cx, noise, spec)
     }
 
     /// The argument is mandatory: absent is a diagnosed recovery, not a valid match.
@@ -870,6 +904,7 @@ mod tests {
 
     const GT_BRACE: u32 = 0;
     const GT_OPTION: u32 = 2;
+    const GT_PAREN: u32 = 3;
     const CT_MACRO: u32 = 10;
 
     /// Test lang resolving `Command` tokens against the state's libraries under the
@@ -965,6 +1000,26 @@ mod tests {
     fn optional_arg_unwrapping() -> Arc<ArgumentSpec<ArgLang>> {
         Arc::new(ArgumentSpec::new(Arc::new(
             OptionalGroupArgumentParser::new(option_rule()).with_unwrap_lone_group(GT_BRACE),
+        )))
+    }
+
+    fn paren_rule() -> Arc<GroupRule<ArgLang>> {
+        Arc::new(GroupRule { group_type: GT_PAREN, open: "(".into(), close: ")".into() })
+    }
+
+    fn rule_arg() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::with_rule(paren_rule()))))
+    }
+
+    fn rule_arg_with_fallback() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new(Arc::new(
+            GroupArgumentParser::with_rule(paren_rule()).with_expression_fallback(true),
+        )))
+    }
+
+    fn brace_arg_without_fallback() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new(Arc::new(
+            GroupArgumentParser::new(GT_BRACE).with_expression_fallback(false),
         )))
     }
 
@@ -1187,6 +1242,112 @@ mod tests {
         assert!(content1[0].is_callable());
         assert_eq!(content1[0].name(), Some("alpha"));
         assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    // --- the expression-fallback knob (uniform across forms) ----------------------------
+
+    #[test]
+    fn class_form_without_fallback_diagnoses_instead_of_taking_an_expression() {
+        let st = state_with(&[("m", vec![brace_arg_without_fallback()])]);
+
+        // The delimited path is untouched by the knob.
+        let parsed = parse_both(r"\m{ab} x", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        let content = content_of(m, 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("ab"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        // Where the class form would fall back (`\frac12`-style), off means missing:
+        // diagnosed, absent, the would-be expression left as enclosing content.
+        let parsed = parse_both(r"\m x", &st, Recovery::Tolerant);
+        let m = root_child(&parsed, 0);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let message = parsed.result.diagnostics.iter().next().unwrap().message().to_string();
+        assert!(
+            message.contains("missing mandatory argument"),
+            "unexpected message: {message}"
+        );
+
+        // Strict aborts on the same shape.
+        let mut reader = StdTokenReader::new(r"\m x");
+        let err = try_run(r"\m x", &mut reader, &st, Recovery::Strict).unwrap_err();
+        assert!(err.to_string().contains("missing mandatory argument"));
+    }
+
+    #[test]
+    fn rule_form_with_fallback_takes_a_single_expression() {
+        let st = state_with(&[("m", vec![rule_arg_with_fallback()]), ("alpha", vec![])]);
+
+        // The minted-rule delimited path is untouched by the knob.
+        let parsed = parse_std(r"\m(ab)", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.child(0).unwrap().group_delimiters(), Some(("(", ")")));
+        let content = content_of(m, 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("ab"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        // No minted opener: the argument is the next single expression
+        // (`\frac12`-style), instead of the rule form's default missing-mandatory.
+        let parsed = parse_std(r"\m x", &st, Recovery::Strict);
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("x"));
+        assert!(parsed.result.diagnostics.is_empty());
+
+        // A full invocation works as the fallback expression too.
+        let parsed = parse_std(r"\m\alpha", &st, Recovery::Strict);
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].name(), Some("alpha"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn rule_form_fallback_on_a_foreign_group_designates_the_whole_node() {
+        // `{ab}` is not the minted `(`…`)` form, so it arrives via the expression
+        // fallback: the group *node* is the content, braces included — the
+        // designation contrast documented on the type (delimited form: children;
+        // fallback: the node).
+        let st = state_with(&[("m", vec![rule_arg_with_fallback()])]);
+        let parsed = parse_std(r"\m{ab}", &st, Recovery::Strict);
+
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 1);
+        assert!(content[0].is_group());
+        assert_eq!(content[0].group_delimiters(), Some(("{", "}")));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn rule_form_fallback_parses_without_the_minted_rule() {
+        // The fallback expression parses under the plain argument state: the minted
+        // rule's spellings are ordinary chars there — `)` is a one-char expression,
+        // never a stray close of a group that never opened.
+        let st = state_with(&[("m", vec![rule_arg_with_fallback()])]);
+        let parsed = parse_std(r"\m )x", &st, Recovery::Strict);
+
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some(")"));
+        assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn rule_form_default_diagnoses_missing_without_fallback() {
+        // `with_rule`'s default: no fallback (pylatexenc's required-delimited) —
+        // `\m x` diagnoses and leaves `x` alone.
+        let st = state_with(&[("m", vec![rule_arg()])]);
+        let parsed = parse_std(r"\m x", &st, Recovery::Tolerant);
+
+        let m = root_child(&parsed, 0);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
     }
 
     #[test]

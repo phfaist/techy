@@ -2,18 +2,18 @@
 
 ## Big chunks of things to settle
 
-- Centralized helpers for accessing parse methods (like parser::parse())
+- Centralized helpers for accessing parse methods (like parser::parse()) ??
 
 - Read/extraction API for content: callable arguments by name, callable argument contents nodes, helpers like get_content_as_chars(), parse_keyval(), etc. etc. [cf also pylatexenc/latexnodes/nodes.py]
 
 - Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
 
-- Fully gated language features (specials, callables, groups, temporary groups ...) with corresponding memory saving in ParsingState/TokenRules fields??
+- Fully gated language features (specials, callables, groups, temporary groups ...) with corresponding memory saving in ParsingState/TokenRules fields??  i.e.: Perhaps a compile-time optimization of languages that don't want to implement libraries and keep a parsing_state with a zero-sized libraries field. Lang should provide a trait for Libraries implementing the relevant lookup functions?
+
+- Public API review.  Remove aggressively; keep only as much as is really necessary.
 
 
 ## More targeted items
-
-- Perhaps a compile-time optimization of languages that don't want to implement libraries and keep a parsing_state with a zero-sized libraries field. Lang should provide a trait for Libraries implementing the relevant lookup functions?
 
 - SimpleLang's role.  Does it have a use?  Maybe rename "SimpleLang" to "TrivialLang" ? because there's no behavior like command resolution.  Document that it's designed mainly for use in tests. Make it private or crate-internal even?
 

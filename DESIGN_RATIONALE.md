@@ -3200,6 +3200,31 @@ builders). No flyweight cache and no singletons: specs are built once per langua
 *Rejected:* accepting a `&[&str]` list-of-codes signature alongside (one grammar, one
 entry; the string form covers the deferred `e{…}` shape too when it arrives).
 
+**`GroupArgumentParser`: the single-expression fallback becomes the orthogonal
+`expression_fallback` knob** — DECIDED (user, July 2026, follow-up session to the 7.7
+landing).
+Previously variant-implied (class form: always; rule form: never), the fallback is now
+a stored `bool` with a builder setter (`with_expression_fallback`); the constructors
+keep the parity defaults (`new` → on, pylatexenc's `'{'` acceptance; `with_rule` → off,
+pylatexenc's required-delimited). Semantics are **uniform across forms**: when no group
+of the delimited form opens, the argument is the next single expression, parsed under
+the **plain argument state** — in the rule form the minted rule is *not* in force
+during the fallback (its spellings read as the language reads them; installing it there
+would manufacture stray-close tokens for a group that never opened). Absence diagnoses
+missing-mandatory with the knob on or off (the fallback engine is the shared
+expression core, not `ExpressionParser::parse_argument`, so the condition never flips
+with the flag). The two new combinations are techy extensions: class + off ("a real
+group or a diagnosed missing argument" — pylatexenc's `'{'` cannot say this) and
+rule + on (opt-in; the `r` code's pinned no-fallback default constrains the *code*,
+not the parser's capability ceiling — the code still resolves to the off default).
+*Motivation:* the knob documents the fallback property on the type's own surface, and
+composes with the anticipated `Rules(Vec<…>)` multi-delimiter generalization (fallback
+as an orthogonal knob, not a variant property). Alongside, the content-designation
+contrast — delimited form: the group's *children* (delimiters are argument syntax);
+`ExpressionParser` and the fallback: the expression *node* itself, delimiters included
+— is now documented on both parser types (it was previously only implicit in §3.5 and
+the parity table).
+
 ## 4. Rejected patterns — do not reintroduce
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section
