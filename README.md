@@ -57,6 +57,17 @@ The parser follows a three-stage pipeline:
 - **`walker`**: High-level parsing API
 - **`error`**: Error types
 
+To build HTML documentation:
+
+```bash
+cargo docs  # alias for 'cargo doc --workspace --no-deps'
+```
+
+If you accidentally ran `cargo doc` instead of `cargo docs`, delete `target/doc` once
+to drop the stale dependency pages (rustdoc merges new output into what is already
+there).
+
+
 ## Development Status
 
 This is a work in progress.
