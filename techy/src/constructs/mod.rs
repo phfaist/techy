@@ -301,6 +301,53 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// routing that makes one driver override apply to every descent site
     /// (Phase 7.2). State scoping and restoration follow
     /// [`parse_scoped`](ParseContext::parse_scoped).
+    ///
+    /// # Resuming a stopped run
+    ///
+    /// A run that stops before end of input — a token condition, an unexpected group
+    /// close ([`StopCause`]) — can be **resumed**: handle the stop (diagnose, consume
+    /// or skip the offending token), then call `parse_nodes` again. There is no resume
+    /// method on [`NodesParser`]; resumption is *re-invocation* — each call builds a
+    /// fresh parser from the factory with its own per-run `stop`/`child_states` — and
+    /// the caller bridges the runs. The canonical bridge is the root drive loop
+    /// ([`Language::parse_source`](crate::engine::Language::parse_source)), which
+    /// diagnoses a stray group close, skips it, and re-enters. The bridge has three
+    /// obligations:
+    ///
+    /// - **Resume under [`NodesOutcome::state`], never under this context's restored
+    ///   `state`.** The descent restores [`state`](ParseContext::state) structurally on
+    ///   return ([`parse_scoped`](ParseContext::parse_scoped)), and the run's sibling
+    ///   after-effects (a `\newcommand`-style definition) are applied *internally*, not
+    ///   returned as a pass-through delta — so after the call, the outcome's exported
+    ///   live state is their only carrier. Re-entering with a clone of `cx.state`
+    ///   silently rolls them back. A caller that re-anchors its ambient state first
+    ///   (the root loop's `cx.state = outcome.state`) makes the two coincide.
+    ///
+    /// - **Stand the reader where the next run should start.** The stop seam is
+    ///   defined ([`TokenStopCondition::consume`], [`StopCause`]'s per-variant docs): a
+    ///   left stop token sits at its own `span.start`, pre-space already staged, and
+    ///   re-peeks clean — but re-entering with the reader still on it and the same
+    ///   stop condition stops again immediately, staging nothing: an infinite loop for
+    ///   an unconditional resumer. Deal with the token first — consume it
+    ///   ([`probe_token`](ParseContext::probe_token) +
+    ///   [`move_past`](crate::token::TokenReader::move_past), the environment
+    ///   terminator flow), skip it (`move_to_pos(span.end())`, the root loop), or
+    ///   exclude it from the next run's stop spec.
+    ///
+    /// - **Concatenate the segments yourself.** Each run returns its own
+    ///   [`NodesOutcome::nodes`]; the resuming caller extends one list across runs.
+    ///   Bytes skipped *between* segments then belong to no node — either accept the
+    ///   diagnosed byte-accounting break (the root loop's stray-close precedent) or
+    ///   stage a span-backed chars fallback over them (the unresolvable-command
+    ///   precedent, [`UnresolvableCommand`]) so the siblings keep tiling the parsed
+    ///   extent. And a node stop condition counts each run's own siblings — its count
+    ///   argument restarts at zero in a resumed segment.
+    ///
+    /// Whether to resume at all is a per-construct policy question, not a default:
+    /// the environment body deliberately **unwinds** on a terminator mismatch instead
+    /// of resuming — a body that diagnosed `\end{A}` and kept going inside
+    /// `\begin{A}…\begin{B}…\end{A}` would swallow the enclosing environment's
+    /// terminator (decision 8; DESIGN_RATIONALE.md §3.8, [`EnvironmentBodyParser`]).
     // The output-plus-delta pair is the decided ConstructParser signature (§3.6).
     #[allow(clippy::type_complexity)]
     pub fn parse_nodes<'p>(
