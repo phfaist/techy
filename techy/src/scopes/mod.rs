@@ -721,7 +721,7 @@ impl<L: Lang> Package<L> {
         self.specials.push(PackageSpecials { trigger, callable_type, spec, visible_modes });
         // Longest first; the stable sort keeps insertion order among equal lengths
         // (irrelevant for matching — equal-length triggers differ in content).
-        self.specials.sort_by(|a, b| b.trigger.len().cmp(&a.trigger.len()));
+        self.specials.sort_by_key(|entry| core::cmp::Reverse(entry.trigger.len()));
         None
     }
 
@@ -847,7 +847,7 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
             .filter(move |(_, entry)| modes_admit(&entry.visible_modes, &mode))
             .map(move |(name, entry)| SymbolEntry {
                 callable_type,
-                name: &**name,
+                name,
                 spec: &entry.spec,
             });
         let specials = self
@@ -900,6 +900,7 @@ impl<L: Lang> fmt::Debug for Package<L> {
 /// `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs.
 pub struct Scope<L: Lang> {
     name: Box<str>,
+    #[allow(clippy::type_complexity)]
     specs: BTreeMap<L::CallableTypeId, BTreeMap<Box<str>, Arc<dyn CallableSpec<L>>>>,
 }
 
@@ -1003,7 +1004,7 @@ impl<L: Lang> SpecsProvider<L> for Scope<L> {
             .get(&callable_type)
             .into_iter()
             .flat_map(BTreeMap::iter)
-            .map(move |(name, spec)| SymbolEntry { callable_type, name: &**name, spec });
+            .map(move |(name, spec)| SymbolEntry { callable_type, name, spec });
         Some(Box::new(entries))
     }
 }

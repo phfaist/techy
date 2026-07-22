@@ -1078,6 +1078,12 @@ recoverable source-style conditions so tolerant parses stay alive. Failed deriva
 are never memoized and never observed — the session memo gate extends the old
 `push_libraries` exclusion to `scope_ops`, so the memo caches successes only, and a
 misbehaving driver descent re-reports per descent (loud, not cached away).
+*(Clippy follow-up, July 2026:)* the `Err` is large (≥ 424 bytes — it owns a full
+state plus the delta), tripping `clippy::result_large_err` at every function returning
+it. Accepted as-is, user-decided over `Box<DeriveError>`: the recovery payload is the
+point of the type, and `Box`-free signatures are worth the bigger `Result` return
+slot. The five returning functions carry a targeted `#[allow]`, with the rationale
+documented on `DeriveError` itself.
 *(b) Specials fold:* longest match wins, ties innermost — verified as *exact*
 pylatexenc parity (`test_for_specials`: a strictly longer match beats an
 earlier-searched category, ties keep the first-searched); since equal-length matches at

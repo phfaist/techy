@@ -243,6 +243,7 @@ impl<L: Lang> ParserSession<L> {
     ///
     /// Out-of-parse code (initial states, tests, tree transforms) keeps calling
     /// `derived()` directly.
+    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived_state(
         &mut self,
         driver: &L::Driver,
@@ -306,6 +307,7 @@ impl<L: Lang> ParserSession<L> {
     /// op), so a tolerant caller can safely parse the interior under it. Failures are
     /// *not* cached: every failing descent re-reports — a misbehaving driver stays
     /// loud.
+    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn group_interior_state(
         &mut self,
         driver: &L::Driver,

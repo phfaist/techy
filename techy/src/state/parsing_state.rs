@@ -116,6 +116,7 @@ impl<L: Lang> ParsingState<L> {
     /// at any depth). A delta that explicitly overrides `temporary_groups` itself is
     /// exempt — the delta author spoke. The rule is a pure function of `(base, delta)`,
     /// so identity-keyed derivation memos stay sound.
+    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> Result<ParsingState<L>, DeriveError<L>> {
         let mut data = self.data.clone();
         let failures = delta.apply_overrides(&mut data);
@@ -279,6 +280,12 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 ///
 /// Not `Clone`: states are identity-bearing (deliberately non-`Clone`), and the
 /// recovered state is a state.
+///
+/// The `Err` variant is large *by design* — it owns a full state plus the applied
+/// delta, because the recovery payload is the point of the type. The functions
+/// returning it `#[allow(clippy::result_large_err)]` rather than box: `Box`-free
+/// signatures were judged worth the bigger `Result` return slot
+/// (DESIGN_RATIONALE.md §3.4).
 pub struct DeriveError<L: Lang> {
     /// One record per failing op, in delta order (never empty).
     pub failures: Vec<ScopeOpError>,

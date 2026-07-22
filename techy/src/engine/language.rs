@@ -97,6 +97,7 @@ impl<L: Lang> Language<L> {
     /// [`DeriveError`], and the `Language` under construction is dropped — a bad
     /// definition setup is an embedder bug to surface at build time, not a source
     /// condition to recover from.
+    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn with_seed_delta(
         mut self,
         delta: ParsingStateDelta<L>,
@@ -118,6 +119,7 @@ impl<L: Lang> Language<L> {
     /// Fallible like [`with_seed_delta`](Language::with_seed_delta) (the sanctioned
     /// derive path underneath): the push itself cannot fail today, but the derivation
     /// runs the full transition machinery.
+    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn with_provider(
         self,
         provider: Arc<dyn SpecsProvider<L>>,

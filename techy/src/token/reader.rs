@@ -964,6 +964,7 @@ mod tests {
         let in_inline = expecting_close(MATH_INLINE);
         let in_display = expecting_close(MATH_DISPLAY);
 
+        #[allow(clippy::type_complexity)]
         let cases: [(usize, &Arc<ParsingState<TestLang>>, TokenKind<'_, TestLang>, usize); 8] = [
             // (pos, state, expected kind, expected end)
             (1, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 2),
