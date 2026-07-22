@@ -3,12 +3,13 @@
 //! xparse's `e{<chars>}` argument type, the preset's `e{…}` code).
 //!
 //! One argument position absorbing a run of *marker + expression* pairs: whenever one
-//! of the configured markers (`^`, `_`, `'`, …) comes next, it must be followed
-//! **immediately** by one expression (a delimited group, a full invocation, or a
-//! single char — the [`ExpressionParser`](super::ExpressionParser) core), and the pair
-//! repeats until no marker matches. Each marker matches **at most once** per
-//! invocation (xparse semantics; pylatexenc removes matched chars the same way), in
-//! any source order — `\op^{a}_{b}` and `\op_{b}^{a}` both provide both fields.
+//! of the configured markers (`^`, `_`, `'`, …) comes next, it must be followed —
+//! at most plain whitespace apart — by one expression (a delimited group, a full
+//! invocation, or a single char — the [`ExpressionParser`](super::ExpressionParser)
+//! core), and the pair repeats until no marker matches. Each marker matches **at most
+//! once** per invocation (xparse semantics; pylatexenc removes matched chars the same
+//! way), in any source order — `\op^{a}_{b}` and `\op_{b}^{a}` both provide both
+//! fields.
 //!
 //! # Record shape (decided July 2026, N3 session)
 //!
@@ -16,20 +17,23 @@
 //! express free source order through sequential per-spec parsing — and each matched
 //! pair stages one **classless wrapper `Group`** ([`GroupData::untyped`]): `open` =
 //! the marker as written (span-backed), `close` empty, children = the expression's
-//! node(s) (pylatexenc's `delimiters=(marker, '')` shape). The argument's content
+//! node(s), preceded by a whitespace `Chars` node when whitespace separated marker
+//! and expression (pylatexenc's `delimiters=(marker, '')` shape). The argument's content
 //! designation covers the run of wrapper groups from the first one on — noise between
 //! embellishments included, leading noise excluded. By-marker access is the read-side
 //! helper [`split_embellishments`](crate::node::extract::split_embellishments).
 //!
 //! # Matching rules
 //!
-//! - **Noise before a marker, never after** (decided July 2026): whitespace and
-//!   comments are scanned ahead of each marker (region noise, like every argument),
-//!   but between a marker and its expression nothing may stand — a marker whose
-//!   expression does not start *immediately* (whitespace, a comment, end of input, a
-//!   group close…) is **not a match**: the marker is rewound whole and the run ends,
-//!   silently. Marker + expression are atomic; a lone `^` stays ordinary content of
-//!   the enclosing level.
+//! - **Noise before a marker; only whitespace before an argument** (decided July
+//!   2026, whitespace allowance revised the same month): whitespace and comments are
+//!   scanned ahead of each marker (region noise, like every argument), and between a
+//!   marker and its expression **plain whitespace** is tolerated (pylatexenc's
+//!   `allow_pre_space` parity; TeX's `x^ 2`), staged *inside* the wrapper group as
+//!   leading noise. Anything else — a comment, a paragraph break, end of input, a
+//!   group close… — is **not a match**: the marker is rewound whole and the run
+//!   ends, silently. Marker + expression stay atomic; a lone `^` is ordinary content
+//!   of the enclosing level.
 //! - **Longest match** among the still-available markers when several share a prefix
 //!   (`'` vs. `''`) — a deliberate divergence from pylatexenc, whose accumulate-until-
 //!   equal scan makes the shortest alternative win unconditionally. Multi-character
@@ -63,8 +67,8 @@ use super::argument_parsers::{
 use super::{ConstructParserResult, ParseContext};
 
 /// The embellishment-arguments parser (see the module docs): marker alternatives, each
-/// followed immediately by one expression, repeating in any order until no available
-/// marker matches; each marker at most once.
+/// followed by one expression (at most plain whitespace apart), repeating in any order
+/// until no available marker matches; each marker at most once.
 pub struct EmbellishmentsArgumentParser {
     markers: Vec<Box<str>>,
 }
@@ -113,17 +117,17 @@ impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser {
                 break;
             };
 
-            // The expression must start immediately: probe the very next token and
-            // reject any pre-space (the reader stands at the marker's end, so empty
-            // pre-space means contiguous). A comment, end of input, or any token that
-            // cannot begin an expression likewise unmatches the marker whole.
+            // The expression follows the marker at most plain whitespace apart: the
+            // probed token may carry pre-space, which the expression core stages
+            // *inside* the wrapper as leading noise on commit. Anything else — a
+            // comment, a paragraph break, end of input, any token that cannot begin
+            // an expression — unmatches the marker whole (`parse_expression_node`
+            // answers `None` for all of these, staging and consuming nothing).
             let mut wrapper_children = Vec::new();
             let state = Arc::clone(&cx.state);
             let expression = match cx.probe_token(&state)? {
-                Some(token) if token.pre_space.is_empty() => {
-                    parse_expression_node(cx, &token, &mut wrapper_children)?
-                }
-                _ => None,
+                Some(token) => parse_expression_node(cx, &token, &mut wrapper_children)?,
+                None => None,
             };
             if expression.is_none() {
                 // Marker + expression are atomic: rewind the marker (and this

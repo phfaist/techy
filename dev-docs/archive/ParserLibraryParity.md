@@ -135,8 +135,11 @@ the run of wrappers (interior noise included, leading noise excluded). Semantics
 (user): each marker at most once (xparse), **longest match** among available markers
 (diverging from pylatexenc's shortest-wins accumulate loop), multi-char markers
 contiguous, follower hardwired to the expression core, and **marker + expression
-atomic** — noise is allowed before a marker but nothing may stand between a marker
-and its expression; a violated pair rewinds whole and ends the run silently. Absent
+atomic** — noise is allowed before a marker, and plain **whitespace** (only) between
+a marker and its expression (revised July 2026; pylatexenc `allow_pre_space` parity,
+staged inside the wrapper and filtered out of `split_embellishments` values); any
+other separation — a comment, a paragraph break — rewinds the pair whole and ends
+the run silently. Absent
 is silent (`can_match_empty` true). By-marker reading is
 `node::extract::split_embellishments` (a `KeyVals`: marker key, argument-nodes
 value). `MarkerArgumentParser` stays single-literal — the alternatives-without-

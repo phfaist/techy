@@ -575,7 +575,8 @@ fn is_run_noise<L: Lang>(node: &NodeRef<'_, L>) -> bool {
 /// ([`EmbellishmentsArgumentParser`](crate::constructs::EmbellishmentsArgumentParser))
 /// as [`KeyVals`]: one entry per matched embellishment in source order, the **marker**
 /// as the key (the wrapper group's opening delimiter — `"^"`, `"_"`, …) and the
-/// embellishment's argument nodes as the value, noise-free. Noise between
+/// embellishment's argument nodes as the value, noise-free (the whitespace node a
+/// `^ {a}`-style pair stages inside its wrapper is filtered out). Noise between
 /// embellishments (whitespace, comments) is skipped; any node that is neither noise
 /// nor a group is [`ExtractError::UnexpectedContent`] — feed this helper the
 /// argument's *content* nodes ([`NodeRef::argument_content_nodes`]).
@@ -598,7 +599,12 @@ pub fn split_embellishments<L: Lang>(
         let Some((marker, _close)) = node.group_delimiters() else {
             return Err(ExtractError::UnexpectedContent { node: node.id() });
         };
-        let pieces: Vec<Piece<'_, L>> = node.children().iter().map(whole).collect();
+        let pieces: Vec<Piece<'_, L>> = node
+            .children()
+            .iter()
+            .filter(|child| !is_run_noise(child))
+            .map(whole)
+            .collect();
         value_lists.push(stage_segment_list(&mut builder, &pieces, &anchor_span, &anchor_state)?);
         entries.push((Box::from(marker), Some(value_lists.len() - 1)));
     }

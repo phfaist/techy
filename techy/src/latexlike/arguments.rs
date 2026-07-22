@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn e_code_allows_noise_before_markers_but_not_after() {
+    fn e_code_allows_noise_before_markers_and_whitespace_before_arguments() {
         // Noise ahead of each marker: whitespace and comments become region noise.
         let result = parse_ok("e{^_}", "\\m %pre\n^{a} _{b}!");
         let m = macro_node(&result);
@@ -769,23 +769,35 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("!"));
 
-        // Marker + expression are atomic: whitespace after the marker unmatches it
-        // whole (silently — `^ {a}` is ordinary enclosing content)…
+        // Plain whitespace between a marker and its expression is allowed (pylatexenc
+        // `allow_pre_space` parity; TeX's `x^ 2`), staged inside the wrapper…
         let result = parse_ok("e{^_}", r"\m^ {a}");
         let m = macro_node(&result);
-        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
-        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("^ "));
-        assert!(result.tree.root().child(2).unwrap().is_group());
+        let wrapper = m.argument_content_nodes(0).unwrap().first().unwrap();
+        assert_eq!(wrapper.group_delimiters(), Some(("^", "")));
+        assert_eq!(wrapper.child_count(), 2);
+        assert_eq!(wrapper.child(0).unwrap().chars(), Some(" "));
+        // …and the extraction values stay noise-free regardless.
+        let fields =
+            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+                .unwrap();
+        let sup = fields.get("^").unwrap();
+        assert_eq!(sup.value().unwrap().len(), 1);
+        assert_eq!(
+            crate::node::extract::content_as_chars(sup.value_content().unwrap()).unwrap(),
+            "a"
+        );
 
-        // …and so does a comment after the marker.
+        // A comment after the marker is not tolerated: the marker unmatches whole
+        // (silently — `^%c…{a}` is ordinary enclosing content).
         let result = parse_ok("e{^_}", "\\m^%c\n{a}");
         let m = macro_node(&result);
         assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("^"));
 
         // A committed pair before the violation stays: `_{b}` parses, the dangling
-        // `^` ends the run.
-        let result = parse_ok("e{^_}", r"\m_{b}^ {a}");
+        // `^` before a comment ends the run.
+        let result = parse_ok("e{^_}", "\\m_{b}^%c\n{a}");
         let m = macro_node(&result);
         let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
         assert_eq!(content.len(), 1);

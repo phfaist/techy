@@ -2461,12 +2461,15 @@ in NAMING_STRATEGY.md). The decisions and their reasons:
   close empty), content = the wrapper run, and by-marker access as a *read-side*
   helper (`extract::split_embellishments`). Per-char access thus costs one helper
   call, not an API change.
-- **N3 matching semantics** (user): noise before a marker, **nothing between marker
-  and expression** — the pair is atomic, and a violated pair (`\op^ {a}`, `\op^` at
-  EOF, a comment after the marker) rewinds *whole* and ends the run silently: a lone
-  marker char is ordinary content nearly everywhere, so a diagnostic would misfire on
-  legitimate input; the atomicity also keeps wrapper contents noise-free by
-  construction. Each marker at most once (xparse; pylatexenc's removal loop agrees);
+- **N3 matching semantics** (user): noise before a marker; between marker and
+  expression, plain **whitespace only** (revised July 2026 — the first cut allowed
+  nothing; pylatexenc's `allow_pre_space` and TeX's `x^ 2` decided the relaxation).
+  The pair stays atomic: a violated pair (`\op^` at EOF, a comment or paragraph
+  break after the marker) rewinds *whole* and ends the run silently — a lone marker
+  char is ordinary content nearly everywhere, so a diagnostic would misfire on
+  legitimate input. The tolerated whitespace is staged *inside* the wrapper as its
+  leading noise node and filtered out of `split_embellishments` values (which stay
+  noise-free). Each marker at most once (xparse; pylatexenc's removal loop agrees);
   **longest match** among available markers — a deliberate divergence from
   pylatexenc, whose accumulate-until-equal check makes `'` permanently shadow `''`.
   Markers are `Char`-token sequences: a specials-claimed spelling does not match
