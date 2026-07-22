@@ -111,6 +111,14 @@ Nodes carry ...
 
 ## Documentation guidelines
 
+### Audience: Both Humans and AI
+
+Documentation should be designed and optimized both for HUMAN and for AI consumption.
+Cross-references should be easy for an AI to follow (cf scheme above).  Explanations
+should be concise, logical, and self-contained that humans can clearly connect
+the explanation with their current mental model and expectations.
+
+
 ### Document cross-referencing
 
 User-facing documents are generated with rustdoc using `cargo docs` (an alias for
