@@ -31,6 +31,10 @@ No dates. No "Assessment of where things stand". Code snippets only when
 absolutely necessary and not directly visible by looking up the relevant
 source files.  Organized into logical sections that cover the different aspects
 of the library.
+
+ARCHITECTURE does NOT contain explanations of implementation phases, which are
+a historical detail of how the library was implemented - that information is
+accessible through git commit history anyways.
   
 Each section has a markdown header (leading #, ##, ###) with
 a relevant title and a label `§dd-arch:<name>` (e.g. "§dd-arch:arguments-slots")
