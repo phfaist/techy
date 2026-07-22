@@ -63,12 +63,13 @@ retargeted at merge time.
 - L167 `lazy-line-col` — "Line/column is a lazy, standalone utility" (DECIDED)
 - L173 `source-resolver` — "Pluggable content resolution" (DECIDED)
 - L180 `origin-genericity` — "Origin genericity without `Lang`" (DECIDED)
-- L181 `origin-url-simplification` — "default origin simplified to an optional URL string" (REVISED; merge candidate → `origin-genericity`, reversal note)
+- L181 `origin-url-simplification` — "default origin simplified to an optional URL string" (REVISED; merged into `origin-genericity` at Stage 2b — label unused)
 - L207 `source-content-boundary` — "`SourceContent` is a trait boundary, not (yet) a `Source` parameter" (DECIDED)
 - L215 `source-cursor-retired` — "`SourceCursor`, `Source::cursor()`, and `SourceContent` retired" (DECIDED; reversal-flavored vs L207)
 - L237 `span-extend-to` — "`Span` has private fields; … monotone `extend_to`" (DECIDED)
 
 ### tokens
+- L676 `enable-flags` — "`enable_*` feature flags on `TokenRules`" (DECIDED; recovered in Stage 2b — missed by the original inventory, label pending user approval)
 - L290 `minimal-tokens` — "Tokens are minimal and structural" (DECIDED)
 - L302 `token-model` — "The token-design review: final token model" (DECIDED)
 - L435 `zero-copy-tokens` — "Zero-copy tokens with ephemeral lifetime" (DECIDED)
@@ -88,6 +89,7 @@ retargeted at merge time.
 - L756 `first-class-mode` — "Parsing mode is first-class state data: `StateData.mode`" (DECIDED)
 
 ### specs
+- L954 `argument-parser-model` — "Argument model rebuilt on pylatexenc's `LatexArgumentSpec`" (DECIDED; recovered in Stage 2b, label pending user approval)
 - L794 `unified-callable-spec` — "Unified `CallableSpec` with self-supplied invocation parser" (PROPOSED)
 - L803 `lexical-shadowing` — "Library stack with lexical shadowing; no `ConflictStrategy`" (DECIDED)
 - L810 `callable-query` — "`SpecLookup` receives a `CallableQuery`" (DECIDED)
@@ -123,7 +125,7 @@ retargeted at merge time.
 - L1952 `child-state-spec` — "`ChildStateSpec`: per-use descent-state policy" (DECIDED)
 - L2004 `state-memoization` — "Group interior states are memoized in the session" (DECIDED)
 - L2043 `session-derivation` — "Session-mediated derivation …; transitions have two levels" (DECIDED)
-- L2178 `temporary-group-rules` — "temporary group rules scoped in state data" (amendment-style note; merge candidate into its surrounding entry)
+- L2178 `temporary-group-rules` — "temporary group rules scoped in state data" (amendment-style note; left unpromoted at Stage 2b, handled in curation batch 3; label reserved)
 - L2457 `parity-parsers` — "The deferred parity parsers N2/N3/N4/N6 landed" (DECIDED)
 - L2612 `language-parse-api` — "`Language<L>` + `parse()`: the runtime bundle's landed surface" (DECIDED)
 - L2702 `with-provider` — "`Language::with_provider`: push-a-provider seed sugar" (DECIDED)
@@ -165,6 +167,7 @@ retargeted at merge time.
 - (new) `docs-restructure` — this restructure decision (added in Stage 2c)
 
 ### latexlike
+- L3516 `mode-visibility` — "Per-definition mode visibility on `Package`" (DECIDED; recovered in Stage 2b, label pending user approval)
 - L3244 `group-taxonomy` — "The preset's group taxonomy is two classes: `Content` and `Math`" (DECIDED)
 - L3285 `preset-vocabulary` — "Preset vocabulary names are bare and module-scoped" (DECIDED)
 - L3299 `base-package` — "The seed ships a `\"base\"` package" (DECIDED)
