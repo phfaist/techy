@@ -8,8 +8,6 @@ open. Its purpose is to let a future session (human or agent) pick up design wor
 re-deriving or accidentally re-litigating settled arguments, and without mistaking open
 questions for settled ones.
 
-This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10.
-
 ---
 
 # How to use and maintain this document [§dd-dr:self-meta]
@@ -22,12 +20,30 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10
 - Every entry has a **Revisit if** clause. If that condition arises, raising the issue is
   welcome; otherwise treat the decision as settled.
 - When a discussion produces a new decision or overturns an old one, **append or amend an entry
-  here in the same session** — with date, rationale, and the alternatives considered. An
-  undocumented decision will be re-argued from scratch in six months.
+  here in the same session** — with the rationale and the alternatives considered (no dates;
+  see the maintenance rules). An undocumented decision will be re-argued from scratch in six
+  months.
 - Documentation precedence when documents conflict: this file and ARCHITECTURE.md >
-  NAMING_STRATEGY.md > everything in `dev-docs/archive/` (which includes SOURCE_ARCHITECTURE.md,
-  folded into ARCHITECTURE.md and archived July 2026). Newer beats older; user-authored beats
-  generated.
+  `dev-docs/extra/` notes > everything in `dev-docs/archive/` (frozen; not consulted by
+  default). Newer beats older; user-authored beats generated.
+
+**Maintenance rules** (the documentation system itself is specified in
+`Documentation_Structure.md` at the repository root):
+
+- Heading labels (`[§dd-dr:…]`, `[§dd-arch:…]`) are immutable addresses: never rename or
+  reuse one. Before removing a label or retitling a labeled heading, run
+  `git grep -n '<label>'` across the repository and retarget every citer first; a label may
+  be retired only when nothing references it.
+- Every decision entry — whatever its status — must be referenced at least once, at a
+  relevant location, from ARCHITECTURE. Add that reference in the same change that adds the
+  entry. Periodic check: for each `[§dd-dr:…]` heading label in this file, grep
+  ARCHITECTURE.md for it; every miss is a gap to fix.
+- Status lines carry who/context, never dates. Dates appear only inside explicitly recorded
+  reversal notes, where preserving the history of a reversed decision is the point.
+- Cross-references are bare bracketed labels (`cf. [§dd-dr:panic-policy]`) — no file paths,
+  no section numbers. User-facing documentation (rustdoc text, guide pages) never references
+  the developer documents; the triage rules for such situations live in
+  Documentation_Structure.md.
 
 **Process rules for this project** (from CLAUDE.md, restated because they govern design work):
 
@@ -43,10 +59,15 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10
 **Entry template for future decisions.**
 
 ```
-**<Short decision title>** — <STATUS> (<who/context>, <month year>).
-<The decision, one or two sentences.>
-Rationale: <the argument that carried it — especially the one decisive reason.>
+#### <Short decision title> [§dd-dr:<short-label>]
+
+Status: <DECIDED|PROPOSED|OPEN|DEFERRED> (<who/context — no date>).
+
+<The decision, one or two sentences, followed by the argument that carried it —
+especially the one decisive reason.>
+
 Rejected alternatives: <alternatives considered, each with its killing flaw.>
+
 Revisit if: <concrete condition under which reopening is warranted.>
 ```
 
@@ -58,13 +79,13 @@ without replaying the conversation. Record the decisive reason, not every reason
 
 ## Project-level goals and constraints [§dd-dr:goals]
 
-These are the fixed points everything else serves (user-stated, July 2026):
+These are the fixed points everything else serves (user-stated):
 
 1. **Flexibility** — minimal hard-coded decisions in the core.
 2. **Extensibility** — custom parsers, token readers, specs, node payloads without forking.
 3. **FLM target** — the [FLM project](https://github.com/phfaist/flm) will be redesigned on top
    of this library. Every core design must pass the "can FLM do X through public extension
-   points?" test (see ARCHITECTURE.md §6 for the fit check).
+   points?" test.
 4. **Low footprint** — minimal dependencies, small compiled artifact.
 5. **No-compromise quality** — clean logical structure preferred over expedient shortcuts;
    clean slate, no pylatexenc backwards-compatibility baggage.
@@ -73,22 +94,21 @@ These are the fixed points everything else serves (user-stated, July 2026):
 
 Corollaries: `Result<T, E>` everywhere and no panics in library code; tests accompany
 functionality; public APIs documented with examples; no over-engineering or premature
-optimization (a goal in tension with 1–2; [§dd-dr:impl-design-principles] explains how the tension is resolved).
+optimization (a goal in tension with 1–2; the principles below resolve the tension).
 
 ---
 
-
-These heuristics resolved most individual decisions below. When facing a new design question,
-try these first.
+These heuristics resolve most individual decisions in the register. When facing a new design
+question, try these first.
 
 ## Data where values change at runtime; traits where behavior changes [§dd-dr:data-vs-traits]
 
-The single most load-bearing principle (July 2026). Anything a *state delta* may need to change
+The single most load-bearing principle. Anything a *state delta* may need to change
 mid-parse — delimiters, escape characters, enabled features, specials strings — must be plain
 data in the parsing state. A value behind a compile-time associated type cannot be changed by a
 runtime delta, so facet-traits for such values are structurally wrong, not merely inelegant.
 Traits are reserved for genuine behavior extension points: `TokenReader`, `ConstructParser`,
-`SpecLookup`, `SourceResolver`, `CallableSpec`.
+`SpecsProvider`, `SourceResolver`, `CallableSpec`.
 
 Litmus test for "should X be a trait?": *could two implementations differ in control flow, not
 just in the values they return?* If they only differ in values, X is data.
@@ -107,7 +127,7 @@ to write code with zero visible generics (ZST preset lang + type aliases).
 The engine knows nothing of math mode, `{`/`}`, `%`, or `\`. pylatexenc hard-codes
 `in_math_mode: bool` into its core `ParsingState`; techy deliberately does not — "math mode" is
 a preset-level state extension, `$…$` is just a configured group type, and mode-aware definition
-lookup happens because `SpecLookup` receives the full parsing state. Rationale: this is what
+lookup happens because `SpecsProvider` lookups receive the parsing state. Rationale: this is what
 makes the library a *toolkit for LaTeX-like languages* (and a viable FLM substrate) rather than
 a LaTeX parser with escape hatches.
 
@@ -118,7 +138,7 @@ it to a preset's `StateExt`, `NodeData`, or library definitions.
 
 The set of *structural shapes* (chars, group, callable invocation, comment, list) is a closed
 enum; extensibility lives in payloads (the two-tier ext system of `Lang::NodeExts` — no
-`Custom` variant; ARCHITECTURE.md Decision 3), specs (trait objects chosen at definition
+`Custom` variant; cf. [§dd-dr:flat-node-tree]), specs (trait objects chosen at definition
 time), and state extensions. Rationale: exhaustive pattern matching and serializability are
 user priorities; `Box<dyn Node>` + downcasting sacrifices both to gain a kind of openness
 nobody needs (new *structure* is rare; new *semantics* is common, and semantics attach to
@@ -142,7 +162,7 @@ group type, a spec) or as an explicit replacement of a well-defined component.
 
 ## Non-goals [§dd-dr:non-goals]
 
-Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 2026):
+Decided intentional limitations (PROPOSALS.md §4 gap analysis, in `dev-docs/archive/`):
 
 - **techy is not a TeX engine.** No catcode system, no macro expansion engine, no conditional
   (`\if…`) evaluation, no full primitive set. Target use cases are structural parsing for
