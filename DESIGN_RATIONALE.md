@@ -2448,6 +2448,85 @@ ParserLibraryParity.md). Key rulings and their reasons:
 interact badly with enclosing stop conditions in practice, or a preset's interior-state
 plug proves to need more context than the group rule/class provides.
 
+**The deferred parity parsers N2/N3/N4/N6 landed** — DECIDED (user, July 2026, N2–N6
+implementation session; full per-parser record in ParserLibraryParity.md, naming rows
+in NAMING_STRATEGY.md). The decisions and their reasons:
+- **N3 record shape — one `ParsedArgument`, structure inside** (the survey's flagged
+  question): per-embellishment-char `ParsedArgument` entries are structurally
+  unreachable — source order is free (`\op_{b}^{a}`) while `parse_declared_arguments`
+  runs one spec at a time in declaration order, so a `^`-spec already reported absent
+  could never be revisited; expressing xparse's per-char slots would need a
+  multi-record argument seam for this one consumer. Instead pylatexenc's shape: one
+  classless wrapper `Group` per matched pair (`GroupData::untyped`, open = marker,
+  close empty), content = the wrapper run, and by-marker access as a *read-side*
+  helper (`extract::split_embellishments`). Per-char access thus costs one helper
+  call, not an API change.
+- **N3 matching semantics** (user): noise before a marker, **nothing between marker
+  and expression** — the pair is atomic, and a violated pair (`\op^ {a}`, `\op^` at
+  EOF, a comment after the marker) rewinds *whole* and ends the run silently: a lone
+  marker char is ordinary content nearly everywhere, so a diagnostic would misfire on
+  legitimate input; the atomicity also keeps wrapper contents noise-free by
+  construction. Each marker at most once (xparse; pylatexenc's removal loop agrees);
+  **longest match** among available markers — a deliberate divergence from
+  pylatexenc, whose accumulate-until-equal check makes `'` permanently shadow `''`.
+  Markers are `Char`-token sequences: a specials-claimed spelling does not match
+  (state-dependent tokenization is the law — the latexlike `''` ligature outranks a
+  `'` marker in text mode, not in math mode where the ligature is invisible).
+- **N2 folds into the existing argument parsers** (the user's own `### PhF` note:
+  `Rules(Vec<…>)` supersedes the scalar `Rule`): `GroupArgumentParser::any_of` /
+  `OptionalGroupArgumentParser::any_of`, no new type — pylatexenc's separate
+  multi-delim class dissolves. The ported contents subtlety maps onto the
+  temporary-groups lifecycle as **two derivations** (shared `probe_minted_group`):
+  probe under all pairs as temporaries, contents under the matched pair only (single
+  configured rule: one derivation, the 7.7 path unchanged). Everything else falls out
+  of the existing machinery: nesting = same-rule descent keeps temporaries, brace
+  protection = other-rule descent strips them (at any depth — stronger than
+  pylatexenc, which mangles depth-two shapes), and the base state's own rules staying
+  live inside is the decided "stripping restores the language's own reading" rule.
+  Word codes `AnyDelimited`/`AnyDelimitedOptional` are **list-form-only** factory
+  elements (a compact string would read `A` as a code; pylatexenc too only spells
+  them as whole `arg_spec` strings).
+- **N4 `CharsGroupArgumentParser` — restriction is contents-only, math off is
+  data-driven, descent restores outer by default**: leading noise scans under the
+  outer state (which is why the parser exists rather than
+  `ArgumentSpec::parsing_state_delta` on a plain `m` argument — the spec delta covers
+  the probe too, so a pre-`{` comment would kill the match with comments off).
+  There is no math gate to switch: with nested groups on, the contents keep only
+  group rules *of the entered class* — math pairs are another class and drop away
+  purely data-driven; with nested groups off, `enable_groups` clears and the ungated
+  expected close still ends the group (verbatim-recipe precedent) — pylatexenc's
+  first-close-wins `enable_groups=False` behavior for free. Nested interiors restore
+  the outer, unrestricted state by default (user, the
+  `\cite{key:value,manual:{… \emph{Title} …}}` case: chars at level one, full
+  richness in braced values) — carried by the `ChildStateSpec` chars-except-groups
+  policy the child-state session anticipated; `with_restricted_descent` keeps
+  chars-only at depth. No argument code (pylatexenc has none; programmatic wiring).
+- **N6 `TackOnFieldsArgumentParser` — an ArgumentParser staging real `Callable`
+  nodes**: FLM's `label_arg` settles the integration (the tack-on parser is the
+  callable's *last declared argument*; attachment = the argument's region, zero
+  invocation-parser changes). Fields are configured `name → Arc<dyn CallableSpec>`
+  pairs plus a `callable_type`; recognition never consults the scope stack (the
+  decided no-`\label`-as-language-command reason survives), and dispatch routes
+  through `ParseDriver::make_invocation_parser` — so the staged field node
+  self-describes (spec, own `ParsedArguments`), frames and accessors work, and
+  pylatexenc's group-wrapper hack is dropped. Two byte-keeping divergences (user):
+  a repeated non-repeatable field is diagnosed (`RepeatedTackOnField`) **and kept**
+  (pylatexenc parses-and-discards, which would break the partition invariants), and
+  noise **between** fields is scanned as region noise (pylatexenc stops absorbing at
+  a comment; techy's noise-ownership doctrine says scan), with a failed probe
+  rewinding only its own scan. Multiplicity is per field
+  (`with_field`/`with_repeatable_field`) — multiple `\label`s after `\section` are a
+  legitimate, opt-in shape.
+- **Both run readers return `KeyVals`** (user): `split_embellishments` (marker key /
+  argument value) and `split_tack_on_fields` (field-name key / provided-argument
+  content value) reuse the keyval result type wholesale — duplicate-preserving source
+  order, last-wins `get`, `value_content` lone-group unwrap, `get_combined_with` —
+  via the shared `finish_keyvals` tail. A field invocation providing no argument
+  records no value (`None`), mirroring keyval's `draft` vs. `label=` distinction.
+*Revisit if:* a consumer needs per-embellishment diagnostics for dangling markers
+(`\op^` silently unmatching), or a field spec needs takeover-level access to the
+absorbing invocation (the configured spec sees only its own invocation).
+
 **`ParseDriver`: parse-driving behavior is a Lang-provided instance, not static hooks or
 session state** — DECIDED (user, July 2026, Phase 7 plan session).
 New core trait `ParseDriver<L>`, defaulted methods only (`StdParseDriver` = the trivial

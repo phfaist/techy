@@ -16,8 +16,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constructs::{
-    GroupArgumentParser, MarkerArgumentParser, OptionalGroupArgumentParser,
-    VerbatimArgumentParser,
+    EmbellishmentsArgumentParser, GroupArgumentParser, MarkerArgumentParser,
+    OptionalGroupArgumentParser, VerbatimArgumentParser,
 };
 use crate::spec::{ArgumentParser, ArgumentSpec};
 use crate::token::GroupRule;
@@ -123,11 +123,16 @@ impl core::error::Error for ArgumentCodeError {}
 /// | `d<c1><c2>` | optional group delimited by `<c1>`…`<c2>` — [`OptionalGroupArgumentParser`] |
 /// | `v` | delimited verbatim, auto-matched delimiter (`\verb`-style) — [`VerbatimArgumentParser`] |
 /// | `v<c1><c2>` | delimited verbatim with the prescribed delimiters — [`VerbatimArgumentParser`] |
+/// | `e{<chars>}` | embellishments: one marker per character, each followed immediately by an expression, any order, each at most once — [`EmbellishmentsArgumentParser`] |
+/// | `AnyDelimited` | mandatory group delimited by any of `{}` `[]` `()` `<>` (minted per use; contents keep only the matched pair) — [`GroupArgumentParser::any_of`] |
+/// | `AnyDelimitedOptional` | the optional flavor (lone inner `{…}` protects and unwraps, like `o`) — [`OptionalGroupArgumentParser::any_of`] |
 ///
 /// In list form the two `v` shapes need no disambiguation: `["v"]` is the
 /// auto-matched-delimiter form, `["v||"]` the prescribed one (the whitespace rule of
-/// the compact grammar lives with [`argument_specs_from_str`]). Codes deferred beyond
-/// Phase 7.7: `e{…}` (embellishments) and `AnyDelimited`.
+/// the compact grammar lives with [`argument_specs_from_str`]). The word codes
+/// `AnyDelimited`/`AnyDelimitedOptional` are **list-form only** — each is a whole
+/// element (pylatexenc uses them as whole `arg_spec` strings the same way); in a
+/// compact string they would read as an unknown code `A`.
 ///
 /// The argument specs carry no names and no per-argument state deltas — attach those
 /// via [`ArgumentSpec`]'s builders where needed (the factory is convenience, never a
@@ -165,6 +170,12 @@ where
 {
     let mut specs = Vec::new();
     for (index, code) in codes.into_iter().enumerate() {
+        // The word codes claim whole (trimmed) list elements before the
+        // character-code scan sees them.
+        if let Some(spec) = scan_word_code(code.as_ref().trim()) {
+            specs.push(spec);
+            continue;
+        }
         let mut chars = code.as_ref().char_indices().peekable();
         let spec = scan_code(&mut chars, Some(index))?
             .ok_or(ArgumentCodeError::EmptyCode { index })?;
@@ -174,6 +185,29 @@ where
         specs.push(spec);
     }
     Ok(specs)
+}
+
+/// Resolve a whole-element word code (`AnyDelimited` / `AnyDelimitedOptional`) —
+/// list-form only (see [`argument_specs`]).
+fn scan_word_code(code: &str) -> Option<Arc<ArgumentSpec<Latexlike>>> {
+    let parser: Arc<dyn ArgumentParser<Latexlike>> = match code {
+        "AnyDelimited" => Arc::new(GroupArgumentParser::any_of(any_delimited_rules())),
+        "AnyDelimitedOptional" => Arc::new(
+            OptionalGroupArgumentParser::any_of(any_delimited_rules())
+                .with_unwrap_lone_group(GroupType::Content),
+        ),
+        _ => return None,
+    };
+    Some(Arc::new(ArgumentSpec::new(parser)))
+}
+
+/// The default delimiter alternatives of the `AnyDelimited` codes (pylatexenc's
+/// list): `{}`, `[]`, `()`, `<>`, minted as content-class rules per use.
+fn any_delimited_rules() -> Vec<Arc<GroupRule<Latexlike>>> {
+    [('{', '}'), ('[', ']'), ('(', ')'), ('<', '>')]
+        .into_iter()
+        .map(|(open, close)| minted_rule(open, close))
+        .collect()
 }
 
 /// [`argument_specs`] from the compact form: all codes concatenated in one string
@@ -231,6 +265,28 @@ fn scan_code(
             let open = parameter(&mut *chars)?;
             let close = parameter(&mut *chars)?;
             Arc::new(optional_group_parser(open, close))
+        }
+        'e' => {
+            // `e{<chars>}`: the braces must follow immediately; one marker per
+            // character between them, at least one, no whitespace (whitespace
+            // separates codes; it cannot be a parameter).
+            if parameter(&mut *chars)? != '{' {
+                return Err(ArgumentCodeError::TruncatedCode { index, offset, code });
+            }
+            let mut markers: Vec<String> = Vec::new();
+            loop {
+                match chars.next() {
+                    Some((_, '}')) => break,
+                    Some((_, c)) if !c.is_whitespace() => markers.push(String::from(c)),
+                    _ => {
+                        return Err(ArgumentCodeError::TruncatedCode { index, offset, code })
+                    }
+                }
+            }
+            if markers.is_empty() {
+                return Err(ArgumentCodeError::TruncatedCode { index, offset, code });
+            }
+            Arc::new(EmbellishmentsArgumentParser::new(markers))
         }
         'v' => match chars.peek() {
             Some((_, c)) if !c.is_whitespace() => {
@@ -445,14 +501,14 @@ mod tests {
 
     // --- end-to-end through the preset (the stdarg port slice) ---------------------------
 
-    /// A language defining `\m` with the given argument codes.
+    /// A language defining `\m` with the given argument codes (a compact string, or a
+    /// single word code like `AnyDelimited`, which only the list form accepts).
     fn language(recovery: Recovery, codes: &str) -> Language<Latexlike> {
+        let specs = argument_specs_from_str(codes)
+            .or_else(|_| argument_specs([codes]))
+            .unwrap();
         let mut package = Package::new("factory-tests");
-        package.insert(
-            CallableType::Macro,
-            "m",
-            Arc::new(MacroSpec::new(argument_specs_from_str(codes).unwrap())),
-        );
+        package.insert(CallableType::Macro, "m", Arc::new(MacroSpec::new(specs)));
         Language::new(LatexlikeDriver::new(recovery))
             .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
             .unwrap()
@@ -597,6 +653,194 @@ mod tests {
         let result = parse_ok("d<>m", r"\m{x}");
         let m = macro_node(&result);
         assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+    }
+
+    #[test]
+    fn e_code_and_word_codes_resolve_to_their_parsers() {
+        let specs = argument_specs(["e{^_}", "AnyDelimited", " AnyDelimitedOptional "]).unwrap();
+        assert!(parser_debug(&specs[0]).contains("EmbellishmentsArgumentParser"));
+        assert!(parser_debug(&specs[0]).contains("markers: [\"^\", \"_\"]"));
+        assert!(parser_debug(&specs[1]).contains("GroupArgumentParser"));
+        assert!(parser_debug(&specs[1]).contains("rules"));
+        assert!(parser_debug(&specs[2]).contains("OptionalGroupArgumentParser"));
+
+        // `e{…}` also reads in the compact form; the word codes are list-form only.
+        let compact = argument_specs_from_str("me{^_}o").unwrap();
+        assert_eq!(compact.len(), 3);
+        assert!(parser_debug(&compact[1]).contains("EmbellishmentsArgumentParser"));
+        assert_eq!(
+            argument_specs_from_str("AnyDelimited").unwrap_err(),
+            ArgumentCodeError::UnknownCode { index: None, offset: 0, code: 'A' }
+        );
+
+        // Malformed `e` codes: missing braces, empty marker set, whitespace inside,
+        // unterminated set.
+        for bad in ["e", "ex", "e{}", "e{^", "e{^ _}"] {
+            assert_eq!(
+                argument_specs([bad]).unwrap_err(),
+                ArgumentCodeError::TruncatedCode { index: Some(0), offset: 0, code: 'e' },
+                "code {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn e_code_parses_embellishments_span_exactly() {
+        // pylatexenc test_arg_embelishments_1 (`e{_^`}` on `^{test}_x{more stuff}`,
+        // shifted by the `\m` trigger): one wrapper group per matched pair, the
+        // marker as its opening delimiter, the following `{more stuff}` untouched.
+        let result = parse_ok("e{_^`}", "\\m^{test}_x{more stuff} stuff");
+        let m = macro_node(&result);
+        assert_eq!(m.span().range(), 0..11);
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(content.len(), 2);
+
+        let sup = content[0];
+        assert_eq!(sup.group_delimiters(), Some(("^", "")));
+        assert_eq!(sup.group_type(), None); // classless synthesized wrapper
+        assert_eq!(sup.span().range(), 2..9);
+        let sup_value = sup.child(0).unwrap();
+        assert_eq!(sup_value.group_delimiters(), Some(("{", "}")));
+        assert_eq!(sup_value.span().range(), 3..9);
+        assert_eq!(sup_value.child(0).unwrap().chars(), Some("test"));
+
+        let sub = content[1];
+        assert_eq!(sub.group_delimiters(), Some(("_", "")));
+        assert_eq!(sub.span().range(), 9..11);
+        assert_eq!(sub.child(0).unwrap().chars(), Some("x"));
+
+        // The next group belongs to the enclosing content.
+        assert!(result.tree.root().child(1).unwrap().is_group());
+
+        // The extraction helper reads the run by marker.
+        let fields = crate::node::extract::split_embellishments(
+            m.argument_content_nodes(0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            crate::node::extract::content_as_chars(fields.get("^").unwrap().value_content().unwrap())
+                .unwrap(),
+            "test"
+        );
+        assert_eq!(
+            crate::node::extract::content_as_chars(fields.get("_").unwrap().value().unwrap())
+                .unwrap(),
+            "x"
+        );
+        assert!(fields.get("`").is_none());
+    }
+
+    #[test]
+    fn e_code_embellishments_match_in_any_order_each_at_most_once() {
+        // pylatexenc test_arg_embelishments_2: no marker at all — silently absent.
+        let result = parse_ok("e{_^}", r"\m more stuff");
+        let m = macro_node(&result);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+
+        // Any source order.
+        let result = parse_ok("e{^_}", r"\m_{b}^{a}");
+        let m = macro_node(&result);
+        let fields =
+            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+                .unwrap();
+        let keys: Vec<_> = fields.iter().map(|entry| entry.key().to_string()).collect();
+        assert_eq!(keys, ["_", "^"]);
+
+        // Each marker at most once: the second `^{b}` stays enclosing content.
+        let result = parse_ok("e{^_}", r"\m^{a}^{b}");
+        let m = macro_node(&result);
+        assert_eq!(m.span().range(), 0..6);
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(content.len(), 1);
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("^"));
+    }
+
+    #[test]
+    fn e_code_allows_noise_before_markers_but_not_after() {
+        // Noise ahead of each marker: whitespace and comments become region noise.
+        let result = parse_ok("e{^_}", "\\m %pre\n^{a} _{b}!");
+        let m = macro_node(&result);
+        let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
+        assert!(region.iter().any(|node| node.comment().is_some()));
+        let fields =
+            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+                .unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("!"));
+
+        // Marker + expression are atomic: whitespace after the marker unmatches it
+        // whole (silently — `^ {a}` is ordinary enclosing content)…
+        let result = parse_ok("e{^_}", r"\m^ {a}");
+        let m = macro_node(&result);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("^ "));
+        assert!(result.tree.root().child(2).unwrap().is_group());
+
+        // …and so does a comment after the marker.
+        let result = parse_ok("e{^_}", "\\m^%c\n{a}");
+        let m = macro_node(&result);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("^"));
+
+        // A committed pair before the violation stays: `_{b}` parses, the dangling
+        // `^` ends the run.
+        let result = parse_ok("e{^_}", r"\m_{b}^ {a}");
+        let m = macro_node(&result);
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].group_delimiters(), Some(("_", "")));
+    }
+
+    #[test]
+    fn any_delimited_code_takes_any_default_pair_and_narrows_the_contents() {
+        // pylatexenc test_arg_any_delimited_angleb.
+        let result = parse_ok("AnyDelimited", r"\m<delimited>more stuff");
+        let m = macro_node(&result);
+        assert_eq!(m.span().range(), 0..13);
+        let group = m.child(0).unwrap();
+        assert_eq!(group.group_delimiters(), Some(("<", ">")));
+        assert_eq!(group.group_type(), Some(GroupType::Content));
+        assert_eq!(content_chars(m, 0), "delimited");
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("more stuff"));
+
+        // Braces (a default pair and the base rule alike) still match…
+        let result = parse_ok("AnyDelimited", r"\m{x}");
+        assert_eq!(content_chars(macro_node(&result), 0), "x");
+
+        // pylatexenc test_multidelim_sg: inside `<…>`, braces protect a stray `>`…
+        let result = parse_ok("AnyDelimited", r"\m<Hello {there>}>");
+        let m = macro_node(&result);
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0].chars(), Some("Hello "));
+        assert_eq!(content[1].group_delimiters(), Some(("{", "}")));
+        assert_eq!(content[1].child(0).unwrap().chars(), Some("there>"));
+
+        // …and test_multidelim_sg2: the matched pair nests, the unmatched `]` is a
+        // plain character (the contents keep only the encountered pair).
+        let result = parse_ok("AnyDelimited", r"\m<Hello <there]>>");
+        let m = macro_node(&result);
+        let content: Vec<_> = m.argument_content_nodes(0).unwrap().iter().collect();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[1].group_delimiters(), Some(("<", ">")));
+        assert_eq!(content[1].child(0).unwrap().chars(), Some("there]"));
+    }
+
+    #[test]
+    fn any_delimited_mandatory_vs_optional() {
+        // pylatexenc test_multidelim_mandatory: no pair opens — diagnosed.
+        let err = language(Recovery::Strict, "AnyDelimited").parse(r"\m x").unwrap_err();
+        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+
+        // pylatexenc test_multidelim_optional: absent is silent.
+        let result = parse_ok("AnyDelimitedOptional", r"\m juice");
+        let m = macro_node(&result);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+
+        // The optional flavor unwraps a lone protective brace group, like `o`.
+        let result = parse_ok("AnyDelimitedOptional", r"\m[{a]b}]");
+        assert_eq!(content_chars(macro_node(&result), 0), "a]b");
     }
 
     #[test]

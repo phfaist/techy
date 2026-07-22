@@ -8,9 +8,10 @@
 //! - **Readers** take any node sequence (`impl IntoIterator<Item = NodeRef>`):
 //!   [`content_as_chars`].
 //! - **Builders** take a [`NodeSlice`] and return an owned result holding a new
-//!   [`NodeTree`]: [`split_at_chars`] (→ [`Split`]) and [`parse_keyval`] (→ [`KeyVals`]).
-//!   They need the slice's tree anchor (parsing state, source) even when the slice is
-//!   empty, which a bare iterator cannot provide.
+//!   [`NodeTree`]: [`split_at_chars`] (→ [`Split`]), [`parse_keyval`], and the
+//!   argument-run readers [`split_embellishments`] / [`split_tack_on_fields`]
+//!   (→ [`KeyVals`]). They need the slice's tree anchor (parsing state, source) even
+//!   when the slice is empty, which a bare iterator cannot provide.
 //!
 //! # Builders mint real trees (the 7.8 "builder route")
 //!
@@ -81,6 +82,14 @@ pub enum ExtractError {
     },
     /// The separator passed to [`split_at_chars`] was empty.
     EmptySeparator,
+    /// A run-shaped helper ([`split_embellishments`], [`split_tack_on_fields`]) met a
+    /// node that is neither skippable noise (whitespace-only chars, comments) nor an
+    /// entry of the shape it reads — the input was not the argument-content run the
+    /// helper is documented for.
+    UnexpectedContent {
+        /// The offending node, in the tree the input nodes came from.
+        node: NodeId,
+    },
     /// Building the result tree failed — the builder surfaced an implementation bug
     /// (e.g. a misbehaving [`Lang::finalize_node`] hook mutating copies into invalid
     /// shapes), never a source-input condition.
@@ -100,6 +109,9 @@ impl fmt::Display for ExtractError {
                 write!(f, "content cannot flatten to characters: node {:?} is neither chars, comment, nor group/list", node)
             }
             ExtractError::EmptySeparator => write!(f, "split separator must not be empty"),
+            ExtractError::UnexpectedContent { node } => {
+                write!(f, "unexpected content in the input run: node {:?} is neither noise nor an entry of the expected shape", node)
+            }
             ExtractError::Build(error) => write!(f, "building the result tree failed: {}", error),
         }
     }
@@ -521,8 +533,20 @@ pub fn parse_keyval<L: Lang>(nodes: NodeSlice<'_, L>) -> Result<KeyVals<L>, Extr
         entries.push((key.trim().into(), value));
     }
 
-    let root =
-        builder.add(NodeKind::list(), anchor_span, anchor_state, value_lists)?;
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
+}
+
+/// Assemble a [`KeyVals`] from staged value lists and a `(key, value-list index)`
+/// table — the shared tail of [`parse_keyval`], [`split_embellishments`], and
+/// [`split_tack_on_fields`].
+fn finish_keyvals<L: Lang>(
+    mut builder: NodeTreeBuilder<L>,
+    value_lists: Vec<BuildId>,
+    entries: Vec<(Box<str>, Option<usize>)>,
+    anchor_span: SourceSpan<L::SourceOrigin>,
+    anchor_state: Arc<ParsingState<L>>,
+) -> Result<KeyVals<L>, ExtractError> {
+    let root = builder.add(NodeKind::list(), anchor_span, anchor_state, value_lists)?;
     let tree = builder.finish(root)?;
     // The root's children are the staged value lists, in staging order.
     let value_ids: Vec<NodeId> = tree.root().children().iter().map(|list| list.id()).collect();
@@ -531,6 +555,108 @@ pub fn parse_keyval<L: Lang>(nodes: NodeSlice<'_, L>) -> Result<KeyVals<L>, Extr
         .map(|(key, value)| KeyValEntryData { key, value: value.map(|i| value_ids[i]) })
         .collect();
     Ok(KeyVals { tree, entries })
+}
+
+// --- split_embellishments / split_tack_on_fields ----------------------------------------
+
+/// Whether `node` is skippable run noise — a comment, or a whitespace-only chars node
+/// (the staged form of pre-entry whitespace in argument regions).
+fn is_run_noise<L: Lang>(node: &NodeRef<'_, L>) -> bool {
+    match node.kind() {
+        NodeKind::Comment { .. } => true,
+        NodeKind::Chars { .. } => node
+            .chars()
+            .is_some_and(|text| text.chars().all(char::is_whitespace)),
+        _ => false,
+    }
+}
+
+/// Read an embellishments argument's content run
+/// ([`EmbellishmentsArgumentParser`](crate::constructs::EmbellishmentsArgumentParser))
+/// as [`KeyVals`]: one entry per matched embellishment in source order, the **marker**
+/// as the key (the wrapper group's opening delimiter — `"^"`, `"_"`, …) and the
+/// embellishment's argument nodes as the value, noise-free. Noise between
+/// embellishments (whitespace, comments) is skipped; any node that is neither noise
+/// nor a group is [`ExtractError::UnexpectedContent`] — feed this helper the
+/// argument's *content* nodes ([`NodeRef::argument_content_nodes`]).
+///
+/// The [`KeyVals`] grammar fits embellishments exactly: duplicate keys preserved in
+/// order, [`get`](KeyVals::get) = last occurrence, and
+/// [`value_content`](KeyValEntry::value_content) unwraps the usual lone `{…}` value
+/// group (`^{ab}` → the `ab` content).
+pub fn split_embellishments<L: Lang>(
+    nodes: NodeSlice<'_, L>,
+) -> Result<KeyVals<L>, ExtractError> {
+    let (anchor_span, anchor_state) = anchor(&nodes);
+    let mut builder = NodeTreeBuilder::new();
+    let mut value_lists: Vec<BuildId> = Vec::new();
+    let mut entries: Vec<(Box<str>, Option<usize>)> = Vec::new();
+    for node in nodes.iter() {
+        if is_run_noise(&node) {
+            continue;
+        }
+        let Some((marker, _close)) = node.group_delimiters() else {
+            return Err(ExtractError::UnexpectedContent { node: node.id() });
+        };
+        let pieces: Vec<Piece<'_, L>> = node.children().iter().map(whole).collect();
+        value_lists.push(stage_segment_list(&mut builder, &pieces, &anchor_span, &anchor_state)?);
+        entries.push((Box::from(marker), Some(value_lists.len() - 1)));
+    }
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
+}
+
+/// Read a tack-on fields argument's content run
+/// ([`TackOnFieldsArgumentParser`](crate::constructs::TackOnFieldsArgumentParser)) as
+/// [`KeyVals`]: one entry per absorbed field invocation in source order, the field's
+/// **command name** as the key (`"label"`) and the invocation's argument content as
+/// the value, noise-free — the content nodes of every *provided* argument,
+/// concatenated in invocation order (for the dominant one-argument field shape:
+/// exactly that argument's content). A field invocation providing no argument at all
+/// (a zero-argument flag field, or every argument absent) records no value
+/// ([`KeyValEntry::value`] is `None`) — sharper than an explicitly empty `\label{}`,
+/// whose value is an empty slice, mirroring the keyval `draft` vs. `label=`
+/// distinction.
+///
+/// Noise between fields is skipped; any node that is neither noise nor a callable is
+/// [`ExtractError::UnexpectedContent`] — feed this helper the argument's *content*
+/// nodes ([`NodeRef::argument_content_nodes`]). Duplicate fields (repeatable `\label`s)
+/// are preserved in order; [`get`](KeyVals::get) answers with the last,
+/// [`get_combined_with`](KeyVals::get_combined_with) collects them all.
+pub fn split_tack_on_fields<L: Lang>(
+    nodes: NodeSlice<'_, L>,
+) -> Result<KeyVals<L>, ExtractError> {
+    let (anchor_span, anchor_state) = anchor(&nodes);
+    let mut builder = NodeTreeBuilder::new();
+    let mut value_lists: Vec<BuildId> = Vec::new();
+    let mut entries: Vec<(Box<str>, Option<usize>)> = Vec::new();
+    for node in nodes.iter() {
+        if is_run_noise(&node) {
+            continue;
+        }
+        let (Some(name), Some(arguments)) = (node.name(), node.arguments()) else {
+            return Err(ExtractError::UnexpectedContent { node: node.id() });
+        };
+        let mut pieces: Option<Vec<Piece<'_, L>>> = None;
+        for i in 0..arguments.len() {
+            if let Some(content) = node.argument_content_nodes(i) {
+                pieces.get_or_insert_with(Vec::new).extend(content.iter().map(whole));
+            }
+        }
+        let value = match pieces {
+            Some(pieces) => {
+                value_lists.push(stage_segment_list(
+                    &mut builder,
+                    &pieces,
+                    &anchor_span,
+                    &anchor_state,
+                )?);
+                Some(value_lists.len() - 1)
+            }
+            None => None,
+        };
+        entries.push((Box::from(name), value));
+    }
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
 }
 
 struct KeyValEntryData {
@@ -954,6 +1080,32 @@ mod tests {
         let keyvals = parse_keyval(tree.root().children()).unwrap();
         let combined = keyvals.get_combined_with("a", "").unwrap().unwrap();
         assert_eq!(texts(combined.root().children()), ["1", "2"]);
+    }
+
+    // --- split_embellishments / split_tack_on_fields ------------------------------------
+    // (The positive paths run end-to-end in the parser test modules,
+    // `constructs::embellishments_parser` / `constructs::tack_on_parser`.)
+
+    #[test]
+    fn run_readers_skip_noise_and_reject_unexpected_content() {
+        // Plain content is neither noise nor an entry of the expected shape.
+        let tree = parse("a{b}");
+        assert!(matches!(
+            split_embellishments(tree.root().children()),
+            Err(ExtractError::UnexpectedContent { .. })
+        ));
+        assert!(matches!(
+            split_tack_on_fields(tree.root().children()),
+            Err(ExtractError::UnexpectedContent { .. })
+        ));
+
+        // Empty input and pure noise (whitespace, comments) read as no entries.
+        let tree = parse("");
+        assert!(split_embellishments(tree.root().children()).unwrap().is_empty());
+        assert!(split_tack_on_fields(tree.root().children()).unwrap().is_empty());
+        let tree = parse(" %c\n ");
+        assert!(split_embellishments(tree.root().children()).unwrap().is_empty());
+        assert!(split_tack_on_fields(tree.root().children()).unwrap().is_empty());
     }
 
     #[test]

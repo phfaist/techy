@@ -1,9 +1,11 @@
 # Parser Library Parity — pylatexenc `latexnodes.parsers` vs techy `constructs`
 
-Status: survey settled July 2026 (parser-library survey session). Companion decision
-entry: DESIGN_RATIONALE.md §3.6 ("parser-library gap list"). Overlapping informal
-items in TODO_Big.md ("Parsers that are worth implementing", "Delimited Group Parser
-Helper Utility") are subsumed by the table below.
+Status: survey settled July 2026 (parser-library survey session); **all rows landed as
+of the N2–N6 implementation session (July 2026)** — no todo rows remain. Companion
+decision entries: DESIGN_RATIONALE.md §3.6 ("parser-library gap list" and the
+"deferred parsers N2/N3/N4/N6" landed entry). Overlapping informal items in
+TODO_Big.md ("Parsers that are worth implementing", "Delimited Group Parser Helper
+Utility") are subsumed by the table below.
 
 **Scope.** Loose parity, not exact: some pylatexenc construct parsers are better served
 by postprocessing parsed content or by composition of simpler parsers. Excluded from
@@ -33,22 +35,22 @@ embellishments, chars groups, …) **are** in scope.
 | `LatexDelimitedExpressionParser` + `…ParserInfo` | composition: `GroupParser` + minted `GroupRule` + `ChildStateSpec` | absorbed |
 | `LatexDelimitedExpressionParserOpeningDelimiterNotFound` | argument-probe protocol (`Ok(None)` + noise rewind) | absorbed |
 | `LatexDelimitedGroupParser` + `…ParserInfo` | `GroupParser` | implemented — interior-state plug settled by design, Phase 7 plan session [N1] |
-| `LatexDelimitedMultiDelimGroupParser` + `…ParserInfo` | — | todo [N2] |
+| `LatexDelimitedMultiDelimGroupParser` + `…ParserInfo` | `GroupArgumentParser::any_of` / `OptionalGroupArgumentParser::any_of` (multi-rule forms of the existing types) | implemented (July 2026) [N2] |
 | `LatexMathParser` | `Group` node under a preset math group class + parsing-mode delta | implemented (7.5 preset wiring: `LatexlikeDriver::group_interior_delta` + `Mode::Math` + `math_style()`; 7.9 acceptance: pylatexenc mathmode-suite parity incl. `\text`/`\mbox` text-mode resets) [N1] |
 | `LatexExpressionParser` | `ExpressionParser` | implemented |
 | `LatexOptionalSquareBracketsParser` | `OptionalGroupArgumentParser` | implemented |
-| `LatexOptionalCharsMarkerParser` | `MarkerArgumentParser` | implemented (single-marker case; full generality folds into [N3]) |
-| `LatexOptionalEmbellishmentArgsParser` | — | todo [N3] |
+| `LatexOptionalCharsMarkerParser` | `MarkerArgumentParser` (single literal marker) + `EmbellishmentsArgumentParser` (marker alternatives with followers) | implemented — the alternatives-without-follower slice deliberately not ported [N3] |
+| `LatexOptionalEmbellishmentArgsParser` | `EmbellishmentsArgumentParser` | implemented (July 2026) [N3] |
 | `LatexStandardArgumentParser`, `get_standard_argument_parser` | `ArgumentSpec` → `parse_declared_arguments` + standard `ArgumentParser`s; preset factory `latexlike::argument_specs` | implemented (excluded dispatch machinery; factory landed 7.7, deferred codes noted) [N8] |
-| `LatexCharsGroupParser` | — (`read_rigid_name_group` is a different role) | todo [N4] |
+| `LatexCharsGroupParser` | `CharsGroupArgumentParser` (`read_rigid_name_group` remains a different role) | implemented (July 2026) [N4] |
 | `LatexCharsCommaSeparatedListParser` | `node::extract::split_at_chars` (+ `parse_keyval`) | implemented (7.8) — postprocessing helpers, per pylatexenc's own recommendation [N5] |
-| `LatexTackOnInformationFieldMacrosParser` | — | todo — construct parser, decided [N6] |
+| `LatexTackOnInformationFieldMacrosParser` | `TackOnFieldsArgumentParser` | implemented (July 2026) — construct parser, per decision [N6] |
 | `LatexVerbatimBaseParser` | `verbatim_state_delta` (the recipe as data) | implemented (7.7) [N7] |
 | `LatexDelimitedVerbatimParser` | `VerbatimArgumentParser` | implemented (7.7) [N7] |
 | `LatexVerbatimEnvironmentContentsParser` | `VerbatimBodyParser` + preset `VerbatimBehavior` | implemented (7.7) [N7] |
 
-All techy type names for **todo** rows are placeholders pending a NAMING_STRATEGY.md
-review with the user.
+Type names user-reviewed July 2026 (N2–N6 session); NAMING_STRATEGY.md carries the
+rows.
 
 ## Notes
 
@@ -100,6 +102,21 @@ Likely argument-parser shaped (sibling of `OptionalGroupArgumentParser`, minting
 state recognizes the whole delimiter list, while the *contents* state keeps only the
 outer/default delimiters plus the pair actually encountered.
 
+**Implemented (July 2026)** by folding into the existing types, per the user's inline
+`### PhF` note (`Rules(Vec<…>)` supersedes the scalar `Rule`): `GroupArgumentParser`'s
+rule form now holds a rules list (`with_rule` = one-element sugar, the `r<c1><c2>`
+code unchanged; `any_of` = the multi-rule constructor, expression fallback off) and
+`OptionalGroupArgumentParser` gains the same `any_of`. The contents-state subtlety
+ports onto the temporary-groups lifecycle with two derivations (shared helper
+`probe_minted_group`): probe under temporaries = all configured pairs; contents under
+temporaries = the matched pair only (one shared derivation when a single rule is
+configured — the 7.7 behavior unchanged). The matched pair is recorded on the staged
+group node as always; brace protection comes out *stronger* than pylatexenc (the
+stripping reaches any depth). Codes `AnyDelimited`/`AnyDelimitedOptional` wired in
+`latexlike::argument_specs`, **list-form only** (whole elements; a compact string
+reads `A` as an unknown code — pylatexenc likewise only uses them as whole `arg_spec`
+strings); the optional flavor gets the `o`-code lone-brace-group unwrap.
+
 ### N3 — embellishment arguments parser (xparse `e{tokens}`-type)
 
 Decided (user): ready-made. pylatexenc composes `LatexOptionalEmbellishmentArgsParser`
@@ -109,6 +126,24 @@ techy's `MarkerArgumentParser` covers only the single-literal-marker `*` case, s
 todo carries the generalization: marker alternatives (e.g. `^`, `_`, `'`), each marker
 followed by an expression argument, repetition until no marker matches.
 
+**Implemented (July 2026)** as `EmbellishmentsArgumentParser`, with the record-shape
+question settled: **one `ParsedArgument`** for the whole position (per-marker entries
+cannot express free source order through sequential per-spec parsing), each matched
+pair staged as a classless wrapper `Group` (`GroupData::untyped`, open = the marker
+span-backed, close empty — pylatexenc's `(marker, '')` shape), content designation =
+the run of wrappers (interior noise included, leading noise excluded). Semantics
+(user): each marker at most once (xparse), **longest match** among available markers
+(diverging from pylatexenc's shortest-wins accumulate loop), multi-char markers
+contiguous, follower hardwired to the expression core, and **marker + expression
+atomic** — noise is allowed before a marker but nothing may stand between a marker
+and its expression; a violated pair rewinds whole and ends the run silently. Absent
+is silent (`can_match_empty` true). By-marker reading is
+`node::extract::split_embellishments` (a `KeyVals`: marker key, argument-nodes
+value). `MarkerArgumentParser` stays single-literal — the alternatives-without-
+follower slice of pylatexenc's generalized chars-marker parser has no consumer and
+was deliberately not ported. `max_num_args` dropped (the at-most-once rule bounds the
+run by the marker set).
+
 ### N4 — chars-group parser (node-staging)
 
 Decided (user; the role split is already recorded in DESIGN_RATIONALE.md §3.6): a
@@ -117,6 +152,20 @@ value-returning *scaffolding* (reconstructed, never recorded, §3.5) used by the
 `\begin` composition; this parser instead **stages parsed nodes** for `\label{…}`-style
 chars-only argument groups — a `{…}` group parsed under a restricted contents state
 (commands/environments/math/specials off; comments and nested groups optionally on).
+
+**Implemented (July 2026)** as `CharsGroupArgumentParser` (class-form opening,
+mandatory, no expression fallback; content = group children). The restriction is
+contents-only — leading noise scans under the outer state — and "math off" is
+**data-driven**: with nested groups on, the contents keep only the base state's group
+rules *of the entered class* (math pairs, being another class, drop away — no math
+gate exists in the core); with nested groups off, `enable_groups` clears and the
+ungated expected close still terminates (first close ends the group, pylatexenc's
+`enable_groups=False` behavior for free). Descent (user, the `\cite{…,manual:{…rich
+content…}}` case): nested group interiors **restore the outer state by default**
+(pylatexenc behavior, carried by the `ChildStateSpec` chars-except-groups policy);
+`with_restricted_descent` keeps the restriction at every depth instead. No argument
+code — pylatexenc has none either; the parser is wired programmatically into specs
+(and pairs naturally with N6's field specs).
 
 ### N5 — comma-separated chars list
 
@@ -153,6 +202,24 @@ Shape (mirroring pylatexenc): after a construct's declared arguments, absorb a
 specified set of trailing info-field macros — per-macro argument parsers (default: one
 expression), multiplicity policy per macro name — and attach the parsed fields to the
 construct's node.
+
+**Implemented (July 2026)** as `TackOnFieldsArgumentParser` — an `ArgumentParser`
+used as the callable's *last declared argument* (the FLM `label_arg` precedent), so
+attachment is the argument's region and no invocation-parser change was needed.
+Staged shape (user): **full `Callable` nodes**, not pylatexenc's
+`(\label, '')`-group wrapper — the parser is configured with a `callable_type` and
+per-name `Arc<dyn CallableSpec>`s (`with_field` / `with_repeatable_field`), and a
+recognized `Command` token dispatches through `ParseDriver::make_invocation_parser`
+with the configured spec, never touching the scope stack (decision reason 2 holds:
+`\label` need not exist as a language command; per-name argument structure is just
+the spec's `ArgumentSpec`s). Multiplicity is per field; a repeated non-repeatable
+field diagnoses `RepeatedTackOnField` and — tolerant — is **parsed and kept** in the
+region (diverging from pylatexenc's parse-and-discard: techy trees keep every byte).
+Noise **between fields** is scanned as region noise (user; diverging from
+pylatexenc, whose peek loop stops at a comment). Content designation = the run of
+field nodes (leading noise excluded); by-name reading is
+`node::extract::split_tack_on_fields` (a `KeyVals`: field name key, provided-argument
+content value; a field providing no argument records no value).
 
 ### N7 — verbatim family — **implemented (Phase 7.7)**
 
@@ -199,9 +266,9 @@ FLM's feature definitions):
 | `o` / `[` | `OptionalGroupArgumentParser` (+ lone-`{…}` unwrap) | implemented — factory wired 7.7 |
 | `s` / `*`, `t<char>` | `MarkerArgumentParser` | implemented — factory wired 7.7 (`t` = same parser, other marker char) |
 | `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser::with_rule` (7.7: the mandatory minted-rule form, no expression fallback by default — `with_expression_fallback` opts in, a techy extension; the same knob turned off on the class form is the other extension pylatexenc cannot spell) / `OptionalGroupArgumentParser` with per-use delimiters | implemented (7.7) — the second consumer of `TokenRules::temporary_groups` |
-| `e{<chars>}` | embellishment-args parser | todo [N3]; record shape to settle before implementing — one `ParsedArgument` per embellishment char vs. one structured entry |
+| `e{<chars>}` | `EmbellishmentsArgumentParser` | implemented (July 2026) — record shape settled: one `ParsedArgument`, wrapper groups inside [N3]; both factory forms (`e` + immediate `{…}`, no whitespace inside) |
 | `v` / `v<c1><c2>` | `VerbatimArgumentParser` | implemented (7.7) — `v` alone = autodetected delimiter; in a compact whole-spec string, `v` takes two delimiter chars exactly when directly followed by a non-whitespace char (`argument_specs_from_str`'s disambiguation rule; the list form needs none) |
-| `AnyDelimited` / `AnyDelimitedOptional` | multi-delim group parser | todo [N2] |
+| `AnyDelimited` / `AnyDelimitedOptional` | `GroupArgumentParser::any_of` / `OptionalGroupArgumentParser::any_of` (default pairs `{} [] () <>`, content class) | implemented (July 2026) — list-form-only word codes [N2] |
 
 Constructor knobs that do **not** carry over — the factory is deliberately thinner
 than the original: `return_full_node_list` (superseded by parser-designated
@@ -209,8 +276,8 @@ than the original: `return_full_node_list` (superseded by parser-designated
 whitespace as noise nodes), the single-token-error switch (emptiness surface).
 
 Landed 7.7 as `latexlike::argument_specs` (`Err(ArgumentCodeError)` on malformed
-codes); `e{…}` [N3] and `AnyDelimited` [N2] stay deferred beyond Phase 7 (plan
-session, July 2026 — Phase7Execution.md §1). Revised July 2026 (user): the primary
+codes); `e{…}` [N3] and `AnyDelimited` [N2], deferred beyond Phase 7 at the plan
+session, landed in the July 2026 N2–N6 session. Revised July 2026 (user): the primary
 signature takes one code string per argument (`argument_specs(["o", "m"])`); the
 compact concatenated form is the twin `argument_specs_from_str` — pylatexenc's spec
 database and FLM's feature definitions stay directly portable through it

@@ -33,11 +33,14 @@
 //! as data ([`StopCause`]) — nobody continues past an `Err`.
 
 mod argument_parsers;
+mod chars_group_parser;
 mod child_state;
+mod embellishments_parser;
 mod environment_parser;
 mod group_parser;
 mod invocation_parser;
 mod nodes_parser;
+mod tack_on_parser;
 mod verbatim_parser;
 
 pub use argument_parsers::{
@@ -45,7 +48,10 @@ pub use argument_parsers::{
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };
+pub use chars_group_parser::CharsGroupArgumentParser;
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
+pub use embellishments_parser::EmbellishmentsArgumentParser;
+pub use tack_on_parser::{RepeatedTackOnField, TackOnFieldsArgumentParser};
 pub use environment_parser::{
     read_rigid_name_group, EnvironmentBody, EnvironmentBodyParser,
     EnvironmentTerminatorMismatch, MalformedEnvironmentTerminator,

@@ -54,7 +54,7 @@ use crate::node::{
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
-use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::ChildStateSpec;
@@ -244,7 +244,7 @@ pub(super) fn stage<L: Lang>(
 /// - An after-effect delta returned by the invocation parser is **dropped**: an
 ///   argument scopes no state beyond its own extent, and
 ///   [`ArgumentParser::parse_argument`] deliberately has no delta channel.
-fn parse_expression_node<'s, L: Lang>(
+pub(super) fn parse_expression_node<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
     next: &Token<'s, L>,
     nodes: &mut Vec<BuildId>,
@@ -471,12 +471,18 @@ fn region_with_last_as_content(nodes: Vec<BuildId>) -> ParsedArgumentNodes {
 ///   content is the group's children. The delimiters come from the state's own group
 ///   rules (the language declares `{…}`); the parser is configured only with the group
 ///   **class** that counts as this argument's delimited form.
-/// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule); Phase 7.7, the
-///   `r<c1><c2>` argument code): the delimiters are **minted for the occasion** — the
-///   parser carries its own [`GroupRule`], installed as a temporary group rule for the
-///   argument's extent exactly like [`OptionalGroupArgumentParser`]'s (same nested-
-///   delimiter balancing, same brace protection — see that type's docs), just
-///   mandatory.
+/// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule) for one pair —
+///   Phase 7.7, the `r<c1><c2>` argument code — and
+///   [`any_of`](GroupArgumentParser::any_of) for several alternatives, pylatexenc's
+///   `LatexDelimitedMultiDelimGroupParser` / the `AnyDelimited` code): the delimiters
+///   are **minted for the occasion** — the parser carries its own [`GroupRule`]s,
+///   installed as temporary group rules for the argument's probe exactly like
+///   [`OptionalGroupArgumentParser`]'s (same nested-delimiter balancing, same brace
+///   protection — see that type's docs), just mandatory. With several alternatives,
+///   the **contents keep only the pair actually encountered** (the pylatexenc
+///   multi-delim subtlety; see the shared rule on [`OptionalGroupArgumentParser`]):
+///   inside `<…>` a stray `[` is an ordinary character, while `<…>` still nests and
+///   the pair that matched is recorded on the staged group node as always.
 ///
 /// Orthogonal to the form, the **single-expression fallback**
 /// ([`with_expression_fallback`](GroupArgumentParser::with_expression_fallback)): when
@@ -507,11 +513,12 @@ pub struct GroupArgumentParser<L: Lang> {
     expression_fallback: bool,
 }
 
-/// The two delimited forms of [`GroupArgumentParser`] (see the type docs).
+/// The two delimited forms of [`GroupArgumentParser`] (see the type docs). `Rules`
+/// holds one minted rule per acceptable delimiter pair (the resolved `### PhF` note:
+/// the list form supersedes a scalar `Rule` — one element is the `r<c1><c2>` case).
 enum GroupArgumentForm<L: Lang> {
     Class(L::GroupTypeId),
-    Rule(Arc<GroupRule<L>>),
-    // ### PhF -- we might need "Rules(Vec<Arc<GroupRule<L>>>)" as well, to enable AnyDelimited-style parsing of a group with any allowable delimiter (e.g. any of "(), [], <>, {}").   Actually, Rules() supersedes Rule() since we can construct it to contain only one rule.
+    Rules(Vec<Arc<GroupRule<L>>>),
 }
 
 impl<L: Lang> GroupArgumentParser<L> {
@@ -525,7 +532,20 @@ impl<L: Lang> GroupArgumentParser<L> {
     /// temporary group rule (e.g. `(`…`)` for an `r()` code), with the expression
     /// fallback off (pylatexenc's required-delimited — see the type docs).
     pub fn with_rule(rule: Arc<GroupRule<L>>) -> GroupArgumentParser<L> {
-        GroupArgumentParser { form: GroupArgumentForm::Rule(rule), expression_fallback: false }
+        GroupArgumentParser::any_of([rule])
+    }
+
+    /// A mandatory argument delimited by **any** of the given minted rules
+    /// (pylatexenc's `LatexDelimitedMultiDelimGroupParser`, the `AnyDelimited` code):
+    /// whichever pair opens at the position is the argument's delimiters; the contents
+    /// keep only that pair (see the type docs). Expression fallback off. Must be
+    /// non-empty; ties between same-spelling opens go to the first listed rule.
+    pub fn any_of(
+        rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
+    ) -> GroupArgumentParser<L> {
+        let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
+        debug_assert!(!rules.is_empty(), "a delimited argument needs at least one rule");
+        GroupArgumentParser { form: GroupArgumentForm::Rules(rules), expression_fallback: false }
     }
 
     /// Set the single-expression fallback (see the type docs; the constructor defaults
@@ -545,34 +565,18 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
         let mut noise = scan_argument_noise(cx)?;
 
         match &self.form {
-            // The rule form: probe with the minted rule in force (the temporary-rule
+            // The rule form: probe with the minted rules in force (the temporary-rule
             // state scoping of `OptionalGroupArgumentParser`, which see).
-            GroupArgumentForm::Rule(rule) => {
+            GroupArgumentForm::Rules(rules) => {
                 if noise.next.is_some() {
-                    let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-                        temporary_groups: Some(alloc::vec![Arc::clone(rule)]),
-                        ..TokenRulesOverrides::default()
-                    });
-                    let contents_state = cx.derived_state(&delta)?;
-                    let matched = match cx.probe_token(&contents_state)? {
-                        Some(token)
-                            if matches!(
-                                &token.kind,
-                                TokenKind::GroupOpen { rule: matched, .. }
-                                    if Arc::ptr_eq(matched, rule)
-                            ) =>
-                        {
-                            Some(token)
-                        }
-                        _ => None,
-                    };
-                    if let Some(open) = matched {
+                    if let Some(matched) = probe_minted_group(cx, rules)? {
+                        let MintedGroupMatch { open, rule, contents_state } = matched;
                         stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
                         cx.tokens.move_past(&open, true);
                         let (id, _delta) = cx.parse_group(
                             contents_state,
                             open.span,
-                            Arc::clone(rule),
+                            rule,
                             ChildStateSpec::inherit(),
                         )?;
                         let child_count = staged_child_count(cx, id);
@@ -628,7 +632,7 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
 
 /// The missing-mandatory recovery (§3.8): diagnostic at the blocking position
 /// (tolerant) or abort (strict); absent, nothing consumed.
-fn missing_mandatory<L: Lang>(
+pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     noise: ArgumentNoise<'_, L>,
     spec: &ArgumentSpec<L>,
@@ -653,15 +657,76 @@ fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32
     view.children().len() as u32
 }
 
+/// A successful minted-group probe ([`probe_minted_group`]): the unconsumed opening
+/// token, the rule that matched it, and the state the group's contents parse under.
+struct MintedGroupMatch<'s, L: Lang> {
+    open: Token<'s, L>,
+    rule: Arc<GroupRule<L>>,
+    contents_state: Arc<ParsingState<L>>,
+}
+
+/// The shared minted-delimiter probe of the rule-form argument parsers
+/// ([`GroupArgumentParser::any_of`], [`OptionalGroupArgumentParser`]): peek under a
+/// derived state with **all** of `rules` installed as temporary group rules, and
+/// report whether one of them opens right here (`Arc` identity — the delta supplied
+/// exactly these `Arc`s). Nothing is consumed either way.
+///
+/// On a match, the returned contents state keeps **only the pair actually
+/// encountered** as a temporary rule (the pylatexenc multi-delim subtlety: inside a
+/// matched `<…>`, an unmatched alternative like `[` reads as an ordinary character,
+/// while the base state's own rules stay live). With a single configured rule the
+/// probe state already *is* that state — one derivation, the Phase 7.7 single-rule
+/// behavior unchanged.
+fn probe_minted_group<'s, L: Lang>(
+    cx: &mut ParseContext<'_, 's, L>,
+    rules: &[Arc<GroupRule<L>>],
+) -> ConstructParserResult<L, Option<MintedGroupMatch<'s, L>>> {
+    let temporaries = |rules: Vec<Arc<GroupRule<L>>>| {
+        ParsingStateDelta::new().rules(TokenRulesOverrides {
+            temporary_groups: Some(rules),
+            ..TokenRulesOverrides::default()
+        })
+    };
+    let probe_state = cx.derived_state(&temporaries(rules.to_vec()))?;
+    let matched = match cx.probe_token(&probe_state)? {
+        Some(token) => {
+            let rule = match &token.kind {
+                TokenKind::GroupOpen { rule, .. }
+                    if rules.iter().any(|candidate| Arc::ptr_eq(rule, candidate)) =>
+                {
+                    Some(Arc::clone(rule))
+                }
+                _ => None,
+            };
+            rule.map(|rule| (token, rule))
+        }
+        None => None,
+    };
+    let Some((open, rule)) = matched else { return Ok(None) };
+    let contents_state = if rules.len() == 1 {
+        probe_state
+    } else {
+        cx.derived_state(&temporaries(alloc::vec![Arc::clone(&rule)]))?
+    };
+    Ok(Some(MintedGroupMatch { open, rule, contents_state }))
+}
+
 /// The standard optional-group argument parser (pylatexenc's `'['` shorthand as a core
-/// parser): the argument is provided exactly when its opening delimiter comes next
-/// (noise skipped), and absent otherwise — silently, consuming nothing.
+/// parser): the argument is provided exactly when one of its opening delimiters comes
+/// next (noise skipped), and absent otherwise — silently, consuming nothing.
 ///
 /// The delimiters are **minted for the occasion**: the parser carries its own
-/// [`GroupRule`] (say `[`…`]` under a preset's option class), installed as a
-/// **temporary group rule** ([`TokenRules::temporary_groups`]) in a derived state that
-/// scopes the argument's **whole extent** — the probing peek and the group's contents
-/// alike. Temporary rules win same-spelling ties, and the derivation choke point
+/// [`GroupRule`]s — one (say `[`…`]` under a preset's option class,
+/// [`new`](OptionalGroupArgumentParser::new)) or several alternatives
+/// ([`any_of`](OptionalGroupArgumentParser::any_of); pylatexenc's
+/// `LatexDelimitedMultiDelimGroupParser` with `optional=True`, the
+/// `AnyDelimitedOptional` code) — installed as **temporary group rules**
+/// ([`TokenRules::temporary_groups`]) in a derived state covering the probing peek.
+/// When the argument is present, the group's contents parse under a state keeping
+/// **only the pair actually encountered** (with one configured rule, the same state —
+/// the pylatexenc multi-delim contents subtlety comes for free; see
+/// [`GroupArgumentParser::any_of`]). Temporary rules win same-spelling ties, and the
+/// derivation choke point
 /// ([`ParsingState::derived`](crate::state::ParsingState::derived)) scopes their
 /// lifecycle (July 2026; supersedes the 6.5 [`ChildStateSpec`] wiring that translated
 /// pylatexenc's `make_child_parsing_state` and protected one bracket level only):
@@ -698,7 +763,7 @@ fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32
 /// [`ChildStateSpec`]: super::ChildStateSpec
 /// [`TokenRules::temporary_groups`]: crate::token::TokenRules::temporary_groups
 pub struct OptionalGroupArgumentParser<L: Lang> {
-    rule: Arc<GroupRule<L>>,
+    rules: Vec<Arc<GroupRule<L>>>,
     unwrap_lone_group: Option<L::GroupTypeId>,
 }
 
@@ -706,7 +771,18 @@ impl<L: Lang> OptionalGroupArgumentParser<L> {
     /// An optional argument delimited by `rule` (e.g. `[`…`]` under a preset's option
     /// class), with no protective-group unwrapping.
     pub fn new(rule: Arc<GroupRule<L>>) -> OptionalGroupArgumentParser<L> {
-        OptionalGroupArgumentParser { rule, unwrap_lone_group: None }
+        OptionalGroupArgumentParser::any_of([rule])
+    }
+
+    /// An optional argument delimited by **any** of the given minted rules (the
+    /// `AnyDelimitedOptional` code — see the type docs). Must be non-empty; ties
+    /// between same-spelling opens go to the first listed rule.
+    pub fn any_of(
+        rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
+    ) -> OptionalGroupArgumentParser<L> {
+        let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
+        debug_assert!(!rules.is_empty(), "a delimited argument needs at least one rule");
+        OptionalGroupArgumentParser { rules, unwrap_lone_group: None }
     }
 
     /// Designate the children of a lone child group of class `group_type` as the
@@ -729,34 +805,17 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             return Ok(None);
         };
 
-        // The state with the minted rule in force — used for the probing peek and,
-        // when the argument is present, for the group's contents (type docs). It is a
-        // *temporary* group rule: it wins same-spelling ties (temporaries precede
-        // `groups` in the prefix table), and the derivation choke point scopes its
-        // lifecycle — kept through descents into its own group (nested brackets
-        // balance), stripped at the first descent into any other group (brace
-        // protection, at any depth). `Arc` identity of the matched rule is the match
-        // criterion — the delta supplied exactly this `Arc`.
-        let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            temporary_groups: Some(alloc::vec![Arc::clone(&self.rule)]),
-            ..TokenRulesOverrides::default()
-        });
-        let contents_state = cx.derived_state(&delta)?;
-        let matched = match cx.probe_token(&contents_state)? {
-            Some(token)
-                if matches!(
-                    &token.kind,
-                    TokenKind::GroupOpen { rule, .. } if Arc::ptr_eq(rule, &self.rule)
-                ) =>
-            {
-                Some(token)
-            }
-            _ => None,
-        };
-        let Some(open) = matched else {
+        // The minted rules are *temporary* group rules: they win same-spelling ties
+        // (temporaries precede `groups` in the prefix table), and the derivation choke
+        // point scopes their lifecycle — kept through descents into the matched rule's
+        // own group (nested brackets balance), stripped at the first descent into any
+        // other group (brace protection, at any depth). The probe/contents state pair
+        // is the shared helper's (`probe_minted_group`, which see).
+        let Some(matched) = probe_minted_group(cx, &self.rules)? else {
             noise.rewind(cx);
             return Ok(None);
         };
+        let MintedGroupMatch { open, rule, contents_state } = matched;
 
         stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
         cx.tokens.move_past(&open, true);
@@ -767,7 +826,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
         let (id, _delta) = cx.parse_group(
             contents_state,
             open.span,
-            Arc::clone(&self.rule),
+            rule,
             ChildStateSpec::inherit(),
         )?;
 
@@ -875,7 +934,7 @@ impl<L: Lang> fmt::Debug for GroupArgumentParser<L> {
         let mut s = f.debug_struct("GroupArgumentParser");
         match &self.form {
             GroupArgumentForm::Class(group_type) => s.field("group_type", group_type),
-            GroupArgumentForm::Rule(rule) => s.field("rule", rule),
+            GroupArgumentForm::Rules(rules) => s.field("rules", rules),
         };
         s.finish()
     }
@@ -884,7 +943,7 @@ impl<L: Lang> fmt::Debug for GroupArgumentParser<L> {
 impl<L: Lang> fmt::Debug for OptionalGroupArgumentParser<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OptionalGroupArgumentParser")
-            .field("rule", &self.rule)
+            .field("rules", &self.rules)
             .field("unwrap_lone_group", &self.unwrap_lone_group)
             .finish()
     }
@@ -2086,5 +2145,100 @@ mod tests {
             diagnostic.identifier(),
             ExpressionCallableRequiresContent::IDENTIFIER
         );
+    }
+
+    // --- the multi-rule (any_of) form -----------------------------------------------------
+
+    const GT_ANGLE: u32 = 4;
+
+    fn angle_rule() -> Arc<GroupRule<ArgLang>> {
+        Arc::new(GroupRule { group_type: GT_ANGLE, open: "<".into(), close: ">".into() })
+    }
+
+    fn any_of_arg() -> Arc<ArgumentSpec<ArgLang>> {
+        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::any_of([
+            paren_rule(),
+            angle_rule(),
+            option_rule(),
+        ]))))
+    }
+
+    #[test]
+    fn any_of_matches_any_listed_pair_and_records_it() {
+        // Multi-rule probing is state-dependent: StdTokenReader only.
+        let st = state_with(&[("m", vec![any_of_arg()])]);
+
+        let parsed = parse_std(r"\m(a) x", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        let group = m.child(0).unwrap();
+        assert_eq!(group.group_delimiters(), Some(("(", ")")));
+        assert_eq!(group.group_type(), Some(GT_PAREN));
+        assert_eq!(content_of(m, 0)[0].chars(), Some("a"));
+
+        let parsed = parse_std(r"\m<a> x", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert_eq!(m.child(0).unwrap().group_delimiters(), Some(("<", ">")));
+        assert_eq!(m.child(0).unwrap().group_type(), Some(GT_ANGLE));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn any_of_contents_keep_only_the_matched_pair() {
+        let st = state_with(&[("m", vec![any_of_arg()])]);
+
+        // The unmatched alternatives are ordinary characters inside (the pylatexenc
+        // multi-delim contents subtlety): one chars run, no nested groups.
+        let parsed = parse_std(r"\m<a[b(c>", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        let content = content_of(m, 0);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].chars(), Some("a[b(c"));
+
+        // The matched pair still nests…
+        let parsed = parse_std(r"\m<a<b>c>", &st, Recovery::Strict);
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[1].group_delimiters(), Some(("<", ">")));
+
+        // …and the base state's braces protect the closer at any depth (the stray
+        // `>` reads as a plain character inside `{…}`).
+        let parsed = parse_std(r"\m<a{b>}c>", &st, Recovery::Strict);
+        let content = content_of(root_child(&parsed, 0), 0);
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[1].group_delimiters(), Some(("{", "}")));
+        assert_eq!(content[1].child(0).unwrap().chars(), Some("b>"));
+        assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn any_of_missing_is_diagnosed_with_nothing_consumed() {
+        let st = state_with(&[("m", vec![any_of_arg()])]);
+        let parsed = parse_std(r"\m x", &st, Recovery::Tolerant);
+        let m = root_child(&parsed, 0);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), MissingMandatoryArgument::IDENTIFIER);
+    }
+
+    #[test]
+    fn optional_any_of_matches_listed_pairs_and_stays_silent_otherwise() {
+        let optional_any: Arc<ArgumentSpec<ArgLang>> = Arc::new(ArgumentSpec::new(
+            Arc::new(OptionalGroupArgumentParser::any_of([option_rule(), angle_rule()])),
+        ));
+        let st = state_with(&[("m", vec![optional_any])]);
+
+        let parsed = parse_std(r"\m<x>", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert!(m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(m.child(0).unwrap().group_delimiters(), Some(("<", ">")));
+
+        // `(` is not among the alternatives: absent, silent, nothing consumed.
+        let parsed = parse_std(r"\m(x)", &st, Recovery::Strict);
+        let m = root_child(&parsed, 0);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(root_child(&parsed, 1).chars(), Some("(x)"));
+        assert!(parsed.result.diagnostics.is_empty());
     }
 }
