@@ -112,10 +112,6 @@ pub mod __private {
     pub use alloc::vec::Vec;
 }
 
-// The remaining module of the previous exploratory implementation (`parser`) is kept in
-// the tree as a quarry but is not compiled; it is rebuilt phase-by-phase per
-// ARCHITECTURE.md §9 (superseded quarry files are kept alongside the new modules as
-// `*_JUNK._rs`).
 
 // Re-export the public API of the implemented topics.
 pub use constructs::{

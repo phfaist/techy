@@ -51,8 +51,6 @@ cargo test <name>    # Specific test
 - [ARCHITECTURE.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
 - [DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
 
-- [Phase7Execution.md] - Detailed plan and recorded progress during execution of the sub-phases of Phase 7 of our Architecture plan.  (Phase 6's record is archived at dev-docs/archive/Phase6Execution.md.)
-
 If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.  Overall, we should try to achieve more or less parity with pylatexenc's capabilities on the features we are planning to implement, while taking advantage of the opportunity to improve on some bugs and quicks of pylatexenc.
 
 ## Design Philosophy

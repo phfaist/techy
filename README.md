@@ -40,7 +40,7 @@ The parser follows a three-stage pipeline:
 - **Tokens**: Basic lexical units (macros, braces, text, etc.)
 - **Nodes**: AST elements representing LaTeX constructs
 - **Specs**: Definitions for how to parse macros and environments
-- **Context**: Database of known LaTeX constructs  [NOTE: "Context" Likely to be renamed]
+- **Scopes/Packages**: Database of known LaTeX constructs
 - **State**: Tracks parsing context (math mode, etc.)
 
 ## Usage Examples
@@ -54,7 +54,6 @@ The parser follows a three-stage pipeline:
 - **`parser`**: Parser implementations
 - **`spec`**: Macro/environment specifications
 - **`state`**: Parsing state management
-- **`walker`**: High-level parsing API
 - **`error`**: Error types
 
 To build HTML documentation:
