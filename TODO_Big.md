@@ -22,3 +22,6 @@
 - Delimited Group Parser Helper Utility! (Expand GroupParser [src/constructs/group_parser.rs] or new class? Unclear to me) Optional argument, auto delimiter detection, group/content/child parsing states, not necessarily group token types, ...
 
 - Parsers that are worth implementing: verbatim, trailing-macro-information (TackOnMacro...), [maybe not CommaChars... -> parse argument content instead]
+
+
+- Have driver/lang be able to specify what expression parser to use when we ask for mandatory args?  E.g. mandatory arg, embellishment arg, + other places we seek an expression? Study this possibility.
