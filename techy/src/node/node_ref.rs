@@ -1,5 +1,7 @@
 //! [`NodeRef`]: the copyable read proxy over a [`NodeTree`]'s flat storage.
 
+use alloc::format;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use core::fmt;
 
@@ -80,6 +82,34 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// The parsing state this node was parsed under.
     pub fn parsing_state(&self) -> &'t Arc<ParsingState<L>> {
         &self.data().parsing_state
+    }
+
+    /// A compact one-line description of the node — `chars(ab )`, `group(Math $ $)`,
+    /// `Macro(emph)`, `comment( note)`, `list(3)` — the assertion/logging companion
+    /// to the verbose `Debug` rendering (promoted from the preset's test support,
+    /// Phase 7.9). Groups print their class (`?` when classless) and recorded
+    /// delimiters; callables print their invocation form (`Debug`) and spelling;
+    /// chars/comments print their full logical text; lists print their child count.
+    ///
+    /// The format is human-oriented and **not a stability contract** — compare trees
+    /// structurally (kinds, spans, accessors) where exactness matters beyond a test's
+    /// lifetime.
+    pub fn summary(&self) -> String {
+        if let Some(text) = self.chars() {
+            format!("chars({text})")
+        } else if self.is_group() {
+            let class = self
+                .group_type()
+                .map_or_else(|| "?".to_string(), |group_type| format!("{group_type:?}"));
+            let (open, close) = self.group_delimiters().unwrap_or(("", ""));
+            format!("group({class} {open} {close})")
+        } else if let Some(data) = self.callable() {
+            format!("{:?}({})", data.callable_type, data.name)
+        } else if let Some(text) = self.comment() {
+            format!("comment({text})")
+        } else {
+            format!("list({})", self.child_count())
+        }
     }
 
     /// The content of this node's own source (what `TextContent::Spanned` resolves

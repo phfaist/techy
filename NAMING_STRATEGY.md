@@ -73,6 +73,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Compile-time type bundle | `Lang` (trait) | one generic parameter everywhere: `L: Lang` |
 | Runtime config bundle | `Language<L>` | "define a language once, parse many documents" |
 | High-level entry point | `Language::parse()` | a convenience `Parser` struct on top is a deferred bikeshed |
+| Seed-provider sugar | `Language::with_provider` | 7.9 promotion from preset test support: `with_seed_delta(push_provider(…))` as one call; fallible like the derive path underneath |
 | Parse session / result | `ParserSession`, `ParseResult` | session is transient; `finish()` freezes |
 | Parsing state | `ParsingState<L>` over private `StateData<L>` | getters are the public surface |
 | Tokenization data | `TokenRules` | plain stored data inside `StateData` |
@@ -125,6 +126,7 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Sibling-run view | `NodeSlice<'t, L>` (+ `NodeSliceIter`) | 7.8: the node-list currency — `Copy` view `{tree, range}` returned by `children()` and the region/content accessors; exact `span()`/`source_text()` (partition invariant), `None` for empty/mixed-source runs. Over `NodeRun`/`Siblings`; "List" excluded (collides with `NodeKind::List`) |
 | By-name argument/slot access | `argument_nodes_named` / `argument_content_nodes_named` / `slot_content_nodes_named` | plain `_named` suffixes beside the index twins (7.8; user choice — no polymorphic key type) |
 | Document-order walk | `NodeRef::descendants()`, `NodeTree::descendants()` → `Descendants` | preorder DFS, self excluded; the deliberate contrast to `iter_storage_order` (7.8) |
+| Compact node description | `NodeRef::summary()` | 7.9 promotion from preset test support (`chars(ab)` / `Macro(emph)` / …); "summary" over "shape" — the phase docs use "shape" for *tree* structure, and the string includes content text; format documented as human-oriented, not a stability contract |
 | Extraction helpers | `node::extract`: `content_as_chars`, `split_at_chars` → `Split` (`segment(i)`/`segments()`), `parse_keyval` → `KeyVals` (`keyval(i)`/`get`/`get_combined_with`) with `KeyValEntry` (`value`/`value_content`), `ExtractError` | 7.8: free functions, not core methods (user); result wrappers own minted trees privately, primary access returns `NodeSlice` views; strict `Result`s (read-time, no tolerance mode) |
 | Symbol enumeration | `SpecsProvider::iter_symbols(callable_type, mode)`, `ScopeStack::iter_symbols` → `SymbolEntry` | 7.8: required type filter (user; specials rows enumerate under their recorded type, trigger spelling as name); `None` = not enumerable; stack dedup = first-visible-wins innermost-first |
 | Enumerable vocabulary | `ClosedVocabulary` (`const ALL`) | 7.8: opt-in tooling bound making "closed per language" statically listable; deliberately not a `Lang` bound (`SimpleLang`'s `u32` ids have no value list); preset implements for all three vocabularies |
@@ -150,6 +152,13 @@ the core has only the associated types (user-decided, 7.5 checkpoint):
 - `LatexlikeDriver` — the preset's `ParseDriver` (scope-stack `resolve_command`, the
   math-mode `group_interior_delta` plug; landed 7.5 — package-loading helper methods
   wait for a package registry).
+- `ParagraphBreakStyle` (`Chars` / `Specials`; `#[non_exhaustive]`, `#[default]
+  Chars`) + `LatexlikeDriver::with_paragraph_break_style` — the paragraph-break
+  emission flag (7.9, user-decided): a two-variant enum over the sketched boolean
+  `with_emit_specials_for_paragraph_breaks()` — names the concept, reads at call
+  sites, leaves room for future styles. The `Specials` node's name is the canonical
+  `"\n\n"` (a vocabulary key like `"~"`; no named constant — it is preset vocabulary,
+  not configuration).
 - `GroupType` (`Content` / `Math` / `Verbatim`) — group classes. A *single* math class:
   inline vs. display is a delimiter fact, read by the `NodeRef::math_style()` sugar →
   `MathStyle` (`Inline` / `Display`). No `Bracket` class: `[]` is not a default group

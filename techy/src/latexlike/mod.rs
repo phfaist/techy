@@ -53,7 +53,7 @@ mod spec;
 mod test_support;
 
 pub use arguments::{argument_specs, ArgumentCodeError};
-pub use driver::LatexlikeDriver;
+pub use driver::{LatexlikeDriver, ParagraphBreakStyle};
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
@@ -318,9 +318,7 @@ pub fn base_package() -> Package<Latexlike> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::test_support::{
-        macro_package, parse_shapes, root_shapes, shape, strict, tolerant, with_provider,
-    };
+    use super::test_support::{macro_package, parse_shapes, root_shapes, strict, tolerant};
     use crate::engine::Language;
     use crate::error::Severity;
     use crate::node::check_tree_invariants;
@@ -383,6 +381,29 @@ mod tests {
             parse_shapes("a\n\nb"),
             ["chars(a)", "chars(\n\n)", "chars(b)"]
         );
+    }
+
+    #[test]
+    fn paragraph_breaks_can_emit_specials_nodes() {
+        // ParagraphBreakStyle::Specials (7.9): pylatexenc-modern's paragraph shape —
+        // a Specials-formed callable named "\n\n".
+        let language = Language::new(
+            LatexlikeDriver::default().with_paragraph_break_style(ParagraphBreakStyle::Specials),
+        );
+        let result = language.parse("a\n\nb").unwrap();
+        check_tree_invariants(&result.tree);
+        assert_eq!(root_shapes(&result), ["chars(a)", "Specials(\n\n)", "chars(b)"]);
+        let break_node = result.tree.root().child(1).unwrap();
+        assert_eq!(break_node.specials_name(), Some("\n\n"));
+        assert_eq!(break_node.span().range(), 1..3);
+
+        // The name is canonical "\n\n" (the vocabulary key); the span covers the
+        // actual whitespace run of the break token.
+        let result = language.parse("a\n \t\nb").unwrap();
+        check_tree_invariants(&result.tree);
+        let break_node = result.tree.root().child(1).unwrap();
+        assert_eq!(break_node.specials_name(), Some("\n\n"));
+        assert_eq!(break_node.span().content(), "\n \t\n");
     }
 
     // --- math modes -------------------------------------------------------------------
@@ -466,7 +487,7 @@ mod tests {
     /// `"alphapkg"`, optionally math-only (package-level visibility).
     fn with_alpha(language: Language<Latexlike>, math_only: bool) -> Language<Latexlike> {
         let modes = math_only.then(|| vec![Mode::Math]);
-        with_provider(language, macro_package("alphapkg", "alpha", modes))
+        language.with_provider(Arc::new(macro_package("alphapkg", "alpha", modes))).unwrap()
     }
 
     #[test]
@@ -484,7 +505,7 @@ mod tests {
         // Inside math: the package is visible, `\alpha` resolves.
         let math = language.parse(r"$\alpha$").unwrap();
         let group = math.tree.root().child(0).unwrap();
-        assert_eq!(shape(group.child(0).unwrap()), "Macro(alpha)");
+        assert_eq!(group.child(0).unwrap().summary(), "Macro(alpha)");
         assert!(math.diagnostics.is_empty());
 
         // In text mode the package answers "not here": unresolvable, recovered as
@@ -563,7 +584,8 @@ mod tests {
         check_tree_invariants(&result.tree);
         let math = result.tree.root().child(0).unwrap();
         assert_eq!(math.group_type(), Some(GroupType::Math));
-        let interior: Vec<String> = math.children().iter().map(shape).collect();
+        let interior: Vec<String> =
+            math.children().iter().map(|node| node.summary()).collect();
         assert_eq!(interior, ["chars(a)", "Specials(~)", "chars(b---c)"]);
 
         // In text mode the same ligature fires as before.

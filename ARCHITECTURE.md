@@ -1253,6 +1253,11 @@ hardcoded `TokenRules` value).
   behavior tests. **Deferred out of Phase 7:** the std spec-database port, parse-level
   `\newcommand`, `^`/`_` specials, `\global` definitions.
   DESIGN_RATIONALE §3.3/§3.4/§3.6.
+  — ✅ done, July 2026 (subphase record: Phase7Execution.md §5; exits with the 7.9
+  acceptance suite — the ported walker slice green in both recovery modes with
+  `check_tree_invariants` on every parse — plus the `docs/learn-by-example.md` guide
+  chapter. The §6.7 per-invocation-`Box` micro-benchmark obligation remains open,
+  unscheduled.)
 - **Phase 8 — FLM spike.** Minimal `Flm` lang in a scratch crate exercising: custom `StateExt`,
   custom node payloads, custom invocation parser, resolver, post-processing traversal. This
   validates goal 3 before FLM proper begins.

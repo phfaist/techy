@@ -1593,6 +1593,19 @@ covering-span *helper* recomputing spans best-effort (user: return types must ca
 them); `indexmap`-style ordered-map dependency for keyval; keyval aggregation knobs
 (strictly less information than duplicate-preserving entries).
 
+**`NodeRef::summary()`: the compact node description is core API** — DECIDED (user,
+July 2026, Phase 7.9 session).
+A one-line rendering per node — `chars(ab )`, `group(Math $ $)`, `Macro(emph)`,
+`comment( note)`, `list(3)` — promoted from the preset's `test_support` under 7.9's
+dedup mandate: it uses core accessors only (the id types are `Debug`-bounded), so it
+is Lang-generic and serves any embedder's tests, logs, and the guide. The format is
+documented as human-oriented and **not a stability contract**; structural comparison
+(kinds, spans, accessors) remains the exactness tool.
+*Rejected:* a `Display`-adapter type (the `SearchedProviders` pattern) — heavier API
+surface for a test/log utility whose callers want `String` in assertions anyway;
+leaving it duplicated test-side (the 7.9 suite, the preset tests, and the guide would
+carry three copies of the same formatter).
+
 ### 3.6 Construct parsers, dispatch, engine
 
 **Single-context parsing API (`ParseContext`)** — PROPOSED (July 2026).
@@ -2583,6 +2596,35 @@ state" includes the **diagnosis**, not just the resume — `ParseDriver::recover
 at a stop position — it must thread `outcome.state` the same way, not its own copy
 of the entry state.)*
 
+*(Amended July 2026, Phase 7.9 acceptance: the skip's remaining quirk — the consumed
+delimiter's bytes were dropped from the tree, the 7.4 "accepted tolerant
+byte-accounting break" — fell to the acceptance suite's invariant gate on its first
+real document: any tolerant root recovery (direct, or reached through an
+environment-body unwind, as in the ported pylatexenc `test_errors` document)
+produced a tree failing `check_tree_invariants`' partition check, colliding with the
+phase-exit criterion "invariants clean on every acceptance parse". The skip now
+**stages the consumed delimiter as a `Chars` node** under the loop's evolved state —
+the markup-in-chars recovery artifact every other tolerant recovery already produces
+(orphan `\end`, malformed `\begin`, forbidden characters) — so the root partition
+holds across skips. Exempting recovered parses from the invariant was rejected: the
+partition is the byte-accounting contract exactness consumers (`NodeSlice::span`)
+build on, and a "recovered trees are less true" carve-out would silently spread to
+every downstream walker.)*
+
+**`Language::with_provider`: push-a-provider seed sugar** — DECIDED (user, July 2026,
+Phase 7.9 session).
+The dominant seed customization — "define a package, add it to the language" — gets a
+first-class spelling: `with_provider(provider)` ≡
+`with_seed_delta(ParsingStateDelta::new().push_provider(provider))`, fallible like the
+derive path underneath. Promoted from the preset's `test_support` under 7.9's dedup
+mandate (genuinely multi-purpose helper code becomes public API instead of being
+duplicated into the integration-test crate).
+*Rationale:* the delta spelling buries the everyday operation under two concepts
+(delta + scope op); every guide example and suite fixture reads better as one call.
+*Rejected:* an infallible signature via `expect` ("Push cannot fail today") — fragile
+against future push semantics and against whatever `finalize_transition` does in the
+derivation; the `Result` mirrors `with_seed_delta` honestly.
+
 ### 3.7 Generics strategy
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
@@ -3406,6 +3448,50 @@ contrast — delimited form: the group's *children* (delimiters are argument syn
 `ExpressionParser` and the fallback: the expression *node* itself, delimiters included
 — is now documented on both parser types (it was previously only implicit in §3.5 and
 the parity table).
+
+**Paragraph-break emission is a driver flag: `ParagraphBreakStyle` on
+`LatexlikeDriver`** — DECIDED (user, July 2026, Phase 7.9 session).
+`with_paragraph_break_style`: `Chars` (default — the core hook's whitespace-chars
+shape, pylatexenc-legacy's) or `Specials` (pylatexenc-modern's shape — a
+`Specials`-formed callable named by the **canonical** `"\n\n"` vocabulary key, its
+span covering the actual whitespace run, its argument-less `SpecialsSpec` minted per
+break). Node-level only: the token stays `ParagraphBreak`, and the emitted name lives
+in no provider, so it is invisible to `iter_symbols` enumeration.
+*Rationale:* (user) paragraph breaks are special enough to warrant a dedicated driver
+flag; correlating the shape with package contents would be error-prone and
+counterintuitive — and factually dead configuration: the tokenizer detects paragraph
+breaks within leading whitespace, *before* the specials scan can run, so a
+package-registered `"\n\n"` specials entry could never fire.
+*Rejected:* probing the scope stack for a `"\n\n"` entry inside
+`make_paragraph_break_node` (the first sketch — package-correlated behavior, plus a
+swallowed `ProviderError` in a hook with no diagnostic channel); reordering the
+tokenizer's detection priority (specials before paragraph breaks) — tangles
+whitespace skipping for one preset feature; caching the spec `Arc` on the driver —
+would cost `LatexlikeDriver` its `Copy`/`Eq` config-value nature to save a
+negligible per-break allocation (specs are behavior, never compared).
+*Revisit if:* a *scoped* shape switch is ever wanted — the flag is driver-global by
+design; per-scope suppression already exists orthogonally through the
+`enable_multi_newline_paragraphs` gate (verbatim's features-off state uses it).
+
+**The 7.9 acceptance suite: an integration-crate port of pylatexenc's walker
+slice** — DECIDED (user, July 2026, Phase 7.9 session).
+`techy/tests/acceptance.rs`, public API only — an integration test crate, so
+anything the port cannot reach is an API gap by construction (chosen over a
+`#[cfg(test)]` module reusing `test_support`; the promotions above are the dedup
+half of that decision). Conventions: descriptive behavior-named tests with
+`pylatexenc:` provenance comments; span-exact `{range} {summary}` outlines; every
+happy-path input parsed under **both** recovery modes with tree identity asserted;
+`check_tree_invariants` on every parse. The referenced specs are registered
+test-side (`testdb`), with two parity mechanisms worth remembering: `\text`/`\mbox`
+carry per-argument text-mode deltas (pylatexenc's `args_math_mode` as ordinary
+`ArgumentSpec::with_state_delta` data — restoring the math openers and un-forbidding
+`$` statically), and the `test_errors` document resolves its unregistered macro
+names through a bottom-of-stack `FallbackProvider` pushed via `ScopeOp::ReplaceStack`
+(pylatexenc parity: unknown macros parse as argument-less nodes rather than
+erroring; simultaneously the fallback machinery's acceptance exercise). Argument-code
+call sites are list-shaped (`args(&["o", "m"])`, joined inside one helper),
+anticipating the factory's planned list-of-codes signature (the `### PHF` note in
+`latexlike/arguments.rs`).
 
 ## 4. Rejected patterns — do not reintroduce
 

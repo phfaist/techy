@@ -1,18 +1,21 @@
 //! Shared `#[cfg(test)]` helpers for the latexlike preset's test modules ([`mod.rs`],
 //! [`node_ref.rs`], and later `environments.rs`): one `Language`/shape/package
 //! vocabulary so each sibling test file doesn't re-derive its own (7.5 review — #13/#14).
+//!
+//! Shrunk in 7.9: the genuinely multi-purpose pieces were promoted to public API —
+//! the compact node description is [`NodeRef::summary`], and pushing a provider onto
+//! a language's seed is [`Language::with_provider`]. What remains here is thin
+//! test-only wiring.
 
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::engine::{Language, ParseResult};
 use crate::error::Recovery;
-use crate::node::{check_tree_invariants, NodeRef};
+use crate::node::check_tree_invariants;
 use crate::scopes::Package;
 use crate::spec::StdCallableSpec;
-use crate::state::ParsingStateDelta;
 
 use super::{CallableType, Latexlike, LatexlikeDriver, Mode};
 
@@ -26,33 +29,13 @@ pub(super) fn tolerant() -> Language<Latexlike> {
     Language::new(LatexlikeDriver::new(Recovery::Tolerant))
 }
 
-/// Compact shape string for a node: `chars(text)`, `group(Math $ $)`, `Macro(emph)`,
-/// `Specials(~)`, `comment(text)`.
-pub(super) fn shape(node: NodeRef<'_, Latexlike>) -> String {
-    if let Some(text) = node.chars() {
-        format!("chars({text})")
-    } else if node.is_group() {
-        let class = node
-            .group_type()
-            .map_or_else(|| "?".to_string(), |group_type| format!("{group_type:?}"));
-        let (open, close) = node.group_delimiters().unwrap();
-        format!("group({class} {open} {close})")
-    } else if node.is_callable() {
-        format!("{:?}({})", node.callable_type().unwrap(), node.name().unwrap())
-    } else if let Some(text) = node.comment() {
-        format!("comment({text})")
-    } else {
-        "other".to_string()
-    }
-}
-
-/// The root list's child shapes.
+/// The root list's child summaries ([`NodeRef::summary`]).
 pub(super) fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
-    result.tree.root().children().iter().map(shape).collect()
+    result.tree.root().children().iter().map(|node| node.summary()).collect()
 }
 
 /// Strict-parse `input`, assert no diagnostics and valid tree invariants, and return the
-/// root child shapes.
+/// root child summaries.
 pub(super) fn parse_shapes(input: &str) -> Vec<String> {
     let result = strict().parse(input).unwrap();
     check_tree_invariants(&result.tree);
@@ -74,14 +57,4 @@ pub(super) fn macro_package(
         package.set_visible_modes(visible_modes);
     }
     package
-}
-
-/// `language` with `package` pushed as a seed-delta provider.
-pub(super) fn with_provider(
-    language: Language<Latexlike>,
-    package: Package<Latexlike>,
-) -> Language<Latexlike> {
-    language
-        .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-        .unwrap()
 }

@@ -634,7 +634,7 @@ impl ConstructParser<Latexlike> for OrphanEndParser<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{root_shapes, shape};
+    use super::super::test_support::root_shapes;
     use super::super::{LatexlikeDriver, MacroSpec, Mode};
     use super::*;
     use crate::constructs::{
@@ -753,7 +753,7 @@ mod tests {
     }
 
     fn body_shapes(env: NodeRef<'_, Latexlike>) -> Vec<String> {
-        env.body().expect("an environment node").iter().map(shape).collect()
+        env.body().expect("an environment node").iter().map(|node| node.summary()).collect()
     }
 
     fn messages(result: &ParseResult<Latexlike>) -> Vec<String> {
@@ -864,7 +864,7 @@ mod tests {
         let env_in_math = parse_ok("$\\begin{itemize}x\\end{itemize}$");
         let math = env_in_math.tree.root().child(0).unwrap();
         assert!(math.is_math_group());
-        assert_eq!(shape(math.child(0).unwrap()), "Environment(itemize)");
+        assert_eq!(math.child(0).unwrap().summary(), "Environment(itemize)");
     }
 
     // --- body state deltas -------------------------------------------------------------
@@ -1016,17 +1016,18 @@ mod tests {
 
     #[test]
     fn stray_group_close_in_the_body_unwinds_to_the_root() {
-        // No invariant check here: the root's tolerant stray-close skip drops the
-        // delimiter's bytes from the tree (the accepted byte-accounting break — see
-        // the core `Language` tests).
+        // The root's tolerant stray-close recovery stages the consumed delimiter as
+        // a chars node (7.9, superseding 7.4's byte-dropping quirk), so the partition
+        // invariant holds across the unwind.
         let result = tolerant().parse("\\begin{itemize}a}b").unwrap();
+        check_tree_invariants(&result.tree);
         let all = messages(&result);
         assert_eq!(all.len(), 2, "{all:?}");
         assert!(all[0].contains("missing terminator of environment ‘itemize’"), "{}", all[0]);
         assert!(all[1].contains("‘}’"), "{}", all[1]);
         assert_eq!(
             root_shapes(&result),
-            ["Environment(itemize)", "chars(b)"]
+            ["Environment(itemize)", "chars(})", "chars(b)"]
         );
     }
 
@@ -1088,7 +1089,7 @@ mod tests {
         );
         let group = result.tree.root().child(0).unwrap();
         assert!(group.is_group());
-        assert_eq!(shape(group.child(0).unwrap()), "chars(\\end{itemize})");
+        assert_eq!(group.child(0).unwrap().summary(), "chars(\\end{itemize})");
     }
 
     #[test]

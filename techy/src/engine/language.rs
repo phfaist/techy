@@ -20,6 +20,7 @@ use crate::constructs::{
 };
 use crate::error::ParseError;
 use crate::node::NodeKind;
+use crate::scopes::SpecsProvider;
 use crate::source::{
     resolve_source, NoResolver, ResolveError, Source, SourceResolver, SourceSpan, Span,
 };
@@ -104,6 +105,26 @@ impl<L: Lang> Language<L> {
         Ok(self)
     }
 
+    /// Push `provider` onto the seed state's scope stack (innermost — it shadows
+    /// what is below) — sugar for the dominant [`with_seed_delta`](Language::with_seed_delta)
+    /// shape, "define a package, add it to the language" (promoted from the preset's
+    /// test support, Phase 7.9):
+    ///
+    /// ```ignore
+    /// let language = Language::<Latexlike>::default()
+    ///     .with_provider(Arc::new(my_package))?;
+    /// ```
+    ///
+    /// Fallible like [`with_seed_delta`](Language::with_seed_delta) (the sanctioned
+    /// derive path underneath): the push itself cannot fail today, but the derivation
+    /// runs the full transition machinery.
+    pub fn with_provider(
+        self,
+        provider: Arc<dyn SpecsProvider<L>>,
+    ) -> Result<Language<L>, DeriveError<L>> {
+        self.with_seed_delta(ParsingStateDelta::new().push_provider(provider))
+    }
+
     /// Use `resolver` for `\input`-like external references (default: [`NoResolver`]).
     pub fn with_resolver(
         mut self,
@@ -159,9 +180,11 @@ impl<L: Lang> Language<L> {
     ///
     /// **Recovery** follows the driver's policy. A stray group close at the root —
     /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recover
-    /// funnel; tolerant parses skip the delimiter and resume (its bytes are dropped
-    /// from the tree — the accepted tolerant byte-accounting break), strict parses
-    /// abort. Diagnosis and resume both run under the state the content loop had
+    /// funnel; tolerant parses consume the delimiter, stage it as a `Chars` node
+    /// (the markup-in-chars recovery artifact — revised in Phase 7.9, superseding
+    /// 7.4's byte-dropping quirk: the root span partition now holds across the
+    /// skip, so `check_tree_invariants` stays clean on recovered parses), and
+    /// resume; strict parses abort. Diagnosis and resume both run under the state the content loop had
     /// reached at the close (the segment's exit state,
     /// [`NodesOutcome::state`](crate::constructs::NodesOutcome::state)): the reported
     /// delimiter is the one the loop's tokenization matched, and sibling-level state
@@ -213,6 +236,20 @@ impl<L: Lang> Language<L> {
                     let delim = span.slice(cx.source.content()).to_string();
                     cx.recover(StrayGroupClose { delim }, SourceSpan::new(&cx.source, span))?;
                     cx.tokens.move_to_pos(span.end());
+                    // Stage the consumed delimiter as a chars node (the
+                    // markup-in-chars recovery artifact; 7.9): the root partition
+                    // stays exact across the skip.
+                    let id = cx
+                        .session
+                        .builder
+                        .add(
+                            NodeKind::chars(span),
+                            SourceSpan::new(&cx.source, span),
+                            Arc::clone(&cx.state),
+                            Vec::new(),
+                        )
+                        .map_err(|error| cx.implementation_error(error, span))?;
+                    nodes.push(id);
                 }
                 StopCause::TokenCondition { span } => {
                     return Err(cx.implementation_error(
@@ -387,17 +424,19 @@ mod tests {
     }
 
     #[test]
-    fn stray_close_aborts_strict_and_is_skipped_tolerantly() {
+    fn stray_close_aborts_strict_and_recovers_as_chars_tolerantly() {
         // Strict: the root drive aborts with the core condition.
         let err = strict().parse("a}b").unwrap_err();
         assert_eq!(err.identifier(), StrayGroupClose::IDENTIFIER);
         assert_eq!(err.span().range(), 1..2);
         assert_eq!(err.to_string(), "unexpected closing ‘}’ — no group is open");
 
-        // Tolerant: diagnose, consume, resume — the stray byte is dropped from the
-        // tree (the accepted byte-accounting break; no invariant check here).
+        // Tolerant: diagnose, consume, and stage the delimiter as a chars node (the
+        // markup-in-chars recovery artifact — revised in 7.9, superseding 7.4's
+        // byte-dropping quirk: the root partition invariant holds across the skip).
         let result = tolerant().parse("a}b").unwrap();
-        assert_eq!(shapes(&result), ["chars(a)", "chars(b)"]);
+        check_tree_invariants(&result.tree);
+        assert_eq!(shapes(&result), ["chars(a)", "chars(})", "chars(b)"]);
         assert_eq!(result.diagnostics.len(), 1);
         let diagnostic = result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
@@ -407,7 +446,8 @@ mod tests {
     #[test]
     fn consecutive_stray_closes_each_report_and_resume() {
         let result = tolerant().parse("}}x").unwrap();
-        assert_eq!(shapes(&result), ["chars(x)"]);
+        check_tree_invariants(&result.tree);
+        assert_eq!(shapes(&result), ["chars(})", "chars(})", "chars(x)"]);
         assert_eq!(result.diagnostics.len(), 2);
     }
 

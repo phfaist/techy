@@ -97,6 +97,9 @@ pub mod token;
 #[cfg(doc)]
 #[doc = include_str!("../../docs/guide.md")]
 pub mod guide {
+    #[doc = include_str!("../../docs/learn-by-example.md")]
+    pub mod learn_by_example {}
+
     #[doc = include_str!("../../docs/parsing-model.md")]
     pub mod parsing_model {}
 }

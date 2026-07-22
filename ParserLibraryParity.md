@@ -34,7 +34,7 @@ embellishments, chars groups, …) **are** in scope.
 | `LatexDelimitedExpressionParserOpeningDelimiterNotFound` | argument-probe protocol (`Ok(None)` + noise rewind) | absorbed |
 | `LatexDelimitedGroupParser` + `…ParserInfo` | `GroupParser` | implemented — interior-state plug settled by design, Phase 7 plan session [N1] |
 | `LatexDelimitedMultiDelimGroupParser` + `…ParserInfo` | — | todo [N2] |
-| `LatexMathParser` | `Group` node under a preset math group class + parsing-mode delta | absorbed (core, by design) / todo (Phase 7 preset wiring; plug settled — see N1) [N1] |
+| `LatexMathParser` | `Group` node under a preset math group class + parsing-mode delta | implemented (7.5 preset wiring: `LatexlikeDriver::group_interior_delta` + `Mode::Math` + `math_style()`; 7.9 acceptance: pylatexenc mathmode-suite parity incl. `\text`/`\mbox` text-mode resets) [N1] |
 | `LatexExpressionParser` | `ExpressionParser` | implemented |
 | `LatexOptionalSquareBracketsParser` | `OptionalGroupArgumentParser` | implemented |
 | `LatexOptionalCharsMarkerParser` | `MarkerArgumentParser` | implemented (single-marker case; full generality folds into [N3]) |
@@ -81,6 +81,14 @@ parsing-mode override (`StateData.mode: L::ModeId`, interpreted by
 `Lang::finalize_transition`) — a math group's interior delta is one line of data.
 `GroupRule` stays pure comparable data. DESIGN_RATIONALE.md §3.3/§3.6;
 Phase7Execution.md D1/D2.
+
+**Landed (7.5) and acceptance-verified (7.9):** the preset wiring shipped in 7.5
+(`LatexlikeDriver::group_interior_delta`, single `GroupType::Math` class,
+`MathStyle` off recorded delimiters); the 7.9 suite ports pylatexenc's
+`test_get_latex_nodes_mathmodes`/`…_dollardollar` slice against it span-exactly,
+including the `\text`/`\mbox` text-mode argument resets
+(`ArgumentSpec::with_state_delta`) and the dollar-boundary tail pylatexenc's own
+test leaves commented out.
 
 ### N2 — multi-delimited group parser
 
