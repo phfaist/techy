@@ -154,7 +154,9 @@ be referenced at least once at a relevant location in ARCHITECTURE.
 
 # PLAN AND ACTION ITEMS FOR DOCUMENTATION REDESIGN
 
-...
+Plan to make documentation align with the above guidelines ... ...
+
+TODO ... ...
 
 - what should we do with NAMING_STRATEGY?  Any important information there?  Keep design principles
   in ARCHITECTURE, drop individual names now that the code is actually implemented?
