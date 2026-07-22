@@ -178,8 +178,9 @@ pylatexenc's `next_chars()`). The three pieces resolved as:
 Decided (user, July 2026, Phase 7 plan session): `LatexStandardArgumentParser`'s code
 interpretation is *not* replicated as a parser type. It becomes a plain constructor
 **function** in the latexlike preset (landed as `argument_specs`): xparse-like
-code string in, configured `Arc<dyn ArgumentParser<L>>` out, resolved eagerly at
-spec-construction time — parser choice depends only on the code, never on parse-time
+codes in — one code string per argument; compact whole-spec strings via
+`argument_specs_from_str` (July 2026 revision) — configured
+`Arc<dyn ArgumentParser<L>>` out, resolved eagerly at spec-construction time — parser choice depends only on the code, never on parse-time
 facts. No wrapper indirection; `get_standard_argument_parser`'s flyweight cache
 dissolves (parameterless codes may return shared singletons — specs are built once per
 language, not per parse). The explicit-parser escape hatch is untouched
@@ -199,7 +200,7 @@ FLM's feature definitions):
 | `s` / `*`, `t<char>` | `MarkerArgumentParser` | implemented — factory wired 7.7 (`t` = same parser, other marker char) |
 | `r<c1><c2>` / `d<c1><c2>` | `GroupArgumentParser::with_rule` (7.7: the mandatory minted-rule form, no expression fallback by default — `with_expression_fallback` opts in, a techy extension; the same knob turned off on the class form is the other extension pylatexenc cannot spell) / `OptionalGroupArgumentParser` with per-use delimiters | implemented (7.7) — the second consumer of `TokenRules::temporary_groups` |
 | `e{<chars>}` | embellishment-args parser | todo [N3]; record shape to settle before implementing — one `ParsedArgument` per embellishment char vs. one structured entry |
-| `v` / `v<c1><c2>` | `VerbatimArgumentParser` | implemented (7.7) — `v` alone = autodetected delimiter; in a code string, `v` takes two delimiter chars exactly when directly followed by a non-whitespace char (the factory's disambiguation rule) |
+| `v` / `v<c1><c2>` | `VerbatimArgumentParser` | implemented (7.7) — `v` alone = autodetected delimiter; in a compact whole-spec string, `v` takes two delimiter chars exactly when directly followed by a non-whitespace char (`argument_specs_from_str`'s disambiguation rule; the list form needs none) |
 | `AnyDelimited` / `AnyDelimitedOptional` | multi-delim group parser | todo [N2] |
 
 Constructor knobs that do **not** carry over — the factory is deliberately thinner
@@ -209,4 +210,8 @@ whitespace as noise nodes), the single-token-error switch (emptiness surface).
 
 Landed 7.7 as `latexlike::argument_specs` (`Err(ArgumentCodeError)` on malformed
 codes); `e{…}` [N3] and `AnyDelimited` [N2] stay deferred beyond Phase 7 (plan
-session, July 2026 — Phase7Execution.md §1).
+session, July 2026 — Phase7Execution.md §1). Revised July 2026 (user): the primary
+signature takes one code string per argument (`argument_specs(["o", "m"])`); the
+compact concatenated form is the twin `argument_specs_from_str` — pylatexenc's spec
+database and FLM's feature definitions stay directly portable through it
+(DESIGN_RATIONALE §3.13).

@@ -44,12 +44,9 @@ mod support {
     use techy::spec::ArgumentSpec;
     use techy::state::{ParsingStateDelta, TokenRulesOverrides};
 
-    /// Argument specs from per-argument code strings. Deliberately list-shaped: the
-    /// factory currently takes one whitespace-joined string, and is expected to move
-    /// to a list-of-codes signature (the `### PHF` note in `latexlike/arguments.rs`)
-    /// — when it does, only this helper changes.
+    /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
     pub fn args(codes: &[&str]) -> Vec<Arc<ArgumentSpec<Latexlike>>> {
-        argument_specs(&codes.join(" ")).unwrap()
+        argument_specs(codes).unwrap()
     }
 
     /// A mandatory `{…}` argument whose interior parses back in text mode — the

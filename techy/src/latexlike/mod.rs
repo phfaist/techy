@@ -16,8 +16,9 @@
 //!   arguments plus body behavior via [`EnvironmentBehavior`]) with the
 //!   `\begin`/`\end` composition ([`BeginSpec`]/[`EndSpec`], seeded in
 //!   [`base_package`]);
-//! - the argument-code factory [`argument_specs`] (`"o{"` → configured
-//!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s) and the verbatim wiring —
+//! - the argument-code factory [`argument_specs`] (`["o", "{"]` → configured
+//!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s; compact whole-spec strings via
+//!   [`argument_specs_from_str`]) and the verbatim wiring —
 //!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
 //!   `\verb`-style delimited verbatim arguments (Phase 7.7);
 //! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
@@ -52,7 +53,7 @@ mod spec;
 #[cfg(test)]
 mod test_support;
 
-pub use arguments::{argument_specs, ArgumentCodeError};
+pub use arguments::{argument_specs, argument_specs_from_str, ArgumentCodeError};
 pub use driver::{LatexlikeDriver, ParagraphBreakStyle};
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,

@@ -3423,6 +3423,8 @@ builders). No flyweight cache and no singletons: specs are built once per langua
 `e{…}` [N3] and `AnyDelimited` [N2] stay deferred with their parsers.
 *Rejected:* accepting a `&[&str]` list-of-codes signature alongside (one grammar, one
 entry; the string form covers the deferred `e{…}` shape too when it arrives).
+*(Reversed July 2026 — the list form is now primary; see the list-primary revision
+entry below.)*
 
 **`GroupArgumentParser`: the single-expression fallback becomes the orthogonal
 `expression_fallback` knob** — DECIDED (user, July 2026, follow-up session to the 7.7
@@ -3489,9 +3491,33 @@ carry per-argument text-mode deltas (pylatexenc's `args_math_mode` as ordinary
 names through a bottom-of-stack `FallbackProvider` pushed via `ScopeOp::ReplaceStack`
 (pylatexenc parity: unknown macros parse as argument-less nodes rather than
 erroring; simultaneously the fallback machinery's acceptance exercise). Argument-code
-call sites are list-shaped (`args(&["o", "m"])`, joined inside one helper),
-anticipating the factory's planned list-of-codes signature (the `### PHF` note in
-`latexlike/arguments.rs`).
+call sites are list-shaped (`args(&["o", "m"])`), anticipating the factory's
+list-of-codes signature (since landed — next entry).
+
+**`argument_specs` goes list-primary; the compact string becomes
+`argument_specs_from_str`** — DECIDED (user, July 2026, follow-up session; revises
+the 7.7 factory entry above and reverses its list-signature rejection).
+One code string per argument is the primary signature — `argument_specs(["o", "{"])`,
+generic `I: IntoIterator, I::Item: AsRef<str>` (the `Command::args` idiom; `&str`
+itself is not `IntoIterator`, so a stray compact string is a compile error, never a
+misparse). Each element holds exactly one code with its parameter characters;
+surrounding whitespace is tolerated, anything more is `TrailingCode`, and an empty
+element is `EmptyCode` (an empty *list* still declares zero arguments). The compact
+whole-spec grammar survives unchanged as `argument_specs_from_str` — pylatexenc's
+default spec database and FLM's feature definitions stay directly portable — and the
+`v` whitespace-disambiguation rule is now purely a property of that compact grammar
+(`["v"]` vs `["v||"]` needs none: this quirk leaving the primary API's contract is
+half the motivation). `ArgumentCodeError` locates errors with **both**
+`index: Option<usize>` (the list element; `None` from the compact string, and plain
+`usize` on the list-only `TrailingCode`/`EmptyCode` variants) and `offset: usize`
+(byte offset within that particular string) — user's call, keeping byte-exact
+reporting in both forms. Twin functions, not a conversion-trait overload: matches the
+`_named`-accessor precedent (no polymorphic input types), and coherence would force
+enumerated per-type impls anyway. Internally one scanner (`scan_code`) reads a single
+code for both entry points, so the grammar cannot drift.
+*Rejected:* a typed `ArgumentCode` enum as the primary currency (duplicates the
+parser vocabulary one level up; hand-built `ArgumentSpec`s with concrete parsers are
+already the fully-typed path — the factory's value *is* the compact codes).
 
 ## 4. Rejected patterns — do not reintroduce
 

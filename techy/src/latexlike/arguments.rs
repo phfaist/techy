@@ -1,13 +1,14 @@
 //! [`argument_specs`]: the argument-code factory (Phase 7.7; ParserLibraryParity.md
 //! N8) — pylatexenc's xparse-like argument shorthands (`LatexStandardArgumentParser`'s
-//! codes) resolved **eagerly** into configured core [`ArgumentParser`]s. A plain
-//! constructor function, not a parser type: parser choice depends only on the code,
+//! codes) resolved **eagerly** into configured core [`ArgumentParser`]s. Plain
+//! constructor functions, not a parser type: parser choice depends only on the code,
 //! never on parse-time facts, and a malformed code is embedder input — an
 //! [`Err`](ArgumentCodeError), not a panic and not a diagnostic.
 //!
-//! The code strings are worth accepting verbatim: pylatexenc's default spec database
-//! (a later phase's porting target) is written in them, as are FLM's feature
-//! definitions.
+//! Two entry points, one code grammar: [`argument_specs`] (primary) takes one code
+//! string per argument (`["o", "{"]`); [`argument_specs_from_str`] takes the compact
+//! whole-spec strings pylatexenc's default spec database (a later phase's porting
+//! target) and FLM's feature definitions are written in (`"o{"`), verbatim.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -23,13 +24,20 @@ use crate::token::GroupRule;
 
 use super::{GroupType, Latexlike};
 
-/// A malformed argument-code string ([`argument_specs`]): embedder input, reported
-/// eagerly at spec-construction time.
+/// A malformed argument code ([`argument_specs`] / [`argument_specs_from_str`]):
+/// embedder input, reported eagerly at spec-construction time.
+///
+/// Errors locate themselves with two coordinates: `index` is the offending element
+/// of [`argument_specs`]'s list (`None` when the codes came through
+/// [`argument_specs_from_str`]'s single string), and `offset` is a byte offset into
+/// that particular string — the element at `index`, or the whole compact string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ArgumentCodeError {
     /// The character at `offset` begins no known argument code.
     UnknownCode {
+        /// The list element holding the code, if the codes came in as a list.
+        index: Option<usize>,
         /// Byte offset into the code string.
         offset: usize,
         /// The offending character.
@@ -39,35 +47,71 @@ pub enum ArgumentCodeError {
     /// the string ended, or whitespace stood where a parameter character must be
     /// (whitespace separates codes; it cannot be a parameter).
     TruncatedCode {
+        /// The list element holding the code, if the codes came in as a list.
+        index: Option<usize>,
         /// Byte offset of the code character itself.
         offset: usize,
         /// The code character whose parameters are missing.
         code: char,
     },
+    /// A list element continues past its single code ([`argument_specs`] only —
+    /// one code per element; in the compact string the next code simply follows).
+    TrailingCode {
+        /// The list element holding the code.
+        index: usize,
+        /// Byte offset of the first unexpected character.
+        offset: usize,
+        /// The first unexpected character.
+        trailing: char,
+    },
+    /// A list element is empty or whitespace-only ([`argument_specs`] only — an
+    /// empty *list* declares zero arguments; an empty *element* declares nothing).
+    EmptyCode {
+        /// The offending list element.
+        index: usize,
+    },
 }
 
 impl fmt::Display for ArgumentCodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ArgumentCodeError::UnknownCode { offset, code } => {
-                write!(f, "unknown argument code ‘{code}’ at offset {offset}")
+        fn at(f: &mut fmt::Formatter<'_>, index: Option<usize>, offset: usize) -> fmt::Result {
+            match index {
+                Some(index) => write!(f, "at offset {offset} of code string {index}"),
+                None => write!(f, "at offset {offset}"),
             }
-            ArgumentCodeError::TruncatedCode { offset, code } => write!(
+        }
+        match self {
+            ArgumentCodeError::UnknownCode { index, offset, code } => {
+                write!(f, "unknown argument code ‘{code}’ ")?;
+                at(f, *index, *offset)
+            }
+            ArgumentCodeError::TruncatedCode { index, offset, code } => {
+                write!(f, "argument code ‘{code}’ ")?;
+                at(f, *index, *offset)?;
+                write!(f, " is missing its parameter character(s)")
+            }
+            ArgumentCodeError::TrailingCode { index, offset, trailing } => write!(
                 f,
-                "argument code ‘{code}’ at offset {offset} is missing its parameter \
-                 character(s)"
+                "unexpected ‘{trailing}’ at offset {offset} of code string {index} \
+                 (one argument code per string)"
             ),
+            ArgumentCodeError::EmptyCode { index } => {
+                write!(f, "code string {index} is empty (one argument code per string)")
+            }
         }
     }
 }
 
 impl core::error::Error for ArgumentCodeError {}
 
-/// Build the argument structure described by an xparse-like code string — one
-/// [`ArgumentSpec`] per code, in order (`"o{"` = an optional `[…]` then a mandatory
-/// argument), ready for [`MacroSpec::new`](super::MacroSpec::new) and friends. Codes
-/// may be separated by whitespace; parameters (the `t`/`r`/`d`/`v` characters) must
-/// follow their code immediately.
+/// Build the argument structure described by xparse-like argument codes, one code
+/// string per argument — one [`ArgumentSpec`] per element, in order (`["o", "{"]` =
+/// an optional `[…]` then a mandatory argument), ready for
+/// [`MacroSpec::new`](super::MacroSpec::new) and friends. Each element holds exactly
+/// one code together with its parameter characters (the `t`/`r`/`d`/`v` forms:
+/// `["t!", "r()", "v||"]`); surrounding whitespace is tolerated, anything more is a
+/// loud [`TrailingCode`](ArgumentCodeError::TrailingCode). For the compact whole-spec
+/// strings pylatexenc's spec database is written in, use [`argument_specs_from_str`].
 ///
 /// | code | argument |
 /// |---|---|
@@ -80,11 +124,10 @@ impl core::error::Error for ArgumentCodeError {}
 /// | `v` | delimited verbatim, auto-matched delimiter (`\verb`-style) — [`VerbatimArgumentParser`] |
 /// | `v<c1><c2>` | delimited verbatim with the prescribed delimiters — [`VerbatimArgumentParser`] |
 ///
-/// **The `v` disambiguation rule:** `v` immediately followed by a non-whitespace
-/// character reads that and the next character as its prescribed delimiters (`"v||"`);
-/// a bare auto-delimiter `v` must therefore stand last or be separated from the next
-/// code by whitespace (`"v {"` — whereas `"v{"` is a truncated `v{…?`). Codes deferred
-/// beyond Phase 7.7: `e{…}` (embellishments) and `AnyDelimited`.
+/// In list form the two `v` shapes need no disambiguation: `["v"]` is the
+/// auto-matched-delimiter form, `["v||"]` the prescribed one (the whitespace rule of
+/// the compact grammar lives with [`argument_specs_from_str`]). Codes deferred beyond
+/// Phase 7.7: `e{…}` (embellishments) and `AnyDelimited`.
 ///
 /// The argument specs carry no names and no per-argument state deltas — attach those
 /// via [`ArgumentSpec`]'s builders where needed (the factory is convenience, never a
@@ -101,7 +144,7 @@ impl core::error::Error for ArgumentCodeError {}
 /// package.insert(
 ///     CallableType::Macro,
 ///     "includegraphics",
-///     Arc::new(MacroSpec::new(argument_specs("o{").unwrap())),
+///     Arc::new(MacroSpec::new(argument_specs(["o", "{"]).unwrap())),
 /// );
 /// let language = Language::<Latexlike>::default()
 ///     .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
@@ -115,56 +158,94 @@ impl core::error::Error for ArgumentCodeError {}
 ///     Some("fig.png"),
 /// );
 /// ```
-pub fn argument_specs(
-    codes: &str,
-) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
-
-    // ### PHF -- shouldn't we accept `codes` with Vec<single-code-as-string>?  Accepting a single
-    // string should be a convenience function only.
-
+pub fn argument_specs<I>(codes: I) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
     let mut specs = Vec::new();
-    let mut chars = codes.char_indices().peekable();
-    while let Some((offset, code)) = chars.next() {
-        if code.is_whitespace() {
-            continue;
+    for (index, code) in codes.into_iter().enumerate() {
+        let mut chars = code.as_ref().char_indices().peekable();
+        let spec = scan_code(&mut chars, Some(index))?
+            .ok_or(ArgumentCodeError::EmptyCode { index })?;
+        if let Some((offset, trailing)) = chars.find(|(_, c)| !c.is_whitespace()) {
+            return Err(ArgumentCodeError::TrailingCode { index, offset, trailing });
         }
-        let parameter = |chars: &mut core::iter::Peekable<core::str::CharIndices>| {
-            match chars.next() {
-                Some((_, c)) if !c.is_whitespace() => Ok(c),
-                _ => Err(ArgumentCodeError::TruncatedCode { offset, code }),
-            }
-        };
-        let parser: Arc<dyn ArgumentParser<Latexlike>> = match code {
-            'm' | '{' => Arc::new(GroupArgumentParser::new(GroupType::Content)),
-            'o' | '[' => Arc::new(optional_group_parser('[', ']')),
-            's' | '*' => Arc::new(MarkerArgumentParser::new("*")),
-            't' => Arc::new(MarkerArgumentParser::new(String::from(parameter(&mut chars)?))),
-            'r' => {
-                let open = parameter(&mut chars)?;
-                let close = parameter(&mut chars)?;
-                Arc::new(GroupArgumentParser::with_rule(minted_rule(open, close)))
-            }
-            'd' => {
-                let open = parameter(&mut chars)?;
-                let close = parameter(&mut chars)?;
-                Arc::new(optional_group_parser(open, close))
-            }
-            'v' => match chars.peek() {
-                Some((_, c)) if !c.is_whitespace() => {
-                    let open = parameter(&mut chars)?;
-                    let close = parameter(&mut chars)?;
-                    Arc::new(
-                        VerbatimArgumentParser::new(GroupType::Verbatim)
-                            .with_delimiters(open, close),
-                    )
-                }
-                _ => Arc::new(VerbatimArgumentParser::new(GroupType::Verbatim)),
-            },
-            _ => return Err(ArgumentCodeError::UnknownCode { offset, code }),
-        };
-        specs.push(Arc::new(ArgumentSpec::new(parser)));
+        specs.push(spec);
     }
     Ok(specs)
+}
+
+/// [`argument_specs`] from the compact form: all codes concatenated in one string
+/// (`"o{"`, `"mo s t! r() d<> v"`) — pylatexenc's default spec database (a later
+/// phase's porting target) and FLM's feature definitions are written in these
+/// strings, worth accepting verbatim. Codes may be separated by whitespace;
+/// parameters (the `t`/`r`/`d`/`v` characters) must follow their code immediately.
+///
+/// **The `v` disambiguation rule:** `v` immediately followed by a non-whitespace
+/// character reads that and the next character as its prescribed delimiters (`"v||"`);
+/// a bare auto-delimiter `v` must therefore stand last or be separated from the next
+/// code by whitespace (`"v {"` — whereas `"v{"` is a truncated `v{…?`).
+pub fn argument_specs_from_str(
+    codes: &str,
+) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
+    let mut specs = Vec::new();
+    let mut chars = codes.char_indices().peekable();
+    while let Some(spec) = scan_code(&mut chars, None)? {
+        specs.push(spec);
+    }
+    Ok(specs)
+}
+
+/// Scan one code (with its parameter characters) off `chars`, skipping leading
+/// whitespace; `Ok(None)` when the string is exhausted first. `index` is the list
+/// coordinate threaded into errors (`None` in the compact-string form).
+fn scan_code(
+    chars: &mut core::iter::Peekable<core::str::CharIndices<'_>>,
+    index: Option<usize>,
+) -> Result<Option<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
+    let (offset, code) = loop {
+        match chars.next() {
+            Some((_, c)) if c.is_whitespace() => continue,
+            Some(pair) => break pair,
+            None => return Ok(None),
+        }
+    };
+    let parameter = |chars: &mut core::iter::Peekable<core::str::CharIndices>| {
+        match chars.next() {
+            Some((_, c)) if !c.is_whitespace() => Ok(c),
+            _ => Err(ArgumentCodeError::TruncatedCode { index, offset, code }),
+        }
+    };
+    let parser: Arc<dyn ArgumentParser<Latexlike>> = match code {
+        'm' | '{' => Arc::new(GroupArgumentParser::new(GroupType::Content)),
+        'o' | '[' => Arc::new(optional_group_parser('[', ']')),
+        's' | '*' => Arc::new(MarkerArgumentParser::new("*")),
+        't' => Arc::new(MarkerArgumentParser::new(String::from(parameter(&mut *chars)?))),
+        'r' => {
+            let open = parameter(&mut *chars)?;
+            let close = parameter(&mut *chars)?;
+            Arc::new(GroupArgumentParser::with_rule(minted_rule(open, close)))
+        }
+        'd' => {
+            let open = parameter(&mut *chars)?;
+            let close = parameter(&mut *chars)?;
+            Arc::new(optional_group_parser(open, close))
+        }
+        'v' => match chars.peek() {
+            Some((_, c)) if !c.is_whitespace() => {
+                let open = parameter(&mut *chars)?;
+                let close = parameter(&mut *chars)?;
+                Arc::new(
+                    VerbatimArgumentParser::new(GroupType::Verbatim)
+                        .with_delimiters(open, close),
+                )
+            }
+            _ => Arc::new(VerbatimArgumentParser::new(GroupType::Verbatim)),
+        },
+        _ => return Err(ArgumentCodeError::UnknownCode { index, offset, code }),
+    };
+    Ok(Some(Arc::new(ArgumentSpec::new(parser))))
 }
 
 /// The minted per-use content-class rule of the `o`/`r`/`d` codes.
@@ -205,14 +286,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_whitespace_only_code_strings_declare_no_arguments() {
-        assert!(argument_specs("").unwrap().is_empty());
-        assert!(argument_specs("  \t ").unwrap().is_empty());
+    fn empty_lists_and_whitespace_only_compact_strings_declare_no_arguments() {
+        assert!(argument_specs(Vec::<&str>::new()).unwrap().is_empty());
+        assert!(argument_specs_from_str("").unwrap().is_empty());
+        assert!(argument_specs_from_str("  \t ").unwrap().is_empty());
     }
 
     #[test]
     fn the_codes_resolve_to_their_parsers() {
-        let specs = argument_specs("mo s t! r() d<> v").unwrap();
+        let specs = argument_specs(["m", "o", "s", "t!", "r()", "d<>", "v"]).unwrap();
         assert_eq!(specs.len(), 7);
         assert!(parser_debug(&specs[0]).contains("GroupArgumentParser"));
         assert!(parser_debug(&specs[0]).contains("group_type: Content"));
@@ -230,60 +312,134 @@ mod tests {
 
     #[test]
     fn the_shorthand_aliases_match_their_letters() {
-        let letters = argument_specs("mos").unwrap();
-        let aliases = argument_specs("{[*").unwrap();
+        let letters = argument_specs(["m", "o", "s"]).unwrap();
+        let aliases = argument_specs(["{", "[", "*"]).unwrap();
         for (letter, alias) in letters.iter().zip(&aliases) {
             assert_eq!(parser_debug(letter), parser_debug(alias));
         }
     }
 
     #[test]
+    fn the_compact_string_matches_the_list_form() {
+        let compact = argument_specs_from_str("mo s t! r() d<> v").unwrap();
+        let listed = argument_specs(["m", "o", "s", "t!", "r()", "d<>", "v"]).unwrap();
+        assert_eq!(compact.len(), listed.len());
+        for (c, l) in compact.iter().zip(&listed) {
+            assert_eq!(parser_debug(c), parser_debug(l));
+        }
+    }
+
+    #[test]
+    fn list_elements_hold_one_code_and_tolerate_surrounding_whitespace() {
+        let specs = argument_specs([" m ", "\tt!", "v "]).unwrap();
+        assert_eq!(specs.len(), 3);
+        assert!(parser_debug(&specs[0]).contains("GroupArgumentParser"));
+        assert!(parser_debug(&specs[1]).contains("marker: \"!\""));
+        // Trailing whitespace does not turn `v` into the prescribed-delimiter form.
+        assert!(parser_debug(&specs[2]).contains("delimiters: None"));
+    }
+
+    #[test]
     fn v_takes_delimiters_exactly_when_followed_directly() {
-        let auto = argument_specs("v").unwrap();
+        let auto = argument_specs_from_str("v").unwrap();
         assert!(parser_debug(&auto[0]).contains("delimiters: None"));
 
-        let fixed = argument_specs("v||").unwrap();
+        let fixed = argument_specs_from_str("v||").unwrap();
         assert!(parser_debug(&fixed[0]).contains("delimiters: Some(('|', '|'))"));
 
         // Whitespace separates: a bare `v` before another code.
-        let separated = argument_specs("v {").unwrap();
+        let separated = argument_specs_from_str("v {").unwrap();
         assert_eq!(separated.len(), 2);
         assert!(parser_debug(&separated[0]).contains("delimiters: None"));
         assert!(parser_debug(&separated[1]).contains("GroupArgumentParser"));
 
         // Directly followed means the delimiters must both be there.
         assert_eq!(
-            argument_specs("v{").unwrap_err(),
-            ArgumentCodeError::TruncatedCode { offset: 0, code: 'v' }
+            argument_specs_from_str("v{").unwrap_err(),
+            ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 'v' }
+        );
+
+        // In list form there is nothing to disambiguate.
+        let auto = argument_specs(["v"]).unwrap();
+        assert!(parser_debug(&auto[0]).contains("delimiters: None"));
+        let fixed = argument_specs(["v||"]).unwrap();
+        assert!(parser_debug(&fixed[0]).contains("delimiters: Some(('|', '|'))"));
+    }
+
+    #[test]
+    fn malformed_compact_strings_report_offset_and_code() {
+        assert_eq!(
+            argument_specs_from_str("m x").unwrap_err(),
+            ArgumentCodeError::UnknownCode { index: None, offset: 2, code: 'x' }
+        );
+        assert_eq!(
+            argument_specs_from_str("t").unwrap_err(),
+            ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 't' }
+        );
+        // Whitespace cannot be a parameter character.
+        assert_eq!(
+            argument_specs_from_str("t !").unwrap_err(),
+            ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 't' }
+        );
+        assert_eq!(
+            argument_specs_from_str("or(").unwrap_err(),
+            ArgumentCodeError::TruncatedCode { index: None, offset: 1, code: 'r' }
+        );
+        assert_eq!(
+            argument_specs_from_str("x").unwrap_err().to_string(),
+            "unknown argument code ‘x’ at offset 0"
+        );
+        assert_eq!(
+            argument_specs_from_str("d<").unwrap_err().to_string(),
+            "argument code ‘d’ at offset 0 is missing its parameter character(s)"
         );
     }
 
     #[test]
-    fn malformed_codes_report_offset_and_code() {
+    fn malformed_code_lists_report_index_offset_and_code() {
         assert_eq!(
-            argument_specs("m x").unwrap_err(),
-            ArgumentCodeError::UnknownCode { offset: 2, code: 'x' }
+            argument_specs(["m", "x"]).unwrap_err(),
+            ArgumentCodeError::UnknownCode { index: Some(1), offset: 0, code: 'x' }
         );
         assert_eq!(
-            argument_specs("t").unwrap_err(),
-            ArgumentCodeError::TruncatedCode { offset: 0, code: 't' }
+            argument_specs(["o", "r("]).unwrap_err(),
+            ArgumentCodeError::TruncatedCode { index: Some(1), offset: 0, code: 'r' }
         );
-        // Whitespace cannot be a parameter character.
+        // One code per element: a second code is trailing, not concatenated.
         assert_eq!(
-            argument_specs("t !").unwrap_err(),
-            ArgumentCodeError::TruncatedCode { offset: 0, code: 't' }
-        );
-        assert_eq!(
-            argument_specs("or(").unwrap_err(),
-            ArgumentCodeError::TruncatedCode { offset: 1, code: 'r' }
+            argument_specs(["mo"]).unwrap_err(),
+            ArgumentCodeError::TrailingCode { index: 0, offset: 1, trailing: 'o' }
         );
         assert_eq!(
-            argument_specs("x").unwrap_err().to_string(),
-            "unknown argument code ‘x’ at offset 0"
+            argument_specs(["m", "o m"]).unwrap_err(),
+            ArgumentCodeError::TrailingCode { index: 1, offset: 2, trailing: 'm' }
+        );
+        // Empty elements are bugs, not zero-argument declarations.
+        assert_eq!(
+            argument_specs(["m", ""]).unwrap_err(),
+            ArgumentCodeError::EmptyCode { index: 1 }
         );
         assert_eq!(
-            argument_specs("d<").unwrap_err().to_string(),
-            "argument code ‘d’ at offset 0 is missing its parameter character(s)"
+            argument_specs([" \t"]).unwrap_err(),
+            ArgumentCodeError::EmptyCode { index: 0 }
+        );
+        // Display strings name the list element.
+        assert_eq!(
+            argument_specs(["x"]).unwrap_err().to_string(),
+            "unknown argument code ‘x’ at offset 0 of code string 0"
+        );
+        assert_eq!(
+            argument_specs(["r<"]).unwrap_err().to_string(),
+            "argument code ‘r’ at offset 0 of code string 0 is missing its parameter \
+             character(s)"
+        );
+        assert_eq!(
+            argument_specs(["mo"]).unwrap_err().to_string(),
+            "unexpected ‘o’ at offset 1 of code string 0 (one argument code per string)"
+        );
+        assert_eq!(
+            argument_specs([""]).unwrap_err().to_string(),
+            "code string 0 is empty (one argument code per string)"
         );
     }
 
@@ -295,7 +451,7 @@ mod tests {
         package.insert(
             CallableType::Macro,
             "m",
-            Arc::new(MacroSpec::new(argument_specs(codes).unwrap())),
+            Arc::new(MacroSpec::new(argument_specs_from_str(codes).unwrap())),
         );
         Language::new(LatexlikeDriver::new(recovery))
             .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))

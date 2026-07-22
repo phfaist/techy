@@ -93,13 +93,13 @@ use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
 use techy::scopes::Package;
 
 let mut package = Package::new("mydefs");
-// Argument structures come from xparse-like codes: `o` = optional `[…]`,
-// `m` = mandatory `{…}` (with the single-expression fallback). The list-and-join
-// spelling anticipates the factory's move to a per-argument list signature.
+// Argument structures come from xparse-like codes, one code string per argument:
+// `o` = optional `[…]`, `m` = mandatory `{…}` (with the single-expression
+// fallback). Compact whole-spec strings go through `argument_specs_from_str`.
 package.insert(
     CallableType::Macro,
     "cite",
-    Arc::new(MacroSpec::new(argument_specs(&["o", "m"].join(" ")).unwrap())),
+    Arc::new(MacroSpec::new(argument_specs(["o", "m"]).unwrap())),
 );
 
 let language = Language::<Latexlike>::default()
@@ -134,7 +134,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "item",
-    Arc::new(MacroSpec::new(argument_specs(&["o"].join(" ")).unwrap())),
+    Arc::new(MacroSpec::new(argument_specs(["o"]).unwrap())),
 );
 let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
 
@@ -263,7 +263,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Environment,
     "enumerate",
-    Arc::new(EnvironmentSpec::new(argument_specs(&["o"].join(" ")).unwrap())),
+    Arc::new(EnvironmentSpec::new(argument_specs(["o"]).unwrap())),
 );
 let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
 
@@ -323,7 +323,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "verb",
-    Arc::new(MacroSpec::new(argument_specs(&["v"].join(" ")).unwrap())),
+    Arc::new(MacroSpec::new(argument_specs(["v"]).unwrap())),
 );
 package.insert(
     CallableType::Environment,
@@ -380,7 +380,7 @@ let mut package = Package::new("mydefs");
 package.insert_specials(
     "_",
     CallableType::Specials,
-    Arc::new(SpecialsSpec::new(argument_specs(&["m"].join(" ")).unwrap())),
+    Arc::new(SpecialsSpec::new(argument_specs(["m"]).unwrap())),
 );
 let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
 
@@ -479,7 +479,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "usetikzlibrary",
-    Arc::new(MacroSpec::new(argument_specs(&["m"].join(" ")).unwrap())),
+    Arc::new(MacroSpec::new(argument_specs(["m"]).unwrap())),
 );
 let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
 
@@ -507,7 +507,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "includegraphics",
-    Arc::new(MacroSpec::new(argument_specs(&["o", "m"].join(" ")).unwrap())),
+    Arc::new(MacroSpec::new(argument_specs(["o", "m"]).unwrap())),
 );
 let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
 
