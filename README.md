@@ -25,36 +25,37 @@ Add this to your `Cargo.toml`:
 techy = "0.1"
 ```
 
-(Todo: include example once all design patterns are finalized and prototype code is set up.)
+Parse LaTeX-like input with the built-in `latexlike` preset:
+
+```rust
+use techy::engine::Language;
+use techy::latexlike::Latexlike;
+
+let language: Language<Latexlike> = Language::default();
+let result = language.parse("inline $x+y$ math").unwrap();
+let math = result.tree.root().child(1).unwrap();
+assert!(math.is_math_group());
+```
+
+The narrative guide (chapters under `techy::guide` in the generated
+documentation) walks through parsing, defining macros and environments, math
+modes, verbatim, error recovery, and content extraction.
 
 ## Architecture
 
-The parser follows a three-stage pipeline:
+The crate is organized in three strata: S0, a `Lang`-free foundation; S1, the
+mutually recursive core; and S2, the presets.
 
-1. **Tokenization** (`token` module): Break source into tokens
-2. **Parsing** (`parser` module): Build AST from tokens  
-3. **Processing** (`node` module): Traverse and manipulate AST
-
-### Core Concepts
-
-- **Tokens**: Basic lexical units (macros, braces, text, etc.)
-- **Nodes**: AST elements representing LaTeX constructs
-- **Specs**: Definitions for how to parse macros and environments
-- **Scopes/Packages**: Database of known LaTeX constructs
-- **State**: Tracks parsing context (math mode, etc.)
-
-## Usage Examples
-
-(TODO, after design decisions finalized and minimal code is set up.)
-
-## Module Documentation
-
-- **`token`**: Token types and tokenization
-- **`node`**: AST node definitions
-- **`parser`**: Parser implementations
-- **`spec`**: Macro/environment specifications
-- **`state`**: Parsing state management
-- **`error`**: Error types
+- **`source`** (S0): source content, byte spans, provenance, lazy line/column
+- **`error`** (S0): span-based structured diagnostics, tolerant parsing policy
+- **`token`** (S1): zero-copy tokens, data-driven tokenization rules, readers
+- **`state`** (S1): the `Lang` trait, immutable parsing state, state deltas
+- **`spec`** (S1): callable specs and argument structures
+- **`scopes`** (S1): definition packages, the scope stack, spec lookup
+- **`node`** (S1): the flat, frozen node tree and its accessors
+- **`constructs`** (S1): the construct parsers and the content dispatch loop
+- **`engine`** (S1): `Language`, parse sessions, drivers, results
+- **`latexlike`** (S2): the familiar LaTeX behavior as a preset
 
 To build HTML documentation:
 

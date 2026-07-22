@@ -534,5 +534,3 @@ assert_eq!(label.value_content().unwrap().source_text(), Some("fig,main"));
 - The acceptance suite (`techy/tests/acceptance.rs`) is this page's bigger sibling:
   span-exact ports of pylatexenc's walker tests, error-recovery matrices in both
   recovery modes, and the shared test-side spec database pattern.
-- `ARCHITECTURE.md` and `DESIGN_RATIONALE.md` in the repository record why the
-  library is shaped this way.
