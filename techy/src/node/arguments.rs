@@ -3,8 +3,7 @@
 //! content nodes live in the tree, and (for arguments) which spec each region was
 //! parsed against.
 //!
-//! **Modeled on pylatexenc's `ParsedArguments`** (decided July 2026, replacing the
-//! Phase 5 `ArgsLayout`/`SlotsLayout` offset maps): pylatexenc keeps two parallel lists —
+//! **Modeled on pylatexenc's `ParsedArguments`**: pylatexenc keeps two parallel lists —
 //! `argnlist` (one node or `None` per argument) and `arguments_spec_list` (the spec of
 //! every argument, present or not). Here the two are zipped into one `Vec` of
 //! [`ParsedArgument`] entries, each carrying its `Arc`'d [`ArgumentSpec`]: the record is
@@ -12,8 +11,7 @@
 //! callable spec didn't declare — `\newcommand`-alikes), and absent optionals keep their
 //! spec, so by-name lookup can distinguish "not provided" from "no such argument".
 //!
-//! # Encoding: one child *region* per argument/slot (July 2026 regions session,
-//! DESIGN_RATIONALE.md [§dd-dr:nodes]; supersedes the one-node-per-argument shape)
+//! # Encoding: one child *region* per argument/slot
 //!
 //! A callable's children range is the concatenation of one contiguous **region** per
 //! *provided* argument, followed by one region per slot. A region holds the argument's
@@ -37,7 +35,7 @@
 //! which drop pre-argument comment nodes by default (`return_full_node_list=False`) —
 //! noise is kept, out of the way of content.
 //!
-//! # Two-phase records — the accepted "honest cost" (DESIGN_RATIONALE.md [§dd-dr:nodes])
+//! # Two-phase records — the accepted "honest cost"
 //!
 //! Resolved region ranges name positions in the **flattened** tree (the coordinate
 //! system of `NodeData.children`), and those positions don't exist while parsers run: a
@@ -55,7 +53,7 @@
 //! panic-on-contract-violation policy.
 //!
 //! Content-extraction conveniences beyond the stored ranges (keyval helpers, chars
-//! flattening) remain *computed* views (Phase 7); extensions that want to cache derived
+//! flattening) remain *computed* views; extensions that want to cache derived
 //! data per argument use the [`ext`](ParsedArgument::ext) slot instead.
 
 use alloc::boxed::Box;
@@ -100,7 +98,7 @@ pub enum ContentNodes {
 /// panic on staged ones — a finished tree never contains staged regions (the builder
 /// validates staged-ness at `add()`), so the panic is only reachable by reading a
 /// region one built oneself and never staged (the approved indexing-style exception,
-/// panic policy, DESIGN_RATIONALE.md [§dd-dr:panic-policy]).
+/// panic policy).
 #[derive(Clone, Debug)]
 pub struct ChildRegion {
     state: RegionState,
@@ -316,11 +314,11 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
 /// for the standard environment shape it holds the body `List` node, whose children are
 /// the content.
 ///
-/// Slots are pure **record-level** vocabulary (decided July 2026, slots session): there
+/// Slots are pure **record-level** vocabulary: there
 /// is no spec-side slot declaration — the invocation parser that reads a callable's
 /// body (the spec's sanctioned `make_invocation_parser` composition) mints these
 /// records directly, with whatever parsers it drives internally. Self-description
-/// ([§dd-dr:nodes]) therefore means carrying the `name` on the record itself — a deliberate
+/// therefore means carrying the `name` on the record itself — a deliberate
 /// asymmetry with [`ParsedArgument`], which points at its `Arc<ArgumentSpec>`: an
 /// argument spec carries parser/name/delta worth pointing at; a slot record has no
 /// spec-side counterpart.

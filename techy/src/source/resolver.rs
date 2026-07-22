@@ -14,11 +14,10 @@ use super::origin::SourceOrigin;
 use super::source::{Source, SourceSpan};
 
 /// Resolves an external reference (e.g. a file name from an `\input`-like construct) to
-/// the referenced **content**. The parser will be generic over the resolver (wired in
-/// Phase 7 — nothing calls [`resolve`](SourceResolver::resolve) yet); [`NoResolver`] is
+/// the referenced **content**. The parser will be generic over the resolver; [`NoResolver`] is
 /// the zero-sized, zero-cost default for builds that must not perform any lookup or I/O.
 ///
-/// **The resolver returns content, not a [`Source`]** (decided July 2026, Action-05):
+/// **The resolver returns content, not a [`Source`]** (Action-05):
 /// the caller mints the `Source` — see [`resolve_source`] — stamping the include-site
 /// provenance (`SourceProvenance::Resolved { reference, triggered_at }`) itself. A
 /// twice-included file thereby gets a *distinct* `Source` per include site, each
@@ -94,7 +93,7 @@ impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Arc<R
 }
 
 /// Resolve `reference` through `resolver` and mint the [`Source`] — the call-site
-/// composition the parser will use (Phase 7). Provenance is stamped **here, in core**:
+/// composition the parser will use. Provenance is stamped **here, in core**:
 /// each call produces a fresh `Source` whose provenance records *this* `triggered_at`,
 /// which is what keeps a twice-included file's diagnostics pointing at the right
 /// include site (see the trait docs).

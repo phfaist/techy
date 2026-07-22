@@ -17,14 +17,13 @@ use super::lang::Lang;
 pub struct StateData<L: Lang> {
     /// Tokenization rules — plain stored data (defined in the token topic).
     pub rules: TokenRules<L>,
-    /// The definitions visible in this state: the provider stack (Phase 7.3),
+    /// The definitions visible in this state: the provider stack,
     /// modified mid-parse via [`scope_ops`](super::ParsingStateDelta::scope_ops)
     /// (`\newcommand`-style definitions, package loads).
     pub scopes: ScopeStack<L>,
     /// The parsing mode this state is in ([`Lang::ModeId`]) — first-class core data:
     /// deltas *initiate* mode changes ([`mode`](super::ParsingStateDelta::mode)
-    /// override channel) and [`Lang::finalize_transition`] *interprets* them
-    /// (DESIGN_RATIONALE.md [§dd-dr:parsing-state]).
+    /// override channel) and [`Lang::finalize_transition`] *interprets* them.
     pub mode: L::ModeId,
     /// Language-specific state (e.g. feature-toggle flags; modal state lives in
     /// [`mode`](StateData::mode) instead).
@@ -37,7 +36,7 @@ pub struct StateData<L: Lang> {
 /// The **only** way a non-initial state comes into existence is
 /// [`derived()`](ParsingState::derived) — the transition choke point. States are cheaply
 /// shareable; the engine wraps them in `Arc` and creates a new one only at transitions,
-/// so nodes can record their parse-time state (ARCHITECTURE.md [§dd-arch:state]).
+/// so nodes can record their parse-time state.
 ///
 /// # Derived caches
 ///
@@ -47,7 +46,7 @@ pub struct StateData<L: Lang> {
 /// states non-`Sync`). Eager rebuilds are a real fraction of a transition's cost, so
 /// [`derived()`](ParsingState::derived) reuses the parent's `PrefixTable` (held behind
 /// `Arc`) whenever its inputs — `enable_groups` and the `groups` rules, by `Arc`
-/// identity — are unchanged (July 2026). No analogous generic reuse rule exists for
+/// identity — are unchanged. No analogous generic reuse rule exists for
 /// `TriggerChars`: its inputs include `L::StateExt`, which carries no `Eq` bound (see
 /// [`Lang::specials_trigger_chars`]).
 pub struct ParsingState<L: Lang> {
@@ -89,7 +88,7 @@ impl<L: Lang> ParsingState<L> {
     /// which is deliberately not a table input — takes the reuse path. Functional
     /// contract: `self` is never observably mutated.
     ///
-    /// # Fallibility (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs])
+    /// # Fallibility
     ///
     /// A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets an
     /// absent provider name; a definition op routed to an immutable provider). A delta
@@ -102,7 +101,7 @@ impl<L: Lang> ParsingState<L> {
     /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder deriving out
     /// of parse treats an `Err` as its own input error.
     ///
-    /// # Temporary group rules (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine])
+    /// # Temporary group rules
     ///
     /// [`TokenRules::temporary_groups`] is scoped in state data, and this choke point
     /// enforces the scope — every group descent passes through here (installing the
@@ -261,7 +260,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 }
 
 /// A [`derived()`](ParsingState::derived) transition whose delta carried failing
-/// [`scope ops`](ParsingStateDelta::scope_ops) (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// [`scope ops`](ParsingStateDelta::scope_ops).
 ///
 /// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
 /// embedder input error is the *caller's* context. The error carries everything a
@@ -284,8 +283,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// The `Err` variant is large *by design* — it owns a full state plus the applied
 /// delta, because the recovery payload is the point of the type. The functions
 /// returning it `#[allow(clippy::result_large_err)]` rather than box: `Box`-free
-/// signatures were judged worth the bigger `Result` return slot
-/// (DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// signatures were judged worth the bigger `Result` return slot.
 pub struct DeriveError<L: Lang> {
     /// One record per failing op, in delta order (never empty).
     pub failures: Vec<ScopeOpError>,

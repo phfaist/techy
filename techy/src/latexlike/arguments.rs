@@ -1,5 +1,4 @@
-//! [`argument_specs`]: the argument-code factory (Phase 7.7; ParserLibraryParity.md
-//! N8) — pylatexenc's xparse-like argument shorthands (`LatexStandardArgumentParser`'s
+//! [`argument_specs`]: the argument-code factory — pylatexenc's xparse-like argument shorthands (`LatexStandardArgumentParser`'s
 //! codes) resolved **eagerly** into configured core [`ArgumentParser`]s. Plain
 //! constructor functions, not a parser type: parser choice depends only on the code,
 //! never on parse-time facts, and a malformed code is embedder input — an

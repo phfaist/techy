@@ -5,7 +5,7 @@
 //! [`TokenRules`](super::TokenRules) data: a language may have many trigger strings in
 //! scope, changing with scope-stack ops, so their recognition is delegated to a
 //! [`Lang`](crate::state::Lang) hook (`Lang::scan_specials`) instead of being enumerated in
-//! the rules (DESIGN_RATIONALE.md [§dd-dr:tokens]). Recognition and resolution happen in one call: a
+//! the rules. Recognition and resolution happen in one call: a
 //! [`SpecialsMatch`] carries both the name and the resolved spec, which removes
 //! normalization and scoping mismatches between scanning and lookup by construction.
 //!
@@ -40,8 +40,7 @@ pub struct SpecialsMatch<'s, L: Lang> {
     /// The invocation form the trigger resolved to (recorded on the token; the dispatch
     /// loop needs it to build an `Invocation`). Recognition = resolution, and a
     /// resolution is the *(callable type, spec)* pair — the same shape as
-    /// [`ResolvedCallable`](crate::engine::ResolvedCallable) (added July 2026, Phase 6.4,
-    /// user-approved).
+    /// [`ResolvedCallable`](crate::engine::ResolvedCallable).
     pub callable_type: L::CallableTypeId,
     /// The specials name recorded on the token and later on the node — usually the matched
     /// string itself. Borrowed from the scanned content (zero-copy).
@@ -89,7 +88,7 @@ impl TriggerChars {
 
     /// The union of two filters: a character may start a trigger in the union iff it may
     /// in either operand ([`Any`](TriggerChars::Any) absorbs). The fold behind a
-    /// multi-provider scan (Phase 7.3): the state caches one filter for the whole
+    /// multi-provider scan: the state caches one filter for the whole
     /// [`ScopeStack`](crate::scopes::ScopeStack), unioned over its providers at freeze.
     #[must_use]
     pub fn union(&self, other: &TriggerChars) -> TriggerChars {

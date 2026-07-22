@@ -1,5 +1,5 @@
 //! [`NodeSlice`]: a `Copy` view of a contiguous run of sibling nodes, with exact span
-//! information (Phase 7.8, DESIGN_RATIONALE.md [§dd-dr:nodes]).
+//! information.
 //!
 //! Every "list of nodes" the read API hands out — a node's children, an argument's
 //! region or content nodes, a slot's content — is a contiguous run of siblings in the
@@ -7,7 +7,7 @@
 //! [`NodeRef::children`](super::NodeRef::children) and the region/content accessors.
 //! Beyond iteration it answers *where the run is in the source* ([`span`](NodeSlice::span),
 //! [`source_text`](NodeSlice::source_text)) **exactly** — sibling runs are
-//! span-contiguous by the [§dd-arch:nodes] partition invariant, so the covering span is the first
+//! span-contiguous by the partition invariant, so the covering span is the first
 //! node's start to the last node's end, not an approximation. The extraction helpers
 //! ([`node::extract`](super::extract)) consume and produce these views.
 
@@ -96,7 +96,7 @@ impl<'t, L: Lang> NodeSlice<'t, L> {
     }
 
     /// The run's covering [`SourceSpan`] — **exact**: sibling runs are span-contiguous
-    /// (the [§dd-arch:nodes] partition invariant), so this is the first node's start to the last
+    /// (the partition invariant), so this is the first node's start to the last
     /// node's end, in the run's own source.
     ///
     /// `None` in exactly two honest cases: the run is **empty** (no source material to

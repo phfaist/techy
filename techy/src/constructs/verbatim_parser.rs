@@ -1,6 +1,6 @@
-//! The verbatim family (Phase 7.7; ParserLibraryParity.md N7): parsers whose content
-//! is **raw text** — no commands, no groups, no comments — read per the pinned recipe
-//! (DESIGN_RATIONALE.md [§dd-dr:tokens], Action-02 entry): a features-disabled derived state whose
+//! The verbatim family: parsers whose content
+//! is **raw text** — no commands, no groups, no comments — read per the pinned recipe:
+//! a features-disabled derived state whose
 //! [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) is
 //! **replaced** by a rule whose close string is the verbatim terminator. The expected
 //! close is ungated by `enable_groups` and overrides any close expectation inherited
@@ -33,7 +33,7 @@
 //! argument's content designation is the group's children. The environment form
 //! stages the standard body `List` holding the raw-content `Chars` node; a gobbled
 //! newline is **kept as a leading whitespace `Chars` node but designated out of the
-//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte ([§dd-dr:nodes]
+//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte (the
 //! partition invariants), so pylatexenc's byte-dropping gobble becomes a designation
 //! fact, not a missing node.
 //!

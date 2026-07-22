@@ -1,5 +1,4 @@
-//! [`ChildStateSpec`]: per-use descent-state policy on [`NodesParser`] (decided July
-//! 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine] — ports pylatexenc's `make_child_parsing_state`).
+//! [`ChildStateSpec`]: per-use descent-state policy on [`NodesParser`] (ports pylatexenc's `make_child_parsing_state`).
 //!
 //! When the dispatch loop descends into a child construct — a group interior, or (6.4) a
 //! callable invocation — the child construct parser's **base state** is resolved through
@@ -10,13 +9,13 @@
 //!
 //! (The 6.5 consumer,
 //! [`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)'s
-//! bracket-balancing policy, detached in July 2026: its keep-or-revert semantics are
+//! bracket-balancing policy, since detached: its keep-or-revert semantics are
 //! per-level by design — decided semantics 3 below — and are now carried by the
 //! state-scoped [`TokenRules::temporary_groups`](crate::token::TokenRules) lifecycle,
 //! which reaches every depth. The mechanism here remains for descent policies that are
 //! genuinely per-use and per-level, like the chars-except-groups motivating case.)
 //!
-//! Decided semantics ([§dd-dr:parsers-engine]):
+//! Decided semantics:
 //!
 //! 1. *Resolution precedes policy* — `ParseDriver::resolve_command` runs under the loop's own
 //!    state (coherent with the state that tokenized the token); the policy only shapes

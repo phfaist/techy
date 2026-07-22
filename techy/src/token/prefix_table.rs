@@ -1,6 +1,6 @@
 //! The delimiter prefix table derived from [`TokenRules`].
 //!
-//! Rebuilt only at state transitions (the parsing state caches it per instance, Phase 3),
+//! Rebuilt only at state transitions (the parsing state caches it per instance),
 //! so the hot token-reading path scans a small pre-sorted table.
 
 use alloc::string::String;

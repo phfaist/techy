@@ -1,11 +1,11 @@
 //! S0 — source management: content, spans, provenance, resolution, line/column analysis.
 //!
-//! This stratum implements `ARCHITECTURE.md` [§dd-arch:source] and `DESIGN_RATIONALE.md` [§dd-dr:sources-and-spans]:
+//! This stratum provides:
 //!
 //! - [`Source`] owns one unit of source content, its origin metadata, and its
 //!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
 //! - [`Span`] is a plain `Copy` byte range — the transient span type on which all span
-//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately, [§dd-dr:errors]; the
+//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately; the
 //!   type lives here rather than in the token topic because errors use it independently
 //!   of tokenization).
 //! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes and errors/diagnostics carry
@@ -19,7 +19,7 @@
 //! - [`SourceResolver`] is the pluggable content-lookup extension point (`\input`-like
 //!   references); [`NoResolver`] is the zero-cost default.
 //! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
-//!   owned when synthesized or normalized. Node payloads carry it (Phase 5).
+//!   owned when synthesized or normalized. Node payloads carry it.
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
 //!   purely in byte offsets.
 //!
@@ -30,13 +30,12 @@
 //! layered (nodes → sources; sources → sources), which makes `Arc` cycles impossible by
 //! construction.
 //!
-//! # Genericity note (Phase 1)
+//! # Genericity note
 //!
 //! The origin metadata type is a plain type parameter `O: SourceOrigin` with the default
 //! `Option<String>` (conventionally the URL the content was obtained from, `None` when
-//! unknown or synthesized). When the `Lang` trait arrives (Phase 3+), `L::SourceOrigin` will
-//! be plugged into this parameter by the higher layers; L0 itself never depends on `Lang`,
-//! preserving the strict layering of ARCHITECTURE.md [§dd-arch:arch].
+//! unknown or synthesized). The higher layers plug `L::SourceOrigin` into this parameter; S0 itself never
+//! depends on `Lang`, preserving the strict stratum layering.
 //!
 //! # no_std
 //!

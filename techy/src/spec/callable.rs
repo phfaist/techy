@@ -2,7 +2,7 @@
 //! standard declarative implementation [`StdCallableSpec`].
 //!
 //! The invocation-form identifier is [`Lang::CallableTypeId`] — a closed per-language
-//! type (decided July 2026; formerly an open interned id).
+//! type.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -35,13 +35,12 @@ pub enum FrameRole {
 
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and no
 /// invocation form; one spec may back several names (`\emph` and `\textit` can share), and
-/// per-callable-type unknown-callable fallbacks can be shared singletons
-/// (ARCHITECTURE.md [§dd-arch:specs]).
+/// per-callable-type unknown-callable fallbacks can be shared singletons.
 ///
 /// The declarative surface is the [`ArgumentSpec`] list (arguments *configure* an
 /// invocation), pylatexenc-`arguments_spec_list`-shaped: `Arc`-shared so parsed nodes
 /// can record which spec each argument was parsed against. Slots — a parsed callable's
-/// *content regions* — have no spec-side declaration (decided July 2026, slots
+/// *content regions* — have no spec-side declaration (slots
 /// session): a body-bearing callable's takeover parser mints the
 /// [`ParsedSlot`](crate::node::ParsedSlot) records directly, and announces that it
 /// takes material via [`requires_content`](CallableSpec::requires_content). The default
@@ -52,23 +51,22 @@ pub enum FrameRole {
 /// The behavioral surface is [`make_invocation_parser`](CallableSpec::make_invocation_parser):
 /// a factory returning a fresh boxed [`ConstructParser`] per resolved [`Invocation`],
 /// defaulting to the declarative [`StdInvocationParser`]. Overriding it is the
-/// full-takeover escape hatch for `\verb`-like constructs (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
+/// full-takeover escape hatch for `\verb`-like constructs.
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.
 /// Every method takes `&self`, so a stateful implementation needs interior mutability
 /// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
-/// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell` (DESIGN_RATIONALE.md).
+/// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.
 ///
-/// **Downcasting is part of the contract** (`Any` supertrait, decided July 2026,
-/// Action-05): a preset's [`Lang::finalize_node`](crate::state::Lang::finalize_node)
+/// **Downcasting is part of the contract** (`Any` supertrait): a preset's [`Lang::finalize_node`](crate::state::Lang::finalize_node)
 /// hook recovers its concrete spec type from a stored `Arc<dyn CallableSpec<L>>` via
 /// trait upcasting — `(&*spec as &dyn core::any::Any).downcast_ref::<MySpec>()`. The
 /// `Arc`'d trait object was already implicitly `'static`; the supertrait makes it
 /// per-implementor law. Downcasting to a preset's own spec *trait* (an open set of
 /// third-party spec types) needs one extra move: register every spec behind one
 /// concrete wrapper (`FlmSpecBox(Arc<dyn FlmSpec>)` delegating to the inner value) and
-/// downcast to the wrapper (DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// downcast to the wrapper.
 pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// The declarative argument structure of an invocation, in invocation order.
     /// Default: no arguments.
@@ -78,7 +76,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
 
     /// Would this invocation, appearing **bare** — as a single-token expression
     /// argument, `\frac\mymacro 2` — be malformed? The expression position's guard
-    /// consults this before dispatching (decided July 2026, slots session; the spec-side
+    /// consults this before dispatching (the spec-side
     /// face of pylatexenc's `contents_can_be_empty` consultation): `true` diagnoses the
     /// bare use and stages the single-token callable with every declared argument
     /// absent; `false` dispatches the invocation in full.
@@ -96,9 +94,8 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
 
     /// The factory producing this spec's invocation parser: a **fresh boxed parser per
     /// resolved invocation**, ownership moved to the caller, the [`Invocation`]
-    /// traveling inside the parser instance (decided July 2026, DESIGN_RATIONALE.md
-    /// [§dd-dr:parsers-engine] — pylatexenc's `get_node_parser(token)` shape with ownership made
-    /// explicit). The dispatch loop resolves the trigger, builds the `Invocation`,
+    /// traveling inside the parser instance (pylatexenc's `get_node_parser(token)` shape
+    /// with ownership made explicit). The dispatch loop resolves the trigger, builds the `Invocation`,
     /// calls this factory, runs `parser.parse(cx)` once, and drops the parser.
     ///
     /// When the parser runs, the trigger token has already been consumed whole by the
@@ -121,8 +118,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
         Box::new(StdInvocationParser::new(invocation))
     }
 
-    /// Title of a parse-traceback frame covering this callable (DESIGN_RATIONALE.md
-    /// [§dd-dr:errors]): called at *snapshot* time — the cold path, when a condition is recorded —
+    /// Title of a parse-traceback frame covering this callable: called at *snapshot* time — the cold path, when a condition is recorded —
     /// never on push, so live frames stay allocation-free. `name` is the invocation
     /// spelling as written (`\frac`, `~`), sliced from the source at snapshot time; the
     /// spec itself is de-keyed and cannot know it.

@@ -1,9 +1,8 @@
-//! The node tree: flat, frozen, index-based AST storage (ARCHITECTURE.md [§dd-arch:nodes];
-//! DESIGN_RATIONALE.md [§dd-dr:nodes]).
+//! The node tree: flat, frozen, index-based AST storage.
 //!
 //! - [`NodeTree`] stores all nodes of a parse in one `Vec`; a node's children occupy a
 //!   contiguous index block (`Range<u32>`). Trees are immutable — they come out of a
-//!   [`NodeTreeBuilder`] (driven by `ParserSession`, Phase 6) and are only read
+//!   [`NodeTreeBuilder`] (driven by `ParserSession`) and are only read
 //!   afterwards, through [`NodeRef`] proxies. Transformations build new trees;
 //!   Arc-shared sources, specs, and states make that cheap.
 //! - [`NodeKind`] is the **closed structural core**: `Chars` / `Group` / `Callable` /
@@ -16,8 +15,7 @@
 //! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
 //!   arguments/slots, post-space); shared behavior lives in the spec, context in the
 //!   recorded parsing state (the division-of-labor rule).
-//! - **One child region per argument/slot** (July 2026 regions session,
-//!   DESIGN_RATIONALE.md [§dd-dr:nodes]): a callable's children are the concatenation of one
+//! - **One child region per argument/slot**: a callable's children are the concatenation of one
 //!   contiguous region per *provided* argument, then one per slot — each region holding
 //!   noise (comment nodes, whitespace-only `Chars` nodes) alongside the syntax-bearing
 //!   nodes. [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments` pattern)
@@ -154,7 +152,7 @@ mod tests {
         Arc::new(ArgumentSpec::new(Arc::new(StubParser)))
     }
 
-    /// Compile-time proof of the thread-safety contract (DESIGN_RATIONALE.md): trees,
+    /// Compile-time proof of the thread-safety contract: trees,
     /// states, and spec handles are `Send + Sync`, so a tree parsed on one thread can be
     /// handed to another.
     #[test]
@@ -169,7 +167,7 @@ mod tests {
     /// List [ Chars"x", Callable\frac(Group(Chars"a"), Group(Chars"b")), Chars" ",
     /// Comment" note" ]. The callable's post-space is the trigger token's own —
     /// empty here, `{` follows the name directly — so the space before the comment is
-    /// sibling content ([§dd-dr:nodes] invariant 3 as amended in Phase 6.4).
+    /// sibling content (whitespace invariant 3).
     fn example_tree() -> NodeTree<PlainLang> {
         let source: Arc<Source> = Arc::new(Source::new(r"x\frac{a}{b} % note"));
         let st = state::<PlainLang>();
@@ -718,7 +716,7 @@ mod tests {
     // --- builder contract violations around regions -----------------------------------
     //
     // Contract violations return `NodeBuildError` — extension-implementation bugs must
-    // never panic core code (panic policy, DESIGN_RATIONALE.md).
+    // never panic core code (the panic policy).
 
     /// Helper: a one-argument callable staged over the given children with the given
     /// region record (drives the builder's region checks).
@@ -1063,7 +1061,7 @@ mod tests {
         assert_eq!(*tree.root().ext(), 0);
     }
 
-    /// The slot-side symmetry of `ArgumentExt` (decided July 2026): per-instance derived
+    /// The slot-side symmetry of `ArgumentExt`: per-instance derived
     /// data about one content region (tabular cells, enumerate items) rides on the
     /// `ParsedSlot` record itself, not on the whole-callable ext.
     #[test]

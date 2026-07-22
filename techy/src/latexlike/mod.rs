@@ -20,7 +20,7 @@
 //!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s; compact whole-spec strings via
 //!   [`argument_specs_from_str`]) and the verbatim wiring —
 //!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
-//!   `\verb`-style delimited verbatim arguments (Phase 7.7);
+//!   `\verb`-style delimited verbatim arguments;
 //! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
 //!   `NodeRef<'_, Latexlike>`.
@@ -95,7 +95,7 @@ pub enum GroupType {
     /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
     /// plug).
     Math,
-    /// A verbatim region's group (Phase 7.7): the `\verb|…|` shape staged by the `v`
+    /// A verbatim region's group: the `\verb|…|` shape staged by the `v`
     /// argument codes ([`argument_specs`]), and the class of the terminator rules
     /// verbatim readers mint. The interior is **raw text** — it is read under a
     /// features-off derived state, never tokenized — so this class appears on no
@@ -233,7 +233,7 @@ impl Lang for Latexlike {
 /// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
 /// space (NBSP U+00A0, U+2028, …) is ordinary content here, so e.g. an NBSP after
 /// `\emph` becomes a content char rather than being swallowed as post-macro space
-/// (decided for determinism and a fixed char-set model; DESIGN_RATIONALE.md [§dd-dr:latexlike]).
+/// (decided for determinism and a fixed char-set model).
 ///
 /// The four math delimiter pairs come from the shared `MATH_DELIMITERS` table (the
 /// single source of truth also read by [`NodeRef::math_style`](crate::node::NodeRef::math_style)).
@@ -288,7 +288,7 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 /// preset deliberately omits it — a multi-newline break is a whitespace chars node
 /// here (via
 /// [`enable_multi_newline_paragraphs`](TokenRules::enable_multi_newline_paragraphs)),
-/// not a specials node (DESIGN_RATIONALE.md [§dd-dr:latexlike]).
+/// not a specials node.
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
 /// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes

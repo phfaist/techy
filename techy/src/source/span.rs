@@ -12,8 +12,7 @@ use core::ops::Range;
 /// caller contract, enforced where spans meet content ([`slice`](Span::slice) panics,
 /// [`get`](Span::get) returns `None`), not by this type.
 ///
-/// Fields are private and every mutator preserves `start <= end` (decided July 2026,
-/// Action-05 session — consistent with `SourceSpan`): [`new`](Span::new) debug-asserts
+/// Fields are private and every mutator preserves `start <= end` (consistent with `SourceSpan`): [`new`](Span::new) debug-asserts
 /// it, and in-place growth goes through the monotone [`extend_to`](Span::extend_to).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
@@ -54,7 +53,7 @@ impl Span {
     ///
     /// Saturating: an inverted span (`start > end` — a caller bug `new` debug-asserts
     /// against, unreachable through the mutators) has length 0 rather than wrapping in
-    /// release builds (panic policy, DESIGN_RATIONALE.md).
+    /// release builds (the panic policy).
     #[inline]
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
@@ -104,8 +103,8 @@ impl Span {
     /// # Panics
     ///
     /// Panics if the span is out of bounds for `content` or not on `char` boundaries
-    /// (same contract as `&content[range]` — the approved indexing-style exception,
-    /// panic policy, DESIGN_RATIONALE.md).
+    /// (same contract as `&content[range]` — the approved indexing-style exception
+    /// of the panic policy).
     #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]

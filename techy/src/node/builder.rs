@@ -18,7 +18,7 @@
 //! terms) into global node-index ranges: those ranges name positions in the flattened
 //! layout, which exists only here. This is the accepted "honest cost" of letting
 //! parsers build `ParsedArguments`/`ParsedSlots` directly with an unchanged `add()`
-//! (DESIGN_RATIONALE.md [§dd-dr:nodes]) — the record's phase is a runtime invariant, contained by
+//! — the record's phase is a runtime invariant, contained by
 //! resolving at exactly this one point, so a finished tree never holds staged regions.
 
 use alloc::sync::Arc;
@@ -62,14 +62,14 @@ struct Staged<L: Lang> {
 /// freezes everything reachable from the designated root into flat storage.
 ///
 /// This is the mutation boundary of the node system: trees are immutable, and this
-/// builder — driven by `ParserSession` (Phase 6), tests, and future transforms — is the
+/// builder — driven by `ParserSession`, tests, and future transforms — is the
 /// only place nodes are assembled.
 ///
 /// # Contract (validated at the boundary — violations return [`NodeBuildError`])
 ///
 /// The staging input comes from argument/construct parser implementations and
 /// [`Lang::finalize_node`] hooks — outer layers whose bugs must surface as errors, not
-/// panics (panic policy, DESIGN_RATIONALE.md). Every check runs in every build:
+/// panics (the panic policy). Every check runs in every build:
 ///
 /// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
 /// - Each staged node is used as a child at most once, and the root must not be anyone's
@@ -77,7 +77,7 @@ struct Staged<L: Lang> {
 /// - A `Callable` kind's `ParsedArguments`/`ParsedSlots` regions must be *staged* (never
 ///   reuse records from a finished tree — ranges are only meaningful for the layout that
 ///   minted them) and must **tile** the child list exactly, in order (argument regions,
-///   then slot regions, no gaps — every child accounted for: the [§dd-arch:nodes] partition
+///   then slot regions, no gaps — every child accounted for: the partition
 ///   invariant); content designations must fit their parent's child list, and a content
 ///   parent must lie inside its own region's subtree (checked in
 ///   [`finish`](NodeTreeBuilder::finish), where the layout exists).
@@ -118,7 +118,7 @@ impl<L: Lang> NodeTreeBuilder<L> {
     ///
     /// Runs [`Lang::finalize_node`] on the node's parts first — the builder is the single
     /// mutation boundary, so hooking here guarantees no node escapes finalization
-    /// (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]) — then the staging checks (hook mutations are validated
+    /// — then the staging checks (hook mutations are validated
     /// too). `Err` means the input violated the staging contract (see the type docs; the
     /// builder is poisoned then).
     pub fn add_with_ext(
@@ -340,7 +340,7 @@ fn resolve_regions<L: Lang>(
 /// A read-only view over a [`NodeTreeBuilder`]'s staged nodes, keyed by [`BuildId`] —
 /// the "already staged" context handed to [`Lang::finalize_node`] (so a callable's hook
 /// can inspect its children, e.g. to extract environment scaffolding sub-spans) and to
-/// node-based stop predicates (Phase 6.2).
+/// node-based stop predicates.
 ///
 /// Obtained from [`NodeTreeBuilder::staged_nodes`]; borrows the builder, no mutation.
 pub struct StagedNodes<'b, L: Lang> {

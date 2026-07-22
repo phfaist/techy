@@ -3,8 +3,7 @@
 //!
 //! `NodeExtTypes` is defined here, next to `Lang`, rather than in the `node` topic:
 //! its *meaning* is a node concern, but it is a constituent of the compile-time bundle,
-//! and moving it there would recreate a module cycle for cosmetics (ARCHITECTURE.md
-//! [§dd-arch:engine] stratum note).
+//! and moving it there would recreate a module cycle for cosmetics.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -24,8 +23,7 @@ use crate::token::{
 
 use super::parsing_state::{ParsingState, StateData};
 
-/// The bundle of node extension types of a language: the **two-tier ext system** of
-/// ARCHITECTURE.md [§dd-arch:nodes], orthogonal to structural node identity (a group with custom
+/// The bundle of node extension types of a language: the **two-tier ext system**, orthogonal to structural node identity (a group with custom
 /// data is still a group to all generic tooling).
 ///
 /// Tier 1 — [`NodeExt`](NodeExtTypes::NodeExt) — sits uniformly on every node
@@ -54,12 +52,12 @@ pub trait NodeExtTypes {
     /// Ext of a *parsed argument* record (not a node kind): language/extension data
     /// attached to one argument of one invocation — e.g. a reference-parsing extension
     /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
-    /// derives from, instead of re-parsing the argument node (decided July 2026).
+    /// derives from, instead of re-parsing the argument node.
     type ArgumentExt: Clone + fmt::Debug + Default + Send + Sync;
     /// Ext of a *parsed slot* record (not a node kind): per-instance derived data about
     /// one content region of one invocation — e.g. a tabular extension caching the cell
     /// structure of an environment's body slot, or an itemize extension caching item
-    /// boundaries (decided July 2026; the slot-side symmetry of
+    /// boundaries (the slot-side symmetry of
     /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)).
     type SlotExt: Clone + fmt::Debug + Default + Send + Sync;
 }
@@ -77,14 +75,14 @@ impl NodeExtTypes for () {
 }
 
 /// The compile-time type bundle of a language definition. Every core type takes one
-/// `L: Lang` parameter — never five (ARCHITECTURE.md [§dd-arch:lib-design-principles], principle 2).
+/// `L: Lang` parameter — never five (the one-generic-parameter principle).
 ///
 /// A minimal language is a ZST with only the associated types filled in; all methods have
 /// working defaults (no transition customization, no specials). The latexlike preset
-/// (Phase 7) and FLM are the intended full implementors.
+/// and FLM are the intended full implementors.
 ///
 /// All associated types are `Send + Sync`: thread-safe states and trees are a core
-/// contract (decided July 2026; see DESIGN_RATIONALE.md) — in practice these types are
+/// contract — in practice these types are
 /// enums, flags, and `Arc`s, so the bounds are nearly free.
 // `'static` because a `Lang` is a compile-time type bundle (a unit marker type in
 // practice) and `CallableSpec<L>: Any` (the downcast contract) requires every spec
@@ -92,8 +90,7 @@ impl NodeExtTypes for () {
 pub trait Lang: Sized + 'static {
     /// Identifier of a group *class* — the language-native taxonomy of "a delimited
     /// region viewed as one object" (the latexlike preset: content group vs. math
-    /// group), **fully detached from delimiter spellings** (revised July 2026; formerly
-    /// a per-delimiter-pair identity). **Closed per language**: a language's group
+    /// group), **fully detached from delimiter spellings**. **Closed per language**: a language's group
     /// classes are known when the `Lang` is written, so this is typically a small enum —
     /// typed answers to "is this a math group?" without string comparison or a registry.
     /// Which *delimiter pairs* exist, and which class each maps to, is runtime data
@@ -105,7 +102,7 @@ pub trait Lang: Sized + 'static {
     type GroupTypeId: Copy + Eq + Hash + fmt::Debug + Send + Sync;
 
     /// Identifier of a callable *type* — an invocation form (the latexlike preset:
-    /// macro / environment / specials). **Closed per language** (decided July 2026):
+    /// macro / environment / specials). **Closed per language**:
     /// new invocation *forms* are never registered at runtime (new *callables* are —
     /// via the scope stack), so this is a per-language enum, not an open id. `Ord`
     /// because providers key their maps by it. [`SimpleLang`] defaults this to `u32`.
@@ -116,11 +113,11 @@ pub trait Lang: Sized + 'static {
     /// vocabulary after [`GroupTypeId`](Lang::GroupTypeId) and
     /// [`CallableTypeId`](Lang::CallableTypeId), though deliberately not a `…TypeId`:
     /// it names the mode a state *is in*, not a classification of a syntactic object
-    /// (NAMING_STRATEGY.md principle 5). Stored as plain state data
+    /// (the crate's Id-naming rule). Stored as plain state data
     /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`](super::ParsingStateDelta::mode) override
     /// channel: deltas *initiate* mode changes, and
-    /// [`finalize_transition`](Lang::finalize_transition) *interprets* them
-    /// (DESIGN_RATIONALE.md [§dd-dr:parsing-state]). Mode is not lookup-private: definition visibility
+    /// [`finalize_transition`](Lang::finalize_transition) *interprets* them.
+    /// Mode is not lookup-private: definition visibility
     /// and any content-interpretation decision may key on it.
     ///
     /// `Copy + Eq + Hash` because modes are memo-key material — the session's
@@ -152,8 +149,8 @@ pub trait Lang: Sized + 'static {
     /// [`ParserSession`](crate::engine::ParserSession) — the preset-owned mutable object
     /// of a parse, and the home for parse-history accumulation
     /// ([`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition))
-    /// and parse-global caches
-    /// (decided July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]). `()` if unused.
+    /// and parse-global caches.
+    /// `()` if unused.
     ///
     /// Unlike [`StateExt`](Lang::StateExt) this is not `Clone`: sessions are transient
     /// single-parse objects, never shared or reverted — access is always `&mut`, through
@@ -169,7 +166,7 @@ pub trait Lang: Sized + 'static {
     type NodeExts: NodeExtTypes;
 
     /// The language's [`ParseDriver`] type — the **instance** face of parse-time
-    /// behavior (Phase 7.2, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]): recovery policy, command
+    /// behavior: recovery policy, command
     /// resolution, the group descent-delta channel, construct provision. Reached by
     /// construct parsers as
     /// [`ParseContext::driver`](crate::constructs::ParseContext::driver), **concretely
@@ -233,12 +230,12 @@ pub trait Lang: Sized + 'static {
     /// [`derived()`](ParsingState::derived) call, after the delta's overrides have
     /// been applied and before the new state is frozen. Cross-cutting rules centralize
     /// here (e.g. FLM's "in math mode the escape char is `#`"); the override policy —
-    /// pure normalization vs. event-driven — is this function's business
-    /// (ARCHITECTURE.md [§dd-arch:state]). Never runs on the seed state (see
+    /// pure normalization vs. event-driven — is this function's business.
+    /// Never runs on the seed state (see
     /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
     /// default does nothing.
     ///
-    /// **Mode transitions are interpreted here** (Phase 7, DESIGN_RATIONALE.md [§dd-dr:parsing-state]):
+    /// **Mode transitions are interpreted here**:
     /// a delta's [`mode`](super::ParsingStateDelta::mode) override is already applied to
     /// `new.mode` when this hook runs — the override *is* the signal, no
     /// [`Event`](Lang::Event) needed for mode-shaped transitions. Compare

@@ -19,41 +19,38 @@
 //!
 //! ## Architecture
 //!
-//! The crate is organized in three strata (see `ARCHITECTURE.md` [§dd-arch:arch]): S0, a Lang-free
-//! foundation; S1, the mutually-recursive core (whose modules are topics, not dependency
-//! ranks); and S2, the presets. It is being rebuilt phase by phase:
+//! The crate is organized in three strata: S0, a `Lang`-free foundation; S1, the
+//! mutually recursive core (whose modules are topics, not dependency ranks); and S2,
+//! the presets:
 //!
 //! - [`source`] (S0) — source content, plain byte [`Span`]s, `Arc`-based [`SourceSpan`]s,
-//!   provenance, pluggable resolution, lazy line/column analysis. **Implemented (Phase 1).**
-//! - [`error`] — span-based diagnostics and the tolerant-parsing policy.
-//!   **Implemented (Phase 1).**
-//! - [`token`] (S1) — zero-copy tokens, tokenization rules, the `TokenReader<L>` trait and
-//!   the standard state-driven reader. **Implemented (Phases 2–3).**
-//! - [`state`] (S1) — the `Lang` trait, parsing state, and reified state deltas.
-//!   **Implemented (Phase 3).**
+//!   provenance, pluggable resolution, lazy line/column analysis.
+//! - [`error`] (S0) — span-based structured diagnostics and the tolerant-parsing
+//!   policy.
+//! - [`token`] (S1) — zero-copy tokens, data-driven tokenization rules, the
+//!   `TokenReader<L>` trait and the standard state-driven reader.
+//! - [`state`] (S1) — the `Lang` trait, immutable parsing state, and reified state
+//!   deltas.
 //! - [`spec`] + [`scopes`] (S1) — de-keyed callable specs (argument/slot structures)
 //!   and the definition scope stack (dyn `SpecsProvider` entries, lexical shadowing,
-//!   in-stack fallback providers, definition/stack delta ops). **Implemented (Phase 4;
-//!   reworked in Phase 7.3)**.
+//!   in-stack fallback providers, definition/stack delta ops).
 //! - [`node`] (S1) — the flat, immutable node tree: closed structural [`NodeKind`],
-//!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy access.
-//!   **Implemented (Phase 5)**; the whitespace/span invariants and the concrete
-//!   `ArgsLayout` syntax records grow with the parsers in Phase 6.
-//! - [`constructs`] + [`engine`] (S1) — construct parsers and the parse-session API.
-//!   **In progress (Phase 6)**: the contracts ([`ConstructParser`], [`ParseContext`],
-//!   [`Invocation`], [`ParserSession`], [`ParseError`]) landed in 6.1; the content
-//!   dispatch loop ([`NodesParser`], stop conditions, [`StopCause`]) landed in 6.2;
-//!   groups ([`GroupParser`], the [`ChildStateSpec`] descent policy, the session
-//!   derivation seam, `check_tree_invariants`) landed in 6.3; invocations, arguments,
-//!   and environment bodies land in 6.4–6.6.
+//!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy
+//!   access, `check_tree_invariants`.
+//! - [`constructs`] (S1) — construct parsing: the [`ConstructParser`] contract and its
+//!   one-value context ([`ParseContext`], [`Invocation`]), the content dispatch loop
+//!   ([`NodesParser`], stop conditions, [`StopCause`]), groups ([`GroupParser`], the
+//!   [`ChildStateSpec`] descent policy), invocations, arguments, environment bodies,
+//!   and verbatim.
+//! - [`engine`] (S1) — the parse-session machinery: [`Language`], [`ParserSession`],
+//!   [`ParseDriver`], [`ParseResult`], and the session derivation seam.
 //! - [`latexlike`] preset (S2) — the familiar LaTeX behavior: the [`Latexlike`](latexlike::Latexlike)
 //!   lang with text/math modes, scope-stack command resolution, default token rules and
-//!   base specials, environments (`\begin`/`\end`), and `NodeRef` accessor sugar.
-//!   **In progress (Phase 7)**: the preset core landed in 7.5 and environments in 7.6;
-//!   verbatim and the argument-code factory land in 7.7. Preset items are namespaced
-//!   (`techy::latexlike::…`), not re-exported at the crate root.
+//!   base specials, environments (`\begin`/`\end`), verbatim, and `NodeRef` accessor
+//!   sugar. Preset items are namespaced (`techy::latexlike::…`), not re-exported at
+//!   the crate root.
 //!
-//! ## Quick start (what exists today)
+//! ## Quick start
 //!
 //! ```rust
 //! use std::sync::Arc;
@@ -68,7 +65,7 @@
 //! assert_eq!(line_index.line_col(span.start()), Some((1, 7)));
 //! ```
 
-// no_std-friendly, alloc-only (see ARCHITECTURE.md); tests build with std for convenience.
+// no_std-friendly, alloc-only ([§dd-dr:dependencies]); tests build with std for convenience.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;

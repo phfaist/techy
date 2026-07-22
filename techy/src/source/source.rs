@@ -15,8 +15,7 @@ use super::span::Span;
 /// spans (and everything that stores them) self-contained. Sources are immutable once
 /// created.
 ///
-/// The content backing is a plain `String`, deliberately (July 2026, Action 06; retired
-/// the earlier `SourceContent` trait seam): a memory-mapped UTF-8 file can be handed in
+/// The content backing is a plain `String`, deliberately: a memory-mapped UTF-8 file can be handed in
 /// as text by the embedder after one validation pass, and a genuinely chunked/streaming
 /// backing would need a different reader design — not a backing swap behind this type.
 pub struct Source<O: SourceOrigin = Option<String>> {

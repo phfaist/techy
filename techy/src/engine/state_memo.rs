@@ -13,8 +13,7 @@
 //! **Why keys own their `Arc`s:** an entry pins the allocations of its base state and
 //! payload rules, so a live `Arc` that compares pointer-equal to a stored key is
 //! necessarily the *same* object — no address reuse, no ABA false hits. The retention
-//! this implies (entries live until the session drops) is a decided trade
-//! (DESIGN_RATIONALE.md [§dd-dr:parsers-engine], July 2026): a session is one transient parse, and most
+//! this implies (entries live until the session drops) is a decided trade: a session is one transient parse, and most
 //! memoized states end up pinned by the node tree anyway.
 //!
 //! Probes are allocation-free: lookups go through the borrowed [`StateMemoProbe`] view
@@ -33,7 +32,7 @@ use crate::token::GroupRule;
 /// The memo map: owned keys → memoized derived states.
 pub(super) type StateMemo<L> = hashbrown::HashMap<StateMemoKey<L>, Arc<ParsingState<L>>>;
 
-/// The **group-interior** memo map (Phase 7.2): one entry per `(base, rule)` descent,
+/// The **group-interior** memo map: one entry per `(base, rule)` descent,
 /// deliberately separate from [`StateMemo`]. The group-interior derivation is its own
 /// operation — the canonical `expecting_group_close` override *plus* the driver's
 /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta), which

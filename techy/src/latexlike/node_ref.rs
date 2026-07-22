@@ -3,7 +3,7 @@
 //! These are **inherent methods** on `NodeRef<'_, Latexlike>` — the preset shares the
 //! crate with `node`, so consumers need no extra import (decided at the 7.5
 //! checkpoint; an out-of-crate language attaches its sugar through an extension trait
-//! instead). The fuller extraction/view API is Phase 7.8's design session; this is
+//! instead). The fuller extraction/view API lives with the node-tree helpers; this is
 //! the minimal preset-vocabulary layer.
 
 use crate::node::NodeRef;

@@ -22,7 +22,7 @@
 //! interior state is scoped structurally: `cx.state` is swapped for the recursion and
 //! restored after (the group has no after-effect — the returned delta is always `None`).
 //!
-//! # Matching and recovery (DESIGN_RATIONALE.md [§dd-dr:nodes], [§dd-dr:parsers-engine], [§dd-dr:errors])
+//! # Matching and recovery
 //!
 //! The interior [`NodesParser`] stops at the exact `(group_type, close)` pairing the
 //! group opened with, **consuming** the close at match time (the consume flag's
@@ -33,7 +33,7 @@
 //!   group with an **empty** `close` ([`GroupData`]'s documented recovery value).
 //! - *Unexpected group close inside* (a `]` under a `{`, a re-classed `}`): diagnostic +
 //!   close the group **without consuming** the stray token — the same unwinding rule as
-//!   environment-terminator mismatch ([§dd-dr:parsers-engine]): every level either consumes the token or
+//!   environment-terminator mismatch: every level either consumes the token or
 //!   unwinds out of its own frame, and the stray close eventually reaches a level that
 //!   claims it (or the root, which diagnoses and skips).
 //!
@@ -55,8 +55,7 @@ use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
-/// by [`GroupParser`], which defines the condition next to its detection site
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// by [`GroupParser`], which defines the condition next to its detection site.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.group_parser.unclosed-group")]
@@ -107,12 +106,12 @@ pub struct GroupParser<'p, L: Lang> {
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
     /// Descent-state policy handed to the interior [`NodesParser`]; defaults to
-    /// inherit-everywhere ([§dd-dr:parsers-engine] decided semantics 3: policies are one level deep, so a
+    /// inherit-everywhere (policies are one level deep, so a
     /// plain arm-driven descent never propagates one). A parser that scopes the group's
     /// interior state sets it per use — e.g. the chars-except-groups argument pattern,
     /// whose group interiors revert to the outer, unrestricted state. (The 6.5
     /// motivating consumer, the optional-group argument parser's brace protection,
-    /// detached in July 2026 in favor of the state-scoped
+    /// since detached in favor of the state-scoped
     /// [`TokenRules::temporary_groups`](crate::token::TokenRules) lifecycle.)
     child_states: ChildStateSpec<'p, L>,
 }
@@ -145,7 +144,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
         // still reaches observe_transition).
         let interior_state = cx.group_interior_state(&self.rule)?;
 
-        // Recurse under the interior state (structural swap/revert — §2 state-threading
+        // Recurse under the interior state (structural swap/revert — the state-threading
         // convention). The stop condition names the exact pairing the group opened with,
         // and consumes the close at match time.
         let stop = StopSpec::at_token(

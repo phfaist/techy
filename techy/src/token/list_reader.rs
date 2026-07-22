@@ -1,7 +1,7 @@
 //! [`TokenListReader`]: a [`TokenReader`] over a pre-built token list.
 //!
 //! **Internal test infrastructure** — compiled under `cfg(test)` only, deliberately not
-//! public API (decided July 2026, Action-02 follow-up). Its purpose is testing construct
+//! public API. Its purpose is testing construct
 //! parsers in isolation: a hand-written or pre-scanned `Vec<Token>` drives a parser
 //! without a live tokenizer, so a test can exercise exactly the token sequence it means
 //! to — most importantly as the lockstep reader-agreement harness of the construct-parser

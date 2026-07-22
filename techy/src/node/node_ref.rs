@@ -25,8 +25,7 @@ use super::NodeExt;
 /// so extracted references outlive the `NodeRef` value itself.
 ///
 /// Kind-specific accessors are `Option`-returning on the wrong kind; preset-level sugar
-/// (`as_math()`-style environment/macro views) arrives with the latexlike preset
-/// (Phase 7).
+/// (`as_math()`-style environment/macro views) arrives with the latexlike preset.
 pub struct NodeRef<'t, L: Lang> {
     tree: &'t NodeTree<L>,
     id: NodeId,
@@ -72,8 +71,8 @@ impl<'t, L: Lang> NodeRef<'t, L> {
         &self.data().span
     }
 
-    /// The exact original text of this node — level-1 verbatim recomposition
-    /// (ARCHITECTURE.md [§dd-arch:nodes]): never needs an external lookup, works for detached and
+    /// The exact original text of this node — level-1 verbatim recomposition:
+    /// never needs an external lookup, works for detached and
     /// mixed-origin trees.
     pub fn span_content(&self) -> &'t str {
         self.data().span.content()
@@ -86,8 +85,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
 
     /// A compact one-line description of the node — `chars(ab )`, `group(Math $ $)`,
     /// `Macro(emph)`, `comment( note)`, `list(3)` — the assertion/logging companion
-    /// to the verbose `Debug` rendering (promoted from the preset's test support,
-    /// Phase 7.9). Groups print their class (`?` when classless) and recorded
+    /// to the verbose `Debug` rendering (promoted from the preset's test support). Groups print their class (`?` when classless) and recorded
     /// delimiters; callables print their invocation form (`Debug`) and spelling;
     /// chars/comments print their full logical text; lists print their child count.
     ///

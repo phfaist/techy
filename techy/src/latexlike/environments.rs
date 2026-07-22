@@ -1,8 +1,7 @@
 //! Environments: the `\begin{name} … \end{name}` composition and its spec surface.
 //!
 //! The *notion* of "environment" is preset property; core contributes parameterized
-//! building blocks only (decided July 2026, Phase 7 plan session — DESIGN_RATIONALE.md
-//! [§dd-dr:nodes]/[§dd-dr:parsers-engine]). This module promotes the composition rehearsed test-side in Phase 6.6:
+//! building blocks only. This module promotes a composition once rehearsed test-side:
 //!
 //! - [`BeginSpec`] — the `\begin` dispatcher, registered as an ordinary
 //!   [`Macro`](CallableType::Macro) entry of the [`base_package`](super::base_package)
@@ -16,8 +15,8 @@
 //!   the body parser's stop condition and never reaches command resolution, so a
 //!   *resolved* `\end` is always an orphan.
 //! - [`EnvironmentSpec`] — the registration type for environments: declared arguments
-//!   plus body behavior, reachable through the sanctioned funnel pattern
-//!   (DESIGN_RATIONALE.md [§dd-dr:specs]): the concrete wrapper holds an
+//!   plus body behavior, reachable through the sanctioned funnel pattern:
+//!   the concrete wrapper holds an
 //!   `Arc<dyn `[`EnvironmentBehavior`]`>`, whose defaulted methods carry the body
 //!   state delta and the body-parser choice (pylatexenc's
 //!   `EnvironmentSpec.make_body_parser` precedent; [`VerbatimBehavior`] overrides it
@@ -165,7 +164,7 @@ pub struct EnvironmentInvocation<'p> {
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the funnel's inner
-/// trait (DESIGN_RATIONALE.md [§dd-dr:specs]): third-party implementations override the
+/// trait: third-party implementations override the
 /// defaulted methods; the composition reaches them through the concrete wrapper's
 /// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
 /// `make_body_parsing_state_delta`), with the declarative standard implementation
@@ -234,7 +233,7 @@ impl EnvironmentBehavior for StdEnvironmentBehavior {
     }
 }
 
-/// The verbatim-environment behavior (Phase 7.7; pylatexenc's
+/// The verbatim-environment behavior (pylatexenc's
 /// `LatexVerbatimEnvironmentContentsParser` wired as an [`EnvironmentBehavior`]):
 /// declared arguments parse normally — tokenized, before the raw region begins
 /// (`lstlisting`-style options) — and the **body is raw text**, read by the core
@@ -338,8 +337,7 @@ impl EnvironmentBehavior for BodyDeltaOverride {
 }
 
 /// The preset's environment spec: the registration type for
-/// [`CallableType::Environment`] entries — the funnel wrapper (DESIGN_RATIONALE.md
-/// [§dd-dr:specs]) through which the `\begin` composition reaches the environment's
+/// [`CallableType::Environment`] entries — the funnel wrapper through which the `\begin` composition reaches the environment's
 /// [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so the open set
 /// of behaviors funnels through this one concrete spec type).
 ///
@@ -406,7 +404,7 @@ impl CallableSpec<Latexlike> for BeginSpec {
     /// `\begin` declares nothing but reads an entire environment: bare use as a
     /// single-token expression argument is diagnosed, not dispatched — a deliberate,
     /// documented divergence from pylatexenc, which dispatches the environment as the
-    /// argument (decided July 2026, slots session).
+    /// argument.
     fn requires_content(&self) -> bool {
         true
     }

@@ -3,7 +3,7 @@
 //! A [`TokenError`] may carry a [`TokenRecovery`]: a placeholder token to emit *as if*
 //! tokenization had succeeded, plus the position at which to resume reading. The token
 //! reader itself is policy-free — it always reports the error; the session-level
-//! [`Recovery`](crate::error::Recovery) policy (Phase 6) decides whether to abort (strict)
+//! [`Recovery`](crate::error::Recovery) policy decides whether to abort (strict)
 //! or to record a [`Diagnostic`](crate::error::Diagnostic) and continue with the recovery
 //! token (tolerant). Conversion to Arc-span diagnostics happens there too; within the token
 //! layer, errors are transient values carrying plain byte [`Span`]s, like tokens themselves.
@@ -25,7 +25,7 @@ use super::token::Token;
 pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 
 /// Condition: the input ended immediately after a command escape character, before any
-/// name (DESIGN_RATIONALE.md [§dd-dr:errors] — the token layer's conditions are ordinary
+/// name (the token layer's conditions are ordinary
 /// [`DiagnosticInfo`] data structs, wrapped by [`TokenErrorKind`] for the recovery
 /// protocol).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
@@ -63,8 +63,8 @@ impl fmt::Display for ForbiddenChar {
 /// more error conditions — hence `#[non_exhaustive]`. The built-in variants wrap plain
 /// condition structs (each a [`DiagnosticInfo`] impl) and [`Custom`](Self::Custom)
 /// carries any language-defined payload, so token errors join the structured-diagnostics
-/// model while the token layer keeps a concrete matchable enum for the recovery protocol
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]). Not `Copy` (a custom payload is boxed) and no `PartialEq`
+/// model while the token layer keeps a concrete matchable enum for the recovery protocol.
+/// Not `Copy` (a custom payload is boxed) and no `PartialEq`
 /// — consumers match the variants or downcast the payload.
 #[derive(Debug, Clone)]
 // `Custom` and `#[non_exhaustive]` serve different extension axes: `Custom` lets third
@@ -80,12 +80,12 @@ pub enum TokenErrorKind {
     /// A language-defined condition, reported by an extension point participating in
     /// the recovery protocol (`Lang::scan_specials`, a custom
     /// [`TokenReader`](super::TokenReader)) — one extension mechanism serves both
-    /// layers ([§dd-dr:errors]).
+    /// layers.
     Custom(Box<dyn DiagnosticData>),
 }
 
 impl TokenErrorKind {
-    /// Lift the kind into a condition payload (DESIGN_RATIONALE.md [§dd-dr:errors]): the built-in
+    /// Lift the kind into a condition payload: the built-in
     /// conditions are boxed; a `Custom` payload is unwrapped, never double-boxed.
     pub(crate) fn into_condition(self) -> Box<dyn DiagnosticData> {
         match self {

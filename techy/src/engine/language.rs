@@ -1,5 +1,4 @@
-//! [`Language<L>`]: the long-lived runtime bundle and the `parse()` convenience entry
-//! (Phase 7.4; ARCHITECTURE.md [§dd-arch:engine]).
+//! [`Language<L>`]: the long-lived runtime bundle and the `parse()` convenience entry.
 //!
 //! A `Language` is everything a parse needs that outlives any one parse: the frozen
 //! seed [`ParsingState`], the [`ParseDriver`](crate::engine::ParseDriver) instance, and
@@ -71,7 +70,7 @@ pub struct Language<L: Lang> {
     /// The frozen seed state every parse starts from — shared by `Arc` across parses
     /// (states are immutable).
     initial_state: Arc<ParsingState<L>>,
-    /// Resolver for `\input`-like external references (DESIGN_RATIONALE.md [§dd-dr:parsing-state]);
+    /// Resolver for `\input`-like external references;
     /// [`NoResolver`] by default — no lookup, no I/O.
     resolver: Arc<dyn SourceResolver<L::SourceOrigin>>,
 }
@@ -93,7 +92,7 @@ impl<L: Lang> Language<L> {
     /// customized seed. Everything a delta expresses is available: token-rules
     /// overrides, a mode override, scope ops (pushing packages), an ext replacement.
     ///
-    /// Fallible because scope ops are (Phase 7.3): a failing op yields the
+    /// Fallible because scope ops are: a failing op yields the
     /// [`DeriveError`], and the `Language` under construction is dropped — a bad
     /// definition setup is an embedder bug to surface at build time, not a source
     /// condition to recover from.
@@ -109,7 +108,7 @@ impl<L: Lang> Language<L> {
     /// Push `provider` onto the seed state's scope stack (innermost — it shadows
     /// what is below) — sugar for the dominant [`with_seed_delta`](Language::with_seed_delta)
     /// shape, "define a package, add it to the language" (promoted from the preset's
-    /// test support, Phase 7.9):
+    /// test support):
     ///
     /// ```ignore
     /// let language = Language::<Latexlike>::default()
@@ -183,8 +182,7 @@ impl<L: Lang> Language<L> {
     /// **Recovery** follows the driver's policy. A stray group close at the root —
     /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recover
     /// funnel; tolerant parses consume the delimiter, stage it as a `Chars` node
-    /// (the markup-in-chars recovery artifact — revised in Phase 7.9, superseding
-    /// 7.4's byte-dropping quirk: the root span partition now holds across the
+    /// (the markup-in-chars recovery artifact: the root span partition holds across the
     /// skip, so `check_tree_invariants` stays clean on recovered parses), and
     /// resume; strict parses abort. Diagnosis and resume both run under the state the content loop had
     /// reached at the close (the segment's exit state,

@@ -1,5 +1,5 @@
-//! Engine orchestration: [`ParserSession`], the root object of a parse (Phase 6), and
-//! the [`ParseDriver`] behavior object (Phase 7.2).
+//! Engine orchestration: [`ParserSession`], the root object of a parse, and
+//! the [`ParseDriver`] behavior object.
 //!
 //! A session bundles everything one parse **accumulates** — the staging
 //! [`NodeTreeBuilder`], the [`Diagnostics`] sink, the derivation memos, the live frame
@@ -8,11 +8,10 @@
 //! *behavior* — the [`Recovery`] policy included, moved off the session in 7.2 — lives
 //! on the language's [`ParseDriver`] (see its docs for the placement doctrine).
 //!
-//! The [`Language<L>`] runtime bundle (Phase 7.4) is the long-lived counterpart: seed
+//! The [`Language<L>`] runtime bundle is the long-lived counterpart: seed
 //! state, driver instance, and source resolver, with the [`parse()`](Language::parse)
 //! convenience entry driving reader → root content loop → root list → `finish()`.
-//! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference
-//! (Phase 6 decision, kept): nodes are self-contained, results outlive their bundle.
+//! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference: nodes are self-contained, results outlive their bundle.
 
 mod driver;
 mod language;
@@ -43,7 +42,7 @@ use state_memo::{
 pub use driver::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
 pub use language::Language;
 
-/// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md [§dd-dr:errors]):
+/// One live entry of the session's parse-frame stack:
 /// pushed at the descent points through
 /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
 /// snapshotted into `L`-free [`TraceFrame`]s by the recover funnel. Pushes run on the
@@ -57,7 +56,7 @@ pub struct Frame<L: Lang> {
 }
 
 /// A live frame's title recipe: **mechanisms, not a construct taxonomy**
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]) — the core has no macro/environment vocabulary, so a
+/// — the core has no macro/environment vocabulary, so a
 /// callable's title comes from its spec's
 /// [`stack_frame_title`](CallableSpec::stack_frame_title) hook at snapshot time.
 pub enum FrameTitle<L: Lang> {
@@ -146,7 +145,7 @@ pub struct ParserSession<L: Lang> {
     /// `Default`-initialized): the preset-owned mutable object of a parse — transition
     /// observation counters ([`ParseDriver::observe_transition`]), parse-global caches.
     pub ext: L::SessionExt,
-    /// The derivation memo (DESIGN_RATIONALE.md [§dd-dr:parsers-engine], revised July 2026):
+    /// The derivation memo:
     /// overrides-only derivations (token rules and/or mode) deduplicated by
     /// [`derived_state`](ParserSession::derived_state), keyed on base-state `Arc`
     /// identity plus the delta's overrides — rule payloads by `Arc` identity, the mode
@@ -154,14 +153,14 @@ pub struct ParserSession<L: Lang> {
     /// pointer keys cannot be reused (no ABA hazard); retention is bounded by the
     /// session — one transient parse.
     state_memo: StateMemo<L>,
-    /// The group-interior derivation memo (Phase 7.2): one entry per `(base, rule)`
+    /// The group-interior derivation memo: one entry per `(base, rule)`
     /// descent — the canonical expecting-close derivation *merged with the driver's*
     /// [`group_interior_delta`](ParseDriver::group_interior_delta), which runs on memo
     /// miss only. Deliberately separate from [`state_memo`](ParserSession::state_memo):
     /// sharing it would let a hand-built expecting-close delta collide with a
     /// driver-augmented descent under one key (see [`state_memo`] module docs).
     group_interior_memo: GroupInteriorMemo<L>,
-    /// The live parse-frame stack, outermost first (DESIGN_RATIONALE.md [§dd-dr:errors]):
+    /// The live parse-frame stack, outermost first:
     /// maintained exclusively by
     /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame)
     /// (closure-scoped push/pop) and snapshotted — innermost first — into every
@@ -172,7 +171,7 @@ pub struct ParserSession<L: Lang> {
 
 impl<L: Lang> ParserSession<L> {
     /// A fresh session. The recovery policy is no longer session state — it lives on
-    /// the language's [`ParseDriver`] (Phase 7.2): the session is pure scratch/output.
+    /// the language's [`ParseDriver`]: the session is pure scratch/output.
     pub fn new() -> ParserSession<L> {
         ParserSession {
             builder: NodeTreeBuilder::new(),
@@ -198,7 +197,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
-    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md [§dd-dr:errors]). Public for
+    /// titles are rendered here, on the cold path. Public for
     /// custom parser code building its own [`ParseError`]s
     /// ([`ParseError::with_frames`](crate::error::ParseError::with_frames)); the
     /// stack itself is only mutated through
@@ -207,8 +206,7 @@ impl<L: Lang> ParserSession<L> {
         self.frames.iter().rev().map(Frame::render).collect()
     }
 
-    /// Session-mediated state derivation — the in-parse standard (DESIGN_RATIONALE.md
-    /// [§dd-dr:parsers-engine]): within a parse frame, construct parsers derive states through this seam
+    /// Session-mediated state derivation — the in-parse standard: within a parse frame, construct parsers derive states through this seam
     /// (usually via the [`ParseContext::derived_state`] sugar, which supplies the
     /// driver) so every transition event reaches
     /// [`ParseDriver::observe_transition`] (with the session's
@@ -218,8 +216,7 @@ impl<L: Lang> ParserSession<L> {
     ///
     /// [`ParseContext::derived_state`]: crate::constructs::ParseContext::derived_state
     ///
-    /// **Overrides-only deltas are memoized** (revised July 2026, superseding the
-    /// earlier never-memoize rule): when the delta carries no ext replacement, no
+    /// **Overrides-only deltas are memoized**: when the delta carries no ext replacement, no
     /// events, and no scope ops — i.e. only token-rules overrides and/or a mode
     /// override — the derivation is keyed on the base state's `Arc` identity plus the
     /// overrides (rule payloads by `Arc` identity, gates and mode by value — see the
@@ -232,7 +229,7 @@ impl<L: Lang> ParserSession<L> {
     /// [`ParseDriver::observe_transition`] fires on **every** call, memo hits included;
     /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
-    /// **Fallibility** (Phase 7.3): scope ops can fail, so this seam is fallible like
+    /// **Fallibility**: scope ops can fail, so this seam is fallible like
     /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
     /// also why the memo never caches a failure). On `Err`, no transition is committed:
     /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
@@ -299,7 +296,7 @@ impl<L: Lang> ParserSession<L> {
     /// The descent invariant wins over the hook: whatever the driver's delta says, the
     /// interior's `expecting_group_close` is the entered rule.
     ///
-    /// **Fallibility** (Phase 7.3): a driver descent delta may carry scope ops, which
+    /// **Fallibility**: a driver descent delta may carry scope ops, which
     /// can fail. On `Err`, nothing is memoized and no transition was observed (see
     /// [`derived_state`](ParserSession::derived_state)); the error's
     /// [`recovered`](crate::state::DeriveError::recovered) state still has the
@@ -335,8 +332,7 @@ impl<L: Lang> ParserSession<L> {
         Ok(new)
     }
 
-    /// The raw record-or-abort primitive of detection-site recovery
-    /// (DESIGN_RATIONALE.md [§dd-dr:panic-policy], rule 1). Construct parsers call
+    /// The raw record-or-abort primitive of detection-site recovery. Construct parsers call
     /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead —
     /// the funnel that boxes the condition and hands it to
     /// [`ParseDriver::recover`], which applies
@@ -436,7 +432,7 @@ mod tests {
     struct PlainLang;
     impl SimpleLang for PlainLang {}
 
-    /// A third-party-style condition — the extension surface demonstration ([§dd-dr:errors]): a
+    /// A third-party-style condition — the extension surface demonstration: a
     /// plain data struct, a `Display` for the wording, and a `DiagnosticInfo` impl,
     /// structurally identical to the library's own conditions.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -762,8 +758,7 @@ mod tests {
         type Driver = ObserverDriver;
     }
 
-    /// ObserverLang's driver: counts every transition observation (the hook moved off
-    /// `Lang` in Phase 7.2).
+    /// ObserverLang's driver: counts every transition observation (the hook lives on the driver, not on `Lang`).
     #[derive(Debug, Clone, Copy, Default)]
     struct ObserverDriver;
     impl ParseDriver<ObserverLang> for ObserverDriver {

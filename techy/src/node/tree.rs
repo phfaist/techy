@@ -99,14 +99,13 @@ impl fmt::Debug for NodeId {
 }
 
 /// One stored node: structural kind, uniform ext, provenance span, parse-time state, and
-/// the contiguous children block (ARCHITECTURE.md [§dd-arch:nodes]).
+/// the contiguous children block.
 ///
 /// Fields are crate-private; the public read surface is [`NodeRef`]. Nodes carry **no
 /// lifetime parameters** — Arc-wrapped spans, specs, and states make them self-contained,
 /// which is what lets transformed trees outlive the parse they came from.
 ///
-/// The runtime ownership graph stays acyclic by type structure (ARCHITECTURE.md [§dd-arch:arch]
-/// rule 3): nodes reference states, specs, and sources; no runtime value references
+/// The runtime ownership graph stays acyclic by type structure (by design): nodes reference states, specs, and sources; no runtime value references
 /// nodes back.
 pub struct NodeData<L: Lang> {
     pub(crate) kind: NodeKind<L>,
@@ -194,7 +193,7 @@ impl<L: Lang> NodeTree<L> {
 
     /// All nodes in **storage order** (breadth-first: root first, every node's children
     /// contiguous) — *not* document order: for `a{b}c` it yields `a`, `c`, `b`. Named
-    /// for what it is (renamed from `iter`, July 2026, Action-05 session) so nobody
+    /// for what it is so nobody
     /// mistakes it for a document-order walk; recurse via
     /// [`children()`](super::NodeRef::children) for structure-aware traversal.
     pub fn iter_storage_order(&self) -> impl Iterator<Item = NodeRef<'_, L>> {

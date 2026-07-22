@@ -5,8 +5,7 @@
 //!
 //! Deliberately distinct from
 //! [`read_rigid_name_group`](super::read_rigid_name_group): the environment-name
-//! reader is value-returning *scaffolding* (reconstructed, never recorded,
-//! DESIGN_RATIONALE.md [§dd-dr:nodes]) — this parser **stages nodes** like any argument parser,
+//! reader is value-returning *scaffolding* (reconstructed, never recorded) — this parser **stages nodes** like any argument parser,
 //! and the group's children are the argument's content (the braces are argument
 //! syntax, exactly as in [`GroupArgumentParser`](super::GroupArgumentParser)'s class
 //! form).
@@ -28,7 +27,7 @@
 //! terminates the group, because the expected-close recognizer is ungated (the
 //! verbatim-recipe precedent) — so the first close ends the group, as in pylatexenc.
 //!
-//! **Descent policy** (decided July 2026, N4 session): by default a nested group's
+//! **Descent policy**: by default a nested group's
 //! interior **restores the outer, unrestricted state** — the pylatexenc behavior,
 //! wanted for shapes like `\cite{manual:{… \emph{Title} …}}` where the first level is
 //! chars-only but braced values regain full parsing richness. The one-level-deep
@@ -38,7 +37,7 @@
 //! keeps the restriction at every depth instead (nested groups stay chars-only).
 //!
 //! Leading noise (whitespace, comments ahead of the `{`) scans under the **outer**
-//! state per the noise-ownership doctrine ([§dd-dr:nodes]) — the restriction scopes the group's
+//! state per the noise-ownership doctrine — the restriction scopes the group's
 //! interior only, which is why this parser exists rather than a plain state delta on
 //! the whole argument ([`ArgumentSpec::parsing_state_delta`] covers the probe too).
 //!

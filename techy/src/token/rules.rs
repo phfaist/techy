@@ -3,14 +3,14 @@
 //! `TokenRules` is defined here in the token topic and *stored* in the parsing state
 //! ([`StateData<L>`](crate::state::StateData)). Everything that can vary during a parse —
 //! delimiters, escape characters, enabled features — is a plain value in these structs,
-//! changed only through reified state deltas at the transition choke point
-//! (ARCHITECTURE.md [§dd-arch:state]). There are no privileged language concepts here: no default
-//! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset
-//! (Phase 7), which is also why none of these types implement `Default`.
+//! changed only through reified state deltas at the transition choke point.
+//! There are no privileged language concepts here: no default
+//! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset,
+//! which is also why none of these types implement `Default`.
 //!
 //! Group *classes* are the language's business: [`Lang::GroupTypeId`] is a closed
 //! per-language classification (typically an enum — the latexlike preset: content vs.
-//! math groups; revised July 2026), fully detached from delimiter spellings. Which
+//! math groups), fully detached from delimiter spellings. Which
 //! *delimiter pairs* exist, and which class each belongs to, is runtime data — the
 //! [`GroupRule`] values here. Any construct parser may mint a new rule mid-parse via a
 //! state delta (an optional-argument parser momentarily declaring `[`…`]` group
@@ -56,7 +56,7 @@ pub struct GroupRule<L: Lang> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WhitespaceRules {
     /// The characters treated as whitespace (e.g. `" \t\n\r"`). Shared (`Arc<str>`) so
-    /// state derivations clone rules data by refcount, not by content (July 2026).
+    /// state derivations clone rules data by refcount, not by content.
     pub chars: Arc<str>,
 }
 
@@ -67,7 +67,7 @@ pub struct WhitespaceRules {
 /// "Command" is the token-level term (TeX lineage: control sequence). It is deliberately
 /// *not* "macro": at the token level `\begin` is a command exactly like `\foobar` — which
 /// names are macros, environments, or anything else is decided at parse time by the preset
-/// (terminology stack: command → callable → macro/environment; NAMING_STRATEGY.md).
+/// (terminology stack: command → callable → macro/environment).
 ///
 /// A future syntax-kind extension (e.g. `@MARKER@`-style commands without an escape
 /// character) would grow an enum inside this struct; flat escape-char form only, for now.
@@ -111,7 +111,7 @@ pub struct CommentRule {
 /// # `enable_*` feature gates
 ///
 /// Every major feature has a boolean gate stored next to its data (pylatexenc's
-/// `enable_macros`/`enable_comments`/… pattern; DESIGN_RATIONALE.md [§dd-dr:tokens]). A disabled
+/// `enable_macros`/`enable_comments`/… pattern). A disabled
 /// feature's syntax reads as ordinary content characters while its data **stays in
 /// place** — so a state delta can disable a feature and a later delta re-enable it,
 /// without any party having to carry the original rules. Two spellings of "off" are
@@ -137,7 +137,7 @@ pub struct TokenRules<L: Lang> {
     /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
     /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
     pub groups: Vec<Arc<GroupRule<L>>>,
-    /// Group rules with a *scoped lifecycle* (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]): they
+    /// Group rules with a *scoped lifecycle*: they
     /// tokenize exactly like [`groups`](Self::groups) — same gate, listed **first** in
     /// the [`PrefixTable`](super::PrefixTable), so they win same-spelling ties — but a
     /// state derivation that installs an
@@ -154,14 +154,14 @@ pub struct TokenRules<L: Lang> {
     /// content characters.
     pub enable_commands: bool,
     /// Command syntaxes; empty = no command recognition. `Arc`-shared like
-    /// [`groups`](Self::groups) (symmetrized July 2026): state derivations clone the
+    /// [`groups`](Self::groups): state derivations clone the
     /// rule list by refcount, and the shared rules carry pointer identity.
     pub commands: Vec<Arc<CommandRule>>,
     /// Whether comment syntax is recognized; disabled = comment starts are ordinary
     /// content characters.
     pub enable_comments: bool,
     /// Comment syntaxes; empty = no comment recognition. `Arc`-shared like
-    /// [`groups`](Self::groups) (symmetrized July 2026).
+    /// [`groups`](Self::groups).
     pub comments: Vec<Arc<CommentRule>>,
     /// Whether the specials scan runs. The specials *data* lives with the language
     /// ([`Lang::scan_specials`](crate::state::Lang::scan_specials) → the scope stack's
@@ -172,7 +172,7 @@ pub struct TokenRules<L: Lang> {
     /// Characters that may not appear as content; encountering one yields a recoverable
     /// [`TokenError`](super::TokenError). Empty = off (deliberately no `enable_*` gate:
     /// one trivially restorable string, not a feature toggle). Shared (`Arc<str>`) so
-    /// state derivations clone it by refcount (July 2026).
+    /// state derivations clone it by refcount.
     pub forbidden_chars: Arc<str>,
     /// The group rule whose *close* delimiter takes precedence over all other delimiter
     /// matches — set (via a state delta) by the group construct parser upon entering a

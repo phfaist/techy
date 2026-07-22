@@ -1,7 +1,6 @@
 //! Derive macros for techy's structured diagnostic conditions.
 //!
-//! This is the build-time companion crate of `techy` (ARCHITECTURE.md "Condition
-//! declaration via derive"; DESIGN_RATIONALE.md [§dd-dr:errors]). `techy` re-exports both derives
+//! This is the build-time companion crate of `techy`. `techy` re-exports both derives
 //! from `techy::error`, next to the traits they implement — depend on `techy` and use
 //! the re-exports rather than depending on this crate directly.
 //!

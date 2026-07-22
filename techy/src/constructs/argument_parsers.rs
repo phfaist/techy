@@ -1,16 +1,16 @@
-//! The standard [`ArgumentParser`] implementations (Phase 6.5) and the shared
+//! The standard [`ArgumentParser`] implementations and the shared
 //! noise-scan helper: [`GroupArgumentParser`] (mandatory delimited group — by class
-//! or by a per-use minted rule (Phase 7.7) — with a configurable single-expression
+//! or by a per-use minted rule — with a configurable single-expression
 //! fallback: class defaults on, rule off),
 //! [`OptionalGroupArgumentParser`] (optional group whose
 //! delimiters are minted for the occasion), [`MarkerArgumentParser`] (literal markers
 //! like `*`), and [`ExpressionParser`] (one node: group / full invocation / single
 //! char) — pylatexenc's `'{'` / `'['` / `'*'` argument shorthands resolved into core
-//! parsers, parameterized by group types and rules (no privileged spellings, [§dd-dr:no-privileged-concepts];
+//! parsers, parameterized by group types and rules (no privileged spellings;
 //! the preset one-liner constructor is `latexlike::argument_specs`; the delimited
 //! verbatim sibling lives in [`verbatim_parser`](super::VerbatimArgumentParser)).
 //!
-//! # Regions, noise, and the absent contract (DESIGN_RATIONALE.md [§dd-dr:nodes])
+//! # Regions, noise, and the absent contract
 //!
 //! An argument parser owns its argument's **entire region**, leading noise included: it
 //! scans whitespace and comments itself ([`scan_argument_noise`]) and stages them as
@@ -27,7 +27,7 @@
 //! before a present mandatory re-scans the same noise, by design) and speculatively
 //! staged nodes are never claimed (the builder drops them).
 //!
-//! # Recovery (DESIGN_RATIONALE.md [§dd-dr:errors], detection-site rules)
+//! # Recovery (detection-site rules)
 //!
 //! A missing *mandatory* argument is diagnosed here — tolerant: diagnostic + report
 //! absent; strict: abort — while a missing optional or marker is silent. An
@@ -67,8 +67,8 @@ use super::{
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
 /// paragraph break, an enclosing group close) — detected by the mandatory argument
-/// parsers, which report the argument absent after recording it
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]). No callable name in the payload: the frame stack renders
+/// parsers, which report the argument absent after recording it.
+/// No callable name in the payload: the frame stack renders
 /// the enclosing invocation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -157,8 +157,7 @@ impl<L: Lang> fmt::Debug for ArgumentNoise<'_, L> {
 
 /// Scan an argument's leading noise — whitespace and comments ahead of its syntax —
 /// staging each as an ordinary node under the context's current state (the argument's
-/// own state: noise policy is inseparable from argument syntax, DESIGN_RATIONALE.md
-/// [§dd-dr:nodes]), and stop at the first non-noise token, peeked and left unconsumed.
+/// own state: noise policy is inseparable from argument syntax), and stop at the first non-noise token, peeked and left unconsumed.
 ///
 /// The shared entry step of the standard argument parsers; custom [`ArgumentParser`]s
 /// with ordinary noise behavior use it the same way. Parsers whose syntax involves the
@@ -192,7 +191,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
 
 /// Stage `pre_space` as a whitespace-only `Chars` node (if non-empty) and record it in
 /// `nodes` — how a committed token's pre-space becomes the region's leading noise
-/// (whitespace before an argument is a node like everywhere else, [§dd-dr:nodes]).
+/// (whitespace before an argument is a node like everywhere else).
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
@@ -227,8 +226,7 @@ pub(super) fn stage<L: Lang>(
 ///
 /// Invocations dispatch through the spec's full `make_invocation_parser` factory path
 /// (takeover parsers included) under the current state — the descent policy question
-/// does not reach here ([`ChildStateSpec`](super::ChildStateSpec) is one level deep,
-/// [§dd-dr:parsers-engine]) — with two deliberate rules:
+/// does not reach here ([`ChildStateSpec`](super::ChildStateSpec) is one level deep) — with two deliberate rules:
 ///
 /// - A callable whose invocation **requires content**
 ///   ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content):
@@ -472,7 +470,7 @@ fn region_with_last_as_content(nodes: Vec<BuildId>) -> ParsedArgumentNodes {
 ///   rules (the language declares `{…}`); the parser is configured only with the group
 ///   **class** that counts as this argument's delimited form.
 /// - **Rule form** ([`with_rule`](GroupArgumentParser::with_rule) for one pair —
-///   Phase 7.7, the `r<c1><c2>` argument code — and
+///   the `r<c1><c2>` argument code — and
 ///   [`any_of`](GroupArgumentParser::any_of) for several alternatives, pylatexenc's
 ///   `LatexDelimitedMultiDelimGroupParser` / the `AnyDelimited` code): the delimiters
 ///   are **minted for the occasion** — the parser carries its own [`GroupRule`]s,
@@ -630,7 +628,7 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
     }
 }
 
-/// The missing-mandatory recovery ([§dd-dr:errors]): diagnostic at the blocking position
+/// The missing-mandatory recovery: diagnostic at the blocking position
 /// (tolerant) or abort (strict); absent, nothing consumed.
 pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
@@ -675,7 +673,7 @@ struct MintedGroupMatch<'s, L: Lang> {
 /// encountered** as a temporary rule (the pylatexenc multi-delim subtlety: inside a
 /// matched `<…>`, an unmatched alternative like `[` reads as an ordinary character,
 /// while the base state's own rules stay live). With a single configured rule the
-/// probe state already *is* that state — one derivation, the Phase 7.7 single-rule
+/// probe state already *is* that state — one derivation, the single-rule
 /// behavior unchanged.
 fn probe_minted_group<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
@@ -728,12 +726,11 @@ fn probe_minted_group<'s, L: Lang>(
 /// [`GroupArgumentParser::any_of`]). Temporary rules win same-spelling ties, and the
 /// derivation choke point
 /// ([`ParsingState::derived`](crate::state::ParsingState::derived)) scopes their
-/// lifecycle (July 2026; supersedes the 6.5 [`ChildStateSpec`] wiring that translated
-/// pylatexenc's `make_child_parsing_state` and protected one bracket level only):
+/// lifecycle:
 ///
 /// - **Nested brackets balance**: a descent into the minted rule's own group keeps
 ///   the rule, so `[with[recursive[use]of]brackets]` is one argument with nested
-///   group nodes (user-decided July 2026, pylatexenc parity; supersedes the
+///   group nodes (pylatexenc parity; supersedes the
 ///   briefly-shipped LaTeX-style first-`]`-closes rule).
 /// - **Braces protect, at any depth**: a descent into any *other* group strips the
 ///   rule for that whole subtree — `]` is an ordinary character inside
@@ -744,7 +741,7 @@ fn probe_minted_group<'s, L: Lang>(
 /// group-delimited arguments protect through the same stripping (`[\m{a]b}]` holds),
 /// while their **non-group** token consumption sees the minted rule in force — a
 /// deliberate, narrow divergence from pylatexenc's revert-to-outer-state semantics
-/// (user-decided July 2026; to be revisited with the preset argument-parser helpers,
+/// (to be revisited with the preset argument-parser helpers,
 /// which may reset `groups` or the temporaries through their own deltas).
 ///
 /// **Protection presupposes the close spelling is not otherwise special in the
@@ -752,13 +749,12 @@ fn probe_minted_group<'s, L: Lang>(
 /// language, the stripped state still reads `]` as a real close token, and
 /// `\item[{a]b}]` genuinely fails — stray-close unwinding with diagnostics, exactly
 /// like `{a]b}` anywhere else in that language. Intended, not degradation: stripping
-/// restores the language's own reading, it never overrides it (user-decided July 2026,
-/// DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
+/// restores the language's own reading, it never overrides it.
 ///
 /// Content designation: the option group's children — except that a **lone child group
 /// of the configured protective class** (`[{arg with ]}]`: braces protecting the `]`)
 /// designates *that* group's children instead, the parse-time resolution of
-/// pylatexenc's post-hoc `unwrap_double_group` accessor hack ([§dd-dr:nodes]).
+/// pylatexenc's post-hoc `unwrap_double_group` accessor hack.
 ///
 /// [`ChildStateSpec`]: super::ChildStateSpec
 /// [`TokenRules::temporary_groups`]: crate::token::TokenRules::temporary_groups

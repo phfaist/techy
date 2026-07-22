@@ -127,8 +127,8 @@ impl DiagnosticAttrs {
     }
 }
 
-/// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]); enforce the coarse shape, not the exact scheme.
+/// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`;
+/// enforce the coarse shape, not the exact scheme.
 fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     if value.is_empty()
@@ -302,7 +302,7 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
 }
 
 /// The `new()` constructor: one `impl Into<FieldType>` parameter per field, in
-/// declaration order — the companion of `#[non_exhaustive]` (DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// declaration order — the companion of `#[non_exhaustive]`.
 fn expand_constructor(name: &Ident, fields: &[&Field]) -> TokenStream {
     let params = fields.iter().map(|field| {
         let ident = field.ident.as_ref().expect("named field has an ident");

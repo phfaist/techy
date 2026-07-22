@@ -1,4 +1,4 @@
-//! Construct parsers: the parsing layer of the S1 core (ARCHITECTURE.md [§dd-arch:constructs]).
+//! Construct parsers: the parsing layer of the S1 core.
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
 //! the main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
@@ -8,7 +8,7 @@
 //! implementations), environment bodies ([`EnvironmentBodyParser`]) — is parsed by an
 //! implementation of it, reading tokens and staging nodes through one [`ParseContext`].
 //!
-//! # The two-tier ownership model (DESIGN_RATIONALE.md [§dd-dr:parsers-engine])
+//! # The two-tier ownership model
 //!
 //! Construct parsers are **temporaries** (tier 2): constructed with their per-use
 //! configuration where they are needed, `parse(&mut self, …)` so working state lives in
@@ -18,7 +18,7 @@
 //! immutable, and receive every per-use input as arguments. Closures (stop predicates)
 //! are thereby confined to tier 2; specs stay data.
 //!
-//! # State threading (the [§dd-arch:state] "caller applies deltas" law, pinned to `cx`)
+//! # State threading (the "caller applies deltas" law, pinned to `cx`)
 //!
 //! [`ParseContext::state`] is the parser's **input** state — the caller sets it. A parser
 //! that scopes a child state (group interior, argument extent, slot body) derives it
@@ -26,7 +26,7 @@
 //! (structural revert — `Arc` clone is cheap). The `Option<ParsingStateDelta>` in the
 //! return value is exclusively the *after-effect for the caller* (`\newcommand`).
 //!
-//! # Errors (DESIGN_RATIONALE.md [§dd-dr:errors])
+//! # Errors
 //!
 //! `Err` means **abort**: recovery happens at the detection site (the
 //! [`recover`](ParseContext::recover) helper), and abnormal endings of sub-parses travel
@@ -82,8 +82,7 @@ use crate::node::BuildId;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenReader};
 
-/// The live frame covering a resolved invocation's parse (the dispatch push site,
-/// DESIGN_RATIONALE.md [§dd-dr:errors]): the spec's title hook with the invocation spelling — the
+/// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
 /// the `Invocation` moves into the spec's parser factory; allocation-free (`Arc` bumps
 /// only).
@@ -110,20 +109,19 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
     /// The source the token spans refer into — what staging a node's
-    /// [`SourceSpan`] requires (added July 2026, Phase 6.4, user-approved). It lives
+    /// [`SourceSpan`] requires. It lives
     /// here, not on tokens or readers, because the token layer deliberately carries
-    /// only transient byte spans (DESIGN_RATIONALE.md [§dd-dr:errors]); the construct-parser layer
+    /// only transient byte spans; the construct-parser layer
     /// is where byte spans become `Arc`-backed source spans. Not a parsing input:
     /// construct parsers make no forward parsing decision from raw content — even a
-    /// verbatim parser reads `Char` tokens under a features-disabled state
-    /// (DESIGN_RATIONALE.md [§dd-dr:tokens], Action-02 entry).
+    /// verbatim parser reads `Char` tokens under a features-disabled state.
     pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).
     pub state: Arc<ParsingState<L>>,
     /// The session: node building, diagnostics, derivation memos, frames.
     pub session: &'a mut ParserSession<L>,
-    /// The language's [`ParseDriver`] (Phase 7.2): recovery policy, parse-time hooks,
+    /// The language's [`ParseDriver`]: recovery policy, parse-time hooks,
     /// the descent-delta channel, construct provision. **Concretely typed through
     /// `L`** — preset parsers reach preset helper methods (inherent methods on the
     /// driver type) with zero downcasts; generic code sees only the trait.
@@ -163,8 +161,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// parser peeking with its minted group rule in force — without swapping
     /// [`state`](ParseContext::state).
     ///
-    /// Thin sugar over [`ParseDriver::probe_token`], where the policy is defined
-    /// (Phase 7.2).
+    /// Thin sugar over [`ParseDriver::probe_token`], where the policy is defined.
     pub fn probe_token(
         &mut self,
         state: &Arc<ParsingState<L>>,
@@ -182,7 +179,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// remember to restore **before** `?`-propagating the result; here the restore is
     /// structural. The returned [`ParsingStateDelta`] is the construct's after-effect
     /// for the caller, passed through **unapplied** — whether and where it applies is
-    /// caller business (the [§dd-arch:state] "caller applies deltas" law).
+    /// caller business (the "caller applies deltas" law).
     pub fn parse_scoped<P>(
         &mut self,
         state: Arc<ParsingState<L>>,
@@ -208,9 +205,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md [§dd-dr:errors]):
+    /// Detection-site recovery — **the recover funnel**:
     /// boxes the condition and hands it to [`ParseDriver::recover`], where the policy
-    /// is defined (Phase 7.2) — the default driver path applies
+    /// is defined — the default driver path applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once (it needs
     /// this context's parsing state) and then records the condition as an
     /// error-severity diagnostic and returns `Ok(())` (tolerant — the caller continues
@@ -240,7 +237,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// shape; derive from another base via the session method directly
     /// (`cx.session.derived_state(cx.driver, &base, &delta)`).
     ///
-    /// **Failing scope ops** (Phase 7.3) route through the recover funnel as
+    /// **Failing scope ops** route through the recover funnel as
     /// [`ScopeOpFailed`] conditions at the current position: under
     /// [`Recovery::Strict`](crate::error::Recovery::Strict) the first failure aborts;
     /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) each failure is
@@ -304,8 +301,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// Parse one **nodes descent** (a content run: group interior, environment body,
     /// top-level drive) under `state`, with the parser obtained from the driver's
     /// [`make_nodes_parser`](ParseDriver::make_nodes_parser) factory — the uniform
-    /// routing that makes one driver override apply to every descent site
-    /// (Phase 7.2). State scoping and restoration follow
+    /// routing that makes one driver override apply to every descent site.
+    /// State scoping and restoration follow
     /// [`parse_scoped`](ParseContext::parse_scoped).
     ///
     /// # Resuming a stopped run
@@ -353,7 +350,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// the environment body deliberately **unwinds** on a terminator mismatch instead
     /// of resuming — a body that diagnosed `\end{A}` and kept going inside
     /// `\begin{A}…\begin{B}…\end{A}` would swallow the enclosing environment's
-    /// terminator (decision 8; DESIGN_RATIONALE.md [§dd-dr:errors], [`EnvironmentBodyParser`]).
+    /// terminator (see [`EnvironmentBodyParser`]).
     // The output-plus-delta pair is the decided ConstructParser signature ([§dd-dr:parsers-engine]).
     #[allow(clippy::type_complexity)]
     pub fn parse_nodes<'p>(
@@ -373,7 +370,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// Parse one **group descent** (the consumed `GroupOpen` token's facts: open span
     /// and resolved rule) with `base` as the group's input state, the parser obtained
     /// from the driver's [`make_group_parser`](ParseDriver::make_group_parser)
-    /// factory — the uniform routing of every group descent site (Phase 7.2).
+    /// factory — the uniform routing of every group descent site.
     // Same decided pair as above.
     #[allow(clippy::type_complexity)]
     pub fn parse_group<'p>(
@@ -392,7 +389,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point
-    /// primitive of the parse traceback (DESIGN_RATIONALE.md [§dd-dr:errors]): every condition the
+    /// primitive of the parse traceback: every condition the
     /// recover funnel records while `f` runs carries the frame in its snapshot.
     ///
     /// Closure-scoped rather than an RAII guard, deliberately: a guard would hold
@@ -444,8 +441,7 @@ pub struct ImplementationError {
 
 /// Condition: a scope op of an in-parse state delta failed
 /// ([`ScopeOpError`](crate::scopes::ScopeOpError), rendered into `detail`) — reported
-/// through the recover funnel by the [`ParseContext`] derivation sugars (Phase 7.3,
-/// decided July 2026): strict parses abort on it; tolerant parses record it and
+/// through the recover funnel by the [`ParseContext`] derivation sugars: strict parses abort on it; tolerant parses record it and
 /// continue under the ops-skipped state
 /// ([`DeriveError::recovered`](crate::state::DeriveError::recovered)).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]

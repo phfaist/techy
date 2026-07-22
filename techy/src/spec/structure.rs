@@ -1,23 +1,20 @@
 //! Argument specs: the declarative description of a callable's invocation shape.
 //!
-//! **Modeled on pylatexenc's `LatexArgumentSpec`** (decided July 2026, replacing the
-//! Phase 4 `ArgumentKind` skeleton): an argument *is* a parser, optionally named, and may
+//! **Modeled on pylatexenc's `LatexArgumentSpec`**: an argument *is* a parser, optionally named, and may
 //! request a modified parsing state for its own extent. **Every** argument routes to an
-//! [`ArgumentParser`] object (revised July 2026, dropping the earlier closed data
-//! variants): the core cannot know a language's argument forms — which group class a
+//! [`ArgumentParser`] object: the core cannot know a language's argument forms — which group class a
 //! `{…}` argument uses, whether `[…]` is a group rule of the current state or a
 //! momentarily-minted one — so the standard parsers (delimited group, optional group,
 //! literal marker, expression, delimited verbatim) live in
 //! [`constructs`](crate::constructs) as core `ArgumentParser` implementations,
 //! parameterized by group types and rules; the preset's code factory
-//! (`latexlike::argument_specs`, Phase 7.7) resolves pylatexenc's `'{'` / `'['` /
+//! (`latexlike::argument_specs`) resolves pylatexenc's `'{'` / `'['` /
 //! `'*'` / … shorthands into configured instances.
 //!
 //! **Arguments vs. slots.** Arguments *configure* an invocation (`\frac{a}{b}`,
 //! `\item[label]`) and are declared here, spec-side. Slots — the *content regions* of a
 //! parsed callable (an environment's body; a fence-block construct may have several) —
-//! are pure **record-level** vocabulary: there is no `SlotSpec` (decided July 2026,
-//! slots session; supersedes the Phase 6 spec-side slot list). Body parsing needs
+//! are pure **record-level** vocabulary: there is no `SlotSpec`. Body parsing needs
 //! invocation facts no declarative list can supply — the `\end{name}` back-reference,
 //! the arguments parsed so far (pylatexenc's `EnvironmentSpec.make_body_parser(token,
 //! nodeargd, …)` precedent) — so a body-bearing callable's sanctioned
@@ -38,8 +35,7 @@ use crate::node::{BuildId, ContentNodes};
 use crate::state::{Lang, ParsingStateDelta};
 
 /// What an [`ArgumentParser`] returns for a *provided* argument: the region's staged
-/// nodes and the content designation among them (Phase 6.5, the decided
-/// `parse_argument` shape).
+/// nodes and the content designation among them (the `parse_argument` shape).
 ///
 /// The nodes are the argument's full syntactic extent in source order — leading noise
 /// (comment nodes, whitespace-only `Chars` nodes), then the syntax-bearing node(s). The
@@ -59,7 +55,7 @@ pub struct ParsedArgumentNodes {
 /// pylatexenc's "any `LatexParserBase` instance as `LatexArgumentSpec.parser`", and the
 /// single argument-parsing interface (no privileged data forms in the core).
 ///
-/// The entry point is [`parse_argument`](ArgumentParser::parse_argument) (Phase 6.5).
+/// The entry point is [`parse_argument`](ArgumentParser::parse_argument).
 /// An implementation parses one argument region and stages its nodes, designating the
 /// content nodes among them ([`ChildRegion`](crate::node::ChildRegion) /
 /// [`ContentNodes`](crate::node::ContentNodes)), or reports the argument absent; the
@@ -74,10 +70,9 @@ pub struct ParsedArgumentNodes {
 /// [`MarkerArgumentParser`](crate::constructs::MarkerArgumentParser),
 /// [`ExpressionParser`](crate::constructs::ExpressionParser).
 ///
-/// **Noise ownership** (decided July 2026, regions session; DESIGN_RATIONALE.md [§dd-dr:nodes]):
+/// **Noise ownership**:
 /// an argument parser owns its argument's *entire* region, leading noise included — it
-/// scans whitespace and comments itself (typically via the standard noise-scan helper,
-/// Phase 6) and stages them as ordinary nodes (comment nodes, whitespace-only `Chars`
+/// scans whitespace and comments itself (typically via the standard noise-scan helper) and stages them as ordinary nodes (comment nodes, whitespace-only `Chars`
 /// nodes) ahead of the argument's syntax. The core never scans noise on a parser's
 /// behalf: noise policy is inseparable from the argument's syntax (a verbatim argument
 /// whose delimiter is the comment character must see the raw token stream), and the
@@ -86,8 +81,8 @@ pub struct ParsedArgumentNodes {
 /// it is re-parsed as enclosing content — and speculatively staged nodes are simply
 /// never claimed (the builder drops them).
 ///
-/// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
-/// 2026; see [`CallableSpec`](super::CallableSpec)'s note and DESIGN_RATIONALE.md).
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits;
+/// see [`CallableSpec`](super::CallableSpec)'s note).
 /// Argument parsers are tier-1 *stored* behavior objects (`Arc`-shared inside
 /// [`ArgumentSpec`]s): immutable, `&self`, every per-use input arriving as arguments —
 /// unlike the tier-2 construct-parser temporaries they drive internally.
@@ -107,7 +102,7 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
     /// (the builder drops them). Whether absence is an error is the parser's own
     /// policy: an optional argument stays silent, a mandatory one records its
     /// diagnostic (tolerant) or aborts (strict) at this detection site
-    /// (DESIGN_RATIONALE.md [§dd-dr:errors]) before reporting absent. There is deliberately no
+    /// before reporting absent. There is deliberately no
     /// after-effect delta channel: an argument scopes no state beyond its own extent.
     fn parse_argument(
         &self,
@@ -117,7 +112,7 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
 
     /// Can this argument be satisfied consuming nothing — is reporting it absent a
     /// *valid* outcome rather than a diagnosed recovery? An optional group or `*`
-    /// marker: yes; a mandatory group or expression: no (decided July 2026, slots
+    /// marker: yes; a mandatory group or expression: no (slots
     /// session; pylatexenc's `LatexParserBase.contents_can_be_empty`).
     ///
     /// Consulted by [`CallableSpec::requires_content`](super::CallableSpec::requires_content)'s

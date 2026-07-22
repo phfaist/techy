@@ -11,7 +11,7 @@
 //! way), in any source order — `\op^{a}_{b}` and `\op_{b}^{a}` both provide both
 //! fields.
 //!
-//! # Record shape (decided July 2026, N3 session)
+//! # Record shape
 //!
 //! The whole run is **one argument** — per-marker `ParsedArgument` entries cannot
 //! express free source order through sequential per-spec parsing — and each matched

@@ -6,7 +6,7 @@
 //! Used as a callable's **last declared argument** (the FLM `label_arg` precedent):
 //! attachment is the argument's region — the whole absorption happens at parse time
 //! inside the invocation's own parse, per the decided construct-parser (not
-//! postprocessing) ruling (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]). The parser is configured with
+//! postprocessing) ruling. The parser is configured with
 //! the accepted field commands by **name**; a peeked
 //! [`Command`](TokenKind::Command) token whose name is configured dispatches with the
 //! configured [`CallableSpec`] directly — the scope stack is never consulted, so a
@@ -15,7 +15,7 @@
 //! reproduced (decision reason 2). Anything else — an unconfigured command, plain
 //! content, a group close, a paragraph break — ends the absorption, silently.
 //!
-//! # Staged shape (decided July 2026, N6 session)
+//! # Staged shape
 //!
 //! Each absorbed field stages a full **`Callable` node** under the configured
 //! per-name spec (diverging from pylatexenc's group-wrapper hack): the field's own
@@ -36,18 +36,17 @@
 //!
 //! # Multiplicity and noise
 //!
-//! Per-field policy (decided July 2026): a field registered with
+//! Per-field policy: a field registered with
 //! [`with_field`](TackOnFieldsArgumentParser::with_field) may appear **once**; one
 //! registered with
 //! [`with_repeatable_field`](TackOnFieldsArgumentParser::with_repeatable_field) any
 //! number of times (multiple `\label`s after a `\section`). A repeated
 //! non-repeatable field diagnoses [`RepeatedTackOnField`] — and, tolerant, the field
 //! is **still parsed and kept** in the region (diverging from pylatexenc's
-//! parse-and-discard: techy trees keep every byte, [§dd-dr:nodes]) — consumers see the
+//! parse-and-discard: techy trees keep every byte) — consumers see the
 //! diagnostic and the record.
 //!
-//! Whitespace and comments **between** fields are scanned as region noise (decided
-//! July 2026, diverging from pylatexenc, whose peek loop stops at a comment):
+//! Whitespace and comments **between** fields are scanned as region noise (diverging from pylatexenc, whose peek loop stops at a comment):
 //! `\section{x} % note` + newline + `\label{y}` still associates. A probe that finds
 //! no further field rewinds exactly its own noise scan — absorbed fields stay.
 

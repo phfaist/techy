@@ -30,7 +30,7 @@ use super::token::{Token, TokenKind};
 /// The token-reading protocol — the behavior extension point for genuinely different
 /// tokenization (catcode-like schemes, non-textual sources). `peek` receives the full
 /// [`ParsingState<L>`], not just `&TokenRules`: a custom reader keeps its tables in
-/// `L::StateExt`, which only the state exposes (ARCHITECTURE.md [§dd-arch:token]).
+/// `L::StateExt`, which only the state exposes.
 ///
 /// # Contract
 ///
@@ -85,7 +85,7 @@ pub trait TokenReader<'s, L: Lang> {
 ///
 /// A `pos` that is out of bounds for `content` or not on a `char` boundary is a caller
 /// bug (debug-asserted); the function then returns `pos` unchanged rather than panic
-/// (panic policy, DESIGN_RATIONALE.md).
+/// (the panic policy).
 ///
 /// **The multi-newline rule** (`TokenRules::enable_multi_newline_paragraphs`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
@@ -507,7 +507,7 @@ mod tests {
     }
 
     /// Hardcoded LaTeX-flavored rules; the real defaults arrive with the latexlike
-    /// preset (Phase 7). Generic so the several test langs of this module can share it.
+    /// preset. Generic so the several test langs of this module can share it.
     fn latex_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
             enable_whitespace: true,
@@ -1646,7 +1646,7 @@ mod tests {
     }
 
     /// An invalid `pos` is a caller bug: debug builds assert; release builds return
-    /// `pos` unchanged rather than panic (panic policy, DESIGN_RATIONALE.md).
+    /// `pos` unchanged rather than panic (the panic policy).
     #[test]
     #[cfg_attr(debug_assertions, should_panic(expected = "char boundary"))]
     fn skip_whitespace_tolerates_invalid_pos() {

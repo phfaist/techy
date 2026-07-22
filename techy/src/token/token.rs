@@ -11,13 +11,13 @@ use super::rules::GroupRule;
 
 /// What a token *is* — structural and minimal: it identifies *what to parse next*.
 ///
-/// Design invariants (DESIGN_RATIONALE.md [§dd-dr:tokens]):
+/// Design invariants:
 ///
 /// - **No invocation-form knowledge on tokens whose resolution happens at parse time.**
 ///   There is no macro/environment/specials taxonomy on [`Command`](TokenKind::Command)
 ///   tokens and no `CallableTypeId`: `\begin` tokenizes exactly like `\foobar`; which
 ///   names are macros or environments is decided at parse time by the preset.
-///   [`Specials`](TokenKind::Specials) is the scoped exception (July 2026 amendment):
+///   [`Specials`](TokenKind::Specials) is the scoped exception:
 ///   there recognition *is* resolution, so the token carries the full resolved pair
 ///   (`callable_type`, `spec`). (Terminology: *command* is the token-level syntactic
 ///   form; *callable* the parse-level concept; *macro*/*environment* preset-level
@@ -68,7 +68,7 @@ pub enum TokenKind<'s, L: Lang> {
         /// [`CommandRule`](super::CommandRule) fired (a syntactic fact, not resolution
         /// output). Parse-time lookup needs it for disambiguation when several command
         /// syntaxes coexist (`CallableQuery { syntax: Command { escape_char } }`), and it
-        /// is not otherwise recoverable from the token (added July 2026, Phase 6).
+        /// is not otherwise recoverable from the token.
         escape_char: char,
         /// Syntactic whitespace consumed after a multi-character name (the whitespace
         /// that terminates the name is part of the invocation syntax, not content).
@@ -80,8 +80,7 @@ pub enum TokenKind<'s, L: Lang> {
     /// full resolution: the invocation form *and* the spec (never absent; unknown-name
     /// fallback is the scan's business). Exactly a
     /// [`ResolvedCallable`](crate::engine::ResolvedCallable)'s pair — what the dispatch
-    /// loop needs to build an `Invocation` (`callable_type` added July 2026, Phase 6.4,
-    /// user-approved).
+    /// loop needs to build an `Invocation`.
     Specials {
         /// The invocation form the trigger resolved to (a preset's specials form; a
         /// fence-block form; …).
@@ -100,7 +99,7 @@ pub enum TokenKind<'s, L: Lang> {
         /// `start.end..post_space.start` *without* assuming `content` was sliced
         /// verbatim from the source — a custom [`TokenReader`](super::TokenReader) may
         /// normalize `content`, so consumers must never reconstruct spans from
-        /// `content.len()` (added July 2026, Action 02).
+        /// `content.len()`.
         start: Span,
         /// The comment text after the start delimiter, without the newline.
         content: &'s str,
@@ -127,7 +126,7 @@ pub enum TokenKind<'s, L: Lang> {
 ///
 /// - `pre_space` is the whitespace immediately *before* the token; it lies **outside**
 ///   `span`, ending exactly at `span.start`. Pre-space is *content* whitespace: it belongs
-///   to the document flow (whitespace-only chars nodes, Phase 6).
+///   to the document flow (whitespace-only chars nodes).
 /// - Post-space, where a kind has it ([`Command`](TokenKind::Command),
 ///   [`Comment`](TokenKind::Comment) — see [`Token::post_space`]), is *syntactic*
 ///   whitespace consumed by the construct and ignored as content. It is a trailing
@@ -135,7 +134,7 @@ pub enum TokenKind<'s, L: Lang> {
 ///   break.
 ///
 /// These are *token*-level conventions; node span semantics are a separate, deliberately
-/// decoupled contract (ARCHITECTURE.md [§dd-arch:nodes]) — tokens are transient engine internals.
+/// decoupled contract — tokens are transient engine internals.
 ///
 /// Tokens are `Clone` but not `Copy` (a [`Specials`](TokenKind::Specials) token holds an
 /// `Arc`); they are transient, `'s`-bound values internal to a parse.

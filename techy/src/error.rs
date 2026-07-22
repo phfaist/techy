@@ -4,9 +4,9 @@
 //! Diagnostics carry Arc-based [`SourceSpan`]s, so they are self-contained and outlive the
 //! parse that produced them — no `'src` lifetime spreads through error signatures. Library
 //! conditions are reported through diagnostics (accumulated by the parser session, available
-//! on the parse result), never through a logging side channel (DESIGN_RATIONALE.md [§dd-dr:dependencies]).
+//! on the parse result), never through a logging side channel.
 //!
-//! # Structured conditions (DESIGN_RATIONALE.md [§dd-dr:errors])
+//! # Structured conditions
 //!
 //! [`Diagnostic`] and [`ParseError`] carry a structured **condition payload**
 //! (`Box<dyn DiagnosticData>`) plus span and traceback frames — no message string, no kind
@@ -19,9 +19,9 @@
 //! carriers.
 //!
 //! The token-level error type carrying a recovery token (`TokenError`) lives with `Token` in
-//! the token layer (Phase 2); the [`Recovery`] policy that governs it is defined here, as is
-//! [`ParseError`] — the construct-parsing abort (Phase 6), which deliberately carries **no**
-//! recovery payload (DESIGN_RATIONALE.md [§dd-dr:errors]).
+//! the token layer; the [`Recovery`] policy that governs it is defined here, as is
+//! [`ParseError`] — the construct-parsing abort, which deliberately carries **no**
+//! recovery payload.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -39,8 +39,7 @@ use crate::token::TokenErrorKind;
 // for condition structs, `#[derive(ToDiagnosticValue)]` for field-less payload enums.
 pub use techy_derive::{DiagnosticInfo, ToDiagnosticValue};
 
-/// A structured parse condition, as implemented on a plain public-field data struct
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// A structured parse condition, as implemented on a plain public-field data struct.
 ///
 /// Implementors write a data struct (public fields, `#[non_exhaustive]` + constructor for
 /// semver headroom, ordinary `Clone`/`Debug` derives), a `Display` impl for the human
@@ -67,7 +66,7 @@ pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync 
 mod sealed {
     /// Seals [`DiagnosticData`](super::DiagnosticData): the blanket impl over
     /// [`DiagnosticInfo`](super::DiagnosticInfo) is the only way in, which enforces the
-    /// const-identifier discipline (DESIGN_RATIONALE.md [§dd-dr:errors]).
+    /// const-identifier discipline.
     pub trait Sealed {}
 }
 
@@ -117,7 +116,7 @@ impl dyn DiagnosticData {
 
     /// Downcast the condition payload to its concrete type — the in-process identity
     /// (the [`identifier`](DiagnosticData::identifier) string exists only for boundaries
-    /// where types cannot go, DESIGN_RATIONALE.md [§dd-dr:errors]).
+    /// where types cannot go).
     pub fn downcast_ref<T: DiagnosticInfo>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref::<T>()
     }
@@ -132,7 +131,7 @@ impl Clone for Box<dyn DiagnosticData> {
 /// Minimal alloc-only value tree for the serialization boundary
 /// ([`DiagnosticInfo::serializable_data`]).
 ///
-/// Deliberately barebones (DESIGN_RATIONALE.md [§dd-dr:errors]): no float variant — serialize floats
+/// Deliberately barebones: no float variant — serialize floats
 /// as strings if ever needed. A JSON emission helper over this tree is deferred,
 /// non-breaking work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,8 +160,7 @@ impl DiagnosticValue {
 
 /// Conversion of one payload field into its [`DiagnosticValue`] projection — the
 /// serialization bridge behind `#[derive(DiagnosticInfo)]`'s generated
-/// [`serializable_data`](DiagnosticInfo::serializable_data)
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// [`serializable_data`](DiagnosticInfo::serializable_data).
 ///
 /// Implemented for the payload primitives below (booleans, integers, `char`, strings,
 /// `Option`, slices/`Vec`, references, and `DiagnosticValue` itself). The derive routes
@@ -268,7 +266,7 @@ impl ToDiagnosticValue for DiagnosticValue {
 /// `argument #1 of ‘\frac’`) and the source location the parse descended at.
 ///
 /// Snapshots are taken from the session's live frame stack by the recover funnel
-/// (DESIGN_RATIONALE.md [§dd-dr:errors]) and stored **innermost first** on [`Diagnostic`] and
+/// and stored **innermost first** on [`Diagnostic`] and
 /// [`ParseError`]; unlike the live [`Frame`](crate::engine::Frame), a `TraceFrame` is
 /// `L`-free — generic over the source origin only — so errors aggregate across languages.
 #[derive(Debug, Clone)]
@@ -299,7 +297,7 @@ impl<O: SourceOrigin> TraceFrame<O> {
 /// The derived `Ord` ranks `Note < Warning < Error` for threshold filtering ("warnings
 /// and above"). The core parser currently emits only `Error` diagnostics; `Note` and
 /// `Warning` are constructor-supported for presets and embedders (lint-ish conditions)
-/// and gain core producers only when such conditions arrive (noted July 2026, Action 06).
+/// and gain core producers only when such conditions arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     /// Informational note.
@@ -326,7 +324,7 @@ impl fmt::Display for Severity {
 /// rendered from the payload on demand ([`message`](Diagnostic::message)) — plus a
 /// traceback snapshot ([`frames`](Diagnostic::frames), attached by the recover funnel).
 /// No `PartialEq`: tests compare [`identifier()`](Diagnostic::identifier) and downcast
-/// fields (DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// fields.
 #[derive(Debug, Clone)]
 pub struct Diagnostic<O: SourceOrigin = Option<String>> {
     severity: Severity,
@@ -421,7 +419,7 @@ impl<O: SourceOrigin> fmt::Display for Diagnostic<O> {
 
 /// An ordered collection of [`Diagnostic`]s, as accumulated over one parse.
 ///
-/// Retention is **bounded** (July 2026, Action 06): at most [`limit`](Diagnostics::limit)
+/// Retention is **bounded**: at most [`limit`](Diagnostics::limit)
 /// diagnostics are stored — [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT) unless the
 /// collection was created with [`with_limit`](Diagnostics::with_limit). In tolerant mode
 /// degenerate input can produce one diagnostic per byte; the cap turns that unbounded
@@ -594,7 +592,7 @@ impl<'a, O: SourceOrigin> IntoIterator for &'a Diagnostics<O> {
 ///
 /// Under `Strict`, the parse aborts on the first error. Under `Tolerant`, a diagnostic is
 /// recorded and parsing continues with the error's recovery token where one is available
-/// (the recovery-token mechanism itself arrives with the token layer, Phase 2).
+/// (the recovery-token mechanism itself arrives with the token layer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recovery {
     /// Abort on the first error.
@@ -606,9 +604,9 @@ pub enum Recovery {
 /// The abort error of construct parsing: a strict-mode escalation or a genuinely
 /// unrecoverable condition.
 ///
-/// **`Err` means abort** (DESIGN_RATIONALE.md [§dd-dr:errors]): recovery happens where a problem is
+/// **`Err` means abort**: recovery happens where a problem is
 /// detected (the recover funnel), abnormal endings of sub-parses travel as data
-/// (`StopCause`, Phase 6.2), and nobody ever continues *past* a `ParseError` — it
+/// (`StopCause`), and nobody ever continues *past* a `ParseError` — it
 /// carries no recovery payload and bubbles freely. Like [`Diagnostic`], it holds an
 /// Arc-based [`SourceSpan`] plus the structured condition payload and the traceback
 /// snapshot, so it is self-contained and outlives the parse. No `PartialEq`: tests
@@ -628,7 +626,7 @@ impl<O: SourceOrigin> ParseError<O> {
         ParseError { data: Box::new(condition), span, frames: Vec::new() }
     }
 
-    /// Lift a token error's kind into the abort error (DESIGN_RATIONALE.md [§dd-dr:errors]): the
+    /// Lift a token error's kind into the abort error: the
     /// built-in token conditions are boxed; a custom payload is unwrapped, never
     /// double-boxed.
     pub fn from_token_error(kind: TokenErrorKind, span: SourceSpan<O>) -> ParseError<O> {

@@ -1,17 +1,17 @@
 //! [`EnvironmentBodyParser`]: parses an environment-shaped callable's body — content up
 //! to and including the rigid `\end{name}` terminator — staging it as one body `List`
-//! node (Phase 6.6; pylatexenc's environment body handling, expressed as the decided
-//! parameterized core parser).
+//! node (pylatexenc's environment body handling, expressed as a parameterized core
+//! parser).
 //!
-//! # Design (DESIGN_RATIONALE.md [§dd-dr:nodes], [§dd-dr:parsers-engine])
+//! # Design
 //!
 //! **Slot terminators are parser business** — and slots have no spec-side declaration
-//! at all (decided July 2026, slots session): the terminator data (the stop command's
+//! at all: the terminator data (the stop command's
 //! name, the name group's class, whether the name must back-reference the invocation)
 //! parameterizes this parser, and the composition driving it mints the
 //! [`ParsedSlot`](crate::node::ParsedSlot) records directly. A body state delta
 //! (pylatexenc's `make_body_parsing_state_delta`) lives as an ordinary field on the
-//! preset spec type that drives the parse (Phase 7's `EnvironmentSpec`) — the core
+//! preset spec type that drives the parse (the preset's `EnvironmentSpec`) — the core
 //! never interprets it. Environments stay zero-custom-code for spec authors.
 //!
 //! **The scaffolding is rigid and reconstructed, not recorded** (decision 6): the
@@ -25,10 +25,10 @@
 //! invocation parser stacks the slot's `parsing_state_delta` on the invocation's base
 //! (session-mediated) and reverts structurally, exactly as for arguments. Both the body
 //! content *and the terminator* are read under it; a slot state that cannot tokenize the
-//! stop command runs the body to end of input (the [§dd-dr:parsers-engine] pitfall — environments do not
+//! stop command runs the body to end of input (a known pitfall — environments do not
 //! self-heal the way group closes do).
 //!
-//! # Recovery (decision 8; DESIGN_RATIONALE.md [§dd-dr:errors])
+//! # Recovery (decision 8)
 //!
 //! - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`): diagnostic + close the body
 //!   **without consuming** the terminator — the unwinding lets the enclosing
@@ -66,8 +66,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: an environment's body ran into the terminator of a *different*
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
-/// so an enclosing level can claim its own terminator (decision 8,
-/// DESIGN_RATIONALE.md [§dd-dr:errors]).
+/// so an enclosing level can claim its own terminator.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -146,8 +145,7 @@ pub struct NameGroup {
     pub end: usize,
 }
 
-/// Try to read a **rigid** environment name group at the reader's position (decision 6,
-/// DESIGN_RATIONALE.md [§dd-dr:nodes]): a group open of class `name_group_type` as the immediately
+/// Try to read a **rigid** environment name group at the reader's position: a group open of class `name_group_type` as the immediately
 /// next token (no pre-space — inline whitespace after the introducing command is that
 /// token's own post-space, already consumed with it; comments and paragraph breaks are
 /// not tolerated), a chars-only interior with no whitespace, and the matching close
@@ -161,7 +159,7 @@ pub struct NameGroup {
 /// consuming — the enclosing content loop re-reads the error and applies its own token
 /// recovery (the argument-probe rule, [`ParseContext::probe_token`]).
 ///
-/// Public as a takeover-composition building block (decided July 2026, slots session):
+/// Public as a takeover-composition building block:
 /// a `\begin`-shaped `make_invocation_parser` override reads its scaffolding with this
 /// before resolving the environment and driving [`EnvironmentBodyParser`].
 pub fn read_rigid_name_group<L: Lang>(
@@ -242,12 +240,12 @@ pub struct EnvironmentBody {
     /// parser ends the callable's span here.
     pub end: usize,
     /// The body slot's **content designation**, ready for the driving composition's
-    /// [`ParsedSlot`](crate::node::ParsedSlot) record (added Phase 7.7): which of the
+    /// [`ParsedSlot`](crate::node::ParsedSlot) record: which of the
     /// body's nodes are the slot's content. The standard parser designates all of the
     /// body `List`'s children; a verbatim body designates its gobbled leading newline
     /// *out* ([`VerbatimBodyParser`](super::VerbatimBodyParser)) — the parser that
     /// staged the body is the one that knows, exactly as for arguments
-    /// (DESIGN_RATIONALE.md [§dd-dr:nodes] parse-time designation).
+    /// (parse-time designation).
     pub content: ContentNodes,
 }
 
@@ -275,7 +273,7 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// the caller has one: it titles the body's traceback frame (`environment ‘align’`).
     /// Without it the frame falls back to the generic "environment body".
     /// (`invocation_name` itself is a borrowed `&str` and cannot ride in the
-    /// allocation-free live frame — a span can, [§dd-dr:errors].)
+    /// allocation-free live frame — a span can.)
     invocation_name_span: Option<Span>,
 }
 
@@ -801,7 +799,7 @@ mod tests {
     // --- with a slot record — the decided verbatim recipe ([§dd-dr:tokens], Action-02 entry) ------
 
     /// `\raw … \endraw`: the body is raw source bytes — the parser never runs
-    /// `NodesParser`, so no terminator-state doctrine is needed ([§dd-dr:parsers-engine]). It reads the
+    /// `NodesParser`, so no terminator-state doctrine is needed. It reads the
     /// body through the reader like every other parser (no raw-content peeking): under
     /// the verbatim state every byte is a `Char` token and the terminator one
     /// `GroupClose`.
@@ -982,7 +980,7 @@ mod tests {
         Arc::new(StdCallableSpec::new(arguments))
     }
 
-    /// The test-lang environment spec (Phase 7 `EnvironmentSpec` rehearsal): arguments
+    /// The test-lang environment spec (an `EnvironmentSpec` rehearsal): arguments
     /// declared spec-side like any callable; the body's state delta an **ordinary
     /// field** (the A.3 rehoming of pylatexenc's `make_body_parsing_state_delta`),
     /// read back by the composition that drives the parse — the core never sees it.

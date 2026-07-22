@@ -1,8 +1,6 @@
 //! The scope stack: how callable names resolve to [`CallableSpec`]s.
 //!
-//! Implements the Phase 7.3 scope-stack redesign (ARCHITECTURE.md [§dd-arch:specs] revision;
-//! DESIGN_RATIONALE.md [§dd-dr:specs]), replacing the Phase 4 `SpecLookup`/`Library`/`LibraryStack`
-//! design:
+//! The scope-stack design:
 //!
 //! - [`SpecsProvider`] is the stack-entry contract: a named, fallible resolver
 //!   ([`retrieve_spec`](SpecsProvider::retrieve_spec)) that may also participate in the
@@ -20,7 +18,7 @@
 //! - [`ScopeStack`] is the ordered stack stored in the parsing state
 //!   ([`StateData::scopes`](crate::state::StateData)), searched **innermost
 //!   (last-pushed) first** — lexical shadowing, no `ConflictStrategy`. The stack itself
-//!   is *not* a provider (stacks do not nest — this removes the Phase 4
+//!   is *not* a provider (stacks do not nest — this removes the
 //!   nested-fallback-preemption hazard instead of re-mitigating it), and it is
 //!   visibility-blind: mode visibility is each provider's own business.
 //!
@@ -87,7 +85,7 @@ pub enum CallableSyntax {
 /// the parsing state (passed alongside).
 ///
 /// The `token` is present when resolution happens for an already-scanned token (the nodes
-/// parser resolving a `Command`, Phase 6) and lets providers inspect `pre_space` and
+/// parser resolving a `Command`) and lets providers inspect `pre_space` and
 /// spans; it is `None` where no token exists yet (specials scan, synthesized
 /// invocations). Plain data providers ignore everything but `callable_type` and `name`.
 pub struct CallableQuery<'a, 's, L: Lang> {
@@ -145,8 +143,7 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, '_, L> {
 
 /// A [`SpecsProvider`] operation failed — the provider-level error of
 /// [`retrieve_spec`](SpecsProvider::retrieve_spec) and
-/// [`with_definitions`](SpecsProvider::with_definitions) (decided July 2026, Phase 7.3
-/// checkpoint). Structured for testability; custom providers report anything beyond the
+/// [`with_definitions`](SpecsProvider::with_definitions). Structured for testability; custom providers report anything beyond the
 /// named cases through [`Failed`](ProviderError::Failed).
 ///
 /// A provider error is an *operational* failure (misconfiguration, extension bug, backing
@@ -210,8 +207,7 @@ impl core::error::Error for ScopeStackError {
 
 /// One [`ScopeOp`] failed while a delta was applied — the per-op failure record
 /// collected by the fallible [`ParsingState::derived`](crate::state::ParsingState::derived)
-/// into a [`DeriveError`](crate::state::DeriveError) (decided July 2026, Phase 7.3
-/// checkpoint). Mechanical, not classified: the *caller* decides what a failure means —
+/// into a [`DeriveError`](crate::state::DeriveError). Mechanical, not classified: the *caller* decides what a failure means —
 /// the in-parse seam treats it as a recoverable condition through the recover funnel
 /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder applying a delta
 /// out of parse treats it as its own input error.
@@ -340,7 +336,7 @@ pub enum ScopeOp<L: Lang> {
     /// entry is replaced by the returned provider). If no provider named `scope` is on
     /// the stack, a fresh [`Scope`] with that name is created **innermost**, holding
     /// the definition — scopes are created lazily on first `Define`, never eagerly per
-    /// group (DESIGN_RATIONALE.md [§dd-dr:specs]). Targeting an immutable provider (a
+    /// group. Targeting an immutable provider (a
     /// [`Package`]) is an error.
     Define {
         /// The name of the provider to define into.
@@ -427,7 +423,7 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 // --- the provider contract -------------------------------------------------------------
 
 /// A scope-stack entry: a named source of callable definitions, with optional specials
-/// participation and optional functional updates (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// participation and optional functional updates.
 ///
 /// Entries are **all-dyn** — the multi-method contract keeps generic ops and diagnostics
 /// available while admitting lazy-loading providers (large spec databases) that closed
@@ -437,7 +433,7 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits; see
 /// [`CallableSpec`]'s note): every method takes `&self`, so a stateful implementation (a
 /// memo cache, a database connection) needs interior mutability regardless — under this
-/// contract that means `Mutex`/`RwLock`, not `RefCell` (DESIGN_RATIONALE.md).
+/// contract that means `Mutex`/`RwLock`, not `RefCell`.
 pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
     /// The provider's name: how definition ops target it ([`ScopeOp::Define`] routing),
     /// and how it appears in diagnostics (the miss detail of
@@ -464,8 +460,7 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
     /// the [`ScopeStack::scan_specials`] fold — including the [`SpecialsMatch::end`]
     /// obligations and the recovery-token protocol (the `TokenResult` shape is
     /// deliberate: a scanning provider keeps the tokenizer's recoverable-failure
-    /// channel, which a [`ProviderError`] could not express; decided July 2026, Phase
-    /// 7.3 checkpoint). Implementations should return their **longest** match at `pos`.
+    /// channel, which a [`ProviderError`] could not express). Implementations should return their **longest** match at `pos`.
     /// The default recognizes nothing.
     fn scan_specials<'s>(
         &self,
@@ -505,7 +500,7 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     /// Enumerate this provider's definitions of the invocation form `callable_type`
-    /// that are visible under `mode` (Phase 7.8; the deferral of the 7.3 checkpoint).
+    /// that are visible under `mode`.
     /// Visibility is the provider's own business, exactly as in
     /// [`retrieve_spec`](SpecsProvider::retrieve_spec) — and since visibility is
     /// mode-determined at every grain, the mode alone is passed, not a full state.
@@ -607,7 +602,7 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 }
 
 /// An immutable, wholesale-loaded collection of definitions — the standard
-/// [`SpecsProvider`] for preset/library data (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// [`SpecsProvider`] for preset/library data.
 ///
 /// Built once (insertions while owned), then shared behind an `Arc` on scope stacks;
 /// it never mutates afterwards — its [`with_definitions`](SpecsProvider::with_definitions)
@@ -889,14 +884,12 @@ impl<L: Lang> fmt::Debug for Package<L> {
 // --- Scope -------------------------------------------------------------------------------
 
 /// The definition target: the standard mutable-by-replacement [`SpecsProvider`] that
-/// [`ScopeOp::Define`]/[`ScopeOp::Remove`] address (Phase 7.3, DESIGN_RATIONALE.md
-/// [§dd-dr:specs]).
+/// [`ScopeOp::Define`]/[`ScopeOp::Remove`] address.
 ///
 /// "Mutable" means **copy-on-write**: [`with_definitions`](SpecsProvider::with_definitions)
 /// returns a fresh `Scope` and the stack swaps its entry, while outer states keep the
 /// old `Arc` — group-local definition semantics fall out of structural reversion, even
-/// when the targeted scope sits below other providers. Storage is a `BTreeMap` (like
-/// the Phase 4 `Library`: `no_std`, and deterministic iteration); keys are
+/// when the targeted scope sits below other providers. Storage is a `BTreeMap` (`no_std`, deterministic iteration); keys are
 /// `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs.
 pub struct Scope<L: Lang> {
     name: Box<str>,
@@ -1027,8 +1020,7 @@ impl<L: Lang> fmt::Debug for Scope<L> {
 // --- FallbackProvider --------------------------------------------------------------------
 
 /// The unknown-callable policy as an ordinary provider: answers **any** name of its
-/// registered callable types with that type's shared fallback singleton (Phase 7.3,
-/// DESIGN_RATIONALE.md [§dd-dr:specs] — fallbacks live *in* the stack, at the bottom, so
+/// registered callable types with that type's shared fallback singleton (fallbacks live *in* the stack, at the bottom, so
 /// suppression by shadowing is a theorem of search order, and the stack needs no
 /// separate fallback map).
 ///
@@ -1094,8 +1086,7 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 // --- ErrorCallableSpec ---------------------------------------------------------------------
 
 /// Condition: a callable that is *defined to be an error* was invoked — the
-/// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition,
-/// DESIGN_RATIONALE.md [§dd-dr:specs]). The invocation recovers as a span-backed chars fallback.
+/// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition). The invocation recovers as a span-backed chars fallback.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.scopes.callable-defined-as-error")]
@@ -1122,7 +1113,7 @@ impl fmt::Display for CallableDefinedAsError {
 /// A [`CallableSpec`] whose invocation is an error: the core-provided utility behind
 /// "defined to be an error" (no `Masked` resolution outcome exists — shadowing lower
 /// entries *and* the fallback with this spec suppresses them purely by search order,
-/// with a better message than a mask could carry; DESIGN_RATIONALE.md [§dd-dr:specs]).
+/// with a better message than a mask could carry).
 ///
 /// Its invocation parser records a [`CallableDefinedAsError`] through the recover funnel
 /// (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
@@ -1203,7 +1194,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
 /// shadowing (`\newcommand` semantics; no `ConflictStrategy`).
 ///
 /// The stack is deliberately **not** a [`SpecsProvider`] (stacks do not nest — the
-/// Phase 4 nested-fallback-preemption hazard is removed rather than re-mitigated) and
+/// nested-fallback-preemption hazard is removed rather than re-mitigated) and
 /// carries **no** fallback map: unknown-callable policy is an ordinary bottom
 /// [`FallbackProvider`]. It is also visibility-blind — a mode-restricted [`Package`]
 /// declines inside its own methods.

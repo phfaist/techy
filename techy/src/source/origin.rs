@@ -18,11 +18,9 @@ use core::fmt::Debug;
 /// The default origin type is `Option<String>`: conventionally the URL the content was
 /// obtained from if available, and `None` otherwise (e.g. content handed in directly as a
 /// string, or content synthesized while parsing — the latter is described by the source's
-/// [`SourceProvenance`](super::SourceProvenance), which every source carries). Once the
-/// `Lang` trait exists (Phase 3+), a language definition selects its origin type via
-/// `L::SourceOrigin`.
-/// `Send + Sync` because sources are `Arc`-shared (decided July 2026, together with the
-/// thread-safety contract on the spec traits — see DESIGN_RATIONALE.md).
+/// [`SourceProvenance`](super::SourceProvenance), which every source carries). A language definition selects its origin type via `L::SourceOrigin`.
+/// `Send + Sync` because sources are `Arc`-shared (together with the
+/// thread-safety contract on the spec traits).
 pub trait SourceOrigin: Debug + Clone + Default + Send + Sync {
     /// Short human-readable label shown in diagnostics (e.g. a URL).
     ///

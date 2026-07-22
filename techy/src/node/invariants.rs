@@ -1,5 +1,5 @@
 //! [`check_tree_invariants`]: the mechanical checker for the pinned whitespace/span
-//! invariants (DESIGN_RATIONALE.md [§dd-dr:nodes]; ARCHITECTURE.md [§dd-arch:nodes]) — **a test utility,
+//! invariants — **a test utility,
 //! deliberately not builder law**: a future construct that legitimately breaks byte
 //! accounting (e.g. a tolerant root recovery that *skips* a stray close, leaving an
 //! unrepresented byte) amends a test, not the architecture.
@@ -24,7 +24,7 @@ use super::tree::{NodeData, NodeTree};
 ///    parent (the breadth-first layout); every non-root node is inside exactly one
 ///    parent's children range (single parent + reachability); the root is nobody's
 ///    child.
-/// 2. **Partition of content interiors** ([§dd-dr:nodes] invariant 5). The sibling spans of a
+/// 2. **Partition of content interiors** (invariant 5). The sibling spans of a
 ///    `List`'s or `Group`'s children partition the parent's content interior exactly —
 ///    no gaps, no double counting. A `List`'s interior is its whole span; a `Group`'s
 ///    interior is its span minus the delimiters. `Chars` and `Comment` nodes are
@@ -32,7 +32,7 @@ use super::tree::{NodeData, NodeTree};
 /// 3. **Callable children-block contiguity.** A `Callable`'s children block is
 ///    span-contiguous (sibling spans chain without gaps) and lies inside the node's
 ///    span; a `Spanned` post-space — exactly the trigger token's own syntactic
-///    post-space ([§dd-dr:nodes] invariant 3, as amended in Phase 6.4) — ends where the first
+///    post-space (invariant 3) — ends where the first
 ///    child begins, or ends the node's span when there are no children (the
 ///    argument-less shape, where it *is* trailing).
 /// 4. **Region tiling.** A `Callable`'s resolved argument/slot regions tile its children

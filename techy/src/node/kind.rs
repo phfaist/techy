@@ -12,8 +12,7 @@ use crate::state::Lang;
 use super::arguments::{ParsedArguments, ParsedSlots};
 use super::{CallableNodeExt, CharsNodeExt, CommentNodeExt, GroupNodeExt, ListNodeExt};
 
-/// What a node structurally *is* — the closed core enum of ARCHITECTURE.md [§dd-arch:nodes]
-/// (DESIGN_RATIONALE.md [§dd-dr:nodes]): exactly the structural shapes, no `Custom` variant, no invocation-form
+/// What a node structurally *is* — the closed core enum: exactly the structural shapes, no `Custom` variant, no invocation-form
 /// variants.
 ///
 /// - **No `Macro`/`Environment`/`Specials`/`Math` kinds.** Macro, environment, and
@@ -29,7 +28,7 @@ use super::{CallableNodeExt, CharsNodeExt, CommentNodeExt, GroupNodeExt, ListNod
 ///   [`TextContent`] — span-backed when parsed, owned when synthesized or normalized.
 pub enum NodeKind<L: Lang> {
     /// A run of ordinary content characters (including whitespace-only runs — pylatexenc's
-    /// whitespace-as-chars-nodes rule, pinned in Phase 6).
+    /// whitespace-as-chars-nodes rule).
     Chars {
         /// The characters.
         content: TextContent,
@@ -45,7 +44,7 @@ pub enum NodeKind<L: Lang> {
     /// payload keeps the enum small.
     Callable(Box<CallableData<L>>),
     /// A comment: start delimiter, content, and syntactic post-space, each recorded on
-    /// the node (decided July 2026, Phase 6 plan session): with several `CommentRule`s in
+    /// the node: with several `CommentRule`s in
     /// scope, *which* delimiter fired and what post-space followed are per-instance
     /// facts, and level-2 recomposition must not depend on `Lang` cooperation — the same
     /// recorded-delimiter principle as [`GroupData`]. The node's span covers all three
@@ -133,7 +132,7 @@ impl<L: Lang> NodeKind<L> {
 
 /// The payload of a [`Group`](NodeKind::Group) node.
 ///
-/// **Delimiters are stored on the node** (decided July 2026, following pylatexenc's
+/// **Delimiters are stored on the node** (following pylatexenc's
 /// `LatexGroupNode.delimiters`): recomposition and delimiter-sensitive consumers must not
 /// depend on a registry lookup — the same "recomposability must not depend on `Lang`
 /// cooperation" rule that keeps per-instance argument syntax as ordinary nodes in the
@@ -191,7 +190,7 @@ impl<L: Lang> GroupData<L> {
 }
 
 /// The payload of a [`Callable`](NodeKind::Callable) node: the **invocation facts** — the
-/// division-of-labor rule of ARCHITECTURE.md [§dd-arch:nodes] puts shared behavior in the [spec]
+/// division-of-labor rule puts shared behavior in the [spec]
 /// (stored once), resolution keys in the scope stack's providers, context in the
 /// parsing state, and
 /// *here* everything specific to this one invocation.
@@ -204,7 +203,7 @@ pub struct CallableData<L: Lang> {
     /// keys hold the *normalized* name; this is the name as written).
     pub name: Box<str>,
     /// The behavior spec — shared, de-keyed, and never absent (unknown callables resolve
-    /// to per-type fallback singletons, ARCHITECTURE.md [§dd-arch:specs]).
+    /// to per-type fallback singletons).
     pub spec: Arc<dyn CallableSpec<L>>,
     /// The parsed arguments: which are provided, where their region/content nodes are,
     /// and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each was parsed against.
@@ -214,8 +213,7 @@ pub struct CallableData<L: Lang> {
     /// The syntactic whitespace consumed by the invocation's **trigger token** — the
     /// name-terminating whitespace of a multi-character command (pylatexenc's
     /// `macro_post_space`), reproduced verbatim in recomposition. Nothing beyond the
-    /// token's own post-space is ever claimed (amended July 2026, Phase 6.4, user
-    /// decision — supersedes "whitespace after the invocation"): whitespace after a
+    /// token's own post-space is ever claimed: whitespace after a
     /// single-character command or after a final argument is ordinary sibling/region
     /// content, as in TeX. Included in the node's span (a `Spanned` post-space is a
     /// sub-range of it — trailing for zero-argument callables; between the name and the

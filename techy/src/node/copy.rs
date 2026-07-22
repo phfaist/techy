@@ -1,7 +1,6 @@
 //! Subtree copying: re-stage a finished tree's node (with its whole subtree) into a
 //! [`NodeTreeBuilder`] — the cross-tree machinery behind the [`extract`](super::extract)
-//! helpers (Phase 7.8; the "first-class cross-tree remapping story" the [§dd-dr:nodes] debug-tag
-//! entry's revisit clause anticipated).
+//! helpers.
 //!
 //! Copying is *by value*: the new tree owns fresh `NodeData` (spans, states, specs, and
 //! ext payloads are `Arc`-shared or cloned), and the copies get **new ids** in the new

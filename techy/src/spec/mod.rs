@@ -1,7 +1,7 @@
 //! Callable specs: the behavior attached to anything invocable from the token stream.
 //!
-//! Implements ARCHITECTURE.md [§dd-arch:specs] (Phase 4; argument model rebuilt on pylatexenc's
-//! `LatexArgumentSpec`, July 2026). A [`CallableSpec`] records *callable behavior*, not
+//! Callable specs (the argument model is modeled on pylatexenc's
+//! `LatexArgumentSpec`). A [`CallableSpec`] records *callable behavior*, not
 //! the form or name under which it is invoked — specs are **de-keyed**: the invocation
 //! form is the language's closed [`Lang::CallableTypeId`](crate::state::Lang) and the
 //! name lives in the provider key (normalized) and on the node (invocation spelling).
@@ -10,18 +10,17 @@
 //!
 //! The declarative surface is the [`ArgumentSpec`] list exposed by the spec (arguments
 //! *configure* an invocation), with [`StdCallableSpec`] as the standard implementation.
-//! Slots — a parsed callable's *content regions* — have no spec-side declaration
-//! (decided July 2026, slots session): they are record-level vocabulary
+//! Slots — a parsed callable's *content regions* — have no spec-side declaration:
+//! they are record-level vocabulary
 //! ([`ParsedSlot`](crate::node::ParsedSlot)), minted by the takeover parser that reads
 //! the body; the spec announces that it takes material via
 //! [`CallableSpec::requires_content`]. An argument **is a parser**: every argument routes to
 //! an [`ArgumentParser`] object, with the standard forms (delimited group, optional
 //! group, literal marker, …) provided as core construct parsers, parameterized by group
 //! types and rules — the core has no privileged argument *spellings* (revised July
-//! 2026). The [`ArgumentParser`] entry point ([`parse_argument`], returning
-//! [`ParsedArgumentNodes`]) and the standard argument parsers landed in Phase 6.5; the
-//! `make_invocation_parser()` factory (whose override is the full-takeover hatch) in
-//! Phase 6.4 (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
+//! 2026). The [`ArgumentParser`] entry point is [`parse_argument`], returning
+//! [`ParsedArgumentNodes`]; the `make_invocation_parser()` factory override is the
+//! full-takeover hatch.
 //!
 //! [`parse_argument`]: ArgumentParser::parse_argument
 //!

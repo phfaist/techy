@@ -1,6 +1,6 @@
 //! Parsing state: materialized state data behind a single transition choke point.
 //!
-//! This implements ARCHITECTURE.md [§dd-arch:state] ("Option C", DESIGN_RATIONALE.md [§dd-dr:parsing-state]):
+//! The state model:
 //!
 //! - [`ParsingState<L>`] holds [`StateData<L>`] (the plain stored settings:
 //!   [`TokenRules`](crate::token::TokenRules), the first-class parsing mode
@@ -11,7 +11,7 @@
 //! - [`ParsingStateDelta<L>`] is the reified change value — typed optional overrides
 //!   ([`TokenRulesOverrides`], the mode channel) plus semantic `L::Event`s. Deltas are
 //!   data, not closures: mergeable, inspectable, and applicable by a *caller* to a base
-//!   state the producer never saw (the producer/scope split of ARCHITECTURE.md [§dd-arch:state]).
+//!   state the producer never saw (the producer/scope split).
 //! - [`ParsingState::derived`] is the **sole constructor of non-initial states**: it
 //!   applies the overrides, runs the [`Lang::finalize_transition`] customizer exactly
 //!   once, and freezes the result (caches rebuilt). Cross-cutting rules ("in math mode
@@ -23,18 +23,17 @@
 //! - [`Lang`] is the compile-time bundle (one generic parameter everywhere). It also
 //!   carries the two token-level hooks, [`Lang::scan_specials`] and
 //!   [`Lang::specials_trigger_chars`] — specials recognition is the one part of
-//!   tokenization delegated to the language rather than enumerated as rules data
-//!   (DESIGN_RATIONALE.md [§dd-dr:tokens]).
+//!   tokenization delegated to the language rather than enumerated as rules data.
 //!
 //! The state also stores the definitions visible at this point of the parse
-//! ([`ScopeStack`](crate::scopes::ScopeStack), Phase 7.3): construct parsers extend or
+//! ([`ScopeStack`](crate::scopes::ScopeStack)): construct parsers extend or
 //! reshape definitions mid-parse by returning a delta carrying
 //! [`scope_ops`](ParsingStateDelta::scope_ops) (`\newcommand`, package loads), and
 //! scopes revert structurally when the caller drops the derived state. Scope ops can
 //! fail, which makes [`derived()`](ParsingState::derived) fallible — see
 //! [`DeriveError`].
 //!
-//! [`Lang::NodeExts`] selects the node extension type bundle ([`NodeExtTypes`], Phase 5);
+//! [`Lang::NodeExts`] selects the node extension type bundle ([`NodeExtTypes`]);
 //! [`SimpleLang`] is the all-defaults shortcut for languages with no customization.
 
 mod delta;
