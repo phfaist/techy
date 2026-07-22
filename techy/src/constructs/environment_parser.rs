@@ -3,7 +3,7 @@
 //! node (Phase 6.6; pylatexenc's environment body handling, expressed as the decided
 //! parameterized core parser).
 //!
-//! # Design (DESIGN_RATIONALE.md §3.5, §3.6)
+//! # Design (DESIGN_RATIONALE.md [§dd-dr:nodes], [§dd-dr:parsers-engine])
 //!
 //! **Slot terminators are parser business** — and slots have no spec-side declaration
 //! at all (decided July 2026, slots session): the terminator data (the stop command's
@@ -25,10 +25,10 @@
 //! invocation parser stacks the slot's `parsing_state_delta` on the invocation's base
 //! (session-mediated) and reverts structurally, exactly as for arguments. Both the body
 //! content *and the terminator* are read under it; a slot state that cannot tokenize the
-//! stop command runs the body to end of input (the §3.6 pitfall — environments do not
+//! stop command runs the body to end of input (the [§dd-dr:parsers-engine] pitfall — environments do not
 //! self-heal the way group closes do).
 //!
-//! # Recovery (decision 8; DESIGN_RATIONALE.md §3.8)
+//! # Recovery (decision 8; DESIGN_RATIONALE.md [§dd-dr:errors])
 //!
 //! - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`): diagnostic + close the body
 //!   **without consuming** the terminator — the unwinding lets the enclosing
@@ -67,7 +67,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 /// Condition: an environment's body ran into the terminator of a *different*
 /// environment (`\begin{A}…\end{B}`) — the body closes without consuming it, unwinding
 /// so an enclosing level can claim its own terminator (decision 8,
-/// DESIGN_RATIONALE.md §3.8).
+/// DESIGN_RATIONALE.md [§dd-dr:errors]).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -147,7 +147,7 @@ pub struct NameGroup {
 }
 
 /// Try to read a **rigid** environment name group at the reader's position (decision 6,
-/// DESIGN_RATIONALE.md §3.5): a group open of class `name_group_type` as the immediately
+/// DESIGN_RATIONALE.md [§dd-dr:nodes]): a group open of class `name_group_type` as the immediately
 /// next token (no pre-space — inline whitespace after the introducing command is that
 /// token's own post-space, already consumed with it; comments and paragraph breaks are
 /// not tolerated), a chars-only interior with no whitespace, and the matching close
@@ -247,7 +247,7 @@ pub struct EnvironmentBody {
     /// body `List`'s children; a verbatim body designates its gobbled leading newline
     /// *out* ([`VerbatimBodyParser`](super::VerbatimBodyParser)) — the parser that
     /// staged the body is the one that knows, exactly as for arguments
-    /// (DESIGN_RATIONALE.md §3.5 parse-time designation).
+    /// (DESIGN_RATIONALE.md [§dd-dr:nodes] parse-time designation).
     pub content: ContentNodes,
 }
 
@@ -275,7 +275,7 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// the caller has one: it titles the body's traceback frame (`environment ‘align’`).
     /// Without it the frame falls back to the generic "environment body".
     /// (`invocation_name` itself is a borrowed `&str` and cannot ride in the
-    /// allocation-free live frame — a span can, §3.8.)
+    /// allocation-free live frame — a span can, [§dd-dr:errors].)
     invocation_name_span: Option<Span>,
 }
 
@@ -382,7 +382,7 @@ impl<L: Lang> ConstructParser<L> for EnvironmentBodyParser<'_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody, Option<ParsingStateDelta<L>>)> {
-        // The environment-body traceback frame (§3.8), covering the body content *and*
+        // The environment-body traceback frame ([§dd-dr:errors]), covering the body content *and*
         // the terminator flow — terminator diagnostics name the environment being
         // parsed. Anchored at the invocation trigger.
         let title = match self.invocation_name_span {
@@ -408,7 +408,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
 
         // The content loop, stopping at the terminator command — `consume = false`,
         // deliberately: whether the terminator is consumed hinges on the name group
-        // *after* it, invisible at the stop point (the §3.6 manual post-stop lookahead).
+        // *after* it, invisible at the stop point (the [§dd-dr:parsers-engine] manual post-stop lookahead).
         // Conditions are tested only at this nesting level, so a terminator inside a
         // nested group or environment never stops this body.
         let stop = StopSpec::at_token(
@@ -595,7 +595,7 @@ mod tests {
             // factory returns the composition parser. `\end` deliberately resolves to
             // nothing — inside a body it is the stop condition (checked before the
             // dispatch arms), and an orphan at the root takes the
-            // unresolvable-command recovery (§3.6, decision 8).
+            // unresolvable-command recovery ([§dd-dr:parsers-engine], decision 8).
             if *name == "begin" {
                 return CommandResolution::Resolved(ResolvedCallable {
                     callable_type: CT_ENVIRONMENT,
@@ -620,7 +620,7 @@ mod tests {
     }
 
     // --- EnvLang's own conditions: third-party-style derived conditions (the
-    // --- extension surface demonstration, §3.8) — plain data structs under the
+    // --- extension surface demonstration, [§dd-dr:errors]) — plain data structs under the
     // --- language's "envlang." namespace, structurally identical to core conditions
     // --- (`no_constructor`: the tests build them with struct literals) ---------------
 
@@ -780,7 +780,7 @@ mod tests {
                 spec,
                 arguments: ParsedArguments::from(arguments),
                 slots,
-                // Environment shapes record empty post-space (§3.5 invariant 3 as
+                // Environment shapes record empty post-space ([§dd-dr:nodes] invariant 3 as
                 // amended in 6.4): whitespace after `\begin` is unrecorded scaffolding
                 // normalization, whitespace after `\end{…}` is sibling content.
                 post_space: TextContent::empty(),
@@ -798,10 +798,10 @@ mod tests {
 
     // --- the verbatim takeover (the 6.6 obligation): a parser reading its body as raw
     // --- chars under a features-disabled state, staging an environment-shaped node
-    // --- with a slot record — the decided verbatim recipe (§3.2, Action-02 entry) ------
+    // --- with a slot record — the decided verbatim recipe ([§dd-dr:tokens], Action-02 entry) ------
 
     /// `\raw … \endraw`: the body is raw source bytes — the parser never runs
-    /// `NodesParser`, so no terminator-state doctrine is needed (§3.6). It reads the
+    /// `NodesParser`, so no terminator-state doctrine is needed ([§dd-dr:parsers-engine]). It reads the
     /// body through the reader like every other parser (no raw-content peeking): under
     /// the verbatim state every byte is a `Char` token and the terminator one
     /// `GroupClose`.
@@ -909,7 +909,7 @@ mod tests {
                 body_nodes,
             ).unwrap();
             // The slot record is minted by the parser — pure node vocabulary, the
-            // name carried on the record itself (§3.5 self-description).
+            // name carried on the record itself ([§dd-dr:nodes] self-description).
             let slots = ParsedSlots::from(vec![ParsedSlot::named(
                 "raw",
                 ChildRegion::new(0..1, ContentNodes::InChildrenOf(list, 0..body_children)),
@@ -1229,7 +1229,7 @@ mod tests {
         let env = root_child(&parsed, 1);
         assert_eq!(env.callable_type(), Some(CT_ENVIRONMENT));
         // Environment shapes record empty post-space; the space after `\end{itemize}`
-        // is sibling content (§3.5 invariant 3 as amended).
+        // is sibling content ([§dd-dr:nodes] invariant 3 as amended).
         assert_eq!(env.post_space(), Some(""));
         // Children = the body `List` alone; its span is the body's content interior,
         // whitespace on both ends included.

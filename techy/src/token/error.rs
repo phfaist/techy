@@ -25,7 +25,7 @@ use super::token::Token;
 pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
 
 /// Condition: the input ended immediately after a command escape character, before any
-/// name (DESIGN_RATIONALE.md §3.8 — the token layer's conditions are ordinary
+/// name (DESIGN_RATIONALE.md [§dd-dr:errors] — the token layer's conditions are ordinary
 /// [`DiagnosticInfo`] data structs, wrapped by [`TokenErrorKind`] for the recovery
 /// protocol).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
@@ -64,7 +64,7 @@ impl fmt::Display for ForbiddenChar {
 /// condition structs (each a [`DiagnosticInfo`] impl) and [`Custom`](Self::Custom)
 /// carries any language-defined payload, so token errors join the structured-diagnostics
 /// model while the token layer keeps a concrete matchable enum for the recovery protocol
-/// (DESIGN_RATIONALE.md §3.8). Not `Copy` (a custom payload is boxed) and no `PartialEq`
+/// (DESIGN_RATIONALE.md [§dd-dr:errors]). Not `Copy` (a custom payload is boxed) and no `PartialEq`
 /// — consumers match the variants or downcast the payload.
 #[derive(Debug, Clone)]
 // `Custom` and `#[non_exhaustive]` serve different extension axes: `Custom` lets third
@@ -80,12 +80,12 @@ pub enum TokenErrorKind {
     /// A language-defined condition, reported by an extension point participating in
     /// the recovery protocol (`Lang::scan_specials`, a custom
     /// [`TokenReader`](super::TokenReader)) — one extension mechanism serves both
-    /// layers (§3.8).
+    /// layers ([§dd-dr:errors]).
     Custom(Box<dyn DiagnosticData>),
 }
 
 impl TokenErrorKind {
-    /// Lift the kind into a condition payload (DESIGN_RATIONALE.md §3.8): the built-in
+    /// Lift the kind into a condition payload (DESIGN_RATIONALE.md [§dd-dr:errors]): the built-in
     /// conditions are boxed; a `Custom` payload is unwrapped, never double-boxed.
     pub(crate) fn into_condition(self) -> Box<dyn DiagnosticData> {
         match self {
@@ -188,7 +188,7 @@ impl<L: Lang> PartialEq for TokenRecovery<'_, L> {
 
 impl<L: Lang> Eq for TokenRecovery<'_, L> {}
 
-// No PartialEq for TokenError: its kind may carry a dyn condition payload (§3.8) —
+// No PartialEq for TokenError: its kind may carry a dyn condition payload ([§dd-dr:errors]) —
 // consumers match the kind's variants or downcast the payload.
 
 impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
@@ -213,7 +213,7 @@ impl<L: Lang> fmt::Debug for TokenError<'_, L> {
 impl fmt::Display for TokenErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // The wording lives on the condition payloads (the message is a pure function
-        // of the payload, §3.8); the enum only delegates.
+        // of the payload, [§dd-dr:errors]); the enum only delegates.
         match self {
             TokenErrorKind::EndOfStreamAfterEscape(condition) => {
                 fmt::Display::fmt(condition, f)

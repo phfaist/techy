@@ -99,13 +99,13 @@ impl fmt::Debug for NodeId {
 }
 
 /// One stored node: structural kind, uniform ext, provenance span, parse-time state, and
-/// the contiguous children block (ARCHITECTURE.md §nodes).
+/// the contiguous children block (ARCHITECTURE.md [§dd-arch:nodes]).
 ///
 /// Fields are crate-private; the public read surface is [`NodeRef`]. Nodes carry **no
 /// lifetime parameters** — Arc-wrapped spans, specs, and states make them self-contained,
 /// which is what lets transformed trees outlive the parse they came from.
 ///
-/// The runtime ownership graph stays acyclic by type structure (ARCHITECTURE.md §3
+/// The runtime ownership graph stays acyclic by type structure (ARCHITECTURE.md [§dd-arch:arch]
 /// rule 3): nodes reference states, specs, and sources; no runtime value references
 /// nodes back.
 pub struct NodeData<L: Lang> {

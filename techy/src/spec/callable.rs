@@ -36,7 +36,7 @@ pub enum FrameRole {
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and no
 /// invocation form; one spec may back several names (`\emph` and `\textit` can share), and
 /// per-callable-type unknown-callable fallbacks can be shared singletons
-/// (ARCHITECTURE.md §specs).
+/// (ARCHITECTURE.md [§dd-arch:specs]).
 ///
 /// The declarative surface is the [`ArgumentSpec`] list (arguments *configure* an
 /// invocation), pylatexenc-`arguments_spec_list`-shaped: `Arc`-shared so parsed nodes
@@ -52,7 +52,7 @@ pub enum FrameRole {
 /// The behavioral surface is [`make_invocation_parser`](CallableSpec::make_invocation_parser):
 /// a factory returning a fresh boxed [`ConstructParser`] per resolved [`Invocation`],
 /// defaulting to the declarative [`StdInvocationParser`]. Overriding it is the
-/// full-takeover escape hatch for `\verb`-like constructs (DESIGN_RATIONALE.md §3.6).
+/// full-takeover escape hatch for `\verb`-like constructs (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
 /// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.
@@ -68,7 +68,7 @@ pub enum FrameRole {
 /// per-implementor law. Downcasting to a preset's own spec *trait* (an open set of
 /// third-party spec types) needs one extra move: register every spec behind one
 /// concrete wrapper (`FlmSpecBox(Arc<dyn FlmSpec>)` delegating to the inner value) and
-/// downcast to the wrapper (DESIGN_RATIONALE.md §3.4).
+/// downcast to the wrapper (DESIGN_RATIONALE.md [§dd-dr:specs]).
 pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// The declarative argument structure of an invocation, in invocation order.
     /// Default: no arguments.
@@ -97,7 +97,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// The factory producing this spec's invocation parser: a **fresh boxed parser per
     /// resolved invocation**, ownership moved to the caller, the [`Invocation`]
     /// traveling inside the parser instance (decided July 2026, DESIGN_RATIONALE.md
-    /// §3.6 — pylatexenc's `get_node_parser(token)` shape with ownership made
+    /// [§dd-dr:parsers-engine] — pylatexenc's `get_node_parser(token)` shape with ownership made
     /// explicit). The dispatch loop resolves the trigger, builds the `Invocation`,
     /// calls this factory, runs `parser.parse(cx)` once, and drops the parser.
     ///
@@ -122,7 +122,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     }
 
     /// Title of a parse-traceback frame covering this callable (DESIGN_RATIONALE.md
-    /// §3.8): called at *snapshot* time — the cold path, when a condition is recorded —
+    /// [§dd-dr:errors]): called at *snapshot* time — the cold path, when a condition is recorded —
     /// never on push, so live frames stay allocation-free. `name` is the invocation
     /// spelling as written (`\frac`, `~`), sliced from the source at snapshot time; the
     /// spec itself is de-keyed and cannot know it.

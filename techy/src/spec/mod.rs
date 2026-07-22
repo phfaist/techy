@@ -1,6 +1,6 @@
 //! Callable specs: the behavior attached to anything invocable from the token stream.
 //!
-//! Implements ARCHITECTURE.md §specs (Phase 4; argument model rebuilt on pylatexenc's
+//! Implements ARCHITECTURE.md [§dd-arch:specs] (Phase 4; argument model rebuilt on pylatexenc's
 //! `LatexArgumentSpec`, July 2026). A [`CallableSpec`] records *callable behavior*, not
 //! the form or name under which it is invoked — specs are **de-keyed**: the invocation
 //! form is the language's closed [`Lang::CallableTypeId`](crate::state::Lang) and the
@@ -21,7 +21,7 @@
 //! 2026). The [`ArgumentParser`] entry point ([`parse_argument`], returning
 //! [`ParsedArgumentNodes`]) and the standard argument parsers landed in Phase 6.5; the
 //! `make_invocation_parser()` factory (whose override is the full-takeover hatch) in
-//! Phase 6.4 (DESIGN_RATIONALE.md §3.6).
+//! Phase 6.4 (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 //!
 //! [`parse_argument`]: ArgumentParser::parse_argument
 //!

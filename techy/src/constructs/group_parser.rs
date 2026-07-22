@@ -22,7 +22,7 @@
 //! interior state is scoped structurally: `cx.state` is swapped for the recursion and
 //! restored after (the group has no after-effect — the returned delta is always `None`).
 //!
-//! # Matching and recovery (DESIGN_RATIONALE.md §3.5, §3.6, §3.8)
+//! # Matching and recovery (DESIGN_RATIONALE.md [§dd-dr:nodes], [§dd-dr:parsers-engine], [§dd-dr:errors])
 //!
 //! The interior [`NodesParser`] stops at the exact `(group_type, close)` pairing the
 //! group opened with, **consuming** the close at match time (the consume flag's
@@ -33,7 +33,7 @@
 //!   group with an **empty** `close` ([`GroupData`]'s documented recovery value).
 //! - *Unexpected group close inside* (a `]` under a `{`, a re-classed `}`): diagnostic +
 //!   close the group **without consuming** the stray token — the same unwinding rule as
-//!   environment-terminator mismatch (§3.6): every level either consumes the token or
+//!   environment-terminator mismatch ([§dd-dr:parsers-engine]): every level either consumes the token or
 //!   unwinds out of its own frame, and the stray close eventually reaches a level that
 //!   claims it (or the root, which diagnoses and skips).
 //!
@@ -56,7 +56,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
 /// by [`GroupParser`], which defines the condition next to its detection site
-/// (DESIGN_RATIONALE.md §3.8).
+/// (DESIGN_RATIONALE.md [§dd-dr:errors]).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.group_parser.unclosed-group")]
@@ -107,7 +107,7 @@ pub struct GroupParser<'p, L: Lang> {
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
     /// Descent-state policy handed to the interior [`NodesParser`]; defaults to
-    /// inherit-everywhere (§3.6 decided semantics 3: policies are one level deep, so a
+    /// inherit-everywhere ([§dd-dr:parsers-engine] decided semantics 3: policies are one level deep, so a
     /// plain arm-driven descent never propagates one). A parser that scopes the group's
     /// interior state sets it per use — e.g. the chars-except-groups argument pattern,
     /// whose group interiors revert to the outer, unrestricted state. (The 6.5
@@ -155,7 +155,7 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             },
             true,
         );
-        // The group-interior traceback frame (§3.8): conditions detected inside the
+        // The group-interior traceback frame ([§dd-dr:errors]): conditions detected inside the
         // group carry `group ‘{’` @ the open delimiter in their snapshot.
         let frame = Frame {
             title: FrameTitle::Quoted {
@@ -334,7 +334,7 @@ mod tests {
         let diagnostic = result.diagnostics.iter().next().unwrap();
         // The wording stays covered by a Display assertion…
         assert_eq!(diagnostic.message(), "unclosed group: expected ‘}’ before end of input");
-        // …while machine consumers read the structured condition (§3.8).
+        // …while machine consumers read the structured condition ([§dd-dr:errors]).
         assert_eq!(diagnostic.identifier(), UnclosedGroup::IDENTIFIER);
         let condition = diagnostic.data().downcast_ref::<UnclosedGroup>().unwrap();
         assert_eq!(condition.expected_close, "}");

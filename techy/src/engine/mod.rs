@@ -43,7 +43,7 @@ use state_memo::{
 pub use driver::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
 pub use language::Language;
 
-/// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md §3.8):
+/// One live entry of the session's parse-frame stack (DESIGN_RATIONALE.md [§dd-dr:errors]):
 /// pushed at the descent points through
 /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
 /// snapshotted into `L`-free [`TraceFrame`]s by the recover funnel. Pushes run on the
@@ -57,7 +57,7 @@ pub struct Frame<L: Lang> {
 }
 
 /// A live frame's title recipe: **mechanisms, not a construct taxonomy**
-/// (DESIGN_RATIONALE.md §3.8) — the core has no macro/environment vocabulary, so a
+/// (DESIGN_RATIONALE.md [§dd-dr:errors]) — the core has no macro/environment vocabulary, so a
 /// callable's title comes from its spec's
 /// [`stack_frame_title`](CallableSpec::stack_frame_title) hook at snapshot time.
 pub enum FrameTitle<L: Lang> {
@@ -146,7 +146,7 @@ pub struct ParserSession<L: Lang> {
     /// `Default`-initialized): the preset-owned mutable object of a parse — transition
     /// observation counters ([`ParseDriver::observe_transition`]), parse-global caches.
     pub ext: L::SessionExt,
-    /// The derivation memo (DESIGN_RATIONALE.md §3.6, revised July 2026):
+    /// The derivation memo (DESIGN_RATIONALE.md [§dd-dr:parsers-engine], revised July 2026):
     /// overrides-only derivations (token rules and/or mode) deduplicated by
     /// [`derived_state`](ParserSession::derived_state), keyed on base-state `Arc`
     /// identity plus the delta's overrides — rule payloads by `Arc` identity, the mode
@@ -161,7 +161,7 @@ pub struct ParserSession<L: Lang> {
     /// sharing it would let a hand-built expecting-close delta collide with a
     /// driver-augmented descent under one key (see [`state_memo`] module docs).
     group_interior_memo: GroupInteriorMemo<L>,
-    /// The live parse-frame stack, outermost first (DESIGN_RATIONALE.md §3.8):
+    /// The live parse-frame stack, outermost first (DESIGN_RATIONALE.md [§dd-dr:errors]):
     /// maintained exclusively by
     /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame)
     /// (closure-scoped push/pop) and snapshotted — innermost first — into every
@@ -198,7 +198,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
-    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md §3.8). Public for
+    /// titles are rendered here, on the cold path (DESIGN_RATIONALE.md [§dd-dr:errors]). Public for
     /// custom parser code building its own [`ParseError`]s
     /// ([`ParseError::with_frames`](crate::error::ParseError::with_frames)); the
     /// stack itself is only mutated through
@@ -208,7 +208,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Session-mediated state derivation — the in-parse standard (DESIGN_RATIONALE.md
-    /// §3.6): within a parse frame, construct parsers derive states through this seam
+    /// [§dd-dr:parsers-engine]): within a parse frame, construct parsers derive states through this seam
     /// (usually via the [`ParseContext::derived_state`] sugar, which supplies the
     /// driver) so every transition event reaches
     /// [`ParseDriver::observe_transition`] (with the session's
@@ -336,7 +336,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// The raw record-or-abort primitive of detection-site recovery
-    /// (DESIGN_RATIONALE.md §3.8, rule 1). Construct parsers call
+    /// (DESIGN_RATIONALE.md [§dd-dr:panic-policy], rule 1). Construct parsers call
     /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead —
     /// the funnel that boxes the condition and hands it to
     /// [`ParseDriver::recover`], which applies
@@ -436,7 +436,7 @@ mod tests {
     struct PlainLang;
     impl SimpleLang for PlainLang {}
 
-    /// A third-party-style condition — the extension surface demonstration (§3.8): a
+    /// A third-party-style condition — the extension surface demonstration ([§dd-dr:errors]): a
     /// plain data struct, a `Display` for the wording, and a `DiagnosticInfo` impl,
     /// structurally identical to the library's own conditions.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,7 +515,7 @@ mod tests {
                 span(&source, 0..3),
             )
             .unwrap_err();
-        // No PartialEq on the carriers (§3.8): compare identifier and downcast fields.
+        // No PartialEq on the carriers ([§dd-dr:errors]): compare identifier and downcast fields.
         assert_eq!(err.identifier(), TestUnresolvable::IDENTIFIER);
         assert_eq!(err.data().downcast_ref::<TestUnresolvable>(), Some(&condition));
         assert_eq!(err.span().start(), 0);
@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(session.diagnostics.len(), 1);
     }
 
-    // --- the live frame stack (§3.8) ----------------------------------------------------
+    // --- the live frame stack ([§dd-dr:errors]) ----------------------------------------------------
 
     #[test]
     fn with_frame_pushes_pops_and_snapshots_into_diagnostics() {
@@ -726,7 +726,7 @@ mod tests {
         match kind {
             NodeKind::Chars { content, .. } => {
                 // Span-backed over the full token span (newlines included), per the
-                // whitespace-as-chars invariant (§3.5).
+                // whitespace-as-chars invariant ([§dd-dr:nodes]).
                 assert!(!content.is_owned());
                 assert_eq!(content.resolve("x  \n\nz"), "\n\n");
             }
@@ -734,7 +734,7 @@ mod tests {
         }
     }
 
-    // --- the session-mediated derivation seam (6.3, DESIGN_RATIONALE.md §3.6) ----------
+    // --- the session-mediated derivation seam (6.3, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]) ----------
 
     #[derive(Debug, Default)]
     struct Observed {

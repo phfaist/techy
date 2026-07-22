@@ -30,7 +30,7 @@ use super::token::{Token, TokenKind};
 /// The token-reading protocol — the behavior extension point for genuinely different
 /// tokenization (catcode-like schemes, non-textual sources). `peek` receives the full
 /// [`ParsingState<L>`], not just `&TokenRules`: a custom reader keeps its tables in
-/// `L::StateExt`, which only the state exposes (ARCHITECTURE.md §token).
+/// `L::StateExt`, which only the state exposes (ARCHITECTURE.md [§dd-arch:token]).
 ///
 /// # Contract
 ///
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn command_records_the_fired_rules_escape_char() {
         // Two coexisting command syntaxes: each token records which rule's escape
-        // character fired (parse-time lookup disambiguates by it — DESIGN_RATIONALE §3.2).
+        // character fired (parse-time lookup disambiguates by it — DESIGN_RATIONALE [§dd-dr:tokens]).
         let names = "abcdefghijklmnopqrstuvwxyz";
         let st = state(TokenRules {
             commands: vec![
@@ -1290,7 +1290,7 @@ mod tests {
     fn enable_specials_off_freezes_the_empty_filter() {
         // The gate is baked at freeze: the state stores the empty TriggerChars, so the
         // scan hook is unreachable and triggers read as plain content — this is what
-        // makes "no specials here" delta-expressible (DESIGN_RATIONALE §3.2, ex-§6.6).
+        // makes "no specials here" delta-expressible (DESIGN_RATIONALE [§dd-dr:tokens], ex-[§dd-dr:open-questions]).
         let mut tr = StdTokenReader::new("a&b");
         let st = specials_state(TokenRules { enable_specials: false, ..latex_rules() });
         assert_eq!(st.trigger_chars(), &TriggerChars::default());
@@ -1446,7 +1446,7 @@ mod tests {
 
     #[test]
     fn enable_groups_off_does_not_gate_the_expected_close() {
-        // The decided interaction (DESIGN_RATIONALE §3.2): expecting_group_close is
+        // The decided interaction (DESIGN_RATIONALE [§dd-dr:tokens]): expecting_group_close is
         // positional data, not a feature — a group interior that disables groups
         // entirely still finds its own close, so the entered group always terminates.
         let mut tr = StdTokenReader::new("a{$");

@@ -5,7 +5,7 @@
 //! # Contract
 //!
 //! Constructed around the resolved [`Invocation`], which travels inside the parser
-//! instance (decided July 2026, DESIGN_RATIONALE.md §3.6). The **caller consumes the
+//! instance (decided July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]). The **caller consumes the
 //! trigger token whole** — `move_past(token, true)`, syntactic post-space included —
 //! before running the parser (the dispatch-loop arm that peeked it, mirroring the
 //! [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
@@ -14,7 +14,7 @@
 //! the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself,
 //! positionally — `move_to_pos(token.post_space().start())`: the stored trigger token
 //! cannot be handed back to the reader through the uniform `parse` signature
-//! (Phase 6.6 finding; see DESIGN_RATIONALE.md §3.6).
+//! (Phase 6.6 finding; see DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 //!
 //! `cx.state` is the invocation's **base** state: the caller resolves any
 //! [`InvocationChildState`](super::InvocationChildState) policy first and scopes the
@@ -31,7 +31,7 @@
 //! [`ChildRegion`](crate::node::ChildRegion) to the [`ParsedArguments`] record; an
 //! absent argument keeps its entry (spec included — the record is self-describing) and
 //! contributes nothing. Missing-mandatory recovery is the argument parser's own
-//! detection-site business (§3.8): by the time `parse_argument` reports absent, any
+//! detection-site business ([§dd-dr:errors]): by the time `parse_argument` reports absent, any
 //! diagnostic is already recorded.
 //!
 //! The node's span runs from the trigger token through the last child (the children
@@ -48,7 +48,7 @@
 //! argument is ordinary sibling/region content, exactly as TeX treats it. With
 //! arguments present the recorded post-space thus sits **between** the name and the
 //! first argument region — a sub-range of the node's span, no longer necessarily
-//! trailing (§3.5 invariant 3 as amended).
+//! trailing ([§dd-dr:nodes] invariant 3 as amended).
 //!
 //! # Slots
 //!
@@ -85,13 +85,13 @@ use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
 ///
 /// Iterates `callable_spec.arguments()` in invocation order, running each argument's
 /// parser under the argument's own state — the spec's `parsing_state_delta` stacked on
-/// `cx.state` (§3.6 decided semantics 2), session-mediated, reverted structurally — and
+/// `cx.state` ([§dd-dr:parsers-engine] decided semantics 2), session-mediated, reverted structurally — and
 /// collects the provided regions' nodes into one child list plus one [`ParsedArgument`]
 /// entry per spec (absent arguments keep their entry and contribute no nodes). The
 /// returned regions are staged in child-list offsets, ready for the caller's
 /// [`ParsedArguments`] record.
 ///
-/// Each argument runs under its traceback frame (`argument #N of ‘\frac’`, §3.8):
+/// Each argument runs under its traceback frame (`argument #N of ‘\frac’`, [§dd-dr:errors]):
 /// `name_span` is the invocation spelling's span, quoted into the title at snapshot
 /// time — the spec is de-keyed, so the spelling must come from the caller (an
 /// environment composition passes its *name*'s span, so frames quote `align`, not

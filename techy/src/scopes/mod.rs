@@ -1,7 +1,7 @@
 //! The scope stack: how callable names resolve to [`CallableSpec`]s.
 //!
-//! Implements the Phase 7.3 scope-stack redesign (ARCHITECTURE.md §specs revision;
-//! DESIGN_RATIONALE.md §3.4), replacing the Phase 4 `SpecLookup`/`Library`/`LibraryStack`
+//! Implements the Phase 7.3 scope-stack redesign (ARCHITECTURE.md [§dd-arch:specs] revision;
+//! DESIGN_RATIONALE.md [§dd-dr:specs]), replacing the Phase 4 `SpecLookup`/`Library`/`LibraryStack`
 //! design:
 //!
 //! - [`SpecsProvider`] is the stack-entry contract: a named, fallible resolver
@@ -340,7 +340,7 @@ pub enum ScopeOp<L: Lang> {
     /// entry is replaced by the returned provider). If no provider named `scope` is on
     /// the stack, a fresh [`Scope`] with that name is created **innermost**, holding
     /// the definition — scopes are created lazily on first `Define`, never eagerly per
-    /// group (DESIGN_RATIONALE.md §3.4). Targeting an immutable provider (a
+    /// group (DESIGN_RATIONALE.md [§dd-dr:specs]). Targeting an immutable provider (a
     /// [`Package`]) is an error.
     Define {
         /// The name of the provider to define into.
@@ -427,7 +427,7 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 // --- the provider contract -------------------------------------------------------------
 
 /// A scope-stack entry: a named source of callable definitions, with optional specials
-/// participation and optional functional updates (Phase 7.3, DESIGN_RATIONALE.md §3.4).
+/// participation and optional functional updates (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
 ///
 /// Entries are **all-dyn** — the multi-method contract keeps generic ops and diagnostics
 /// available while admitting lazy-loading providers (large spec databases) that closed
@@ -607,7 +607,7 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 }
 
 /// An immutable, wholesale-loaded collection of definitions — the standard
-/// [`SpecsProvider`] for preset/library data (Phase 7.3, DESIGN_RATIONALE.md §3.4).
+/// [`SpecsProvider`] for preset/library data (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
 ///
 /// Built once (insertions while owned), then shared behind an `Arc` on scope stacks;
 /// it never mutates afterwards — its [`with_definitions`](SpecsProvider::with_definitions)
@@ -890,7 +890,7 @@ impl<L: Lang> fmt::Debug for Package<L> {
 
 /// The definition target: the standard mutable-by-replacement [`SpecsProvider`] that
 /// [`ScopeOp::Define`]/[`ScopeOp::Remove`] address (Phase 7.3, DESIGN_RATIONALE.md
-/// §3.4).
+/// [§dd-dr:specs]).
 ///
 /// "Mutable" means **copy-on-write**: [`with_definitions`](SpecsProvider::with_definitions)
 /// returns a fresh `Scope` and the stack swaps its entry, while outer states keep the
@@ -1028,7 +1028,7 @@ impl<L: Lang> fmt::Debug for Scope<L> {
 
 /// The unknown-callable policy as an ordinary provider: answers **any** name of its
 /// registered callable types with that type's shared fallback singleton (Phase 7.3,
-/// DESIGN_RATIONALE.md §3.4 — fallbacks live *in* the stack, at the bottom, so
+/// DESIGN_RATIONALE.md [§dd-dr:specs] — fallbacks live *in* the stack, at the bottom, so
 /// suppression by shadowing is a theorem of search order, and the stack needs no
 /// separate fallback map).
 ///
@@ -1095,7 +1095,7 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 
 /// Condition: a callable that is *defined to be an error* was invoked — the
 /// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition,
-/// DESIGN_RATIONALE.md §3.4). The invocation recovers as a span-backed chars fallback.
+/// DESIGN_RATIONALE.md [§dd-dr:specs]). The invocation recovers as a span-backed chars fallback.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.scopes.callable-defined-as-error")]
@@ -1122,7 +1122,7 @@ impl fmt::Display for CallableDefinedAsError {
 /// A [`CallableSpec`] whose invocation is an error: the core-provided utility behind
 /// "defined to be an error" (no `Masked` resolution outcome exists — shadowing lower
 /// entries *and* the fallback with this spec suppresses them purely by search order,
-/// with a better message than a mask could carry; DESIGN_RATIONALE.md §3.4).
+/// with a better message than a mask could carry; DESIGN_RATIONALE.md [§dd-dr:specs]).
 ///
 /// Its invocation parser records a [`CallableDefinedAsError`] through the recover funnel
 /// (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
@@ -1180,7 +1180,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
             SourceSpan::new(&cx.source, token.span),
         )?;
         // Tolerant continuation: markup in a Chars node is the accepted recovery
-        // artifact (DESIGN_RATIONALE.md §3.8).
+        // artifact (DESIGN_RATIONALE.md [§dd-dr:errors]).
         let id = cx
             .session
             .builder
@@ -1387,7 +1387,7 @@ impl<L: Lang> ScopeStack<L> {
                     Some(index) => self.route_definition(index, scope, op),
                     None => {
                         // Lazy creation: the first Define into an absent scope name
-                        // creates it, innermost (DESIGN_RATIONALE.md §3.4).
+                        // creates it, innermost (DESIGN_RATIONALE.md [§dd-dr:specs]).
                         let mut fresh = Scope::new(scope.clone());
                         fresh.insert(*callable_type, name.clone(), Arc::clone(spec));
                         self.stack.push(Arc::new(fresh));
@@ -1692,7 +1692,7 @@ mod tests {
 
     #[test]
     fn provider_can_dispatch_on_syntax() {
-        // `\foo` and `#foo` resolve to different specs (open question §6(a), decided
+        // `\foo` and `#foo` resolve to different specs (open question [§dd-dr:open-questions] (a), decided
         // July 2026; the query carries the fired escape char).
         #[derive(Debug)]
         struct BySyntax {

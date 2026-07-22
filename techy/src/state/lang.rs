@@ -4,7 +4,7 @@
 //! `NodeExtTypes` is defined here, next to `Lang`, rather than in the `node` topic:
 //! its *meaning* is a node concern, but it is a constituent of the compile-time bundle,
 //! and moving it there would recreate a module cycle for cosmetics (ARCHITECTURE.md
-//! §engine stratum note).
+//! [§dd-arch:engine] stratum note).
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -25,7 +25,7 @@ use crate::token::{
 use super::parsing_state::{ParsingState, StateData};
 
 /// The bundle of node extension types of a language: the **two-tier ext system** of
-/// ARCHITECTURE.md §nodes, orthogonal to structural node identity (a group with custom
+/// ARCHITECTURE.md [§dd-arch:nodes], orthogonal to structural node identity (a group with custom
 /// data is still a group to all generic tooling).
 ///
 /// Tier 1 — [`NodeExt`](NodeExtTypes::NodeExt) — sits uniformly on every node
@@ -77,7 +77,7 @@ impl NodeExtTypes for () {
 }
 
 /// The compile-time type bundle of a language definition. Every core type takes one
-/// `L: Lang` parameter — never five (ARCHITECTURE.md §2 principle 2).
+/// `L: Lang` parameter — never five (ARCHITECTURE.md [§dd-arch:lib-design-principles], principle 2).
 ///
 /// A minimal language is a ZST with only the associated types filled in; all methods have
 /// working defaults (no transition customization, no specials). The latexlike preset
@@ -120,7 +120,7 @@ pub trait Lang: Sized + 'static {
     /// ([`StateData::mode`]) with a matching [`ParsingStateDelta::mode`](super::ParsingStateDelta::mode) override
     /// channel: deltas *initiate* mode changes, and
     /// [`finalize_transition`](Lang::finalize_transition) *interprets* them
-    /// (DESIGN_RATIONALE.md §3.3). Mode is not lookup-private: definition visibility
+    /// (DESIGN_RATIONALE.md [§dd-dr:parsing-state]). Mode is not lookup-private: definition visibility
     /// and any content-interpretation decision may key on it.
     ///
     /// `Copy + Eq + Hash` because modes are memo-key material — the session's
@@ -153,7 +153,7 @@ pub trait Lang: Sized + 'static {
     /// of a parse, and the home for parse-history accumulation
     /// ([`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition))
     /// and parse-global caches
-    /// (decided July 2026, DESIGN_RATIONALE.md §3.6). `()` if unused.
+    /// (decided July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]). `()` if unused.
     ///
     /// Unlike [`StateExt`](Lang::StateExt) this is not `Clone`: sessions are transient
     /// single-parse objects, never shared or reverted — access is always `&mut`, through
@@ -169,7 +169,7 @@ pub trait Lang: Sized + 'static {
     type NodeExts: NodeExtTypes;
 
     /// The language's [`ParseDriver`] type — the **instance** face of parse-time
-    /// behavior (Phase 7.2, DESIGN_RATIONALE.md §3.6): recovery policy, command
+    /// behavior (Phase 7.2, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]): recovery policy, command
     /// resolution, the group descent-delta channel, construct provision. Reached by
     /// construct parsers as
     /// [`ParseContext::driver`](crate::constructs::ParseContext::driver), **concretely
@@ -234,11 +234,11 @@ pub trait Lang: Sized + 'static {
     /// been applied and before the new state is frozen. Cross-cutting rules centralize
     /// here (e.g. FLM's "in math mode the escape char is `#`"); the override policy —
     /// pure normalization vs. event-driven — is this function's business
-    /// (ARCHITECTURE.md §state). Never runs on the seed state (see
+    /// (ARCHITECTURE.md [§dd-arch:state]). Never runs on the seed state (see
     /// [`initial_state_data`](Lang::initial_state_data)'s coherence contract). The
     /// default does nothing.
     ///
-    /// **Mode transitions are interpreted here** (Phase 7, DESIGN_RATIONALE.md §3.3):
+    /// **Mode transitions are interpreted here** (Phase 7, DESIGN_RATIONALE.md [§dd-dr:parsing-state]):
     /// a delta's [`mode`](super::ParsingStateDelta::mode) override is already applied to
     /// `new.mode` when this hook runs — the override *is* the signal, no
     /// [`Event`](Lang::Event) needed for mode-shaped transitions. Compare
@@ -325,11 +325,11 @@ pub trait Lang: Sized + 'static {
         TriggerChars::default()
     }
 
-    // --- Phase 6 finalization hook (July 2026, DESIGN_RATIONALE.md §3.6) ---------------
+    // --- Phase 6 finalization hook (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]) ---------------
     //
     // The parse-time dispatch hooks that used to sit here — `resolve_command`,
     // `make_paragraph_break_node`, `refine_diagnostic`, `observe_transition` — migrated
-    // to the `ParseDriver` in Phase 7.2 (placement doctrine, DESIGN_RATIONALE.md §3.6):
+    // to the `ParseDriver` in Phase 7.2 (placement doctrine, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]):
     // `Lang` keeps only hooks of layers callable outside a driven parse.
 
     /// Centralized node finalization, run by

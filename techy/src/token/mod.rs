@@ -1,12 +1,12 @@
 //! Tokenization: zero-copy tokens, tokenization rules, and the standard token reader.
 //!
-//! The whole token topic lives in the **S1 core stratum** (ARCHITECTURE.md §3): tokens are
+//! The whole token topic lives in the **S1 core stratum** (ARCHITECTURE.md [§dd-arch:arch]): tokens are
 //! generic over `L: Lang` (a `Specials` token carries its resolution), the reader reads
 //! the full [`ParsingState<L>`](crate::state::ParsingState), and token errors are free to
 //! grow language/state context. The only tokenization-adjacent S0 type is the plain byte
 //! range [`Span`](crate::source::Span), which lives in the source topic.
 //!
-//! # Design highlights (DESIGN_RATIONALE.md §3.2)
+//! # Design highlights (DESIGN_RATIONALE.md [§dd-dr:tokens])
 //!
 //! - **Tokens are structural and minimal — and single-character for content**: a token is
 //!   an atomic unit identifying *what to parse next*. [`TokenKind::Char`] covers exactly
@@ -17,7 +17,7 @@
 //!   `\begin` is a `Command` like any other; what its name *means* is decided at parse
 //!   time by the preset. ([`Specials`](TokenKind::Specials) is the scoped exception:
 //!   recognition *is* resolution there, so it carries its `CallableTypeId` and spec —
-//!   July 2026 amendment, DESIGN_RATIONALE §3.2.)
+//!   July 2026 amendment, DESIGN_RATIONALE [§dd-dr:tokens].)
 //! - **Two callable-trigger token kinds, split by mechanism**:
 //!   [`Command`](TokenKind::Command) is recognized from [`CommandRule`] *data* in the
 //!   rules; [`Specials`](TokenKind::Specials) is recognized by the `Lang::scan_specials`

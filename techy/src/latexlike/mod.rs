@@ -233,7 +233,7 @@ impl Lang for Latexlike {
 /// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
 /// space (NBSP U+00A0, U+2028, …) is ordinary content here, so e.g. an NBSP after
 /// `\emph` becomes a content char rather than being swallowed as post-macro space
-/// (decided for determinism and a fixed char-set model; DESIGN_RATIONALE.md §3.13).
+/// (decided for determinism and a fixed char-set model; DESIGN_RATIONALE.md [§dd-dr:latexlike]).
 ///
 /// The four math delimiter pairs come from the shared `MATH_DELIMITERS` table (the
 /// single source of truth also read by [`NodeRef::math_style`](crate::node::NodeRef::math_style)).
@@ -288,7 +288,7 @@ pub fn default_token_rules() -> TokenRules<Latexlike> {
 /// preset deliberately omits it — a multi-newline break is a whitespace chars node
 /// here (via
 /// [`enable_multi_newline_paragraphs`](TokenRules::enable_multi_newline_paragraphs)),
-/// not a specials node (DESIGN_RATIONALE.md §3.13).
+/// not a specials node (DESIGN_RATIONALE.md [§dd-dr:latexlike]).
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
 /// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes

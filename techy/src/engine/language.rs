@@ -1,5 +1,5 @@
 //! [`Language<L>`]: the long-lived runtime bundle and the `parse()` convenience entry
-//! (Phase 7.4; ARCHITECTURE.md §engine).
+//! (Phase 7.4; ARCHITECTURE.md [§dd-arch:engine]).
 //!
 //! A `Language` is everything a parse needs that outlives any one parse: the frozen
 //! seed [`ParsingState`], the [`ParseDriver`](crate::engine::ParseDriver) instance, and
@@ -71,7 +71,7 @@ pub struct Language<L: Lang> {
     /// The frozen seed state every parse starts from — shared by `Arc` across parses
     /// (states are immutable).
     initial_state: Arc<ParsingState<L>>,
-    /// Resolver for `\input`-like external references (DESIGN_RATIONALE.md §3.3);
+    /// Resolver for `\input`-like external references (DESIGN_RATIONALE.md [§dd-dr:parsing-state]);
     /// [`NoResolver`] by default — no lookup, no I/O.
     resolver: Arc<dyn SourceResolver<L::SourceOrigin>>,
 }
@@ -230,7 +230,7 @@ impl<L: Lang> Language<L> {
             match outcome.stop {
                 StopCause::EndOfInput => break,
                 StopCause::UnexpectedGroupClose { span } => {
-                    // Diagnose-and-skip at the root (DESIGN_RATIONALE.md §3.8): the
+                    // Diagnose-and-skip at the root (DESIGN_RATIONALE.md [§dd-dr:errors]): the
                     // loop left the close unconsumed at `span.start`, and the span is
                     // the delimiter exactly as matched (`StopCause`'s contract) —
                     // sliced, not re-peeked: a re-read under any state but the loop's

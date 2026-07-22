@@ -19,7 +19,7 @@
 //!
 //! ## Architecture
 //!
-//! The crate is organized in three strata (see `ARCHITECTURE.md` §3): S0, a Lang-free
+//! The crate is organized in three strata (see `ARCHITECTURE.md` [§dd-arch:arch]): S0, a Lang-free
 //! foundation; S1, the mutually-recursive core (whose modules are topics, not dependency
 //! ranks); and S2, the presets. It is being rebuilt phase by phase:
 //!

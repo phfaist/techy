@@ -14,7 +14,7 @@
 //! payload rules, so a live `Arc` that compares pointer-equal to a stored key is
 //! necessarily the *same* object — no address reuse, no ABA false hits. The retention
 //! this implies (entries live until the session drops) is a decided trade
-//! (DESIGN_RATIONALE.md §3.6, July 2026): a session is one transient parse, and most
+//! (DESIGN_RATIONALE.md [§dd-dr:parsers-engine], July 2026): a session is one transient parse, and most
 //! memoized states end up pinned by the node tree anyway.
 //!
 //! Probes are allocation-free: lookups go through the borrowed [`StateMemoProbe`] view

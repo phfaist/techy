@@ -1,7 +1,7 @@
 //! Derive macros for techy's structured diagnostic conditions.
 //!
 //! This is the build-time companion crate of `techy` (ARCHITECTURE.md "Condition
-//! declaration via derive"; DESIGN_RATIONALE.md §3.8). `techy` re-exports both derives
+//! declaration via derive"; DESIGN_RATIONALE.md [§dd-dr:errors]). `techy` re-exports both derives
 //! from `techy::error`, next to the traits they implement — depend on `techy` and use
 //! the re-exports rather than depending on this crate directly.
 //!
@@ -90,7 +90,7 @@ pub(crate) fn ensure_no_generics(
             &generics.params,
             format!(
                 "#[derive({derive_name})] does not support generic types: \
-                 diagnostic payloads are concrete data structs (DESIGN_RATIONALE.md §3.8)"
+                 diagnostic payloads are concrete data structs (DESIGN_RATIONALE.md [§dd-dr:errors])"
             ),
         ));
     }

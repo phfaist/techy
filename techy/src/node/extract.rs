@@ -1,5 +1,5 @@
 //! Content-extraction helpers over parsed node lists — the pylatexenc-style read
-//! package (work report R7; Phase 7.8, DESIGN_RATIONALE.md §3.5).
+//! package (work report R7; Phase 7.8, DESIGN_RATIONALE.md [§dd-dr:nodes]).
 //!
 //! Free functions over the node read API, deliberately **not** methods of the core node
 //! types (decided at the 7.8 checkpoint): the core stays "storage + access", and helpers

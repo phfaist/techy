@@ -2,7 +2,7 @@
 
 Living document recording the naming rules and the current authoritative names for the
 `techy` crate. **Last updated July 2026** to incorporate the resolved decisions of
-[ARCHITECTURE.md](ARCHITECTURE.md) §7 (which this document must stay consistent with).
+[ARCHITECTURE.md](ARCHITECTURE.md) [§dd-arch:naming] (which this document must stay consistent with).
 Superseded names and the reasons they changed are collected at the end; the full history
 of earlier revisions lives in git.
 
@@ -37,7 +37,7 @@ of earlier revisions lives in git.
 
 ## Current Authoritative Names (July 2026)
 
-### Modules / strata (ARCHITECTURE.md §3 — modules are topics, not dependency ranks)
+### Modules / strata (ARCHITECTURE.md [§dd-arch:arch] — modules are topics, not dependency ranks)
 
 | Stratum | Module | Contents |
 |---|---|---|
@@ -112,14 +112,14 @@ Each term is scoped to its stratum; using one at the wrong level is a naming bug
 | Group parser | `GroupParser` | engine temporary (tier 2), per-use config, dropped with the frame |
 | Invocation dispatch | `Invocation`, `CommandResolution`, `ResolvedCallable`, `ParseDriver::resolve_command` (moved off `Lang`, Phase 7 plan session) | `Invocation` = the resolved-invocation value moved into the parser; `CommandResolution` = the hook's outcome (`Resolved`/`Unresolved { detail }`, July 2026); `ResolvedCallable` = invocation form + spec pair |
 | Default invocation parser | `StdInvocationParser` | `Std…` prefix per `StdTokenReader`/`StdCallableSpec`; `parse_declared_arguments` = its shared argument half (pub, slots session) |
-| Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params (§3.6); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session); `EnvironmentBody.content` = the parser's slot-content designation (7.7) |
+| Environment body parsing | `EnvironmentBodyParser`, `EnvironmentBody`, `with_match_invocation_name` | core, parameterized — terminator data = ctor params ([§dd-dr:parsers-engine]); `read_rigid_name_group` + `NameGroup` = the shared rigid-scaffolding reader (pub, slots session); `EnvironmentBody.content` = the parser's slot-content designation (7.7) |
 | Verbatim family (7.7) | `verbatim_state_delta` (the pinned recipe as data), `VerbatimArgumentParser` (delimited `\verb\|…\|`, the `v` codes; family-consistent `…ArgumentParser`), `VerbatimBodyParser` (environment contents to a literal terminator; sibling of `EnvironmentBodyParser`), conditions `UnterminatedVerbatim`/`ExpectedVerbatimDelimiter` | pylatexenc `LatexDelimitedVerbatimParser` / `LatexVerbatimEnvironmentContentsParser`; no `Latex` prefixes, roles named over mechanisms. `GroupArgumentParser::with_rule` = the mandatory minted-rule form (the `r<c1><c2>` code); `with_expression_fallback` = the orthogonal fallback knob (defaults: class on, rule off) |
 | Parity parsers N2–N6 (July 2026, user-reviewed) | `GroupArgumentParser::any_of` / `OptionalGroupArgumentParser::any_of` (multi-rule forms; `with_rule` = one-element sugar), `EmbellishmentsArgumentParser` (plural — user choice), `CharsGroupArgumentParser` (knobs `with_comments`/`with_nested_groups`/`with_restricted_descent`), `TackOnFieldsArgumentParser` (`with_field`/`with_repeatable_field`), condition `RepeatedTackOnField` | pylatexenc `LatexDelimitedMultiDelimGroupParser` (dissolved into `any_of` — no new type, per the resolved `### PhF` note), `LatexOptionalEmbellishmentArgsParser`, `LatexCharsGroupParser`, `LatexTackOnInformationFieldMacrosParser` — "macro" is preset vocabulary, so the tack-on name speaks of *fields* (role over mechanism); family-consistent `…ArgumentParser` suffixes; `any_of` echoes the `AnyDelimited` code |
 | Node finalization hook | `Lang::finalize_node` | run by `NodeTreeBuilder::add` for every staged node, all kinds |
 | Staged read views | `StagedNodes`, `StagedNodeView` | read-only builder views for `finalize_node` and node stop predicates |
 | Tree invariant checker | `check_tree_invariants` | public test utility in `node` (span partition, `Spanned` residency, region tiling) |
 | Pre-scanned token reader | `TokenListReader` | `TokenReader` over a pre-built token list; unit-test isolation (documented re-tokenization fidelity limit) |
-| Construct-level error | `ParseError<O>` | abort-only (`Err` means abort, §3.8); carries no recovery payload |
+| Construct-level error | `ParseError<O>` | abort-only (`Err` means abort, [§dd-dr:errors]); carries no recovery payload |
 | Node storage | `NodeTree<L>`, `NodeData<L>`, `NodeId`, `NodeRef<'pr>` | flat, frozen, index-based; proxy access |
 | Tree building | `NodeTreeBuilder<L>`, `BuildId` | staging ids ≠ final `NodeId`s (BFS flatten) |
 | Parsed argument/slot records | `ParsedArguments` (`ParsedArgument` entries), `ParsedSlots` (`ParsedSlot`) | self-describing: argument entry = `Arc`'d spec + optional child region + ext (regions session, July 2026); slot entry = own `name` + region + ext (slots session, July 2026 — no spec pointer) |
@@ -177,7 +177,7 @@ the core has only the associated types (user-decided, 7.5 checkpoint):
   concrete types, user-decided at the 7.6 checkpoint — they carry the preset's
   traceback vocabulary "macro ‘\frac’" / "environment ‘align’" / "specials ‘~’" and
   are stable downcast targets). `MacroSpec`/`SpecialsSpec` are declarative
-  (`StdCallableSpec`-shaped); `EnvironmentSpec` is the §3.4 funnel wrapper over
+  (`StdCallableSpec`-shaped); `EnvironmentSpec` is the [§dd-dr:specs] funnel wrapper over
   `EnvironmentBehavior` (the inner dyn trait: defaulted `arguments()`,
   `body_state_delta()`, `make_body_parser()`; hooks receive an
   `EnvironmentInvocation` facts struct). Builder `with_body_delta(…)` overrides the
@@ -237,16 +237,16 @@ Decided July 2026 unless noted; rationale in ARCHITECTURE.md §4/§4b and DESIGN
 | `ContentParser` (Phase 6 notes) | `NodesParser` | regions session gave "content" a precise meaning (designated argument/slot content) a general nodes parser doesn't have |
 | `ParseOutcome` (Phase 6 notes) | `ConstructParserResult<L, T>` | unambiguous next to the engine-level `ParseResult`; clarity over brevity |
 | `TokenStopCondition` (closed enum, Phase 6 plan) | `TokenStopKind` + `TokenStopCondition { kind, consume }` | 6.2 amendment: the consume switch is bound to the condition |
-| `claim_post_space` (planned 6.4 helper) | (nothing) | superseded before shipping: `post_space` = exactly the trigger token's own syntactic post-space, nothing beyond it is ever claimed (§3.5 invariant 3) |
+| `claim_post_space` (planned 6.4 helper) | (nothing) | superseded before shipping: `post_space` = exactly the trigger token's own syntactic post-space, nothing beyond it is ever claimed ([§dd-dr:nodes] invariant 3) |
 | `peek_argument_token` | `try_peek` (pub(crate)) | hoisted in 6.6 — the same probe policy also serves the terminator flow |
 | `SourceLocation<'src>` | `SourceSpan` | Arc spans remove the `'src` lifetime infection |
-| `SourceContent`, `SourceCursor`, `Source::cursor()` | (nothing — `StdTokenReader` scans `&str` directly) | retired July 2026 (Action 06): the scanner needs random-access slicing, not a char cursor; the borrow-returning trait was information-equivalent to `&str` (DESIGN_RATIONALE §3.1) |
+| `SourceContent`, `SourceCursor`, `Source::cursor()` | (nothing — `StdTokenReader` scans `&str` directly) | retired July 2026 (Action 06): the scanner needs random-access slicing, not a char cursor; the borrow-returning trait was information-equivalent to `&str` (DESIGN_RATIONALE [§dd-dr:sources-and-spans]) |
 | `SpecLookup`, `Library`, `LibraryStack`; `ParsingStateDelta::push_libraries` | `SpecsProvider`, `Package` + `Scope`, `ScopeStack`; `ParsingStateDelta.scope_ops` (`ScopeOp`/`DefinitionOp`) | Phase 7 plan session, landed 7.3: data-first multi-method provider contract (fallible, specials-participating, functionally updatable via `with_…`); package/scope role split (immutable loadable vs delta-mutable); fallbacks in-stack |
 | `library` module; `StateData.libraries`, `ParsingState::libraries()` | `scopes` module; `StateData.scopes`, `ParsingState::scopes()` | 7.3 naming checkpoint: no type named `Library` survived the redesign — module and field follow the vocabulary they hold |
 | parse-time `Lang` hooks (`resolve_command`, `make_paragraph_break_node`, `observe_transition`, `refine_diagnostic`); `ParserSession.recovery` | `ParseDriver` methods; driver-held `Recovery` | placement doctrine (Phase 7 plan session): what only runs while a parse is driven lives on the driver; the session stays pure scratch/output |
 | "namespace", `CallableKind` | `CallableTypeId` | "namespace" confusable with package/library; `…TypeId` = per-language id type |
 | `GroupExt`, `NodeGroupExt` | `GroupNodeExt` (etc.) | `GroupExt` too vague; `NodeGroupExt` parses wrong |
-| `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md §3 |
+| `parser` module (high-level API) | `engine` module | layered architecture of ARCHITECTURE.md [§dd-arch:arch] |
 | `apply()` / `copy_with()` | `ParsingState::derived()` | adjective form; signals a transition |
 | `impl Iterator` returns of `children()` and the region/content accessors | `NodeSlice` | 7.8: span information belongs in the return types (exact, partition-invariant-backed); adaptor chains insert `.iter()` |
 | `Segment` / `SegmentPiece` (7.8 shape draft) | (nothing — segments are `NodeSlice` views into minted result trees) | user: no second node-list currency ("that's why we have node lists in the first place"); the builder route mints real trees, pylatexenc-style |

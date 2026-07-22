@@ -133,7 +133,7 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         }
     }
 
-    /// The math plug (DESIGN_RATIONALE.md §3.3/§3.6): a math group's interior parses in
+    /// The math plug (DESIGN_RATIONALE.md [§dd-dr:parsing-state]/[§dd-dr:parsers-engine]): a math group's interior parses in
     /// [`Mode::Math`], and — since LaTeX forbids nested math — the math delimiters stop
     /// being *openers* inside it. Derived from the **outer** `base` state (not the seed):
     /// the interior's group rules are `base`'s minus the [`Math`](GroupType::Math)

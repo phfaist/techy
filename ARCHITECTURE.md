@@ -9,16 +9,16 @@ Decision points that need explicit sign-off are marked **[DECISION n]** and coll
 
 **All decision points (1–7) were discussed and RESOLVED, July 2026.**
 Decision 1 (parsing-state design): materialized state + transition choke point ("Option C");
-see §state for the design and §4 for the recorded rationale. Decision 3 (node representation):
-unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see §specs/§nodes for the design
+see [§dd-arch:state] for the design and §4 for the recorded rationale. Decision 3 (node representation):
+unified `Callable` kind + two-tier ext + `TextContent` ("Option F"); see [§dd-arch:specs]/[§dd-arch:nodes] for the design
 and §4b for the recorded rationale. Decisions 2 (`Lang` + `Language<L>` naming), 4 (defer
 `Rc`/`Arc` genericity), 5 (zero mandatory dependencies), and 7 (rebuild phase-by-phase) were
 accepted as proposed. Decision 6: no `ConflictStrategy` is accepted; the deferred `SpecLookup`
-semantics were settled in the Phase 4 design session (July 2026) — see §specs.
+semantics were settled in the Phase 4 design session (July 2026) — see [§dd-arch:specs].
 
 **Revised July 2026:** the strict L0–L7 layer ladder originally used to present §3 was
 replaced by a three-strata dependency model (S0 foundation / S1 core / S2 presets) with three
-enforced rules — see §3 and DESIGN_RATIONALE.md §3.11 (decision 8 in §11).
+enforced rules — see §3 and DESIGN_RATIONALE.md [§dd-dr:crates] (decision 8 in §11).
 
 ---
 
@@ -53,13 +53,13 @@ phase-by-phase with each phase compiling and tested before the next. (§9.)
 
 ---
 
-## 2. Design principles
+## 2. Design principles [§dd-arch:lib-design-principles]
 
 Derived from your stated goals and the decided parts of the existing documents:
 
 1. **Data-driven where possible, trait-driven where necessary.** Anything that can vary *during a
    parse* (delimiters, escape chars, enabled features) is plain stored data in the parsing state,
-   changed only through reified deltas at a single transition choke point (§state). Traits are
+   changed only through reified deltas at a single transition choke point ([§dd-arch:state]). Traits are
    reserved for genuine *behavior* extension points: token readers, construct parsers, spec
    lookup, source resolution, and the per-language transition customizer.
    This single principle resolves most of the "how generic should X be" questions.
@@ -69,17 +69,17 @@ Derived from your stated goals and the decided parts of the existing documents:
 
 3. **No privileged language concepts in the core.** No math mode, no `{`/`}`, no `%`, no `\` in
    the engine. All of it is data in the parsing state or definitions in libraries. The familiar
-   LaTeX behavior lives in a *preset* (§8).
+   LaTeX behavior lives in a *preset* ([§dd-arch:latexlike]).
 
 4. **Zero-copy by default; logical content is first-class.** Tokens reference source content by
-   byte spans. Node *textual content* is `TextContent` (§nodes): span-backed when it came from
+   byte spans. Node *textual content* is `TextContent` ([§dd-arch:nodes]): span-backed when it came from
    parsing, owned when synthesized or normalized — the span is provenance, not the content's
    storage. Identity-bearing data (callable names) is always owned.
 
 5. **Closed structural core, open payloads.** The engine knows a small fixed set of *structural*
    shapes (chars, group, callable invocation, comment, list) — no `Custom` variant, no
    open-ended node trait objects. Semantics attach through specs; custom data attaches through
-   per-node and per-kind ext types supplied by `Lang` (§nodes), orthogonal to structural identity.
+   per-node and per-kind ext types supplied by `Lang` ([§dd-arch:nodes]), orthogonal to structural identity.
 
 6. **Zero mandatory dependencies; `no_std`-friendly core.** Hand-written `Display`/`Error`
    impls instead of `thiserror`; no `log` — library conditions flow through the diagnostics
@@ -94,7 +94,7 @@ Derived from your stated goals and the decided parts of the existing documents:
 
 ---
 
-## 3. The architecture: three strata, three rules
+## 3. The architecture: three strata, three rules [§dd-arch:arch]
 
 *(Revised July 2026. An earlier draft presented a strict L0–L7 layer ladder here; review showed
 its middle "layers" form one strongly-connected component **by design** — every cycle edge is a
@@ -102,10 +102,10 @@ decided feature: state stores libraries (`\newcommand`); lookup takes the state 
 `SpecLookup`); specs carry their invocation parser (the pylatexenc escape hatch); parsers build
 nodes and derive states; nodes record their parse-time state and spec. No renumbering can make
 that region a DAG, so the ladder was replaced by the strata below, whose boundaries are real.
-Full argument: DESIGN_RATIONALE.md §3.11.)*
+Full argument: DESIGN_RATIONALE.md [§dd-dr:crates].)*
 
 ```
-S2  presets      latexlike (module; §8); later: flm (separate crate)
+S2  presets      latexlike (module; [§dd-arch:latexlike]); later: flm (separate crate)
 S1  core         ONE mutually-recursive stratum, organized as topic modules:
                    Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · token/ (Token<'s, L>,
                    TokenRules, TokenReader, StdTokenReader) · spec/ + scopes/
@@ -120,7 +120,7 @@ S0  foundation   Lang-free true DAG:
 
 *(Revised after the July 2026 token-design review: the token topic is wholly S1 — tokens
 are generic over `L` (a `Specials` token carries its resolved spec) and token errors may
-grow state context; `Span` moved to the source topic. See DESIGN_RATIONALE.md §3.2.)*
+grow state context; `Span` moved to the source topic. See DESIGN_RATIONALE.md [§dd-dr:tokens].)*
 
 Three enforced rules replace "each layer depends only on lower ones" — each mechanically
 checkable, unlike the old ladder (which the design violated by intention):
@@ -131,7 +131,7 @@ checkable, unlike the old ladder (which the design violated by intention):
 3. **The runtime ownership graph is acyclic.** (Checkable by inspecting struct fields.)
    nodes → {states, specs, sources}; states → specs; specs → parsers; sources → sources;
    no runtime value references nodes. This generalizes the Arc-cycle-prevention invariant of
-   §source and is what the old "arrows point downward" rule was really about.
+   [§dd-arch:source] and is what the old "arrows point downward" rule was really about.
 
 The disentangling insight: the ladder conflated three different graphs. The **type/signature
 graph** is cyclic inside S1 — harmlessly: traits are just signatures, `dyn` references are how
@@ -148,9 +148,9 @@ machinery (`StdTokenReader`, `Library`, `NodesParser`, …); orchestration (`Lan
 `ParserSession`). Module = topic, not stratum.
 
 The rest of this section walks the topics bottom-up; the former layer labels survive only as
-section names (§source, §token, §state, §specs, §nodes, §constructs, §engine).
+section names ([§dd-arch:source], [§dd-arch:token], [§dd-arch:state], [§dd-arch:specs], [§dd-arch:nodes], [§dd-arch:constructs], [§dd-arch:engine]).
 
-### source (S0) — adopt SOURCE_ARCHITECTURE.md
+### source (S0) — adopt SOURCE_ARCHITECTURE.md [§dd-arch:source]
 
 Exactly as decided in March: `Arc<Source>`-based `SourceSpan`, provenance enum
 (`Primary` / `Resolved` / `Synthesized`) with `triggered_at: SourceSpan` back-references,
@@ -158,7 +158,7 @@ Exactly as decided in March: `Arc<Source>`-based `SourceSpan`, provenance enum
 of the plain byte-range `Span` (`Copy`, no `Arc`; moved here from the token topic, July
 2026 — it is used by errors independently of tokenization). (The March plan's
 `SourceContent` backing trait and mark/rewind cursor were retired July 2026, Action 06 —
-the tokenizer scans `&str` directly; DESIGN_RATIONALE §3.1.)
+the tokenizer scans `&str` directly; DESIGN_RATIONALE [§dd-dr:sources-and-spans].)
 
 One correction to the current `source.rs`: the per-location `via: [SourceLocationVia]` chain is
 removed. Provenance belongs on `Source` (one hop per synthesized/included source), not on every
@@ -183,7 +183,7 @@ to be decided. Note that `Weak<T>`, Rust's usual cycle-breaker, is not applicabl
 nodes live in a flat `Vec<NodeData>`, not behind per-node `Arc`s, so there is nothing to point
 a `Weak` at.
 
-### token (S1)  *(reworked July 2026 — token-design review, DESIGN_RATIONALE.md §3.2)*
+### token (S1)  *(reworked July 2026 — token-design review, DESIGN_RATIONALE.md [§dd-dr:tokens])* [§dd-arch:token]
 
 Tokens are **transient, span-based, zero-copy**, and generic over `L: Lang`
 (`Clone`, not `Copy` — a `Specials` token carries an `Arc`):
@@ -261,9 +261,9 @@ per-state structures: the `PrefixTable` (group delimiters), the `TriggerChars` f
 merging the starting characters of comments, group delimiters, and known specials/commands
 into one precompiled table per state. Deliberately not done yet — revisit when the nodes
 parser exists and the hot loop can be profiled (noted July 2026, user request; also
-DESIGN_RATIONALE.md §6).
+DESIGN_RATIONALE.md [§dd-dr:open-questions]).
 
-### state (S1) — parsing state  *(Decision 1 — RESOLVED, July 2026)*
+### state (S1) — parsing state  *(Decision 1 — RESOLVED, July 2026)* [§dd-arch:state]
 
 Parsing state is **materialized data behind a single transition choke point** ("Option C" of
 the design discussion recorded in §4). All stored fields are private; the public read surface
@@ -274,7 +274,7 @@ existence is `derived()`.
 pub struct ParsingState<L: Lang> {
     data: StateData<L>,          // private — getters are the public surface
     prefix_table: PrefixTable,   // derived caches, rebuilt when a state is frozen
-    trigger_chars: TriggerChars, //   (eager, not OnceLock-lazy: no_std — see DESIGN_RATIONALE §3.3)
+    trigger_chars: TriggerChars, //   (eager, not OnceLock-lazy: no_std — see DESIGN_RATIONALE [§dd-dr:parsing-state])
 }
 
 pub struct StateData<L: Lang> {
@@ -285,7 +285,7 @@ pub struct StateData<L: Lang> {
 
 pub struct TokenRules {
     // (amended July 2026: every major feature has an enable_* gate next to its data —
-    // scoped disable/re-enable without carrying the rules; DESIGN_RATIONALE §3.2.
+    // scoped disable/re-enable without carrying the rules; DESIGN_RATIONALE [§dd-dr:tokens].
     // Gate false = scoped off, empty data = constitutive off.)
     pub enable_whitespace: bool,               // off = whitespace chars are plain content
     pub whitespace: WhitespaceRules,
@@ -299,7 +299,7 @@ pub struct TokenRules {
     pub enable_specials: bool,                 // gates the scan hook (baked into TriggerChars at freeze)
     pub forbidden_chars: String,               // no gate: one trivially restorable string
     pub expecting_group_close: Option<Arc<GroupRule<L>>>,  // ambiguous-delimiter disambiguator; ungated
-    // NB: no specials strings — specials recognition is the Lang::scan_specials hook (§token)
+    // NB: no specials strings — specials recognition is the Lang::scan_specials hook ([§dd-arch:token])
 }
 ```
 
@@ -332,8 +332,8 @@ impl<L: Lang> ParsingState<L> {
 mode** — `mode: L::ModeId`, a third closed per-language vocabulary — with a matching
 `ParsingStateDelta.mode` override channel; deltas initiate mode changes (e.g. the
 driver's group descent-delta for math groups) and `Lang::finalize_transition` interprets
-them. `libraries: LibraryStack<L>` becomes the redesigned scope stack (§specs).
-DESIGN_RATIONALE.md §3.3/§3.4.)*
+them. `libraries: LibraryStack<L>` becomes the redesigned scope stack ([§dd-arch:specs]).
+DESIGN_RATIONALE.md [§dd-dr:parsing-state]/[§dd-dr:specs].)*
 
 Properties, roughly in decreasing order of importance:
 
@@ -343,7 +343,7 @@ Properties, roughly in decreasing order of importance:
   differ, which is why the delta must be a standalone value. For *inward* scoping (group or
   math interior) a parser derives the child state itself and drops it when done — inside a
   parse frame through the session seam (`session.derived_state(…)` / keyed memo helpers —
-  amended July 2026, DESIGN_RATIONALE §3.6), out of parse via `state.derived(…)` directly
+  amended July 2026, DESIGN_RATIONALE [§dd-dr:parsers-engine]), out of parse via `state.derived(…)` directly
   — reversion is structural (the caller still holds the outer `Arc`); deltas are never
   inverted. For *outward* propagation (`\newcommand`) the parser returns the delta to its
   caller, who applies it to **its own** state for subsequent siblings — a base the producer
@@ -387,7 +387,7 @@ Properties, roughly in decreasing order of importance:
   a new one only at transitions, so nodes record their parse-time state
   (SOURCE_ARCHITECTURE.md decision, kept). No `TypeId` maps, no `dyn Any`.
 
-### specs (S1) — specs and libraries  *(updated per Decision 3 resolution — §4b)*
+### specs (S1) — specs and libraries  *(updated per Decision 3 resolution — §4b)* [§dd-arch:specs]
 
 The **callable** concept from PARSING_STRATEGY.md, unified and **de-keyed**: a spec records
 *callable behavior*, not the form or name under which it is invoked. The invocation form is
@@ -401,21 +401,21 @@ systematic across the crate: `…Kind` = closed core enum, exhaustively matchabl
 /// Behavior of anything invocable from the token stream. De-keyed: carries no name and
 /// no invocation form; one spec may back several names (\emph and \textit can share).
 /// (Supertraits as shipped: Send + Sync — specs live in parsed trees, which stay Send —
-/// plus Debug and Any, the downcast channel for Lang::finalize_node; §3.4, Action 05.)
+/// plus Debug and Any, the downcast channel for Lang::finalize_node; [§dd-dr:specs], Action 05.)
 pub trait CallableSpec<L: Lang>: Debug + Send + Sync + Any {
     // (amended July 2026: an argument IS a parser — pylatexenc's LatexArgumentSpec.
     // ArgumentSpec<L> = { parser: Arc<dyn ArgumentParser<L>>, name, parsing_state_delta },
     // Arc-shared so parsed nodes record which spec each argument was parsed against.
-    // See DESIGN_RATIONALE §3.4.)
+    // See DESIGN_RATIONALE [§dd-dr:specs].)
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>];
     /// Would a bare use as a single-token expression argument be malformed? Default
     /// derives from arguments() (any argument whose parser cannot match empty); a
     /// body-bearing takeover spec (\begin, \verb) overrides to true — the only spec-side
-    /// channel for "I take material" (slots session, July 2026; DESIGN_RATIONALE §3.6).
+    /// channel for "I take material" (slots session, July 2026; DESIGN_RATIONALE [§dd-dr:parsers-engine]).
     fn requires_content(&self) -> bool;
     /// Factory: a fresh, single-use construct parser for one invocation of this callable,
     /// ownership moved to the caller (amended July 2026, Phase 6 plan session — was a
-    /// stored-parser accessor; DESIGN_RATIONALE §3.6). Default: the standard declarative
+    /// stored-parser accessor; DESIGN_RATIONALE [§dd-dr:parsers-engine]). Default: the standard declarative
     /// parser driven by arguments(). Overriding it is the full-takeover escape
     /// hatch (\verb, tabular preambles, FLM constructs) — pylatexenc's most valuable
     /// extensibility property, preserved (its get_node_parser(token) has exactly this
@@ -423,7 +423,7 @@ pub trait CallableSpec<L: Lang>: Debug + Send + Sync + Any {
     fn make_invocation_parser<'a, 's>(&'a self, invocation: Invocation<'a, 's, L>)
         -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
     where 's: 'a;   // 's = the source borrow the invocation's trigger token carries
-    /// Optional recomposition hook (§nodes level 2) for constructs whose custom parser
+    /// Optional recomposition hook ([§dd-arch:nodes] level 2) for constructs whose custom parser
     /// records per-instance syntax the default recomposer cannot infer.
     // fn recompose(&self, …) -> …   — default covers declaratively-specced callables
 }
@@ -441,7 +441,7 @@ pattern may reference the invocation name (`\end{align}` must match the `align` 
 opened; a `---` fence closes with `---`) — are *parser* business, not spec vocabulary
 (decided July 2026, Phase 6 plan session): the terminator data parameterizes the core
 `EnvironmentBodyParser`, and a body state delta is an ordinary field of the preset spec
-type that drives the parse (DESIGN_RATIONALE §3.6). A macro has no slots; an environment
+type that drives the parse (DESIGN_RATIONALE [§dd-dr:parsers-engine]). A macro has no slots; an environment
 has exactly one (its body); specials usually have none but may have any number (a
 fence-block construct with `+++` separators is expressible as a specials callable with
 multiple slots). The boundary is a guideline, not a theorem (`\verb`'s delimited content
@@ -486,19 +486,19 @@ standard impls `Package` (immutable, loaded wholesale, mode-visibility field) an
 providers and the stack itself no longer nests; `ParsingStateDelta` grows
 definition/stack ops replacing `push_libraries`. `CallableQuery` and innermost-wins
 shadowing carry over unchanged. Design: Phase7Execution.md D3; rationale:
-DESIGN_RATIONALE.md §3.4. Landed 7.3 — the module is renamed `library` → `scopes`,
+DESIGN_RATIONALE.md [§dd-dr:specs]. Landed 7.3 — the module is renamed `library` → `scopes`,
 the state field/getter to `StateData.scopes`/`scopes()`, and `derived()` became
-fallible (`DeriveError`); checkpoint resolutions in the §3.4 landed note.)*
+fallible (`DeriveError`); checkpoint resolutions in the [§dd-dr:specs] landed note.)*
 
 - **Keys are `(CallableTypeId, name)`, many-to-one**: several names may map to one shared
   behavior spec (flyweight). Library keys hold the *normalized* name; the node records the
-  *invocation spelling* (§nodes) — the right split given de-keyed specs.
+  *invocation spelling* ([§dd-arch:nodes]) — the right split given de-keyed specs.
 - Resolution: ordered stack, innermost/last-added wins (lexical shadowing — matches
   `\newcommand` semantics and group-local definitions). No `ConflictStrategy` enum: shadowing
   *is* the semantic; an optional lint pass can warn on shadowing if wanted. **[DECISION 6 —
   decided, July 2026: no `ConflictStrategy`. The deferred `SpecLookup` semantics were settled
   in the Phase 4 design session (July 2026): `CallableQuery`-based lookup as sketched above —
-  rationale in DESIGN_RATIONALE.md §3.4.]**
+  rationale in DESIGN_RATIONALE.md [§dd-dr:specs].]**
 - **Unknown callables**: per-`CallableTypeId` fallback policy built into `LibraryStack`
   (consulted by `resolve()` only, after the stack misses; the stack's own `SpecLookup` impl is
   stack-only so nested fallbacks cannot preempt outer definitions), returning a **shared
@@ -514,7 +514,7 @@ fallible (`DeriveError`); checkpoint resolutions in the §3.4 landed note.)*
   `ParsingStateDelta::push_libraries`; popping happens naturally because the previous
   `Arc<ParsingState>` is restored when the group ends.
 
-### nodes (S1)  *(Decision 3 — RESOLVED, July 2026; evolution recorded in §4b)*
+### nodes (S1)  *(Decision 3 — RESOLVED, July 2026; evolution recorded in §4b)* [§dd-arch:nodes]
 
 Flat, frozen, index-based storage (SOURCE_ARCHITECTURE.md), with a **unified callable kind**
 and a **two-tier ext system**:
@@ -543,7 +543,7 @@ pub enum NodeKind<L: Lang> {
 pub struct CallableData<L: Lang> {
     pub callable_type: L::CallableTypeId, // invocation form: latexlike MACRO / ENVIRONMENT / SPECIALS
     pub name: Box<str>,                  // invocation spelling; identity ⇒ always owned
-    pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None (§specs fallback)
+    pub spec: Arc<dyn CallableSpec<L>>,  // behavior; shared, de-keyed; never None ([§dd-arch:specs] fallback)
     pub arguments: ParsedArguments<L>,   // pylatexenc pattern (July 2026): entries carry their
                                          // Arc'd ArgumentSpec + child region (noise + syntax
                                          // + designated content range) + ext — regions session
@@ -596,7 +596,7 @@ Lang-owned storage); `CallableData` is boxed so the enum stays small for the dom
 case.
 
 **Whitespace and span invariants** (pinned July 2026, Phase 6 plan session — full numbered
-statement in DESIGN_RATIONALE.md §3.5):
+statement in DESIGN_RATIONALE.md [§dd-dr:nodes]):
 - A callable's `post_space` is **exactly its trigger token's own syntactic post-space** —
   the name-terminating whitespace of a multi-character command, stopping at any paragraph
   break; nothing beyond the token is ever claimed (amended July 2026, Phase 6.4, user
@@ -633,7 +633,7 @@ statement in DESIGN_RATIONALE.md §3.5):
   `\begin{name}`/`\end{name}` scaffolding is deliberately inflexible (no comments/newlines
   before the name group; unrecorded inline whitespace normalized away) and is
   *reconstructed*, not recorded — deterministic, hence still "reproduce, don't guess"
-  (DESIGN_RATIONALE §3.5). Exotic custom parsers use the `CallableSpec::recompose()` hook.
+  (DESIGN_RATIONALE [§dd-dr:nodes]). Exotic custom parsers use the `CallableSpec::recompose()` hook.
 
 **Two-phase region records — a deliberate runtime invariant (July 2026 regions session).**
 `ParsedArguments`/`ParsedSlots` entries hold child *regions* (noise + syntax + designated
@@ -643,7 +643,7 @@ place by `NodeTreeBuilder::finish()`. This is the accepted "honest cost": a phas
 system can't see, contained because resolution happens in one component at one point, finished
 trees cannot contain staged records, and resolved-only accessors panic on staged ones. It buys
 the important property that construct parsers build `ParsedArguments` directly with an
-unchanged builder API. Full argument: DESIGN_RATIONALE.md §3.5.
+unchanged builder API. Full argument: DESIGN_RATIONALE.md [§dd-dr:nodes].
 
 Access is only through `NodeRef<'pr>` proxies as designed in March (Copy, resolves indices,
 `span_content()`, `children()`, `parsing_state()`, `name()`, `arguments()`, `slots()`,
@@ -663,7 +663,7 @@ indirection or API complexity for flexibility nobody realistically uses. Users w
 narrower ids can compress at their own boundary via the usize seam, and the one safeguard
 that matters is a checked usize → u32 conversion at the single mint site.
 
-### constructs (S1) — construct parsers
+### constructs (S1) — construct parsers [§dd-arch:constructs]
 
 The single most important trait in the system. To avoid pylatexenc's three-argument threading
 (`walker, token_reader, parsing_state`), everything a parser needs rides in one context:
@@ -691,13 +691,13 @@ pub trait ConstructParser<L: Lang> {
 *(Amended July 2026, Phase 7 plan session: `ParseContext` gains `driver: &'a L::Driver`
 — the `ParseDriver`, home of construct-parser provision, descent deltas, and the
 `Recovery` policy (moved off `ParserSession`); descent call sites route through
-`cx.parse_nodes(…)`/`cx.parse_group(…)`. See the §engine note; DESIGN_RATIONALE.md §3.6.)*
+`cx.parse_nodes(…)`/`cx.parse_group(…)`. See the [§dd-arch:engine] note; DESIGN_RATIONALE.md [§dd-dr:parsers-engine].)*
 
 Construct parsers are **temporaries** (July 2026, Phase 6 plan session): constructed with
 their per-use configuration, `&mut self` so working state lives in fields, dropped when the
-frame ends — never stored in specs (two-tier ownership model, DESIGN_RATIONALE §3.6).
+frame ends — never stored in specs (two-tier ownership model, DESIGN_RATIONALE [§dd-dr:parsers-engine]).
 `Err` means abort; recovery happens at the detection site and abnormal endings travel as
-`StopCause` data (DESIGN_RATIONALE §3.8).
+`StopCause` data (DESIGN_RATIONALE [§dd-dr:errors]).
 
 **Dispatch is by token kind + library lookup — never by parser registry scanning.** The main
 loop (`NodesParser`, pylatexenc's `LatexGeneralNodesParser` + nodes collector):
@@ -706,7 +706,7 @@ loop (`NodesParser`, pylatexenc's `LatexGeneralNodesParser` + nodes collector):
 loop:
   tok = tokens.peek(state)
   match tok.kind:
-    Char            -> accumulate chars node (whitespace-only chars nodes from pre_space, §nodes)
+    Char            -> accumulate chars node (whitespace-only chars nodes from pre_space, [§dd-arch:nodes])
     ParagraphBreak  -> own node via Lang::make_paragraph_break_node (default: whitespace Chars)
     GroupOpen(rule) -> group parser (derived state expecting_group_close; recurse NodesParser)
     Comment         -> comment node built directly from the token (whole-comment tokens)
@@ -718,8 +718,8 @@ loop:
     EndOfStream     -> materialize trailing-whitespace chars node from pre_space; stop
   returned delta -> session.derived_state(&state, &delta) -> new Arc<ParsingState> for subsequent
                     siblings (session-mediated: the memo/observation seam — amended July 2026,
-                    DESIGN_RATIONALE §3.6; ParsingState::derived stays the underlying pure transition)
-NodesParser returns (nodes, StopCause) — the caller interprets the ending (§errors).
+                    DESIGN_RATIONALE [§dd-dr:parsers-engine]; ParsingState::derived stays the underlying pure transition)
+NodesParser returns (nodes, StopCause) — the caller interprets the ending ([§dd-arch:errors]).
 ```
 
 Everything the Sonnet doc wanted from `can_parse()`/`priority()` registries is achieved
@@ -744,7 +744,7 @@ and the verbatim family (7.7: `verbatim_state_delta`, `VerbatimArgumentParser`,
 (No `CommentParser`:
 whole-comment tokens made it vestigial — comment nodes come straight from tokens.)
 
-### engine (S1) — orchestration
+### engine (S1) — orchestration [§dd-arch:engine]
 
 Per SOURCE_ARCHITECTURE.md, with one renaming: `FLMEnvironment` collides fatally with
 `EnvironmentSpec`/`EnvironmentNode`. **[DECISION 2 — decided, July 2026]**:
@@ -754,39 +754,39 @@ pub trait Lang: Sized {                 // the compile-time bundle (was: Languag
     type StateExt:  Clone + Debug + Default;
     type SessionExt: Debug + Default;   // parse-global MUTABLE extension on ParserSession —
                                         // counters, parse-global caches (amended July 2026,
-                                        // DESIGN_RATIONALE §3.6 two-level transition doctrine)
+                                        // DESIGN_RATIONALE [§dd-dr:parsers-engine] two-level transition doctrine)
     type Event:     Clone + Debug;      // semantic transition events (e.g. FLM's EnterMath)
-    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt (§nodes) [Phase 5]
+    type NodeExts:  NodeExtTypes;       // bundle: uniform NodeExt + per-kind <Kind>NodeExt ([§dd-arch:nodes]) [Phase 5]
     type SourceOrigin: …;
 
-    /// Transition customizer — the choke-point hook of §state. PURE constructor of state
+    /// Transition customizer — the choke-point hook of [§dd-arch:state]. PURE constructor of state
     /// data (what makes derivations memoizable); runs once per unique derivation.
     /// Default: empty.
     fn finalize_transition(new: &mut StateData<Self>, prev: &ParsingState<Self>,
                            events: &[Self::Event]) {}
 
-    /// Per-EVENT transition observation (amended July 2026, DESIGN_RATIONALE §3.6):
+    /// Per-EVENT transition observation (amended July 2026, DESIGN_RATIONALE [§dd-dr:parsers-engine]):
     /// called by ParserSession::derived_state on every transition event, memo hits
     /// included — parse-history accumulation lives here, never in finalize_transition.
     /// Observational only: cannot alter the resulting state. Default: no-op. [6.3]
     fn observe_transition(ext: &mut Self::SessionExt, prev: &ParsingState<Self>,
                           new: &ParsingState<Self>, delta: &ParsingStateDelta<Self>) {}
 
-    /// Specials scan (§token): recognition + resolution in one call — the match carries
+    /// Specials scan ([§dd-arch:token]): recognition + resolution in one call — the match carries
     /// name AND spec. Typically dispatches to the state's libraries. Default: no specials.
     fn scan_specials<'s>(state: &ParsingState<Self>, content: &'s str, pos: usize)
         -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> { Ok(None) }
-    /// Hot-path filter for scan_specials, cached per state (§token). Default: none.
+    /// Hot-path filter for scan_specials, cached per state ([§dd-arch:token]). Default: none.
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars { … }
 
-    // Phase 6 plan session hooks (July 2026; DESIGN_RATIONALE §3.6):
+    // Phase 6 plan session hooks (July 2026; DESIGN_RATIONALE [§dd-dr:parsers-engine]):
 
     /// Resolve a Command token to (callable_type, spec). Typically dispatches to the
     /// state's libraries via CallableQuery. Returns Resolved / Unresolved { detail } —
     /// the optional detail (why resolution failed: "searched libraries x, y, z", "load
     /// the {amsmath} library") rides the unresolvable-command diagnostic. Default:
     /// Unresolved with a "command resolution is not implemented by this language"
-    /// detail (amended July 2026; DESIGN_RATIONALE §3.6).
+    /// detail (amended July 2026; DESIGN_RATIONALE [§dd-dr:parsers-engine]).
     fn resolve_command(state: &ParsingState<Self>, token: &Token<'_, Self>)
         -> CommandResolution<Self> { … }
     /// Node kind representing a paragraph break; the core stages it with the token's
@@ -823,16 +823,16 @@ impl<L: Lang> Language<L> {             // landed shape (Phase 7.4, July 2026)
 entry methods replace the never-designed `SourceInput` conversion enum, and the advanced
 path is accessors rather than a `session()` method. Root drive loop: `cx.parse_nodes`
 under no stop condition, diagnose-and-skip `StrayGroupClose` on a root-level stray close,
-root `List` over the entire source. DESIGN_RATIONALE §3.6.)*
+root `List` over the entire source. DESIGN_RATIONALE [§dd-dr:parsers-engine].)*
 
 *(Phase 6 amendment, July 2026: `Language<L>` itself and the `parse()` convenience entry
 point are **deferred** — Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery`)
 as the root object, driven directly; `Language` arrives with the phase that demonstrates
 the need, Phase 7 at the earliest. Type-id interning stays deferred with it.
-DESIGN_RATIONALE §3.6.)*
+DESIGN_RATIONALE [§dd-dr:parsers-engine].)*
 
 *(Phase 7 plan session amendment, July 2026: `Language<L>` + `parse()` are **scheduled for
-Phase 7**. `Lang` gains `type ModeId` (§state) and `type Driver: ParseDriver<Self>`; the
+Phase 7**. `Lang` gains `type ModeId` ([§dd-arch:state]) and `type Driver: ParseDriver<Self>`; the
 parse-time hooks sketched above — `resolve_command`, `make_paragraph_break_node`,
 `observe_transition`, plus `refine_diagnostic` — migrate to the **`ParseDriver`**
 (instance methods; also home of construct-parser provision via
@@ -841,7 +841,7 @@ parse-time hooks sketched above — `resolve_command`, `make_paragraph_break_nod
 `ParserSession`). `Lang` keeps the state-, tokenizer-, and builder-layer hooks
 (`initial_state_data`/`finalize_transition`, `scan_specials`/`specials_trigger_chars`,
 `finalize_node`). Design: Phase7Execution.md D1/D2; rationale: DESIGN_RATIONALE.md
-§3.3/§3.6.)*
+[§dd-dr:parsing-state]/[§dd-dr:parsers-engine].)*
 
 **Stratum note** (July 2026): the `Lang` trait and its bound-trait `NodeExtTypes` are
 *documented* here as the compile-time bundle, but their *definitions* live in the S1 core next
@@ -868,7 +868,7 @@ at these proxy/result types — node data itself carries **none**, which is prec
 transformed trees outlive the `ParseResult` they came from, and lets sources be freed only when
 the last `SourceSpan` in any tree drops.
 
-### Errors and tolerant parsing
+### Errors and tolerant parsing [§dd-arch:errors]
 
 - Zero-dep hand-written error types (zero-dep at *runtime*; declaration boilerplate is
   generated by `techy-derive`, below). Every error carries a `SourceSpan` (not a lifetime-bound
@@ -882,7 +882,7 @@ the last `SourceSpan` in any tree drops.
   `SourceProvenance`, open-blocks traceback — the existing `format_traceback` work slots in
   here).
 
-**Condition declaration via derive** *(July 2026 — DESIGN_RATIONALE.md §3.8)*
+**Condition declaration via derive** *(July 2026 — DESIGN_RATIONALE.md [§dd-dr:errors])*
 
 - `techy-derive` proc-macro sub-crate (syn 2 + quote; **build-time dependency only**, runtime
   stays zero-dep), re-exported from `techy::error` — third-party conditions use the identical
@@ -911,7 +911,7 @@ the last `SourceSpan` in any tree drops.
 
 ## 4. How Decision 1 was resolved (facet traits → A → B → C)
 
-Recorded so the reasoning survives; the resulting design is §state. Four candidates were compared
+Recorded so the reasoning survives; the resulting design is [§dd-arch:state]. Four candidates were compared
 (discussion of July 2026):
 
 **Per-facet traits (the WIP in an earlier source tree)** — each tokenization facet behind its own trait
@@ -954,7 +954,7 @@ A simplification fell out of the follow-up `copy_with` discussion: there is **no
 (`ParsingStateDelta<L>`, a struct of optional overrides + events) *is* the argument of
 `derived()`; standard changes and semantic events travel in one mergeable, inspectable value.
 The change-description must remain a *value* (not a closure, not a direct constructor call)
-because producer and scope-decider differ — see the producer/scope split in §state.
+because producer and scope-decider differ — see the producer/scope split in [§dd-arch:state].
 
 What survives from the earlier WIP: the cached sorted delimiter-prefix table
 (`cached_prefix_strings`, with the open/close-ambiguity merging — good work, keep it), the
@@ -965,7 +965,7 @@ recovery-token mechanism.
 
 ## 4b. How Decision 3 was resolved (`Custom` variant → unified `Callable` + two-tier ext)
 
-Recorded so the reasoning survives; the resulting design is §specs/§nodes (discussion of July 2026).
+Recorded so the reasoning survives; the resulting design is [§dd-arch:specs]/[§dd-arch:nodes] (discussion of July 2026).
 
 - The original proposal — closed structural enum + `Custom(L::NodeData)` variant — conflated
   two needs: *extra per-instance data on a node that IS structurally a group/macro/…* (the
@@ -999,13 +999,13 @@ Recorded so the reasoning survives; the resulting design is §specs/§nodes (dis
 
 ---
 
-## 5. Generics strategy
+## 5. Generics strategy [§dd-arch:generics]
 
 Generic (via the single `L: Lang`):
 - `StateExt` — language-specific parsing state (math mode etc.). Typed, no `Any`.
-- `Event` — semantic transition events, consumed by `Lang::finalize_transition` (§state).
+- `Event` — semantic transition events, consumed by `Lang::finalize_transition` ([§dd-arch:state]).
 - `NodeExts` — bundle of node ext types: uniform `NodeExt` (every node) plus per-kind
-  `CharsNodeExt` / `GroupNodeExt` / `CallableNodeExt` / `CommentNodeExt` / `ListNodeExt` (§nodes).
+  `CharsNodeExt` / `GroupNodeExt` / `CallableNodeExt` / `CommentNodeExt` / `ListNodeExt` ([§dd-arch:nodes]).
 - `SourceOrigin` — origin metadata type.
 
 Defaults: `Lang` for the latexlike preset is a ZST (`Latexlike`), and type aliases
@@ -1021,7 +1021,7 @@ Deliberately **not** generic (for now):
   concrete spec types.
 - Content backing is a plain `String` on `Source` (the once-planned `SourceContent` trait
   was retired July 2026 as information-equivalent to `&str` — a UTF-8 mmap can be handed
-  in as text by the embedder; DESIGN_RATIONALE §3.1. The old mmap feasibility notes remain
+  in as text by the embedder; DESIGN_RATIONALE [§dd-dr:sources-and-spans]. The old mmap feasibility notes remain
   in `dev-docs/archive/SOURCE_ARCHITECTURE.md`).
 
 ---
@@ -1050,7 +1050,7 @@ FLM-defined).
 
 ---
 
-## 7. Naming (deltas to NAMING_STRATEGY.md)
+## 7. Naming (deltas to NAMING_STRATEGY.md) [§dd-arch:naming]
 
 Keep all existing decisions (no `Latex` prefixes, …; note July 2026 revisions: `ParsedArguments`
 over `Arguments`, spec argument lists over `ArgumentStructureSpec` — NAMING_STRATEGY.md), plus:
@@ -1072,7 +1072,7 @@ over `Arguments`, spec argument lists over `ArgumentStructureSpec` — NAMING_ST
 | Node ext types | `NodeExt` (uniform) + `CharsNodeExt`, `GroupNodeExt`, `CallableNodeExt`, … (bundled as `Lang::NodeExts`) | `GroupExt` (too vague), `NodeGroupExt` (wrong parse) |
 | Token-level command syntax | `TokenKind::Command`, `CommandRule` | `Macro` token kind, `MacroRules` ("command" per TeX lineage; scales to future non-escape syntaxes, unlike "escape") |
 | Comment syntax rule | `CommentRule` (start string; end-of-line terminated) | `CommentRules` |
-| Paragraph-break flag | `TokenRules::enable_multi_newline_paragraphs` | `paragraph_breaks`, `double_newline_paragraphs` (renamed July 2026: any run of 2+ newlines is one break; joined the `enable_*` family July 2026, DESIGN_RATIONALE §3.2) |
+| Paragraph-break flag | `TokenRules::enable_multi_newline_paragraphs` | `paragraph_breaks`, `double_newline_paragraphs` (renamed July 2026: any run of 2+ newlines is one break; joined the `enable_*` family July 2026, DESIGN_RATIONALE [§dd-dr:tokens]) |
 | Specials recognition | `Lang::scan_specials` → `SpecialsMatch` (name + spec); `TriggerChars` filter | `TokenRules::specials` string list |
 | Whitespace primitive | `skip_whitespace` (never consumes a `\n\s*\n` newline) | per-call-site inline logic |
 
@@ -1081,10 +1081,10 @@ exists on top is a bikeshed we can defer.
 
 ---
 
-## 8. The latexlike preset (S2)
+## 8. The latexlike preset (S2) [§dd-arch:latexlike]
 
 A module (`techy::latexlike`), not a separate crate. Core landed in Phase 7.5 (checkpoint
-decisions in DESIGN_RATIONALE §3.13); items are namespaced, not re-exported at the crate
+decisions in DESIGN_RATIONALE [§dd-dr:latexlike]); items are namespaced, not re-exported at the crate
 root. It provides:
 
 - `Latexlike` ZST implementing `Lang` with the three closed vocabularies (bare,
@@ -1106,7 +1106,7 @@ root. It provides:
   definition deltas (parse-level only, no TeX expansion) — waits for the standard
   spec-database phase.
 - The preset spec types (landed 7.6): `MacroSpec`/`SpecialsSpec` (declarative, preset
-  traceback vocabulary) and `EnvironmentSpec` — the §3.4 funnel wrapper over a dyn
+  traceback vocabulary) and `EnvironmentSpec` — the [§dd-dr:specs] funnel wrapper over a dyn
   `EnvironmentBehavior` (defaulted `arguments`/`body_state_delta`/`make_body_parser`) —
   driven by `BeginSpec`'s composition over the core building blocks
   (`read_rigid_name_group` + `parse_declared_arguments` + `EnvironmentBodyParser`).
@@ -1137,15 +1137,15 @@ hardcoded `TokenRules` value).
   (`SpecLookup` semantics deferred, see §11 point 6). Consolidate documents (§10) —
   ✅ done, July 2026 (stale docs archived to `dev-docs/archive/`; `NAMING_STRATEGY.md`
   rewritten per §7).
-- **Phase 1 — `source` + `error`.** Rewrite per §source; port the good tests from current
+- **Phase 1 — `source` + `error`.** Rewrite per [§dd-arch:source]; port the good tests from current
   `source.rs`; provenance, resolver, `LineIndex`, diagnostics types, recovery-token types.
   — ✅ done, July 2026. Origin type = plain defaulted parameter `Source<O: SourceOrigin>`
   with default `Option<String>` (`L::SourceOrigin` plugs in at Phase 3+); crate made
   `no_std`-friendly (core + alloc only, no file-backed resolver, principle 6);
   `SourceContent` kept as an enabling boundary
   (no mmap, `Source` stores `String`; the boundary was later retired — July 2026, Action
-  06, DESIGN_RATIONALE §3.1); diagnostics + `Recovery` policy landed here while
-  `TokenError`/recovery tokens move to Phase 2 with `Token`. See DESIGN_RATIONALE.md §3.1/§3.8.
+  06, DESIGN_RATIONALE [§dd-dr:sources-and-spans]); diagnostics + `Recovery` policy landed here while
+  `TokenError`/recovery tokens move to Phase 2 with `Token`. See DESIGN_RATIONALE.md [§dd-dr:sources-and-spans]/[§dd-dr:errors].
 - **Phase 2 — `token`.** `Span`, `Token`, `TokenKind`, `TokenReader` trait, `StdTokenReader`
   driven by a hardcoded-for-now `TokenRules` value; delimiter prefix table; exhaustive tokenizer
   tests (port pylatexenc's tokenizer test cases).
@@ -1155,34 +1155,34 @@ hardcoded `TokenRules` value).
   (recovery tokens, reader policy-free), and `StdTokenReader` with the `detect_*` scanning
   core; pylatexenc's tokenizer test suite ported/adapted (~30 tests). The `TokenReader<L>`
   *trait* moves to Phase 3 with `ParsingState<L>` — defining it against `&TokenRules` now
-  would sever the catcode escape hatch (§token stratum split); `StdTokenReader`'s inherent
+  would sever the catcode escape hatch ([§dd-arch:token] stratum split); `StdTokenReader`'s inherent
   `peek(&mut self, &TokenRules, &PrefixTable)` API is shaped to become the trait impl.
   Implementation decisions (uniform `post_space: Span` on `Token` with pylatexenc span
   conventions; maximal-run `Chars` tokens; `TokenRules::expecting_group_close` as the
   data-driven `$…$`/`$$…$$` disambiguator; `peek` → `Ok(None)` at EOF with trailing
-  whitespace untokenized) recorded in DESIGN_RATIONALE.md §3.2/§3.8.
+  whitespace untokenized) recorded in DESIGN_RATIONALE.md [§dd-dr:tokens]/[§dd-dr:errors].
   **Superseded in part (July 2026):** the Phase-2 token *model* (maximal-run `Chars`,
   `Macro`/`Specials`/`CommentStart` kinds, uniform `post_space`, `Ok(None)` at EOF, S0
   scanning core) was reworked in Phase 3 following the token-design review —
-  DESIGN_RATIONALE.md §3.2. The scanning machinery (prefix table, group logic, recovery,
+  DESIGN_RATIONALE.md [§dd-dr:tokens]. The scanning machinery (prefix table, group logic, recovery,
   span conventions, test corpus) carried over.
 - **Phase 3 — `state` + token rework (merged).** — ✅ done, July 2026. Ships `Lang` (with
   the `scan_specials`/`specials_trigger_chars` token hooks; `NodeExts` waits for Phase 5),
   `ParsingState`/`StateData` (rules + ext; `libraries` waits for Phase 4),
   `ParsingStateDelta` + `TokenRulesOverrides` + `derived()` + `Lang::finalize_transition`
   (test langs exercising events and the pure-normalization override idiom), and the
-  reworked token module per §token: S1 `Token<'s, L>` with
+  reworked token module per [§dd-arch:token]: S1 `Token<'s, L>` with
   `Char`/`Command`/`Specials`/`Comment`/`ParagraphBreak`/`EndOfStream`, `CommandRule`/
   `CommentRule`, the `skip_whitespace` primitive, the `TokenReader<L>` trait +
   `StdTokenReader`, and the `CallableSpec<L>` trait declaration (stub; fleshed out in
-  Phase 4). Derived caches built eagerly at freeze (no_std — DESIGN_RATIONALE.md §3.3);
+  Phase 4). Derived caches built eagerly at freeze (no_std — DESIGN_RATIONALE.md [§dd-dr:parsing-state]);
   `Span` relocated to `source`.
 - **Phase 4 — `spec` + `library`.** `CallableSpec` (de-keyed), `StdCallableSpec`,
   `ArgumentStructureSpec` + `SlotStructureSpec`, `CallableTypeId` interning,
   `Library`/`LibraryStack`/`SpecLookup` + per-type unknown-fallback policy.
   — ✅ done, July 2026. The deferred `SpecLookup` semantics were settled first
   (`CallableQuery` with `CallableSyntax` + optional token; fallbacks built into
-  `LibraryStack`; DESIGN_RATIONALE.md §3.4). `StateData.libraries` +
+  `LibraryStack`; DESIGN_RATIONALE.md [§dd-dr:specs]). `StateData.libraries` +
   `ParsingStateDelta::push_libraries` landed with it. Deliberately deferred to Phase 6,
   with their consumers: the full argument-kind inventory and slot
   separators/terminators (Phase 4 ships skeletons), `invocation_parser()`, and
@@ -1190,25 +1190,25 @@ hardcoded `TokenRules` value).
   `Language<L>` exists). *(Amended July 2026, current-level review: `ArgumentKind` and the
   structure-spec wrappers replaced by the pylatexenc-shaped `ArgumentSpec<L>` model; both
   `…TypeId`s became closed `Lang` associated types — interning cancelled. DESIGN_RATIONALE
-  §3.4.)*
+  [§dd-dr:specs].)*
 - **Phase 5 — `node`.** Flat `NodeTree`, `NodeKind<L>`/`CallableData`, `TextContent`, ext
   bundle (`NodeExtTypes`, `SimpleLang`), `NodeRef`, builder used by the session;
   `materialize()`.
   — ✅ done, July 2026. The deferred args/slots ↔ children encoding was settled first
   (**one node per region**: one child per present argument, one `List` child per slot;
   presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout` —
-  DESIGN_RATIONALE.md §3.5). Ships the topic as designed, plus: node spans stay mandatory
+  DESIGN_RATIONALE.md [§dd-dr:nodes]). Ships the topic as designed, plus: node spans stay mandatory
   (synthetic-node span representation deferred to the transform API, post-Phase-6); a
   *staging* `NodeTreeBuilder` whose `finish()` lays siblings out contiguously breadth-first
-  (direct arena emission can't — §3.5); `TextContent` housed in the source topic (S0), no
+  (direct arena emission can't — [§dd-dr:nodes]); `TextContent` housed in the source topic (S0), no
   `PartialEq` on it or on node types yet. Per-instance syntax records and possible `Comment`
-  recomposition fields grow with their consumers in Phase 6 (DESIGN_RATIONALE.md §6.5).
+  recomposition fields grow with their consumers in Phase 6 (DESIGN_RATIONALE.md [§dd-dr:open-questions]).
   *(Amended July 2026, current-level review: `ArgsLayout`/`SlotsLayout` replaced by
   pylatexenc-shaped `ParsedArguments`/`ParsedSlots`; `Group` grew a boxed `GroupData` with
   on-node delimiters. Amended again July 2026, regions session: one child *region* per
   argument/slot — inter-argument noise kept as nodes, `pre_space` removed,
   parser-designated content ranges (`ChildRegion`/`ContentNodes`), two-phase records
-  resolved to global node indices by `finish()`. DESIGN_RATIONALE §3.5.)*
+  resolved to global node indices by `finish()`. DESIGN_RATIONALE [§dd-dr:nodes].)*
 - **Phase 6 — `constructs` + engine core.** Execution plan: **Phase6Execution.md** (July
   2026, Phase 6 plan session; supersedes the preliminary notes). Scope as amended there:
   `ParseContext` + `ConstructParser`/`ConstructParserResult` (parsers are temporaries —
@@ -1221,7 +1221,7 @@ hardcoded `TokenRules` value).
   pinned + `check_tree_invariants()`. **`Language<L>` and any `parse()` convenience are
   deferred** — `ParserSession` is the root object. End-to-end tests on LaTeX-ish snippets
   under test langs (the real preset is Phase 7).
-  DESIGN_RATIONALE §3.2/§3.5/§3.6/§3.8/§3.10.
+  DESIGN_RATIONALE [§dd-dr:tokens]/[§dd-dr:nodes]/[§dd-dr:parsers-engine]/[§dd-dr:errors]/[§dd-dr:naming].
   — ✅ done, July 2026 (subphases 6.0–6.7; per-subphase record in Phase6Execution.md's
   progress table, amendments in the DESIGN_RATIONALE sections above). Ships the full scope
   as amended in execution: the dispatch loop with all arms + detection-site tolerant
@@ -1235,7 +1235,7 @@ hardcoded `TokenRules` value).
   Deferred as planned (Phase6Execution.md §4): `Language<L>`/`parse()`, verbatim +
   preset one-liner specs and the `\begin` composition's home (test-side meanwhile),
   content-extraction views; the per-invocation-`Box`
-  benchmark check is consciously deferred, not dropped (DESIGN_RATIONALE §3.6). Post-6.6
+  benchmark check is consciously deferred, not dropped (DESIGN_RATIONALE [§dd-dr:parsers-engine]). Post-6.6
   sessions already amended the shipped shape in place (slots session: `SlotSpec` deleted,
   composition building blocks promoted `pub`; emptiness surface; condition-derive;
   temporary state-scoped group rules — `TokenRules::temporary_groups`, July 2026 — with
@@ -1252,11 +1252,11 @@ hardcoded `TokenRules` value).
   extraction/view API (R7); ported pylatexenc walker acceptance tests + tolerant-parsing
   behavior tests. **Deferred out of Phase 7:** the std spec-database port, parse-level
   `\newcommand`, `^`/`_` specials, `\global` definitions.
-  DESIGN_RATIONALE §3.3/§3.4/§3.6.
+  DESIGN_RATIONALE [§dd-dr:parsing-state]/[§dd-dr:specs]/[§dd-dr:parsers-engine].
   — ✅ done, July 2026 (subphase record: Phase7Execution.md §5; exits with the 7.9
   acceptance suite — the ported walker slice green in both recovery modes with
   `check_tree_invariants` on every parse — plus the `docs/learn-by-example.md` guide
-  chapter. The §6.7 per-invocation-`Box` micro-benchmark obligation remains open,
+  chapter. The [§dd-dr:open-questions] per-invocation-`Box` micro-benchmark obligation remains open,
   unscheduled.)
 - **Phase 8 — FLM spike.** Minimal `Flm` lang in a scratch crate exercising: custom `StateExt`,
   custom node payloads, custom invocation parser, resolver, post-processing traversal. This
@@ -1276,7 +1276,7 @@ Too many overlapping documents; several are stale or superseded. Proposal:
 `DEVELOPMENT.md`, `PARSING_STRATEGY.md` (its decisions are absorbed here),
 `pylatexenc_to_rust_strategy.md` and `PROPOSALS.md` (keep accessible as pylatexenc feature
 inventory + TeX gap analysis); `SOURCE_ARCHITECTURE.md` — ✅ archived July 2026, its surviving
-content folded into §source/§nodes/§engine here and DESIGN_RATIONALE.md §3.1/§3.5 (superseded parts: the
+content folded into [§dd-arch:source]/[§dd-arch:nodes]/[§dd-arch:engine] here and DESIGN_RATIONALE.md [§dd-dr:sources-and-spans]/[§dd-dr:nodes] (superseded parts: the
 `SharedPointer` GAT by Decision 4, `FLMEnvironment` naming by Decision 2, its open-ended
 generic-node-data sketch by Decision 3's ext system).
 
@@ -1299,7 +1299,7 @@ not obvious.
    overrides-struct (+ `L::Event`s) as the reified change value; `derived()` as the sole
    constructor of non-initial states; `Lang::finalize_transition` as the customizer for
    cross-cutting rules. Replaces the per-facet trait + macro design in earlier source tree.
-   (Design: §state. Rationale, including rejected Options A and B: §4.)
+   (Design: [§dd-arch:state]. Rationale, including rejected Options A and B: §4.)
 2. **RESOLVED (July 2026): naming.** `Lang` trait + `Language<L>` runtime object (dropping
    `FLMEnvironment` and `LanguageSpecification`). (§7)
 3. **RESOLVED (July 2026): unified `Callable` node kind + two-tier ext + `TextContent`
@@ -1309,7 +1309,7 @@ not obvious.
    singletons; owned names, `TextContent` content, `post_space` kept; args/slots as two named
    concepts over shared machinery; whitespace-as-chars-nodes + exact sibling-span partition;
    recomposition levels 1+2 as stated requirements constraining `ParsedArguments`. **No core `MathNode`** (math =
-   group types + preset state ext). (Design: §specs/§nodes. Rationale: §4b.)
+   group types + preset state ext). (Design: [§dd-arch:specs]/[§dd-arch:nodes]. Rationale: §4b.)
 4. **RESOLVED (July 2026): defer `Rc`/`Arc` genericity**; `Arc` behind an internal alias
    for now. (§5)
 5. ✅ **DECIDED (July 2026): zero mandatory dependencies.** Drop `thiserror` (hand-written
@@ -1320,14 +1320,14 @@ not obvious.
    **Amended (July 2026, performance review):** a dependency may be added in very specific,
    exceptional cases, for widely used, lightweight, `no_std`-capable crates — decided case by
    case. First (and so far only) instance: `hashbrown` (the implementation inside std's own
-   `HashMap`), backing the engine's derivation memo (DESIGN_RATIONALE.md §3.6); `no_std` has
+   `HashMap`), backing the engine's derivation memo (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]); `no_std` has
    no `std::collections::HashMap`, and a hand-rolled map would be worse on every axis.
 6. **RESOLVED (July 2026): no `ConflictStrategy`** — library resolution = ordered
    stack with lexical shadowing, no built-in mode tables. The deferred `SpecLookup`
    semantics were settled in the Phase 4 design session (July 2026): `CallableQuery`-based
    lookup (explicit `CallableSyntax`, optional token, mode-awareness via the state
    argument) with per-`CallableTypeId` fallbacks built into `LibraryStack`.
-   (§specs; rationale in DESIGN_RATIONALE.md §3.4.)
+   ([§dd-arch:specs]; rationale in DESIGN_RATIONALE.md [§dd-dr:specs].)
 7. **RESOLVED (July 2026): rebuild `src/` phase-by-phase** per §9 rather than repairing the
    current tree in place (salvaging: prefix-table logic, `detect_*` decomposition, recovery
    tokens, source tests, line-index logic).
@@ -1338,9 +1338,9 @@ not obvious.
    `&ParsingState<L>` parameter (escape-hatch access to `L::StateExt`); `Lang` +
    `NodeExtTypes` are defined in the core next to the state types, not in `engine/` or
    `node/`; `Language<L>` participates only by seeding the initial state. (Design: §3.
-   Rationale: DESIGN_RATIONALE.md §3.11.) *Revised July 2026: the token topic — originally
+   Rationale: DESIGN_RATIONALE.md [§dd-dr:crates].) *Revised July 2026: the token topic — originally
    split S0 data / S1 trait — moved wholly to S1, and `Span` to the source topic
-   (token-design review; DESIGN_RATIONALE.md §3.2).*
+   (token-design review; DESIGN_RATIONALE.md [§dd-dr:tokens]).*
 9. **DECIDED (July 2026, Phase 7 plan session): `ParseDriver` + first-class parsing mode +
    scope-stack redesign.** Parse-driving behavior (construct-parser provision, the group
    descent-delta channel, recovery policy, and the migrated hooks `resolve_command` /
@@ -1350,4 +1350,4 @@ not obvious.
    initiate mode changes; `finalize_transition` interprets them).
    `Library`/`LibraryStack`/`SpecLookup` are redesigned as `Package`/`Scope`/`ScopeStack`
    over a dyn `SpecsProvider` contract with in-stack fallbacks and definition/stack delta
-   ops. (Plan: Phase7Execution.md. Rationale: DESIGN_RATIONALE.md §3.3/§3.4/§3.6.)
+   ops. (Plan: Phase7Execution.md. Rationale: DESIGN_RATIONALE.md [§dd-dr:parsing-state]/[§dd-dr:specs]/[§dd-dr:parsers-engine].)

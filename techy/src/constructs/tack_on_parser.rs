@@ -6,7 +6,7 @@
 //! Used as a callable's **last declared argument** (the FLM `label_arg` precedent):
 //! attachment is the argument's region — the whole absorption happens at parse time
 //! inside the invocation's own parse, per the decided construct-parser (not
-//! postprocessing) ruling (DESIGN_RATIONALE.md §3.6). The parser is configured with
+//! postprocessing) ruling (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]). The parser is configured with
 //! the accepted field commands by **name**; a peeked
 //! [`Command`](TokenKind::Command) token whose name is configured dispatches with the
 //! configured [`CallableSpec`] directly — the scope stack is never consulted, so a
@@ -43,7 +43,7 @@
 //! number of times (multiple `\label`s after a `\section`). A repeated
 //! non-repeatable field diagnoses [`RepeatedTackOnField`] — and, tolerant, the field
 //! is **still parsed and kept** in the region (diverging from pylatexenc's
-//! parse-and-discard: techy trees keep every byte, §3.5) — consumers see the
+//! parse-and-discard: techy trees keep every byte, [§dd-dr:nodes]) — consumers see the
 //! diagnostic and the record.
 //!
 //! Whitespace and comments **between** fields are scanned as region noise (decided

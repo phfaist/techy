@@ -73,7 +73,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     }
 
     /// The exact original text of this node — level-1 verbatim recomposition
-    /// (ARCHITECTURE.md §nodes): never needs an external lookup, works for detached and
+    /// (ARCHITECTURE.md [§dd-arch:nodes]): never needs an external lookup, works for detached and
     /// mixed-origin trees.
     pub fn span_content(&self) -> &'t str {
         self.data().span.content()

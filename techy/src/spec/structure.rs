@@ -74,7 +74,7 @@ pub struct ParsedArgumentNodes {
 /// [`MarkerArgumentParser`](crate::constructs::MarkerArgumentParser),
 /// [`ExpressionParser`](crate::constructs::ExpressionParser).
 ///
-/// **Noise ownership** (decided July 2026, regions session; DESIGN_RATIONALE.md §3.5):
+/// **Noise ownership** (decided July 2026, regions session; DESIGN_RATIONALE.md [§dd-dr:nodes]):
 /// an argument parser owns its argument's *entire* region, leading noise included — it
 /// scans whitespace and comments itself (typically via the standard noise-scan helper,
 /// Phase 6) and stages them as ordinary nodes (comment nodes, whitespace-only `Chars`
@@ -107,7 +107,7 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
     /// (the builder drops them). Whether absence is an error is the parser's own
     /// policy: an optional argument stays silent, a mandatory one records its
     /// diagnostic (tolerant) or aborts (strict) at this detection site
-    /// (DESIGN_RATIONALE.md §3.8) before reporting absent. There is deliberately no
+    /// (DESIGN_RATIONALE.md [§dd-dr:errors]) before reporting absent. There is deliberately no
     /// after-effect delta channel: an argument scopes no state beyond its own extent.
     fn parse_argument(
         &self,

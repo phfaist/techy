@@ -75,7 +75,7 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    violation returns an `Err`, it does not panic. Panics are allowed only for verifiably
    unreachable invariants (`unreachable!`/`expect` with the invariant stated), plus the
    explicitly approved indexing-style accessors that have non-panicking `get` companions.
-   Full policy: DESIGN_RATIONALE.md §3.8 ("Panic policy"). New exceptions need explicit
+   Full policy: DESIGN_RATIONALE.md [§dd-dr:panic-policy]. New exceptions need explicit
    user approval.
 5. **Always check naming strategy** before suggesting names
 6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in `dev-docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)

@@ -1,24 +1,24 @@
-//! [`NodesParser`]: the main content dispatch loop (ARCHITECTURE.md §constructs), with
+//! [`NodesParser`]: the main content dispatch loop (ARCHITECTURE.md [§dd-arch:constructs]), with
 //! its stop machinery ([`StopSpec`], [`TokenStopCondition`], [`StopCause`]).
 //!
 //! The parser peeks one token at a time and dispatches on its kind — never on parser
-//! registries (§2.6). The content arms (6.2) cover chars accumulation, paragraph breaks
+//! registries ([§dd-dr:deterministic-dispatch]). The content arms (6.2) cover chars accumulation, paragraph breaks
 //! (via [`ParseDriver::make_paragraph_break_node`]), comments, and end of stream. The
 //! `GroupOpen` arm (6.3) descends: it resolves the interior's base state through the
 //! per-use [`ChildStateSpec`] policy, consumes the trigger token, and runs a
 //! [`GroupParser`] under the policy's state (structural swap/revert). The
 //! `Command`/`Specials` invocation arms (6.4) descend the same way: a `Command` token
 //! resolves through [`ParseDriver::resolve_command`] under the loop's own state (resolution
-//! precedes the descent policy — §3.6), a `Specials` token carries its resolution; the
+//! precedes the descent policy — [§dd-dr:parsers-engine]), a `Specials` token carries its resolution; the
 //! arm consumes the trigger whole, builds the [`Invocation`], and runs the parser
 //! returned by the spec's
 //! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
 //! factory under the policy's state. The state delta an invocation parser returns is
 //! the invocation's after-effect for subsequent siblings (`\newcommand`), applied to
 //! the loop's own state session-mediated (`cx.session.derived_state(…)` —
-//! DESIGN_RATIONALE.md §3.6).
+//! DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 //!
-//! # Whitespace and span invariants (DESIGN_RATIONALE.md §3.5, pinned)
+//! # Whitespace and span invariants (DESIGN_RATIONALE.md [§dd-dr:nodes], pinned)
 //!
 //! 1. `Char` tokens accumulate into **maximal** `Chars` nodes; every token's `pre_space`
 //!    (content whitespace) joins the pending run, and pending whitespace with no
@@ -36,14 +36,14 @@
 //!
 //! # Stop conditions and the position seam
 //!
-//! A [`StopSpec`] carries two independent triggers (decided July 2026, §3.6): a *token*
+//! A [`StopSpec`] carries two independent triggers (decided July 2026, [§dd-dr:parsers-engine]): a *token*
 //! condition tested on peek — a match ends the parse and, per the condition's
 //! [`consume`](TokenStopCondition::consume) switch, either leaves the token unconsumed
 //! for the caller or consumes it here — and a *node* condition tested after each staged
 //! node — a match includes that node and stops after it. Conditions are tested only at
 //! this parser's own nesting level (a nested group is consumed whole by the group
 //! parser). Abnormal endings are **data**, not errors: the parser reports its
-//! [`StopCause`] and the caller decides (§3.8 rule 2) — an unexpected group close stays
+//! [`StopCause`] and the caller decides ([§dd-dr:panic-policy] rule 2) — an unexpected group close stays
 //! unconsumed.
 //!
 //! On *any* return the stop token's pre-space is first flushed into the sibling nodes
@@ -55,13 +55,13 @@
 //! reported in [`StopCause::TokenCondition`] either way.
 //!
 //! When the two triggers collide — the pre-stop flush stages a node the node condition
-//! would match — the token condition wins outright (§3.6): that flush does **not**
+//! would match — the token condition wins outright ([§dd-dr:parsers-engine]): that flush does **not**
 //! consult the node predicate. Its answer could change nothing (the parse ends as
 //! `TokenCondition` either way; honoring it would instead leave a `consume = true` token
 //! unconsumed, breaking the flag's atomicity), and the predicate is a stateful `FnMut`
 //! that must not observe a consulted-but-ignored call.
 //!
-//! # Recovery (DESIGN_RATIONALE.md §3.8)
+//! # Recovery (DESIGN_RATIONALE.md [§dd-dr:errors])
 //!
 //! Recovery happens where a problem is detected, through the session's policy helper.
 //! Tokenizer errors continue with their [`TokenRecovery`](crate::token::TokenRecovery)
@@ -97,7 +97,7 @@ use super::{
 /// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
 /// [`Resolved`](crate::engine::CommandResolution::Resolved)) — the content loop recovers
-/// with a span-backed chars fallback (DESIGN_RATIONALE.md §3.8).
+/// with a span-backed chars fallback (DESIGN_RATIONALE.md [§dd-dr:errors]).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.nodes_parser.unresolvable-command")]
@@ -131,7 +131,7 @@ impl fmt::Display for UnresolvableCommand {
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)
 /// returned [`Failed`](crate::engine::CommandResolution::Failed)) — as opposed to a
 /// clean miss ([`UnresolvableCommand`]). The content loop recovers the same way (a
-/// span-backed chars fallback, DESIGN_RATIONALE.md §3.8), but the distinct condition
+/// span-backed chars fallback, DESIGN_RATIONALE.md [§dd-dr:errors]), but the distinct condition
 /// lets tooling tell "command unknown" from "resolver broken" (mirrors the
 /// [`ScopeOpFailed`](crate::constructs::ScopeOpFailed) precedent for operational
 /// scope-op failures).
@@ -244,7 +244,7 @@ pub enum TokenStopKind<'p, L: Lang> {
     /// non-matching close surfaces as [`StopCause::UnexpectedGroupClose`] instead.
     ///
     /// The class is not carried on the token — `GroupClose` holds only its `delim`
-    /// (DESIGN_RATIONALE.md §3.5) — so it is re-resolved against `cx.state`, the same
+    /// (DESIGN_RATIONALE.md [§dd-dr:nodes]) — so it is re-resolved against `cx.state`, the same
     /// state (including sibling deltas applied so far) the tokenizer used to emit the
     /// token; a reclassifying delta is therefore reflected here.
     GroupClose {
@@ -257,7 +257,7 @@ pub enum TokenStopKind<'p, L: Lang> {
     /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
     ParagraphBreak,
     /// Stop at any token matching the predicate. Programmatic conditions live only in
-    /// tier-2 parser temporaries, never in spec data (DESIGN_RATIONALE.md §2.1).
+    /// tier-2 parser temporaries, never in spec data (DESIGN_RATIONALE.md [§dd-dr:data-vs-traits]).
     Predicate(&'p dyn Fn(&Token<'_, L>) -> bool),
 }
 
@@ -282,7 +282,7 @@ pub struct TokenStopCondition<'p, L: Lang> {
 /// What ends a [`NodesParser`] run — both triggers optional and independent.
 ///
 /// The `'p` lifetime ties borrowed conditions (names, predicates) to the parser
-/// temporary — construct parsers are free to borrow (two-tier ownership model, §3.6).
+/// temporary — construct parsers are free to borrow (two-tier ownership model, [§dd-dr:parsers-engine]).
 pub struct StopSpec<'p, L: Lang> {
     /// Token condition, tested on peek; a match ends the parse, consuming the token or
     /// leaving it per its [`consume`](TokenStopCondition::consume) switch.
@@ -292,8 +292,8 @@ pub struct StopSpec<'p, L: Lang> {
     /// it. Not consulted on the final flush a matched token condition triggers — the
     /// token condition wins outright (see the module docs on the position seam). The
     /// (count, last node) signature is a deliberate deviation from pylatexenc's
-    /// whole-nodelist rescans (§3.6).
-    // The decided signature (DESIGN_RATIONALE.md §3.6); an alias would only rename it.
+    /// whole-nodelist rescans ([§dd-dr:parsers-engine]).
+    // The decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]); an alias would only rename it.
     #[allow(clippy::type_complexity)]
     pub node: Option<&'p mut dyn FnMut(usize, StagedNodeView<'_, L>) -> bool>,
 }
@@ -339,7 +339,7 @@ pub struct StrayGroupClose {
 
 /// How a [`NodesParser`] run ended. Abnormal endings are **data**, not errors — only the
 /// caller knows whether reaching end of input before `\end{align}` is a problem
-/// (DESIGN_RATIONALE.md §3.8 rule 2).
+/// (DESIGN_RATIONALE.md [§dd-dr:panic-policy] rule 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopCause {
     /// The token stop condition matched. `span` is the matched token's span; whether it
@@ -359,7 +359,7 @@ pub enum StopCause {
     EndOfInput,
     /// A group close no condition asked for; the close token is left unconsumed at
     /// `span.start` and the caller decides (diagnose-and-skip at the root, unwind in a
-    /// group parser — §3.8). The span covers the delimiter exactly as matched
+    /// group parser — [§dd-dr:errors]). The span covers the delimiter exactly as matched
     /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
     /// and nothing more), so a caller diagnosing the close slices it from the source —
     /// re-peeking under any state but the loop's own could tokenize different bytes.
@@ -380,7 +380,7 @@ pub struct NodesOutcome<L: Lang> {
     /// after-effect deltas applied so far. A caller that resumes content at the stop
     /// position (the root's tolerant stray-close skip) continues under this state —
     /// resuming under its own copy of the entry state would silently roll those
-    /// after-effects back (DESIGN_RATIONALE.md §3.8).
+    /// after-effects back (DESIGN_RATIONALE.md [§dd-dr:errors]).
     pub state: Arc<ParsingState<L>>,
 }
 
@@ -511,7 +511,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// [`flush_through`](Self::flush_through) minus the node-condition test: the flush
     /// performed when the token stop condition has matched. The stop token's pre-space
     /// is interior content and must land in a sibling node (partition invariant), but
-    /// the token condition has already ended the parse and wins outright (§3.6): a
+    /// the token condition has already ended the parse and wins outright ([§dd-dr:parsers-engine]): a
     /// node-condition match here could not change the outcome, and honoring it instead
     /// would leave a `consume = true` stop token unconsumed, forfeiting the consume
     /// flag's atomicity guarantee. The predicate is a stateful `FnMut`, so even a
@@ -601,7 +601,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// The shared tolerant recovery of the not-yet-wired arms (`Command` until
     /// resolution dispatch lands in 6.4, `Specials` likewise, plus recovery-placeholder
-    /// `GroupOpen` tokens) — and the decided unresolvable-command recovery (§3.8):
+    /// `GroupOpen` tokens) — and the decided unresolvable-command recovery ([§dd-dr:errors]):
     /// flush, record the condition (or abort under strict), consume the token, and stage
     /// a chars fallback node over its full span. For a `Command` token the span includes
     /// its post-space, which the fallback deliberately swallows (consuming the token
@@ -633,7 +633,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     /// Dispatch a resolved invocation (the `Command`/`Specials` arms): resolve the
     /// descent base state through the [`invocation`](ChildStateSpec::invocation) policy
     /// (resolution already ran under the loop's own state — resolution precedes policy,
-    /// §3.6), consume the trigger token **whole** (syntactic post-space included —
+    /// [§dd-dr:parsers-engine]), consume the trigger token **whole** (syntactic post-space included —
     /// mirroring the `GroupOpen` arm, so loop progress holds by construction), run the
     /// spec's invocation parser under the policy state (structural swap/revert), record
     /// the staged node, and apply the parser's after-effect delta to the loop's own
@@ -651,7 +651,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             InvocationChildState::Compute(compute) => compute(&cx.state, &invocation),
         };
         // The invocation's traceback frame — built before the `Invocation` moves into
-        // the factory, pushed around the parser run (the dispatch push site, §3.8).
+        // the factory, pushed around the parser run (the dispatch push site, [§dd-dr:errors]).
         let frame = invocation_frame(cx, &invocation);
         cx.tokens.move_past(invocation.token, true);
         // The parser comes from the driver's interception seam (default: the spec's
@@ -664,7 +664,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         self.nodes.push(id);
         if let Some(delta) = delta {
             // The after-effect applies to the loop's own state, not the policy base
-            // (decided semantics 4, §3.6 — §3.3's outward propagation blesses applying
+            // (decided semantics 4, [§dd-dr:parsers-engine] — [§dd-dr:parsing-state]'s outward propagation blesses applying
             // a delta to a base the producer never saw).
             cx.state = cx.derived_state(&delta)?;
         }
@@ -706,7 +706,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                         }
                         Some(recovery) => {
                             // The lift boxes the built-in token conditions and unwraps
-                            // a `Custom` payload (never double-boxed) — §3.8.
+                            // a `Custom` payload (never double-boxed) — [§dd-dr:errors].
                             cx.recover_boxed(kind.clone().into_condition(), span.clone())?;
                             // The recovery arm is the one arm that consumes no token,
                             // so loop progress rests entirely on the resume position
@@ -768,7 +768,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
 
                 TokenKind::GroupClose { .. } => {
                     // A close the stop condition did not ask for: report it as data and
-                    // let the caller decide (§3.8 rule 2); the token stays unconsumed.
+                    // let the caller decide ([§dd-dr:panic-policy] rule 2); the token stays unconsumed.
                     let fired = self.flush_through(cx, token.pre_space)?;
                     if !recovered {
                         cx.tokens.move_to(&token, false);
@@ -822,7 +822,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                 TokenKind::Command { name, escape_char, .. } => {
                     // Resolution runs under the loop's own state — coherent with the
                     // state that tokenized the token (resolution precedes policy,
-                    // §3.6). A recovery placeholder is never dispatched: its site
+                    // [§dd-dr:parsers-engine]). A recovery placeholder is never dispatched: its site
                     // already diagnosed it, and a token with no real bytes behind it
                     // cannot be consumed by the arm (no detail: the hook never ran).
                     let resolved = if recovered {
@@ -853,7 +853,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             }
                         }
                         CommandResolution::Unresolved { detail } => {
-                            // Unresolvable command (§3.8): diagnostic plus span-backed
+                            // Unresolvable command ([§dd-dr:errors]): diagnostic plus span-backed
                             // chars fallback.
                             let condition =
                                 UnresolvableCommand::new(*name, *escape_char, detail);
@@ -865,7 +865,7 @@ impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
                             }
                         }
                         CommandResolution::Failed { detail } => {
-                            // Operational resolver failure (§3.8): a distinct condition
+                            // Operational resolver failure ([§dd-dr:errors]): a distinct condition
                             // from a clean miss, same span-backed chars recovery.
                             let condition =
                                 CommandResolutionFailed::new(*name, *escape_char, detail);
@@ -1386,7 +1386,7 @@ mod tests {
             .collect()
     }
 
-    /// The partition invariant (§3.5, invariant 5): the root's children tile `interior`
+    /// The partition invariant ([§dd-dr:nodes], invariant 5): the root's children tile `interior`
     /// exactly — no gaps, no double counting.
     fn assert_partition<L: Lang>(result: &ParseResult<L>, interior: core::ops::Range<usize>) {
         let mut pos = interior.start;
@@ -1939,7 +1939,7 @@ mod tests {
         let mut reader = StdTokenReader::new("ab#cd");
         let err =
             try_run("ab#cd", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
-        // The token error was lifted into the structured condition (§3.8): compare
+        // The token error was lifted into the structured condition ([§dd-dr:errors]): compare
         // identifier and downcast fields (no PartialEq on the carriers).
         assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
         assert_eq!(
@@ -2006,7 +2006,7 @@ mod tests {
         assert_eq!(err.span().range(), 0..1);
     }
 
-    // --- TokenErrorKind::Custom (§3.8: one extension mechanism serves both layers) --------
+    // --- TokenErrorKind::Custom ([§dd-dr:errors]: one extension mechanism serves both layers) --------
 
     /// A language-defined token condition, carried by `TokenErrorKind::Custom`.
     #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
@@ -2094,7 +2094,7 @@ mod tests {
         let parsed =
             try_run("ab \\", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
         // The placeholder is a Char covering the dangling escape byte: it joins the
-        // pending chars run, so the recovery is partition-clean (§3.8) — the escape
+        // pending chars run, so the recovery is partition-clean ([§dd-dr:errors]) — the escape
         // byte stays in the tree, accompanied by its diagnostic.
         assert_eq!(shapes(&parsed.result), ["chars 0..4 \"ab \\\\\""]);
         assert_eq!(parsed.stop, StopCause::EndOfInput);
@@ -2118,7 +2118,7 @@ mod tests {
         );
     }
 
-    // --- unresolvable-command recovery (§3.8) ---------------------------------------------
+    // --- unresolvable-command recovery ([§dd-dr:errors]) ---------------------------------------------
 
     #[test]
     fn unresolved_command_recovers_as_a_chars_fallback() {
@@ -2342,7 +2342,7 @@ mod tests {
         );
     }
 
-    // --- ParseDriver::refine_diagnostic (§3.8) ----------------------------------------------
+    // --- ParseDriver::refine_diagnostic ([§dd-dr:errors]) ----------------------------------------------
 
     /// The refinement demonstration's own condition: structured, so tools see it — not
     /// just better prose.
@@ -2625,7 +2625,7 @@ mod tests {
 
     #[test]
     fn takeover_parser_reads_raw_tokens_stages_custom_shape_and_returns_a_delta() {
-        // The full-takeover escape hatch (§3.6, the C6 obligation): an overridden
+        // The full-takeover escape hatch ([§dd-dr:parsers-engine], the C6 obligation): an overridden
         // factory returns a custom parser that consumes tokens up to a `!` marker —
         // markup included, no group descent — stages its own node shape (an untyped
         // group holding the raw chars), and returns a tokenization-affecting delta
@@ -2725,11 +2725,11 @@ mod tests {
 
     #[test]
     fn finalize_node_populates_callable_ext_through_the_dispatch_loop() {
-        // FLM pattern rehearsal (§3.6): the builder-run hook sees every staged
+        // FLM pattern rehearsal ([§dd-dr:parsers-engine]): the builder-run hook sees every staged
         // `Callable`, downcasts `data.spec` to the concrete spec type (the `Any`
         // supertrait contract, Action-05), and attaches derived data as its per-kind
         // ext. A preset dispatching on an *open* set of spec types funnels them
-        // through one concrete wrapper first (DESIGN_RATIONALE.md §3.4).
+        // through one concrete wrapper first (DESIGN_RATIONALE.md [§dd-dr:specs]).
         struct ExtBundle;
         impl NodeExtTypes for ExtBundle {
             type NodeExt = ();
@@ -2973,7 +2973,7 @@ mod tests {
 
     #[test]
     fn stop_conditions_are_not_consulted_inside_a_group() {
-        // Conditions are tested only at the parser's own nesting level (§3.6): the
+        // Conditions are tested only at the parser's own nesting level ([§dd-dr:parsers-engine]): the
         // `\end` inside the group is the *interior* parser's business (here the
         // 6.4-pending unresolvable-command recovery), never an outer stop.
         let st = state();
@@ -3026,7 +3026,7 @@ mod tests {
         // `[`/`]` shares class GT_BRACE. Inside the `{` group, the `]` matches neither
         // the expected close spelling nor rules it out by class alone: the interior
         // reports it as data, the group parser diagnoses and closes *without consuming*
-        // (unwinding — every level consumes or unwinds, §3.6), and the stray close then
+        // (unwinding — every level consumes or unwinds, [§dd-dr:parsers-engine]), and the stray close then
         // surfaces at this level, still unconsumed, for the root driver to adjudicate.
         let mut r = rules::<TestLang>();
         r.groups.push(Arc::new(GroupRule {
@@ -3068,7 +3068,7 @@ mod tests {
 
     #[test]
     fn root_driver_skips_a_stray_close_and_continues() {
-        // The root always consumes (§3.6): `UnexpectedGroupClose` is data, and the
+        // The root always consumes ([§dd-dr:parsers-engine]): `UnexpectedGroupClose` is data, and the
         // *root driver* — here the test; the core `Language::parse` entry drives this
         // same loop since Phase 7.4 — diagnoses, skips the token, and resumes. The
         // skipped byte is dropped from the tree: an accepted tolerant byte-accounting
@@ -3076,7 +3076,7 @@ mod tests {
         // applied to.
         //
         // The condition here is deliberately the driver's own, third-party style
-        // (§3.8): a custom root driver defines its diagnoses like any downstream
+        // ([§dd-dr:errors]): a custom root driver defines its diagnoses like any downstream
         // language would (or reuses the core `StrayGroupClose`, which is what
         // `Language::parse` reports).
         #[derive(Debug, Clone, DiagnosticInfo)]
@@ -3145,7 +3145,7 @@ mod tests {
 
     #[test]
     fn child_state_fixed_reverts_group_interiors_to_the_outer_state() {
-        // The chars-except-groups motivating case (§3.6): a restricted outer state
+        // The chars-except-groups motivating case ([§dd-dr:parsers-engine]): a restricted outer state
         // (comments disabled) whose group interiors revert to the full state. Std
         // reader only: a pre-scanned list cannot see the interior reclassification.
         let full = state();
@@ -3268,7 +3268,7 @@ mod tests {
 
     #[test]
     fn observe_transition_fires_per_descent_finalize_once_per_derivation() {
-        // The two-level transition doctrine (§3.6): `{a}{b}` makes two group descents —
+        // The two-level transition doctrine ([§dd-dr:parsers-engine]): `{a}{b}` makes two group descents —
         // both reach observe_transition (memo hits included) — but only one actual
         // derivation runs finalize_transition.
         use core::sync::atomic::{AtomicUsize, Ordering};

@@ -12,8 +12,8 @@ use crate::state::Lang;
 use super::arguments::{ParsedArguments, ParsedSlots};
 use super::{CallableNodeExt, CharsNodeExt, CommentNodeExt, GroupNodeExt, ListNodeExt};
 
-/// What a node structurally *is* — the closed core enum of ARCHITECTURE.md §nodes
-/// (Decision 3): exactly the structural shapes, no `Custom` variant, no invocation-form
+/// What a node structurally *is* — the closed core enum of ARCHITECTURE.md [§dd-arch:nodes]
+/// (DESIGN_RATIONALE.md [§dd-dr:nodes]): exactly the structural shapes, no `Custom` variant, no invocation-form
 /// variants.
 ///
 /// - **No `Macro`/`Environment`/`Specials`/`Math` kinds.** Macro, environment, and
@@ -191,7 +191,7 @@ impl<L: Lang> GroupData<L> {
 }
 
 /// The payload of a [`Callable`](NodeKind::Callable) node: the **invocation facts** — the
-/// division-of-labor rule of ARCHITECTURE.md §nodes puts shared behavior in the [spec]
+/// division-of-labor rule of ARCHITECTURE.md [§dd-arch:nodes] puts shared behavior in the [spec]
 /// (stored once), resolution keys in the scope stack's providers, context in the
 /// parsing state, and
 /// *here* everything specific to this one invocation.
@@ -204,7 +204,7 @@ pub struct CallableData<L: Lang> {
     /// keys hold the *normalized* name; this is the name as written).
     pub name: Box<str>,
     /// The behavior spec — shared, de-keyed, and never absent (unknown callables resolve
-    /// to per-type fallback singletons, ARCHITECTURE.md §specs).
+    /// to per-type fallback singletons, ARCHITECTURE.md [§dd-arch:specs]).
     pub spec: Arc<dyn CallableSpec<L>>,
     /// The parsed arguments: which are provided, where their region/content nodes are,
     /// and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each was parsed against.

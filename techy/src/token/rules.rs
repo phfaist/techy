@@ -4,7 +4,7 @@
 //! ([`StateData<L>`](crate::state::StateData)). Everything that can vary during a parse —
 //! delimiters, escape characters, enabled features — is a plain value in these structs,
 //! changed only through reified state deltas at the transition choke point
-//! (ARCHITECTURE.md §state). There are no privileged language concepts here: no default
+//! (ARCHITECTURE.md [§dd-arch:state]). There are no privileged language concepts here: no default
 //! `\`, `{}`, `%`, or `$` — the familiar LaTeX values are supplied by the latexlike preset
 //! (Phase 7), which is also why none of these types implement `Default`.
 //!
@@ -111,7 +111,7 @@ pub struct CommentRule {
 /// # `enable_*` feature gates
 ///
 /// Every major feature has a boolean gate stored next to its data (pylatexenc's
-/// `enable_macros`/`enable_comments`/… pattern; DESIGN_RATIONALE.md §3.2). A disabled
+/// `enable_macros`/`enable_comments`/… pattern; DESIGN_RATIONALE.md [§dd-dr:tokens]). A disabled
 /// feature's syntax reads as ordinary content characters while its data **stays in
 /// place** — so a state delta can disable a feature and a later delta re-enable it,
 /// without any party having to carry the original rules. Two spellings of "off" are
@@ -137,7 +137,7 @@ pub struct TokenRules<L: Lang> {
     /// `\(…\)`, … — all just delimiter pairs; math is not a core concept). On delimiter
     /// conflicts, earlier entries win (see [`PrefixTable`](super::PrefixTable)).
     pub groups: Vec<Arc<GroupRule<L>>>,
-    /// Group rules with a *scoped lifecycle* (July 2026, DESIGN_RATIONALE.md §3.6): they
+    /// Group rules with a *scoped lifecycle* (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]): they
     /// tokenize exactly like [`groups`](Self::groups) — same gate, listed **first** in
     /// the [`PrefixTable`](super::PrefixTable), so they win same-spelling ties — but a
     /// state derivation that installs an

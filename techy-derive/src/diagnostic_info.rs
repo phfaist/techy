@@ -18,7 +18,7 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
                     unnamed,
                     "#[derive(DiagnosticInfo)] requires named fields (or a unit struct): \
                      field names are the payload's serialization keys \
-                     (DESIGN_RATIONALE.md §3.8)",
+                     (DESIGN_RATIONALE.md [§dd-dr:errors])",
                 ));
             }
         },
@@ -26,7 +26,7 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new(
                 data.enum_token.span,
                 "#[derive(DiagnosticInfo)] supports structs only: a condition is one \
-                 plain data struct (DESIGN_RATIONALE.md §3.8)",
+                 plain data struct (DESIGN_RATIONALE.md [§dd-dr:errors])",
             ));
         }
         Data::Union(data) => {
@@ -119,7 +119,7 @@ impl DiagnosticAttrs {
             syn::Error::new(
                 input.ident.span(),
                 "missing `#[diagnostic(id = \"…\")]`: the wire identifier is mandatory \
-                 and never derived from the type name (DESIGN_RATIONALE.md §3.8)",
+                 and never derived from the type name (DESIGN_RATIONALE.md [§dd-dr:errors])",
             )
         })?;
 
@@ -128,7 +128,7 @@ impl DiagnosticAttrs {
 }
 
 /// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`
-/// (DESIGN_RATIONALE.md §3.8); enforce the coarse shape, not the exact scheme.
+/// (DESIGN_RATIONALE.md [§dd-dr:errors]); enforce the coarse shape, not the exact scheme.
 fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     if value.is_empty()
@@ -140,7 +140,7 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
         return Err(syn::Error::new(
             lit.span(),
             "the identifier must be a namespaced dotted name like \
-             `core.area.condition` (DESIGN_RATIONALE.md §3.8)",
+             `core.area.condition` (DESIGN_RATIONALE.md [§dd-dr:errors])",
         ));
     }
     Ok(())
@@ -302,7 +302,7 @@ fn referenced_names(message: &LitStr) -> syn::Result<Vec<String>> {
 }
 
 /// The `new()` constructor: one `impl Into<FieldType>` parameter per field, in
-/// declaration order — the companion of `#[non_exhaustive]` (DESIGN_RATIONALE.md §3.8).
+/// declaration order — the companion of `#[non_exhaustive]` (DESIGN_RATIONALE.md [§dd-dr:errors]).
 fn expand_constructor(name: &Ident, fields: &[&Field]) -> TokenStream {
     let params = fields.iter().map(|field| {
         let ident = field.ident.as_ref().expect("named field has an ident");

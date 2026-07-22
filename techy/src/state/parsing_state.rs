@@ -24,7 +24,7 @@ pub struct StateData<L: Lang> {
     /// The parsing mode this state is in ([`Lang::ModeId`]) — first-class core data:
     /// deltas *initiate* mode changes ([`mode`](super::ParsingStateDelta::mode)
     /// override channel) and [`Lang::finalize_transition`] *interprets* them
-    /// (DESIGN_RATIONALE.md §3.3).
+    /// (DESIGN_RATIONALE.md [§dd-dr:parsing-state]).
     pub mode: L::ModeId,
     /// Language-specific state (e.g. feature-toggle flags; modal state lives in
     /// [`mode`](StateData::mode) instead).
@@ -37,7 +37,7 @@ pub struct StateData<L: Lang> {
 /// The **only** way a non-initial state comes into existence is
 /// [`derived()`](ParsingState::derived) — the transition choke point. States are cheaply
 /// shareable; the engine wraps them in `Arc` and creates a new one only at transitions,
-/// so nodes can record their parse-time state (ARCHITECTURE.md §state).
+/// so nodes can record their parse-time state (ARCHITECTURE.md [§dd-arch:state]).
 ///
 /// # Derived caches
 ///
@@ -89,7 +89,7 @@ impl<L: Lang> ParsingState<L> {
     /// which is deliberately not a table input — takes the reuse path. Functional
     /// contract: `self` is never observably mutated.
     ///
-    /// # Fallibility (Phase 7.3, DESIGN_RATIONALE.md §3.4)
+    /// # Fallibility (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs])
     ///
     /// A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets an
     /// absent provider name; a definition op routed to an immutable provider). A delta
@@ -102,7 +102,7 @@ impl<L: Lang> ParsingState<L> {
     /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder deriving out
     /// of parse treats an `Err` as its own input error.
     ///
-    /// # Temporary group rules (July 2026, DESIGN_RATIONALE.md §3.6)
+    /// # Temporary group rules (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine])
     ///
     /// [`TokenRules::temporary_groups`] is scoped in state data, and this choke point
     /// enforces the scope — every group descent passes through here (installing the
@@ -261,7 +261,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 }
 
 /// A [`derived()`](ParsingState::derived) transition whose delta carried failing
-/// [`scope ops`](ParsingStateDelta::scope_ops) (Phase 7.3, DESIGN_RATIONALE.md §3.4).
+/// [`scope ops`](ParsingStateDelta::scope_ops) (Phase 7.3, DESIGN_RATIONALE.md [§dd-dr:specs]).
 ///
 /// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
 /// embedder input error is the *caller's* context. The error carries everything a
@@ -285,7 +285,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// delta, because the recovery payload is the point of the type. The functions
 /// returning it `#[allow(clippy::result_large_err)]` rather than box: `Box`-free
 /// signatures were judged worth the bigger `Result` return slot
-/// (DESIGN_RATIONALE.md §3.4).
+/// (DESIGN_RATIONALE.md [§dd-dr:specs]).
 pub struct DeriveError<L: Lang> {
     /// One record per failing op, in delta order (never empty).
     pub failures: Vec<ScopeOpError>,
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn enable_flag_disables_and_reenables_without_carrying_the_data() {
-        // The restore problem the enable_* gates exist for (DESIGN_RATIONALE §3.2): the
+        // The restore problem the enable_* gates exist for (DESIGN_RATIONALE [§dd-dr:tokens]): the
         // re-enabling delta names no CommandRules — the data survived the disabled scope.
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
@@ -618,7 +618,7 @@ mod tests {
 
     // --- a lang exercising events + the finalize customizer ---------------------------
     //
-    // The FLM-style example from ARCHITECTURE.md §state: "in math mode the escape char
+    // The FLM-style example from ARCHITECTURE.md [§dd-arch:state]: "in math mode the escape char
     // is '#'". The math-open parser would only emit `EnterMath`; no delta writer knows
     // the escape-char rule — finalize centralizes it (pure-normalization idiom: dependent
     // settings recomputed from ext at every transition).
@@ -688,7 +688,7 @@ mod tests {
     fn normalization_clobbers_in_scope_overrides_by_design() {
         // The pure-normalization idiom recomputes dependent settings at *every*
         // transition — an explicit escape-char override is clobbered. That trade-off is
-        // the customizer author's documented choice (ARCHITECTURE.md §state).
+        // the customizer author's documented choice (ARCHITECTURE.md [§dd-arch:state]).
         let state: ParsingState<MathLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: MathState::default() });
 
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(derived.rules().commands[0].escape_char, '#');
     }
 
-    // --- a lang with a first-class parsing mode (Phase 7.1, DESIGN_RATIONALE §3.3) -----
+    // --- a lang with a first-class parsing mode (Phase 7.1, DESIGN_RATIONALE [§dd-dr:parsing-state]) -----
     //
     // Mode-shaped transitions need no `L::Event`: the delta's mode override *is* the
     // signal. `finalize_transition` interprets it — level normalization recomputed from

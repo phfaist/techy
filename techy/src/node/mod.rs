@@ -1,5 +1,5 @@
-//! The node tree: flat, frozen, index-based AST storage (ARCHITECTURE.md §nodes,
-//! Decision 3).
+//! The node tree: flat, frozen, index-based AST storage (ARCHITECTURE.md [§dd-arch:nodes];
+//! DESIGN_RATIONALE.md [§dd-dr:nodes]).
 //!
 //! - [`NodeTree`] stores all nodes of a parse in one `Vec`; a node's children occupy a
 //!   contiguous index block (`Range<u32>`). Trees are immutable — they come out of a
@@ -17,7 +17,7 @@
 //!   arguments/slots, post-space); shared behavior lives in the spec, context in the
 //!   recorded parsing state (the division-of-labor rule).
 //! - **One child region per argument/slot** (July 2026 regions session,
-//!   DESIGN_RATIONALE.md §3.5): a callable's children are the concatenation of one
+//!   DESIGN_RATIONALE.md [§dd-dr:nodes]): a callable's children are the concatenation of one
 //!   contiguous region per *provided* argument, then one per slot — each region holding
 //!   noise (comment nodes, whitespace-only `Chars` nodes) alongside the syntax-bearing
 //!   nodes. [`ParsedArguments`]/[`ParsedSlots`] (pylatexenc's `ParsedArguments` pattern)
@@ -169,7 +169,7 @@ mod tests {
     /// List [ Chars"x", Callable\frac(Group(Chars"a"), Group(Chars"b")), Chars" ",
     /// Comment" note" ]. The callable's post-space is the trigger token's own —
     /// empty here, `{` follows the name directly — so the space before the comment is
-    /// sibling content (§3.5 invariant 3 as amended in Phase 6.4).
+    /// sibling content ([§dd-dr:nodes] invariant 3 as amended in Phase 6.4).
     fn example_tree() -> NodeTree<PlainLang> {
         let source: Arc<Source> = Arc::new(Source::new(r"x\frac{a}{b} % note"));
         let st = state::<PlainLang>();

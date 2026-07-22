@@ -1,4 +1,4 @@
-//! Construct parsers: the parsing layer of the S1 core (ARCHITECTURE.md §constructs).
+//! Construct parsers: the parsing layer of the S1 core (ARCHITECTURE.md [§dd-arch:constructs]).
 //!
 //! [`ConstructParser`] is the single most important trait in the system: every construct —
 //! the main content loop ([`NodesParser`]), groups ([`GroupParser`]), callable invocations
@@ -8,7 +8,7 @@
 //! implementations), environment bodies ([`EnvironmentBodyParser`]) — is parsed by an
 //! implementation of it, reading tokens and staging nodes through one [`ParseContext`].
 //!
-//! # The two-tier ownership model (DESIGN_RATIONALE.md §3.6)
+//! # The two-tier ownership model (DESIGN_RATIONALE.md [§dd-dr:parsers-engine])
 //!
 //! Construct parsers are **temporaries** (tier 2): constructed with their per-use
 //! configuration where they are needed, `parse(&mut self, …)` so working state lives in
@@ -18,7 +18,7 @@
 //! immutable, and receive every per-use input as arguments. Closures (stop predicates)
 //! are thereby confined to tier 2; specs stay data.
 //!
-//! # State threading (the §state "caller applies deltas" law, pinned to `cx`)
+//! # State threading (the [§dd-arch:state] "caller applies deltas" law, pinned to `cx`)
 //!
 //! [`ParseContext::state`] is the parser's **input** state — the caller sets it. A parser
 //! that scopes a child state (group interior, argument extent, slot body) derives it
@@ -26,7 +26,7 @@
 //! (structural revert — `Arc` clone is cheap). The `Option<ParsingStateDelta>` in the
 //! return value is exclusively the *after-effect for the caller* (`\newcommand`).
 //!
-//! # Errors (DESIGN_RATIONALE.md §3.8)
+//! # Errors (DESIGN_RATIONALE.md [§dd-dr:errors])
 //!
 //! `Err` means **abort**: recovery happens at the detection site (the
 //! [`recover`](ParseContext::recover) helper), and abnormal endings of sub-parses travel
@@ -83,7 +83,7 @@ use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site,
-/// DESIGN_RATIONALE.md §3.8): the spec's title hook with the invocation spelling — the
+/// DESIGN_RATIONALE.md [§dd-dr:errors]): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
 /// the `Invocation` moves into the spec's parser factory; allocation-free (`Arc` bumps
 /// only).
@@ -112,11 +112,11 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// The source the token spans refer into — what staging a node's
     /// [`SourceSpan`] requires (added July 2026, Phase 6.4, user-approved). It lives
     /// here, not on tokens or readers, because the token layer deliberately carries
-    /// only transient byte spans (DESIGN_RATIONALE.md §3.8); the construct-parser layer
+    /// only transient byte spans (DESIGN_RATIONALE.md [§dd-dr:errors]); the construct-parser layer
     /// is where byte spans become `Arc`-backed source spans. Not a parsing input:
     /// construct parsers make no forward parsing decision from raw content — even a
     /// verbatim parser reads `Char` tokens under a features-disabled state
-    /// (DESIGN_RATIONALE.md §3.2, Action-02 entry).
+    /// (DESIGN_RATIONALE.md [§dd-dr:tokens], Action-02 entry).
     pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the module docs
     /// for the state-threading convention).
@@ -182,7 +182,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// remember to restore **before** `?`-propagating the result; here the restore is
     /// structural. The returned [`ParsingStateDelta`] is the construct's after-effect
     /// for the caller, passed through **unapplied** — whether and where it applies is
-    /// caller business (the §state "caller applies deltas" law).
+    /// caller business (the [§dd-arch:state] "caller applies deltas" law).
     pub fn parse_scoped<P>(
         &mut self,
         state: Arc<ParsingState<L>>,
@@ -208,7 +208,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md §3.8):
+    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md [§dd-dr:errors]):
     /// boxes the condition and hands it to [`ParseDriver::recover`], where the policy
     /// is defined (Phase 7.2) — the default driver path applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once (it needs
@@ -353,8 +353,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// the environment body deliberately **unwinds** on a terminator mismatch instead
     /// of resuming — a body that diagnosed `\end{A}` and kept going inside
     /// `\begin{A}…\begin{B}…\end{A}` would swallow the enclosing environment's
-    /// terminator (decision 8; DESIGN_RATIONALE.md §3.8, [`EnvironmentBodyParser`]).
-    // The output-plus-delta pair is the decided ConstructParser signature (§3.6).
+    /// terminator (decision 8; DESIGN_RATIONALE.md [§dd-dr:errors], [`EnvironmentBodyParser`]).
+    // The output-plus-delta pair is the decided ConstructParser signature ([§dd-dr:parsers-engine]).
     #[allow(clippy::type_complexity)]
     pub fn parse_nodes<'p>(
         &mut self,
@@ -392,7 +392,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point
-    /// primitive of the parse traceback (DESIGN_RATIONALE.md §3.8): every condition the
+    /// primitive of the parse traceback (DESIGN_RATIONALE.md [§dd-dr:errors]): every condition the
     /// recover funnel records while `f` runs carries the frame in its snapshot.
     ///
     /// Closure-scoped rather than an RAII guard, deliberately: a guard would hold
@@ -493,7 +493,7 @@ pub trait ConstructParser<L: Lang> {
     type Output;
 
     /// Parse the construct at the context's current position.
-    // The output-plus-delta pair is the decided signature (DESIGN_RATIONALE.md §3.6);
+    // The output-plus-delta pair is the decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]);
     // splitting it into a named type would only rename the complexity.
     #[allow(clippy::type_complexity)]
     fn parse(

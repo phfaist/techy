@@ -1,5 +1,5 @@
 //! [`ParseDriver`]: the Lang-provided parse-behavior object (Phase 7.2,
-//! DESIGN_RATIONALE.md §3.6).
+//! DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 //!
 //! A driver is the **instance** face of a language's parse-time behavior: while
 //! [`Lang`](crate::state::Lang) stays the compile-time bundle of hooks belonging to
@@ -83,7 +83,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Recovery::Strict
     }
 
-    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md §3.8),
+    /// Detection-site recovery — **the recover funnel** (DESIGN_RATIONALE.md [§dd-dr:errors]),
     /// reached through [`ParseContext::recover`](crate::constructs::ParseContext::recover): applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once, then
     /// records the condition as an error-severity diagnostic and returns `Ok(())`
@@ -154,7 +154,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// An implementation returns [`Resolved`](CommandResolution::Resolved) to dispatch
     /// the invocation, or [`Unresolved`](CommandResolution::Unresolved) — the parse
     /// loops then diagnose the command as unresolvable and recover (span-backed
-    /// chars-node fallback, DESIGN_RATIONALE.md §3.8). The failure's optional `detail`
+    /// chars-node fallback, DESIGN_RATIONALE.md [§dd-dr:errors]). The failure's optional `detail`
     /// string is surfaced on that diagnostic: the place for a resolver to say *why*
     /// ("searched libraries x, y, z"; "load the {amsmath} library for this command").
     ///
@@ -188,7 +188,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// assert panics otherwise. (Structurally intrinsic: this hook has no
     /// session/builder and cannot stage children.)
     ///
-    /// The default preserves the whitespace-as-chars invariant (§3.5): a
+    /// The default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]): a
     /// whitespace-only `Chars` kind, span-backed over the full token span (newlines
     /// included).
     fn make_paragraph_break_node(
@@ -200,7 +200,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         NodeKind::chars(token.span)
     }
 
-    /// Condition refinement (DESIGN_RATIONALE.md §3.8): replace a condition payload
+    /// Condition refinement (DESIGN_RATIONALE.md [§dd-dr:errors]): replace a condition payload
     /// with a language-specific one before it is recorded. Applied exactly once, in
     /// the default [`recover`](ParseDriver::recover) path — at the driver level, where
     /// the parsing state is in scope. The default is the identity.
@@ -223,7 +223,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         data
     }
 
-    /// Per-transition **observation** (DESIGN_RATIONALE.md §3.6): called by the
+    /// Per-transition **observation** (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]): called by the
     /// session-mediated derivation helpers ([`ParserSession::derived_state`],
     /// [`ParserSession::group_interior_state`]) on **every** transition event — memo
     /// hits included, which is what
@@ -412,7 +412,7 @@ pub enum CommandResolution<L: Lang> {
     Resolved(ResolvedCallable<L>),
     /// The command did not resolve — a clean miss (the name is defined nowhere the
     /// query could see); the parse loops diagnose it as unresolvable and recover
-    /// (span-backed chars fallback, DESIGN_RATIONALE.md §3.8).
+    /// (span-backed chars fallback, DESIGN_RATIONALE.md [§dd-dr:errors]).
     Unresolved {
         /// Optional human-facing detail on why resolution failed, appended to the
         /// diagnostic's message and serialized with the condition. `None` when there

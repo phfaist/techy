@@ -1,5 +1,5 @@
 //! [`ChildStateSpec`]: per-use descent-state policy on [`NodesParser`] (decided July
-//! 2026, DESIGN_RATIONALE.md §3.6 — ports pylatexenc's `make_child_parsing_state`).
+//! 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine] — ports pylatexenc's `make_child_parsing_state`).
 //!
 //! When the dispatch loop descends into a child construct — a group interior, or (6.4) a
 //! callable invocation — the child construct parser's **base state** is resolved through
@@ -16,7 +16,7 @@
 //! which reaches every depth. The mechanism here remains for descent policies that are
 //! genuinely per-use and per-level, like the chars-except-groups motivating case.)
 //!
-//! Decided semantics (§3.6):
+//! Decided semantics ([§dd-dr:parsers-engine]):
 //!
 //! 1. *Resolution precedes policy* — `ParseDriver::resolve_command` runs under the loop's own
 //!    state (coherent with the state that tokenized the token); the policy only shapes

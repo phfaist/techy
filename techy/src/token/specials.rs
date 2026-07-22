@@ -5,7 +5,7 @@
 //! [`TokenRules`](super::TokenRules) data: a language may have many trigger strings in
 //! scope, changing with scope-stack ops, so their recognition is delegated to a
 //! [`Lang`](crate::state::Lang) hook (`Lang::scan_specials`) instead of being enumerated in
-//! the rules (DESIGN_RATIONALE.md §3.2). Recognition and resolution happen in one call: a
+//! the rules (DESIGN_RATIONALE.md [§dd-dr:tokens]). Recognition and resolution happen in one call: a
 //! [`SpecialsMatch`] carries both the name and the resolved spec, which removes
 //! normalization and scoping mismatches between scanning and lookup by construction.
 //!

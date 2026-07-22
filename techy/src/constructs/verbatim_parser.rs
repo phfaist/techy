@@ -1,6 +1,6 @@
 //! The verbatim family (Phase 7.7; ParserLibraryParity.md N7): parsers whose content
 //! is **raw text** — no commands, no groups, no comments — read per the pinned recipe
-//! (DESIGN_RATIONALE.md §3.2, Action-02 entry): a features-disabled derived state whose
+//! (DESIGN_RATIONALE.md [§dd-dr:tokens], Action-02 entry): a features-disabled derived state whose
 //! [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) is
 //! **replaced** by a rule whose close string is the verbatim terminator. The expected
 //! close is ungated by `enable_groups` and overrides any close expectation inherited
@@ -33,7 +33,7 @@
 //! argument's content designation is the group's children. The environment form
 //! stages the standard body `List` holding the raw-content `Chars` node; a gobbled
 //! newline is **kept as a leading whitespace `Chars` node but designated out of the
-//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte (§3.5
+//! content** ([`EnvironmentBody::content`]) — techy trees keep every byte ([§dd-dr:nodes]
 //! partition invariants), so pylatexenc's byte-dropping gobble becomes a designation
 //! fact, not a missing node.
 //!
@@ -151,7 +151,7 @@ fn read_raw_content<L: Lang>(
         let Some(token) = cx.probe_token(state)? else {
             // A tolerated unreadable token (e.g. a forbidden char): the verbatim region
             // ends here; the enclosing content loop re-reads the error and applies its
-            // own token recovery (the probe protocol, DESIGN_RATIONALE.md §3.8).
+            // own token recovery (the probe protocol, DESIGN_RATIONALE.md [§dd-dr:errors]).
             return Ok(RawContentEnd { content_end: cx.tokens.pos(), terminator: None });
         };
         match &token.kind {
@@ -761,7 +761,7 @@ mod tests {
     }
 
     // --- harness: full content drive over `StdTokenReader` (verbatim re-tokenizes
-    // --- under derived states, so only the scanning reader applies — §3.2) -----------
+    // --- under derived states, so only the scanning reader applies — [§dd-dr:tokens]) -----------
 
     fn try_parse(
         content: &str,

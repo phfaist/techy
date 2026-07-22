@@ -11,7 +11,7 @@ use super::rules::GroupRule;
 
 /// What a token *is* — structural and minimal: it identifies *what to parse next*.
 ///
-/// Design invariants (DESIGN_RATIONALE.md §3.2):
+/// Design invariants (DESIGN_RATIONALE.md [§dd-dr:tokens]):
 ///
 /// - **No invocation-form knowledge on tokens whose resolution happens at parse time.**
 ///   There is no macro/environment/specials taxonomy on [`Command`](TokenKind::Command)
@@ -135,7 +135,7 @@ pub enum TokenKind<'s, L: Lang> {
 ///   break.
 ///
 /// These are *token*-level conventions; node span semantics are a separate, deliberately
-/// decoupled contract (ARCHITECTURE.md §nodes) — tokens are transient engine internals.
+/// decoupled contract (ARCHITECTURE.md [§dd-arch:nodes]) — tokens are transient engine internals.
 ///
 /// Tokens are `Clone` but not `Copy` (a [`Specials`](TokenKind::Specials) token holds an
 /// `Arc`); they are transient, `'s`-bound values internal to a parse.

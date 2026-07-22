@@ -12,7 +12,7 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10
 
 ---
 
-## 0. How to use and maintain this document
+## 0. How to use and maintain this document [§dd-dr:self-meta]
 
 **For agents and future sessions:**
 
@@ -34,13 +34,13 @@ This document supersedes the `DECISIONS.md` log proposed in ARCHITECTURE.md §10
 - The user wants a high degree of control over design decisions. Propose with rationale and
   clearly marked decision points; do not silently decide.
 - Never remove or "fix" user-written experimental code without confirming intent — argue
-  against it in writing first (see §3.3 for the worked example of how this went well).
+  against it in writing first (see [§dd-dr:parsing-state] for the worked example of how this went well).
 - Most of the codebase is provisional; docs describing decided architecture are more
   authoritative than code that hasn't been reviewed yet.
 
 ---
 
-## 1. Project-level goals and constraints
+## 1. Project-level goals and constraints [§dd-dr:goals]
 
 These are the fixed points everything else serves (user-stated, July 2026):
 
@@ -57,16 +57,16 @@ These are the fixed points everything else serves (user-stated, July 2026):
 
 Corollaries: `Result<T, E>` everywhere and no panics in library code; tests accompany
 functionality; public APIs documented with examples; no over-engineering or premature
-optimization (a goal in tension with 1–2; §2 explains how the tension is resolved).
+optimization (a goal in tension with 1–2; [§dd-dr:impl-design-principles] explains how the tension is resolved).
 
 ---
 
-## 2. Meta-principles
+## 2. Meta-principles [§dd-dr:impl-design-principles]
 
 These heuristics resolved most individual decisions below. When facing a new design question,
 try these first.
 
-### 2.1 Data where values change at runtime; traits where behavior changes
+### 2.1 Data where values change at runtime; traits where behavior changes [§dd-dr:data-vs-traits]
 
 The single most load-bearing principle (July 2026). Anything a *state delta* may need to change
 mid-parse — delimiters, escape characters, enabled features, specials strings — must be plain
@@ -78,7 +78,7 @@ Traits are reserved for genuine behavior extension points: `TokenReader`, `Const
 Litmus test for "should X be a trait?": *could two implementations differ in control flow, not
 just in the values they return?* If they only differ in values, X is data.
 
-### 2.2 One generic parameter, defaults everywhere
+### 2.2 One generic parameter, defaults everywhere [§dd-dr:one-generic-param]
 
 Generic customization is bundled into a single `Lang` trait with associated types, threaded as
 one `L: Lang` parameter. History shows why: two prior designs independently drifted into
@@ -87,7 +87,7 @@ C>` in the generated trait-architecture doc). Proliferation is the natural failu
 Rust generics and must be resisted structurally, not by discipline. Simple users must be able
 to write code with zero visible generics (ZST preset lang + type aliases).
 
-### 2.3 No privileged language concepts in the core
+### 2.3 No privileged language concepts in the core [§dd-dr:no-privileged-concepts]
 
 The engine knows nothing of math mode, `{`/`}`, `%`, or `\`. pylatexenc hard-codes
 `in_math_mode: bool` into its core `ParsingState`; techy deliberately does not — "math mode" is
@@ -99,7 +99,7 @@ a LaTeX parser with escape hatches.
 Guard rail: any proposal that adds a language-specific field to a core type should instead add
 it to a preset's `StateExt`, `NodeData`, or library definitions.
 
-### 2.4 Closed structural core, open payloads
+### 2.4 Closed structural core, open payloads [§dd-dr:closed-core-open-payloads]
 
 The set of *structural shapes* (chars, group, callable invocation, comment, list) is a closed
 enum; extensibility lives in payloads (the two-tier ext system of `Lang::NodeExts` — no
@@ -109,13 +109,13 @@ user priorities; `Box<dyn Node>` + downcasting sacrifices both to gain a kind of
 nobody needs (new *structure* is rare; new *semantics* is common, and semantics attach to
 payloads and specs).
 
-### 2.5 Zero-copy by default
+### 2.5 Zero-copy by default [§dd-dr:zero-copy]
 
 Tokens and nodes reference source content by byte spans; owned `String`s appear only where
 content genuinely differs from any source slice (synthesized content). Transient borrow
 lifetimes (tokens borrowing the current source) are fine as long as they never enter the AST.
 
-### 2.6 Deterministic dispatch over registry scanning
+### 2.6 Deterministic dispatch over registry scanning [§dd-dr:deterministic-dispatch]
 
 Parsing dispatch follows data: token kind → construct parser, name → library lookup → spec →
 invocation parser. Never "ask every registered parser if it can_parse() and pick by priority" —
@@ -125,12 +125,12 @@ group type, a spec) or as an explicit replacement of a well-defined component.
 
 ---
 
-## 3. Decision register
+## 3. Decision register [§dd-dr:decisions]
 
 Format: **Status** (DECIDED / PROPOSED / OPEN / DEFERRED) · date · decision · why · rejected
 alternatives · revisit-if.
 
-### 3.1 Sources and spans
+### 3.1 Sources and spans [§dd-dr:sources-and-spans]
 
 **Arc-based source ownership** — DECIDED (user-led design discussion, March 2026;
 SOURCE_ARCHITECTURE.md).
@@ -142,7 +142,7 @@ Cost: ~1ns refcount bump per node — negligible.
 *Rejected:* `SourceId` + store (circumvents borrow checking; id meaningless without its store);
 lifetime `'src` on all AST types (self-referential struct problem + transform chaining);
 index-based spans with a `SourceStore` in `ParseResult` (ties nodes to one result).
-*Revisit if:* profiling ever shows Arc traffic mattering (then see §3.7 pointer genericity).
+*Revisit if:* profiling ever shows Arc traffic mattering (then see [§dd-dr:generics] pointer genericity).
 
 **Provenance lives on `Source`, not on every location** — PROPOSED (July 2026 plan).
 `SourceProvenance` (`Primary`/`Resolved`/`Synthesized` with `triggered_at: SourceSpan`) is one
@@ -151,7 +151,7 @@ per-location `via: [SourceLocationVia]` vector paid per-token/per-node cost for 
 that is constant per source. Removing it also structurally prevents Arc cycles: the invariant
 is *source types never reference node types* (reference graph strictly layered:
 nodes → sources/specs/state; sources → sources) — generalized in July 2026 to the crate-wide
-acyclic-runtime-ownership rule (§3.11, rule 3).
+acyclic-runtime-ownership rule ([§dd-dr:crates], rule 3).
 *Revisit if:* a use case needs per-node provenance distinct from its source's provenance
 (e.g. token-level macro-expansion tracing à la TeX).
 
@@ -172,7 +172,7 @@ display (errors, diagnostics). The lazy-extension logic and traceback formatting
 
 **Pluggable content resolution** — DECIDED (March 2026).
 `SourceResolver` trait for `\input`-like lookups; `NoResolver` is a ZST so a no-I/O build pays
-nothing. No file-system resolver is shipped (no_std policy, §3.9): an embedder implements
+nothing. No file-system resolver is shipped (no_std policy, [§dd-dr:dependencies]): an embedder implements
 `SourceResolver` on its side, where the I/O capability lives; the in-memory `MapResolver`
 covers tests and fully preloaded setups. *(The `SourceContent` backing-abstraction half this
 entry originally carried is retired — see the July 2026 retirement entry below.)*
@@ -183,7 +183,7 @@ entry originally carried is retired — see the July 2026 retirement entry below
 parameter; `SourceSpan`/`SourceProvenance`/`SourceResolver`/`Diagnostic` carry the same
 parameter. When `Lang` arrives (Phase 3+), the S1 core plugs `L::SourceOrigin` into this
 parameter — the source topic never depends on `Lang`, per the Lang-free-foundation rule
-(S0; ARCHITECTURE.md §3, rule 1).
+(S0; ARCHITECTURE.md [§dd-arch:arch], rule 1).
 The `SourceOrigin` trait provides only `label()` (diagnostics display) on top of
 `Debug + Clone + Default`. The default origin type is `Option<String>`: conventionally the
 URL the content was obtained from, `None` when unknown or when the content was synthesized.
@@ -199,7 +199,7 @@ through every L0 signature later). Also rejected, in the July 2026 revision: the
 Synthesized | Other }`). Its kind taxonomy was too detailed and too rigid for the intended
 generality (where does content fetched from a database fall?), it partially duplicated
 provenance (`SourceOriginKind::Resolved` vs `SourceProvenance::Resolved` answered the same
-question twice), and the `File` kind clashed with the no_std policy (§3.9). The trait's
+question twice), and the `File` kind clashed with the no_std policy ([§dd-dr:dependencies]). The trait's
 `synthesized()`/`resolved()` origin constructors went with it: generic machinery no longer
 *mints* origins — a source starts with the default ("unknown") origin, and a creator that
 actually knows a URL attaches it via `with_origin`.
@@ -285,7 +285,7 @@ Action-05 session; settled before any consumer exists — the wiring lands on
   exotic origins write their own ten-line resolver), and the trait doc now says the
   parser "will be" generic over the resolver until it is.
 
-### 3.2 Tokens and tokenization
+### 3.2 Tokens and tokenization [§dd-dr:tokens]
 
 **Tokens are minimal and structural** — DECIDED (user, PARSING_STRATEGY.md, Jan 2026;
 sharpened by the July 2026 token-design review). A token identifies *what to parse next*
@@ -294,7 +294,7 @@ stream) and nothing more. Notably there is **no `BeginEnvironment(name)` token**
 `\begin` is an ordinary command token, and environment recognition is a construct-parser
 concern (preset registers `\begin`/`\end` specs). This is a deliberate departure from
 pylatexenc, whose tokenizer bakes in environment syntax.
-*Rationale:* keeps the tokenizer language-agnostic (§2.3) and moves all semantics to the
+*Rationale:* keeps the tokenizer language-agnostic ([§dd-dr:no-privileged-concepts]) and moves all semantics to the
 spec/parser layer where it is extensible. ("Minimal" bounds *language knowledge*, not token
 extent: a whole-comment token is fine because comment interiors carry no structure the
 parser cares about — see the review entry below.)
@@ -360,7 +360,7 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   recovery-token protocol.
 - **Syntactic vs. content whitespace** — the principle that decides every whitespace
   placement question: *pre-space is content whitespace* (belongs to the document flow;
-  becomes whitespace chars nodes, §3.5), *post-space is syntactic whitespace* (consumed by
+  becomes whitespace chars nodes, [§dd-dr:nodes]), *post-space is syntactic whitespace* (consumed by
   the construct's syntax, ignored as content, reproduced verbatim in recomposition).
   Post-space exists only where *tokenization syntax* consumes whitespace — multi-character
   `Command` names (whitespace terminates the name) and `Comment`s (the newline terminates
@@ -402,7 +402,7 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   grow state context. Tokens remain transient `'s`-bound engine internals; the genericity
   never enters the AST. `Span` — a generic byte range used by errors and cursors
   independently of tokenization — moved to the source topic (S0). This supersedes the
-  Phase-2-era "scanning core is S0" stratum split (§3.11's consequence bullet, revised);
+  Phase-2-era "scanning core is S0" stratum split ([§dd-dr:crates]'s consequence bullet, revised);
   the S0-testability property was traded for the freedom to keep state context in token
   machinery, and a trivial test `Lang` restores testability at negligible cost.
 
@@ -412,7 +412,7 @@ this hybrid):*
   produced by different mechanisms (rules data vs. preset hook) and dragged
   `CallableTypeId` into tokens.
 - *`CallableTypeId` on tokens / on `CommandRule`* — invocation form is resolution output,
-  not tokenization output. (Follow-up noted in §6: with several `CommandRule`s, the
+  not tokenization output. (Follow-up noted in [§dd-dr:open-questions]: with several `CommandRule`s, the
   parse-time lookup needs the escape char for disambiguation — pass the token.)
 - *Whitespace as its own token* — killed by parser ergonomics: every construct parser's
   peek grows a "maybe whitespace first" case; the pre/post-space encoding localizes that
@@ -437,7 +437,7 @@ upheld through the token redesign).
 `Token<'s, L>` holds `&'s str` slices plus `Span`s; `pre_space`/post-space are `Span`s, not
 `String`s. The `'s` lifetime never enters the AST.
 *Revisit if:* a streaming token source can't expose stable slices (that calls for a
-chunked-content reader design — see §3.1's `SourceContent` retirement entry — not a
+chunked-content reader design — see [§dd-dr:sources-and-spans]'s `SourceContent` retirement entry — not a
 change to the token type).
 
 **`TokenReader` is the behavior extension point for tokenization** — DECIDED (user,
@@ -446,7 +446,7 @@ PARSING_STRATEGY.md; trait landed July 2026, Phase 3).
 `scan_specials` hook); anyone needing genuinely different tokenization *behavior*
 (catcode-like schemes, non-textual sources) implements the trait. `peek` deliberately
 receives `&ParsingState<L>`, not `&TokenRules` — a catcode-like reader keeps its tables in
-`L::StateExt` (§3.11). The peek/move_past/move_to protocol with `skip_post_space` /
+`L::StateExt` ([§dd-dr:crates]). The peek/move_past/move_to protocol with `skip_post_space` /
 `rewind_pre_space` flags follows pylatexenc's proven `LatexTokenReaderBase` design; the
 flags are not vestigial (`\verb`-style parsers reposition before swallowed post-space).
 **Peek idempotence contract:** repeated peeks at one position with the *same state
@@ -479,7 +479,7 @@ directly, which also deleted the id→rule lookup from the hot path.)*
 
 **Group classes detached from delimiters: `Lang::GroupTypeId` = class, `GroupRule` = runtime
 delimiter data, tokens carry the resolved rule** — DECIDED (user, July 2026, group-classes
-session; reframes the closed-ids decision of §3.4). A group *type* is a language-native class
+session; reframes the closed-ids decision of [§dd-dr:specs]). A group *type* is a language-native class
 of "delimited region viewed as one object" — the latexlike preset will declare content-group
 and math-group variants — and says nothing about spellings. This is the exact semantic
 parallel of `CallableTypeId`: closed invocation *forms* ↔ runtime-registered *callables*;
@@ -506,16 +506,16 @@ The class keeps the typed "is this a math group?" answer (no string comparison) 
 parse-time behavior data-driven — "entering this group enters math mode" is one class check,
 where per-spelling variants (`DollarInline`, `ParenMath`, …) scattered it.
 *Rejected:* removing `GroupTypeId` entirely (loses typed classification; would have reversed
-§3.5's "delimiters-only degenerates to string comparison" rejection); keeping per-pairing ids
+[§dd-dr:nodes]'s "delimiters-only degenerates to string comparison" rejection); keeping per-pairing ids
 with runtime allocation (recreates the deleted interned-id registry).
 *Revisit if:* per-instance group data beyond class + spellings is needed — that is
 `GroupNodeExt`'s job, not more id structure.
 
 **`TokenKind::Command` records its escape character** — DECIDED (user, July 2026, Phase 6
 plan session; Phase 6 notes item C2). `Command { name, escape_char: char, post_space }`.
-*Rationale:* §3.4's lookup design requires `CallableQuery { syntax: Command { escape_char } }`,
+*Rationale:* [§dd-dr:specs]'s lookup design requires `CallableQuery { syntax: Command { escape_char } }`,
 the escape char was not recoverable from the token, and the nodes parser must not reach
-around the reader into raw content (§3.2, `EndOfStream` rationale). The tokenizer knows
+around the reader into raw content ([§dd-dr:tokens], `EndOfStream` rationale). The tokenizer knows
 which `CommandRule` fired; recording it is syntactic fact (which rule fired), not resolution
 output — consistent with the no-`CallableTypeId`-on-tokens line. Small ripple through the
 Phase 3 token tests, accepted.
@@ -533,11 +533,11 @@ implementations:
    lib-code panic reachable from a legitimate impl of a public trait.
 2. *Dangling-escape recovery uses a `Char(escape_char)` placeholder* spanning the escape
    byte (`resume_pos` = its span end). The byte joins the pending chars run, so the tolerant
-   parse keeps the partition invariant — consistent with §3.8's recovery principle (markup
+   parse keeps the partition invariant — consistent with [§dd-dr:errors]'s recovery principle (markup
    text in a `Chars` node, always with a diagnostic) and with the other content-preserving
    recoveries. *Rejected:* the empty `EndOfStream` placeholder (pylatexenc parity) — it
    claimed no bytes while reading resumed past the escape, so the root children did not tile
-   the content; the placeholder-vs-drop tradeoff had never actually been weighed when §3.2's
+   the content; the placeholder-vs-drop tradeoff had never actually been weighed when [§dd-dr:tokens]'s
    sentinel was chosen.
 3. *`peek`/`next` take `&Arc<ParsingState<L>>`.* The documented memoization key (state
    pointer identity) was unobtainable from `&ParsingState`: a memoizing reader could not
@@ -620,8 +620,8 @@ precedent. Uniformization rider: `whitespace` loses its `Option` (plain `Whitesp
 Decided interactions: (1) **`enable_groups` does not gate `expecting_group_close`** — the
 expected close is positional data the tokenizer checks *before* the delimiter table, and it
 survives the flag: a group interior that disables groups entirely still finds its close
-(preserves §3.6's termination guarantee structurally). (2) **`enable_specials` settles the
-disable-specials gap (former open question §6.6)**: specials *data* stays Lang/library
+(preserves [§dd-dr:parsers-engine]'s termination guarantee structurally). (2) **`enable_specials` settles the
+disable-specials gap (former open question [§dd-dr:open-questions])**: specials *data* stays Lang/library
 business, but the gate is rules data — `freeze()` skips `Lang::specials_trigger_chars`
 entirely and stores the empty `TriggerChars` filter, so the scan hook is unreachable in
 disabled states. (3) Flags bake into the eager per-state caches where possible (empty
@@ -630,13 +630,13 @@ disabled states. (3) Flags bake into the eager per-state caches where possible (
 former `Option` checks. (4) `forbidden_chars` deliberately gets **no** flag (one trivially
 restorable string, not a feature toggle with a demonstrated scoped-off need);
 `expecting_group_close` is positional data, not a feature.
-*Rationale:* the `ChildStateSpec` restricted-state use cases (§3.6) need scoped, losslessly
+*Rationale:* the `ChildStateSpec` restricted-state use cases ([§dd-dr:parsers-engine]) need scoped, losslessly
 reversible feature disabling, and field-wise wholesale replacement can express "off" but
 not "off, remembering what on meant".
 *Rejected:* keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
 "off"); `enable_forbidden_chars` (uniformity for its own sake).
 
-### 3.3 Parsing state and deltas
+### 3.3 Parsing state and deltas [§dd-dr:parsing-state]
 
 **Tokenization config is plain data (`TokenRules`), not per-facet traits** — PROPOSED
 (July 2026), **reverses the user's most recent code experiment — needs explicit sign-off**
@@ -647,7 +647,7 @@ macro-generated data struct, composed via 9 associated types. The decisive argum
 `$` group type; verbatim disables everything; `\makeatletter` changes name chars), and values
 behind compile-time associated types can't be changed by runtime deltas. Supporting arguments:
 facet traits only abstract storage layout, which nothing needs; the macro DSL + 9-way generics
-are exactly the proliferation §2.2 warns about; genuine behavior variation is already covered by
+are exactly the proliferation [§dd-dr:one-generic-param] warns about; genuine behavior variation is already covered by
 `TokenReader`.
 *Rejected:* the facet-trait design; also the `TypeId`-keyed `Any` extension map from the
 generated docs (runtime-typed, allocation-heavy, unnecessary once `L::StateExt` exists).
@@ -670,7 +670,7 @@ state (definitions pushed inside `{…}`) pops naturally by restoring the previo
 scope — whether a delta applies to following siblings or dies with the group.
 
 **Settings are stored data; dependent settings recomputed at transitions (Option C)** — DECIDED
-(user-led, July 2026; ARCHITECTURE.md §state/§4, Decision 1 RESOLVED).
+(user-led, July 2026; ARCHITECTURE.md [§dd-arch:state]/§4, Decision 1 RESOLVED).
 Every effective setting is a plain field — no getters compute values on read. Cross-cutting or
 derived settings (e.g. escape char = `#` in math mode) are recomputed by a single
 `Lang::finalize_transition(new, prev, events)` hook that runs when a new state is built. The
@@ -717,7 +717,7 @@ receiving the state (or, for the trigger-chars derivation, the `StateData` mid-f
 libraries — everything a swappable scanner object stored in `StateData` could express,
 without adding a state field, dyn indirection, and a delta story for swapping it.
 *Rejected:* an `Arc<dyn SpecialsScan>` field in `StateData`; per-library trigger
-declarations with core-legislated cross-library shadowing (see §3.2 — the preset owns its
+declarations with core-legislated cross-library shadowing (see [§dd-dr:tokens] — the preset owns its
 scan; the core legislates nothing about trigger precedence).
 
 **Seed states are crate-frozen `Lang` data: `ParsingState::initial()` +
@@ -746,7 +746,7 @@ are constructed inline in the hook instead).
 *fallbacks* is still inexpressible by delta (a `Lang` author bakes fallbacks into
 `initial_state_data`; a *user* of a preset cannot add their own). Resolution folded into
 the planned LibraryStack revisit — deltas should become much more expressive about
-library manipulation, possibly whole-library replacement in a transition (§6 open
+library manipulation, possibly whole-library replacement in a transition ([§dd-dr:open-questions] open
 question 7).
 *Revisit if:* the LibraryStack revisit lands (the delta story may then subsume parts of
 the seed contract), or a preset needs `finalize_transition`-grade normalization on the
@@ -755,12 +755,12 @@ is the cheap mechanical option before any signature change.
 
 **Parsing mode is first-class state data: `StateData.mode: L::ModeId`** — DECIDED (user,
 July 2026, Phase 7 plan session; settles ParserLibraryParity.md N1 jointly with the
-`ParseDriver` entry, §3.6).
+`ParseDriver` entry, [§dd-dr:parsers-engine]).
 `Lang` gains `type ModeId` (`Copy + Eq + Debug + Send + Sync`; `()` under `SimpleLang`) —
 the third closed per-language vocabulary after `GroupTypeId`/`CallableTypeId` — stored as
 a plain field on `StateData` with a matching `ParsingStateDelta.mode: Option<L::ModeId>`
 override channel. Mode is deliberately not lookup-private: the scope stack reads it for
-package visibility (§3.4), and a preset may key any content-interpretation decision on it
+package visibility ([§dd-dr:specs]), and a preset may key any content-interpretation decision on it
 (text/math; verbatim/listing-ish modes are candidates).
 *Division of labor:* the driver *initiates* mode changes (its `group_interior_delta`
 returns a mode-bearing delta for a math group class — the whole math plug is one line of
@@ -789,7 +789,7 @@ map-key reason). `Default` supplies the seed's mode in the default
 `#[default]` variant names its canonical initial mode. The memoizable-delta *gate* is
 unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
-### 3.4 Specs and libraries
+### 3.4 Specs and libraries [§dd-dr:specs]
 
 **Unified `CallableSpec` with self-supplied invocation parser** — PROPOSED (July 2026,
 generalizing pylatexenc's `CallableSpecBase`).
@@ -798,7 +798,7 @@ The common path is declarative (`ArgumentStructureSpec` list), with an optional 
 override. This preserves pylatexenc's most valuable extensibility property — *a spec can fully
 take over parsing its own invocation* — required by `\verb`, tabular preambles, and FLM's
 richer constructs.
-*Rationale:* specs are data + optional behavior, matching §2.1.
+*Rationale:* specs are data + optional behavior, matching [§dd-dr:data-vs-traits].
 
 **Library stack with lexical shadowing; no `ConflictStrategy`** — DECIDED (July 2026,
 ARCHITECTURE.md DECISION 6).
@@ -809,7 +809,7 @@ lint can warn on shadowing if ever wanted.
 
 **`SpecLookup` receives a `CallableQuery` (query struct), not bare `(ct, name)`** — DECIDED
 (July 2026, Phase 4 design session; closes the deferred half of DECISION 6 / open question
-§6.1). `lookup(&CallableQuery, &ParsingState<L>) -> Option<Arc<dyn CallableSpec<L>>>`, where
+[§dd-dr:open-questions]). `lookup(&CallableQuery, &ParsingState<L>) -> Option<Arc<dyn CallableSpec<L>>>`, where
 the query carries `callable_type`, `name`, a `CallableSyntax` (`Command { escape_char }` /
 `Specials` / `Other`), and `token: Option<&Token>`.
 *Why a syntax field:* with several `CommandRule`s in scope, `\foo` and `#foo` both tokenize as
@@ -826,14 +826,14 @@ sometimes there is no token).
 *Mode-awareness*, as proposed: the `&ParsingState<L>` parameter lets a preset's lookup dispatch
 on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
 token alike. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which
-contradicted §2.3.
+contradicted [§dd-dr:no-privileged-concepts].
 *(Amended July 2026, Phase 7 plan session: the lookup contract rehomes to
 `SpecsProvider::retrieve_spec` — fallible, part of a richer provider trait — with
 `CallableQuery` and its rationale carried over unchanged; see the scope-stack redesign
 entry below.)*
 
 **Unknown-callable fallbacks are built into `LibraryStack`; its own `SpecLookup` impl is
-stack-only** — DECIDED (July 2026, Phase 4 design session; open question §6.1(b)).
+stack-only** — DECIDED (July 2026, Phase 4 design session; open question [§dd-dr:open-questions](b)).
 The per-`CallableTypeId` fallback singletons live in a map on `LibraryStack`, consulted only by
 `resolve()` after the whole stack misses (`lookup()` never consults them). De-keyed specs make
 the singletons shareable — "unknown `\foo`" costs no per-instance allocation, and a callable
@@ -894,25 +894,25 @@ inventory — real regression vs. pylatexenc); every-argument-is-an-opaque-parse
 *(Amended July 2026, group-classes session: the *Revisit if* fired early and fully — the data
 variants are gone; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser<L>>`, pylatexenc's
 parser-objects-everywhere, with the terse `group`/`optional_group`/`marker` constructors
-removed. Once `GroupTypeId` became a delimiter-detached class (§3.2), the core could no
+removed. Once `GroupTypeId` became a delimiter-detached class ([§dd-dr:tokens]), the core could no
 longer name "the `{…}` argument" in a data variant or constructor — which group class, whose
 spelling? The standard forms become preset-provided `ArgumentParser` impls, pylatexenc's own
 resolution of the `'{'`/`'['`/`'*'` shorthands into parser instances. The introspection
 argument for data variants turned out not to be load-bearing: recomposition reads nodes and
-layouts — delimiters and marker spellings stored as `TextContent` per §3.5 — never specs. The
+layouts — delimiters and marker spellings stored as `TextContent` per [§dd-dr:nodes] — never specs. The
 prior *Rejected:* "every-argument-is-an-opaque-parser" is thereby deliberately reversed.)*
 
 **`ArgumentStructureSpec`/`SlotStructureSpec` wrappers dropped; `CallableSpec` exposes
 `&[Arc<ArgumentSpec<L>>]` / `&[Arc<SlotSpec<L>>]`** — DECIDED (July 2026, same session).
 The elements are `Arc`-shared so parsed nodes can record which spec each argument was parsed
-against (see §3.5), mirroring pylatexenc's `arguments_spec_list`. Empty-slice defaults work
+against (see [§dd-dr:nodes]), mirroring pylatexenc's `arguments_spec_list`. Empty-slice defaults work
 for generic `L` where the former `static NONE: ArgumentStructureSpec` cannot (no generic
 statics; `Vec` is not const-promotable).
 *Revisit if:* structure-level (not per-item) spec fields materialize in Phase 6 — e.g. a
 slot-separator field that belongs to no single slot; then a wrapper returns.
 *(Amended July 2026, slots session: only the arguments slice remains — `SlotSpec` and
 `CallableSpec::slots()` are deleted; slots are record-level vocabulary. See the
-no-spec-side-slots entry, §3.6.)*
+no-spec-side-slots entry, [§dd-dr:parsers-engine].)*
 
 **`CallableTypeId` and `GroupTypeId` are closed per-`Lang` associated types** — DECIDED
 (user, July 2026, current-level review session; replaces the open interned-id registry
@@ -934,7 +934,7 @@ integer id type; the associated-type design accommodates it without core changes
 *(Amended July 2026, group-classes session: the *Revisit if* fired for groups — construct
 parsers do mint delimiter pairs mid-parse (optional arguments, custom specs). Resolved not by
 opening the id space (the rejected registry) but by detaching the closed vocabulary from
-spellings: `GroupTypeId` reframed from per-pairing identity to group *class* — see the §3.2
+spellings: `GroupTypeId` reframed from per-pairing identity to group *class* — see the [§dd-dr:tokens]
 group-classes entry. `CallableTypeId` is untouched; both remain closed per-`Lang`.)*
 *(Amended July 2026, thread-safety session: both id types' bounds gained `+ Send + Sync` —
 see the thread-safety entry below.)*
@@ -960,7 +960,7 @@ and returns plain-data `StdCallableSpec`s; pyo3-backed specs are already `Send +
 (GIL-guarded); the one awkward case is `!Send` script-engine handles (`mlua::Lua`), solved
 by mlua's own `send` feature or a dedicated interpreter thread. Also resolves clippy's
 `arc_with_non_send_sync` — the crate's global `alloc::sync::Arc` commitment previously paid
-atomic refcounts for zero capability — and completes §3.3's "OnceCell would make states
+atomic refcounts for zero capability — and completes [§dd-dr:parsing-state]'s "OnceCell would make states
 non-`Sync`" intent. Contrast pylatexenc: Python's GIL made shared mutable spec state a
 non-issue; ports of such specs use locks.
 *Rejected:* a `sync` cargo feature gating the supertraits (or `Arc` vs `Rc`) — cargo
@@ -996,14 +996,14 @@ its registration sugar wraps every spec in `FlmSpecBox(Arc<dyn FlmSpec>)` (imple
 *Rejected (for now):* a `Lang`-associated dyn type (`type CallableSpecExt: ?Sized` set
 to `dyn FlmSpec`, plus a defaulted `fn lang_ext(&self) -> Option<&L::CallableSpecExt>`
 bridge on the spec trait) — expressible and object-safe, but it adds an associated type
-to every hand-written `Lang` impl (the SimpleLang-cliff cost, §3.6/H.2) for a need the
+to every hand-written `Lang` impl (the SimpleLang-cliff cost, [§dd-dr:parsers-engine]/H.2) for a need the
 wrapper covers; recorded here as the upgrade path if the wrapper proves annoying in
-FLM practice. This also unblocks the flagged default-factory escape hatch (§3.6): the
+FLM practice. This also unblocks the flagged default-factory escape hatch ([§dd-dr:parsers-engine]): the
 dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
 profiling ever asks for it.
 
 **Scope-stack redesign: dyn `SpecsProvider` entries, `Package`/`Scope` standard impls,
-in-stack fallbacks** — DECIDED (user, July 2026, Phase 7 plan session; closes §6 open
+in-stack fallbacks** — DECIDED (user, July 2026, Phase 7 plan session; closes [§dd-dr:open-questions] open
 question 7 and supersedes the `SpecLookup`/`LibraryStack` entries above).
 Driving requirements (user): definition visibility that switches with the parsing mode;
 deltas expressive enough to add/remove definitions and load/unload/replace collections up
@@ -1154,7 +1154,7 @@ enumeration with visibility data carried on entries (information without a consu
 excluding specials or a separate `iter_specials` (the recorded-type framing unifies
 the tables with no extra surface).
 
-### 3.5 Nodes and AST
+### 3.5 Nodes and AST [§dd-dr:nodes]
 
 **Flat `NodeTree` (Vec + index ranges), frozen after parse, `NodeRef` proxy access** — DECIDED
 (March 2026). Cache-friendly, no per-node heap allocation, trivially serializable; `NodeRef`
@@ -1179,14 +1179,14 @@ generated TRAIT_BASED_ARCHITECTURE.md design) — loses exhaustive matching, add
 boxing, makes serialization and flat storage impossible, and reintroduces runtime type errors
 that the type system should prevent.
 
-**No core `MathNode`** — DECIDED (July 2026, consequence of §2.3 and Decision 3).
+**No core `MathNode`** — DECIDED (July 2026, consequence of [§dd-dr:no-privileged-concepts] and Decision 3).
 `$…$` parses as a `Group` with a `$`-delimited `GroupTypeId` under a math-mode state extension;
 the latexlike preset provides accessor helpers so ergonomics don't suffer.
 *Revisit if:* preset-level ergonomics prove genuinely painful in practice — the fallback is
 preset-defined ext data on the `Group` kind, still not a core variant.
 
 **Args/slots ↔ children encoding: one node per region** — DECIDED (user, July 2026, Phase 5
-design session; was open question §6.2). A `Callable` node's children range holds one node per
+design session; was open question [§dd-dr:open-questions]). A `Callable` node's children range holds one node per
 *present* argument (the argument's natural node — typically a `Group`; a `List` wrapper only if
 an argument kind ever yields several nodes), followed by one `List` node per slot (an
 environment body = one `List` child; an empty body is an empty `List` — a region that exists,
@@ -1291,7 +1291,7 @@ delimiters on `GroupData`; a `Chars` node for `\frac 1 2` single tokens and `*` 
 which **count as content** — pylatexenc parity), and any trailing per-instance syntax.
 Records: `ParsedArgument { spec, region: Option<ChildRegion>, ext }` and
 `ParsedSlot { spec, region: ChildRegion }` *(slots session, July 2026: the slot record's
-`spec` is now `name: Option<Box<str>>` — see the no-spec-side-slots entry, §3.6)*; a
+`spec` is now `name: Option<Box<str>>` — see the no-spec-side-slots entry, [§dd-dr:parsers-engine])*; a
 resolved `ChildRegion` =
 `{ children: Range<u32>, content_range: Range<u32>, content_parent: NodeId }`, **all in
 global node-index coordinates** (the `NodeData.children` system — one coordinate language,
@@ -1331,7 +1331,7 @@ content (`\m{}`). Key points:
   non-overlapping; designation sub-ranges within their parent's child list) and at
   `finish()` (content parent reachable and inside its own region's subtree — only checkable
   once the layout exists); debug-assert that regions **tile** the child list exactly (the
-  §nodes partition invariant, mechanically checkable).
+  [§dd-arch:nodes] partition invariant, mechanically checkable).
 - **Consequences accepted:** a callable's child list is the raw-syntax view (child count ≠
   argument count; `\frac 1 2` costs two whitespace `Chars` nodes); an argument has no single
   node identity — transforms and views splice child *ranges* (Phase 7 view API);
@@ -1376,7 +1376,7 @@ comparison); registry-only (the inconsistency above).
 *Revisit if:* per-group-node allocation shows up in profiles (then consider inlining a
 small-string delimiter pair).
 *(Amended July 2026, group-classes session: `group_type` now records the group's *class*
-(§3.2), not a pairing identity — the "is this a math group?" typed check stands unchanged,
+([§dd-dr:tokens]), not a pairing identity — the "is this a math group?" typed check stands unchanged,
 while `$…$` vs. `$$…$$` now share a class and are distinguished by the stored delimiter
 strings where spelling matters. The delimiters-only rejection stands.)*
 
@@ -1412,7 +1412,7 @@ accessors). Node/layout types likewise ship without `PartialEq` until golden-tes
 the right equality concrete (Phase 6/7).
 
 **`Comment` nodes store their start delimiter and post-space** — DECIDED (user, July 2026,
-Phase 6 plan session; closes open question §6.5 / Phase 6 notes Q4, Option A).
+Phase 6 plan session; closes open question [§dd-dr:open-questions] / Phase 6 notes Q4, Option A).
 `Comment { content, start: TextContent, post_space: TextContent, ext }`; the node's span
 covers start delimiter + content + post-space (the token's span convention).
 *Rationale:* with several `CommentRule`s in scope, *which* start delimiter fired and what
@@ -1440,7 +1440,7 @@ guess. The partition invariant holds in its callable form: regions tile the chil
 children block is span-contiguous, and the scaffolding is derivable as the two sub-spans
 (node-span start → children start) and (children end → post-space start). A preset that
 wants the verbatim scaffolding strings anyway extracts exactly those two sub-spans at
-`Lang::finalize_node` time (§3.6) and stashes them in node ext.
+`Lang::finalize_node` time ([§dd-dr:parsers-engine]) and stashes them in node ext.
 *Rejected:* a `terminator: TextContent` record on `ParsedSlot` (every environment pays
 storage for a string that rigid syntax makes reconstructible); terminator as region nodes
 (`\end`'s command bytes have no honest node kind — a `Chars` node holding markup would
@@ -1450,14 +1450,14 @@ closing with its own trigger text is fine — that is `name`; a freely chosen cl
 is not): that construct's parser then records the choice on the node, following the
 `GroupData` delimiter precedent.
 
-**Whitespace and span invariants pinned (the §nodes Phase 6 pin-down)** — DECIDED (user,
-July 2026, Phase 6 plan session; ARCHITECTURE.md §nodes updated).
+**Whitespace and span invariants pinned (the [§dd-arch:nodes] Phase 6 pin-down)** — DECIDED (user,
+July 2026, Phase 6 plan session; ARCHITECTURE.md [§dd-arch:nodes] updated).
 1. *Chars accumulation:* `Char` tokens accumulate into maximal `Chars` nodes; a token's
    pre-space (content whitespace) joins the run; the run flushes when any non-`Char`
    construct starts. Pending whitespace with no adjacent chars becomes a whitespace-only
    `Chars` node. Parsed content is always `TextContent::Spanned` (the exact span slice).
 2. *Paragraph breaks:* their own nodes, produced via `Lang::make_paragraph_break_node`
-   (§3.6; default: whitespace-only `Chars` spanning the full token, newlines included);
+   ([§dd-dr:parsers-engine]; default: whitespace-only `Chars` spanning the full token, newlines included);
    never merged into neighboring whitespace nodes (adjacent whitespace-only `Chars` nodes
    are possible and fine — deterministic).
 3. *Callable post-space:* **exactly the trigger token's own syntactic post-space** — the
@@ -1546,7 +1546,7 @@ route")** — DECIDED (user, July 2026, 7.8 checkpoint session).
   region/content accessors, and the new by-name family (`argument_nodes_named`,
   `argument_content_nodes_named`, `slot_content_nodes_named`). Motivation (user): span
   information belongs **in the return types**, not in a helper recomputing it
-  best-effort — `span()`/`source_text()` are *exact* by the §nodes partition invariant
+  best-effort — `span()`/`source_text()` are *exact* by the [§dd-arch:nodes] partition invariant
   (first node's start to last node's end), and `Option`-returning with `None` in
   exactly two honest cases (empty run; cross-source siblings of synthesized trees).
   Iteration via `iter()`/`IntoIterator`; call sites chaining adaptors gained one
@@ -1612,7 +1612,7 @@ surface for a test/log utility whose callers want `String` in assertions anyway;
 leaving it duplicated test-side (the 7.9 suite, the preset tests, and the guide would
 carry three copies of the same formatter).
 
-### 3.6 Construct parsers, dispatch, engine
+### 3.6 Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
 **Single-context parsing API (`ParseContext`)** — PROPOSED (July 2026).
 Bundles token reader + state + session handle, avoiding pylatexenc's three-argument threading
@@ -1622,14 +1622,14 @@ through every parser. One place to extend later (e.g. depth limits, cancellation
 staging a node's `SourceSpan` requires. Factory-created parsers
 (`make_invocation_parser(&self, invocation)`, later `ArgumentParser` entry points) have no
 constructor through which a caller could thread it, and it cannot ride on tokens or
-readers: the token layer deliberately carries only transient byte spans (§3.8 — no
+readers: the token layer deliberately carries only transient byte spans ([§dd-dr:errors] — no
 `Arc`-span infection; a reader-side accessor would force `StdTokenReader` origin-generic
 and `TokenListReader` to carry a source it doesn't have). The construct-parser layer is
 where byte spans become `Arc`-backed source spans, so the context is the honest carrier.
 `NodesParser::new`/`GroupParser::new` dropped their redundant `source` parameters —
 single source of truth.)*
 
-**Dispatch by token kind + library lookup** — PROPOSED (July 2026). See §2.6.
+**Dispatch by token kind + library lookup** — PROPOSED (July 2026). See [§dd-dr:deterministic-dispatch].
 *Rejected:* `can_parse()`/`priority()` parser registries (registration-order-dependent,
 scattered dispatch logic, priority races).
 
@@ -1649,7 +1649,7 @@ configuration where they are needed, free to borrow (`'s` content, token refs),
 only in designs that *stored* engine parsers.
 *Rationale:* mutable working state and stored sharing are incompatible without locks; giving
 each tier one job removes the conflict. Closures (stop predicates) are thereby confined to
-tier 2 — specs stay data (§2.1).
+tier 2 — specs stay data ([§dd-dr:data-vs-traits]).
 
 **`CallableSpec::make_invocation_parser` — a factory moving a fresh parser to the caller** —
 DECIDED (user, July 2026, Phase 6 plan session; settles Phase 6 notes Q2 with a third option
@@ -1680,7 +1680,7 @@ of invariant only because it is contained in one component at one point); a gene
 `with_invocation_parser(inv, closure)` (stack allocation, but kills `dyn CallableSpec`
 object safety).
 *Revisit if:* the per-invocation `Box` allocation shows up in parse-throughput profiles
-(run a micro-benchmark; see Phase6Execution.md §6.7). If it ever matters, the dispatch
+(run a micro-benchmark; see Phase6Execution.md [§dd-dr:open-questions]). If it ever matters, the dispatch
 loop can special-case the default path without touching the trait. *(Phase 6 close, July
 2026: the pre-close benchmark check this note originally flagged was consciously deferred,
 not dropped — user decision, performance-review session; see the state-memo entry's
@@ -1688,7 +1688,7 @@ companions note. The obligation stands open, unscheduled.)*
 *(Phase 6.6 finding, recorded for Phase 7's `EnvironmentSpec`:* a composition running
 *inside* `parse(cx)` cannot mint a **new** `Invocation` for a construct it resolves
 mid-parse — `Invocation.name: &'s str`, and the `'s` source content is unreachable through
-`cx` (the source is `Arc`-owned; tokens and readers carry only byte spans, §3.8). So a
+`cx` (the source is `Arc`-owned; tokens and readers carry only byte spans, [§dd-dr:errors]). So a
 two-level dispatch — a `\begin` spec's parser calling the resolved environment spec's own
 `make_invocation_parser` — does not work with the current `Invocation` shape; the 6.6
 test composition instead drives `EnvironmentBodyParser` directly under the resolved spec.
@@ -1703,12 +1703,12 @@ staged node** — DECIDED (user, July 2026, Phase 6 plan session; supersedes the
 Called inside `NodeTreeBuilder::add` for **all** nodes (every kind, not just callables),
 before the staging checks; receives mutable access to the node's parts (kind, uniform ext,
 span, state) plus a read-only view of already-staged nodes (so a callable's hook can
-inspect its children — e.g. extract scaffolding sub-spans, §3.5); default: no-op.
+inspect its children — e.g. extract scaffolding sub-spans, [§dd-dr:nodes]); default: no-op.
 *Rationale:* the builder is the single mutation boundary, so hooking there guarantees *no
 node escapes finalization* — no parser cooperation required, transforms and tests included.
 A preset delegates to spec-specific behavior itself (FLM's `Lang` sees a `Callable`, reads
 `data.spec`, downcasts, attaches its `flm_specinfo`-like ext — the `Any`-supertrait
-contract, §3.4; downcasting to the preset's own spec *trait* goes through the
+contract, [§dd-dr:specs]; downcasting to the preset's own spec *trait* goes through the
 concrete-wrapper pattern recorded there), so the core needs no spec-level hook at all;
 and *uniform* per-node initialization (fields every node of a language carries) gets a
 natural home, which a callables-only spec hook could never provide.
@@ -1726,7 +1726,7 @@ resolve through `fn resolve_command(state, &token) -> CommandResolution<Self>`
 (`Resolved(ResolvedCallable { callable_type, spec })` / `Unresolved { detail }`);
 typically dispatches to the state's libraries via
 `CallableQuery { syntax: Command { escape_char }, … }` — the token now carries its escape
-char (§3.2). An `Unresolved` answer → the nodes parser diagnoses and recovers (§3.8).
+char ([§dd-dr:tokens]). An `Unresolved` answer → the nodes parser diagnoses and recovers ([§dd-dr:errors]).
 Specials need no hook: recognition = resolution; the token already carries its spec.
 *Rationale:* the dispatch loop needs `(CallableTypeId, spec)` for command tokens and the
 core cannot know a preset's type ids; follows the `scan_specials` precedent (a `Lang` hook,
@@ -1788,9 +1788,9 @@ it"). `fn make_paragraph_break_node(state, &token) -> NodeKind<Self>`; default: 
 whitespace-only `Chars` kind, `TextContent::Spanned` over the full token span (newlines
 included). The *core* stages the returned kind with the token's span and the current state —
 a `Lang` cannot stage nodes itself.
-*Rationale:* ARCHITECTURE §nodes left paragraph-break representation to the preset;
+*Rationale:* ARCHITECTURE [§dd-arch:nodes] left paragraph-break representation to the preset;
 returning a `NodeKind` keeps callable-shaped paragraph breaks (FLM) expressible without a
-Phase 7 redesign, while the default preserves the whitespace-as-chars invariant (§3.5).
+Phase 7 redesign, while the default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]).
 
 **Stop conditions: reified value + tier-2 predicates; abnormal endings are data
 (`StopCause`), not errors** — DECIDED (user, July 2026, Phase 6 plan session;
@@ -1811,11 +1811,11 @@ tested only at the parser's own nesting level (nested groups are consumed whole 
 group parser, so an `\end` inside a brace group cannot terminate an environment body).
 `NodesParser` returns its `StopCause` — `TokenCondition { span }` / `NodeCondition` /
 `EndOfInput` / `UnexpectedGroupClose { span }` — and the *caller* decides which causes are
-errors (§3.8).
+errors ([§dd-dr:errors]).
 Deliberate deviations from pylatexenc: the node predicate sees (count, last node), not the
 whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
 invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
-data (§2.1).
+data ([§dd-dr:data-vs-traits]).
 *`GroupClose` matches the exact `(group_type, close)` pairing, not either field alone
 (amended July 2026, Phase 6.2 review):* both must hold, because each guards a distinct
 false match. `close` disambiguates delimiters *within* a class — where `{`/`}` and `[`/`]`
@@ -1894,7 +1894,7 @@ doctrine at all: a verbatim construct's parser reads raw content itself and neve
 *Rationale:* a declarative terminator spec re-creates a parser-description language inside
 spec data for exactly one consumer, while the parameterized parser expresses the same
 constructs with the same zero user code; core placement is legitimate because every
-parameter is data — no privileged spellings (§2.3).
+parameter is data — no privileged spellings ([§dd-dr:no-privileged-concepts]).
 *Rejected:* `SlotTerminatorSpec`/`StopConditionSpec` as core spec data (notes Q1 Option A);
 stop-before-terminator with preset-owned consumption (Option B — weakened the declarative
 path and left terminator syntax neither recorded nor reconstructible).
@@ -1923,7 +1923,7 @@ Phase 6 plan session). `\begin{A}…\begin{B}…\end{A}`: B's body parser stops 
 reads the name, sees the mismatch → diagnostic ("missing `\end{B}`"), closes B **without
 consuming** the terminator, and returns; the unwinding lets A's parser find and consume its
 own `\end{A}`. An orphan `\end` eventually reaches the root nodes parser as an ordinary
-command and takes the unresolvable-command recovery (§3.8). A *malformed* terminator
+command and takes the unresolvable-command recovery ([§dd-dr:errors]). A *malformed* terminator
 (`\end` not followed by its name group) is diagnosed, **consumed**, and closes the
 environment — leaving it unconsumed would cascade the same malformed token through every
 enclosing level. Loop safety: every level either consumes the token or unwinds out of its
@@ -1941,12 +1941,12 @@ level that claims it (an enclosing group consumes it silently — one honest dia
 total; at the root, the root's diagnose-and-skip adds its own).)*
 
 **No `Language<L>` type in Phase 6; `ParserSession` is the root object** — DECIDED (user,
-July 2026, Phase 6 plan session; amends Phase 6 notes item C5 and the §engine timing).
+July 2026, Phase 6 plan session; amends Phase 6 notes item C5 and the [§dd-arch:engine] timing).
 Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery` policy), driven directly
 by tests; the `Language<L>` runtime bundle and any `parse()` convenience entry point are
 deferred to the phase that demonstrates the need (Phase 7 at the earliest) — convenience
 code is not written before its convenience is demonstrable. Consequence: type-id interning
-stays deferred exactly as §3.4 recorded (it presupposed `Language`). The "`Language<L>`
+stays deferred exactly as [§dd-dr:specs] recorded (it presupposed `Language`). The "`Language<L>`
 owns no per-parse state" principle above is untouched — it binds the type when it arrives.
 
 **`ChildStateSpec`: per-use descent-state policy on `NodesParser`** — DECIDED (user, July
@@ -1972,10 +1972,10 @@ caller's rule applies "before the callables add their own deltas"; (3) *one leve
 the `NodesParser`s recursed into by group/invocation parsers default to `Inherit`; note that
 group-delimited *arguments* of an invocation are reached by the `invocation` policy (they
 are parsed inside the invocation parser), not by `group`; (4) *sibling deltas unaffected* —
-still applied to the loop's own `cx.state` (§3.3's outward-propagation design already
+still applied to the loop's own `cx.state` ([§dd-dr:parsing-state]'s outward-propagation design already
 blesses applying a delta to a base the producer never saw); (5) *states pass as-is* —
 `Arc` in, `Arc` out: `Inherit`/`Fixed`/pass-through `Compute` never force a `derived()`,
-and returning the same `Arc` preserves pointer identity (the §3.2 identity-keyed
+and returning the same `Arc` preserves pointer identity (the [§dd-dr:tokens] identity-keyed
 memoization argument stays sound); (6) *callbacks are pure `&dyn Fn`* (like
 `TokenStopKind::Predicate`, unlike the node condition's deliberate `FnMut`): a descent
 policy whose answer depends on call order would be fragile, and `Fixed` covers the
@@ -1987,7 +1987,7 @@ sets `expecting_group_close` on the interior state, which takes tokenizer preced
 environment bodies do not — a base that cannot tokenize `\end` runs the body to
 `EndOfInput`, surfacing as `StopCause` for the caller to diagnose; and "disable specials"
 was not delta-expressible when this was decided — settled immediately after by
-`enable_specials` in the `TokenRules` `enable_*` flags decision (§3.2).
+`enable_specials` in the `TokenRules` `enable_*` flags decision ([§dd-dr:tokens]).
 *Rationale:* descent-state control is the one pylatexenc state hook with no techy
 equivalent, and pure parser composition (run `NodesParser` to a `GroupOpen` stop,
 invoke the group parser directly under the other state, loop) — while it works and remains
@@ -2024,7 +2024,7 @@ key `Arc`s alive, so pointer keys cannot be reused (no ABA hazard). Consequences
 `Lang::finalize_transition` runs once per `(base, rule)`, not once per descent — its
 contract is already a pure function of `(data, prev, events)`; and `derived()` itself still
 always mints a new `Arc` (the memo sits in the group parser, calling it less often), so the
-§3.2 peek-idempotence argument is untouched — shared interior `Arc`s only *raise* the hit
+[§dd-dr:tokens] peek-idempotence argument is untouched — shared interior `Arc`s only *raise* the hit
 rate of any future identity-keyed reader memo.
 *Rationale:* `ParsingState` cannot host the memo — its derived caches are eager by decision
 (no_std: no `OnceLock`, and `OnceCell` would cost `Sync`) — but `ParserSession` is the
@@ -2133,10 +2133,10 @@ struct is already the canonical sparse form (one slot per field, no ordering, no
 duplicates), and a stored what-changed mask desyncs against the public fields and breaks
 struct-literal construction (E0451).
 *Companions (same session):* `PrefixTable::first_chars` **removed** (dead public API
-describing the rejected maximal-run design, §3.2/§4; premature to wire in as a `match_at`
-guard — §6 open question 1b can reintroduce a merged table if profiling demands);
-`PrefixTable` reuse across derivations (see the §3.3 implementation notes); the benchmark
-harness (Phase6Execution §6.7 obligation) consciously deferred, not dropped.
+describing the rejected maximal-run design, [§dd-dr:tokens]/§4; premature to wire in as a `match_at`
+guard — [§dd-dr:open-questions] item 1b can reintroduce a merged table if profiling demands);
+`PrefixTable` reuse across derivations (see the [§dd-dr:parsing-state] implementation notes); the benchmark
+harness (Phase6Execution [§dd-dr:open-questions] obligation) consciously deferred, not dropped.
 *Revisit if:* profiling shows memo overhead dominating on non-recurring deltas, or
 per-parse memory growth hurts on pathological documents — eviction is unsound with
 pointer keys, so that would need a different key design.
@@ -2152,11 +2152,11 @@ coherent: a nested group opened by the *minted rule* keeps the contents state (t
 then rides the inherited states of deeper levels — that is what balances recursively),
 while every **other** child descent — a brace group, an invocation — reverts to the
 argument's own state, where `]` is an ordinary character: braces protect
-(`[{arg with ]}]`, the §3.5 designation example, unchanged), and an invocation's own
+(`[{arg with ]}]`, the [§dd-dr:nodes] designation example, unchanged), and an invocation's own
 arguments inside the option see no bracket rule (`\item[\m{a]b}]`). This is exactly
 pylatexenc's `LatexDelimitedGroupParserInfo.make_child_parsing_state` ("group with same
 delimiter → keep contents parsing state; else → the outer, original parsing state"),
-expressed through `ChildStateSpec` — the §3.6 hook that ports that very pylatexenc
+expressed through `ChildStateSpec` — the [§dd-dr:parsers-engine] hook that ports that very pylatexenc
 method; `GroupParser` gained a per-use `with_child_states` config so the parser that
 scopes a group's interior can steer its descents (default stays `Inherit`; decided
 semantics 3 — one-level-deep policies — is untouched: this is per-use configuration at
@@ -2269,7 +2269,7 @@ seven lib sites, but the correctness was per-site discipline (restore **before**
 `walker.parse_content(parser, …, parsing_state)` analog, deliberately on the *context*
 (the session lacks tokens and source; a session-level `parse` remains planned as the
 top-level driver entry, Phase 7) — makes the restore structural; the returned delta stays
-**unapplied** (the §3.3/§3.6 caller-applies law; an auto-applying driver would be wrong
+**unapplied** (the [§dd-dr:parsing-state]/[§dd-dr:parsers-engine] caller-applies law; an auto-applying driver would be wrong
 for group interiors). Frame-opening stays separate (`with_frame` composes around it;
 argument frames wrap two sub-operations, not one parse). The peek-shaped sites that are
 not sub-parses are covered by `probe_token(&state)` — the former `try_peek` as a public
@@ -2299,18 +2299,18 @@ level — "slots" become pure node vocabulary. Consequences shipped together:
 - `ParsedSlot` reshaped: `{ spec: Arc<SlotSpec<L>>, region, ext }` →
   `{ name: Option<Box<str>>, region, ext }` (user: definitely include the name; kept
   `Option` — environments may not bother, fence-block multi-slot constructs may name
-  several). Self-describing records (§3.5) *preserved*, not weakened: standing alone now
+  several). Self-describing records ([§dd-dr:nodes]) *preserved*, not weakened: standing alone now
   means carrying the name directly — the spec pointer bought nothing else, since
   `SlotSpec` had no other tool-visible payload. Deliberate asymmetry with
   `ParsedArgument`, which keeps its `Arc<ArgumentSpec>` (parser/name/delta are worth
   pointing at).
 - The **slots trap disappears by construction**: with `slots()` gone there is nothing to
   declare that `StdInvocationParser` won't parse — its implementation-error arm and the
-  pinned test are deleted (§3.8 consequence list amended).
+  pinned test are deleted ([§dd-dr:errors] consequence list amended).
 - The body state delta (pylatexenc's `make_body_parsing_state_delta`) rehomes to the
   preset spec type that drives the parse — Phase 7's `EnvironmentSpec` holds it as an
   ordinary field, read back by its own composition (the test-lang `EnvSpec` rehearses
-  this through the §3.4 `Any`-supertrait downcast). The core never interpreted it.
+  this through the [§dd-dr:specs] `Any`-supertrait downcast). The core never interpreted it.
 - `StdCallableSpec::new(arguments)` is single-list (a free ergonomics win); the guard's
   `!slots().is_empty()` clause is replaced by the spec-level emptiness method (next
   entry), which the removal makes *more* load-bearing.
@@ -2376,7 +2376,7 @@ environment's spec from the state's libraries under the preset's ENVIRONMENT cal
 type, parses declared arguments (`parse_declared_arguments`), drives the core
 `EnvironmentBodyParser`, and assembles the callable node. The *notion* of "environment"
 is preset property; core owns each individual parsing task as data-parameterized
-machinery (the §2.3 ground `EnvironmentBodyParser`'s core placement already stands on).
+machinery (the [§dd-dr:no-privileged-concepts] ground `EnvironmentBodyParser`'s core placement already stands on).
 Consequences made explicit:
 - **Invocation-level takeover is out; amending `Invocation` is declined.** An
   environment spec's own `make_invocation_parser` is never invoked (the 6.6
@@ -2384,7 +2384,7 @@ Consequences made explicit:
   per-environment variation flows through the preset's `EnvironmentSpec` surface.
   That surface is *not* constrained to plain data (user, same session — "spec-as-data"
   would overstate the ruling): behavior-shaped customization via defaulted methods is
-  legitimate, per §2.1 and the factory precedent of `make_invocation_parser` itself.
+  legitimate, per [§dd-dr:data-vs-traits] and the factory precedent of `make_invocation_parser` itself.
   For the body-parsing choice (verbatim-like bodies) the user leans to a defaulted
   `make_body_parser()` method (pylatexenc's `EnvironmentSpec.make_body_parser`) over a
   plain field — final shape remains a Phase 7 preset-side design question. *(Settled July
@@ -2398,7 +2398,7 @@ Consequences made explicit:
 - **`read_rigid_name_group` stays a value-returning scaffolding helper**, deliberately
   separate from the node-staging chars-group *argument* parser (pylatexenc's
   `LatexCharsGroupParser` analog) that Phase 7's std library adds for `\label`-style
-  chars-only arguments: scaffolding is reconstructed, never recorded (§3.5), so the
+  chars-only arguments: scaffolding is reconstructed, never recorded ([§dd-dr:nodes]), so the
   name reader must not stage nodes — the two roles differ in kind, not configuration.
 - Preset-side strays that rehome with the composition: registering an `end` spec so an
   orphan `\end` diagnoses well; the name reader's rigidity contract (trigger post-space
@@ -2437,7 +2437,7 @@ ParserLibraryParity.md). Key rulings and their reasons:
   vs a `Lang`/preset hook keyed on `GroupTypeId`) is an open Phase 7 design question.
   *(Settled July 2026, Phase 7 plan session: neither candidate — the `ParseDriver`'s
   `group_interior_delta` hook returning a parsing-mode delta; see the `ParseDriver`
-  entry below and §3.3.)*
+  entry below and [§dd-dr:parsing-state].)*
 - **Ready-made argument-parser conveniences are wanted even where composition
   suffices** (user): a multi-delimited group parser (any of several delimiter pairs at
   one argument position — port pylatexenc's contents-state subtlety of keeping only
@@ -2445,7 +2445,7 @@ ParserLibraryParity.md). Key rulings and their reasons:
   `e{tokens}`-type), which subsumes generalizing `MarkerArgumentParser` beyond the
   single-literal `*` case. A node-staging chars-group parser is likewise wanted,
   deliberately distinct from `read_rigid_name_group`: the environment-name reader is
-  value-returning scaffolding (reconstructed, never recorded, §3.5), while the
+  value-returning scaffolding (reconstructed, never recorded, [§dd-dr:nodes]), while the
   chars-group parser stages nodes for `\label{…}`-style chars-only argument groups.
 - **Comma-separated chars list**: discarded as a construct parser in favor of a
   split-at-chars read/extraction helper over parsed children (pylatexenc's own
@@ -2551,7 +2551,7 @@ fully typed — no downcasts; generic code sees only the trait. The driver owns:
   ARCHITECTURE "custom nodes parser" nuclear option becomes a supported seam;
 - **the group descent-delta channel** — `group_interior_delta(prev, rule)`, pure per
   `(state, rule)`, merged into the memoized `session.group_interior_state` derivation
-  (the cache stays in session; the hook runs on memo miss only). With §3.3's parsing
+  (the cache stays in session; the hook runs on memo miss only). With [§dd-dr:parsing-state]'s parsing
   mode this closes ParserLibraryParity.md N1;
 - **recovery policy** — `Recovery` leaves `ParserSession`, which returns to pure
   scratch/output (builder, diagnostics, frames, memo, `SessionExt`); overriding the
@@ -2582,7 +2582,7 @@ foreign to its layers); overridable `parse_scoped`/`with_frame` (invariant footg
 updates — mechanical but broad.
 *Revisit if:* a real consumer needs runtime driver swapping for one `Lang` (add a dyn
 override on top of the associated-type default), or per-invocation `Box` provision shows
-up in profiles (the §6.7 benchmark obligation).
+up in profiles (the [§dd-dr:open-questions] benchmark obligation).
 *Landed (subphase 7.2, July 2026)*, with these in-flight decisions (user-checkpointed):
 **Module home `engine::driver`** (user choice over constructs); `CommandResolution`/
 `ResolvedCallable` relocated there next to `resolve_command` (crate-root re-exports
@@ -2603,7 +2603,7 @@ soundness + observe-on-every-transition are invariants, not policy, so they must
 be trait-overridable; `cx.derived_state(&delta)`/`cx.group_interior_state(&rule)`
 sugar (base = `cx.state`, the only shape call sites use) hides the driver parameter.
 **Box-per-descent accepted** for the `make_nodes_parser`/`make_group_parser` defaults
-(uniform with the per-invocation Box; §6.7 benchmark covers it; a fast path could hide
+(uniform with the per-invocation Box; [§dd-dr:open-questions] benchmark covers it; a fast path could hide
 behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 (`Default` added); `ParserSession::recover` takes the policy per call — the channel a
 custom driver `recover` uses for per-condition decisions. The default
@@ -2615,7 +2615,7 @@ Phase-6 type). `Language<L>` = `{ driver: L::Driver, initial_state:
 Arc<ParsingState<L>>, resolver: Arc<dyn SourceResolver<O>> }`, long-lived, owning no
 per-parse state (March 2026 principle, kept).
 - **Entry points are two named methods, not a `SourceInput` enum** (rejecting the old
-  §engine sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
+  [§dd-arch:engine] sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
   Into<String>)` mints an anonymous `Source`; `parse_source(Arc<Source<O>>)` takes a
   pre-minted source (origin/provenance intact — the `resolve_source` round trip feeds
   it). A conversion enum whose only job is overloading buys one method name at the
@@ -2713,7 +2713,7 @@ duplicated into the integration-test crate).
 against future push semantics and against whatever `finalize_transition` does in the
 derivation; the `Result` mirrors `with_seed_delta` honestly.
 
-### 3.7 Generics strategy
+### 3.7 Generics strategy [§dd-dr:generics]
 
 **Defer `Rc`/`Arc` genericity** — DECIDED (July 2026, ARCHITECTURE.md DECISION 4).
 The `SharedPointer` GAT sketched in SOURCE_ARCHITECTURE.md would infect nearly every signature
@@ -2726,13 +2726,15 @@ genuinely needs `Rc`.
 **What is generic (via `Lang`) and what is not** — PROPOSED (July 2026).
 Generic: `StateExt`, `NodeData`, `SourceOrigin`. Not generic: spec types (extensibility comes
 from `CallableSpec` being a trait), pointer type (above), content backing (a plain `String`
-on `Source`; the `SourceContent` seam was retired, §3.1). Every proposed new `Lang`
-associated type should be challenged against §2.1/§2.2 first.
+on `Source`; the `SourceContent` seam was retired, [§dd-dr:sources-and-spans]). Every proposed new `Lang`
+associated type should be challenged against [§dd-dr:data-vs-traits]/[§dd-dr:one-generic-param] first.
 
-### 3.8 Errors and diagnostics
+### 3.8 Errors and diagnostics [§dd-dr:errors]
 
-**Panic policy: `Result` everywhere; panics only for verifiably unreachable invariants** —
-DECIDED (user, July 2026, Action 04; refines the original one-line CLAUDE.md constraint).
+#### Panic policy: `Result` everywhere; panics only for verifiably unreachable invariants [§dd-dr:panic-policy]
+
+Status: DECIDED (user, Action-04 review; refines the original one-line CLAUDE.md constraint).
+
 Four rules:
 
 1. Panics are allowed only for **verifiably unreachable** code — impossibility guaranteed by
@@ -2800,7 +2802,7 @@ tolerant) decides whether to record a diagnostic and continue or abort. Diagnost
 on the session and remain available on `ParseResult` even for successful tolerant parses.
 *Rationale:* tolerant parsing is a first-class requirement for document tooling (FLM, linters,
 editors), not an afterthought flag; and a diagnostics sink is the API-honest replacement for
-logging side channels (see §3.9).
+logging side channels (see [§dd-dr:dependencies]).
 
 **Recovery mechanism split across phases** — DECIDED (user, July 2026, Phase 1 kickoff).
 Phase 1 ships the token-independent parts: `Diagnostic`/`Diagnostics`/`Severity` and the
@@ -2831,7 +2833,7 @@ session; Phase 6 notes item C4 concretized). Three rules:
    chars-node fallback (markup text in a `Chars` node is an accepted tolerant-recovery
    artifact, always accompanied by a diagnostic); missing mandatory argument: absent +
    diagnostic; unmatched group close at the root: diagnostic + skip; terminator mismatch:
-   close-without-consuming (§3.6).
+   close-without-consuming ([§dd-dr:parsers-engine]).
 2. *Abnormal endings of sub-parses are data, not errors.* `NodesParser` returns a
    `StopCause`; only the caller knows whether EOF-before-`\end{align}` is an error. Nobody
    ever continues *past* an `Err` — which is what keeps the reader position and the state
@@ -2883,11 +2885,11 @@ layer, FLM's in FLM) — third-party conditions are structurally identical citiz
 severity + sentence + span, and `ParseErrorKind::Syntax { message }` had become the only
 parse-level kind, `format!`-ing away exactly the fields a linter/LSP needs. A kind *enum*
 cannot be made right: core-owned variants would privilege construct-level vocabulary
-("environment" is not a core concept, §2.3), and `#[non_exhaustive]` extension is crate-only,
+("environment" is not a core concept, [§dd-dr:no-privileged-concepts]), and `#[non_exhaustive]` extension is crate-only,
 so downstream languages would stay stringly forever — the same disease one level out. On the
 message side, the "same condition, subtly different context" case decomposes without
 remainder: a semantic difference belongs in a payload field (tools want it too); a positional
-difference is what frames render. This conforms to §2.4: the *structure*
+difference is what frames render. This conforms to [§dd-dr:closed-core-open-payloads]: the *structure*
 (severity/payload/span/frames) stays closed; the openness is payload-level, like specs, and
 serializability is preserved (see the serialization entry below). Exhaustive matching over an
 open-ended condition space is not meaningful — consumers handle what they know, via
@@ -2962,7 +2964,7 @@ convention-based in every ecosystem (rustc lints, ESLint rules, LSP codes); what
 cadences — a struct rename is an internal refactor, a wire-id change is a silent break; the
 derive macro will *require* the id attribute); method name `diagnostic_identifier()`
 (stutters as `DiagnosticData::diagnostic_identifier`; the trait context already qualifies,
-§3.10); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (user, July 2026:
+[§dd-dr:naming]); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (user, July 2026:
 maintenance work to keep in sync, and namespace prefixes already prevent collisions — can be
 added later without breakage).
 
@@ -2973,7 +2975,7 @@ only — programmatic consumers downcast to the typed struct; there is no string
 API anywhere. The method is defaulted (empty) so the trait ships before the serialization
 work. No hand-written shipped schemas.
 *Rationale:* `serde::Serialize` is not dyn-compatible (the ecosystem workaround,
-`erased-serde`, is a dependency — §3.9), hence the own value tree. The authoritative schema
+`erased-serde`, is a dependency — [§dd-dr:dependencies]), hence the own value tree. The authoritative schema
 is the Rust struct itself. pylatexenc's `error_type_info` weakness was ad-hoc dicts assembled
 at every raise site; here the keys are written once, adjacent to the struct fields, and the
 eventual derive macro generates them from the field names. A shipped machine schema would be
@@ -3005,7 +3007,7 @@ cold, so boxing is free — eager `String` titles would be an allocation per des
 Closure-scoped rather than an RAII guard because a guard would hold `&mut cx` against the
 parser body. The live frame may be `L`-generic (the session already is), but the snapshot
 must be `O`-generic only, or `L` re-enters `Diagnostic` through the back door. "Frame", not
-"context": `ParseContext` already owns that word (§3.10 sibling-vocabulary rule).
+"context": `ParseContext` already owns that word ([§dd-dr:naming] sibling-vocabulary rule).
 *Rejected:* frames in `ParsingState` (above); structured machine fields on frames (frames are
 the human-facing projection — machine data belongs in the condition payload; title + span is
 what tools need); wrapping-on-bubble (the tolerant path never bubbles).
@@ -3058,7 +3060,7 @@ the shared `Source` is blocked dep-free (`alloc` has no `Mutex`; `OnceCell` woul
 a public `DiagnosticRenderer` type (no second consumer yet; `render_all` covers the
 need — promote the cache if one appears).
 
-### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1)
+### 3.9 Dependencies — **DECIDED** (ARCHITECTURE.md Decision 5; implemented July 2026, Phase 1) [§dd-dr:dependencies]
 
 **Absolute minimal mandatory dependencies** — `thiserror` and `log` removed from `Cargo.toml`
 (July 2026). The considerations that led there:
@@ -3075,7 +3077,7 @@ need — promote the cache if one appears).
 - **`log`.** Different situation: the question is not "which logging dep" but **whether a
   library should log at all**. The only current use is one `warn!` (source too big to compute
   line info) — information that rightly belongs in the API's return values or the diagnostics
-  sink (§3.8), where callers can actually react to it. A library that communicates through its
+  sink ([§dd-dr:errors]), where callers can actually react to it. A library that communicates through its
   API needs no logging facade. Recommendation: drop, or feature-gate if a concrete debugging
   need appears. This half is nearly free.
 - Not under discussion: heavier deps. Nothing in the design needs regex, serde (could be an
@@ -3085,7 +3087,7 @@ need — promote the cache if one appears).
 `std`; allocation is fine (`#![cfg_attr(not(test), no_std)]` + `extern crate alloc` in
 `lib.rs`; tests keep `std` for convenience). Consequences: no I/O anywhere in the library —
 the file-reading `FileResolver` was removed (an embedder implements `SourceResolver` where
-the I/O capability lives), and the `File` origin kind fell with it (see §3.1); `alloc`
+the I/O capability lives), and the `File` origin kind fell with it (see [§dd-dr:sources-and-spans]); `alloc`
 collections only (`MapResolver` uses `BTreeMap`, not `HashMap`); error types implement
 `core::error::Error`, which sets MSRV 1.81 (`rust-version` in `Cargo.toml`); `Arc` comes
 from `alloc::sync`, so targets must support atomics. A plain `cargo build` compiles the
@@ -3115,7 +3117,7 @@ churn (0.14→0.15 already swapped default hashers).
 lands.
 
 
-### 3.10 Naming
+### 3.10 Naming [§dd-dr:naming]
 
 Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 2026):
 
@@ -3127,7 +3129,7 @@ Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 202
   review) because the spec-side `ArgumentSpec`/`ArgumentParserSpec` vocabulary now coexists
   wherever the parsed records appear, and pylatexenc parity favors `ParsedArguments`.
   (`ArgumentStructureSpec` — the old clarity-over-brevity example — was dropped with the
-  argument-model rebuild, §3.4.)
+  argument-model rebuild, [§dd-dr:specs].)
 - **Collision avoidance beats tradition**: `Language<L>` replaces March's `FLMEnvironment`
   (fatal collision with `EnvironmentSpec`/`EnvironmentNode`); `ConstructParser` avoids clashing
   with any high-level `Parser` type; `Lang` replaces `LanguageSpecification` (too long for a
@@ -3143,10 +3145,10 @@ Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 202
 When naming something new: check NAMING_STRATEGY.md, then ask "does this collide with or
 shadow an existing concept in LaTeX terminology or in this codebase?"
 
-### 3.11 Crate organization and dependency model
+### 3.11 Crate organization and dependency model [§dd-dr:crates]
 
 **Three strata + three rules replace the strict L0–L7 layer ladder** — DECIDED (user-led,
-July 2026; ARCHITECTURE.md §3 revised accordingly).
+July 2026; ARCHITECTURE.md [§dd-arch:arch] revised accordingly).
 S0 *foundation* (Lang-free, a true DAG: source, error/diagnostics, `Span`/`Token`/`TokenKind`,
 `TokenRules` + `PrefixTable` + the concrete scanning core, `TextContent`); S1 *core* (a single
 mutually-recursive stratum: `Lang` + `NodeExtTypes`, state, spec/library, node, constructs,
@@ -3166,7 +3168,7 @@ renumbering could restore a DAG, and "L3 shall not use L5" was a law the design 
 violated deliberately. The confusion dissolves once three graphs the ladder conflated are
 separated: the *type/signature* graph (cyclic inside S1, harmless — traits are signatures,
 `dyn` references tie the knot, cross-module cycles within one crate are idiomatic Rust); the
-*runtime ownership* graph (must stay acyclic — rule 3, generalizing §3.1's
+*runtime ownership* graph (must stay acyclic — rule 3, generalizing [§dd-dr:sources-and-spans]'s
 sources-never-reference-nodes invariant); and the *build order* (§9 phases sequence concrete
 machinery, which stays DAG-shaped even where signatures are mutually recursive — Phase 2's
 tokenizer runs against a hardcoded `TokenRules`). Within S1 the useful distinction is by
@@ -3177,7 +3179,7 @@ Consequences worth pinning:
   **S1** — tokens are generic over `L` (`Specials` carries its spec) and token errors may
   grow state context; the earlier "scanning core is S0" split is superseded, and `Span`
   moved to the source topic. S0-testability was traded for state-context freedom; a trivial
-  test `Lang` restores it at negligible cost. See §3.2.)*
+  test `Lang` restores it at negligible cost. See [§dd-dr:tokens].)*
 - The `TokenReader<L>` trait keeps `&ParsingState<L>` (not `&TokenRules`) in `peek`:
   it is the documented catcode escape hatch, and such a reader keeps its tables in
   `L::StateExt`; narrowing to the rules would sever the escape hatch from language state.
@@ -3222,7 +3224,7 @@ a `crates/` super-directory (needless nesting at three crates; plain siblings su
 
 ---
 
-### 3.12 Documentation
+### 3.12 Documentation [§dd-dr:documentation]
 
 **Narrative docs included with rustdoc, not a separate site** — DECIDED (user-led, July 2026).
 API documentation is rustdoc; narrative pages (usage, concepts, design patterns — the role
@@ -3239,7 +3241,7 @@ nearly verbatim if the narrative later outgrows rustdoc.
 *Revisit if:* the guide needs ordered, book-style chapter navigation that rustdoc's
 module-shaped layout can't carry.
 
-### 3.13 The latexlike preset
+### 3.13 The latexlike preset [§dd-dr:latexlike]
 
 **The preset's group taxonomy is two classes: `Content` and `Math`** — DECIDED (user,
 July 2026, Phase 7.5 checkpoint).
@@ -3373,7 +3375,7 @@ the language.
 
 **The environment spec surface: `EnvironmentSpec` wraps a dyn `EnvironmentBehavior`;
 `with_body_delta` overrides by adapter** — DECIDED (user, July 2026, Phase 7.6
-checkpoint, decision (b); executes the §3.4 funnel and D4's defaulted
+checkpoint, decision (b); executes the [§dd-dr:specs] funnel and D4's defaulted
 `make_body_parser()`).
 The concrete wrapper `EnvironmentSpec` is the registration/downcast target (implements
 `CallableSpec` by delegation, titles frames "environment ‘align’"); the inner trait
@@ -3421,7 +3423,7 @@ new mechanism.
 
 **The verbatim family (Phase 7.7): recipe → production parsers, group+chars shapes** —
 DECIDED (July 2026, 7.7 landing; N7 of ParserLibraryParity.md).
-`constructs::verbatim_parser` promotes the pinned recipe (§3.2 Action-02 entry; the
+`constructs::verbatim_parser` promotes the pinned recipe ([§dd-dr:tokens] Action-02 entry; the
 test-side `RawBlockParser`): `verbatim_state_delta(rule)` is the recipe as data (all six
 feature gates off + `expecting_group_close` **replaced**), and the two production
 parsers drive it — `VerbatimArgumentParser` (delimited `\verb|…|`; `ArgumentParser`,
@@ -3434,7 +3436,7 @@ Points settled in flight:
   `skip_space_chars` parity — a paragraph break may precede the delimiter), everything
   else off, and the inherited close expectation **cleared** — `\verb}x}` works inside a
   braces group. Comments are deliberately *not* noise here: `%` is a valid delimiter
-  (the §3.5 "noise policy is inseparable from argument syntax" case in the flesh).
+  (the [§dd-dr:nodes] "noise policy is inseparable from argument syntax" case in the flesh).
 - *Node shapes* (modern-pylatexenc parity): `\verb` stages a `Group` (class = a
   language verbatim class; delimiters as written; close **empty** on EOF recovery)
   holding one raw `Chars` child — omitted when empty, techy-wide convention — with
@@ -3474,7 +3476,7 @@ else breaks an invariant: excluded from the `List`'s span it either gaps the cal
 children block (arguments before the body, the `lstlisting[opts]` shape — invariant 3)
 or un-tiles the `List` interior (invariant 2). The standard `EnvironmentBodyParser`
 designates all children (7.6 behavior unchanged); "which body nodes are content" is the
-staging parser's knowledge, exactly as for arguments (§3.5 parse-time designation).
+staging parser's knowledge, exactly as for arguments ([§dd-dr:nodes] parse-time designation).
 *Rejected:* letting the newline ride the scaffolding gap (works only for argument-less
 environments; would weaken invariant 3 to legalize the rest); an `Option`al designation
 field (the default parser knows its answer — make every producer say it).
@@ -3536,7 +3538,7 @@ composes with the anticipated `Rules(Vec<…>)` multi-delimiter generalization (
 as an orthogonal knob, not a variant property). Alongside, the content-designation
 contrast — delimited form: the group's *children* (delimiters are argument syntax);
 `ExpressionParser` and the fallback: the expression *node* itself, delimiters included
-— is now documented on both parser types (it was previously only implicit in §3.5 and
+— is now documented on both parser types (it was previously only implicit in [§dd-dr:nodes] and
 the parity table).
 
 **Paragraph-break emission is a driver flag: `ParagraphBreakStyle` on
@@ -3607,66 +3609,66 @@ code for both entry points, so the grammar cannot drift.
 parser vocabulary one level up; hand-built `ArgumentSpec`s with concrete parsers are
 already the fully-typed path — the factory's value *is* the compact codes).
 
-## 4. Rejected patterns — do not reintroduce
+## 4. Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 
 Quick-reference list of patterns that have been considered and rejected. Each links the section
 holding the full argument.
 
-- **`Box<dyn Node>` + `Any` downcasting + `clone_box`** (§3.5) — loses exhaustive matching, adds
+- **`Box<dyn Node>` + `Any` downcasting + `clone_box`** ([§dd-dr:nodes]) — loses exhaustive matching, adds
   per-node boxing, and makes flat storage and serialization impossible.
-- **`can_parse()`/`priority()` parser registries** (§3.6, §2.6) — behavior depends on
+- **`can_parse()`/`priority()` parser registries** ([§dd-dr:parsers-engine], [§dd-dr:deterministic-dispatch]) — behavior depends on
   registration order and dispatch logic scatters across predicates.
-- **`TypeId`-keyed `Any` maps for state/node extensions** (§3.3) — runtime-typed and
+- **`TypeId`-keyed `Any` maps for state/node extensions** ([§dd-dr:parsing-state]) — runtime-typed and
   allocation-heavy; `L::StateExt`/`L::NodeData` do the same statically.
-- **Per-facet parsing-state traits (9 associated types)** (§3.3) — values behind compile-time
+- **Per-facet parsing-state traits (9 associated types)** ([§dd-dr:parsing-state]) — values behind compile-time
   associated types can't be changed by runtime deltas; also textbook generic proliferation.
-- **Whole state behind an `L::State: ParsingStateModel` getter trait** (§3.3, Option B) —
+- **Whole state behind an `L::State: ParsingStateModel` getter trait** ([§dd-dr:parsing-state], Option B) —
   abstracts storage nothing needs, at real cost: the engine still needs a wrapper for derived
   caches; trait laws (getter purity, delta locality, stored/effective split) silently *become*
   the design; compound getters need `Cow` shapes; ext access needs capability traits; "default
   plus one tweak" means delegation boilerplate; and `dbg!(state)` lies because effective values
   are computed on read. Option C (stored data + `finalize_transition`) gets the same
   centralization with truthful debugging and hot-path field reads.
-- **Closure-shaped state deltas** (§3.3) — a delta must stay a reified value so it can be
+- **Closure-shaped state deltas** ([§dd-dr:parsing-state]) — a delta must stay a reified value so it can be
   merged, inspected, and propagated to base states its producer never saw (outward
   `\newcommand` propagation); a closure supports none of that.
-- **Hard-coded math-mode definition tables in libraries** (§3.4) — violates §2.3;
+- **Hard-coded math-mode definition tables in libraries** ([§dd-dr:specs]) — violates [§dd-dr:no-privileged-concepts];
   `SpecLookup(state)` dispatching on the state extension covers it without built-in modes.
-- **`ConflictStrategy` for library resolution** (§3.4) — shadowing *is* the intended semantic
+- **`ConflictStrategy` for library resolution** ([§dd-dr:specs]) — shadowing *is* the intended semantic
   (`\newcommand`, group-local defs), not a conflict to configure away.
-- **`SourceId` into an external store** (§3.1) — circumvents borrow checking; the id is
+- **`SourceId` into an external store** ([§dd-dr:sources-and-spans]) — circumvents borrow checking; the id is
   meaningless without its store.
-- **`'src` lifetimes on AST/error types** (§3.1, §3.8) — self-referential structs and
+- **`'src` lifetimes on AST/error types** ([§dd-dr:sources-and-spans], [§dd-dr:errors]) — self-referential structs and
   lifetime chains across N tree transformations; Arc spans fix both at negligible cost.
-- **Per-location provenance chains (`via` vectors)** (§3.1) — pay per-node cost for information
+- **Per-location provenance chains (`via` vectors)** ([§dd-dr:sources-and-spans]) — pay per-node cost for information
   that is constant per source; provenance lives on `Source`.
 - **Byte-level `Read`/`BufRead` streaming** (SOURCE_ARCHITECTURE.md) — the parser needs
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
-- **Tokenizer-level environment recognition (`\begin{…}` tokens)** (§3.2) — bakes language
+- **Tokenizer-level environment recognition (`\begin{…}` tokens)** ([§dd-dr:tokens]) — bakes language
   semantics into the tokenizer; `\begin` is an ordinary command, environments are a parser concern.
-- **Invocation-form ids (`CallableTypeId`) on tokens resolved at parse time** (§3.2) —
+- **Invocation-form ids (`CallableTypeId`) on tokens resolved at parse time** ([§dd-dr:tokens]) —
   invocation form is resolution output, not tokenization output; carrying it on `Command`
   tokens re-creates the "token says MACRO, node says ENVIRONMENT" wart. (Scoped: does
   *not* apply to `Specials`, where recognition *is* resolution — the token carries the
-  full `ResolvedCallable` pair, §3.2 July 2026 amendment.)
-- **Whitespace as its own token kind** (§3.2) — every construct parser's peek grows a
+  full `ResolvedCallable` pair, [§dd-dr:tokens] July 2026 amendment.)
+- **Whitespace as its own token kind** ([§dd-dr:tokens]) — every construct parser's peek grows a
   "maybe whitespace first" case; pre/post-space spans localize the cost in the tokenizer.
-- **Uniform `post_space` field on `Token`** (§3.2) — post-space is a per-kind syntactic
+- **Uniform `post_space` field on `Token`** ([§dd-dr:tokens]) — post-space is a per-kind syntactic
   fact (commands, comments); an accessor serves `move_past`, the field taxed every token.
-- **Maximal-run `Chars` tokens** (§3.2) — a token is an atomic unit; run-splitting
+- **Maximal-run `Chars` tokens** ([§dd-dr:tokens]) — a token is an atomic unit; run-splitting
   machinery (conservative stop sets) bought speed the node level didn't need and cost
   char-by-char construct parsing.
-- **Specials trigger strings enumerated in `TokenRules`** (§3.2, §3.3) — trigger sets can
+- **Specials trigger strings enumerated in `TokenRules`** ([§dd-dr:tokens], [§dd-dr:parsing-state]) — trigger sets can
   be large and library-driven; recognition belongs to the preset (`Lang::scan_specials`,
   name + spec in one call), guarded by the cached `TriggerChars` filter.
-- **A strict dependency ladder through the crate's middle (the old L2–L6 layering)** (§3.11) —
+- **A strict dependency ladder through the crate's middle (the old L2–L6 layering)** ([§dd-dr:crates]) —
   the middle is a strongly-connected component by intention (each cycle edge is a decided
   feature); enforce the three real rules (Lang-free foundation, preset line, acyclic runtime
   ownership) instead of a fictional ranking.
 
 ---
 
-## 5. Non-goals
+## 5. Non-goals [§dd-dr:non-goals]
 
 Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 2026):
 
@@ -3677,46 +3679,46 @@ Decided intentional limitations (PROPOSALS.md §4 gap analysis, reaffirmed July 
 - `\newcommand` **is** supported, but at the parse level (a library-extension delta defining a
   new spec), not as token-stream expansion.
 - Deferred: memory-mapped sources (an embedder can already hand in mmap-validated text;
-  the `SourceContent` trait seam was retired as information-equivalent to `&str`, §3.1),
-  streaming/incremental parsing, `Rc` pointer genericity (§3.7).
+  the `SourceContent` trait seam was retired as information-equivalent to `&str`, [§dd-dr:sources-and-spans]),
+  streaming/incremental parsing, `Rc` pointer genericity ([§dd-dr:generics]).
 
 ---
 
-## 6. Open questions
+## 6. Open questions [§dd-dr:open-questions]
 
-Current list — remove entries as they are settled (move the outcome into §3):
+Current list — remove entries as they are settled (move the outcome into [§dd-dr:decisions]):
 
 1. ~~**`SpecLookup` semantics and behavior**~~ — settled July 2026 (Phase 4 design
    session): `CallableQuery`-based lookup with explicit `CallableSyntax` + optional token,
-   and stack-built-in per-`CallableTypeId` fallbacks. Outcome moved to §3.4.
+   and stack-built-in per-`CallableTypeId` fallbacks. Outcome moved to [§dd-dr:specs].
 1b. **Precompiled-table merging (`PrefixTable`++)**: detection consults several per-state
    structures (group-delimiter `PrefixTable`, specials `TriggerChars`, per-rule command
    escape and comment-start checks). Worth evaluating a single merged first-character /
    prefix table per state once the hot loop can be profiled (noted July 2026, user
-   request; also flagged in ARCHITECTURE.md §token). Not a design blocker.
+   request; also flagged in ARCHITECTURE.md [§dd-arch:token]). Not a design blocker.
 2. ~~**`ArgsLayout` / children encoding in flat `NodeData`**~~ — settled July 2026 (Phase 5
    design session): one node per region (one child per present argument, one `List` child per
    slot), with presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout`.
-   Outcome moved to §3.5.
+   Outcome moved to [§dd-dr:nodes].
 3. ~~**Top-level convenience API**~~ — settled July 2026 (Phase 6 plan session): no facade,
    and no `Language<L>`/`parse()` convenience entry point in Phase 6 at all — `ParserSession`
    is the root object; convenience API deferred to the phase that demonstrates the need
-   (Phase 7+). Outcome moved to §3.6.
+   (Phase 7+). Outcome moved to [§dd-dr:parsers-engine].
 4. **`CompactString`**: plain `String` initially; whether a small-string optimization ever pays
    for delimiter/specials storage is a profiling question, not a design question.
 5. ~~**`Comment` node recomposition fields**~~ — settled July 2026 (Phase 6 plan session):
    `Comment` grows `start` + `post_space` per-instance syntax fields (notes Q4, Option A).
-   Outcome moved to §3.5.
+   Outcome moved to [§dd-dr:nodes].
 6. ~~**Disabling specials by delta**~~ — settled July 2026 (child-state design session
    follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
    stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
-   moved to §3.2.
+   moved to [§dd-dr:tokens].
 7. ~~**LibraryStack structure and delta expressiveness**~~ — settled July 2026 (Phase 7
    plan session): the scope-stack redesign — dyn `SpecsProvider` entries,
    `Package`/`Scope` standard impls, in-stack fallback providers, definition/stack delta
-   ops replacing `push_libraries`. Outcome moved to §3.4. (The seed-path half had been
-   settled earlier — §3.3, "Seed states are crate-frozen `Lang` data".)
-8. **Structured-diagnostics implementation details** (opened July 2026 — decisions in §3.8,
+   ops replacing `push_libraries`. Outcome moved to [§dd-dr:specs]. (The seed-path half had been
+   settled earlier — [§dd-dr:parsing-state], "Seed states are crate-frozen `Lang` data".)
+8. **Structured-diagnostics implementation details** (opened July 2026 — decisions in [§dd-dr:errors],
    plan in CodeReportAction_01.md). Sub-items settled July 2026: MSRV bumped to 1.86 (dyn
    trait upcasting); `FrameTitle` variants as sketched; `DiagnosticValue` barebones with no
    float variant (serialize as string if ever needed); `diagnostic_catalog()` dropped.

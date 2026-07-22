@@ -6,7 +6,7 @@
 //! Deliberately distinct from
 //! [`read_rigid_name_group`](super::read_rigid_name_group): the environment-name
 //! reader is value-returning *scaffolding* (reconstructed, never recorded,
-//! DESIGN_RATIONALE.md §3.5) — this parser **stages nodes** like any argument parser,
+//! DESIGN_RATIONALE.md [§dd-dr:nodes]) — this parser **stages nodes** like any argument parser,
 //! and the group's children are the argument's content (the braces are argument
 //! syntax, exactly as in [`GroupArgumentParser`](super::GroupArgumentParser)'s class
 //! form).
@@ -38,7 +38,7 @@
 //! keeps the restriction at every depth instead (nested groups stay chars-only).
 //!
 //! Leading noise (whitespace, comments ahead of the `{`) scans under the **outer**
-//! state per the noise-ownership doctrine (§3.5) — the restriction scopes the group's
+//! state per the noise-ownership doctrine ([§dd-dr:nodes]) — the restriction scopes the group's
 //! interior only, which is why this parser exists rather than a plain state delta on
 //! the whole argument ([`ArgumentSpec::parsing_state_delta`] covers the probe too).
 //!

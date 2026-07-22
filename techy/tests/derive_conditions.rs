@@ -1,6 +1,6 @@
 //! End-to-end exercise of `#[derive(DiagnosticInfo)]` and `#[derive(ToDiagnosticValue)]`
 //! from a consumer crate (ARCHITECTURE.md "Condition declaration via derive";
-//! DESIGN_RATIONALE.md §3.8). This file plays the third-party role: conditions declared
+//! DESIGN_RATIONALE.md [§dd-dr:errors]). This file plays the third-party role: conditions declared
 //! here go through exactly the same surface a downstream language crate would use.
 
 use core::fmt;

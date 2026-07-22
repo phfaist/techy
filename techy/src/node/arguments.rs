@@ -13,7 +13,7 @@
 //! spec, so by-name lookup can distinguish "not provided" from "no such argument".
 //!
 //! # Encoding: one child *region* per argument/slot (July 2026 regions session,
-//! DESIGN_RATIONALE.md §3.5; supersedes the one-node-per-argument shape)
+//! DESIGN_RATIONALE.md [§dd-dr:nodes]; supersedes the one-node-per-argument shape)
 //!
 //! A callable's children range is the concatenation of one contiguous **region** per
 //! *provided* argument, followed by one region per slot. A region holds the argument's
@@ -37,7 +37,7 @@
 //! which drop pre-argument comment nodes by default (`return_full_node_list=False`) —
 //! noise is kept, out of the way of content.
 //!
-//! # Two-phase records — the accepted "honest cost" (DESIGN_RATIONALE.md §3.5)
+//! # Two-phase records — the accepted "honest cost" (DESIGN_RATIONALE.md [§dd-dr:nodes])
 //!
 //! Resolved region ranges name positions in the **flattened** tree (the coordinate
 //! system of `NodeData.children`), and those positions don't exist while parsers run: a
@@ -100,7 +100,7 @@ pub enum ContentNodes {
 /// panic on staged ones — a finished tree never contains staged regions (the builder
 /// validates staged-ness at `add()`), so the panic is only reachable by reading a
 /// region one built oneself and never staged (the approved indexing-style exception,
-/// panic policy, DESIGN_RATIONALE.md §3.8).
+/// panic policy, DESIGN_RATIONALE.md [§dd-dr:panic-policy]).
 #[derive(Clone, Debug)]
 pub struct ChildRegion {
     state: RegionState,
@@ -320,7 +320,7 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
 /// is no spec-side slot declaration — the invocation parser that reads a callable's
 /// body (the spec's sanctioned `make_invocation_parser` composition) mints these
 /// records directly, with whatever parsers it drives internally. Self-description
-/// (§3.5) therefore means carrying the `name` on the record itself — a deliberate
+/// ([§dd-dr:nodes]) therefore means carrying the `name` on the record itself — a deliberate
 /// asymmetry with [`ParsedArgument`], which points at its `Arc<ArgumentSpec>`: an
 /// argument spec carries parser/name/delta worth pointing at; a slot record has no
 /// spec-side counterpart.

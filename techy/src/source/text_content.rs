@@ -6,7 +6,7 @@ use alloc::string::String;
 use super::span::Span;
 
 /// Logical textual content of a node payload — the *content* is first-class; a span is
-/// provenance, not the content's storage (ARCHITECTURE.md §nodes).
+/// provenance, not the content's storage (ARCHITECTURE.md [§dd-arch:nodes]).
 ///
 /// Content that came from parsing is [`Spanned`](TextContent::Spanned) (zero-copy: a byte
 /// range into the source the carrying node's `SourceSpan` refers to); content that was

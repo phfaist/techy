@@ -15,7 +15,7 @@ use super::parsing_state::StateData;
 ///
 /// The `enable_*` gates override independently of their data: disabling a feature for a
 /// scope is `enable_commands: Some(false)`, and a later `Some(true)` re-enables it with
-/// the *original* rules intact — no party has to carry them (DESIGN_RATIONALE.md §3.2).
+/// the *original* rules intact — no party has to carry them (DESIGN_RATIONALE.md [§dd-dr:tokens]).
 ///
 /// Collections are replaced wholesale, not merged: a delta that wants "current group
 /// rules plus one more" is built by the party that can see the current state (typically
@@ -114,13 +114,13 @@ pub struct ParsingStateDelta<L: Lang> {
     /// `push_libraries`): stack-shape ops and definition ops routed to a named
     /// provider — see [`ScopeOp`]. This is how definitions extend mid-parse
     /// (`\newcommand`); scope reversion is structural — the caller keeps the previous
-    /// `Arc<ParsingState>` (ARCHITECTURE.md §specs). Ops can **fail** (absent target
+    /// `Arc<ParsingState>` (ARCHITECTURE.md [§dd-arch:specs]). Ops can **fail** (absent target
     /// name, immutable provider): failures are collected per op — the rest still
     /// apply — and surface through the fallible
     /// [`derived()`](super::ParsingState::derived).
     pub scope_ops: Vec<ScopeOp<L>>,
     /// Override the parsing mode ([`StateData::mode`]); `None` = leave unchanged.
-    /// The override *is* the mode-change signal (DESIGN_RATIONALE.md §3.3):
+    /// The override *is* the mode-change signal (DESIGN_RATIONALE.md [§dd-dr:parsing-state]):
     /// [`Lang::finalize_transition`] sees it applied on the new data and interprets it
     /// against the previous state's [`mode()`](super::ParsingState::mode) — no
     /// [`Lang::Event`] needed for mode-shaped transitions.

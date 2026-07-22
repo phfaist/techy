@@ -2,7 +2,7 @@
 //!
 //! The *notion* of "environment" is preset property; core contributes parameterized
 //! building blocks only (decided July 2026, Phase 7 plan session — DESIGN_RATIONALE.md
-//! §3.5/§3.6). This module promotes the composition rehearsed test-side in Phase 6.6:
+//! [§dd-dr:nodes]/[§dd-dr:parsers-engine]). This module promotes the composition rehearsed test-side in Phase 6.6:
 //!
 //! - [`BeginSpec`] — the `\begin` dispatcher, registered as an ordinary
 //!   [`Macro`](CallableType::Macro) entry of the [`base_package`](super::base_package)
@@ -17,7 +17,7 @@
 //!   *resolved* `\end` is always an orphan.
 //! - [`EnvironmentSpec`] — the registration type for environments: declared arguments
 //!   plus body behavior, reachable through the sanctioned funnel pattern
-//!   (DESIGN_RATIONALE.md §3.4): the concrete wrapper holds an
+//!   (DESIGN_RATIONALE.md [§dd-dr:specs]): the concrete wrapper holds an
 //!   `Arc<dyn `[`EnvironmentBehavior`]`>`, whose defaulted methods carry the body
 //!   state delta and the body-parser choice (pylatexenc's
 //!   `EnvironmentSpec.make_body_parser` precedent; [`VerbatimBehavior`] overrides it
@@ -165,7 +165,7 @@ pub struct EnvironmentInvocation<'p> {
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the funnel's inner
-/// trait (DESIGN_RATIONALE.md §3.4): third-party implementations override the
+/// trait (DESIGN_RATIONALE.md [§dd-dr:specs]): third-party implementations override the
 /// defaulted methods; the composition reaches them through the concrete wrapper's
 /// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
 /// `make_body_parsing_state_delta`), with the declarative standard implementation
@@ -339,7 +339,7 @@ impl EnvironmentBehavior for BodyDeltaOverride {
 
 /// The preset's environment spec: the registration type for
 /// [`CallableType::Environment`] entries — the funnel wrapper (DESIGN_RATIONALE.md
-/// §3.4) through which the `\begin` composition reaches the environment's
+/// [§dd-dr:specs]) through which the `\begin` composition reaches the environment's
 /// [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so the open set
 /// of behaviors funnels through this one concrete spec type).
 ///
@@ -570,7 +570,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
             spec,
             arguments: ParsedArguments::from(arguments),
             slots,
-            // Environment shapes record empty post-space (§3.5 invariant 3 as
+            // Environment shapes record empty post-space ([§dd-dr:nodes] invariant 3 as
             // amended): whitespace after `\begin` is unrecorded scaffolding
             // normalization, whitespace after `\end{…}` is sibling content.
             post_space: TextContent::empty(),

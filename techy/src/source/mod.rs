@@ -1,11 +1,11 @@
 //! S0 — source management: content, spans, provenance, resolution, line/column analysis.
 //!
-//! This stratum implements `ARCHITECTURE.md` §source and `DESIGN_RATIONALE.md` §3.1:
+//! This stratum implements `ARCHITECTURE.md` [§dd-arch:source] and `DESIGN_RATIONALE.md` [§dd-dr:sources-and-spans]:
 //!
 //! - [`Source`] owns one unit of source content, its origin metadata, and its
 //!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
 //! - [`Span`] is a plain `Copy` byte range — the transient span type on which all span
-//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately, §3.8; the
+//!   arithmetic rests. Tokens and readers carry only `Span`s (deliberately, [§dd-dr:errors]; the
 //!   type lives here rather than in the token topic because errors use it independently
 //!   of tokenization).
 //! - [`SourceSpan`] is an `Arc<Source>` + byte range. Nodes and errors/diagnostics carry
@@ -36,7 +36,7 @@
 //! `Option<String>` (conventionally the URL the content was obtained from, `None` when
 //! unknown or synthesized). When the `Lang` trait arrives (Phase 3+), `L::SourceOrigin` will
 //! be plugged into this parameter by the higher layers; L0 itself never depends on `Lang`,
-//! preserving the strict layering of ARCHITECTURE.md §3.
+//! preserving the strict layering of ARCHITECTURE.md [§dd-arch:arch].
 //!
 //! # no_std
 //!

@@ -6,11 +6,11 @@
 //! delimiters are minted for the occasion), [`MarkerArgumentParser`] (literal markers
 //! like `*`), and [`ExpressionParser`] (one node: group / full invocation / single
 //! char) — pylatexenc's `'{'` / `'['` / `'*'` argument shorthands resolved into core
-//! parsers, parameterized by group types and rules (no privileged spellings, §2.3;
+//! parsers, parameterized by group types and rules (no privileged spellings, [§dd-dr:no-privileged-concepts];
 //! the preset one-liner constructor is `latexlike::argument_specs`; the delimited
 //! verbatim sibling lives in [`verbatim_parser`](super::VerbatimArgumentParser)).
 //!
-//! # Regions, noise, and the absent contract (DESIGN_RATIONALE.md §3.5)
+//! # Regions, noise, and the absent contract (DESIGN_RATIONALE.md [§dd-dr:nodes])
 //!
 //! An argument parser owns its argument's **entire region**, leading noise included: it
 //! scans whitespace and comments itself ([`scan_argument_noise`]) and stages them as
@@ -27,7 +27,7 @@
 //! before a present mandatory re-scans the same noise, by design) and speculatively
 //! staged nodes are never claimed (the builder drops them).
 //!
-//! # Recovery (DESIGN_RATIONALE.md §3.8, detection-site rules)
+//! # Recovery (DESIGN_RATIONALE.md [§dd-dr:errors], detection-site rules)
 //!
 //! A missing *mandatory* argument is diagnosed here — tolerant: diagnostic + report
 //! absent; strict: abort — while a missing optional or marker is silent. An
@@ -68,7 +68,7 @@ use super::{
 /// Condition: a mandatory argument was missing at its position (end of input, a
 /// paragraph break, an enclosing group close) — detected by the mandatory argument
 /// parsers, which report the argument absent after recording it
-/// (DESIGN_RATIONALE.md §3.8). No callable name in the payload: the frame stack renders
+/// (DESIGN_RATIONALE.md [§dd-dr:errors]). No callable name in the payload: the frame stack renders
 /// the enclosing invocation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -158,7 +158,7 @@ impl<L: Lang> fmt::Debug for ArgumentNoise<'_, L> {
 /// Scan an argument's leading noise — whitespace and comments ahead of its syntax —
 /// staging each as an ordinary node under the context's current state (the argument's
 /// own state: noise policy is inseparable from argument syntax, DESIGN_RATIONALE.md
-/// §3.5), and stop at the first non-noise token, peeked and left unconsumed.
+/// [§dd-dr:nodes]), and stop at the first non-noise token, peeked and left unconsumed.
 ///
 /// The shared entry step of the standard argument parsers; custom [`ArgumentParser`]s
 /// with ordinary noise behavior use it the same way. Parsers whose syntax involves the
@@ -192,7 +192,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
 
 /// Stage `pre_space` as a whitespace-only `Chars` node (if non-empty) and record it in
 /// `nodes` — how a committed token's pre-space becomes the region's leading noise
-/// (whitespace before an argument is a node like everywhere else, §3.5).
+/// (whitespace before an argument is a node like everywhere else, [§dd-dr:nodes]).
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
@@ -228,7 +228,7 @@ pub(super) fn stage<L: Lang>(
 /// Invocations dispatch through the spec's full `make_invocation_parser` factory path
 /// (takeover parsers included) under the current state — the descent policy question
 /// does not reach here ([`ChildStateSpec`](super::ChildStateSpec) is one level deep,
-/// §3.6) — with two deliberate rules:
+/// [§dd-dr:parsers-engine]) — with two deliberate rules:
 ///
 /// - A callable whose invocation **requires content**
 ///   ([`CallableSpec::requires_content`](crate::spec::CallableSpec::requires_content):
@@ -271,7 +271,7 @@ pub(super) fn parse_expression_node<'s, L: Lang>(
 
         TokenKind::Command { name, escape_char, .. } => {
             // Resolution under the current state, coherent with the state that
-            // tokenized the token (§3.6).
+            // tokenized the token ([§dd-dr:parsers-engine]).
             match cx.driver.resolve_command(&cx.state, next) {
                 CommandResolution::Resolved(resolved) => {
                     let invocation = Invocation {
@@ -283,7 +283,7 @@ pub(super) fn parse_expression_node<'s, L: Lang>(
                     dispatch_expression_invocation(cx, nodes, invocation)
                 }
                 CommandResolution::Unresolved { detail } => {
-                    // The decided unresolvable-command recovery (§3.8), in expression
+                    // The decided unresolvable-command recovery ([§dd-dr:errors]), in expression
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
                     cx.recover(
@@ -297,7 +297,7 @@ pub(super) fn parse_expression_node<'s, L: Lang>(
                     Ok(Some(id))
                 }
                 CommandResolution::Failed { detail } => {
-                    // Operational resolver failure (§3.8), in expression position: a
+                    // Operational resolver failure ([§dd-dr:errors]), in expression position: a
                     // distinct condition from a clean miss, same span-backed recovery.
                     cx.recover(
                         CommandResolutionFailed::new(*name, *escape_char, detail),
@@ -381,9 +381,9 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     }
 
     stage_pre_space(cx, nodes, token.pre_space)?;
-    // The invocation's traceback frame (the expression-position dispatch site, §3.8).
+    // The invocation's traceback frame (the expression-position dispatch site, [§dd-dr:errors]).
     let frame = super::invocation_frame(cx, &invocation);
-    // Consume the trigger whole before the parser runs (the dispatch contract, §3.6);
+    // Consume the trigger whole before the parser runs (the dispatch contract, [§dd-dr:parsers-engine]);
     // the parser comes from the driver's interception seam (Phase 7.2).
     cx.tokens.move_past(token, true);
     let driver = cx.driver;
@@ -630,7 +630,7 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
     }
 }
 
-/// The missing-mandatory recovery (§3.8): diagnostic at the blocking position
+/// The missing-mandatory recovery ([§dd-dr:errors]): diagnostic at the blocking position
 /// (tolerant) or abort (strict); absent, nothing consumed.
 pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
@@ -753,12 +753,12 @@ fn probe_minted_group<'s, L: Lang>(
 /// `\item[{a]b}]` genuinely fails — stray-close unwinding with diagnostics, exactly
 /// like `{a]b}` anywhere else in that language. Intended, not degradation: stripping
 /// restores the language's own reading, it never overrides it (user-decided July 2026,
-/// DESIGN_RATIONALE.md §3.6).
+/// DESIGN_RATIONALE.md [§dd-dr:parsers-engine]).
 ///
 /// Content designation: the option group's children — except that a **lone child group
 /// of the configured protective class** (`[{arg with ]}]`: braces protecting the `]`)
 /// designates *that* group's children instead, the parse-time resolution of
-/// pylatexenc's post-hoc `unwrap_double_group` accessor hack (§3.5).
+/// pylatexenc's post-hoc `unwrap_double_group` accessor hack ([§dd-dr:nodes]).
 ///
 /// [`ChildStateSpec`]: super::ChildStateSpec
 /// [`TokenRules::temporary_groups`]: crate::token::TokenRules::temporary_groups
@@ -1286,7 +1286,7 @@ mod tests {
         let frac = root_child(&parsed, 0);
         assert_eq!(frac.span().range(), 0..9);
         // The name-terminating whitespace is the recorded post-space — between the
-        // name and the first region (§3.5 invariant 3 as amended).
+        // name and the first region ([§dd-dr:nodes] invariant 3 as amended).
         assert_eq!(frac.post_space(), Some(" "));
         // Children: "1", the inter-argument whitespace node, "2".
         assert_eq!(frac.child_count(), 3);
@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn absent_optional_probe_rewinds_and_noise_reparses_as_enclosing_content() {
-        // The probe/rewind case from §3.5: the scan consumes the comment while looking
+        // The probe/rewind case from [§dd-dr:nodes]: the scan consumes the comment while looking
         // for `[`, finds `x`, rewinds — the same comment re-parses as sibling content,
         // and the speculatively staged nodes are dropped by the builder.
         let st = state_with(&[("item", vec![optional_arg()])]);
@@ -1577,7 +1577,7 @@ mod tests {
     #[test]
     fn optional_lone_protective_group_designates_inner_content() {
         // `[{arg with ]}]`: the braces protect the `]`; the parser designates the
-        // *inner* group's children as content at parse time (§3.5 — the parse-time
+        // *inner* group's children as content at parse time ([§dd-dr:nodes] — the parse-time
         // resolution of pylatexenc's unwrap_double_group accessor hack).
         let st = state_with(&[("item", vec![optional_arg_unwrapping()])]);
         let parsed = parse_std(r"\item[{arg with ]}]", &st, Recovery::Strict);
@@ -1659,7 +1659,7 @@ mod tests {
     #[test]
     fn optional_brace_protection_reaches_nested_bracket_levels() {
         // The temporary-rule lifecycle (user-decided July 2026, DESIGN_RATIONALE.md
-        // §3.6): the brace descent at bracket depth two strips the minted rule, so its
+        // [§dd-dr:parsers-engine]): the brace descent at bracket depth two strips the minted rule, so its
         // `]` is an ordinary character — beyond pylatexenc, whose one-level policy
         // mangles exactly this shape (3.0a33-checked: childless nested group, leaked
         // `]`).
@@ -1731,7 +1731,7 @@ mod tests {
 
     #[test]
     fn brackets_as_language_groups_defeat_brace_protection_by_design() {
-        // User-decided (July 2026, Action-06 review; DESIGN_RATIONALE §3.6): brace
+        // User-decided (July 2026, Action-06 review; DESIGN_RATIONALE [§dd-dr:parsers-engine]): brace
         // protection works because the *reverted* argument state reads `]` as an
         // ordinary character. When the language's own base rules class `[`/`]` as a
         // genuine group pairing, the reverted state reads `]` as a real group-close
@@ -1851,7 +1851,7 @@ mod tests {
 
     #[test]
     fn unrecoverable_token_error_while_probing_aborts_even_tolerant() {
-        // The probe_token recoverability rule (§3.8): a token error carrying no recovery
+        // The probe_token recoverability rule ([§dd-dr:errors]): a token error carrying no recovery
         // must abort even under Tolerant — reporting the argument absent instead would
         // record a spurious missing-argument diagnostic before the enclosing loop's
         // re-read aborted anyway.
