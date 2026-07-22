@@ -1,6 +1,6 @@
 # Design Rationale & Decision Log
 
-**Status: LIVING DOCUMENT.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md).
+**Status: LIVING DOCUMENT.** Companion to [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 Where ARCHITECTURE.md says *what* the architecture is, this document records *why* — the
 arguments, trade-offs, and rejected alternatives behind each decision, plus questions still

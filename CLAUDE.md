@@ -49,7 +49,7 @@ cargo test <name>    # Specific test
 ## Important Files
 
 - [ARCHITECTURE.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
-- [DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
+- [dev-docs/DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
 
 If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.  Overall, we should try to achieve more or less parity with pylatexenc's capabilities on the features we are planning to implement, while taking advantage of the opportunity to improve on some bugs and quicks of pylatexenc.
 
