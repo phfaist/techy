@@ -12,6 +12,9 @@ repository.workspace = true
 # re-exported from `techy::error`, next to the traits they implement. Publish this crate
 # before `techy` (techy depends on it by version).
 
+[lints]
+workspace = true
+
 [lib]
 proc-macro = true
 

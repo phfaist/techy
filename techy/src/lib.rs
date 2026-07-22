@@ -102,6 +102,9 @@ pub mod guide {
 
     #[doc = include_str!("../../docs/parsing-model.md")]
     pub mod parsing_model {}
+
+    #[doc = include_str!("../../docs/concepts-overview.md")]
+    pub mod concepts_overview {}
 }
 
 /// Support module for `techy-derive`-generated code only: `alloc` paths spelled so they

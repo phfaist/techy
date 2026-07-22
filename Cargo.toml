@@ -16,6 +16,18 @@ authors = ["Philippe Faist"]
 license = "MIT"
 repository = "https://github.com/phfaist/techy"
 
+# Workspace-wide lint policy; members opt in with `[lints] workspace = true`.
+# missing_docs stays "warn" until the count reaches zero (promotion to "deny" is a
+# separate decision). broken_intra_doc_links is "deny": documentation link rot fails
+# the `cargo docs` build instead of silently shipping.
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+bare_urls = "warn"
+
 # Profiles apply workspace-wide and are only honored in the workspace root manifest.
 [profile.release]
 lto = true

@@ -11,6 +11,9 @@ repository.workspace = true
 keywords = ["latex", "parser", "flm", "markup"]
 categories = ["parser-implementations", "text-processing"]
 
+[lints]
+workspace = true
+
 # Near-zero mandatory dependencies (DESIGN_RATIONALE.md [§dd-dr:dependencies]):
 # hand-written Display/Error impls; library conditions flow through diagnostics, not
 # logging. Exceptional, case-by-case additions of widely used, lightweight, no_std-capable
