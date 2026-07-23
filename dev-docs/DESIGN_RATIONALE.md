@@ -1250,107 +1250,93 @@ guarantees a `NodeRef` can't outlive the tree its index points into. Mutation ha
 inside `ParserSession`; `finish()` consumes the session, so there is no mutable/immutable
 conflict by design.
 
-**Closed `NodeKind<L>`, unified `Callable` kind, two-tier ext, no `Custom` variant
-("Option F")** — DECIDED (ARCHITECTURE.md Decision 3, July 2026; implemented July 2026,
-Phase 5). The structural taxonomy is `Chars`/`Group`/`Callable`/`Comment`/`List`;
+#### Closed `NodeKind<L>`: unified `Callable`, two-tier ext, no `Custom` variant [§dd-dr:closed-node-kind]
+
+Status: DECIDED (user-led design discussion; "Option F").
+
+The structural taxonomy is `Chars`/`Group`/`Callable`/`Comment`/`List`;
 macro/environment/specials are invocation *forms* (`CallableTypeId` on `CallableData`), not
 node kinds; custom data rides in the two-tier ext bundle (`Lang::NodeExts: NodeExtTypes` —
 uniform `NodeExt` + per-kind `<Kind>NodeExt`, all bounded `Clone + Debug + Default`; the
 `Default` gives builders their no-ext value, mirroring `StateExt`). `NodeExtTypes` is defined
 next to `Lang` in the state topic, not in `node/` (moving it would recreate a module cycle for
-cosmetics); `SimpleLang` + blanket impl provides the all-defaults shortcut. The full
-resolution argument (why `Custom` died, de-keyed specs, owned names, `TextContent`) is
-recorded in ARCHITECTURE.md §4b and is not duplicated here.
+cosmetics); `SimpleLang` + blanket impl provides the all-defaults shortcut.
+The resolution argument, in full:
+- The original proposal — closed structural enum + `Custom(L::NodeData)` variant —
+  conflated two needs: *extra per-instance data on a node that IS structurally a
+  group/callable/…* (the common case) and *genuinely new structural shapes* (rare; no
+  concrete example survived scrutiny — custom constructs are still invocation-, group-, or
+  leaf-shaped). Making `Custom` a *sibling* of the structural variants meant attaching data
+  destroyed structural identity: a group with custom data stopped being a group to all
+  generic tooling.
+- The `Callable` merge (macro/environment/specials differ by invocation form, not by parsed
+  shape) is itself a de-privileging move — "environment" was a preset concept wrongly
+  enshrined as a core node kind — and it made the two-tier ext affordable.
+- The merge required recording the invocation form somewhere ⇒ `CallableTypeId`, which
+  also became the definition key space and the per-form unknown-fallback hook. Specs were
+  **de-keyed** (behavior only, no name), enabling flyweight sharing across names and
+  shared-singleton unknown-specs — a callable's spec is never `None` with zero
+  per-instance allocation.
+- **Names are owned** (`Box<str>`): identity-bearing, and span-backed names would force
+  synthetic nodes (transforms creating callables — FLM's bread and butter) to fabricate
+  sources. The same argument generalized to content fields ⇒ **`TextContent`**
+  (span-backed when parsed, owned when synthesized/normalized), which made normalization
+  representable and level-2 recomposition self-contained. `post_space` is kept and
+  reproduced verbatim (reproduce, don't guess); the whitespace-as-chars-nodes rule restores
+  the exact sibling-span partition invariant. Args vs. slots stay two named concepts over
+  shared machinery — the boundary is a spec-owned guideline, not core law.
 Rejected alternatives: `trait Node` + `Box<dyn Node>` + `as_any()` downcasting + `clone_box()` (the
-generated TRAIT_BASED_ARCHITECTURE.md design) — loses exhaustive matching, adds per-node
-boxing, makes serialization and flat storage impossible, and reintroduces runtime type errors
-that the type system should prevent.
+generated trait-based design) — loses exhaustive matching, adds per-node boxing, makes
+serialization and flat storage impossible, and reintroduces runtime type errors that the
+type system should prevent; annotation wrapper nodes (re-create the problem one level up);
+side tables (break node self-containment across tree transforms).
 
 #### No core `MathNode` [§dd-dr:no-core-math-node]
 
-Status: DECIDED (consequence of [§dd-dr:no-privileged-concepts] and Decision 3).
+Status: DECIDED (consequence of [§dd-dr:no-privileged-concepts] and [§dd-dr:closed-node-kind]).
 
 `$…$` parses as a `Group` with a `$`-delimited `GroupTypeId` under a math-mode state extension;
 the latexlike preset provides accessor helpers so ergonomics don't suffer.
 Revisit if: preset-level ergonomics prove genuinely painful in practice — the fallback is
 preset-defined ext data on the `Group` kind, still not a core variant.
 
-#### Args/slots ↔ children encoding: one node per region [§dd-dr:region-nodes]
+#### `ParsedArguments`/`ParsedSlots`: self-describing argument records [§dd-dr:parsed-arguments]
 
-Status: DECIDED (user; was open question [§dd-dr:open-questions]).
+Status: DECIDED (user; replaces the first-cut `ArgsLayout`/`SlotsLayout` offset maps,
+following pylatexenc's `ParsedArguments` pattern).
 
-A `Callable` node's children range holds one node per
-*present* argument (the argument's natural node — typically a `Group`; a `List` wrapper only if
-an argument kind ever yields several nodes), followed by one `List` node per slot (an
-environment body = one `List` child; an empty body is an empty `List` — a region that exists,
-unlike an absent optional argument). `ArgsLayout` maps spec-argument index →
-`Absent` / `Present { child offset }` / `Marker { spelling }`; `SlotsLayout` maps slot → child
-offset. Per-instance syntax choices the spec doesn't determine (today the marker spelling;
-delimiter alternatives, verbatim fences, and slot separators arrive with Phase 6's parsers)
-are recorded **in the layouts as `TextContent`**, not in ext types — the level-2 recomposition
-requirement must not depend on `Lang` cooperation.
-Rationale: matches pylatexenc's proven argnlist shape (one node per argument, `None` when
-absent); every region has node identity and its own span ("what is the span of `\frac`'s 2nd
-argument" is answerable); generic child traversal visits meaningful units; layouts stay small.
-Rejected alternatives: flattening region contents directly into the children range with `(offset, len)`
-layout entries — regions lose node identity (no span, no ext attachment point) and visitors
-see argument content and body content indistinguishably mixed; separate `Vec<NodeId>` lists
-inside `CallableData` — duplicates the children mechanism, exempts callables from the
-flat-tree contiguity invariant, and costs per-callable allocations.
-*(Amended July 2026, current-level review: the record types `ArgsLayout`/`SlotsLayout` are
-superseded by `ParsedArguments`/`ParsedSlots` — see below. The one-node-per-region encoding
-itself stands, with one change: provided markers are ordinary `Chars` child nodes.)*
-*(Amended again July 2026, regions session: the one-node-per-argument encoding is superseded
-by **one child region per argument/slot** — see the `ChildRegion` entry below. One node per
-argument gave inter-argument comments no home (`\frac % half⏎{1}{2}`: `pre_space` held only
-whitespace), breaking the partition invariant. The span-answerability rationale carries over
-(region span = first..last region node); "generic child traversal visits meaningful units" is
-deliberately weakened — a callable's child list is now the raw-syntax view, and semantic
-access goes through the records.)*
-
-**`ParsedArguments`/`ParsedSlots` replace `ArgsLayout`/`SlotsLayout` (pylatexenc's
-`ParsedArguments` pattern)** — DECIDED (user, July 2026, current-level review session).
 `ParsedArguments<L>` holds one `ParsedArgument<L>` per spec'd argument:
-`{ spec: Arc<ArgumentSpec<L>>, child: Option<u32>, pre_space: TextContent,
-ext: ArgumentExt<L> }`; `ParsedSlots<L>` holds `ParsedSlot<L> { spec: Arc<SlotSpec<L>>,
-child: u32 }`. Key points, each argued in the session:
-- **Self-describing records.** Every entry carries the `Arc`'d spec it was parsed against —
-  pylatexenc keeps `arguments_spec_list` next to `argnlist` for exactly this: a custom
-  invocation parser may produce an argument structure the callable spec didn't declare
-  (`\newcommand`-alikes), and the record must stand alone.
-- **Presence lives *inside* the entry** (`child: Option<u32>`), not as
+`{ spec: Arc<ArgumentSpec<L>>, region: Option<ChildRegion>, ext: ArgumentExt<L> }`;
+`ParsedSlots<L>` holds `ParsedSlot<L> { name: Option<Box<str>>, region: ChildRegion,
+ext: SlotExt<L> }` (slots carry a name, not a spec — spec-side slot declarations do not
+exist, cf. [§dd-dr:no-spec-side-slots]). Key points, each argued in the session:
+- **Self-describing records.** Every argument entry carries the `Arc`'d spec it was parsed
+  against — pylatexenc keeps `arguments_spec_list` next to `argnlist` for exactly this: a
+  custom invocation parser may produce an argument structure the callable spec didn't
+  declare (`\newcommand`-alikes), and the record must stand alone.
+- **Presence lives *inside* the entry** (`region: Option<ChildRegion>`), not as
   `Vec<Option<ParsedArgument>>`: absent optionals keep their spec, so by-name lookup
   distinguishes "not provided" from "no such argument". This zips pylatexenc's two parallel
-  lists into one array-of-structs; the user's sketched `Vec<Option<…>>` shape is preserved
-  one level down.
+  lists into one array-of-structs. Presence is `Option`-ness of the region, not node
+  existence — an empty provided region is representable.
 - **Provided markers are `Chars` nodes** (pylatexenc's `LatexOptionalCharsMarkerParser`
-  returns a chars node for `*`): every provided argument has a node, and the three-way
-  `Absent`/`Present`/`Marker` layout enum disappears.
+  returns a chars node for `*`): every provided argument has content nodes, and a three-way
+  `Absent`/`Present`/`Marker` enum is unnecessary.
 - **No stored name→index map**: lookup scans the entries' spec names (argument counts are
   tiny; the specs are the single source of truth). Add a cache only if profiling ever says
   so.
-- **Content access is computed, not stored** (pylatexenc's `get_content_nodelist()` /
-  `get_content_as_chars()` are accessors): the group node's children *are* the content, and
-  stored copies would diverge under transforms. The extraction-view API is the Phase 7 work
-  package (report R7). What *is* stored: the new `ArgumentExt` slot in the
-  `Lang::NodeExts` bundle, for extensions caching derived data per argument (e.g.
-  `{ref_domain, ref_key}` from a `fig:Abc` argument) — populated by custom argument parsers
-  or the Phase 6 finalize hook (report R3).
-- **Per-instance syntax records** (Q3 Option A): `pre_space` per argument now; slot
-  terminator/separator records arrive with `SlotsParser` (Phase 6).
+- **Content access is computed — but content membership is recorded.** Extraction
+  conveniences stay computed accessors (pylatexenc's `get_content_nodelist()` /
+  `get_content_as_chars()`; stored copies would diverge under transforms), while *which
+  nodes are content* is recorded per argument, parser-designated
+  ([§dd-dr:child-regions]) — eliminating pylatexenc's lone-group unwrap heuristics. The
+  extraction-view API: [§dd-dr:read-api]. What *is* stored beyond the region: the
+  `ArgumentExt` slot in the `Lang::NodeExts` bundle, for extensions caching derived
+  per-argument data (e.g. `{ref_domain, ref_key}` from a `fig:Abc` argument) — populated
+  by custom argument parsers or `Lang::finalize_node`.
 Rejected alternatives: parallel `specs`/`args` vectors (pylatexenc-literal — an unenforced
 length/pointer-consistency invariant and a redundant `Arc` when the spec also sits in the
 entry); "layout" as a name (opaque — nobody could say what it referred to).
-Revisit if: an argument form that is "provided" yet produces no node appears — then
-presence needs a flag separate from `child`.
-*(Amended July 2026, regions session: `child: Option<u32>` and `pre_space` are replaced by
-`region: Option<ChildRegion>` — next entry. The revisit clause above is thereby resolved:
-presence is `Option`-ness of the region, no longer tied to node existence (an empty region
-is representable). The self-describing-records, presence-inside-the-entry,
-markers-as-`Chars`, and no-name-map points stand. The "content access is computed, not
-stored" point is refined: extraction conveniences stay computed, but *which nodes are
-content* is now recorded per argument — parser-designated, eliminating pylatexenc's
-lone-group unwrap heuristics.)*
 
 #### `SlotExt` — slot records carry per-instance ext, symmetric with `ArgumentExt` [§dd-dr:slot-ext]
 
@@ -1371,27 +1357,29 @@ Status: DECIDED (user).
 The flat iterator yields storage
 (breadth-first) order — `a`, `c`, `b` for `a{b}c` — which a name as generic as `iter`
 invites consumers to mistake for document order; the rename makes the iteration order
-part of the signature. A document-order `descendants()` arrives only with the Phase 7
-read API, when it has a consumer. Upward navigation (`parent: u32` in `NodeData`,
-`parent()`/`next_sibling()`/`ancestors()`) was considered and declined as not needed —
-the transient parent vector `finish()` computes for region resolution stays transient.
-Named argument-node accessors (`argument_nodes_named` etc.) are deferred to the Phase 7
-pylatexenc-style argument-access package rather than added piecemeal.
+part of the signature. The document-order `descendants()` arrived with the read API
+([§dd-dr:read-api]), once it had consumers. Upward navigation (`parent: u32` in
+`NodeData`, `parent()`/`next_sibling()`/`ancestors()`) was considered and declined as not
+needed — the transient parent vector `finish()` computes for region resolution stays
+transient. Named argument-node accessors (`argument_nodes_named` etc.) likewise landed
+with the read/extraction package, not piecemeal.
 
-**Argument/slot child *regions* with parser-designated content, resolved to global node
-ranges by the builder (`ChildRegion`, `ContentNodes`)** — DECIDED (user, July 2026, regions
-session; supersedes one-node-per-argument and `pre_space`). A callable's children range is
+#### Argument/slot child regions with parser-designated content (`ChildRegion`, `ContentNodes`) [§dd-dr:child-regions]
+
+Status: DECIDED (user, regions session; supersedes the earlier one-node-per-argument
+encoding and per-argument `pre_space` — the argument encoding's final shape).
+
+A callable's children range is
 the concatenation of one contiguous **region** per provided argument, then one per slot. A
 region holds the argument's full syntactic extent in source order: leading noise (comment
 nodes and whitespace-only `Chars` nodes — `pre_space` is deleted; whitespace before an
-argument is a node like everywhere else, matching the D1/D4 whitespace-as-chars rule and
+argument is a node like everywhere else, matching the whitespace-as-chars rule and
 pylatexenc's expression parser), the syntax-bearing node(s) (a `Group` for `{…}`/`[…]` with
 delimiters on `GroupData`; a `Chars` node for `\frac 1 2` single tokens and `*` markers,
 which **count as content** — pylatexenc parity), and any trailing per-instance syntax.
 Records: `ParsedArgument { spec, region: Option<ChildRegion>, ext }` and
-`ParsedSlot { spec, region: ChildRegion }` *(slots session, July 2026: the slot record's
-`spec` is now `name: Option<Box<str>>` — see the no-spec-side-slots entry, [§dd-dr:parsers-engine])*; a
-resolved `ChildRegion` =
+`ParsedSlot { name, region, ext }` (the slot record carries `name: Option<Box<str>>`, not
+a spec — cf. [§dd-dr:no-spec-side-slots]); a resolved `ChildRegion` =
 `{ children: Range<u32>, content_range: Range<u32>, content_parent: NodeId }`, **all in
 global node-index coordinates** (the `NodeData.children` system — one coordinate language,
 no per-callable base arithmetic). `content_parent` is the node whose child list holds the
@@ -1408,8 +1396,8 @@ content (`\m{}`). Key points:
 - **Noise ownership is the argument parser's** (pylatexenc-style), *not* a centralized
   `ArgumentsParser` scan: noise policy is inseparable from argument syntax — a verbatim
   argument whose delimiter is the comment char must see raw tokens, and the scan must run
-  under the argument's own parsing-state delta. Standard parsers share one noise-scan helper
-  (Phase 6); no noise knobs on `ArgumentSpec`. **Absent means zero consumption**: noise
+  under the argument's own parsing-state delta. Standard parsers share one noise-scan helper;
+  no noise knobs on `ArgumentSpec`. **Absent means zero consumption**: noise
   scanned while searching is rewound and re-parsed as enclosing content (an absent-optional
   probe before a present mandatory re-scans the same noise — by design); abandoned staged
   nodes are dropped by the builder.
@@ -1420,7 +1408,7 @@ content (`\m{}`). Key points:
   `InRegion(sub-range)` / `InChildrenOf(BuildId, child sub-range)` — contiguity by
   construction, O(1) even for huge slot bodies, empty ranges stay anchored) and *resolved in
   place* by `NodeTreeBuilder::finish()`. The phase is a runtime invariant the type system
-  can't see — the same genus as the rejected Q2-Option-B set-before-use field protocol —
+  can't see — the same genus as the earlier-rejected set-before-use field protocol —
   accepted here because resolution happens in a single component at a single point, finished
   trees cannot contain staged regions, and the resolved-only accessors panic on staged
   records (a caller bug under the builder's panic policy). Bought with it: parsers build
@@ -1433,14 +1421,14 @@ content (`\m{}`). Key points:
   [§dd-arch:nodes] partition invariant, mechanically checkable).
 - **Consequences accepted:** a callable's child list is the raw-syntax view (child count ≠
   argument count; `\frac 1 2` costs two whitespace `Chars` nodes); an argument has no single
-  node identity — transforms and views splice child *ranges* (Phase 7 view API);
+  node identity — transforms and views splice child *ranges* ([§dd-dr:read-api]);
   `NodeRef::argument(i)`/`argument_named()` are replaced by region/content-nodes accessors;
   `ParsedArguments` holds no `TextContent`, so its materialization plumbing is deleted.
   `CallableData.post_space` deliberately stays a field: it lies outside the region tiling
   and is whitespace-only by construction (trailing comments are never consumed).
 - **Slots mirror arguments** (same `ChildRegion` type), keeping the body `List` as the
-  content parent (span/state/ext identity; "an empty body exists"); whether terminator
-  syntax (`\end{align}`) becomes region nodes or spec-driven records stays open with Q1.
+  content parent (span/state/ext identity; "an empty body exists"); terminator syntax is settled
+  separately — rigid scaffolding is reconstructed, cf. [§dd-dr:environment-scaffolding].
 Rejected alternatives: centralized noise scanning (breaks verbatim-delimiter arguments; scans under the
 wrong state); noise as `TextContent` blobs (comments lose node identity — invisible to
 visitors and transforms); a wrapper `List` node per argument (extra node, unnatural shape);
@@ -1451,13 +1439,18 @@ into sibling syntax nodes (the same braces would get two representations dependi
 structural role, and argument values lose their group class); lone-group unwrap accessor
 heuristics (parser intent is not reconstructible after the fact); `Vec<BuildId>` content
 designation (contiguity by checked contract instead of by construction; O(k) for slot
-bodies; empty content loses its anchor).
+bodies; empty content loses its anchor); flattening region contents directly into the
+children range with `(offset, len)` layout entries (regions lose node identity — no span,
+no ext anchor — and visitors see argument and body content indistinguishably mixed);
+separate `Vec<NodeId>` region lists inside `CallableData` (duplicates the children
+mechanism, exempts callables from the flat-tree contiguity invariant, costs per-callable
+allocations).
 Revisit if: re-minting the layout-dependent ranges in transforms proves error-prone (by
 design, any new tree re-resolves records through its own builder).
 
 #### Group nodes store their delimiters: `NodeKind::Group(Box<GroupData<L>>)` [§dd-dr:group-delimiters]
 
-Status: DECIDED (user, current-level review session; follows pylatexenc's `LatexGroupNode.delimiters`).
+Status: DECIDED (user; follows pylatexenc's `LatexGroupNode.delimiters`).
 
 `GroupData<L>` = `{ group_type: Option<L::GroupTypeId>,
 open: TextContent, close: TextContent, ext }`.
@@ -1468,19 +1461,15 @@ and synthesized groups couldn't recompose; delimiter-sensitive consumers (pylate
 double-group unwrap compares `delimiters[0]`) need the strings directly. `TextContent`, not
 `Box<str>`: span-backed zero-copy when parsed, owned when synthesized; empty `close` on
 tolerant "close never found" recovery. `group_type` is **kept alongside** the strings as the
-typed identity ("is this a math group?" without string comparison; `$…$` vs `$$…$$` share
-spellings, not identity) and is `Option` so *internal synthesized groups* — structural
+typed identity — the group's *class* ([§dd-dr:group-classes]): "is this a math group?"
+needs no string comparison, while `$…$` vs `$$…$$` share a class and are distinguished by
+the stored delimiter strings — and is `Option` so *internal synthesized groups* — structural
 groups corresponding to no language group type — are representable (user amendment). Boxed
 for the same reason `CallableData` is: `Chars` must keep dominating the enum size.
 Rejected alternatives: delimiters-only (pylatexenc-pure — group classification degenerates to string
 comparison); registry-only (the inconsistency above).
 Revisit if: per-group-node allocation shows up in profiles (then consider inlining a
 small-string delimiter pair).
-*(Amended July 2026, group-classes session: `group_type` now records the group's *class*
-([§dd-dr:tokens]), not a pairing identity — the "is this a math group?" typed check stands unchanged,
-while `$…$` vs. `$$…$$` now share a class and are distinguished by the stored delimiter
-strings where spelling matters. The delimiters-only rejection stands.)*
-
 #### Node spans stay mandatory; synthetic-node representation deferred [§dd-dr:mandatory-node-spans]
 
 Status: DECIDED (user).
@@ -1489,9 +1478,9 @@ Status: DECIDED (user).
 nodes always have a real span, and level-1 recomposition (span → verbatim text) is
 unconditionally available. How *transform-created* nodes represent provenance (empty span
 anchored at the insertion point, a `Synthesized`-provenance source, a detached variant, …) is
-decided together with the transform/visitor API, post-Phase-6.
+decided together with the transform/visitor API (still future work).
 Rejected alternatives: `Option<SourceSpan>` now — every span consumer grows a `None` case that no
-Phase-5/6 code path can produce, and `TextContent::Spanned` would be unresolvable on span-less
+current code path can produce, and `TextContent::Spanned` would be unresolvable on span-less
 nodes (forcing an awkward "span-less ⇒ all content owned" side invariant).
 
 #### Staging builder with breadth-first flatten [§dd-dr:staging-builder]
@@ -1519,11 +1508,11 @@ merely uses it. No `PartialEq` on `TextContent`: logical-text equality of a `Spa
 requires the source content, so a structural `==` would be a footgun (`Spanned(2..4)` vs
 `Owned("ab")` may denote the same text); comparisons go through resolved `&str` (node-level
 accessors). Node/layout types likewise ship without `PartialEq` until golden-test needs make
-the right equality concrete (Phase 6/7).
+the right equality concrete.
 
 #### `Comment` nodes store their start delimiter and post-space [§dd-dr:comment-delimiters]
 
-Status: DECIDED (user; closes open question [§dd-dr:open-questions] / notes Q4, Option A).
+Status: DECIDED (user).
 
 `Comment { content, start: TextContent, post_space: TextContent, ext }`; the node's span
 covers start delimiter + content + post-space (the token's span convention).
@@ -1534,9 +1523,11 @@ level-2 recomposition self-contained, synthesized comments included.
 Rejected alternatives: recovering either from the span (fails for synthesized comments) or from a
 `Language` default (guessing).
 
-**Environment scaffolding (`\begin{name}` / `\end{name}`) is neither child nodes nor a
-stored record — rigid syntax, reconstructed** — DECIDED (user, July 2026, Phase 6 plan
-session; closes the terminator-representation question left open by the regions session).
+#### Environment scaffolding is rigid syntax, reconstructed — not nodes, not a record [§dd-dr:environment-scaffolding]
+
+Status: DECIDED (user; closes the terminator-representation question left open by the
+regions session).
+
 An environment-shaped callable's span covers the whole `\begin{align}…\end{align}` extent
 (plus post-space); its children are the argument regions followed by the body `List` — one
 contiguous block whose span runs from the first argument region to the body's end. The
@@ -1564,7 +1555,7 @@ is not): that construct's parser then records the choice on the node, following 
 
 #### Whitespace and span invariants pinned [§dd-dr:span-invariants]
 
-Status: DECIDED (user; ARCHITECTURE.md [§dd-arch:nodes] updated).
+Status: DECIDED (user).
 
 1. *Chars accumulation:* `Char` tokens accumulate into maximal `Chars` nodes; a token's
    pre-space (content whitespace) joins the run; the run flushes when any non-`Char`
@@ -1580,18 +1571,14 @@ Status: DECIDED (user; ARCHITECTURE.md [§dd-arch:nodes] updated).
    after a single-character command (`\& b`) or after a final argument is ordinary
    sibling/region content, as in TeX. Groups have no post-space (space after `}` is
    content). Comment post-space is the token's (newline + indentation, stopping at
-   paragraph breaks). *(Amended July 2026, Phase 6.4, user decision — supersedes the
-   original "claimed by the invocation parser via a peek + `move_to` one-call helper"
-   rule; the planned `claim_post_space` helper was never shipped. Two arguments: TeX
-   swallows whitespace only after a control word, so claiming beyond the token would
-   deviate from both TeX and pylatexenc semantics; and the token-only rule keeps
-   `TokenListReader` faithful — a claim helper re-peeking after the trigger would read
-   whitespace a pre-scanned list cannot re-serve. Consequences: for callables *with*
-   arguments (6.5) the recorded post-space sits between the name and the first argument
-   region — a sub-range of the node's span but no longer necessarily trailing — and
-   environment-shaped callables record empty post-space, the whitespace after `\begin`
-   being unrecorded rigid-scaffolding normalization and the whitespace after
-   `\end{…}` being sibling content.)*
+   paragraph breaks). (Reversal record, July 2026: an earlier rule had the invocation parser *claim*
+   whitespace beyond the token via a planned `claim_post_space` helper — never shipped,
+   and consciously reversed: TeX swallows whitespace only after a control word, so
+   claiming more would deviate from both TeX and pylatexenc, and the token-only rule
+   keeps a pre-scanned token list faithful. Consequences: for callables with arguments
+   the recorded post-space sits between the name and the first argument region — a
+   sub-range of the node's span, not necessarily trailing — and environment-shaped
+   callables record empty post-space.)
 4. *End of stream:* `EndOfStream.pre_space` materializes as a final whitespace-only `Chars`
    node.
 5. *Partition invariant:* sibling spans partition the parent's *content interior* exactly —
@@ -1608,7 +1595,7 @@ Status: DECIDED (user, code-review follow-up session).
 
 `NodeTree::node()`'s assert checks *range*, not *provenance*: an in-range id minted by a
 different tree silently resolves to whatever node sits at that index — exactly the hazard
-of Phase 7 transforms, which hold two trees (source + rebuilt) at once. Debug builds now
+of tree transforms, which hold two trees (source + rebuilt) at once. Debug builds now
 stamp every tree layout with a tag from a wrapping `static AtomicU32` counter
 (`node::tree::next_tree_tag`; `fetch_add` wraps, fine for a heuristic), carry it in
 `NodeId` and in resolved `ChildRegion` records, and `debug_assert` the match at the single
@@ -1622,17 +1609,19 @@ drop); a debug-only `Box` dummy allocation whose address tags the tree (unique a
 *live* trees, but likewise reusable after drop; the counter never repeats short of 2^32
 trees). Bare `Range<u32>` node ranges remain uncheckable — they carry no provenance even
 in debug; `nodes_in()`'s docs say so.
-Revisit if: Phase 7 gives ids/regions a first-class cross-tree remapping story — the
+Revisit if: a public transform surface gives ids/regions a first-class cross-tree remapping story — the
 tag then belongs in that design.
-*(Amended July 2026, 7.8: the first cross-tree machinery landed as the crate-internal
-`node::copy::copy_subtree_into` — a finished subtree re-staged through the builder,
+The first cross-tree machinery has since landed: the crate-internal
+`node::copy::copy_subtree_into` re-stages a finished subtree through the builder,
 resolved regions translated back to staging coordinates and re-resolved for the new
 layout. Copies get new tags/ids by design (correlation with the original is by span,
 same `Arc<Source>`); the tag design is unchanged. A public transform surface remains a
-later phase's design.)*
+later design.
 
-**Slot read API: content nodes are primary; the wrapper node is an explicit, optional
-accessor** — DECIDED (user, July 2026, code-review follow-up session).
+#### Slot read API: content nodes primary; the wrapper is an explicit, optional accessor [§dd-dr:slot-read-api]
+
+Status: DECIDED (user, code-review follow-up).
+
 The old `slot(i)`/`body()` returned "the node whose children hold the content" — but for
 a `ContentNodes::InRegion` designation the builder resolves `content_parent` to the
 callable *itself* (there is no wrapper node), so `env.body()` could return `env` and a
@@ -1654,9 +1643,10 @@ parsing state.
 Revisit if: the List-free direction lands — `slot_content_parent` then likely
 disappears with the wrapper it exposes.
 
-**Read/extraction API (R7): `NodeSlice` as the node-list currency, free-function
-`node::extract` helpers, and derived results as real minted trees (the "builder
-route")** — DECIDED (user, July 2026, 7.8 checkpoint session).
+#### Read/extraction API: `NodeSlice` currency, `node::extract` helpers, the builder route [§dd-dr:read-api]
+
+Status: DECIDED (user).
+
 - **`NodeSlice<'t, L>`** — a `Copy` view `{&NodeTree, Range<u32>}` over a contiguous
   sibling run — is what every node-list-returning accessor returns: `children()`, the
   region/content accessors, and the new by-name family (`argument_nodes_named`,
@@ -1701,8 +1691,8 @@ route")** — DECIDED (user, July 2026, 7.8 checkpoint session).
   provenance). No insertion-ordered map dependency: the wrapper scans (the
   `ParsedArguments` no-name-map precedent).
 - **`descendants()`** (`NodeRef` + `NodeTree` sugar; preorder DFS, self excluded)
-  resolves the Action-05 deferral now that consumers exist (extraction composition,
-  the 7.9 acceptance suite); `iter_storage_order` keeps the breadth-first contrast
+  resolves the earlier deferral now that consumers exist (extraction composition, the
+  acceptance suite); `iter_storage_order` keeps the breadth-first contrast
   documented.
 Rejected alternatives: expanding `NodeRef` into an `InTree`/`AdHoc` enum so split partials could
 be tree-less nodes (user's initial sketch, analyzed): ownership cannot attach to the
@@ -1720,14 +1710,13 @@ them); `indexmap`-style ordered-map dependency for keyval; keyval aggregation kn
 Status: DECIDED (user).
 
 A one-line rendering per node — `chars(ab )`, `group(Math $ $)`, `Macro(emph)`,
-`comment( note)`, `list(3)` — promoted from the preset's `test_support` under 7.9's
-dedup mandate: it uses core accessors only (the id types are `Debug`-bounded), so it
+`comment( note)`, `list(3)` — promoted from the preset's test support under the dedup mandate: it uses core accessors only (the id types are `Debug`-bounded), so it
 is Lang-generic and serves any embedder's tests, logs, and the guide. The format is
 documented as human-oriented and **not a stability contract**; structural comparison
 (kinds, spans, accessors) remains the exactness tool.
 Rejected alternatives: a `Display`-adapter type (the `SearchedProviders` pattern) — heavier API
 surface for a test/log utility whose callers want `String` in assertions anyway;
-leaving it duplicated test-side (the 7.9 suite, the preset tests, and the guide would
+leaving it duplicated test-side (the acceptance suite, the preset tests, and the guide would
 carry three copies of the same formatter).
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
