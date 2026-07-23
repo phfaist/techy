@@ -3446,9 +3446,12 @@ list — with a subfolder, `cargo package` ships exactly the crate's files. This
 serde/tokio/clap layout, and serde is precisely our shape (lib + derive companion).
 Non-obvious pitfalls pinned during the move: (1) a virtual root has no `edition` to infer
 the dependency resolver from, so `resolver = "2"` must be explicit — v1 would unify
-features across the no_std-leaning core and std-linking members; (2) `include_str!`'d docs
-(`docs/guide.md`, `docs/parsing-model.md`) must live *inside* the package directory or
-`cargo package` breaks, so `docs/` moved into `techy/docs/`; (3) `readme = "../README.md"`
+features across the no_std-leaning core and std-linking members; (2) the guide sources live in the
+repository-root `docs/` (user-decided: workspace-level documentation, one home), pulled
+in via `../../docs/…` includes — `#[cfg(doc)]` keeps the includes out of normal
+builds, so `cargo package` verification passes, but a docs.rs build (which sets
+`--cfg doc`) would miss the files: packaging the guide sources is an acknowledged open
+point for the publish stage; (3) `readme = "../README.md"`
 works from a subfolder (cargo copies it into the package). The CLI "linking std" is
 orthogonal to layout — governed per-crate by features, not folder placement. Rejected alternatives:
 keeping the root-package layout until the CLI lands (the move only gets more expensive);
