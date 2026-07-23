@@ -2845,7 +2845,7 @@ derivation; the `Result` mirrors `with_seed_delta` honestly.
 
 #### Defer `Rc`/`Arc` genericity [§dd-dr:defer-rc-arc]
 
-Status: DECIDED (ARCHITECTURE.md DECISION 4).
+Status: DECIDED (user-led).
 
 The `SharedPointer` GAT sketched in SOURCE_ARCHITECTURE.md would infect nearly every signature
 in the crate to save ~1ns uncontended atomic increments that happen once per node, not per
@@ -2856,12 +2856,15 @@ genuinely needs `Rc`.
 
 #### What is generic (via `Lang`) and what is not [§dd-dr:lang-genericity-scope]
 
-Status: PROPOSED.
+Status: DECIDED (working doctrine; formerly proposed).
 
-Generic: `StateExt`, `NodeData`, `SourceOrigin`. Not generic: spec types (extensibility comes
-from `CallableSpec` being a trait), pointer type (above), content backing (a plain `String`
-on `Source`; the `SourceContent` seam was retired, [§dd-dr:sources-and-spans]). Every proposed new `Lang`
-associated type should be challenged against [§dd-dr:data-vs-traits]/[§dd-dr:one-generic-param] first.
+Generic (via `Lang`): the extension types (`StateExt`, `SessionExt`, the `NodeExts`
+bundle), the closed id vocabularies (`GroupTypeId`, `CallableTypeId`, `ModeId`),
+`SourceOrigin`, `Event`, and the `Driver`. Not generic: spec types (extensibility comes
+from `CallableSpec` being a trait), the pointer type (above), content backing (a plain
+`String` on `Source`; the `SourceContent` seam was retired,
+[§dd-dr:sources-and-spans]). Every proposed new `Lang` associated type should be
+challenged against [§dd-dr:data-vs-traits]/[§dd-dr:one-generic-param] first.
 
 ## Errors and diagnostics [§dd-dr:errors]
 
@@ -2879,15 +2882,15 @@ Four rules:
    `unreachable!`/`expect` with the invariant stated in the message.
 2. The violation of a documented input contract is **not by itself** a reason to panic — it
    returns an `Err` (translatable to, e.g., a Python exception by a wrapper).
-3. Individual indexing-style exceptions require explicit user approval. Approved (July
-   2026): `NodeTree::node`/`nodes_in`, `Span::slice`, `TextContent::resolve`, and
+3. Individual indexing-style exceptions require explicit user approval. Approved:
+   `NodeTree::node`/`nodes_in`, `Span::slice`, `TextContent::resolve`, and
    `ChildRegion`'s resolved-only accessors keep their documented panics **with
    non-panicking companions** (`NodeTree::get`, `Span::get`) — the std `Index`-vs-`get`
    convention: the panicking form for ids/spans the caller minted from this very
    tree/source, the `Option` form for values of unknown provenance.
 4. Everything else returns an error.
 
-Consequences applied with the decision (July 2026):
+Consequences applied with the decision:
 - `NodeTreeBuilder::{add, add_with_ext, finish}` validate their contract and return
   `NodeBuildError`; the previously debug-only exact-tiling and spanned-content checks are
   always-on error paths (one validation regime in every build — extension authors get clean
@@ -2899,9 +2902,8 @@ Consequences applied with the decision (July 2026):
   `ParseContext::implementation_error`, deliberately bypassing the recover funnel: an
   implementation bug **aborts even under tolerant recovery** (tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions), and no
-  `Lang::refine_diagnostic` pass applies. ~~`StdInvocationParser`'s slots check reports
-  the same condition.~~ *(Slots session, July 2026: the slots check is gone with the
-  spec-side slot list — nothing declarable is left for it to catch.)*
+  `Lang::refine_diagnostic` pass applies. (The former `StdInvocationParser` slots check is gone with the spec-side slot
+  list — nothing declarable was left for it to catch, [§dd-dr:no-spec-side-slots].)
 - Staged-id read-backs whose id passed through outer-layer hands degrade gracefully (the
   node-stop test treats a missing id as "condition did not fire"; invocation/body span
   read-backs fall back to the trigger/body start). No silently-wrong tree results: the
@@ -2926,48 +2928,42 @@ staging path (all checks are O(1) per region/payload today).
 
 #### Errors carry Arc-based `SourceSpan`, not `'src` lifetimes [§dd-dr:arc-error-spans]
 
-Status: PROPOSED.
+Status: DECIDED (implemented; formerly proposed).
 
-The current `ParseError<'src>` / `Result<'src, T>` spreads a lifetime through every signature
-and prevents errors from outliving the parse. Arc spans fix both at negligible cost (errors are
-rare and cold).
+The first-cut `ParseError<'src>` / `Result<'src, T>` spread a lifetime through every
+signature and prevented errors from outliving the parse. Arc spans fix both at negligible
+cost (errors are rare and cold).
 
 #### Tolerant parsing via recovery tokens + diagnostics sink [§dd-dr:tolerant-parsing]
 
-Status: PROPOSED (formalizing the user's WIP mechanism in `error.rs`/`stringreader.rs` — one of the pieces worth salvaging).
+Status: DECIDED (implemented; formalizes the user's original mechanism — one of the
+salvaged pieces).
 
 Tokenizer errors may carry a recovery token; a session-level `Recovery` policy (strict /
-tolerant) decides whether to record a diagnostic and continue or abort. Diagnostics accumulate
-on the session and remain available on `ParseResult` even for successful tolerant parses.
-Rationale: tolerant parsing is a first-class requirement for document tooling (FLM, linters,
-editors), not an afterthought flag; and a diagnostics sink is the API-honest replacement for
-logging side channels (see [§dd-dr:dependencies]).
-
-#### Recovery mechanism split across phases [§dd-dr:recovery-staging]
-
-Status: DECIDED (user).
-
-Phase 1 ships the token-independent parts: `Diagnostic`/`Diagnostics`/`Severity` and the
-`Recovery` policy enum (strict/tolerant). `TokenError { …, recovery: Option<Token> }` lands in
-Phase 2 next to `Token<'s>`, where it can be designed against a real tokenizer.
-Rejected alternatives: a token-agnostic `TokenError<R>` placeholder in Phase 1 (designing the type blind,
-then reshaping it in Phase 2 anyway).
-*Landed (Phase 2, July 2026):* `TokenError<'s>` = structured `TokenErrorKind` (closed enum:
-end-of-stream-after-escape, forbidden-char — replaces pylatexenc's stringly `error_type_info`)
-+ byte `Span` + `Option<TokenRecovery<'s>>`, where `TokenRecovery` = placeholder token + an
-explicit `resume_pos` (explicit rather than derived from the token: a custom source's
-placeholder need not end where reading resumes, and the explicit position carries the
-advancement contract; the built-in recoveries now all resume at their placeholder's span
-end — the end-of-stream-after-escape placeholder is a `Char(escape_char)` covering the
-escape byte, revised July 2026, Action 02). Token-level errors
-carry plain `Span`s, not `SourceSpan`s — they are transient like tokens; the session converts
-whatever it reports into Arc-span `Diagnostic`s (Phase 6). The reader itself is policy-free:
-it always returns `Err` with the recovery attached, and the session's `Recovery` policy
-decides (the WIP's per-reader `tolerant_parsing` flag is superseded).
+tolerant) decides whether to record a diagnostic and continue or abort. Diagnostics
+accumulate on the session and remain available on `ParseResult` even for successful
+tolerant parses.
+Rationale: tolerant parsing is a first-class requirement for document tooling (FLM,
+linters, editors), not an afterthought flag; and a diagnostics sink is the API-honest
+replacement for logging side channels (see [§dd-dr:dependencies]).
+Concrete shape: `TokenError<'s>` = structured `TokenErrorKind` (closed enum:
+end-of-stream-after-escape, forbidden-char — replaces pylatexenc's stringly
+`error_type_info`) + byte `Span` + `Option<TokenRecovery<'s>>`, where `TokenRecovery` =
+placeholder token + an explicit `resume_pos` (explicit rather than derived from the
+token: a custom source's placeholder need not end where reading resumes, and the explicit
+position carries the advancement contract; the built-in recoveries all resume at their
+placeholder's span end — the dangling-escape placeholder is a `Char(escape_char)`
+covering the escape byte). Token-level errors carry plain `Span`s, not `SourceSpan`s —
+they are transient like tokens; the session converts whatever it reports into Arc-span
+`Diagnostic`s. The reader itself is policy-free: it always returns `Err` with the
+recovery attached, and the session's `Recovery` policy decides (the original per-reader
+`tolerant_parsing` flag is superseded).
+Rejected alternatives: a token-agnostic `TokenError<R>` designed blind against no real
+tokenizer.
 
 #### Detection-site recovery; `Err` means abort [§dd-dr:err-means-abort]
 
-Status: DECIDED (user; notes item C4 concretized).
+Status: DECIDED (user).
 
 Three rules:
 1. *Recovery happens where the problem is detected.* `ParseContext` exposes the `Recovery`
@@ -2992,8 +2988,11 @@ Rejected alternatives: pylatexenc's recovery-attributes-on-exceptions (`recovery
 for having no context object, and exactly the caller/callee reader-state ambiguity that
 rule 2 eliminates.
 
-**`TokenRecovery::resume_pos` must advance the reader; violations abort even in tolerant
-mode** — DECIDED (user, July 2026, code-review follow-up). The content loop's recovery arm
+#### `resume_pos` must advance the reader; violations abort even in tolerant mode [§dd-dr:resume-pos-contract]
+
+Status: DECIDED (user, code-review follow-up).
+
+The content loop's recovery arm
 is the one arm that consumes no token, so its termination rests entirely on `resume_pos`
 repositioning the reader strictly past the failed read's start. Both in-crate producers
 satisfy this, but the contract is reachable by third-party code through two public
@@ -3001,14 +3000,14 @@ extension points (a custom `TokenReader::peek`, a `Lang::scan_specials` returnin
 `TokenRecovery`), and a violating `resume_pos` was demonstrated to hang `NodesParser` in
 release builds while growing the diagnostics sink unboundedly. The contract is now stated
 on `TokenRecovery::resume_pos` and enforced at the adoption site (`nodes_parser.rs`
-content loop): if the reader did not advance after the positional move (`move_to_pos`,
-née `resume_at` — Action-02 token entry, item 4), the parse aborts with the
+content loop): if the reader did not advance after the positional move (`move_to_pos`;
+[§dd-dr:token-contract-hardening], item 4), the parse aborts with the
 token error as a `ParseError` — *even in tolerant mode*, whose promise is a best-effort
 tree, not tolerance of non-termination; an abort is the doctrine-blessed failure mode
 (no panic, rule 3 above). The guard lives at the adoption site and not inside the move
 because `move_to_pos` is deliberately bidirectional (it is also the absent-argument and
 environment-name rewind), so it can assert nothing about direction.
-*Noted for the future (user, July 2026):* contract violations by extension-point code are
+*Noted for the future:* contract violations by extension-point code are
 a different *category* from malformed input, and the error model may eventually want to
 distinguish them (e.g. a `ParseError` vs. an `ImplementationError`/contract-violation
 kind), so callers can tell "your document is broken" from "your `Lang`/reader is broken".
@@ -3017,7 +3016,8 @@ more contract guards accumulate.
 
 #### Structured diagnostics: condition payloads, not prose [§dd-dr:structured-diagnostics]
 
-Status: DECIDED (user + design sessions; supersedes the "grow `ParseErrorKind` variants" intent noted at its definition — implementation plan in CodeReportAction_01.md).
+Status: DECIDED (user + design sessions; supersedes the "grow `ParseErrorKind` variants"
+intent).
 
 `Diagnostic` and `ParseError` carry a
 structured condition payload `Box<dyn DiagnosticData>` plus span and traceback frames — no
@@ -3072,7 +3072,8 @@ records).
 
 #### Condition-declaration derive: `#[derive(DiagnosticInfo)]`, syn accepted [§dd-dr:diagnostic-derive]
 
-Status: DECIDED (user + design session; realizes the derive previously noted as *Future* here; the generated surface is specified in ARCHITECTURE.md §"Condition declaration via derive").
+Status: DECIDED (user + design session; the generated surface is documented on the
+derive itself).
 
 Key points from the discussion: **(1)** derive over a `macro_rules!` DSL — the struct stays
 plain Rust (rustdoc, IDE, "the struct is the schema" stays literally true), and a DSL would
@@ -3100,8 +3101,8 @@ Status: DECIDED (user + design sessions).
 
 In-process identity is the concrete type (downcast via `Any` — collision-proof, compiler-checked at producer and consumer); the string `identifier()` exists
 only for boundaries where types cannot go (JSON output, linter config, logs). Identifiers are
-hand-chosen, namespaced `<layer-or-preset>.<area>.<condition>` (provisional scheme — user,
-July 2026: `core.token.*`, `core.nodes_parser.*`, … for library conditions, areas mirroring
+hand-chosen, namespaced `<layer-or-preset>.<area>.<condition>` (provisional scheme:
+`core.token.*`, `core.nodes_parser.*`, … for library conditions, areas mirroring
 today's modules; `<preset-name>.<namespaced-name>` for presets and downstream languages),
 exposed as `pub const IDENTIFIER` so consumers compare against the const rather than a
 literal. Identifiers and serialization field names are semver-stable API surface: although
@@ -3116,8 +3117,8 @@ Rejected alternatives: deriving the identifier from the type name (the two have 
 cadences — a struct rename is an internal refactor, a wire-id change is a silent break; the
 derive macro will *require* the id attribute); method name `diagnostic_identifier()`
 (stutters as `DiagnosticData::diagnostic_identifier`; the trait context already qualifies,
-[§dd-dr:naming]); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (user, July 2026:
-maintenance work to keep in sync, and namespace prefixes already prevent collisions — can be
+[§dd-dr:naming]); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (maintenance work to keep in
+sync, and namespace prefixes already prevent collisions — can be
 added later without breakage).
 
 #### Serialization is a derived projection; the struct is the schema [§dd-dr:serialized-schema]
@@ -3204,9 +3205,11 @@ Rationale: `scan_specials` participates in the recovery protocol but could only 
 tokenizer-internal kinds; one extension mechanism (`DiagnosticData`) serves both layers,
 while the token layer keeps a concrete matchable enum for the recovery protocol.
 
-**`Diagnostics` retention is capped; collection rendering shares line indices
-(`render_all`)** — DECIDED (user, July 2026, Action-06 review). Two bounded-resource
-fixes in one: (i) `Diagnostics` retains at most `limit` items (`with_limit(n)`;
+#### `Diagnostics` retention is capped; `render_all` shares line indices [§dd-dr:diagnostics-retention]
+
+Status: DECIDED (user).
+
+Two bounded-resource fixes in one: (i) `Diagnostics` retains at most `limit` items (`with_limit(n)`;
 `DEFAULT_LIMIT` = 1000 via `new()`) — in tolerant mode degenerate input produces one
 diagnostic per byte, and an unbounded `Vec` turns a 10 MB input into ~GB of identical
 messages. Pushes beyond the cap are *counted* (`suppressed()`, surfaced by `render_all`
@@ -3228,10 +3231,10 @@ need — promote the cache if one appears).
 
 #### Absolute minimal mandatory dependencies [§dd-dr:minimal-dependencies]
 
-Status: DECIDED.
+Status: DECIDED (user).
 
-`thiserror` and `log` removed from `Cargo.toml`toml`
-(July 2026). The considerations that led there:
+`thiserror` and `log` are removed; the runtime is dependency-free. The considerations
+that led there:
 
 - **`thiserror`.** It generates exactly the `Display`/`Error` impls one would write by hand —
   zero runtime difference either way. The trade is: dropping it removes a proc-macro dependency
@@ -3246,10 +3249,16 @@ Status: DECIDED.
   library should log at all**. The only current use is one `warn!` (source too big to compute
   line info) — information that rightly belongs in the API's return values or the diagnostics
   sink ([§dd-dr:errors]), where callers can actually react to it. A library that communicates through its
-  API needs no logging facade. Recommendation: drop, or feature-gate if a concrete debugging
-  need appears. This half is nearly free.
+  API needs no logging facade. Dropped (feature-gate later if a concrete debugging need
+  appears).
 - Not under discussion: heavier deps. Nothing in the design needs regex, serde (could be an
   optional feature later), or unicode tables beyond `char` methods.
+
+Amendment (performance review): a dependency may be added in very specific, exceptional
+cases — widely used, lightweight, `no_std`-capable crates, decided case by case. First
+(and so far only) instance: `hashbrown` (the implementation inside std's own `HashMap`),
+backing the engine's derivation memo ([§dd-dr:memoized-derivations]); `no_std` has no
+`std::collections::HashMap`, and a hand-rolled map would be worse on every axis.
 
 #### `no_std`-friendly, alloc-only [§dd-dr:no-std]
 
@@ -3284,7 +3293,7 @@ ever *insert* into a map (e.g. `\newcommand` definitions into a runtime library)
 DoS becomes theoretically possible, whereas `BTreeMap` guarantees O(log n) worst case.
 *Also decided:* public APIs must not name a concrete map type — `MapResolver`'s
 `From<BTreeMap<String, String>>` was generalized to `From<I: IntoIterator<Item = (String,
-String)>>` (July 2026) so the backing container stays an implementation detail; exposing
+String)>>` so the backing container stays an implementation detail; exposing
 `hashbrown::HashMap` in a signature would couple the public API to hashbrown's 0.x semver
 churn (0.14→0.15 already swapped default hashers).
 Revisit if: profiling flags `Library` name-lookup cost, or the `library` structural revisit
