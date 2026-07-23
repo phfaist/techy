@@ -3302,37 +3302,81 @@ lands.
 
 ## Naming [§dd-dr:naming]
 
-Decided conventions (NAMING_STRATEGY.md, Dec 2025; two examples revised July 2026):
+The durable naming principles (generic over specific, specificity over brevity, the
+systematic Id-naming rule, `make_*` factories, and the rest) live in ARCHITECTURE
+[§dd-arch:naming]; this topic records naming decisions and their reasons.
+
+Decided conventions:
 
 - **No `Latex` prefixes** — the library is markup-generic (`Token`, not `LatexToken`).
 - **Specificity over brevity** where confusion is possible: `ParsingStateDelta` not
   `StateDelta`.
-- **Context makes qualifiers redundant — unless sibling vocabulary competes in scope**:
-  Dec 2025 chose `Arguments` over `ParsedArguments`; reversed July 2026 (current-level
-  review) because the spec-side `ArgumentSpec`/`ArgumentParserSpec` vocabulary now coexists
-  wherever the parsed records appear, and pylatexenc parity favors `ParsedArguments`.
-  (`ArgumentStructureSpec` — the old clarity-over-brevity example — was dropped with the
-  argument-model rebuild, [§dd-dr:specs].)
-- **Collision avoidance beats tradition**: `Language<L>` replaces March's `FLMEnvironment`
-  (fatal collision with `EnvironmentSpec`/`EnvironmentNode`); `ConstructParser` avoids clashing
-  with any high-level `Parser` type; `Lang` replaces `LanguageSpecification` (too long for a
-  parameter appearing in nearly every signature).
-- **Phase 6 plan session (July 2026):** `ConstructParserResult<T>` (= `Result<T, ParseError>`)
-  over the sketched `ParseOutcome` — unambiguous next to the engine-level `ParseResult`;
-  clarity over brevity. `NodesParser` over `ContentParser` — the regions session gave
-  "content" a precise technical meaning (`ContentNodes`, designated argument/slot content)
-  that a general nodes parser has nothing to do with. `StopCause` for the parser-returned
-  ending cause; `Invocation` for the resolved-invocation value; `make_*` for factory hooks
+- **Collision avoidance beats tradition**: `Language<L>` replaces the early
+  `FLMEnvironment` (fatal collision with `EnvironmentSpec`/`EnvironmentNode`);
+  `ConstructParser` avoids clashing with any high-level `Parser` type; `Lang` replaces
+  `LanguageSpecification` (too long for a parameter appearing in nearly every signature).
+- **Session rulings**: `ConstructParserResult<T>` (= `Result<T, ParseError>`) over the
+  sketched `ParseOutcome` — unambiguous next to the engine-level `ParseResult`; clarity
+  over brevity. `NodesParser` over `ContentParser` — the regions session gave "content"
+  a precise technical meaning (`ContentNodes`, designated argument/slot content) that a
+  general nodes parser has nothing to do with. `StopCause` for the parser-returned ending
+  cause; `Invocation` for the resolved-invocation value; `make_*` for factory hooks
   (`make_invocation_parser`, `make_paragraph_break_node`).
 
-When naming something new: check NAMING_STRATEGY.md, then ask "does this collide with or
-shadow an existing concept in LaTeX terminology or in this codebase?"
+When naming something new: check the naming principles ([§dd-arch:naming]), then ask
+"does this collide with or shadow an existing concept in LaTeX terminology or in this
+codebase?"
+
+#### `ParsedArguments`, not `Arguments`: a context-principle reversal [§dd-dr:parsed-arguments-naming]
+
+Status: DECIDED (user; reverses the earlier "context makes the qualifier redundant"
+call — a recorded reversal, July 2026).
+
+The original ruling (Dec 2025) chose `Arguments` over `ParsedArguments`: context — a
+field on parsed nodes — made the qualifier redundant. Reversed at the current-level
+review: the spec-side argument vocabulary (`ArgumentSpec`, `ArgumentParser`) now coexists
+wherever the parsed records appear, so the parsed-side types carry the distinguishing
+prefix; pylatexenc parity favors `ParsedArguments` too. The lesson generalizes into the
+principles: "context determines names" holds only while no sibling vocabulary competes
+in the same scope.
+
+#### Superseded names — do not reintroduce [§dd-dr:superseded-names]
+
+Status: DECIDED (distilled from the archived NAMING_STRATEGY.md registry; the full
+old-to-new table stays there and in git history).
+
+Names that look natural and were consciously rejected or replaced — reintroducing one
+re-opens a settled argument:
+
+- `LatexToken`, `LatexWalker`, `LatexNode`, … — no `Latex` prefixes in the core; LaTeX
+  names live in the preset.
+- `FLMEnvironment`, `LanguageSpecification` — replaced by `Language<L>` and `Lang`.
+- `ContextDb`, `LibrarySet`, `ModeContext`, `ConflictStrategy` — definitions are
+  `SpecsProvider`/`Package`/`Scope`/`ScopeStack` with lexical shadowing; no flat
+  namespace, no mode tables, no conflict policies ([§dd-dr:lexical-shadowing],
+  [§dd-dr:scope-stack]).
+- `SpecLookup`, `Library`, `LibraryStack`, `push_libraries`, the `library` module — the
+  first-generation definition vocabulary, fully replaced by the scope-stack redesign.
+- `TokenType`, `TokenKind::Macro`/`MacroRules`, `CommentStart`, maximal-run `Chars` —
+  the token model's rejected shapes ([§dd-dr:token-model]).
+- `MathNode`, `MacroNode`/`EnvironmentNode`/`SpecialsNode`, a `Custom` node variant —
+  the closed `NodeKind` with `Callable` covers them ([§dd-dr:closed-node-kind],
+  [§dd-dr:no-core-math-node]).
+- `StateDelta` (trait), `apply()`/`copy_with()`, per-facet state traits — deltas are
+  reified `ParsingStateDelta` values applied via `derived()` ([§dd-dr:state-option-c]).
+- `ArgumentKind`, `ArgumentStructureSpec`, `ArgsLayout`/`SlotsLayout`, `SlotSpec` — the
+  argument model's superseded shapes ([§dd-dr:argument-parser-model],
+  [§dd-dr:no-spec-side-slots]).
+- "namespace" / `CallableKind` — `CallableTypeId` (the Id-naming rule); `GroupExt` /
+  `NodeGroupExt` — `GroupNodeExt`.
+- `Parser` (trait), `ContentParser`, `ParseOutcome` — `ConstructParser`, `NodesParser`,
+  `ConstructParserResult`.
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
 #### Three strata + three rules replace the strict L0–L7 layer ladder [§dd-dr:three-strata]
 
-Status: DECIDED (user-led; ARCHITECTURE.md [§dd-arch:arch] revised accordingly).
+Status: DECIDED (user-led).
 
 S0 *foundation* (Lang-free, a true DAG: source, error/diagnostics, `Span`/`Token`/`TokenKind`,
 `TokenRules` + `PrefixTable` + the concrete scanning core, `TextContent`); S1 *core* (a single
@@ -3354,17 +3398,17 @@ violated deliberately. The confusion dissolves once three graphs the ladder conf
 separated: the *type/signature* graph (cyclic inside S1, harmless — traits are signatures,
 `dyn` references tie the knot, cross-module cycles within one crate are idiomatic Rust); the
 *runtime ownership* graph (must stay acyclic — rule 3, generalizing [§dd-dr:sources-and-spans]'s
-sources-never-reference-nodes invariant); and the *build order* (§9 phases sequence concrete
-machinery, which stays DAG-shaped even where signatures are mutually recursive — Phase 2's
-tokenizer runs against a hardcoded `TokenRules`). Within S1 the useful distinction is by
+sources-never-reference-nodes invariant); and the *build order* (which sequenced concrete machinery DAG-shaped even where
+signatures are mutually recursive — the tokenizer first ran against a hardcoded
+`TokenRules`). Within S1 the useful distinction is by
 *role* — data / contracts / standard machinery / orchestration — not by rank.
 Consequences worth pinning:
 - `TokenRules` and `PrefixTable` are *defined* in the token topic and merely *stored*/cached
-  by `ParsingState`. *(Revised July 2026, token-design review: the token topic is wholly
+  by `ParsingState`. *(Later revised, token-design review: the token topic is wholly
   **S1** — tokens are generic over `L` (`Specials` carries its spec) and token errors may
   grow state context; the earlier "scanning core is S0" split is superseded, and `Span`
   moved to the source topic. S0-testability was traded for state-context freedom; a trivial
-  test `Lang` restores it at negligible cost. See [§dd-dr:tokens].)*
+  test `Lang` restores it at negligible cost. See [§dd-dr:token-model].)*
 - The `TokenReader<L>` trait keeps `&ParsingState<L>` (not `&TokenRules`) in `peek`:
   it is the documented catcode escape hatch, and such a reader keeps its tables in
   `L::StateExt`; narrowing to the rules would sever the escape hatch from language state.
@@ -3421,7 +3465,7 @@ Status: DECIDED (user-led).
 API documentation is rustdoc; narrative pages (usage, concepts, design patterns — the role
 of pylatexenc's Sphinx pages) are markdown files in `docs/`, rendered as doc-only modules
 under `techy::guide` via `#[cfg(doc)]` + `#[doc = include_str!(...)]` in `lib.rs` (the clap
-pattern). Stubs landed July 2026.
+pattern).
 Rationale: one site and one search index, and — decisively — compiler-checked intra-doc
 links plus doctest-compiled examples: during the ongoing review-and-rename churn, links and
 code samples in a separate book would silently rot, whereas rustdoc breaks the docs build
@@ -3431,6 +3475,32 @@ unchecked book→API links. Not precluded: the `docs/*.md` sources move into mdB
 nearly verbatim if the narrative later outgrows rustdoc.
 Revisit if: the guide needs ordered, book-style chapter navigation that rustdoc's
 module-shaped layout can't carry.
+
+#### Two-pillar developer docs with immutable label cross-references [§dd-dr:docs-restructure]
+
+Status: DECIDED (user-led).
+
+The project documentation is organized per `Documentation_Structure.md` (repository
+root): user-facing rustdoc (guides + API documentation, self-contained, never citing
+developer documents except individually-approved cases) and developer-facing
+`dev-docs/ARCHITECTURE.md` (*how*; present-day, no history, no dates) +
+`dev-docs/DESIGN_RATIONALE.md` (*why*; this register). Cross-references use immutable
+bracketed heading labels (`[§dd-arch:…]`, `[§dd-dr:…]`) instead of section
+numbers; every register entry, whatever its status, is referenced at least once from
+ARCHITECTURE; label integrity is manual grep discipline (the maintenance rules,
+[§dd-dr:self-meta]). Status lines carry who/context, never dates; dates survive only
+inside explicit reversal records. NAMING_STRATEGY.md is archived: its principles moved
+to ARCHITECTURE [§dd-arch:naming], its reversal and do-not-reintroduce material into
+[§dd-dr:naming].
+Rationale: numeric section references (about 190 in Rust sources alone) broke on every
+reorganization, and history mixed into present-day description made ARCHITECTURE
+misleading about what currently exists.
+Rejected alternatives: keeping numeric sections (renumbering invalidates every citer); a
+separate documentation site for the guides (already rejected — previous entry);
+automated label-integrity tooling for now (a checker script or test can come later; the
+manual procedure is cheap at the current change rate).
+Revisit if: label collisions or topic splits become frequent enough that the flat label
+namespace or the manual discipline hurts.
 
 ## The latexlike preset [§dd-dr:latexlike]
 
@@ -3457,8 +3527,10 @@ the base rule has a consumer (user-caught; the original plan listed both).
 Revisit if: a consumer needs typed display-ness on custom math delimiters (the split
 stays open under `#[non_exhaustive]`).
 
-**Inside math the math delimiters stop opening (no nested math); a stray `$` is
-forbidden** — DECIDED (user, July 2026, Phase 7.5 review).
+#### Inside math the math delimiters stop opening; a stray `$` is forbidden [§dd-dr:math-no-nesting]
+
+Status: DECIDED (user, review).
+
 `LatexlikeDriver::group_interior_delta` for a math rule returns, besides `mode(Mode::Math)`,
 a `TokenRulesOverrides` derived from the **outer** state: the interior's group rules are the
 outer rules minus the `Math` openers, and `$` is merged into the outer `forbidden_chars`.
@@ -3468,7 +3540,7 @@ nested inline group. Example: tolerant `$$a$b$$` is one display group over `a$b`
 diagnostic), never a display group left unclosed around a spurious inner `$…$`.
 Rationale: LaTeX forbids nested math; without this a lone `$` inside display math opened a
 fresh inline group and consumed the trailing `$$` as two separate closes, leaving the
-display group unclosed (the surprising tree the 7.5 review flagged). Deriving from the outer
+display group unclosed (the surprising tree the review flagged). Deriving from the outer
 state (not the seed) preserves any embedder rule changes in force at the `$`, and *merging*
 (not replacing) `forbidden_chars` keeps the embedder's forbidden set. `\(`/`\[` inside math,
 their openers likewise gone, fall through to the command path (a stray single-char command)
@@ -3484,9 +3556,10 @@ Status: DECIDED (user).
 `GroupType`/`CallableType`/`Mode` with short variants (`Content`/`Math`;
 `Macro`/`Environment`/`Specials`; `Text`/`Math`), reading as `latexlike::Mode::Math`;
 preset items are **not** re-exported at the crate root. All three enums are
-`#[non_exhaustive]` (verbatim-ish variants expected in 7.7); in-crate matches stay
+`#[non_exhaustive]` (`GroupType::Verbatim` arrived exactly so); in-crate matches stay
 exhaustive on purpose, so a new variant surfaces every site.
-Rationale: NAMING_STRATEGY principle 4 — no sibling vocabulary competes, since the core
+Rationale: the context-determines-names principle ([§dd-arch:naming]) — no sibling
+vocabulary competes, since the core
 has only the *associated types* (`Lang::GroupTypeId` …), never concrete types with these
 names; the module path disambiguates everywhere else.
 Rejected alternatives: `Latex`-/`Latexlike`-prefixed enum names (length that does no disambiguation
@@ -3504,13 +3577,13 @@ wholesale by name (`ScopeOp::Unload`), shadowable per-trigger by pushing a provi
 Macro/environment definitions deliberately stay out until the std-DB port. The typography
 ligatures (``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` ``) are registered **text-mode
 only** (they carry no math meaning — inside `$…$` they stay plain chars); `&` and `~` are
-visible in every mode (7.5 review; the per-entry mode gate below). `\begin`/`\end` (7.6)
-stay all-modes so math environments still open in math.
+visible in every mode (the per-entry mode gate, [§dd-dr:mode-visibility]).
+`\begin`/`\end` stay all-modes so math environments still open in math.
 Rationale: out-of-the-box parity with pylatexenc's default node shapes for these
 triggers — with one deliberate exception: the `\n\n` paragraph-break special of
 pylatexenc's *latex-paragraph* category is omitted, so a multi-newline break is a
 whitespace chars node here (`enable_multi_newline_paragraphs`), not a specials node. The
-multi-character ligatures exercise the 7.3 longest-match fold (`---` beats `--`) in real
+multi-character ligatures exercise the longest-match fold (`---` beats `--`) in real
 defaults rather than only in tests.
 Rejected alternatives: an empty seed stack (purest, but `~`/`&` would parse as plain chars out of the
 box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
@@ -3530,7 +3603,7 @@ text ligatures there — package-level visibility alone cannot express that with
 `"base"` into several names, which would break the single-name `Unload("base")` contract
 and the specials-as-one-category model. Per-entry visibility is the minimal mechanism that
 keeps one package. The trigger-char union deliberately stays mode-blind (a hidden entry's
-first chars remain in the filter; its scan declines) — the established 7.3 caching contract.
+first chars remain in the filter; its scan declines) — the established caching contract.
 Rejected alternatives: multiple mode-scoped seed packages (changes the unload semantics, multiplies
 seed names); a whole-package flip to text-only (would hide `\begin`/`\end` in math too).
 
@@ -3563,7 +3636,7 @@ only symmetry with a constraint the preset does not have).
 
 #### `\begin`/`\end` dispatch is scope-stack data: ordinary `Macro` entries of `"base"` [§dd-dr:begin-end-dispatch]
 
-Status: DECIDED (user, decision (a)).
+Status: DECIDED (user).
 
 `BeginSpec` (the environment composition) and `EndSpec` (orphan-`\end` diagnostics) are
 registered under `begin`/`end` in the seed package like any definition — resolvable
@@ -3578,10 +3651,11 @@ the language.
 Rejected alternatives: the test-lang rehearsal's driver arm (`if name == "begin"`), which made
 `\begin` structural syntax.
 
-**The environment spec surface: `EnvironmentSpec` wraps a dyn `EnvironmentBehavior`;
-`with_body_delta` overrides by adapter** — DECIDED (user, July 2026, Phase 7.6
-checkpoint, decision (b); executes the [§dd-dr:specs] funnel and D4's defaulted
-`make_body_parser()`).
+#### `EnvironmentSpec` wraps a dyn `EnvironmentBehavior`; `with_body_delta` adapts [§dd-dr:environment-spec-surface]
+
+Status: DECIDED (user; executes the [§dd-dr:spec-downcasting] funnel and
+[§dd-dr:begin-composition]'s defaulted `make_body_parser()`).
+
 The concrete wrapper `EnvironmentSpec` is the registration/downcast target (implements
 `CallableSpec` by delegation, titles frames "environment ‘align’"); the inner trait
 carries the behavior as defaulted methods — `arguments()`, `body_state_delta(…)`
@@ -3602,7 +3676,7 @@ tax on the 99% case).
 
 #### `MacroSpec`/`SpecialsSpec` are real types, not constructor functions [§dd-dr:concrete-spec-types]
 
-Status: DECIDED (user, decision (c)).
+Status: DECIDED (user).
 
 Both are `StdCallableSpec`-shaped declarative types whose `stack_frame_title` speaks
 the preset vocabulary ("macro ‘\frac’", "argument #1 of macro ‘\frac’",
@@ -3614,7 +3688,7 @@ types are stable downcast targets for later `finalize_node` work.
 
 #### Orphan-`\end` recovery: dispatch-time diagnosis, chars over the consumed extent [§dd-dr:orphan-end-recovery]
 
-Status: DECIDED (user, decisions (d)/(e)).
+Status: DECIDED (user).
 
 Inside a body, `\end` is the stop condition and never reaches resolution, so a
 *dispatched* `\end` is always an orphan: `EndSpec`'s parser reads the rigid name group
@@ -3625,16 +3699,16 @@ and tolerantly stages the consumed extent as one `Chars` node — `\end{name}` w
 user-chosen over `latexlike.begin.*`/`latexlike.end.*`). Implementation fact worth
 remembering: the tolerant chars fallbacks (malformed `\begin`, nameless orphan `\end`)
 must cover the trigger's syntactic *post-space* too — the token span includes it, and
-trimming it would break the sibling partition invariant; the §G rehearsal had the same
-shape. The body-unwind path that leaves a stray `}` for the root re-crosses the
-recorded root byte-accounting break (stray bytes dropped from the tree) — accepted, no
-new mechanism.
+trimming it would break the sibling partition invariant; the earlier rehearsal had the same
+shape. The body-unwind path that leaves a stray `}` for the root recovers cleanly: the
+root stages the consumed delimiter as a `Chars` node (cf. [§dd-dr:language-parse-api],
+second follow-up).
 
-#### The verbatim family (Phase 7.7): recipe → production parsers, group+chars shapes [§dd-dr:verbatim-family]
+#### The verbatim family: recipe → production parsers, group+chars shapes [§dd-dr:verbatim-family]
 
-Status: DECIDED (7.7 landing; N7 of ParserLibraryParity.md).
+Status: DECIDED (user; parity item N7).
 
-`constructs::verbatim_parser` promotes the pinned recipe ([§dd-dr:tokens] Action-02 entry; the
+`constructs::verbatim_parser` promotes the pinned recipe ([§dd-dr:token-contract-hardening], item 5; the
 test-side `RawBlockParser`): `verbatim_state_delta(rule)` is the recipe as data (all six
 feature gates off + `expecting_group_close` **replaced**), and the two production
 parsers drive it — `VerbatimArgumentParser` (delimited `\verb|…|`; `ArgumentParser`,
@@ -3668,8 +3742,7 @@ Points settled in flight:
   true diagnostics accepted. A reader yielding any *other* token kind under the recipe
   state is an implementation-error abort (panic policy: contract violations `Err`).
 
-`GroupType::Verbatim` joins the preset vocabulary (the 7.5 "verbatim-ish variants"
-slot); **no `Mode::Verbatim`** — verbatimness is rules-borne (a derived-state fact
+`GroupType::Verbatim` joins the preset vocabulary (the reserved variants slot); **no `Mode::Verbatim`** — verbatimness is rules-borne (a derived-state fact
 scoped to the region), not a mode the scope stack or content interpretation keys on.
 Rejected alternatives: a char-level reader API (pylatexenc `next_chars`; the recipe already
 delivers per-byte `Char` tokens); a shared "base parser" type with pluggable stop
@@ -3677,10 +3750,10 @@ conditions (two users, one private loop helper + the public delta builder suffic
 
 #### `EnvironmentBody.content`: the body parser designates the slot's content [§dd-dr:environment-body-content]
 
-Status: DECIDED (7.7 landing).
+Status: DECIDED (user).
 
 `EnvironmentBody` gains a `content: ContentNodes` field (and drops `Copy`); the
-`\begin` composition (and the §G test composition) mints the `"body"` slot record from
+`\begin` composition (and the test composition) mints the `"body"` slot record from
 it instead of designating all-children itself. Forced by the newline gobble: pylatexenc
 *drops* the newline right after `\begin{verbatim}` from its chars node, but techy trees
 keep every byte — so the gobbled newline is **staged as a leading whitespace `Chars`
@@ -3688,7 +3761,7 @@ node inside the body `List` and designated out of the content**. Putting it anyw
 else breaks an invariant: excluded from the `List`'s span it either gaps the callable's
 children block (arguments before the body, the `lstlisting[opts]` shape — invariant 3)
 or un-tiles the `List` interior (invariant 2). The standard `EnvironmentBodyParser`
-designates all children (7.6 behavior unchanged); "which body nodes are content" is the
+designates all children (behavior unchanged); "which body nodes are content" is the
 staging parser's knowledge, exactly as for arguments ([§dd-dr:nodes] parse-time designation).
 Rejected alternatives: letting the newline ride the scaffolding gap (works only for argument-less
 environments; would weaken invariant 3 to legalize the rest); an `Option`al designation
@@ -3696,7 +3769,7 @@ field (the default parser knows its answer — make every producer say it).
 
 #### The argument-code factory: `latexlike::argument_specs` [§dd-dr:argument-specs-factory]
 
-Status: DECIDED (7.7 landing; N8 of ParserLibraryParity.md).
+Status: DECIDED (user; parity item N8).
 
 A preset **function**, `&str` in → `Result<Vec<Arc<ArgumentSpec>>, ArgumentCodeError>`
 out, eager, per the plan-session shape. The single code string concatenates codes
@@ -3719,7 +3792,7 @@ a loud `TruncatedCode`, never a silent misparse. Per-code resolution as landed:
   **no expression fallback** (pylatexenc's required-delimited has none; `\m x` under
   `r()` diagnoses missing-mandatory and leaves `x` alone). Asymmetry accepted for now:
   `r` does no protective-group unwrapping (the class form never did either); revisit
-  with the 7.8 accessor work if extraction wants it.
+  with the accessor work if extraction wants it.
 - `s`/`*`, `t<c>` → `MarkerArgumentParser`; `v`/`v<c1><c2>` →
   `VerbatimArgumentParser::new(GroupType::Verbatim)` (+ `.with_delimiters`).
 
@@ -3728,12 +3801,13 @@ builders). No flyweight cache and no singletons: specs are built once per langua
 `e{…}` [N3] and `AnyDelimited` [N2] stay deferred with their parsers.
 Rejected alternatives: accepting a `&[&str]` list-of-codes signature alongside (one grammar, one
 entry; the string form covers the deferred `e{…}` shape too when it arrives).
-*(Reversed July 2026 — the list form is now primary; see the list-primary revision
-entry below.)*
+(Reversed — the list form is now primary; cf.
+[§dd-dr:argument-specs-list-primary].)
 
-**`GroupArgumentParser`: the single-expression fallback becomes the orthogonal
-`expression_fallback` knob** — DECIDED (user, July 2026, follow-up session to the 7.7
-landing).
+#### `GroupArgumentParser`: the expression fallback is an orthogonal knob [§dd-dr:expression-fallback]
+
+Status: DECIDED (user, follow-up session).
+
 Previously variant-implied (class form: always; rule form: never), the fallback is now
 a stored `bool` with a builder setter (`with_expression_fallback`); the constructors
 keep the parity defaults (`new` → on, pylatexenc's `'{'` acceptance; `with_rule` → off,
@@ -3756,8 +3830,10 @@ contrast — delimited form: the group's *children* (delimiters are argument syn
 — is now documented on both parser types (it was previously only implicit in [§dd-dr:nodes] and
 the parity table).
 
-**Paragraph-break emission is a driver flag: `ParagraphBreakStyle` on
-`LatexlikeDriver`** — DECIDED (user, July 2026, Phase 7.9 session).
+#### Paragraph-break emission is a driver flag: `ParagraphBreakStyle` [§dd-dr:paragraph-break-style]
+
+Status: DECIDED (user).
+
 `with_paragraph_break_style`: `Chars` (default — the core hook's whitespace-chars
 shape, pylatexenc-legacy's) or `Specials` (pylatexenc-modern's shape — a
 `Specials`-formed callable named by the **canonical** `"\n\n"` vocabulary key, its
@@ -3780,8 +3856,10 @@ Revisit if: a *scoped* shape switch is ever wanted — the flag is driver-global
 design; per-scope suppression already exists orthogonally through the
 `enable_multi_newline_paragraphs` gate (verbatim's features-off state uses it).
 
-**The 7.9 acceptance suite: an integration-crate port of pylatexenc's walker
-slice** — DECIDED (user, July 2026, Phase 7.9 session).
+#### The acceptance suite: an integration-crate port of pylatexenc's walker slice [§dd-dr:acceptance-suite]
+
+Status: DECIDED (user).
+
 `techy/tests/acceptance.rs`, public API only — an integration test crate, so
 anything the port cannot reach is an API gap by construction (chosen over a
 `#[cfg(test)]` module reusing `test_support`; the promotions above are the dedup
@@ -3797,11 +3875,13 @@ names through a bottom-of-stack `FallbackProvider` pushed via `ScopeOp::ReplaceS
 (pylatexenc parity: unknown macros parse as argument-less nodes rather than
 erroring; simultaneously the fallback machinery's acceptance exercise). Argument-code
 call sites are list-shaped (`args(&["o", "m"])`), anticipating the factory's
-list-of-codes signature (since landed — next entry).
+list-of-codes signature ([§dd-dr:argument-specs-list-primary]).
 
-**`argument_specs` goes list-primary; the compact string becomes
-`argument_specs_from_str`** — DECIDED (user, July 2026, follow-up session; revises
-the 7.7 factory entry above and reverses its list-signature rejection).
+#### `argument_specs` goes list-primary; the compact string is `argument_specs_from_str` [§dd-dr:argument-specs-list-primary]
+
+Status: DECIDED (user; revises [§dd-dr:argument-specs-factory] and reverses its
+list-signature rejection — a recorded reversal, July 2026).
+
 One code string per argument is the primary signature — `argument_specs(["o", "{"])`,
 generic `I: IntoIterator, I::Item: AsRef<str>` (the `Command::args` idiom; `&str`
 itself is not `IntoIterator`, so a stray compact string is a compile error, never a
