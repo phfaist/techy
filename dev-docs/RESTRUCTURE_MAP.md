@@ -203,6 +203,24 @@ labeled) were deleted with their lessons folded into `argument-parser-model` and
 Forward-cited labels that batch 3 MUST define on the parsers-engine entries:
 `no-spec-side-slots`, `slot-terminators`.
 
+
+Batch-3/4 additions (multi-line-title promotions + created entries; labels pending
+user approval, no citers outside the register itself):
+- parsers-engine: parser-temporaries, finalize-node, resolution-detail,
+  resolver-failure, stop-conditions, slot-terminators, memoized-derivations,
+  optional-group-balancing, brace-protection-limits, temporary-group-rules,
+  parse-scoped, no-spec-side-slots, emptiness-surface, begin-composition,
+  parity-gap-list, parse-driver
+- errors: resume-pos-contract, diagnostics-retention
+- naming (created): parsed-arguments-naming, superseded-names
+- documentation (created): docs-restructure
+- latexlike: math-no-nesting, environment-spec-surface, expression-fallback,
+  paragraph-break-style, acceptance-suite, argument-specs-list-primary
+
+Batch-3/4 retirements (merged away, zero citers): parser-session-root (into
+language-parse-api), recovery-staging (into tolerant-parsing). The batch-2
+forward-cited labels no-spec-side-slots and slot-terminators are now defined.
+
 ## Table C — ARCHITECTURE old sections → dispositions
 
 | Old section | Disposition |
