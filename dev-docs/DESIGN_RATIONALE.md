@@ -199,7 +199,7 @@ Revisit if: profiling ever shows Arc traffic mattering (then see [§dd-dr:generi
 
 #### Provenance lives on `Source`, not on every location [§dd-dr:provenance-on-source]
 
-Status: PROPOSED.
+Status: DECIDED (implemented; formerly proposed).
 
 `SourceProvenance` (`Primary`/`Resolved`/`Synthesized` with `triggered_at: SourceSpan`) is one
 hop per *source*, forming a provenance tree walkable for error reports. The WIP code's
@@ -735,8 +735,8 @@ Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (thr
 
 #### Tokenization config is plain data (`TokenRules`), not per-facet traits [§dd-dr:token-rules-data]
 
-Status: PROPOSED (**reverses the user's most recent code experiment — needs
-explicit sign-off**; cf. [§dd-dr:state-option-c]).
+Status: DECIDED (proposed as a reversal of the user's earlier code experiment; signed
+off and implemented — cf. [§dd-dr:state-option-c]).
 The WIP `src/state/` gave each facet (whitespace, groups, macros, comments, …) its own trait +
 macro-generated data struct, composed via 9 associated types. The decisive argument against:
 **it contradicts the delta system** — these values must change *mid-parse* (math library adds a
@@ -752,7 +752,7 @@ value-like — first try expressing it as data; then as a `TokenReader` wrapper.
 
 #### Language-specific state is a typed extension (`L::StateExt`) [§dd-dr:state-ext]
 
-Status: PROPOSED.
+Status: DECIDED (implemented; formerly proposed).
 
 Math mode, FLM flags, etc. live in a compile-time-typed field, not a dynamic map. Type safety
 and zero lookup cost; dynamic-language bindings (Python/JS, if ever) can define one `Lang` with
@@ -760,7 +760,7 @@ a dynamic `StateExt` — the cost is contained to those bindings instead of taxi
 
 #### Immutable state, explicit deltas, Arc-shared snapshots [§dd-dr:immutable-state-deltas]
 
-Status: DECIDED (pattern inherited from pylatexenc, kept deliberately; March +).
+Status: DECIDED (pattern inherited from pylatexenc, kept deliberately).
 
 Construct parsers return `(output, Option<delta>)`; the caller applies deltas. The engine
 creates a new `Arc<ParsingState>` only at transitions, so all nodes parsed under one state share
@@ -772,7 +772,7 @@ scope — whether a delta applies to following siblings or dies with the group.
 
 #### Settings are stored data; dependent settings recomputed at transitions (Option C) [§dd-dr:state-option-c]
 
-Status: DECIDED (user-led; ARCHITECTURE.md [§dd-arch:state]/§4, Decision 1 RESOLVED).
+Status: DECIDED (user-led).
 
 Every effective setting is a plain field — no getters compute values on read. Cross-cutting or
 derived settings (e.g. escape char = `#` in math mode) are recomputed by a single
@@ -788,17 +788,22 @@ delta is a **struct, not a closure** because producer and scope-decider differ (
 propagation: `\newcommand`'s delta is applied by callers to base states the producer never saw),
 and a struct is mergeable, inspectable, propagatable, and batchable.
 Rejected alternatives: Option A (concrete state + per-getter `Lang` hooks — hooks "patch" the storage
-model); Option B (whole state behind an `L::State: ParsingStateModel` getter trait — see §4 for
-the cost list; the swappable storage it buys is speculative and recoverable later behind a getter
-surface, so C keeps B's door open, not vice versa); a closure-shaped delta (not
+model); Option B (whole state behind an `L::State: ParsingStateModel` getter trait — maximally
+flexible, but the costs compound: an engine-owned wrapper is needed anyway because derived
+caches cannot live in the model; the trait needs laws — getter purity for caching, delta
+locality, a stored-vs-effective semantic; compound getters need `Cow`-shaped returns;
+"default plus one tweak" costs a dozen delegated methods; and `dbg!(state)` lies because
+effective state is latent in code. The swappable storage it buys is speculative and
+recoverable later behind the same getter surface, so C keeps B's door open, not vice
+versa); a closure-shaped delta (not
 mergeable/inspectable/propagatable).
 Revisit if: a preset genuinely needs swappable state storage (re-evaluate B behind getters —
 C→B is the intended one-way door).
-Implementation notes (Phase 3, July 2026): the derived caches (`PrefixTable`,
-`TriggerChars`) are built **eagerly** when a state is frozen, not `OnceLock`-lazily as the
-ARCHITECTURE sketch had it — the crate is `no_std` (`core` has no `OnceLock`; `OnceCell`
+Implementation notes: the derived caches (`PrefixTable`,
+`TriggerChars`) are built **eagerly** when a state is frozen, not `OnceLock`-lazily as first
+sketched — the crate is `no_std` (`core` has no `OnceLock`; `OnceCell`
 would cost `Sync`). Eager rebuilds turned out to be a real fraction of a transition's cost
-(the July 2026 performance review), so `derived()` reuses the parent's `PrefixTable`
+(performance review), so `derived()` reuses the parent's `PrefixTable`
 (`Arc`-held) whenever its inputs — `enable_groups`, and `groups` by elementwise `Arc`
 identity — are unchanged; the dominant group-interior transition (only
 `expecting_group_close` overridden, deliberately not a table input) always takes the reuse
@@ -826,9 +831,11 @@ Rejected alternatives: an `Arc<dyn SpecialsScan>` field in `StateData`; per-libr
 declarations with core-legislated cross-library shadowing (see [§dd-dr:tokens] — the preset owns its
 scan; the core legislates nothing about trigger precedence).
 
-**Seed states are crate-frozen `Lang` data: `ParsingState::initial()` +
-`Lang::initial_state_data()`** — DECIDED (user, July 2026, code-review follow-up
-session; closes the seed hole flagged by the state review).
+#### Seed states are crate-frozen `Lang` data: `ParsingState::initial()` [§dd-dr:seed-states]
+
+Status: DECIDED (user, code-review follow-up; closes the seed hole flagged by the state
+review).
+
 `ParsingState::new(data)` was `pub`, so any caller could assemble a state that never
 passed `finalize_transition` — the one hole in "airtightness is structural". Now the
 language provides its canonical seed as *data* (`Lang::initial_state_data() ->
@@ -861,7 +868,8 @@ is the cheap mechanical option before any signature change.
 
 #### Parsing mode is first-class state data: `StateData.mode: L::ModeId` [§dd-dr:first-class-mode]
 
-Status: DECIDED (user; settles ParserLibraryParity.md N1 jointly with the `ParseDriver` entry, [§dd-dr:parsers-engine]).
+Status: DECIDED (user; settles parity item N1 jointly with the `ParseDriver` entry,
+[§dd-dr:parsers-engine]).
 
 `Lang` gains `type ModeId` (`Copy + Eq + Debug + Send + Sync`; `()` under `SimpleLang`) —
 the third closed per-language vocabulary after `GroupTypeId`/`CallableTypeId` — stored as
@@ -886,10 +894,9 @@ data-first candidate — `GroupRule` feeds elementwise prefix-table comparisons 
 definitions instead of centralizing in finalize).
 Revisit if: a language needs several orthogonal mode axes at once (composite enums
 cover the known cases; if they explode, mode may need to become a small struct).
-*Landed (subphase 7.1, July 2026)* with two bound additions forced in flight: `ModeId:
-… + Hash + Default`. `Hash` because the mode override joins the session derivation-memo
+Two bound additions were forced in flight: `ModeId: … + Hash + Default`. `Hash` because the mode override joins the session derivation-memo
 key — keyed *by value* (exact — modes are `Copy + Eq` vocabulary), unlike the
-identity-keyed rule payloads, so mode-bearing descent deltas stay memoizable (the D1/7.2
+identity-keyed rule payloads, so mode-bearing descent deltas stay memoizable (the driver's
 math plug depends on this; `GroupTypeId`/`CallableTypeId` carry `Hash` for the same
 map-key reason). `Default` supplies the seed's mode in the default
 `initial_state_data()` (the exact precedent of `StateExt: Default`); a real language's
