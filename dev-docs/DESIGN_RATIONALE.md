@@ -1723,11 +1723,11 @@ carry three copies of the same formatter).
 
 #### Single-context parsing API (`ParseContext`) [§dd-dr:parse-context]
 
-Status: PROPOSED.
+Status: DECIDED (implemented; formerly proposed).
 
 Bundles token reader + state + session handle, avoiding pylatexenc's three-argument threading
 through every parser. One place to extend later (e.g. depth limits, cancellation).
-*(Amended July 2026, Phase 6.4, user-approved: `ParseContext` gains
+`ParseContext` also carries
 `source: Arc<Source<L::SourceOrigin>>` — the source the token spans refer into, which
 staging a node's `SourceSpan` requires. Factory-created parsers
 (`make_invocation_parser(&self, invocation)`, later `ArgumentParser` entry points) have no
@@ -1736,12 +1736,12 @@ readers: the token layer deliberately carries only transient byte spans ([§dd-d
 `Arc`-span infection; a reader-side accessor would force `StdTokenReader` origin-generic
 and `TokenListReader` to carry a source it doesn't have). The construct-parser layer is
 where byte spans become `Arc`-backed source spans, so the context is the honest carrier.
-`NodesParser::new`/`GroupParser::new` dropped their redundant `source` parameters —
-single source of truth.)*
+`NodesParser::new`/`GroupParser::new` carry no redundant `source` parameters —
+single source of truth.
 
 #### Dispatch by token kind + library lookup [§dd-dr:token-kind-dispatch]
 
-Status: PROPOSED.
+Status: DECIDED (implemented; formerly proposed).
 
 See [§dd-dr:deterministic-dispatch].
 Rejected alternatives: `can_parse()`/`priority()` parser registries (registration-order-dependent,
@@ -1749,13 +1749,15 @@ scattered dispatch logic, priority races).
 
 #### `Language<L>` owns no per-parse state [§dd-dr:stateless-language]
 
-Status: DECIDED (as "FLMEnvironment"; renamed).
+Status: DECIDED (user-led).
 
 Long-lived, reusable across parses, accumulates no memory. Sessions are
 transient; results are frozen.
 
-**Construct parsers are temporaries; stored parser objects are immutable behavior data (the
-two-tier ownership model)** — DECIDED (user, July 2026, Phase 6 plan session).
+#### Two-tier ownership: stored specs are immutable data; construct parsers are temporaries [§dd-dr:parser-temporaries]
+
+Status: DECIDED (user).
+
 Tier 1, *stored* behavior objects (specs; `ArgumentParser`s inside `ArgumentSpec`):
 `Arc`-shared, `Send + Sync`, immutable; every per-use input arrives as arguments of their
 entry points (`&self`). Tier 2, *engine* construct parsers (`NodesParser`, the group parser,
@@ -1770,7 +1772,7 @@ tier 2 — specs stay data ([§dd-dr:data-vs-traits]).
 
 #### `CallableSpec::make_invocation_parser` — a factory moving a fresh parser to the caller [§dd-dr:invocation-parser-factory]
 
-Status: DECIDED (user; settles notes Q2 with a third option superseding both sketched ones).
+Status: DECIDED (user; a third option superseding both sketched ones).
 
 ```rust
 fn make_invocation_parser<'a>(
@@ -1797,26 +1799,27 @@ of invariant only because it is contained in one component at one point); a gene
 `with_invocation_parser(inv, closure)` (stack allocation, but kills `dyn CallableSpec`
 object safety).
 Revisit if: the per-invocation `Box` allocation shows up in parse-throughput profiles
-(run a micro-benchmark; see Phase6Execution.md [§dd-dr:open-questions]). If it ever matters, the dispatch
-loop can special-case the default path without touching the trait. *(Phase 6 close, July
-2026: the pre-close benchmark check this note originally flagged was consciously deferred,
-not dropped — user decision, performance-review session; see the state-memo entry's
-companions note. The obligation stands open, unscheduled.)*
-*(Phase 6.6 finding, recorded for Phase 7's `EnvironmentSpec`:* a composition running
+(run a micro-benchmark; [§dd-dr:open-questions]). If it ever matters, the dispatch
+loop can special-case the default path without touching the trait. (The benchmark check
+was consciously deferred, not dropped — user decision; the obligation stands open,
+unscheduled.)
+*(Composition finding:* a composition running
 *inside* `parse(cx)` cannot mint a **new** `Invocation` for a construct it resolves
 mid-parse — `Invocation.name: &'s str`, and the `'s` source content is unreachable through
 `cx` (the source is `Arc`-owned; tokens and readers carry only byte spans, [§dd-dr:errors]). So a
 two-level dispatch — a `\begin` spec's parser calling the resolved environment spec's own
-`make_invocation_parser` — does not work with the current `Invocation` shape; the 6.6
-test composition instead drives `EnvironmentBodyParser` directly under the resolved spec.
+`make_invocation_parser` — does not work with the `Invocation` shape; the standard
+composition instead drives `EnvironmentBodyParser` directly under the resolved spec.
 Relatedly, a *stored* trigger token cannot be handed back to `cx.tokens` (the uniform
-`parse` signature cannot tie it to the context's reader — the 6.3 finding), so the
+`parse` signature cannot tie it to the context's reader), so the
 takeover post-space reposition idiom is expressed positionally:
 `move_to_pos(token.post_space().start())`.)*
 
-**`Lang::finalize_node` — one centralized finalization hook, run by the builder for every
-staged node** — DECIDED (user, July 2026, Phase 6 plan session; supersedes the spec-level
-`finalize_invocation` proposal — report R3 / pylatexenc's `CallableSpec.finalize_node`).
+#### `Lang::finalize_node`: one centralized finalization hook in the builder [§dd-dr:finalize-node]
+
+Status: DECIDED (user; supersedes a spec-level `finalize_invocation` proposal —
+pylatexenc's `CallableSpec.finalize_node` precedent).
+
 Called inside `NodeTreeBuilder::add` for **all** nodes (every kind, not just callables),
 before the staging checks; receives mutable access to the node's parts (kind, uniform ext,
 span, state) plus a read-only view of already-staged nodes (so a callable's hook can
@@ -1839,7 +1842,7 @@ remember to call it); a `ParseContext`-side helper (forgettable, and transforms 
 
 #### `Lang::resolve_command` hook [§dd-dr:resolve-command-hook]
 
-Status: DECIDED (user; notes item C1 as sketched; return type amended, next entry).
+Status: DECIDED (user; return type refined — next two entries).
 
 `Command` tokens
 resolve through `fn resolve_command(state, &token) -> CommandResolution<Self>`
@@ -1852,9 +1855,11 @@ Rationale: the dispatch loop needs `(CallableTypeId, spec)` for command tokens a
 core cannot know a preset's type ids; follows the `scan_specials` precedent (a `Lang` hook,
 recognition kept close to resolution).
 
-**`CommandResolution` carries a failure `detail` string; the unimplemented default
-`resolve_command` reports itself through it** — DECIDED (user, July 2026). Two needs, one
-channel. (1) Forgetting to implement `resolve_command` has no compile-time signal: a
+#### `CommandResolution` carries a failure `detail`; the default hook reports itself [§dd-dr:resolution-detail]
+
+Status: DECIDED (user).
+
+Two needs, one channel. (1) Forgetting to implement `resolve_command` has no compile-time signal: a
 language that enables commands but keeps the default hook saw every command fail with a
 bare "cannot resolve", nothing pointing at the actual cause. (2) Resolvers that *are*
 implemented often know why a name failed and had nowhere to say it ("searched libraries
@@ -1881,9 +1886,11 @@ distinction is prose, not structure — and "Unknown" would be a misnomer for hi
 command (wrong and noisy for real languages, and every preset would have to scrub it via
 `refine_diagnostic`); docs-only (the runtime wall stays).
 
-**A third `CommandResolution::Failed` variant distinguishes an operational resolver
-failure from a clean miss** — DECIDED (user, July 2026, Phase 7.5 review follow-up).
-`resolve_command` now returns three outcomes: `Resolved`, `Unresolved { detail }` (a clean
+#### `CommandResolution::Failed`: operational failure distinct from a clean miss [§dd-dr:resolver-failure]
+
+Status: DECIDED (user, review follow-up).
+
+`resolve_command` returns three outcomes: `Resolved`, `Unresolved { detail }` (a clean
 miss — the name is defined nowhere the query saw), and `Failed { detail }` (a definition
 *provider* errored while answering — a broken or unavailable source). The dispatch sites
 diagnose `Failed` as a distinct condition — `CommandResolutionFailed`
@@ -1893,7 +1900,7 @@ recovering the same way (span-backed chars). The shared scope-stack resolver
 maps a provider `Err` to `Failed`, where the per-driver copies previously flattened it into
 `Unresolved`.
 Rationale: tooling and `refine_diagnostic` can now tell "command unknown" from "resolver
-broken" by condition identity rather than string-sniffing the detail; this mirrors the 7.3
+broken" by condition identity rather than string-sniffing the detail; this mirrors the
 `ScopeOpFailed` precedent, which likewise gives operational scope-stack failures their own
 condition. `CommandResolution` is `#[non_exhaustive]`, so the added variant is non-breaking
 downstream (the wildcard obligation already stands).
@@ -1904,19 +1911,21 @@ the condition id.
 
 #### `Lang::make_paragraph_break_node` hook [§dd-dr:paragraph-break-hook]
 
-Status: DECIDED (user; notes item C3, upgraded from "core default, hook only if needs it").
+Status: DECIDED (user; upgraded from "core default only").
 
 `fn make_paragraph_break_node(state, &token) -> NodeKind<Self>`; default: a
 whitespace-only `Chars` kind, `TextContent::Spanned` over the full token span (newlines
 included). The *core* stages the returned kind with the token's span and the current state —
 a `Lang` cannot stage nodes itself.
-Rationale: ARCHITECTURE [§dd-arch:nodes] left paragraph-break representation to the preset;
+Rationale: paragraph-break representation belongs to the preset;
 returning a `NodeKind` keeps callable-shaped paragraph breaks (FLM) expressible without a
 Phase 7 redesign, while the default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]).
 
-**Stop conditions: reified value + tier-2 predicates; abnormal endings are data
-(`StopCause`), not errors** — DECIDED (user, July 2026, Phase 6 plan session;
-pylatexenc-informed). `NodesParser` accepts a stop specification with two independent
+#### Stop conditions: reified values, tier-2 predicates; abnormal endings are data [§dd-dr:stop-conditions]
+
+Status: DECIDED (user; pylatexenc-informed).
+
+`NodesParser` accepts a stop specification with two independent
 triggers, mirroring pylatexenc's well-tested pair:
 - *token condition* — a small closed enum (`Command(name)`,
   `GroupClose(group_type, close)`, `ParagraphBreak`, …) **or** a programmatic predicate
@@ -1938,8 +1947,7 @@ Deliberate deviations from pylatexenc: the node predicate sees (count, last node
 whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
 invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
 data ([§dd-dr:data-vs-traits]).
-*`GroupClose` matches the exact `(group_type, close)` pairing, not either field alone
-(amended July 2026, Phase 6.2 review):* both must hold, because each guards a distinct
+*`GroupClose` matches the exact `(group_type, close)` pairing, not either field alone:* both must hold, because each guards a distinct
 false match. `close` disambiguates delimiters *within* a class — where `{`/`}` and `[`/`]`
 share one `GroupTypeId`, a group opened with `{` must not stop at a stray `]`. `group_type`
 disambiguates classes *within* a delimiter — if a mid-stream state delta re-classes `}` to
@@ -1950,8 +1958,7 @@ see the group-token entry), so the class is re-resolved from the current state a
 time — the same state the tokenizer used, so a reclassifying delta is honored. A close that
 matches neither field is left unconsumed and surfaces as `UnexpectedGroupClose` for the
 caller to adjudicate.
-*Token stop conditions carry a `consume` switch; `StopCause` reports the matched span
-(amended July 2026, Phase 6.2 review):* `TokenStopCondition` became a struct
+*Token stop conditions carry a `consume` switch; `StopCause` reports the matched span:* `TokenStopCondition` became a struct
 `{ kind: TokenStopKind, consume: bool }` (the closed enum renamed `TokenStopKind`), so the
 flag binds to the presence of a token condition — an orphan `consume` with no condition is
 unrepresentable. On a match `NodesParser` either leaves the token (`consume = false`,
@@ -1963,8 +1970,8 @@ leave-then-re-peek re-tokenizes at `span.start` under whatever state is *now* cu
 can reclassify the delimiter (a delta that drops the close rule makes `}` come back a
 `Char`, desynchronizing the caller). A post-hoc consume helper cannot fix this — it, too,
 re-peeks. `StopCause` accordingly split `StopConditionMet` into `TokenCondition { span }`
-(token stop) and `NodeCondition` (node stop), and `UnexpectedGroupClose` grew a `span`: the
-group parser (6.3) builds its `Spanned` close delimiter from that span, which it can no
+(token stop) and `NodeCondition` (node stop), and `UnexpectedGroupClose` carries a `span`: the
+group parser builds its `Spanned` close delimiter from that span, which it can no
 longer re-peek once the token is consumed. No `consumed` field — the cause discriminant plus
 the caller's own `consume` already determine it. Consume is always `move_past(token, true)`:
 a *closing* token has no *content* space to preserve — a command's trailing space is its
@@ -1976,7 +1983,7 @@ match time*; the environment-body terminator (close-without-consuming on a name 
 below) hinges on the name group *after* `\end`, invisible at the stop point, so it stays
 manual post-stop lookahead regardless of the flag.
 *The token condition wins outright; the pre-stop flush does not consult the node
-condition (amended July 2026, Phase 6.2 review):* the two triggers can collide — a token
+condition:* the two triggers can collide — a token
 match flushes the pending chars run (stop token's pre-space included) as a final node,
 and that node could satisfy the node condition. Decided: that flush stages **without
 invoking the node predicate**, and the cause is `TokenCondition`. Consulting it could
@@ -1991,8 +1998,8 @@ met-flags (an ambiguous cause) and re-raising `ReachedStoppingCondition` out of
 `process_tokens`'s `finally`, which `LatexGeneralNodesParser` never catches: the
 collision is a latent control-flow leak upstream, unhit only because no caller combines
 both conditions this way.
-Rejected alternatives: a declarative stop-condition language in spec data (the Q1 ruling: terminators
-are parser business); closure storage in specs; a consume *callback* handed to the stop
+Rejected alternatives: a declarative stop-condition language in spec data (terminators are
+parser business — [§dd-dr:slot-terminators]); closure storage in specs; a consume *callback* handed to the stop
 predicate (or a `Stop { consume }` predicate return) — it only adds per-match branching
 inside one heterogeneous predicate (rare), reaches neither the declarative variants (the
 common `GroupClose`) nor the post-lookahead case, would force a second consume mechanism
@@ -2000,31 +2007,32 @@ alongside the static flag, and turns a pure condition into a reader-mutating act
 deferred until a real dynamic-consume consumer appears, and even then localized to the
 `Predicate` variant.
 
-**Slot terminators are parser business; the environment-body parser lives in core
-`constructs`, parameterized** — DECIDED (user, July 2026, Phase 6 plan session; settles
-Phase 6 notes Q1 against both sketched options). `SlotSpec` stays
-`{ name, parsing_state_delta }` — no declarative terminator vocabulary in core spec data.
+#### Slot terminators are parser business; the environment-body parser is core, parameterized [§dd-dr:slot-terminators]
+
+Status: DECIDED (user; settles the terminator question against both sketched options).
+
+No declarative terminator vocabulary enters core spec data.
 The data of the rejected declarative design (stop-command name, name-group type,
 match-invocation-name) becomes the *constructor parameters* of a core
 `EnvironmentBodyParser`: it runs `NodesParser` with a stop condition on the terminator
 command, verifies the name back-reference (`\end{align}` matches the `align` that opened),
 stages the body `List`, and leaves post-space claiming to the invocation parser driving it.
 Environments remain zero-custom-code for spec authors — the preset's `EnvironmentSpec`
-(Phase 7) instantiates the parser from data. Verbatim bodies need no terminator-state
+instantiates the parser from data. Verbatim bodies need no terminator-state
 doctrine at all: a verbatim construct's parser reads raw content itself and never runs
 `NodesParser` — the "which state scans the terminator" question dissolves.
 Rationale: a declarative terminator spec re-creates a parser-description language inside
 spec data for exactly one consumer, while the parameterized parser expresses the same
 constructs with the same zero user code; core placement is legitimate because every
 parameter is data — no privileged spellings ([§dd-dr:no-privileged-concepts]).
-Rejected alternatives: `SlotTerminatorSpec`/`StopConditionSpec` as core spec data (notes Q1 Option A);
-stop-before-terminator with preset-owned consumption (Option B — weakened the declarative
+Rejected alternatives: `SlotTerminatorSpec`/`StopConditionSpec` as core spec data;
+stop-before-terminator with preset-owned consumption (weakened the declarative
 path and left terminator syntax neither recorded nor reconstructible).
-*(Amended July 2026, slots session: `SlotSpec` itself is now deleted — slots have no
-spec-side declaration at all; see the no-spec-side-slots entry below. The core of this
-ruling — terminator data as `EnvironmentBodyParser` constructor parameters — stands
-unchanged; the body state delta rehomes to the preset spec type that drives the parse.)*
-*(Amended July 2026, subphase 6.6 / Phase 6 close: the shipped constructor is
+(`SlotSpec` itself was later deleted — no spec-side slot declarations at all,
+cf. [§dd-dr:no-spec-side-slots]; this ruling's core — terminator data as
+`EnvironmentBodyParser` constructor parameters — stands, with the body state delta
+rehomed to the preset spec type that drives the parse.)
+The shipped constructor is
 `EnvironmentBodyParser::new(trigger_span, invocation_name, stop_command_name,
 name_group_type)` — two approved adjustments to the sketched parameter set. `trigger_span`
 anchors the missing-terminator diagnostic at the `\begin{…}` that opened (the
@@ -2032,13 +2040,13 @@ anchors the missing-terminator diagnostic at the `\begin{…}` that opened (the
 terminator diagnostic names the environment — with the name *check* a builder switch,
 `with_match_invocation_name(bool)`, default true (disabled = any rigid name group closes).
 "Rule/type" resolved to **type**, matching `GroupArgumentParser`'s parameterization.
-Behavior pins from the same review: body and terminator are both read under `cx.state` =
+Behavior pins: body and terminator are both read under `cx.state` =
 the slot's state (caller-scoped, like arguments), and the body `List` records that state —
 the interior state is the honest one for a delimiter-less region (a `Group`, by contrast,
 records the outer state; the environment node itself records the invocation's base state).
-A token error mid-terminator follows the 6.5 probe rule: strict aborts; tolerant treats
+A token error mid-terminator follows the probe rule: strict aborts; tolerant treats
 the position as a malformed terminator without diagnosing the token error — the enclosing
-loop re-reads it and applies its own recovery, no double report.)*
+loop re-reads it and applies its own recovery, no double report.
 
 #### Terminator mismatch recovery: close without consuming [§dd-dr:terminator-mismatch-recovery]
 
@@ -2055,26 +2063,14 @@ enclosing level. Loop safety: every level either consumes the token or unwinds o
 own frame; the root always consumes.
 Accepted consequence: "was this environment properly terminated?" lives in `Diagnostics`,
 not on the node — a preset wanting it on the node flags it in ext via `Lang::finalize_node`.
-*(Amended July 2026, subphase 6.6: the malformed-terminator "consume" is pinned to the
-terminator **command alone**, its post-space included — whatever follows re-parses as
+Pinned details: the malformed-terminator "consume" is the terminator **command alone**, its post-space included — whatever follows re-parses as
 enclosing content (`\end[y]` → sibling `[y]`; `\end{ A }` → sibling group). The command is
 the token whose re-cascading this decision forbids; consuming beyond it would eat content
-on a guess. And a stray group close *inside the body* — a case the 6.6 plan's recovery
-list omitted — resolves by the loop-safety rule: missing-terminator diagnostic + close
+on a guess. And a stray group close *inside the body* — a case the original recovery list
+omitted — resolves by the loop-safety rule: missing-terminator diagnostic + close
 **without consuming**, the `GroupParser` unwinding analog; the stray close then reaches a
 level that claims it (an enclosing group consumes it silently — one honest diagnostic
-total; at the root, the root's diagnose-and-skip adds its own).)*
-
-#### No `Language<L>` type in Phase 6; `ParserSession` is the root object [§dd-dr:parser-session-root]
-
-Status: DECIDED (user; amends notes item C5 and the [§dd-arch:engine] timing).
-
-Phase 6 ships `ParserSession` (builder + diagnostics + `Recovery` policy), driven directly
-by tests; the `Language<L>` runtime bundle and any `parse()` convenience entry point are
-deferred to the phase that demonstrates the need (Phase 7 at the earliest) — convenience
-code is not written before its convenience is demonstrable. Consequence: type-id interning
-stays deferred exactly as [§dd-dr:specs] recorded (it presupposed `Language`). The "`Language<L>`
-owns no per-parse state" principle above is untouched — it binds the type when it arrives.
+total; at the root, the root's diagnose-and-skip adds its own).
 
 #### `ChildStateSpec`: per-use descent-state policy on `NodesParser` [§dd-dr:child-state-spec]
 
@@ -2090,8 +2086,7 @@ the resolved `Arc<GroupRule<L>>`), the `Command`/`Specials` arms through `invoca
 (compute context: the `&Invocation` — callable type, name, spec, trigger token). Motivating
 use case: a macro argument parsed chars-except-groups — a delta-restricted state (commands/
 comments cleared, groups kept) whose group interiors *revert to the outer state*:
-`group: Fixed(outer)`. Timing: the struct and `group` arm land with 6.3; the `invocation`
-arm activates with 6.4 alongside `Invocation` itself.
+`group: Fixed(outer)`.
 Decided semantics: (1) *resolution precedes policy* — `Lang::resolve_command` runs under the
 loop's own `cx.state`, coherent with the state that tokenized the token, and what makes the
 resolved spec available to the callback (pylatexenc's hook likewise runs post-resolution,
@@ -2108,15 +2103,15 @@ and returning the same `Arc` preserves pointer identity (the [§dd-dr:tokens] id
 memoization argument stays sound); (6) *callbacks are pure `&dyn Fn`* (like
 `TokenStopKind::Predicate`, unlike the node condition's deliberate `FnMut`): a descent
 policy whose answer depends on call order would be fragile, and `Fixed` covers the
-stateless case. (Re-examined and upheld against session access, July 2026 — see the
-session-mediated derivation entry: precompute-and-select expresses context-dependent
+stateless case. (Re-examined and upheld against session access — cf. [§dd-dr:session-derivation]:
+precompute-and-select expresses context-dependent
 policies purely, with full `Arc` sharing.)
 Pitfalls recorded: group termination self-heals under any policy base (the group parser
 sets `expecting_group_close` on the interior state, which takes tokenizer precedence), but
 environment bodies do not — a base that cannot tokenize `\end` runs the body to
 `EndOfInput`, surfacing as `StopCause` for the caller to diagnose; and "disable specials"
-was not delta-expressible when this was decided — settled immediately after by
-`enable_specials` in the `TokenRules` `enable_*` flags decision ([§dd-dr:tokens]).
+was not delta-expressible when this was decided — settled by `enable_specials`
+([§dd-dr:enable-flags]).
 Rationale: descent-state control is the one pylatexenc state hook with no techy
 equivalent, and pure parser composition (run `NodesParser` to a `GroupOpen` stop,
 invoke the group parser directly under the other state, loop) — while it works and remains
@@ -2135,7 +2130,7 @@ token, and voids the callback's resolved-spec context).
 Status: DECIDED (user, child-state design session; conditional go — "adopt if straightforward" — and it is).
 
 The
-6.3 group parser keeps always-derive *semantics* (every interior state carries its
+group parser keeps always-derive *semantics* (every interior state carries its
 `expecting_group_close`: the uniform invariant, and the recognition guarantee for the close),
 but the derivation is deduplicated through a memo in `ParserSession`: a small vector of
 `(base, rule, interior)` `Arc` triples matched by `Arc::ptr_eq`, consulted only for the pure
@@ -2148,7 +2143,7 @@ underlying pure transition, and memoization exists only where the derivation inp
 an arbitrary `ParsingStateDelta` has no equality (`L::StateExt`/`L::Event` are not
 `PartialEq`; `Arc<dyn SpecLookup>` has none), and non-recurring derivations gain nothing
 from a memo anyway. (Spec-side deltas *do* have identity — `Arc<ArgumentSpec<L>>` carries
-its `parsing_state_delta` — so a `(base, spec)`-keyed entry kind is a possible 6.4+
+its `parsing_state_delta` — so a `(base, spec)`-keyed entry kind is a possible later
 extension, strictly profiling-driven.) Sibling `{…}` groups under one
 state then share a single interior `Arc` — one `StateData` clone per `(base, rule)` instead
 of per group descent, the dominant state-cloning cost in deep documents. Entries hold their
@@ -2168,9 +2163,9 @@ gets the savings without the semantic wrinkle).
 Revisit if: profiling shows the linear memo scan or memory growth under pathological
 nesting (one entry per depth level) warrants a map or a cap — or 6.3 implementation
 friction appears, in which case ship plain always-derive and flag for performance review.
-*Amended (July 2026, performance review):* generalized — the memo now lives uniformly in
-`derived_state` (see the rules-only memo entry below); `group_interior_state` stays as a
-shape-guaranteed wrapper, and the linear `Vec` scan became a `hashbrown` map.
+(Later generalized, performance review: the memo lives uniformly in `derived_state` —
+cf. [§dd-dr:memoized-derivations]; `group_interior_state` stays as a shape-guaranteed
+wrapper, and the linear `Vec` scan became a `hashbrown` map.)
 
 #### Session-mediated derivation is the in-parse standard; transitions have two levels [§dd-dr:session-derivation]
 
@@ -2205,9 +2200,7 @@ the *delta-producing site* (construct parsers have the session) and shipped `Arc
 the delta (ext replacement or event payload); finalize installs them cheaply. Structural
 sharing covers the rest — `StateData::clone` preserves `Arc` identity, and whole-state memo
 hits share ext caches wholesale.
-Timing: `derived_state`, the keyed group helper, `SessionExt`, and `observe_transition`
-land together in 6.3 — the seam ships whole, so the memo never exists without its
-observation channel.
+The seam ships whole — the memo never exists without its observation channel.
 Rationale: one seam hides memo storage, gives transition provenance a place to reach
 `Diagnostics` (the "deltas are inspectable data" promise), and sees memo-hit transitions —
 which no state-level hook can, by construction.
@@ -2222,15 +2215,17 @@ stage nodes and emit diagnostics, and the loop's borrows tangle — purity uphel
 precompute-and-select covers context-dependent policies with full `Arc` sharing, and the
 designated first relaxation, should a consumer demand latching state, is `Fn` → `FnMut` on
 the node-condition precedent, not session injection).
-*Amended (July 2026, performance review):* "never memoizes" no longer holds — rules-only
-deltas are memoized inside `derived_state` itself (next entry). The original reasoning
-(arbitrary deltas have no identity) survives as the *gate*: deltas carrying
-ext/events/library pushes still always derive fresh.
+(Later revised, performance review: "never memoizes" no longer holds — rules-only
+deltas are memoized inside `derived_state` itself, cf. [§dd-dr:memoized-derivations].
+The original reasoning — arbitrary deltas have no identity — survives as the *gate*:
+deltas carrying ext/events/library pushes still always derive fresh.)
 
-**Rules-only derivations are memoized uniformly in `derived_state`; retention accepted;
-`hashbrown` adopted** — DECIDED (user, July 2026, performance-review session; supersedes
-the never-memoize rule of the two entries above — `derived_state` is now the single
-memoization seam, narrow helpers are wrappers over it).
+#### Rules-only derivations memoized uniformly in `derived_state`; `hashbrown` adopted [§dd-dr:memoized-derivations]
+
+Status: DECIDED (user, performance review; supersedes the never-memoize rule of the two
+entries above — `derived_state` is the single memoization seam, narrow helpers wrappers
+over it).
+
 The gate is decidable without payload equality — the insight that unblocked this: the
 three fields that kill general delta comparability (`ext: Option<L::StateExt>`, `events`,
 `push_libraries`) only need **emptiness** checks. A delta carrying none of them is a pure
@@ -2257,7 +2252,8 @@ key's address could be reused by a new state, silently returning a wrong memoize
 Accepted (user): a session is one transient parse, and most memoized states end up pinned
 by the node tree anyway.
 *Dependency:* `hashbrown` (std's own `HashMap` implementation, no_std) — the first
-mandatory dependency; ARCHITECTURE.md Decision 5 amended accordingly. Probes are
+mandatory dependency; the dependency policy ([§dd-dr:minimal-dependencies]) amended
+accordingly. Probes are
 allocation-free (`Equivalent`-keyed lookup; the owned key is materialized only on
 insert). Pitfall recorded: a **hash may never replace the stored key** — equality on the
 key is what makes collisions harmless; a hash-only "key" would return a wrong state on
@@ -2267,18 +2263,21 @@ struct is already the canonical sparse form (one slot per field, no ordering, no
 duplicates), and a stored what-changed mask desyncs against the public fields and breaks
 struct-literal construction (E0451).
 *Companions (same session):* `PrefixTable::first_chars` **removed** (dead public API
-describing the rejected maximal-run design, [§dd-dr:tokens]/§4; premature to wire in as a `match_at`
-guard — [§dd-dr:open-questions] item 1b can reintroduce a merged table if profiling demands);
-`PrefixTable` reuse across derivations (see the [§dd-dr:parsing-state] implementation notes); the benchmark
-harness (Phase6Execution [§dd-dr:open-questions] obligation) consciously deferred, not dropped.
+describing the rejected maximal-run design, [§dd-dr:token-model]; premature to wire in
+as a `match_at` guard — [§dd-dr:open-questions] item 1b can reintroduce a merged table
+if profiling demands); `PrefixTable` reuse across derivations (see the
+[§dd-dr:parsing-state] implementation notes); the benchmark harness
+([§dd-dr:open-questions] obligation) consciously deferred, not dropped.
 Revisit if: profiling shows memo overhead dominating on non-recurring deltas, or
 per-parse memory growth hurts on pathological documents — eviction is unsound with
 pointer keys, so that would need a different key design.
 
-**Optional-group arguments balance their delimiters; brace protection via the descent
-policy (pylatexenc's `make_child_parsing_state` semantics)** — DECIDED (user, July 2026,
-subphase 6.5 review; supersedes the LaTeX-style first-`]`-closes rule briefly shipped in
-6.5). `OptionalGroupArgumentParser`'s minted `GroupRule` is in force for the argument's
+#### Optional-group arguments balance their delimiters [§dd-dr:optional-group-balancing]
+
+Status: DECIDED (user; supersedes the LaTeX-style first-`]`-closes rule briefly shipped —
+reversal recorded below).
+
+`OptionalGroupArgumentParser`'s minted `GroupRule` is in force for the argument's
 whole extent — the probing peek *and* the group's contents, not just the opening
 delimiter: `\item[with[recursive[use]of]brackets]` parses as **one** argument whose
 contents hold nested `[…]` group nodes. The two-sided child-descent rule that makes this
@@ -2290,8 +2289,7 @@ argument's own state, where `]` is an ordinary character: braces protect
 arguments inside the option see no bracket rule (`\item[\m{a]b}]`). This is exactly
 pylatexenc's `LatexDelimitedGroupParserInfo.make_child_parsing_state` ("group with same
 delimiter → keep contents parsing state; else → the outer, original parsing state"),
-expressed through `ChildStateSpec` — the [§dd-dr:parsers-engine] hook that ports that very pylatexenc
-method; `GroupParser` gained a per-use `with_child_states` config so the parser that
+expressed through `ChildStateSpec` ([§dd-dr:child-state-spec]); `GroupParser` gained a per-use `with_child_states` config so the parser that
 scopes a group's interior can steer its descents (default stays `Inherit`; decided
 semantics 3 — one-level-deep policies — is untouched: this is per-use configuration at
 the level that scopes it, not propagation). Shapes verified empirically against
@@ -2299,38 +2297,20 @@ pylatexenc 3.0a33 (`[with[recursive[use]of]brackets]` → identical node spans;
 `[{arg with ]}]` → protected; `[ {a} ]` → three content nodes, no unwrap).
 Rejected alternatives: LaTeX's first-unprotected-`]` rule (TeX delimited-parameter matching, xparse
 `o`/`O` arguments) — implemented first for LaTeX parity and reverted on user review:
-pylatexenc parity is the 6.5 exit criterion, balanced matching is what document tooling
+pylatexenc parity is the exit criterion, balanced matching is what document tooling
 expects, and the brace-protection idiom survives either way.
 *Pitfall recorded:* the protection policy rides one bracket level, as in pylatexenc —
 whose depth-2 behavior already contradicts its own docstring (`\item[a[{x]y}b]` mangles
 silently there: the nested group comes back childless; checked against 3.0a33). techy
-mangled the same pathological shape *with* diagnostics — **closed by the
-temporary-group-rules entry below** (July 2026), which supersedes this entry's
-`ChildStateSpec` wiring entirely.
-*Revisit — planned mechanism, direction decided (user, July 2026, follow-up
-discussion; since implemented — entry below):* the one-level pitfall is to be closed by
-**temporary group rules scoped in state data** — reversion by reconstruction
-(stripping), the only vehicle that reaches depth N: the outer `Arc` sits N frames up
-and is unknowable to the descending site, and caller-side descent policies are one
-level deep by design. Direction pinned: temporariness is reified in **core rules data**
-(a `temporary_groups` list next to `TokenRules::groups`, or a `transient` flag on
-`GroupRule`) — *not* a `Lang` callback recording a `StateExt` flag (a core parser's
-parsing correctness must not depend on `Lang` cooperation — the same ground the
-ChildStateSpec entry's `StateExt`-routing rejection stands on; `finalize_transition`
-stays reserved for genuine language semantics) and *not* the session (the session layer
-is pinned data-equivalent to `derived()` and may never alter a resulting state).
-Stripping lives in the **pure derivation path**, keyed on the `expecting_group_close`
-change: a derivation installing a *non-temporary* expected close clears the temporary
-rules. The trigger self-disambiguates — a nested minted `[` installs the temporary rule
-(kept, so brackets keep balancing), a brace installs a normal one (stripped, so braces
-protect at any depth) — and remains a pure function of `(base, rule)`, so the session's
-derivation memo is untouched. With it, `\item[a[b{c]}]]` parses as expected — beyond
-pylatexenc, which mangles exactly that input (3.0a33 checked: childless nested group,
-leaked `]`).
+mangled the same pathological shape *with* diagnostics — closed by
+[§dd-dr:temporary-group-rules], which supersedes this entry's `ChildStateSpec` wiring
+entirely.
 
-**Brace protection presupposes the minted close spelling is not a group delimiter of
-the argument state — no active suppression** — DECIDED (user, July 2026, Action-06
-review). The revert-to-argument-state rule above protects `]` inside `[{arg with ]}]`
+#### Brace protection presupposes the close spelling is not a language group delimiter [§dd-dr:brace-protection-limits]
+
+Status: DECIDED (user).
+
+The revert-to-argument-state rule above protects `]` inside `[{arg with ]}]`
 because the reverted state reads `]` as an *ordinary character*. If a language's
 **base** rules class `[`/`]` as a genuine group pairing, the reverted state reads `]`
 as a real close-only `GroupClose` — and `\item[{a]b}]` then **genuinely fails** (the
@@ -2346,10 +2326,13 @@ Rejected alternatives: making the revert state actively suppress the close spell
 then parse differently inside a brace group under an option than in every other brace
 group of the same language: an inconsistency masquerading as robustness.
 
-**Temporary group rules: a state-scoped delimiter lifecycle, enforced at the
-derivation choke point** — DECIDED & implemented (user, July 2026; executes the
-planned mechanism two entries up and supersedes the optional parser's `ChildStateSpec`
-wiring). `TokenRules` gains **`temporary_groups`**, a second rules list that tokenizes
+#### Temporary group rules: a state-scoped delimiter lifecycle at the derivation choke point [§dd-dr:temporary-group-rules]
+
+Status: DECIDED (user; supersedes the optional parser's `ChildStateSpec` wiring — the
+only vehicle that reaches depth N, since the outer `Arc` sits N frames up, unknowable to
+the descending site, and caller-side descent policies are one level deep by design).
+
+`TokenRules` gains **`temporary_groups`**, a second rules list that tokenizes
 exactly like `groups` (same `enable_groups` gate; listed *first* in the `PrefixTable`,
 so temporaries win same-spelling ties — the minted-rule "prepended wins" semantics) but
 whose lifecycle is scoped in state data: `ParsingState::derived()` — after
@@ -2364,7 +2347,7 @@ pylatexenc. Nothing restores the rule after the inner group closes — scope rev
 structural (`\item[a{b}[c]d]` pinned). Nested minted rules scope by the exemption:
 `\item[\mm[x]]`'s inner parser *replaces* the temporaries for the inner argument's
 extent.
-*Sub-rulings (the three open questions of the planning entry):* **(i) stripping site**
+*Sub-rulings:* **(i) stripping site**
 = the `derived()` core rule, not `group_interior_state` delta construction: extensions
 install expected closes through hand-built deltas (the `\verb`-idiom raw-block test
 pattern), in-parse and out-of-parse derivations must agree (the session stays
@@ -2389,20 +2372,26 @@ unchanged, re-pinned as `optional_child_invocation_brace_arguments_protect_by_st
 To revisit when the preset argument-parser helpers are defined: a mandatory-argument
 parser could reset `groups` to exactly the delimiters it wants to see, or reset the
 temporaries itself, through its own deltas.
+Rejected alternatives: a `Lang` callback recording a `StateExt` flag (a core parser's
+parsing correctness must not depend on `Lang` cooperation; `finalize_transition` stays
+reserved for genuine language semantics); session-side stripping (the session layer is
+pinned data-equivalent to `derived()` and may never alter a resulting state).
 *Pitfall recorded:* `temporary_groups` is a **prefix-table input** — `derived()`'s
 table-reuse check compares it elementwise like `groups`; omitting that would reuse a
 stale table across a strip and keep tokenizing the dead delimiters (pinned by
 `temporary_groups_are_prefix_table_inputs`).
 
-**`ParseContext::parse_scoped` and `ParseContext::probe_token` replace the hand-rolled
-state swap/restore and the crate-private `try_peek`** — DECIDED (user, July 2026,
-Action-05 session). The `cx.state` swap/restore protocol was correct at every one of its
+#### `parse_scoped` and `probe_token` replace hand-rolled swap/restore [§dd-dr:parse-scoped]
+
+Status: DECIDED (user).
+
+The `cx.state` swap/restore protocol was correct at every one of its
 seven lib sites, but the correctness was per-site discipline (restore **before** the
 `?`), and the probe site had to hold a `Result` un-`?`-ed across the restore.
 `parse_scoped(state, &mut parser)` — the pylatexenc
 `walker.parse_content(parser, …, parsing_state)` analog, deliberately on the *context*
-(the session lacks tokens and source; a session-level `parse` remains planned as the
-top-level driver entry, Phase 7) — makes the restore structural; the returned delta stays
+(the session lacks tokens and source; the top-level drive later landed on `Language` —
+[§dd-dr:language-parse-api]) — makes the restore structural; the returned delta stays
 **unapplied** (the [§dd-dr:parsing-state]/[§dd-dr:parsers-engine] caller-applies law; an auto-applying driver would be wrong
 for group interiors). Frame-opening stays separate (`with_frame` composes around it;
 argument frames wrap two sub-operations, not one parse). The peek-shaped sites that are
@@ -2416,10 +2405,12 @@ public with it (custom parser code building its own `ParseError`s needs the trac
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
 
-**No spec-side slots: `SlotSpec` and `CallableSpec::slots()` deleted; slots are pure
-record-level vocabulary** — DECIDED (user, July 2026, slots session; supersedes the same
-session's earlier "slots mirror arguments" lean, and executes plan item A of
-PlanSlotsAndConvenienceSurface.md). The mirror died on the **invocation-facts problem**:
+#### No spec-side slots: slots are pure record-level vocabulary [§dd-dr:no-spec-side-slots]
+
+Status: DECIDED (user, slots session; supersedes the same session's earlier
+"slots mirror arguments" lean).
+
+The mirror died on the **invocation-facts problem**:
 body parsing needs facts only the running invocation has — the environment name for the
 `\end{name}` back-reference, potentially the arguments parsed so far — which no
 spec-declared per-slot parser list can receive through a `parse_argument`-shaped entry
@@ -2442,28 +2433,23 @@ level — "slots" become pure node vocabulary. Consequences shipped together:
   declare that `StdInvocationParser` won't parse — its implementation-error arm and the
   pinned test are deleted ([§dd-dr:errors] consequence list amended).
 - The body state delta (pylatexenc's `make_body_parsing_state_delta`) rehomes to the
-  preset spec type that drives the parse — Phase 7's `EnvironmentSpec` holds it as an
+  preset spec type that drives the parse — the preset's `EnvironmentSpec` holds it as an
   ordinary field, read back by its own composition (the test-lang `EnvSpec` rehearses
   this through the [§dd-dr:specs] `Any`-supertrait downcast). The core never interpreted it.
 - `StdCallableSpec::new(arguments)` is single-list (a free ergonomics win); the guard's
   `!slots().is_empty()` clause is replaced by the spec-level emptiness method (next
   entry), which the removal makes *more* load-bearing.
-- Composition building blocks promoted to `pub` (plan item A.4):
+- Composition building blocks promoted to `pub`:
   `parse_declared_arguments` (the shared argument half) and `read_rigid_name_group` (+
   `NameGroup`) — a `\begin`-shaped takeover now assembles from public parts. A
   `ParsedSlots`-assembly helper was judged unnecessary for now: what remains hand-rolled
   is a few lines of offset bookkeeping.
-*Open (deliberately):* where the standard `\begin` composition lives — core (a generic
-name-indexed delegating dispatcher) vs. the latexlike preset (Phase 7 owns the
-`\begin`/`\end` spelling). It stays test-side meanwhile (plan item A.5), as does the C
-batch (builder sugar, crate-root re-exports). *(Settled July 2026, Phase 7 plan
-session: preset-owned — see the `\begin`-composition entry at the end of this
-section.)*
+Where the standard `\begin` composition lives was left open deliberately and settled
+later: preset-owned — cf. [§dd-dr:begin-composition].
 
-**The emptiness surface: `ArgumentParser::can_match_empty()` +
-`CallableSpec::requires_content()`; the expression guard consults the spec** — DECIDED
-(user, July 2026, slots session; both names user-decided 2026-07-15; executes plan item B
-of PlanSlotsAndConvenienceSurface.md; pylatexenc precedent:
+#### The emptiness surface: `can_match_empty()` + `requires_content()` [§dd-dr:emptiness-surface]
+
+Status: DECIDED (user; names user-decided; pylatexenc precedent:
 `LatexParserBase.contents_can_be_empty`, consulted by its expression parser).
 - `ArgumentParser::can_match_empty()` — can this argument be satisfied consuming
   nothing, i.e. is *absent* a valid outcome rather than a diagnosed recovery? Optional
@@ -2495,15 +2481,15 @@ of PlanSlotsAndConvenienceSurface.md; pylatexenc precedent:
   `ExpressionCallableRequiresContent` (identifier
   `core.nodes_parser.expression-callable-requires-content`), message "…it requires
   content (arguments or a body)" — the old "it takes arguments" would be a false
-  message for a body-bearing takeover that declares none. *(Implementation-forced
-  naming consequence, flagged for user sign-off in the session report.)*
+  message for a body-bearing takeover that declares none. (An implementation-forced
+  naming consequence, user-signed-off.)
 
-**The `\begin` composition is preset-owned; core contributes parameterized building
-blocks only; environments customize through their spec (data or hooks), not invocation
-takeover** — DECIDED (user, July 2026, Phase 7 plan session; settles the
-deliberately-open home question of the no-spec-side-slots entry above).
+#### The `\begin` composition is preset-owned; core contributes building blocks [§dd-dr:begin-composition]
+
+Status: DECIDED (user; settles the home question left open by
+[§dd-dr:no-spec-side-slots]).
 The standard `\begin`/`\end` composition (rehearsed test-side in
-`environment_parser.rs`) rehomes to the latexlike preset in Phase 7: the preset
+`environment_parser.rs`) rehomes to the latexlike preset: the preset
 registers a `BeginSpec` dispatcher whose invocation parser contains minimal/no scanning
 code of its own — it reads the rigid name group (`read_rigid_name_group`), resolves the
 environment's spec from the state's libraries under the preset's ENVIRONMENT callable
@@ -2513,16 +2499,15 @@ is preset property; core owns each individual parsing task as data-parameterized
 machinery (the [§dd-dr:no-privileged-concepts] ground `EnvironmentBodyParser`'s core placement already stands on).
 Consequences made explicit:
 - **Invocation-level takeover is out; amending `Invocation` is declined.** An
-  environment spec's own `make_invocation_parser` is never invoked (the 6.6
-  `Invocation<'s>` finding stands as a permanent boundary, not a bug to fix); all
+  environment spec's own `make_invocation_parser` is never invoked (the
+  `Invocation<'s>` composition finding stands as a permanent boundary, not a bug to fix); all
   per-environment variation flows through the preset's `EnvironmentSpec` surface.
   That surface is *not* constrained to plain data (user, same session — "spec-as-data"
   would overstate the ruling): behavior-shaped customization via defaulted methods is
   legitimate, per [§dd-dr:data-vs-traits] and the factory precedent of `make_invocation_parser` itself.
-  For the body-parsing choice (verbatim-like bodies) the user leans to a defaulted
+  The body-parsing choice (verbatim-like bodies) settled on the defaulted
   `make_body_parser()` method (pylatexenc's `EnvironmentSpec.make_body_parser`) over a
-  plain field — final shape remains a Phase 7 preset-side design question. *(Settled July
-  2026, Phase 7 plan session: the defaulted `make_body_parser()` method, confirmed.)*
+  plain field.
 - **`EnvironmentBodyParser` keeps its name** (rename raised and reconsidered, user):
   its contract is hardwired to the rigid COMMAND + CHARS_GROUP terminator shape, and
   environments are the one role it is designed for — a generic name
@@ -2531,7 +2516,7 @@ Consequences made explicit:
   not descriptive vocabulary.
 - **`read_rigid_name_group` stays a value-returning scaffolding helper**, deliberately
   separate from the node-staging chars-group *argument* parser (pylatexenc's
-  `LatexCharsGroupParser` analog) that Phase 7's std library adds for `\label`-style
+  `LatexCharsGroupParser` analog) that the preset's standard library adds for `\label`-style
   chars-only arguments: scaffolding is reconstructed, never recorded ([§dd-dr:nodes]), so the
   name reader must not stage nodes — the two roles differ in kind, not configuration.
 - Preset-side strays that rehome with the composition: registering an `end` spec so an
@@ -2551,10 +2536,12 @@ Revisit if: a second core-worthy consumer of command+name-group termination
 materializes (the generalization/name question reopens), or `EnvironmentSpec`'s
 body-customization design finds it genuinely needs invocation-level takeover.
 
-**Parser-library gap list vs pylatexenc's `latexnodes.parsers` settled; tack-on
-information fields parse as a construct, not postprocessing** — DECIDED (user, July
-2026, parser-library survey session; full table with per-parser strategies in
-ParserLibraryParity.md). Key rulings and their reasons:
+#### Parser-library gap list settled; tack-on fields parse as a construct [§dd-dr:parity-gap-list]
+
+Status: DECIDED (user, parser-library survey; the full per-parser table lives in
+dev-docs/archive/ParserLibraryParity.md).
+
+Key rulings and their reasons:
 - **Tack-on information-field macros** (`\label` after `\section`, pylatexenc's
   `LatexTackOnInformationFieldMacrosParser`): a construct parser, *not* a
   postprocessing pass, for two reasons (user). First, postprocessing means tree surgery
@@ -2567,11 +2554,9 @@ ParserLibraryParity.md). Key rulings and their reasons:
   interior state change/event to a group class (math mode entering on `$…$`); the
   direction is a contents-parsing-state/state-delta plug. `ChildStateSpec` is not that
   mechanism — it is per-use call-site config and deliberately one-level-deep (decided
-  semantics 3 above). The plug's shape (an interior `ParsingStateDelta` on `GroupRule`
-  vs a `Lang`/preset hook keyed on `GroupTypeId`) is an open Phase 7 design question.
-  *(Settled July 2026, Phase 7 plan session: neither candidate — the `ParseDriver`'s
-  `group_interior_delta` hook returning a parsing-mode delta; see the `ParseDriver`
-  entry below and [§dd-dr:parsing-state].)*
+  semantics 3 above). The plug's shape settled on neither sketched candidate: the `ParseDriver`'s
+  `group_interior_delta` hook returning a parsing-mode delta ([§dd-dr:parse-driver],
+  [§dd-dr:first-class-mode]).
 - **Ready-made argument-parser conveniences are wanted even where composition
   suffices** (user): a multi-delimited group parser (any of several delimiter pairs at
   one argument position — port pylatexenc's contents-state subtlety of keeping only
@@ -2590,7 +2575,8 @@ plug proves to need more context than the group rule/class provides.
 
 #### The deferred parity parsers N2/N3/N4/N6 landed [§dd-dr:parity-parsers]
 
-Status: DECIDED (user, N2–N6 implementation session; full per-parser record in ParserLibraryParity.md, naming rows in NAMING_STRATEGY.md).
+Status: DECIDED (user; the full per-parser record lives in
+dev-docs/archive/ParserLibraryParity.md).
 
 The decisions and their reasons:
 - **N3 record shape — one `ParsedArgument`, structure inside** (the survey's flagged
@@ -2604,8 +2590,8 @@ The decisions and their reasons:
   helper (`extract::split_embellishments`). Per-char access thus costs one helper
   call, not an API change.
 - **N3 matching semantics** (user): noise before a marker; between marker and
-  expression, plain **whitespace only** (revised July 2026 — the first cut allowed
-  nothing; pylatexenc's `allow_pre_space` and TeX's `x^ 2` decided the relaxation).
+  expression, plain **whitespace only** (revised — the first cut allowed nothing; pylatexenc's
+  `allow_pre_space` and TeX's `x^ 2` decided the relaxation).
   The pair stays atomic: a violated pair (`\op^` at EOF, a comment or paragraph
   break after the marker) rewinds *whole* and ends the run silently — a lone marker
   char is ordinary content nearly everywhere, so a diagnostic would misfire on
@@ -2623,7 +2609,7 @@ The decisions and their reasons:
   multi-delim class dissolves. The ported contents subtlety maps onto the
   temporary-groups lifecycle as **two derivations** (shared `probe_minted_group`):
   probe under all pairs as temporaries, contents under the matched pair only (single
-  configured rule: one derivation, the 7.7 path unchanged). Everything else falls out
+  configured rule: one derivation, unchanged). Everything else falls out
   of the existing machinery: nesting = same-rule descent keeps temporaries, brace
   protection = other-rule descent strips them (at any depth — stronger than
   pylatexenc, which mangles depth-two shapes), and the base state's own rules staying
@@ -2672,8 +2658,10 @@ Revisit if: a consumer needs per-embellishment diagnostics for dangling markers
 (`\op^` silently unmatching), or a field spec needs takeover-level access to the
 absorbing invocation (the configured spec sees only its own invocation).
 
-**`ParseDriver`: parse-driving behavior is a Lang-provided instance, not static hooks or
-session state** — DECIDED (user, July 2026, Phase 7 plan session).
+#### `ParseDriver`: parse behavior is a Lang-provided instance [§dd-dr:parse-driver]
+
+Status: DECIDED (user).
+
 New core trait `ParseDriver<L>`, defaulted methods only (`StdParseDriver` = the trivial
 impl carrying the `Recovery` knob), bound into the bundle as `Lang::Driver`;
 `ParseContext` gains `driver: &'a L::Driver`. The field is concretely typed through `L`,
@@ -2684,11 +2672,11 @@ fully typed — no downcasts; generic code sees only the trait. The driver owns:
   descent site (dispatch-loop GroupOpen arm, group interiors, environment bodies,
   argument parsers, top-level drive) routes through `ParseContext` wrappers
   (`cx.parse_nodes`/`cx.parse_group`), so one override applies everywhere — the
-  ARCHITECTURE "custom nodes parser" nuclear option becomes a supported seam;
+  "custom nodes parser" nuclear option becomes a supported seam;
 - **the group descent-delta channel** — `group_interior_delta(prev, rule)`, pure per
   `(state, rule)`, merged into the memoized `session.group_interior_state` derivation
   (the cache stays in session; the hook runs on memo miss only). With [§dd-dr:parsing-state]'s parsing
-  mode this closes ParserLibraryParity.md N1;
+  mode this closes parity item N1;
 - **recovery policy** — `Recovery` leaves `ParserSession`, which returns to pure
   scratch/output (builder, diagnostics, frames, memo, `SessionExt`); overriding the
   driver's recover path admits richer policies than the strict/tolerant enum;
@@ -2714,18 +2702,18 @@ Rejected alternatives: a session-installed `dyn` provider (a second customizatio
 `Lang`; preset helpers invisible behind the trait object — Any-funnel required); more
 static `Lang` hooks (no instance configuration; `Lang` was accreting parse behavior
 foreign to its layers); overridable `parse_scoped`/`with_frame` (invariant footgun).
-*Cost accepted:* every Phase 6 `ParseContext`/`ParserSession::new(recovery)` call site
-updates — mechanical but broad.
+*Cost accepted:* every existing `ParseContext`/`ParserSession::new(recovery)` call site
+updated — mechanical but broad.
 Revisit if: a real consumer needs runtime driver swapping for one `Lang` (add a dyn
 override on top of the associated-type default), or per-invocation `Box` provision shows
 up in profiles (the [§dd-dr:open-questions] benchmark obligation).
-*Landed (subphase 7.2, July 2026)*, with these in-flight decisions (user-checkpointed):
+In-flight decisions (user-checkpointed):
 **Module home `engine::driver`** (user choice over constructs); `CommandResolution`/
 `ResolvedCallable` relocated there next to `resolve_command` (crate-root re-exports
 keep `techy::…` paths; module paths changed `state::` → `engine::`). **The
 group-interior memo is a second, dedicated session map** keyed `(base, rule)` by `Arc`
 identity: "hook runs on memo miss only" needs a pre-hook probe key, and sharing the
-7.1 memo would let a hand-built expecting-close delta collide with a driver-augmented
+rules-only memo would let a hand-built expecting-close delta collide with a driver-augmented
 descent under one key (unsound). Entries store the *merged* delta so
 `observe_transition` sees the true delta on hits; keying on `(base, rule)` also keeps
 descents deduplicated when the driver's delta carries events/ext (sound — the hook is
@@ -2747,13 +2735,15 @@ custom driver `recover` uses for per-condition decisions. The default
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
-Status: DECIDED (user, mini-checkpoint; four API-shape decisions on the deferred-from- Phase-6 type).
+Status: DECIDED (user; four API-shape decisions on the long-deferred runtime bundle —
+staged deliberately: `ParserSession` alone shipped first, `Language` only once consumers
+demonstrated the need).
 
 `Language<L>` = `{ driver: L::Driver, initial_state:
 Arc<ParsingState<L>>, resolver: Arc<dyn SourceResolver<O>> }`, long-lived, owning no
-per-parse state (March 2026 principle, kept).
-- **Entry points are two named methods, not a `SourceInput` enum** (rejecting the old
-  [§dd-arch:engine] sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
+per-parse state ([§dd-dr:stateless-language]).
+- **Entry points are two named methods, not a `SourceInput` enum** (rejecting an older
+  sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
   Into<String>)` mints an anonymous `Source`; `parse_source(Arc<Source<O>>)` takes a
   pre-minted source (origin/provenance intact — the `resolve_source` round trip feeds
   it). A conversion enum whose only job is overloading buys one method name at the
@@ -2761,21 +2751,20 @@ per-parse state (March 2026 principle, kept).
 - **Construction seeds from `Lang::initial_state_data()` and customizes by deriving**:
   `new(driver)` + fallible `with_seed_delta(delta) -> Result<_, DeriveError<L>>` (the
   sanctioned seed-customization path — runs `finalize_transition`, so language
-  invariants hold over customized seeds; fallible since 7.3 scope ops; a failing op
+  invariants hold over customized seeds; fallible since scope ops can fail; a failing op
   drops the bundle under construction — an embedder build-time bug, not a source
   condition) + `with_resolver(…)` (default `NoResolver`); `Default` where `L::Driver:
   Default`. Wholesale `StateData` replacement deferred until a consumer demonstrates
   the need. The `Lang` hook remains the seed source for `Language`-less parses.
 - **The advanced path is accessors, not a `session()` method**: `initial_state()`/
-  `driver()`/`resolver()`; the sketch's `session()` dropped — after the Phase 6
-  amendment `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
+  `driver()`/`resolver()`; the sketch's `session()` dropped — `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
   argument-free, so a `Language::session()` would return exactly that (misleading
   discoverability sugar). `ParseResult` likewise stays borrow-free (nodes are
   self-contained; results outlive the bundle).
-- **The root drive loop promotes the Phase 6 rehearsal** (nodes_parser
+- **The root drive loop promotes the rehearsed pattern** (the `nodes_parser` test
   `root_driver_skips_a_stray_close_and_continues`): loop `cx.parse_nodes` under
-  `StopSpec::none()` (through the driver factory — the 7.2 uniform-routing contract
-  covers the top-level site); on `UnexpectedGroupClose` diagnose the new core
+  `StopSpec::none()` (through the driver factory — the uniform-routing contract covers
+  the top-level site); on `UnexpectedGroupClose` diagnose the new core
   condition **`StrayGroupClose { delim }`** through the recover funnel, consume, and
   resume; on `EndOfInput` stage the root `List` over `SourceSpan::entire` and
   `finish()`. The condition lives in `constructs::nodes_parser` **next to
@@ -2793,10 +2782,10 @@ per-parse state (March 2026 principle, kept).
   loop actually reached — and the diagnosed delimiter is the stop span sliced from
   the source, never a re-peek.
 
-*(Amended July 2026, stray-close review-fix session: the recorded quirk — each
-tolerant resume re-entered under the frozen **seed**, with the stray token re-peeked
-under it — fired all three of its latent failure modes once after-effect deltas
-became reachable at the root (agent code review; tests
+Follow-up fix (review-driven): the recorded quirk — each tolerant resume re-entered
+under the frozen **seed**, with the stray token re-peeked under it — fired all three
+of its latent failure modes once after-effect deltas became reachable at the root
+(agent code review; tests
 `engine::language::a_stray_close_of_a_delimiter_a_sibling_delta_added_recovers_tolerantly`
 and siblings). A close only the evolved state knows (`>` added by a sibling's delta)
 re-tokenized under the seed as a plain char, misfiring the `GroupClose` contract
@@ -2820,22 +2809,22 @@ state" includes the **diagnosis**, not just the resume — `ParseDriver::recover
 `refine_diagnostic` receive `cx.state`, so the root must thread the exit state
 *before* funneling the condition. Revisit if: a new non-root caller resumes content
 at a stop position — it must thread `outcome.state` the same way, not its own copy
-of the entry state.)*
+of the entry state.
 
-*(Amended July 2026, Phase 7.9 acceptance: the skip's remaining quirk — the consumed
-delimiter's bytes were dropped from the tree, the 7.4 "accepted tolerant
-byte-accounting break" — fell to the acceptance suite's invariant gate on its first
+Second follow-up (acceptance-gate driven): the skip's remaining quirk — the consumed
+delimiter's bytes were dropped from the tree, an "accepted tolerant byte-accounting
+break" — fell to the acceptance suite's invariant gate on its first
 real document: any tolerant root recovery (direct, or reached through an
 environment-body unwind, as in the ported pylatexenc `test_errors` document)
 produced a tree failing `check_tree_invariants`' partition check, colliding with the
-phase-exit criterion "invariants clean on every acceptance parse". The skip now
+exit criterion "invariants clean on every acceptance parse". The skip now
 **stages the consumed delimiter as a `Chars` node** under the loop's evolved state —
 the markup-in-chars recovery artifact every other tolerant recovery already produces
 (orphan `\end`, malformed `\begin`, forbidden characters) — so the root partition
 holds across skips. Exempting recovered parses from the invariant was rejected: the
 partition is the byte-accounting contract exactness consumers (`NodeSlice::span`)
 build on, and a "recovered trees are less true" carve-out would silently spread to
-every downstream walker.)*
+every downstream walker.
 
 #### `Language::with_provider`: push-a-provider seed sugar [§dd-dr:with-provider]
 
@@ -2844,8 +2833,7 @@ Status: DECIDED (user).
 The dominant seed customization — "define a package, add it to the language" — gets a
 first-class spelling: `with_provider(provider)` ≡
 `with_seed_delta(ParsingStateDelta::new().push_provider(provider))`, fallible like the
-derive path underneath. Promoted from the preset's `test_support` under 7.9's dedup
-mandate (genuinely multi-purpose helper code becomes public API instead of being
+derive path underneath. Promoted from the preset's test support under the dedup mandate (genuinely multi-purpose helper code becomes public API instead of being
 duplicated into the integration-test crate).
 Rationale: the delta spelling buries the everyday operation under two concepts
 (delta + scope op); every guide example and suite fixture reads better as one call.
