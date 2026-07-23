@@ -183,6 +183,26 @@ retargeted at merge time.
 Excluded from Table B (not entries): L646 (emphasis line inside `token-rules-data`),
 L3732 (the entry template).
 
+
+Batch-2 additions — entries with multi-line bold titles, invisible to the original
+inventory grep; promoted during curation with proposed labels (all pending user
+approval, no citers yet):
+- sources-and-spans: `resolver-contract`
+- tokens: `group-classes`
+- parsing-state: `seed-states`
+- specs: `scope-stack`, `iter-symbols`
+- nodes: `closed-node-kind`, `parsed-arguments`, `child-regions`,
+  `environment-scaffolding`, `slot-read-api`, `read-api`
+
+Batch-2 retirements (merged away, zero citers): `spec-structure-staging` (folded into
+`unified-callable-spec`), `region-nodes` (folded into `child-regions`); the
+wrappers-dropped rider and the first-generation LibraryStack-fallbacks entry (never
+labeled) were deleted with their lessons folded into `argument-parser-model` and
+`scope-stack` respectively.
+
+Forward-cited labels that batch 3 MUST define on the parsers-engine entries:
+`no-spec-side-slots`, `slot-terminators`.
+
 ## Table C — ARCHITECTURE old sections → dispositions
 
 | Old section | Disposition |
