@@ -907,18 +907,21 @@ unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
 
-Status: PROPOSED (generalizing pylatexenc's `CallableSpecBase`).
+Status: DECIDED (implemented; generalizes pylatexenc's `CallableSpecBase`).
 
-Macros, environments, and specials are all "callables": name + a parser for their invocation.
-The common path is declarative (`ArgumentStructureSpec` list), with an optional custom parser
-override. This preserves pylatexenc's most valuable extensibility property — *a spec can fully
-take over parsing its own invocation* — required by `\verb`, tabular preambles, and FLM's
-richer constructs.
+Macros, environments, and specials are all "callables": a spec describing the invocation's
+argument structure (the `ArgumentSpec` list, [§dd-dr:argument-parser-model]) plus an
+optional full-takeover invocation parser (the `make_invocation_parser` override). This
+preserves pylatexenc's most valuable extensibility property — *a spec can fully take over
+parsing its own invocation* — required by `\verb`, tabular preambles, and FLM's richer
+constructs. The default `arguments()` returns the neutral callable (no arguments) — the
+semantically correct default for fallback singletons and simple specials like `~`, not an
+arbitrary one.
 Rationale: specs are data + optional behavior, matching [§dd-dr:data-vs-traits].
 
 #### Library stack with lexical shadowing; no `ConflictStrategy` [§dd-dr:lexical-shadowing]
 
-Status: DECIDED (ARCHITECTURE.md DECISION 6).
+Status: DECIDED (user-led).
 
 Ordered stack, innermost/last wins. Shadowing *is* the intended semantic (`\newcommand`
 redefinition, group-local definitions), so a configurable conflict policy (PROPOSALS.md's
@@ -927,7 +930,7 @@ lint can warn on shadowing if ever wanted.
 
 #### `SpecLookup` receives a `CallableQuery` (query struct), not bare `(ct, name)` [§dd-dr:callable-query]
 
-Status: DECIDED (closes the deferred half of DECISION 6 / open question [§dd-dr:open-questions]).
+Status: DECIDED (closes the deferred half of [§dd-dr:lexical-shadowing]).
 
 `lookup(&CallableQuery, &ParsingState<L>) -> Option<Arc<dyn CallableSpec<L>>>`, where
 the query carries `callable_type`, `name`, a `CallableSyntax` (`Command { escape_char }` /
@@ -947,97 +950,43 @@ sometimes there is no token).
 on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
 token alike. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which
 contradicted [§dd-dr:no-privileged-concepts].
-*(Amended July 2026, Phase 7 plan session: the lookup contract rehomes to
-`SpecsProvider::retrieve_spec` — fallible, part of a richer provider trait — with
-`CallableQuery` and its rationale carried over unchanged; see the scope-stack redesign
-entry below.)*
+(The lookup contract has since rehomed to `SpecsProvider::retrieve_spec` — fallible,
+part of a richer provider trait — with `CallableQuery` and its rationale carried over
+unchanged; cf. [§dd-dr:scope-stack].)
 
-**Unknown-callable fallbacks are built into `LibraryStack`; its own `SpecLookup` impl is
-stack-only** — DECIDED (July 2026, Phase 4 design session; open question [§dd-dr:open-questions](b)).
-The per-`CallableTypeId` fallback singletons live in a map on `LibraryStack`, consulted only by
-`resolve()` after the whole stack misses (`lookup()` never consults them). De-keyed specs make
-the singletons shareable — "unknown `\foo`" costs no per-instance allocation, and a callable
-node's spec is never `None` for any type whose preset registered a fallback (`resolve()` still
-returns `Option` for types without one).
-*Pitfall that fixed the shape:* `LibraryStack` implements `SpecLookup` for nesting, but with
-**stack-only** semantics — if a nested stack's fallbacks answered, an inner fallback would
-preempt an *outer* stack's real definitions. Fallback policy belongs to the outermost resolver
-alone.
-*Storage note:* `Library` keys are nested `BTreeMap`s — the crate is `no_std` and `alloc` has
-no `HashMap`; also sidesteps the tuple-key `Borrow` problem. Revisit only if profiling flags
-lookup cost.
-*(Superseded July 2026, Phase 7 plan session: fallbacks become ordinary bottom-of-stack
-providers, and the stack no longer nests as a provider at all — the preemption hazard is
-removed rather than mitigated. See the scope-stack redesign entry below.)*
+#### Argument model: an argument *is* a parser (pylatexenc's `LatexArgumentSpec`) [§dd-dr:argument-parser-model]
 
-#### Phase 4 ships structure-spec skeletons; `invocation_parser()` waits for Phase 6 [§dd-dr:spec-structure-staging]
+Status: DECIDED (user; modeled on pylatexenc's `LatexArgumentSpec`).
 
-Status: DECIDED.
-
-`ArgumentStructureSpec`/`SlotStructureSpec` exist so `CallableSpec` has its declarative surface
-and libraries hold real specs, but deliberately minimal: starter `ArgumentKind`
-(`Mandatory`/`Optional` by `GroupTypeId`, `Star` marker), name-only `SlotSpec`. The argument
-kinds, acceptance semantics (LaTeX's single-token mandatory args), and slot
-separators/terminators (invocation-name back-reference) are pinned down in Phase 6, where
-`ArgumentsParser`/`SlotsParser` make the requirements concrete — same stub-bridging pattern as
-Phase 3's `CallableSpec` declaration. `invocation_parser()` (and the custom-parser override on
-`StdCallableSpec`) also waits for Phase 6's `ConstructParser`/`ParseContext`/`NodeId` rather
-than inventing a throwaway signature. `CallableSpec`'s default `arguments()`/`slots()` return
-the *neutral callable* (no arguments, no slots) — the semantically correct default for fallback
-singletons and simple specials like `~`, not an arbitrary one.
-*(Amended July 2026, current-level review: the skeleton `ArgumentKind` and the
-`ArgumentStructureSpec`/`SlotStructureSpec` wrappers are superseded by the pylatexenc-shaped
-argument model — see the two entries below. The neutral-callable defaults and the Phase 6
-deferral of `parse_invocation()` stand.)*
-
-#### Argument model rebuilt on pylatexenc's `LatexArgumentSpec`: an argument *is* a parser [§dd-dr:argument-parser-model]
-
-Status: DECIDED (user, current-level review session; implements report 2026-07-05
-§5.1/§5.2, R1/R2).
-
-`ArgumentSpec<L>` = `{ parser: ArgumentParserSpec<L>,
-name: Option<Box<str>>, parsing_state_delta: Option<ParsingStateDelta<L>> }`.
-`ArgumentParserSpec` keeps the standard delimited forms as *data* variants (`Group` — with
-LaTeX's single-expression fallback acceptance, Phase 6 notes Q3 Option A —, `OptionalGroup`,
-`Marker`) and adds `Custom(Arc<dyn ArgumentParser<L>>)` as the mid-granularity behavior
-escape hatch (chars-only args, comma lists, verbatim args, FLM argument types — without
-taking over the whole invocation). `SlotSpec<L>` likewise gains `name` +
-`parsing_state_delta` (pylatexenc's `make_body_parsing_state_delta`: verbatim/math bodies).
-The `ArgumentParser` trait is a reserved marker until Phase 6 supplies `ParseContext` for
-its parse method.
+`ArgumentSpec<L>` = `{ parser: Arc<dyn ArgumentParser<L>>, name: Option<Box<str>>,
+parsing_state_delta: Option<ParsingStateDelta<L>> }`; `CallableSpec` exposes
+`&[Arc<ArgumentSpec<L>>]` directly — no wrapper type (empty-slice defaults work for
+generic `L` where a `static` wrapper cannot: no generic statics, `Vec` not
+const-promotable). The elements are `Arc`-shared so parsed nodes can record which spec
+each argument was parsed against ([§dd-dr:nodes]), mirroring pylatexenc's
+`arguments_spec_list`. The standard delimited forms (group, optional group, star marker)
+are shipped `ArgumentParser` implementations parameterized by group class and rules
+([§dd-dr:group-classes]) — pylatexenc's own resolution of the `'{'`/`'['`/`'*'`
+shorthands into parser instances. Slots have no spec-side declaration at all: record-level
+vocabulary only (cf. [§dd-dr:parsers-engine], the no-spec-side-slots entry).
 Rationale: pylatexenc's whole argument ecosystem hangs off this slot, and "just write a
-custom invocation parser" is the expensive path the declarative surface exists to avoid; the
-hybrid (data variants + `Custom`) keeps introspection/recomposition-by-data for the common
-forms where pylatexenc's parser-objects-everywhere loses them.
-*Costs accepted:* spec types become generic over `L`; no `PartialEq` on spec types (dyn
-parser, state delta) — consistent with node types.
-Rejected alternatives: closed `ArgumentKind` enum (a closed *architecture*, not just a closed starter
-inventory — real regression vs. pylatexenc); every-argument-is-an-opaque-parser
-(pylatexenc-pure — loses declarative introspection).
-Revisit if: the data-variant inventory grows unwieldy (fold variants into shipped standard
-`ArgumentParser` impls instead).
-*(Amended July 2026, group-classes session: the *Revisit if* fired early and fully — the data
-variants are gone; `ArgumentSpec.parser` is `Arc<dyn ArgumentParser<L>>`, pylatexenc's
-parser-objects-everywhere, with the terse `group`/`optional_group`/`marker` constructors
-removed. Once `GroupTypeId` became a delimiter-detached class ([§dd-dr:tokens]), the core could no
-longer name "the `{…}` argument" in a data variant or constructor — which group class, whose
-spelling? The standard forms become preset-provided `ArgumentParser` impls, pylatexenc's own
-resolution of the `'{'`/`'['`/`'*'` shorthands into parser instances. The introspection
-argument for data variants turned out not to be load-bearing: recomposition reads nodes and
-layouts — delimiters and marker spellings stored as `TextContent` per [§dd-dr:nodes] — never specs. The
-prior Rejected alternatives: "every-argument-is-an-opaque-parser" is thereby deliberately reversed.)*
-
-**`ArgumentStructureSpec`/`SlotStructureSpec` wrappers dropped; `CallableSpec` exposes
-`&[Arc<ArgumentSpec<L>>]` / `&[Arc<SlotSpec<L>>]`** — DECIDED (July 2026, same session).
-The elements are `Arc`-shared so parsed nodes can record which spec each argument was parsed
-against (see [§dd-dr:nodes]), mirroring pylatexenc's `arguments_spec_list`. Empty-slice defaults work
-for generic `L` where the former `static NONE: ArgumentStructureSpec` cannot (no generic
-statics; `Vec` is not const-promotable).
-Revisit if: structure-level (not per-item) spec fields materialize in Phase 6 — e.g. a
-slot-separator field that belongs to no single slot; then a wrapper returns.
-*(Amended July 2026, slots session: only the arguments slice remains — `SlotSpec` and
-`CallableSpec::slots()` are deleted; slots are record-level vocabulary. See the
-no-spec-side-slots entry, [§dd-dr:parsers-engine].)*
+custom invocation parser" is the expensive path the declarative surface exists to avoid.
+Reversal record (group-classes session, July 2026): the model first shipped as a hybrid —
+standard forms as *data* variants (`Group`/`OptionalGroup`/`Marker`) plus
+`Custom(Arc<dyn ArgumentParser>)` — precisely to keep introspection and
+recomposition-by-data. Once `GroupTypeId` became a delimiter-detached class, a data
+variant could no longer name "the `{…}` argument" (which group class, whose spelling?),
+and the introspection argument proved non-load-bearing: recomposition reads nodes and
+layouts (delimiters and marker spellings stored as `TextContent`, [§dd-dr:nodes]),
+never specs. The previously rejected "every argument is an opaque parser" design was
+thereby consciously adopted; the hybrid's terse constructors went with it.
+Rejected alternatives: a closed `ArgumentKind` enum (a closed *architecture*, not just a
+closed starter inventory — a real regression against pylatexenc); structure-level wrapper
+types (`ArgumentStructureSpec`) around the argument list (nothing structure-level to
+hold; a wrapper returns only if structure-level fields materialize, e.g. a slot separator
+belonging to no single slot).
+Costs accepted: spec types generic over `L`; no `PartialEq` on spec types (dyn parser,
+state delta) — consistent with node types.
 
 #### `CallableTypeId` and `GroupTypeId` are closed per-`Lang` associated types [§dd-dr:closed-type-ids]
 
@@ -1046,7 +995,7 @@ Status: DECIDED (user, current-level review session; replaces the open interned-
 `Lang::CallableTypeId: Copy + Ord + Hash + Debug` (Ord: library map keys),
 `Lang::GroupTypeId: Copy + Eq + Hash + Debug`; a real language defines small enums,
 `SimpleLang` defaults both to `u32`. The planned `Language<L>` interning machinery for these
-ids is deleted from Phase 6 scope.
+ids was deleted outright.
 Rationale: invocation forms and group-type identities are static per language definition —
 nobody registers a new *form* at runtime (new *callables*, yes — via libraries; new
 *delimiter spellings*, yes — `GroupType` values in the state's token rules; only the
@@ -1058,13 +1007,12 @@ runtime state; type *identities* are not.
 Revisit if: a genuine runtime-registration need for group/callable types appears (e.g.
 catcode-style schemes minting new group types mid-parse) — then that language can use an
 integer id type; the associated-type design accommodates it without core changes.
-*(Amended July 2026, group-classes session: the *Revisit if* fired for groups — construct
-parsers do mint delimiter pairs mid-parse (optional arguments, custom specs). Resolved not by
-opening the id space (the rejected registry) but by detaching the closed vocabulary from
-spellings: `GroupTypeId` reframed from per-pairing identity to group *class* — see the [§dd-dr:tokens]
-group-classes entry. `CallableTypeId` is untouched; both remain closed per-`Lang`.)*
-*(Amended July 2026, thread-safety session: both id types' bounds gained `+ Send + Sync` —
-see the thread-safety entry below.)*
+For groups the *Revisit if* later fired — construct parsers do mint delimiter pairs
+mid-parse (optional arguments, custom specs). Resolved not by opening the id space (the
+rejected registry) but by detaching the closed vocabulary from spellings: `GroupTypeId`
+reframed from per-pairing identity to group *class* (cf. [§dd-dr:group-classes]);
+`CallableTypeId` untouched, both still closed per-`Lang`. Both id types' bounds carry
+`+ Send + Sync` ([§dd-dr:spec-thread-safety]).
 
 #### Thread safety is a core contract: `Send + Sync` supertraits on the dyn spec traits [§dd-dr:spec-thread-safety]
 
@@ -1128,15 +1076,17 @@ its registration sugar wraps every spec in `FlmSpecBox(Arc<dyn FlmSpec>)` (imple
 *Rejected (for now):* a `Lang`-associated dyn type (`type CallableSpecExt: ?Sized` set
 to `dyn FlmSpec`, plus a defaulted `fn lang_ext(&self) -> Option<&L::CallableSpecExt>`
 bridge on the spec trait) — expressible and object-safe, but it adds an associated type
-to every hand-written `Lang` impl (the SimpleLang-cliff cost, [§dd-dr:parsers-engine]/H.2) for a need the
+to every hand-written `Lang` impl (the SimpleLang-cliff cost, cf. [§dd-dr:parsers-engine]) for a need the
 wrapper covers; recorded here as the upgrade path if the wrapper proves annoying in
 FLM practice. This also unblocks the flagged default-factory escape hatch ([§dd-dr:parsers-engine]): the
 dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
 profiling ever asks for it.
 
-**Scope-stack redesign: dyn `SpecsProvider` entries, `Package`/`Scope` standard impls,
-in-stack fallbacks** — DECIDED (user, July 2026, Phase 7 plan session; closes [§dd-dr:open-questions] open
-question 7 and supersedes the `SpecLookup`/`LibraryStack` entries above).
+#### Scope-stack redesign: dyn `SpecsProvider` entries, `Package`/`Scope`, in-stack fallbacks [§dd-dr:scope-stack]
+
+Status: DECIDED (user; closes open question 7 of [§dd-dr:open-questions] and supersedes
+the first-generation `SpecLookup`/`LibraryStack` design — reversal recorded below).
+
 Driving requirements (user): definition visibility that switches with the parsing mode;
 deltas expressive enough to add/remove definitions and load/unload/replace collections up
 to wholesale stack replacement; fallbacks no longer delta-inexpressible; deep
@@ -1161,9 +1111,14 @@ customization kept easy. `Library`/`LibraryStack`/`SpecLookup` become:
   on first `Define`; scoped reversion stays structural (outer states hold the old Arcs),
   so lexical scoping falls out of state immutability with zero per-group cost.
 - **Fallbacks are ordinary bottom-of-stack providers** (answering any name of their
-  callable types). The stack carries no fallback map, and **no longer implements the
-  provider contract itself** — stacks don't nest, which *removes* the Phase 4
-  nested-fallback-preemption hazard instead of re-mitigating it. Exhausting the stack is
+  callable types; de-keyed specs keep the singletons shareable — an unknown name costs
+  no per-instance allocation, and a callable node's spec is never `None` for a type with
+  a registered fallback). The stack carries no fallback map, and **no longer implements
+  the provider contract itself** — stacks don't nest. Reversal record (July 2026): the
+  first-generation design built fallbacks *into* `LibraryStack` and let stacks nest as
+  lookups; a nested stack's fallback would then preempt an outer stack's real
+  definitions, and the redesign removes that hazard structurally instead of
+  re-mitigating it. Exhausting the stack is
   a structured miss carrying the searched provider names (feeding the
   `UnresolvableCommand` "searched: …" detail).
 - **No `Masked` outcome** (user): "undefined on purpose" is an ordinary definition — an
@@ -1183,14 +1138,10 @@ packages); eager scope-per-group pushes (churn — CoW makes them unnecessary);
 interior-mutable scopes for `\global\def` (observable mutation of frozen states; breaks
 the reader-memoization contract) — `\global` is DEFERRED, sketched as upward propagation
 of definition ops through the existing parser after-effect return channel.
-*Consequences to settle at implementation (Phase 7.3 checkpoints):* `derived()` likely
-becomes fallible (delta ops can fail: non-mutable target, absent provider name); the
-specials fold rule across providers (lean: longest match wins, ties innermost —
-preserves pylatexenc's `---`-beats-`--`); `ProviderError`/miss-report shapes.
 Revisit if: per-definition mode visibility is needed beyond what custom providers
 cover, or provider-fold resolution cost shows up in profiles (a freeze-time merged map
 à la `PrefixTable` is the prepared answer).
-*(Landed July 2026, Phase 7.3 — checkpoint session resolutions:)*
+Checkpoint resolutions (implementation-settled):
 *(a) Fallibility:* `derived()` returns `Result<ParsingState, DeriveError<L>>`; a delta
 without scope ops cannot fail. Failing ops are **skipped** (the rest of the delta still
 applies, in order) and collected; `DeriveError` carries the mechanical failure records
@@ -1210,7 +1161,7 @@ recoverable source-style conditions so tolerant parses stay alive. Failed deriva
 are never memoized and never observed — the session memo gate extends the old
 `push_libraries` exclusion to `scope_ops`, so the memo caches successes only, and a
 misbehaving driver descent re-reports per descent (loud, not cached away).
-*(Clippy follow-up, July 2026:)* the `Err` is large (≥ 424 bytes — it owns a full
+*Follow-up:* the `Err` is large (≥ 424 bytes — it owns a full
 state plus the delta), tripping `clippy::result_large_err` at every function returning
 it. Accepted as-is, user-decided over `Box<DeriveError>`: the recovery payload is the
 point of the type, and `Box`-free signatures are worth the bigger `Result` return
@@ -1234,9 +1185,8 @@ is plain `Ok(None)` with the "searched: …" detail composed via
 `ScopeStack::searched_providers()` (a `Display` adapter) — the stack is
 visibility-blind, so a miss always searched the *whole* stack and the searched set is a
 property of the stack, not of one miss (no per-miss allocation).
-*(d)* `iter_symbols` is deferred to the 7.8 view-API session (adding a defaulted trait
-method later is non-breaking; 7.8's consumers will shape the item type). *(Landed in
-7.8 — the `iter_symbols` entry at the end of this section.)*
+*(d)* `iter_symbols` was deferred (adding a defaulted trait method later is non-breaking)
+and later landed — cf. [§dd-dr:iter-symbols].
 *Settled in flight:* module renamed `library` → `scopes` with `StateData.scopes` /
 `state.scopes()` (user choice — no type named `Library` survived); delta-level
 `ScopeOp` is flat (carries the target scope name) while provider-level `DefinitionOp`
@@ -1249,11 +1199,13 @@ matched longest-first within the package) — pylatexenc's categories hold speci
 without it packages would not be wholesale-loadable — with mode visibility checked in
 both `retrieve_spec` and `scan_specials`.
 
-**`iter_symbols`: definition enumeration with a required type filter; `ClosedVocabulary`
-supplies the type universe** — DECIDED (user, July 2026, 7.8 checkpoint session).
+#### `iter_symbols`: enumeration with a required type filter; `ClosedVocabulary` [§dd-dr:iter-symbols]
+
+Status: DECIDED (user).
+
 Defaulted `SpecsProvider::iter_symbols(callable_type: L::CallableTypeId, mode:
 L::ModeId) -> Option<Box<dyn Iterator<Item = SymbolEntry<'_, L>>>>` — the enumeration
-counterpart of `retrieve_spec`'s point queries, closing the 7.3 deferral. Key points:
+counterpart of `retrieve_spec`'s point queries, closing the earlier deferral. Key points:
 - **The mode is passed directly, not a `&ParsingState`** (user question, verified in
   source): visibility is mode-determined at both of `Package`'s grains
   (package-level + per-entry `visible_modes`), so the mode is the whole input. `Scope`
