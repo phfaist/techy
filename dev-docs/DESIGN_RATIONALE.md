@@ -185,7 +185,8 @@ alternatives · revisit-if.
 
 #### Arc-based source ownership [§dd-dr:arc-source-ownership]
 
-Status: DECIDED (user-led design discussion; SOURCE_ARCHITECTURE.md).
+Status: DECIDED (user-led design discussion).
+
 Nodes carry `SourceSpan { Arc<Source>, start, end }`; specs and parsing states are likewise
 `Arc`-wrapped in nodes. The decisive argument is **post-processing**: tree transformations
 produce new trees mixing old and new nodes, and Arc makes nodes self-contained — transformed
@@ -198,20 +199,22 @@ Revisit if: profiling ever shows Arc traffic mattering (then see [§dd-dr:generi
 
 #### Provenance lives on `Source`, not on every location [§dd-dr:provenance-on-source]
 
-Status: PROPOSED (plan).
+Status: PROPOSED.
+
 `SourceProvenance` (`Primary`/`Resolved`/`Synthesized` with `triggered_at: SourceSpan`) is one
 hop per *source*, forming a provenance tree walkable for error reports. The WIP code's
 per-location `via: [SourceLocationVia]` vector paid per-token/per-node cost for information
 that is constant per source. Removing it also structurally prevents Arc cycles: the invariant
 is *source types never reference node types* (reference graph strictly layered:
-nodes → sources/specs/state; sources → sources) — generalized in July 2026 to the crate-wide
-acyclic-runtime-ownership rule ([§dd-dr:crates], rule 3).
+nodes → sources/specs/state; sources → sources) — later generalized to the crate-wide
+acyclic-runtime-ownership rule (cf. [§dd-dr:three-strata]).
 Revisit if: a use case needs per-node provenance distinct from its source's provenance
 (e.g. token-level macro-expansion tracing à la TeX).
 
 #### Source→triggering-node mapping lives in a session-owned registry [§dd-dr:source-node-registry]
 
 Status: OPEN (general direction decided, details open).
+
 The reverse question "which node triggered this synthesized/resolved source" is answered by a
 higher-level registry owned by `ParserSession`, keeping track of the synthetic sources and the
 nodes that created them. How the registry refers to nodes, and its exact lifecycle, are to be
@@ -221,20 +224,22 @@ lossy lookup where an explicit owned mapping is cheap and direct.
 
 #### Line/column is a lazy, standalone utility [§dd-dr:lazy-line-col]
 
-Status: DECIDED (refined).
+Status: DECIDED.
+
 The parser works purely in byte offsets; `LineIndex` computes line starts lazily and only for
-display (errors, diagnostics). The lazy-extension logic and traceback formatting in the current
-`source.rs` are worth porting.
+display (errors, diagnostics).
 Rationale: upfront line indexing costs O(source) on every parse for data usually never read.
 
 #### Pluggable content resolution [§dd-dr:source-resolver]
 
 Status: DECIDED.
-`SourceResolver` trait for `\input`-like lookups; `NoResolver` is a ZST so a no-I/O build pays
-nothing. No file-system resolver is shipped (no_std policy, [§dd-dr:dependencies]): an embedder implements
-`SourceResolver` on its side, where the I/O capability lives; the in-memory `MapResolver`
-covers tests and fully preloaded setups. *(The `SourceContent` backing-abstraction half this
-entry originally carried is retired — see the July 2026 retirement entry below.)*
+
+`SourceResolver` trait for `\input`-like lookups; `NoResolver` is a zero-sized type so a
+no-I/O build pays nothing. No file-system resolver is shipped (no_std policy,
+[§dd-dr:dependencies]): an embedder implements `SourceResolver` on its side, where the I/O
+capability lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
+*(The `SourceContent` backing-abstraction half this entry originally carried was later
+retired — cf. [§dd-dr:source-cursor-retired].)*
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
@@ -243,9 +248,8 @@ URL string).
 
 `Source<O: SourceOrigin = Option<String>>` takes the origin type as a plain, defaulted type
 parameter; `SourceSpan`/`SourceProvenance`/`SourceResolver`/`Diagnostic` carry the same
-parameter. When `Lang` arrives (Phase 3+), the S1 core plugs `L::SourceOrigin` into this
-parameter — the source topic never depends on `Lang`, per the Lang-free-foundation rule
-(S0; ARCHITECTURE.md [§dd-arch:arch], rule 1).
+parameter. The S1 core plugs `L::SourceOrigin` into this parameter — the source topic never
+depends on `Lang`, per the Lang-free-foundation rule (S0; cf. [§dd-arch:arch]).
 The `SourceOrigin` trait provides only `label()` (diagnostics display) on top of
 `Debug + Clone + Default`. The default origin type is `Option<String>`: conventionally the
 URL the content was obtained from, `None` when unknown or when the content was synthesized.
@@ -254,7 +258,7 @@ obtained*; `SourceProvenance` — which every source carries — is the *structu
 how it entered the parse, and it (not the origin) holds synthesis descriptions and
 resolution references. One inference consequence of the defaulted parameter: bare
 `Source::new(…)` cannot infer `O`, so simple usage annotates (`let src: Arc<Source> = …`)
-until the Phase-3+ type aliases make it moot.
+until preset type aliases make it moot.
 Rejected alternatives: a concrete-now/genericize-in-Phase-3 approach (would retrofit a type parameter
 through every L0 signature later). Also rejected, in the July 2026 revision: the first-cut
 `StdSourceOrigin` enum (`Unknown` / `Named { name, kind: File | Snippet | Resolved |
@@ -268,9 +272,8 @@ actually knows a URL attaches it via `with_origin`.
 
 #### `SourceContent` is a trait boundary, not (yet) a `Source` parameter [§dd-dr:source-content-boundary]
 
-Status: DECIDED (user).
+Status: DECIDED (user; superseded — retired outright, cf. [§dd-dr:source-cursor-retired]).
 
-*(Superseded the same month — retired outright; next entry.)*
 The trait exists (implemented by `str` and `String`) and
 `SourceCursor<'s, C: SourceContent + ?Sized = str>` is generic over it, but `Source` stores a
 concrete `String`, with all content access behind methods so the backing can later become
@@ -279,10 +282,10 @@ implement mmap until a real need.
 
 #### `SourceCursor`, `Source::cursor()`, and `SourceContent` retired [§dd-dr:source-cursor-retired]
 
-Status: DECIDED (user; supersedes the entry above).
+Status: DECIDED (user; reverses [§dd-dr:source-content-boundary], July 2026 — recorded as a
+conscious reversal).
 
-The intended consumer went another
-way: `StdTokenReader` holds `content: &'s str` and scans the `str` directly. Its access
+The intended consumer went another way: `StdTokenReader` holds `content: &'s str` and scans the `str` directly. Its access
 pattern is random-access slicing at arbitrary offsets (`starts_with` at a position,
 `find('\n')` from a comment start, longest-match through the `PrefixTable`, whitespace
 look-ahead past the current position) — which the cursor's position-local
@@ -294,9 +297,8 @@ serve — and the `TokenReader` contract needs deliberately *bidirectional* `mov
 information-equivalent to `&str` — a UTF-8 memory-mapped file can be handed in as text
 by the embedder after one validation pass, so the trait enabled no future it claimed
 to; only a genuinely *chunked/streaming* backing would be new, and that is a different
-reader design, not a backing swap behind `Source`. ~215 lines retired (content.rs,
-`Source::cursor()`, the re-exports); `Source` keeps its plain `String` field with
-access behind methods.
+reader design, not a backing swap behind `Source`. `Source` keeps its plain `String` field
+with access behind methods.
 Rejected alternatives: re-labeling the cursor as an embedder convenience for custom `TokenReader`s
 (nothing needs it, and `&str` + `usize` is simpler than a bespoke cursor API).
 Revisit if: a genuinely streaming source materializes — design the chunked reader
@@ -306,7 +308,7 @@ then, with a content abstraction shaped by its real requirements.
 
 Status: DECIDED (user).
 
-`Span`'s `start`/`end` went private with
+`Span`'s `start`/`end` went private with the
 `start()`/`end()` accessors, closing the gap where the `start <= end` invariant was only
 advisory (`new` debug-asserts; the fields allowed silent violation). The one mutation
 pattern the lib actually used — growing a chars-run/marker span rightward — became
@@ -322,10 +324,9 @@ pinned by docs + tests in the same commit. Bridging: `SourceSpan::new` accepts
 and `SourceSpan::span()` is the inverse — `span.rs` itself stays ignorant of
 `SourceSpan` (dependency direction preserved).
 
-**`SourceResolver` contract batch: returns content (not a `Source`), `Send + Sync`,
-no core recursion checking, `ResolveError` cause chain** — DECIDED (user, July 2026,
-Action-05 session; settled before any consumer exists — the wiring lands on
-`Language<L>` in Phase 7).
+#### `SourceResolver` contract batch: content-returning, `Send + Sync`, no core recursion checking [§dd-dr:resolver-contract]
+
+Status: DECIDED (user, Action-05 session; settled before any consumer existed).
 - **`resolve()` returns `ResolvedContent { content, origin }`; the caller mints the
   `Source`** (the `resolve_source` composition). Rationale: provenance lives on the
   `Source` (`Resolved { reference, triggered_at }`) and diagnostics self-render include
@@ -353,8 +354,7 @@ Action-05 session; settled before any consumer exists — the wiring lands on
 - Smalls: forwarding impls (`&R`/`Box<R>`/`Arc<R>`), a compile-time object-safety pin
   (drivers may store `Arc<dyn SourceResolver>`), `MapResolver::with_reference_as_origin`
   (its blanket impl narrows to `O: From<String>` — a convenience type may narrow;
-  exotic origins write their own ten-line resolver), and the trait doc now says the
-  parser "will be" generic over the resolver until it is.
+  exotic origins write their own ten-line resolver).
 
 ## Tokens and tokenization [§dd-dr:tokens]
 
