@@ -858,9 +858,8 @@ are constructed inline in the hook instead).
 *Deferred (user, same session):* generic seed-side registration of `LibraryStack`
 *fallbacks* is still inexpressible by delta (a `Lang` author bakes fallbacks into
 `initial_state_data`; a *user* of a preset cannot add their own). Resolution folded into
-the planned LibraryStack revisit — deltas should become much more expressive about
-library manipulation, possibly whole-library replacement in a transition ([§dd-dr:open-questions] open
-question 7).
+the LibraryStack revisit — deltas became much more expressive about library
+manipulation, up to whole-stack replacement in a transition ([§dd-dr:scope-stack]).
 Revisit if: the LibraryStack revisit lands (the delta story may then subsume parts of
 the seed contract), or a preset needs `finalize_transition`-grade normalization on the
 seed itself — the `derived(&empty)`-at-seed trick (one extra freeze at session start)
@@ -1084,8 +1083,9 @@ profiling ever asks for it.
 
 #### Scope-stack redesign: dyn `SpecsProvider` entries, `Package`/`Scope`, in-stack fallbacks [§dd-dr:scope-stack]
 
-Status: DECIDED (user; closes open question 7 of [§dd-dr:open-questions] and supersedes
-the first-generation `SpecLookup`/`LibraryStack` design — reversal recorded below).
+Status: DECIDED (user; closes the long-standing LibraryStack-expressiveness question and
+supersedes the first-generation `SpecLookup`/`LibraryStack` design — reversal recorded
+below).
 
 Driving requirements (user): definition visibility that switches with the parsing mode;
 deltas expressive enough to add/remove definitions and load/unload/replace collections up
@@ -3909,7 +3909,7 @@ already the fully-typed path — the factory's value *is* the compact codes).
 Quick-reference list of patterns that have been considered and rejected. Each links the section
 holding the full argument.
 
-- **`Box<dyn Node>` + `Any` downcasting + `clone_box`** ([§dd-dr:nodes]) — loses exhaustive matching, adds
+- **`Box<dyn Node>` + `Any` downcasting + `clone_box`** ([§dd-dr:closed-node-kind]) — loses exhaustive matching, adds
   per-node boxing, and makes flat storage and serialization impossible.
 - **`can_parse()`/`priority()` parser registries** ([§dd-dr:parsers-engine], [§dd-dr:deterministic-dispatch]) — behavior depends on
   registration order and dispatch logic scatters across predicates.
@@ -3917,7 +3917,7 @@ holding the full argument.
   allocation-heavy; `L::StateExt`/`L::NodeData` do the same statically.
 - **Per-facet parsing-state traits (9 associated types)** ([§dd-dr:parsing-state]) — values behind compile-time
   associated types can't be changed by runtime deltas; also textbook generic proliferation.
-- **Whole state behind an `L::State: ParsingStateModel` getter trait** ([§dd-dr:parsing-state], Option B) —
+- **Whole state behind an `L::State: ParsingStateModel` getter trait** ([§dd-dr:state-option-c], Option B) —
   abstracts storage nothing needs, at real cost: the engine still needs a wrapper for derived
   caches; trait laws (getter purity, delta locality, stored/effective split) silently *become*
   the design; compound getters need `Cow` shapes; ext access needs capability traits; "default
@@ -3928,7 +3928,7 @@ holding the full argument.
   merged, inspected, and propagated to base states its producer never saw (outward
   `\newcommand` propagation); a closure supports none of that.
 - **Hard-coded math-mode definition tables in libraries** ([§dd-dr:specs]) — violates [§dd-dr:no-privileged-concepts];
-  `SpecLookup(state)` dispatching on the state extension covers it without built-in modes.
+  state-receiving `SpecsProvider` lookups cover it without built-in modes.
 - **`ConflictStrategy` for library resolution** ([§dd-dr:specs]) — shadowing *is* the intended semantic
   (`\newcommand`, group-local defs), not a conflict to configure away.
 - **`SourceId` into an external store** ([§dd-dr:sources-and-spans]) — circumvents borrow checking; the id is
@@ -3937,7 +3937,7 @@ holding the full argument.
   lifetime chains across N tree transformations; Arc spans fix both at negligible cost.
 - **Per-location provenance chains (`via` vectors)** ([§dd-dr:sources-and-spans]) — pay per-node cost for information
   that is constant per source; provenance lives on `Source`.
-- **Byte-level `Read`/`BufRead` streaming** (SOURCE_ARCHITECTURE.md) — the parser needs
+- **Byte-level `Read`/`BufRead` streaming** (dev-docs/archive/SOURCE_ARCHITECTURE.md) — the parser needs
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
 - **Tokenizer-level environment recognition (`\begin{…}` tokens)** ([§dd-dr:tokens]) — bakes language
   semantics into the tokenizer; `\begin` is an ordinary command, environments are a parser concern.
@@ -3945,7 +3945,7 @@ holding the full argument.
   invocation form is resolution output, not tokenization output; carrying it on `Command`
   tokens re-creates the "token says MACRO, node says ENVIRONMENT" wart. (Scoped: does
   *not* apply to `Specials`, where recognition *is* resolution — the token carries the
-  full `ResolvedCallable` pair, [§dd-dr:tokens] July 2026 amendment.)
+  full `ResolvedCallable` pair, [§dd-dr:token-model].)
 - **Whitespace as its own token kind** ([§dd-dr:tokens]) — every construct parser's peek grows a
   "maybe whitespace first" case; pre/post-space spans localize the cost in the tokenizer.
 - **Uniform `post_space` field on `Token`** ([§dd-dr:tokens]) — post-space is a per-kind syntactic
@@ -3965,45 +3965,20 @@ holding the full argument.
 
 ## Open questions [§dd-dr:open-questions]
 
-Current list — remove entries as they are settled (move the outcome into [§dd-dr:decisions]):
+Current list — remove entries as they are settled (move the outcome into
+[§dd-dr:decisions]):
 
-1. ~~**`SpecLookup` semantics and behavior**~~ — settled July 2026 (Phase 4 design
-   session): `CallableQuery`-based lookup with explicit `CallableSyntax` + optional token,
-   and stack-built-in per-`CallableTypeId` fallbacks. Outcome moved to [§dd-dr:specs].
-1b. **Precompiled-table merging (`PrefixTable`++)**: detection consults several per-state
-   structures (group-delimiter `PrefixTable`, specials `TriggerChars`, per-rule command
-   escape and comment-start checks). Worth evaluating a single merged first-character /
-   prefix table per state once the hot loop can be profiled (noted July 2026, user
-   request; also flagged in ARCHITECTURE.md [§dd-arch:token]). Not a design blocker.
-2. ~~**`ArgsLayout` / children encoding in flat `NodeData`**~~ — settled July 2026 (Phase 5
-   design session): one node per region (one child per present argument, one `List` child per
-   slot), with presence/offsets and per-instance syntax in `ArgsLayout`/`SlotsLayout`.
-   Outcome moved to [§dd-dr:nodes].
-3. ~~**Top-level convenience API**~~ — settled July 2026 (Phase 6 plan session): no facade,
-   and no `Language<L>`/`parse()` convenience entry point in Phase 6 at all — `ParserSession`
-   is the root object; convenience API deferred to the phase that demonstrates the need
-   (Phase 7+). Outcome moved to [§dd-dr:parsers-engine].
-4. **`CompactString`**: plain `String` initially; whether a small-string optimization ever pays
-   for delimiter/specials storage is a profiling question, not a design question.
-5. ~~**`Comment` node recomposition fields**~~ — settled July 2026 (Phase 6 plan session):
-   `Comment` grows `start` + `post_space` per-instance syntax fields (notes Q4, Option A).
-   Outcome moved to [§dd-dr:nodes].
-6. ~~**Disabling specials by delta**~~ — settled July 2026 (child-state design session
-   follow-up): `enable_specials` joins the `TokenRules` `enable_*` flag family; `freeze()`
-   stores the empty `TriggerChars` when disabled, so the scan hook is unreachable. Outcome
-   moved to [§dd-dr:tokens].
-7. ~~**LibraryStack structure and delta expressiveness**~~ — settled July 2026 (Phase 7
-   plan session): the scope-stack redesign — dyn `SpecsProvider` entries,
-   `Package`/`Scope` standard impls, in-stack fallback providers, definition/stack delta
-   ops replacing `push_libraries`. Outcome moved to [§dd-dr:specs]. (The seed-path half had been
-   settled earlier — [§dd-dr:parsing-state], "Seed states are crate-frozen `Lang` data".)
-8. **Structured-diagnostics implementation details** (opened July 2026 — decisions in [§dd-dr:errors],
-   plan in CodeReportAction_01.md). Sub-items settled July 2026: MSRV bumped to 1.86 (dyn
-   trait upcasting); `FrameTitle` variants as sketched; `DiagnosticValue` barebones with no
-   float variant (serialize as string if ever needed); `diagnostic_catalog()` dropped.
-   Remaining: the identifier scheme (`core.<area>.*` / `<preset-name>.<namespaced-name>`) is
-   provisional — a final naming/identifier pass is due before a public release makes the
-   strings semver surface.
-
----
-
+- **Precompiled-table merging (`PrefixTable`++)** (known as item 1b): detection consults
+  several per-state structures (the group-delimiter `PrefixTable`, the specials
+  `TriggerChars`, per-rule command-escape and comment-start checks). Worth evaluating a
+  single merged first-character/prefix table per state once the hot loop can be profiled
+  (user request; also flagged at [§dd-arch:token]). Not a design blocker.
+- **`CompactString`**: plain `String` initially; whether a small-string optimization ever
+  pays for delimiter/specials storage is a profiling question, not a design question.
+- **The per-invocation `Box` micro-benchmark** — deferred, unscheduled, consciously kept
+  open: measure per-invocation and per-descent `Box` provision cost
+  ([§dd-dr:invocation-parser-factory], [§dd-dr:parse-driver]); a fast path can hide
+  behind the `cx` wrappers if profiling ever asks.
+- **Diagnostic identifier scheme**: provisional (`core.<area>.*` /
+  `<preset-name>.<namespaced-name>`, [§dd-dr:errors]); a final naming/identifier pass
+  is due before a public release makes the strings semver surface.
