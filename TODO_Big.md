@@ -4,11 +4,11 @@
 
 - Centralized helpers for accessing parse methods (like parser::parse()) ??
 
-- Clean up DOCUMENTATION and create good USAGE-ORIENTED-DOCUMENTATION --> DESIGN_RATIONALE.md  has grown too much, IMO.
+- Create good USAGE-ORIENTED-DOCUMENTATION
 
 - Fully gated language features (specials, callables, groups, temporary groups ...) with corresponding memory saving in ParsingState/TokenRules fields??  i.e.: Perhaps a compile-time optimization of languages that don't want to implement libraries and keep a parsing_state with a zero-sized libraries field. Lang should provide a trait for Libraries implementing the relevant lookup functions?
 
-- Public API review.  Remove aggressively; keep only as much as is really necessary.
+- Public API review.  Distill aggressively narrower public entry points; keep only as much as is really necessary.  Keep flexibility for the future!
 
 
 ## More targeted items
