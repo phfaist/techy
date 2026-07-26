@@ -15,24 +15,27 @@ token → constructs → node (AST)
 - **source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, TextContent)
 - **token**: Tokenization (Token, TokenKind, TokenRules, TokenReader, StdTokenReader)
 - **constructs**: Parsers for individual constructs (ConstructParser trait + standard parsers)
-- **engine**: High-level machinery (ParserSession, ParseResult; `Language::parse()` arrives Phase 7)
-- **node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData)
+- **engine**: High-level machinery (Language + `parse()`, ParseDriver, ParserSession, ParseResult)
+- **node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData; extraction helpers)
 - **spec** + **scopes**: Extensibility (CallableSpec, StdCallableSpec, ArgumentSpec, ArgumentParser; SpecsProvider, Package, Scope, ScopeStack)
 - **state**: Parsing context (Lang, ParsingState, ParsingStateDelta)
 - **error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery)
+- **latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs)
 
 ## Critical Naming Conventions
 
-**Read [NAMING_STRATEGY.md](NAMING_STRATEGY.md) first!**
+**The naming principles live in dev-docs/ARCHITECTURE.md [§dd-arch:naming] — check them
+before suggesting names.**
 
 Key naming rules:
-- **No "Latex" prefixes**: Use `Token` not `LatexToken`, `Parser` not `LatexWalker`
+- **No "Latex" prefixes**: Use `Token` not `LatexToken` (LaTeX names live in the preset)
 - **Specificity matters**: `ParsingStateDelta` not `StateDelta` (too vague)
-- **Clarity over brevity**: `ParsedArguments` not `Arguments` (the spec-side `ArgumentSpec`/`ArgumentParser` vocabulary coexists in scope — revised July 2026)
-- **Context determines names** — but only when no sibling vocabulary competes in the same scope (see NAMING_STRATEGY.md principles 3–4)
+- **Clarity over brevity**: `ParsedArguments` not `Arguments` (the spec-side `ArgumentSpec`/`ArgumentParser` vocabulary coexists in scope)
+- **Context determines names** — but only when no sibling vocabulary competes in the same scope ([§dd-arch:naming] principles 3–4)
+- Names consciously rejected or replaced must not come back: DESIGN_RATIONALE [§dd-dr:superseded-names]
 
 **Module organization**:
-- `engine` module = high-level machinery (`ParserSession`; the public `Language::parse()` entry arrives Phase 7)
+- `engine` module = high-level machinery (`Language::parse()`, `ParserSession`, `ParseDriver`)
 - `constructs` module = parsers for individual constructs (traits, parsers)
 - Node taxonomy is the closed `NodeKind`: `Chars`/`Group`/`Callable`/`Comment`/`List` — "macro"/"environment" are preset vocabulary, not node kinds
 
@@ -44,12 +47,20 @@ cargo build          # Build
 cargo test           # Run tests
 cargo test -- --nocapture  # With output
 cargo test <name>    # Specific test
+cargo docs           # Build documentation (alias: doc --workspace --no-deps);
+                     # rm -rf target/doc first when verifying links
 ```
 
 ## Important Files
 
-- [ARCHITECTURE.md] - Plan for how to organize and continue this project.  To be executed [as of July 2026].
-- [dev-docs/DESIGN_RATIONALE.md] - Living log of decisions and rationales, to keep the code base consistent and to guide future design decisions.
+- [Documentation_Structure.md] - The specification of the documentation system itself
+  (pillars, label scheme, cross-referencing rules). Follow it for any documentation work.
+- [dev-docs/ARCHITECTURE.md] - The present-day structure of the library (strata, topics,
+  design principles). Sections carry immutable `[§dd-arch:<name>]` labels.
+- [dev-docs/DESIGN_RATIONALE.md] - The decision register: why the library is shaped this
+  way, with rejected alternatives. Entries carry immutable `[§dd-dr:<name>]` labels; every
+  entry must be referenced from ARCHITECTURE (manual grep discipline — see its
+  maintenance rules).
 
 If you need to consult `pylatexenc` sources, they are available at `$HOME/Research/util/pylatexenc/`.  Overall, we should try to achieve more or less parity with pylatexenc's capabilities on the features we are planning to implement, while taking advantage of the opportunity to improve on some bugs and quicks of pylatexenc.
 
@@ -77,9 +88,9 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    explicitly approved indexing-style accessors that have non-panicking `get` companions.
    Full policy: DESIGN_RATIONALE.md [§dd-dr:panic-policy]. New exceptions need explicit
    user approval.
-5. **Always check naming strategy** before suggesting names
-6. **Prefer existing patterns** from ARCHITECTURE.md, NAMING_STRATEGY.md and DESIGN_RATIONALE.md. (Older strategy documents live in `dev-docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
-7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion with a concise paragraph in DESIGN_RATIONALE.md.
+5. **Always check the naming principles** (dev-docs/ARCHITECTURE.md [§dd-arch:naming]) before suggesting names
+6. **Prefer existing patterns** from dev-docs/ARCHITECTURE.md and dev-docs/DESIGN_RATIONALE.md. (Older strategy documents live in `dev-docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
+7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion as a labeled entry in dev-docs/DESIGN_RATIONALE.md (follow its entry template and maintenance rules — including adding an ARCHITECTURE reference for the new entry).
 8. **Add tests** for new functionality
 9. **Keep it simple**: No over-engineering or premature optimization
 
