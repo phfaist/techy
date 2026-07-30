@@ -3580,6 +3580,11 @@ derive macro will *require* the id attribute); method name `diagnostic_identifie
 sync, and namespace prefixes already prevent collisions — can be
 added later without breakage).
 
+*(Amended — API-review P5: the provisional module-mirroring areas are to be replaced by
+concept-named areas before the stability freeze; the full stability semantics
+(identifier hard-stable, data keys additive, wording excluded) and the
+defining-vocabulary ownership rule are recorded in [§dd-dr:wire-identifier-stability].)*
+
 #### Serialization is a derived projection; the struct is the schema [§dd-dr:serialized-schema]
 
 Status: DECIDED (user + design sessions).
@@ -3685,6 +3690,56 @@ the shared `Source` is blocked dep-free (`alloc` has no `Mutex`; `OnceCell` woul
 Rejected alternatives: an unbounded default (the failure mode is silent and input-controlled), and
 a public `DiagnosticRenderer` type (no second consumer yet; `render_all` covers the
 need — promote the cache if one appears).
+
+#### Wire identifiers: stable namespace, concept-named areas, owner = defining vocabulary [§dd-dr:wire-identifier-stability]
+
+Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate is
+pending in the API-review T4 decision session).
+
+`IDENTIFIER` strings are semver-stable under the same rubric and soft freeze as public
+paths ([§dd-dr:stability-rubric]) — they are wire/config material (match tables,
+suppression lists, serialized logs), and changing one is a *silent* break, worse than a
+path break. Per condition, exactly this is the contract:
+
+- the **identifier string** — hard-stable;
+- the **`serializable_data` keys** — stable with additive-only growth (the structs are
+  `#[non_exhaustive]`; [§dd-dr:serialized-schema]);
+- the **`Display` wording** — explicitly *not* stable: human messages may improve at
+  any time; consumers match on `T::IDENTIFIER` or downcast, never on message text
+  ([§dd-dr:condition-identities]).
+
+Two naming rules complete the scheme `<owner>.<area>.<condition>`:
+
+1. **The `<area>` segment names a construct concept or subsystem** (`token`, `scopes`,
+   `environments`, `arguments`, …) — never a file, module, or type name. This repairs
+   friction F9: most current `core.*` identifiers use internal *file names* as areas
+   (`core.nodes_parser.*`, `core.argument_parsers.*`, …), contradicting the decoupling
+   promise documented on `IDENTIFIER` itself, and both API-review personas who guessed
+   identifiers guessed concept names and lost a cycle. The rename slate is decided in
+   the T4 session (the `nodes_parser` conditions interact with the deferred
+   resolution-family extraction, [§dd-dr:public-namespace-topology]) and lands with the
+   API-review application, before guides print any identifier.
+2. **The first segment names the *defining vocabulary*** — whoever declares the
+   condition type: techy machinery `core.*`, the preset `latexlike.*`, a downstream
+   language its own namespace (e.g. `flm.*`). Ruled explicitly: a foreign `Lang`
+   reusing preset pillar functions ([§dd-dr:latexlike-generalization]) emits
+   `latexlike.*` conditions inside its own parses, and that is correct — the identifier
+   names the machinery that raised the condition, not the language being parsed.
+
+One-time re-homing rides with the preset-generalization application: a condition type
+relocated preset→core gets its identifier re-homed pre-freeze; post-freeze, identifiers
+never move again even when their declaring types do (the decoupling promise).
+
+Rejected alternatives: lang-dependent identifiers (a method instead of the const —
+destroys typed matching via `T::IDENTIFIER`, the sealed-facade blanket impl, and the
+registry/doc story); a code-side identifier registry (rejected in
+[§dd-dr:public-namespace-topology] — the rustdoc `DiagnosticInfo` implementors listing
+plus a guide table serve the need); stable message wording (freezes prose for no
+consumer value — identifier plus payload is the contract).
+
+Revisit if: the soft-freeze condition of [§dd-dr:stability-rubric] arises; or a
+downstream language needs to re-namespace an inherited condition (that would need a
+deliberate identifier-mapping design, not an ad-hoc exception).
 
 ## Dependencies [§dd-dr:dependencies]
 
@@ -4025,6 +4080,44 @@ re-exports losslessly — the facade model is what makes that lossless).
 
 *(Amended — API-review P4: `techy::recompose` (recomposition, [§dd-dr:recompose])
 joins `techy::transform` ([§dd-dr:restage]) in the role-based top level.)*
+
+---
+
+#### API stability rubric: one stability class, soft freeze until framework adoption [§dd-dr:stability-rubric]
+
+Status: DECIDED (user, API-review policy session P5).
+
+Everything `pub` — outside the `#[doc(hidden)] __private` derive plumbing — is **one
+stability class under one semver discipline**: no experimental/unstable tier, no
+unstable feature gates. Access tiers (consumer/extender/language-designer/tooling/
+framework) are expressed by module placement and guide structure
+([§dd-dr:public-namespace-topology]), never by stability level. Consequence for the
+API-review per-item rulings: an item survives as `pub` only if it is worth stabilizing;
+anything else becomes `pub(crate)`.
+
+The freeze is a **discipline with a soft onset, not a hard date**. It takes effect when
+the API-review restructuring lands (guarded by a cargo-semver-checks baseline), and
+from then on breaking changes are deliberate, baseline-visible, version-bumped events
+(at 0.x: breaking → 0.(x+1).0, additive → 0.x.(y+1); 1.0 when the first framework
+builds on techy in earnest). But the user explicitly rejected treating the post-review
+API as untouchable: **until significant frameworks are actually being built on techy,
+an important discovered shortcoming may still be fixed breakingly** — correcting a flaw
+before dependents exist is cheaper than carrying it forever. The review's success
+criterion is that *framework development* never forces a restructuring; the hard freeze
+begins with that development, not with the review's end. Guides print paths and wire
+identifiers only post-restructuring, so published material never teaches a
+pre-freeze name.
+
+Rejected alternatives: an unstable/experimental tier (an escape hatch that invites
+exactly the future restructuring the review exists to prevent, and a dual-status
+ambiguity against the one-canonical-path principle); a hard freeze at the end of the
+review (prematurely enshrines flaws found between review and adoption, for no
+dependent's benefit); stability tiers A/B distinguished by surface (they carried the
+same semver discipline anyway — the distinction collapsed once tiering moved into
+module placement).
+
+Revisit if: a framework starts depending on techy in earnest — from that moment the
+freeze is hard and breaking changes need migration paths and dependent coordination.
 
 ## Documentation [§dd-dr:documentation]
 

@@ -102,7 +102,7 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   techy::latexlike::defs module, no feature gate (pylatexenc DB ≈ 633 lines/253 specs,
   sub-second compile; reversible to crate later via re-export); techy::util REJECTED on
   naming principles.
-- [~] **Phase 2a — Policy session** (interactive, in progress; POLICY_BRIEF.md v2 +
+- [x] **Phase 2a — Policy session** (interactive, complete 2026-07-31; POLICY_BRIEF.md v2 +
   v1 archived; NAMESPACE_OPTIONS.md + CORE_SPLIT_OPTIONS.md are the P1 evaluations).
   **P1 RULED** (topology: C5 + core::specs — see decision log +
   [§dd-dr:public-namespace-topology]; the briefs' P1/D1/D2 recommendations are
@@ -113,9 +113,10 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   log + [§dd-dr:latexlike-generalization], [§dd-dr:math-group-form]). **P4 RULED**
   (transformation & navigation — annotations, tree tags, ext minting, restage,
   recompose, slot roles, `\input`, navigation; see decision log + **P4_RULING.md**
-  (full working detail) + DESIGN_RATIONALE topic [§dd-dr:transform]). **Pending:
-  P5** (stability rubric + stable wire identifiers). Routing to 2b sessions:
-  POLICY_BRIEF last section, as amended by the decision log.
+  (full working detail) + DESIGN_RATIONALE topic [§dd-dr:transform]). **P5 RULED**
+  (stability rubric + wire identifiers: one stability class, soft freeze; see decision
+  log + [§dd-dr:stability-rubric], [§dd-dr:wire-identifier-stability]). Routing to 2b
+  sessions: POLICY_BRIEF last section, as amended by the decision log.
 - [ ] **Phase 2b — Decision sessions by access tier** (now **five**: T1…T5). Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -321,6 +322,30 @@ langdesign/notely/, tooling/techy-tooling/, framework/ pending).
   NEW dedicated **recompose design session**; T4 session gains `\input` engine
   wiring + resolver move + lookup naming. Application lands in Phase 3 together
   with the P1 topology move.
-- (pending) **NEXT: present P5** (stability rubric + wire identifiers;
-  recommendation in POLICY_BRIEF.md). Phase 2a closes after P5; then 2b sessions
-  per POLICY_BRIEF routing (as amended by decision log).
+- 2026-07-31 (user): **P5 RULED — stability rubric + wire identifiers** (durable
+  records: DESIGN_RATIONALE **[§dd-dr:stability-rubric]** and
+  **[§dd-dr:wire-identifier-stability]** + amendment note on
+  [§dd-dr:condition-identities]; ARCHITECTURE refs in [§dd-arch:arch] and
+  [§dd-arch:errors]). (1) **One stability class** for everything `pub` (outside
+  `__private`); no unstable/experimental tier; access tiers expressed by placement +
+  guides, not stability levels; Tier-C per-item 2b rulings = pub-and-stable vs
+  pub(crate). (2) **Soft freeze** (user amendment to the brief): the freeze takes
+  effect when the Phase 3 restructuring lands (cargo-semver-checks baseline guard;
+  0.x discipline: breaking → 0.(x+1).0), but it is NOT absolute — important
+  shortcomings may still be fixed breakingly until significant frameworks are
+  actually being built on techy; hard freeze begins with framework adoption. Guides
+  print paths/identifiers only post-restructure. (3) **Wire identifiers
+  semver-stable** under the same rubric; per condition: identifier hard-stable +
+  serializable_data keys additive-only; Display wording explicitly NOT stable.
+  `<area>` rule: names a construct concept/subsystem, never a file/module/type name
+  (F9 repair — 14 of 18 core.* identifiers currently use internal file names);
+  concrete rename slate → 2b T4 session (nodes_parser conditions interact with the
+  deferred resolution-family extraction); repair lands in Phase 3 before guides.
+  (4) **First segment = defining vocabulary** (core.*/latexlike.*/flm.*); preset
+  conditions keep `latexlike.*` inside foreign-`Lang` parses (P3-routed question —
+  identifier names the raising machinery, not the parsed language); lang-dependent
+  identifiers REJECTED; one-time pre-freeze re-homing rides with the P3 application
+  (types relocated preset→core). **Phase 2a complete.**
+- (pending) **NEXT: Phase 2b decision sessions** per POLICY_BRIEF routing as amended
+  by this log (T1/T2, T3, T4 — incl. wire-area rename slate —, T5, recompose design
+  session, Tier-C batch).
