@@ -313,6 +313,11 @@ pub fn base_package() -> Package<Latexlike> {
             Some(vec![Mode::Text]),
         );
     }
+
+    // ### PhF --- The "base" package should:
+    // ###       1) be renamed to something internal, like "_base" or "_builtin" or "_primitive".  Collects the absolutely necessary things that MUST be preloaded in any latexlike parsing situation.
+    // ###       2) NOT contain the specials above.  No reason that any latexlike parser should count those as specials.  Should be included in techy::latexlike::minidefs/minilatex package instead.
+
     package
 }
 

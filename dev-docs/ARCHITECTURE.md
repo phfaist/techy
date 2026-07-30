@@ -136,9 +136,20 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 `SourceResolver` — plus `Lang` and `ParseDriver`); standard machinery (`StdTokenReader`,
 `Package`/`Scope`, `NodesParser`, …); orchestration (`Language`, `ParserSession`).
 
+**Public export topology (decided; application scheduled within the API review):**
+the public API will be exposed through re-export facades with one canonical path per
+item — `techy::{source, error, extract}` top-level, `techy::core` as a flat machinery
+hub with extracted satellites `core::{constructs, specs, node}`, `techy::latexlike`
+unchanged, future `techy::transform` — and internal src modules become private
+(internal reorganization stops being public-breaking). The topic modules sketched
+above then describe the *internal* organization only. Full decision incl. the
+specs-vs-hub author-side/run-side rule and rejected shapes:
+[§dd-dr:public-namespace-topology].
+
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
-[§dd-dr:workspace-layout] (virtual workspace, crates in subfolders),
-[§dd-dr:decisions] (how the register itself is organized).
+[§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
+extracted subsets), [§dd-dr:workspace-layout] (virtual workspace, crates in
+subfolders), [§dd-dr:decisions] (how the register itself is organized).
 
 ## Sources and spans [§dd-arch:source]
 
@@ -373,6 +384,23 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   misuse is caught by debug-only provenance tags ([§dd-dr:node-id-provenance]).
 - Indices are `u32` behind a private newtype; the one safeguard that matters is the
   checked conversion at the single mint site.
+- **Ruled, not yet applied (API-review P4** — full topic [§dd-dr:transform]; working
+  detail in `dev-docs/api-review/P4_RULING.md` while the review runs**)**: trees gain
+  consumer-owned per-node **annotations** (`NodeTree<L, A = ()>`, a parallel `Vec<A>`
+  over an `Arc`-shared node core; zero-copy `annotate()`;
+  [§dd-dr:node-annotations]); tree tags become always-on `NodeId` identity
+  (`TreeTag`, [§dd-dr:tree-tags]); the two-tier ext system is replaced by
+  **parse-once ext minting** — per-kind node exts removed, required
+  `Lang::make_node_ext`, a hook-free builder demanding ready ext + annotation, parse
+  staging only via `ParseContext::stage_node` ([§dd-dr:ext-minting]); slots gain
+  `SlotRole { Content, Attached, Hidden }` and trait-based body marking
+  (`BodySlotExt`, [§dd-dr:slot-roles]); parent links are stored and
+  `SourcePos`-keyed reverse lookup lands with the read-side honesty fixes
+  ([§dd-dr:tree-navigation]). Transformation (`techy::transform`, the streaming
+  restage driver — [§dd-dr:restage]) and recomposition (`techy::recompose`,
+  [§dd-dr:recompose]) join as top-level modules; `\input` content attaches as an
+  `Attached` slot of a same-builder sub-parse, making multi-source parse trees
+  first-class ([§dd-dr:input-attachment]).
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -380,7 +408,10 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 [§dd-dr:staging-builder], [§dd-dr:text-content-s0], [§dd-dr:comment-delimiters],
 [§dd-dr:environment-scaffolding], [§dd-dr:span-invariants],
 [§dd-dr:node-id-provenance], [§dd-dr:iter-storage-order], [§dd-dr:slot-read-api],
-[§dd-dr:read-api], [§dd-dr:node-summary].
+[§dd-dr:read-api], [§dd-dr:node-summary]; the P4 transformation ruling
+([§dd-dr:transform]): [§dd-dr:node-annotations], [§dd-dr:tree-tags],
+[§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:recompose], [§dd-dr:slot-roles],
+[§dd-dr:input-attachment], [§dd-dr:tree-navigation].
 
 ## Construct parsers [§dd-arch:constructs]
 
@@ -489,11 +520,15 @@ diagnosis and resume, and finishes into a `ParseResult` that owns its tree and
 diagnostics with no `Language` reference. "Define a language once, parse many
 documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
-Decisions behind this section: [§dd-dr:parse-driver], [§dd-dr:session-derivation],
+Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
+state; infallible seed+packages construction), [§dd-dr:parse-driver], [§dd-dr:session-derivation],
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node],
 [§dd-dr:resolve-command-hook], [§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:paragraph-break-hook], [§dd-dr:language-parse-api], [§dd-dr:with-provider],
-[§dd-dr:stateless-language].
+[§dd-dr:stateless-language]. Ruled, not yet applied (API-review P4): `finalize_node`
+is replaced by parse-once minting — parse staging via `ParseContext::stage_node`,
+`ParserSession::builder` crate-private ([§dd-dr:ext-minting]); the source resolver
+moves from `Language` to the driver ([§dd-dr:input-attachment]).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 
@@ -655,7 +690,23 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   integration port of pylatexenc's walker tests — anything the port cannot reach is an
   API gap by construction ([§dd-dr:acceptance-suite]).
 
-Decisions behind this section (full topic: [§dd-dr:latexlike]): [§dd-dr:group-taxonomy], [§dd-dr:math-no-nesting],
+**Preset generalization (decided; design + application scheduled in the API review's
+2b sessions):** every preset component becomes generic over a `Lang` family —
+per-vocabulary role traits (`LatexlikeGroupType`/`LatexlikeCallableType`/
+`LatexlikeMode`, implemented by the vocabulary types; techy implements them for its
+own enums) under the umbrella `trait LatexlikeLang: Lang<…>` with defaulted behavior
+methods (conventional parameter `LLL`); preset behaviors also ship as public
+`LLL`-generic pillar functions that a framework's `Lang` impl delegates to, one line
+per hook. `Lang` itself stays whole. With it, `GroupType` becomes `{Content,
+Math(MathGroupForm), Verbatim}` — inline/display as typed class payload declared at
+rule registration (`MathGroupForm` exhaustive; sugar `math_form()`, table-free) —
+revising the single-bare-math-class and `math_style()` shapes described above.
+[§dd-dr:latexlike-generalization], [§dd-dr:math-group-form].
+
+Decisions behind this section (full topic: [§dd-dr:latexlike]):
+[§dd-dr:latexlike-generalization] (role traits + `LatexlikeLang`; `Lang` stays whole),
+[§dd-dr:math-group-form] (`Math(MathGroupForm)` class payload), [§dd-dr:minidefs]
+(toy `minilatex` package; deliberately not a definitions database), [§dd-dr:group-taxonomy], [§dd-dr:math-no-nesting],
 [§dd-dr:preset-vocabulary], [§dd-dr:base-package], [§dd-dr:mode-visibility],
 [§dd-dr:ascii-whitespace], [§dd-dr:inherent-preset-sugar],
 [§dd-dr:begin-end-dispatch], [§dd-dr:environment-spec-surface],

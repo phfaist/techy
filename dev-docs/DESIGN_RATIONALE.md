@@ -240,6 +240,9 @@ no-I/O build pays nothing. No file-system resolver is shipped (no_std policy,
 capability lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
 *(The `SourceContent` backing-abstraction half this entry originally carried was later
 retired — cf. [§dd-dr:source-cursor-retired].)*
+*(Direction recorded — API-review P4: the resolver instance moves from `Language` to
+the `ParseDriver` (parse-time instance behavior, the placement doctrine); wiring
+designed in the 2b T4 session. [§dd-dr:input-attachment].)*
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
@@ -1291,6 +1294,11 @@ serialization and flat storage impossible, and reintroduces runtime type errors 
 type system should prevent; annotation wrapper nodes (re-create the problem one level up);
 side tables (break node self-containment across tree transforms).
 
+*(Amended — API-review P4: the tier-2 per-kind ext half of this entry is superseded —
+per-kind node exts are removed and `NodeKind` becomes purely structural,
+[§dd-dr:ext-minting]. The closed structural taxonomy, the `Callable` merge, de-keyed
+specs, owned names, and `TextContent` are untouched.)*
+
 #### No core `MathNode` [§dd-dr:no-core-math-node]
 
 Status: DECIDED (consequence of [§dd-dr:no-privileged-concepts] and [§dd-dr:closed-node-kind]).
@@ -1338,6 +1346,11 @@ Rejected alternatives: parallel `specs`/`args` vectors (pylatexenc-literal — a
 length/pointer-consistency invariant and a redundant `Arc` when the spec also sits in the
 entry); "layout" as a name (opaque — nobody could say what it referred to).
 
+*(Amended — API-review P4: `ArgumentExt` is minted by the argument parser at record
+creation — the parser output carries it, the record constructor demands it, and the
+standard parsers are conditionally defined `where ArgumentExt<L>: Default`;
+`Lang::finalize_node` no longer exists as a populate-later path. [§dd-dr:ext-minting].)*
+
 #### `SlotExt` — slot records carry per-instance ext, symmetric with `ArgumentExt` [§dd-dr:slot-ext]
 
 Status: DECIDED (user).
@@ -1349,6 +1362,11 @@ environment's *body* is a slot, and per-instance derived data about a body (tabu
 structure, enumerate item boundaries) had no home except the whole-callable ext. Added
 while cheap: one associated type on the bundle, one field on the record; retrofitting after
 downstream `NodeExtTypes` implementors exist would break them all.
+
+*(Amended — API-review P4: `SlotExt` values are demanded at `ParsedSlot` construction
+(no `Default` path); slots additionally gain a `SlotRole` and trait-based body
+marking, with the preset claiming the `SlotExt` member. [§dd-dr:ext-minting],
+[§dd-dr:slot-roles].)*
 
 #### `NodeTree::iter` renamed `iter_storage_order`; no `parent` stored in `NodeData` [§dd-dr:iter-storage-order]
 
@@ -1363,6 +1381,10 @@ part of the signature. The document-order `descendants()` arrived with the read 
 needed — the transient parent vector `finish()` computes for region resolution stays
 transient. Named argument-node accessors (`argument_nodes_named` etc.) likewise landed
 with the read/extraction package, not piecemeal.
+
+*(Amended — API-review P4: the parent-navigation half is reversed — `finish()`'s
+parent vector is now kept on the tree (`parent()`/`index_in_parent()`), consumers
+having materialized; the `iter_storage_order` rename stands. [§dd-dr:tree-navigation].)*
 
 #### Argument/slot child regions with parser-designated content (`ChildRegion`, `ContentNodes`) [§dd-dr:child-regions]
 
@@ -1498,6 +1520,11 @@ arena-emission order provides it — recursive descent gives subtree-contiguous 
 Staging + flatten is O(n) with one transient copy, and keeps the builder API free of layout
 obligations.
 
+*(Amended — API-review P4: the builder becomes hook-free with a single
+`add(kind, span, state, children, ext, annotation)` demanding ready values; the
+staging semantics recorded here — bottom-up, claim-once, breadth-first flatten,
+unreachable dropped — are unchanged. [§dd-dr:ext-minting], [§dd-dr:node-annotations].)*
+
 #### `TextContent` is S0 and lives in the source topic; no `PartialEq` on node types yet [§dd-dr:text-content-s0]
 
 Status: DECIDED.
@@ -1591,7 +1618,9 @@ Status: DECIDED (user).
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
-Status: DECIDED (user, code-review follow-up session).
+Status: DECIDED (user, code-review follow-up session; **superseded** — API-review P4:
+tags are now always-on in all builds and part of `NodeId` identity, cf.
+[§dd-dr:tree-tags] — the revisit condition below fired).
 
 `NodeTree::node()`'s assert checks *range*, not *provenance*: an in-range id minted by a
 different tree silently resolves to whatever node sits at that index — exactly the hazard
@@ -1705,6 +1734,12 @@ covering-span *helper* recomputing spans best-effort (user: return types must ca
 them); `indexmap`-style ordered-map dependency for keyval; keyval aggregation knobs
 (strictly less information than duplicate-preserving entries).
 
+*(Amended — API-review P4: extract-built trees are `NodeTree<L, ()>`
+([§dd-dr:node-annotations]); boundary partials are minted via `make_node_ext` instead
+of carrying default exts ([§dd-dr:ext-minting]); rebasing the `Split`/`KeyVals`
+builders on the restage mechanism so they can keep/map annotations of annotated input
+trees is a recorded later option ([§dd-dr:restage]; decide in 2b).)*
+
 #### `NodeRef::summary()`: the compact node description is core API [§dd-dr:node-summary]
 
 Status: DECIDED (user).
@@ -1718,6 +1753,375 @@ Rejected alternatives: a `Display`-adapter type (the `SearchedProviders` pattern
 surface for a test/log utility whose callers want `String` in assertions anyway;
 leaving it duplicated test-side (the acceptance suite, the preset tests, and the guide would
 carry three copies of the same formatter).
+
+## Tree transformation, annotations, and ext minting [§dd-dr:transform]
+
+The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
+piece — the entries below cross-depend. None is applied yet (application in the
+review's Phase 3, together with the P1 topology move). Working detail for the
+application sessions: `dev-docs/api-review/P4_RULING.md` (a process file, deleted when
+the review completes — these entries are the durable record).
+
+#### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
+
+Status: DECIDED (user, API-review P4 session; application pending).
+
+Trees gain a second, defaulted generic parameter: the **annotation** type `A` — one
+value per node, uniform across kinds, chosen by the *consumer* per processing stage.
+`Lang` never sees `A` (the whole parse pipeline is `A`-blind; the parser emits
+`A = ()`, so `ParseResult` spellings are unchanged). This is the framework-side
+counterpart of the lang-side `NodeExt`: multi-stage pipelines type each stage's
+derived data (`NodeTree<L, ()>` → `NodeTree<L, SemInfo>` → …) instead of maintaining
+`HashMap<NodeId, T>` side tables that die at every transform boundary (the T5
+framework walkthrough's central friction finding).
+Storage: annotations live in a per-tree parallel `Vec<A>` — *not* in `NodeData` —
+over an `Arc`-shared node core (`NodeTree = { core: Arc<TreeCore<L>>, annotations:
+Vec<A> }`). Consequence: `annotate()` (same layout, new annotation type) allocates
+only the new annotation vector — zero `NodeData` is cloned, the input tree is
+untouched, and all same-layout stages share the core and its tree tag
+([§dd-dr:tree-tags]), so their `NodeId`s are interchangeable (ids identify *layout*,
+not stage); `NodeTree::clone()` becomes O(annotations). Bounds: `A: Clone + Debug +
+Send + Sync`, deliberately **no `Default`** — every annotation value is supplied
+explicitly ([§dd-dr:restage]'s single-pathway rule; the parser passes `()`
+literally). Extract-built trees (`Split`/`KeyVals`) produce `A = ()`; rebasing the
+extract builders on the restage mechanism so they can keep/map annotations is a
+recorded later option (note on [§dd-dr:read-api]). FFI note (T5): a binding fixes one
+concrete `A` for its pipeline (e.g. a PyObject-slot type) — dynamic typing inside a
+single monomorphization; Rust frameworks use typed per-stage `A`. Per-kind
+annotation typing is intentionally absent — a consumer uses an enum inside `A`
+([§dd-dr:ext-minting]'s tier-2 argument applies).
+Rejected alternatives: status-quo side tables (no transform survival, no library
+support); routing through `Lang::NodeExts` (forces the preset-fork cliff, welds
+pipeline data to the language definition, and allows one type forever instead of one
+per stage); a wrapper `AnnotatedTree<L, A>` over `Arc<NodeTree>` (splits the
+node-list currency, and the *builder* still needs a typed channel, so transform
+outputs degrade to `(tree, Vec<A>)` pairs — the side-table problem with extra
+steps); `Box<dyn Any>` per node (untyped, per-node allocation); storing `A` inline
+in `NodeData<L, A>` (the original sketch — forfeits zero-copy re-annotation);
+annotations on argument/slot records (declined — per-node only, kept simple).
+Revisit if: adding the parameter later were the question — it isn't; the reason to
+decide *now* is that the builder, restage, and extract surfaces are shaped around it.
+
+#### Always-on tree tags: `TreeTag` joins `NodeId` identity [§dd-dr:tree-tags]
+
+Status: DECIDED (user, API-review P4 session; supersedes the debug-only scheme of
+[§dd-dr:node-id-provenance] — that entry's revisit condition fired).
+
+Every tree layout mints a `TreeTag` (newtype over `u32`, from the existing wrapping
+global counter) in **all builds**; `NodeId` becomes `{ index: u32, tree_tag:
+TreeTag }` (8 bytes, `Copy`) and the tag **participates in `Eq`/`Ord`/`Hash`** — ids
+minted by different trees are different values, so one map can key ids from several
+trees, and an old tree's `NodeId` stored inside a new tree's annotation is
+unambiguous (the enabling substrate of [§dd-dr:restage]'s origin-by-convention).
+The old exclusion from `Eq`/`Hash` existed only because tags were debug-only; with
+tags everywhere, debug and release agree again. `NodeTree::get()` now genuinely
+rejects foreign ids in release builds (the T5 binding-pattern caveat disappears);
+`node()` keeps its panicking own-tree contract. Layout-preserving copies (`clone`,
+`materialize`, `annotate` stages) share the tag — their ids are interchangeable by
+design. Terminology: **`tree_tag`** (the compound answers "tag of what?"); a newtype
+so signatures cannot confuse tags with indices. Wrap policy: `u32` wraps after 2^32
+layouts per process — accepted and documented, because the tag is a **misuse
+detector, never an addressing mechanism** (resolution always goes through an
+explicit tree; a collision only matters when a stale-id bug already exists). Tags
+are process-local — never wire/persistence material. Bare `Range<u32>` values
+(`ChildRegion` ranges, `nodes_in`) remain untagged, as before.
+Rejected alternatives: keeping tags debug-only (release-build transforms multiply
+trees and silently resolve foreign ids — the exact hazard); `u64` tags for a hard
+uniqueness guarantee (16-byte ids for a guarantee nothing may rely on anyway — user
+ruled `u32`); `tree_identifier` as the term (overpromises addressability).
+Revisit if: a use case wants ids as *global* handles without the tree in hand —
+that needs a registry design, not a wider tag.
+
+#### Ext minting: population is initialization — `make_node_ext` replaces `finalize_node` [§dd-dr:ext-minting]
+
+Status: DECIDED (user, API-review P4 session; supersedes [§dd-dr:finalize-node] and
+the two-tier ext half of [§dd-dr:closed-node-kind]; application pending).
+
+**Principle: an ext is minted exactly once, at creation, by the party with the
+knowledge — no "default-initialized, populated later" state exists anywhere in the
+ext system.** The pieces, each argued in the session:
+
+- **Tier-2 per-kind node exts are removed** (`CharsNodeExt`…`ListNodeExt` deleted;
+  `NodeKind` becomes purely structural — no ext fields inside
+  `Chars`/`GroupData`/`CallableData`/`Comment`/`List`, finally matching
+  [§dd-dr:closed-node-kind]'s own "orthogonal to structural identity" claim). A lang
+  wanting per-kind data uses an enum inside tier-1 `NodeExt`; coherence is enforced
+  at the single minting point by the one author who owns both sides. Accepted costs:
+  a kind/ext mismatch becomes representable (mitigated by the single minting point);
+  enum exts cost discriminant + largest variant on every node (mitigated by the
+  keep-exts-word-sized guidance); typed per-kind accessors disappear (post-parse
+  consumers use annotations, [§dd-dr:node-annotations]). The in-between
+  `NodeDataExt { uniform, per_kind: enum }` bundle is dominated: it pays removal's
+  coherence cost *plus* the six-type ceremony.
+- **`Lang::make_node_ext(kind: &NodeKind, span, state, children: StagedChildren)
+  -> NodeExt`** replaces `finalize_node` — value-return, `kind` by shared reference
+  (the hook cannot change the kind; both `&mut kind` and consume-and-return were
+  rejected for exactly that reach). The **idempotence contract is deleted**: the hook
+  runs once per node, at parse staging, never on restaged copies (their exts travel
+  as frozen parse facts, cloned verbatim). No parent parameter — impossible by
+  construction (staging is bottom-up; the parent doesn't exist yet); downward
+  context is `StateExt`'s job. **`StagedChildren`** replaces the
+  `(children: &[BuildId], staged: &StagedNodes)` pair: a **subtree-deep,
+  descent-only** view — child views resolve *their* children recursively (required:
+  argument content sits at grandchild depth, e.g. computing `{domain, key}` from
+  `\ref{fig:abc}`) but expose no siblings/ancestors/unrelated staged nodes.
+- **`NodeExt` loses its `Default` bound** (`Clone + Debug + Send + Sync`) — a
+  tier-1 ext value can only be minted by the hook or cloned from a node; there is no
+  third path, not even an explicit `Default::default()`. Forced consequence, kept as
+  a feature: `make_node_ext` is a **required** `Lang` method (techy cannot conjure a
+  default body without `Default`); `SimpleLang`'s blanket impl supplies the `()`
+  version, `Latexlike` writes the one-liner, and a lang that declares a real ext
+  type *must* say how it is initialized.
+- **`NodeTreeBuilder` is hook-free and mode-free**, with exactly one staging method:
+  `add(kind, span, parsing_state, children, ext, annotation)` — it demands ready
+  values. (Rejected shapes: the `add()`/`add_with_ext()` pair with a `Default`-fill
+  path — callers of the builder are no more literate about a language's exts than
+  parsers were; a `for_parsing()` hook-firing constructor mode — the
+  misuse-by-accident vector.)
+- **Parse staging goes exclusively through `ParseContext::stage_node(kind, span,
+  state, children)`** — the ONE automatic `make_node_ext` site — and
+  **`ParserSession::builder` becomes `pub(crate)`** (persona sweep found no
+  legitimate external mutable need; a public read view stays for node-based stop
+  predicates). This *strengthens* the old "no node escapes, no parser cooperation"
+  property: the choke point moves from inside the builder to the only staging door
+  parsers have — a third-party construct parser physically cannot stage an
+  unpopulated node.
+- **Transform-side minting is the explicit two-line recipe** (call
+  `L::make_node_ext`, then `builder.add(…)`) — deliberately no wrapper helper: the
+  explicit spelling is the finer control (inspect/adjust the minted ext between the
+  two lines) and cannot be reached by someone who doesn't know what it does. WHO/WHEN
+  in one sentence: *`make_node_ext` runs inside `cx.stage_node()` during parsing,
+  and wherever a transform author writes the call explicitly; nowhere else, ever.*
+  Knock-on: `split_at_chars` boundary partials are now properly minted in-crate via
+  the hook (the "partials carry default ext" approximation disappears).
+- **`ArgumentExt` is kept** (user — the body-marking story proved slot exts
+  load-bearing late; arguments get the same open door, e.g. a future
+  `BodySlotExt`-analog marking trait). Minting: the **`ArgumentParser` output
+  carries the ext** (the parser is the knowledge-holder; the record constructor
+  demands the value); custom parsers mint their own; the **standard parsers are
+  defined only `where ArgumentExt<L>: Default`** — a conditional bound-where-used
+  (the `ClosedVocabulary` pattern): a std parser's knowledge about your ext *is*
+  "nothing", and its bound says so; the bundle itself carries no `Default`.
+- **`SlotExt` is demanded at `ParsedSlot` construction**; generic preset machinery
+  mints via `BodySlotExt::make_body()` ([§dd-dr:slot-roles]); custom
+  `EnvironmentBehavior`s pass their values. No Lang hook, no `Default`.
+- Ext bundle final shape: `NodeExtTypes = { NodeExt, ArgumentExt, SlotExt }`.
+  `Lang`'s "all methods have working defaults" doc claim gains its one exception.
+
+Rejected alternatives (beyond the inline ones): a Lang-global `make_argument_ext`
+consulted by std parsers (spec-local knowledge forced through Lang-global dispatch —
+knowledge and hook in different places); moving the node hook into `NodeExtTypes`
+(bundle would need an `L` parameter — reshape for no gain).
+Revisit if: a `Lang` needs per-node work at *transform* time — that is what
+annotations are for, not a reason to resurrect re-running hooks.
+
+#### `techy::transform`: the streaming restage driver [§dd-dr:restage]
+
+Status: DECIDED (user, API-review P4 session — direction, shape, and contracts;
+exact types/naming in the 2b T5 session; application pending).
+
+Tree→tree transformation is a **streaming restage**: an in-crate top-level module
+`techy::transform` whose driver walks the frozen input tree with a user callback
+invoked **top-down** (decide before descending — a buried `\includegraphics` is seen
+before its subtree is committed) while staging **bottom-up** into a
+`NodeTreeBuilder<L, B>` (children before parents; the driver mediates the two
+orders). Vocabulary is `restage_*` throughout — "copy" is banned (it misreads as
+bulk-subtree-copy; the earlier public-`add_subtree` framing is superseded). Layers:
+
+- **Level 0 primitive** (in `core::node`): single-node copy with a per-child mapping
+  ("old child → the new `BuildId`s that replaced it"), translating the callable's
+  argument/slot region records — the generalization of the crate-internal copy.rs
+  arithmetic (two-phase records, `InChildrenOf` designations, offset re-basing,
+  region extents recomputed under dropped/replaced/multiplied children). Bulk
+  subtree copy is the degenerate recursion over it, not the primitive.
+- **The callback contract**: per node it returns
+  `Restage<B> { Continue(B), Emit(Vec<BuildId>) }`. `Continue(b)` = the driver
+  restages this node over its children's results with annotation `b`, and **the
+  visitor continues through every child subtree** — the safety invariant: the only
+  way a child subtree goes unvisited is an explicit `Emit` for its ancestor (no
+  shallow-keep exists to reach by accident). `Emit(nodes)` = the callback staged the
+  replacement itself (empty = drop); no automatic descent. (`Continue` kept as the
+  name for now; alternates recorded: `Descend`, `Keep`, `Retain`, `Auto`.)
+- **Annotations, single pathway** (user's redesign, replacing a run-level mapper
+  closure): *every* restaged node's annotation passes through the visitor — as
+  `Continue(b)` or as an explicit argument to the staging ops the callback invokes.
+  Mandatory by construction: `A_old` and `A_new` are different types, so "keep the
+  annotation" is not even expressible — good by design; the origin-id convention is
+  the one-liner `Continue(Ann { origin: node.id(), … })`.
+- **Region-aware context ops** (the crate owns *all* region arithmetic):
+  `restage_subtree(node)` (the full visitor over that subtree, its root included);
+  `restage_children(node)`; `restage_argument(node, index_or_name)` /
+  `restage_slot(node, i)` → **restaged-region bundles** (new ids + the record's
+  spec/name/presence/content-designation, in bundle-relative staging coordinates);
+  `restage_invocation(node, arguments, slots, annotation)` — restages the invocation
+  data over bundles **in the order given**, retiling the records (argument swap
+  `\a{1}{2}` → `\a{2}{1}` = two `restage_argument` calls + one reordered
+  `restage_invocation`; swapped sibling spans out of source order are legal in
+  transform trees). Raw `builder()` access underneath everything: the canned ops are
+  conveniences, not the power boundary — arbitrary programmatic staging (and the
+  explicit `make_node_ext` recipe for new nodes) is always available; merges are
+  parent-level callback takeover.
+- **Read frozen / write staged**: callbacks inspect the *frozen input* — the full
+  read API and the `techy::extract` tools — and produce staged output; the staged
+  side is write-only. Verified no meaningful staged-side read need exists: decisions
+  precede restaging (top-down); whatever a callback stages it just made (facts carry
+  in closure state or annotations); full read semantics are impossible pre-`finish`
+  anyway (unresolved regions, no layout, no `NodeRef`). Frameworks that must inspect
+  transform output finish the tree and run another pass — multi-stage is
+  deliberately cheap ([§dd-dr:node-annotations]). Accepted boundary: a `Continue`
+  parent never sees its children's results (take over via `Emit` +
+  `restage_children`, or use two passes).
+- **Origin tracking is a convention, not scaffolding**: the framework puts an old
+  `NodeId` in its own annotation type ([§dd-dr:tree-tags] makes that safe); techy
+  contributes the old-`NodeRef`-in-hand callback and a documented recipe (incl. the
+  O(n) old→new inversion walk). The auto-provenance trait
+  (`WithTransformedTreeNodeProvenance`-style, with wrapper type and tracking entry
+  point) was **rejected**: merges and subtree replacements make "the" original id a
+  fiction whose semantics no mechanism can choose for the framework. Per-node
+  `Arc<NodeTree>` references were rejected separately (type-chaining across stages;
+  lifetime-pinning every pipeline stage alive). Vocabulary: **"original node"** —
+  "provenance"/"origin" alone belong to the source model.
+- Riders: a **transform-tier validator** (structure + region tiling + `TextContent`
+  residency, *minus* the parse-law byte accounting) fills the gap between the
+  builder's checks and `check_tree_invariants`' parse-tree law; `NodeRef::tree()`
+  becomes public.
+
+Rejected alternatives: a companion crate (version skew during co-evolution;
+`techy-totext` is the external-consumer proof instead); a fixed atomic-op vocabulary
+(add/drop/splice/rebuild) as the ceiling (user: not powerful enough — the driver's
+fixed job is only order mediation and region-preserving reassembly); a `finish()`
+BuildId→NodeId map (helps only callers who separately tracked BuildIds; the
+annotation channel is strictly more direct).
+Revisit if: the 2b T5 detailing finds the bundle shapes insufficient for a real FLM
+pass — the layering (primitive / driver / raw builder) is the stable part, the op
+signatures are not frozen until then.
+
+#### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
+
+Status: DECIDED (user, API-review P4 session — direction and scope; detailed design
+DEFERRED to its own planning session).
+
+Recomposition (tree → output text) is a generic fold in a top-level
+`techy::recompose` module: the consumer supplies per-node logic; a typed
+**recomposition state threads downward** into children; the framework is agnostic
+about *how* nodes recompose. Two shipped strategies prove the mechanism:
+**span-verbatim** (exact bytes via spans + gap-filling — the latexpp path, verified
+byte-faithful in the T5 walkthrough incl. tolerant-recovery nodes) and **node-data
+spelling** (reconstruction from recorded facts, pylatexenc's
+`latexnodes._latex_recomposer` precedent — the core provides the walk, the
+**latexlike preset provides the trigger spellings**, which are the only facts node
+data lacks; on a `materialize()`d tree this touches no `Source` at all — fully
+source-independent byte-faithful reconstruction). latex2text is "a recomposition
+whose per-node logic emits text, not LaTeX": the **mechanism lives here, the content
+(handler databases, unicode tables, layout) in techy-totext** — consistent with
+rejecting elaborate in-techy plain-text extraction. Strategies key on `SlotRole`
+([§dd-dr:slot-roles]): verbatim skips `Attached` by definition (the invocation text
+*is* the recomposition; descending is the explicit expansion option); `Hidden` never
+participates.
+Open for the dedicated session: direct fold vs transform-to-chars-then-concatenate;
+state-threading model; output sink type; targeted-replacement integration.
+Revisit if: the dedicated session overturns details — the module, the two
+strategies, and mechanism-not-content are the ruled part.
+
+#### Slot roles and trait-based body marking [§dd-dr:slot-roles]
+
+Status: DECIDED (user, API-review P4 session; amends
+[§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
+application pending).
+
+`ParsedSlot` gains `role: SlotRole { Content, Attached, Hidden }` (default
+`Content`). `Content` = constitutive — the node's meaning is incomplete without it
+(environment body); `Attached` = derived/redundant — reconstructible from the
+invocation itself (`\input`'s resolved content, [§dd-dr:input-attachment]);
+`Hidden` = framework/callable-defined attachments techy core ignores (no
+recomposition, no byte accounting; semantics via slot name + spec). Load-bearing
+consequence: **`Attached` slots are excluded from the parent's byte-tiling** —
+declaration replaces source-change inference in the validator — while structural
+child-list tiling stays role-independent.
+Body-ness is a **separate axis** on the slot *ext*:
+`trait BodySlotExt { fn is_body(&self) -> bool; fn make_body() -> Self; }` —
+environment machinery mints body slots via `make_body()` (the trait is also the
+*generic* minting mechanism the `LatexlikeDriver<LLL>` generalization needs);
+`NodeRef::body()` returns the content of the slot whose ext reports `is_body()`,
+under a bound-where-used (`where SlotExt<L>: BodySlotExt`) — "slot 0" stops being
+load-bearing. A framework forking the ext bundle implements the trait on its own
+`SlotExt` and every preset mechanism keeps working. Consequence, ruled consciously:
+`Latexlike` declares a real body-marker `SlotExt`, so the preset's `NodeExts` bundle
+is `()` per-member for node/argument only — **`SlotExt` is claimed by the preset**.
+Rejected alternatives: body-by-slot-name (the `"body"` string — stringly-typed);
+body-by-position (slot 0 — positional convention as API contract).
+Revisit if: 2b details (does `body()` also filter on `role == Content`? extract
+readers vs `Hidden`? `#[non_exhaustive]`? `Attached` vs `Derived` naming) change the
+edges — the enum, the exclusion rule, and the trait are the ruled part.
+
+#### `\input` attachment: same-builder sub-parse; multi-source trees are first-class [§dd-dr:input-attachment]
+
+Status: DECIDED (user, API-review P4 session — direction and tree-level
+consequences; engine wiring designed in the 2b T4 session, friction F8).
+
+The anticipated `\input` implementation: the callable's spec parser resolves the
+reference and **sub-parses the resolved source into the same builder**, staged as an
+**`Attached` slot** of the `\input` callable. Decisive: copy-free, and semantically
+forced — included content must parse under the parsing state *at the `\input`
+point*, which the running session has naturally. (Separate-parse-then-restage-splice
+stays possible via the transform primitives for frameworks that want caching, with
+the state-correctness caveat on their heads.) Tree-level consequences, verified in
+the session:
+- **Sibling-run source-coherence holds naturally**: the `\input` callable's own span
+  is its invocation in the *includer's* source; only its slot children live in the
+  included source, and those are siblings *of each other* — so every sibling run in
+  a parse tree stays single-source even under nested inputs. The middle-node
+  staleness hazard ([§dd-dr:tree-navigation]'s honest-slices fix) remains exclusive
+  to transform-spliced trees; the single-source `finish()` fast-path flag is an
+  optimization bit, **not** a semantic tier — a multi-source parse tree is not a
+  degraded tree.
+- The parse-law validator scopes byte-accounting per source via the `Attached` role
+  ([§dd-dr:slot-roles]); recompose is per-source (verbatim emits `\input{file}`,
+  not the content — expansion is an explicit strategy choice); `node_at`'s
+  per-source descent already yields the right answers on both sides of the boundary.
+- **The resolver moves from `Language` to the `ParseDriver`** (direction recorded):
+  resolution is parse-time instance behavior, which the placement doctrine
+  ([§dd-dr:parse-driver]) puts on the driver — amending [§dd-dr:language-init]'s
+  expected surface (`Language` collapses toward the constructor alone; supersedes
+  the `with_resolver` remainder of [§dd-dr:source-resolver]'s wiring).
+Revisit if: the T4 wiring session finds the sub-parse-into-same-builder mechanics
+unworkable — the fallback is the restage-splice route, accepting its copy cost.
+
+#### Parent links, `SourcePos` lookup, and read-side honesty [§dd-dr:tree-navigation]
+
+Status: DECIDED (user, API-review P4 session; application pending; method naming in
+2b).
+
+- **Parent table stored**: the `Vec<u32>` that `finish()` already computes for
+  region resolution is kept on the tree (4 bytes/node; reverses
+  [§dd-dr:iter-storage-order]'s decline now that consumers exist — the T5 FFI gap,
+  T4's F7 cursor wish, pass-style renderers). `NodeRef::parent()` and an O(1)
+  `index_in_parent()` (own index minus the parent's block start).
+- **`SourcePos<O> { source: Arc<Source<O>>, pos: usize }`** — a new source-model
+  type, analogous to `SourceSpan`, pointing to a *single location* (constructor,
+  accessors, `Debug`, line/col via `LineIndex`; `SourceSpan::start_pos()`/`end_pos()`
+  conveniences). Chosen over bare `(source, pos)` arguments (reads as two unrelated
+  bits) and over empty-`SourceSpan` encoding (reads oddly).
+- **Point lookup** `node_at(&SourcePos)`: the **deepest** node whose span contains
+  the offset — half-open containment (`start ≤ pos < end`, empty spans never match);
+  descend only into children whose span lies in the **query's source** (per-source
+  answers on multi-source trees, [§dd-dr:input-attachment]); only exact per-node
+  spans are trusted, never inferred covering spans — robust on transform-spliced
+  trees, degrading to the shallowest honest answer. An offset inside a node but in
+  none of its children (group delimiters, trigger spellings) resolves to that node;
+  ancestors come free via `parent()`. **Span lookup**: the minimal covering sibling
+  run (`NodeSlice`, the node-list currency) within the deepest containing node list.
+  Binary search over span-sorted siblings opportunistically, linear fallback.
+- **Honest slices**: `NodeSlice::span()`/`source_text()` verify per-run source
+  uniformity instead of trusting first/last-node agreement (a replaced *middle* node
+  no longer yields silently stale text); the `finish()` single-source flag is the
+  O(1) fast path.
+Rejected alternatives: a build-on-demand `ParentMap` helper (the table is free at
+`finish()` and trees are immutable — no staleness to manage); an offset→node index
+table (premature); parent-dependent data in `make_node_ext` (impossible bottom-up —
+see [§dd-dr:ext-minting]).
+Revisit if: profiling shows the per-node parent word or the honest-slice scans
+mattering — both have obvious opt-out designs, neither worth pre-building.
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
@@ -1818,7 +2222,8 @@ takeover post-space reposition idiom is expressed positionally:
 #### `Lang::finalize_node`: one centralized finalization hook in the builder [§dd-dr:finalize-node]
 
 Status: DECIDED (user; supersedes a spec-level `finalize_invocation` proposal —
-pylatexenc's `CallableSpec.finalize_node` precedent).
+pylatexenc's `CallableSpec.finalize_node` precedent. **Superseded** — API-review P4:
+replaced by parse-once ext minting, [§dd-dr:ext-minting]).
 
 Called inside `NodeTreeBuilder::add` for **all** nodes (every kind, not just callables),
 before the staging checks; receives mutable access to the node's parts (kind, uniform ext,
@@ -1839,6 +2244,11 @@ drop unreachable); the builder grows a small staged-node read view (also wanted 
 node-based stop predicates, below).
 Rejected alternatives: spec-level finalize in core (callables-only; custom invocation parsers must
 remember to call it); a `ParseContext`-side helper (forgettable, and transforms bypass it).
+*(Superseded — API-review P4: the hook becomes the value-returning, parse-time-only
+`Lang::make_node_ext`; the idempotence contract and run-on-transforms behavior are
+deleted. The `ParseContext`-side placement rejected above is essentially the shape now
+adopted — its "forgettable" loophole closed by making `ParserSession::builder`
+crate-private, so parsers cannot stage around it. [§dd-dr:ext-minting].)*
 
 #### `Lang::resolve_command` hook [§dd-dr:resolve-command-hook]
 
@@ -2756,6 +3166,9 @@ per-parse state ([§dd-dr:stateless-language]).
   condition) + `with_resolver(…)` (default `NoResolver`); `Default` where `L::Driver:
   Default`. Wholesale `StateData` replacement deferred until a consumer demonstrates
   the need. The `Lang` hook remains the seed source for `Language`-less parses.
+  *(Construction surface since revised — [§dd-dr:language-init]: the initial state is a
+  mandatory `new` argument; the `new(driver)` + fallible-customizer shape described in
+  this bullet is superseded.)*
 - **The advanced path is accessors, not a `session()` method**: `initial_state()`/
   `driver()`/`resolver()`; the sketch's `session()` dropped — `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
   argument-free, so a `Language::session()` would return exactly that (misleading
@@ -2840,6 +3253,52 @@ Rationale: the delta spelling buries the everyday operation under two concepts
 Rejected alternatives: an infallible signature via `expect` ("Push cannot fail today") — fragile
 against future push semantics and against whatever `finalize_transition` does in the
 derivation; the `Result` mirrors `with_seed_delta` honestly.
+*(Superseded, pending application confirmation — [§dd-dr:language-init]:
+`ParsingState::lang_initial_with_packages` is the infallible spelling of the same
+everyday operation at the seed itself, where no derivation runs; `with_provider` is
+expected to be removed with the construction revision.)*
+
+#### Language construction: explicit initial state, infallible seed+packages path [§dd-dr:language-init]
+
+Status: DECIDED (user, API-review policy session; supersedes the construction bullet of
+[§dd-dr:language-parse-api] and — pending application confirmation — [§dd-dr:with-provider]).
+
+`Language::new(driver, initial_state)` takes the initial `ParsingState` as a
+**mandatory** argument; `ParsingState::initial()` is renamed **`lang_initial()`** (it is
+the *Lang's* notion of the initial parsing state), joined by
+**`ParsingState::lang_initial_with_packages(vec![…])`**, which constructs the seed with
+the given packages/scopes pre-pushed. Canonical initialization:
+`Language::new(LatexlikeDriver::new(recovery),
+ParsingState::lang_initial_with_packages(vec![…]))`.
+Decisive reasons: (1) crafting the initial state must not *require* the delta
+machinery — everyday setup routes through plain construction; (2) the path is
+**infallible**, verified against the state model: the seed never ran
+`finalize_transition` anyway (its coherence is the language author's contract — see
+`ParsingState::initial`'s docs), and pushing providers directly into the seed's scope
+stack involves no by-name scope ops (the derive path's only failure source); the
+transition choke point ([§dd-dr:state-option-c]) is untouched — packages-at-seed is not
+a transition, and `freeze` rebuilds the derived caches from the augmented data; (3) **no
+shortcut accessors** that users must abandon the instant they need one more option — the
+constructor asks for the real inputs, kept cheap by the two `lang_initial*` helpers.
+Expected consequences (proposed; confirm at application): `with_provider` and
+`with_seed_delta` become redundant — seed customization moves *before* construction
+(`Language::new(driver, ParsingState::lang_initial().derived(delta)?)` covers the delta
+path), collapsing the builder surface to the constructor plus `with_resolver`
+(orthogonal: resolver, not state); the `Default` impl's fate and the packages argument's
+ergonomics (avoiding `Arc` noise) are application-time details.
+Rejected alternatives: preset-level `parse()`/`parse_tolerant()` facade functions and a
+configuration builder (shortcut accessors — abandoned at the first configuration need;
+fix the real constructor instead); keeping seed customization delta-only (buries the
+everyday setup under delta + scope-op concepts and makes it fallible for no reason the
+everyday case can trigger).
+Revisit if: a Lang emerges whose seed coherence genuinely requires a finalize-style hook
+over the package-augmented seed — then that hook becomes an explicit, documented opt-in
+on the seed-construction path, not a return to mandatory delta routing.
+*(Amended — API-review P4: `with_resolver` is expected to leave `Language` too — the
+resolver moves to the driver ([§dd-dr:input-attachment]), collapsing the surface
+toward the constructor alone.)*
+
+---
 
 ## Generics strategy [§dd-dr:generics]
 
@@ -3371,6 +3830,33 @@ re-opens a settled argument:
   `NodeGroupExt` — `GroupNodeExt`.
 - `Parser` (trait), `ContentParser`, `ParseOutcome` — `ConstructParser`, `NodesParser`,
   `ConstructParserResult`.
+- `util` (public module), `parsing` (as public namespace name), `definitions`/`defs`
+  (as the core specs-group name), a central `conditions` registry module — the public
+  export topology's rejected names and shapes ([§dd-dr:public-namespace-topology]).
+- `ParsingState::initial()` — renamed `lang_initial()` (the seed is the *Lang's* notion
+  of the initial state; [§dd-dr:language-init]); `latexlike::defs` (as a module name —
+  overclaims; the toy package module is `minidefs`, [§dd-dr:minidefs]).
+- `MathStyle` / `NodeRef::math_style()` — renamed `MathGroupForm` / `math_form()`
+  ("style" collides with typesetting style: `$\displaystyle …$` is display-*style*
+  math in an inline-*form* group; [§dd-dr:math-group-form]).
+- `InitialStateDataProvider` / `StateTransitionFinalizer` / `SpecialsProvider` /
+  `NodeFinalizer` (a facet-decomposed `Lang`), `Latexlike<X: LatexlikeExt>` (the
+  plugin-slot preset) — weighed and rejected during preset generalization
+  ([§dd-dr:latexlike-generalization]).
+- `finalize_node` (and the interim names `populate_ext`/`populate_node_ext`) — the
+  parse-once minting hook is `make_node_ext`; the tier-2 per-kind ext family
+  (`CharsNodeExt`…`ListNodeExt`) and the `NodeDataExt` parallel bundle — removed
+  outright; `NodeTreeBuilder::for_parsing()` — the rejected hook-firing builder
+  mode ([§dd-dr:ext-minting]).
+- `ProcessedNodeData` — the annotation parameter's working name (collides with
+  `NodeData` in the same scope; the vocabulary is *annotations*,
+  [§dd-dr:node-annotations]); `tree_identifier` — the tag term is `tree_tag`
+  ([§dd-dr:tree-tags]).
+- `WithTransformedTreeNodeProvenance`/`WithOriginalNode` (the rejected
+  auto-provenance trait), `add_subtree`/`copy_subtree` and "copy" as transform
+  vocabulary — restaging ([§dd-dr:restage]); node-level cross-tree tracking says
+  *original node* — never "provenance"/"origin", which belong to the source model
+  (`SourceProvenance`/`SourceOrigin`).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -3459,6 +3945,87 @@ a `crates/` super-directory (needless nesting at three crates; plain siblings su
 
 ---
 
+#### Public export topology: facades, one canonical path, hub + extracted subsets [§dd-dr:public-namespace-topology]
+
+Status: DECIDED (user-led, API-review policy session; application pending — the
+restructure is scheduled within the API review, after the resolver-extraction design
+below).
+
+The public API is exported exclusively through **re-export facades** — internal src
+modules become private, so internal file organization is permanently invisible to
+public paths — with **exactly one canonical path per item**, chosen by *logical
+function/use* (never by frequency of use, never mirroring internal layout). Layout:
+
+- `techy::source`, `techy::error` — the S0 data models, top-level.
+- `techy::extract` — consumer tool-library over node trees, top-level; future
+  `techy::transform` (tree-transformation infrastructure) joins it as a sibling.
+  The top level is thus *role-based*: data models and consumer tool libraries up top,
+  machinery in `core`, preset in `latexlike`.
+- `techy::core` — flat hub holding the mutually-recursive heart: `Lang`/state, token
+  machinery, engine (entry, result, sessions, drivers, command resolution).
+- `techy::core::constructs` — the construct-parsing library (dispatch, standard
+  parsers, their conditions).
+- `techy::core::specs` — defining callables: callable specs, the argument model,
+  providers/packages, scopes.
+- `techy::core::node` — the node trees: reading, payloads, building.
+- `techy::latexlike` — unchanged; presets namespace their own conditions.
+- techy-derive emits only `::techy::__private::…` paths (serde discipline), removing
+  the derive crate from all topology considerations.
+
+The decisive structural argument: **extract only subsets with crisp boundaries; the
+straddle families stay in the hub, uncut.** Since S1 is one mutually-recursive stratum
+by decision ([§dd-dr:three-strata]), any public split is a navigation taxonomy, and the
+items that resist assignment are exactly the decided cycle edges (conditions,
+engine types, token data vs runtime, the argument model, `Lang` itself). The
+hub-and-satellites shape keeps `Language::parse() → ParseResult` on one page, dissolves
+every forced coin-flip a full partition creates, and pre-absorbs the known revision
+candidates (spec+scopes now one public group; node read/build one group — required by
+the planned transformation surface, which consumes the read side and produces through
+the builder in one API).
+
+**The specs/hub boundary rule (user-endorsed): `specs` is author-side — what you write
+to define callables and organize definitions; the hub is run-side — state, tokens,
+engine, resolution.** Known judgment calls at that interface (`FrameRole`,
+`SearchedProviders`, `CallableQuery`) and the resolution family
+(`CommandResolution`/`ResolvedCallable`): their current ambiguity is read as a symptom
+of wiring, not taxonomy — the standard command-resolution-via-scopes is to be extracted
+into a single standalone function that `Lang`s opt into (expected home: `specs`), after
+which the ambiguous items rest naturally beside that resolver. Their final placement
+waits for that design. Likewise deferred: `ArgumentParser` trait in `specs` vs
+`constructs` (a case exists for `constructs`, beside `ConstructParser`). Cross-boundary
+*signature* references (deltas naming `SpecsProvider`, state holding the scope stack)
+are accepted as unavoidable; what matters is that item placement itself is unambiguous.
+
+**Conditions stay producer-side** (construct conditions in `constructs`, token
+conditions in the hub, scope conditions in `specs`, preset conditions in the preset). A
+central registry module was rejected: the family is *open* (custom parsers define new
+condition types in their own crates — a registry could never be exhaustive), it couples
+a central module to every parser's internals, and it splits error logic away from the
+parser it belongs to. The registry *need* (identifier ↔ type reference) is served for
+free by rustdoc's `DiagnosticInfo` implementors listing plus a guide table.
+
+Rejected alternatives: **root re-exports / curated common tier** (dual paths violate
+one-canonical-path; empirically near-unused as access paths anyway); **structured
+facade mirroring the nine topics** (freezes the topic taxonomy — the axis already
+revised once and with live revision candidates); **pipeline split**
+(define → parse → result re-litigates the L0–L7 ladder: stage is a property of use
+moments, not items — `ParsingState`, `ScopeStack`, the builder each live in several
+stages); **`techy::util`** (the canonical vague name; S0's models are not utilities);
+**`definitions`/`defs` as the specs-group name** (collides with the planned
+`latexlike::defs` standard-definitions database — the database's claim to the word is
+stronger); **`parsing` as facade name** (forks path vocabulary from the wire
+identifiers' `core.*` areas); **a conditions registry module** (above).
+
+Revisit if: a future public item genuinely belongs to two groups; the hub grows
+uncomfortably large (extracting a further subset is breaking — weigh before the first
+external dependent); or the crate is split (S0/topic modules convert to crate
+re-exports losslessly — the facade model is what makes that lossless).
+
+---
+
+*(Amended — API-review P4: `techy::recompose` (recomposition, [§dd-dr:recompose])
+joins `techy::transform` ([§dd-dr:restage]) in the role-based top level.)*
+
 ## Documentation [§dd-dr:documentation]
 
 #### Narrative docs included with rustdoc, not a separate site [§dd-dr:rustdoc-guides]
@@ -3529,6 +4096,11 @@ recognizes them through its own per-spec `temporary_groups` rule, so neither the
 the base rule has a consumer (user-caught; the original plan listed both).
 Revisit if: a consumer needs typed display-ness on custom math delimiters (the split
 stays open under `#[non_exhaustive]`).
+*(Amended — the revisit condition fired during the API review (typed display-ness for
+custom/dynamic math delimiters; T5/FLM + preset generalization): display-ness is now
+typed **class payload**, `Math(MathGroupForm)`, declared by the rule author, with
+parse wiring still single-armed; the `MathStyle` delimiter-table sugar is superseded.
+See [§dd-dr:math-group-form].)*
 
 #### Inside math the math delimiters stop opening; a stray `$` is forbidden [§dd-dr:math-no-nesting]
 
@@ -3906,6 +4478,193 @@ code for both entry points, so the grammar cannot drift.
 Rejected alternatives: a typed `ArgumentCode` enum as the primary currency (duplicates the
 parser vocabulary one level up; hand-built `ArgumentSpec`s with concrete parsers are
 already the fully-typed path — the factory's value *is* the compact codes).
+
+#### `latexlike::minidefs`: a toy definitions package, deliberately not a database [§dd-dr:minidefs]
+
+Status: DECIDED (user, API-review policy session).
+
+`techy::latexlike::minidefs` ships a single package, `"minilatex"`, mirroring only the
+handful of LaTeX commands one reaches for automatically: `\emph`, `\textbf`, `\textit`,
+`itemize`, `enumerate` — with `\item` available inside the two list environments (the
+natural fit is the body-scoped-definitions mechanism, making minidefs its in-tree
+exemplar). The *positioning* is the decision: minidefs is a **debug/prototyping tool**,
+nothing more — just enough to test the machinery and skip setup overhead on a first
+run. Decisive reason: the latexlike preset configures a parser *so that it can parse
+latexlike content*, not so that it can parse LaTeX documents; anything techy ships
+would fall short of a true package-structured database capable of realistic documents
+(figures, theorems, proofs), while frameworks built on techy (FLM, a latex2text
+successor — [§dd-dr:goals]) will roll exactly the package structure they want.
+Constraint: **no binding reference to `minidefs` from any other latexlike module**, so
+the compiler trivially dead-strips it from builds that never import it.
+Rejected alternatives: a pylatexenc-parity standard-definitions database in techy —
+whether as in-crate module, cargo feature, or companion crate — rejected at the
+positioning level, not the mechanics level (the database belongs to the frameworks
+above techy); naming the module `defs` (overclaims — it is precisely *not* the
+definitions database that name suggests).
+Revisit if: a genuinely shared cross-framework definitions layer emerges — that would
+be its own crate with its own owner, not a techy module.
+
+#### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
+
+Status: DECIDED (user, API-review policy session P3 — direction and shape; detailed
+design and application in the 2b T3/T5 sessions).
+
+Every latexlike preset component — `LatexlikeDriver`, `MacroSpec`/`SpecialsSpec`, the
+environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`EnvironmentBehavior`/
+`VerbatimBehavior`), `argument_specs`, `default_token_rules`, `base_package`,
+`minidefs`, the `NodeRef` sugar — becomes generic over a preset `Lang` family
+(conventional parameter `LLL`), erasing T5's **preset-fork cliff** (a language needing
+its own node exts/state/modes had to implement `Lang` and thereby forfeited every
+preset component; the ext system served only full forks). The audit finding that
+carried the shape: the preset's `Latexlike`-coupling is almost entirely *vocabulary
+threading* — only two genuine LaTeX facts live in logic (the `$` forbidden-char merge,
+the math-delimiter table). Mechanism, three layers:
+
+- **Per-vocabulary role traits**, implemented by the vocabulary types themselves
+  (method-based): `LatexlikeGroupType` (`content_group()`, `math_group(form)`,
+  `verbatim_group()`, classifier `math_form()`, predicate `is_math()` —
+  [§dd-dr:math-group-form]), `LatexlikeCallableType` (macro/environment/specials
+  roles), `LatexlikeMode` (text/math roles). techy implements all three for its own
+  `GroupType`/`CallableType`/`Mode`, so a language adopting the preset enums as its
+  associated types satisfies the bounds with zero code; a language with extended
+  vocabularies implements them itself, which *guarantees* the preset-required values
+  exist while leaving the enum open for its own additions.
+- **`LatexlikeLang`**, the umbrella: `trait LatexlikeLang: Lang<GroupTypeId:
+  LatexlikeGroupType, CallableTypeId: LatexlikeCallableType, ModeId: LatexlikeMode>`,
+  carrying **defaulted behavior methods** for language-level statics (e.g. the
+  math-interior adjustment generalizing the `$` merge — the default must derive the
+  forbidden set from the math-class rules being removed, never restate a literal
+  `'$'`; the math-delimiter data behind `default_token_rules`). Deliberately **no
+  blanket impl** (it would make the defaults un-overridable by coherence); opting in
+  is `impl LatexlikeLang for Flm {}`. Evolution posture (feeds the P5 rubric): the
+  initial required surface freezes at stabilization; future roles/behaviors arrive as
+  defaulted methods delegating to existing ones (non-breaking); a fallback-less new
+  role is a conscious breaking change.
+- **`Lang` stays whole; pillar functions are the composition mechanism.** The preset
+  ships every `Lang`-hook behavior as a public `LLL`-generic function
+  (`latexlike::initial_state_data`, the `finalize_node` spec-dispatch,
+  `default_token_rules`, `base_package`), and a framework's `Lang` impl delegates in
+  one line per hook, augmenting freely (`finalize_node`: preset dispatch, then own ext
+  attachment). The residue (~30 lines: associated types + one-line bodies) is
+  irreducible by the strata rule — S1 never names a preset ([§dd-dr:three-strata]), so
+  preset behavior can only enter core-called hooks through the framework's own bridge
+  code; no trait topology removes it.
+
+The preset keeps `NodeExts = ()`: the whole ext budget belongs to the framework built
+on top; preset semantics encode in the *vocabulary* (role traits), never in the ext
+system.
+
+Rejected alternatives:
+
+- **Extraction-only lifting** (free-function cores, types stay monomorphic) — the
+  cliff is mostly *types* (spec types, environments machinery); functions cannot lift
+  trait impls.
+- **Plugin-slot preset** (`Latexlike<X: LatexlikeExt = ()>`) — pure sugar once the
+  role traits exist, walls off vocabulary extension, and adds a second way to be a
+  latexlike-family language against the one-canonical-path ruling
+  ([§dd-dr:public-namespace-topology]). Reconsider at the 2b FLM probe only if the
+  `Lang`-impl residue proves heavy.
+- **Decomposing `Lang` into facet traits** (`LangTypes` + `InitialStateDataProvider` +
+  `StateTransitionFinalizer` + `SpecialsProvider` + `NodeFinalizer`), in all three
+  Rust realizations: the *supertrait* reading delivers nothing (a subtrait cannot
+  default a supertrait's methods and the orphan rule blocks preset-side impls, so
+  `impl SpecialsProvider for MyLang {}` reaches only the core-neutral defaults the
+  whole `Lang` already gives); *marker-gated blankets* (`impl<T: UseLatexlikeSpecials>
+  SpecialsProvider for T`) have exactly one blanket slot per facet trait crate-wide
+  (competing with the `SimpleLang` quick-start blanket), are wholesale-only with a
+  coherence cliff at the first customization, and cannot be replicated by downstream
+  frameworks for *their* extenders (orphan rule, uncovered type parameter); *strategy
+  associated types* (`type Specials: SpecialsProvider<Self>` naming preset ZSTs)
+  genuinely plug in but split the coherence-coupled hook pairs across authors (seed ↔
+  `finalize_transition`, scan ↔ trigger-chars — "both hooks have the same author" is
+  the documented soundness argument), founder on unstable associated-type defaults
+  (every non-`SimpleLang` language names 4–5 more types; the F10 on-ramp cliff
+  steepens), and win nothing for the dominant preset-plus-own-additions mode
+  (`finalize_node`), where a wrapper ZST wraps the same delegation body. Regret
+  asymmetry: a framework can adopt the strategy pattern privately today with zero
+  techy support, while un-decomposing a public `Lang` is breaking.
+- **Role mapping via associated consts, `From<GroupType>` bounds, or equality bounds**
+  (`L: Lang<GroupTypeId = GroupType, …>`) — consts and `From` cannot express
+  payload-carrying roles (`math_group(form)`) nor defaulted-method evolution;
+  equality bounds freeze hosts to the preset enums (that shortcut falls out of the
+  role traits for free via techy's own impls).
+
+Routed to 2b (T3/T5 unless noted): role-accessor naming incl. the `macro` keyword
+wrinkle ([§dd-arch:naming] session); `ClosedVocabulary` as role-trait supertrait?;
+`latexlike.*` wire identifiers emitted inside foreign-`Lang` parses (P5); generic
+`LatexlikeDriver<LLL>` vs extracted driver-core helpers; generic
+`minidefs::package::<LLL>()` (T1/T2). Acceptance test: re-run T5's FLM compile probe —
+a custom `Lang` with node exts reusing driver, spec types, token rules, and base
+package.
+
+Revisit if: a real ecosystem of interchangeable facet implementations materializes
+(strategy traits are then addable without breakage), or a required role with no
+sensible default becomes unavoidable (accepted as a conscious breaking change).
+
+*(Amended — API-review P4: "the preset keeps `NodeExts = ()`" is restated per-member —
+the node and argument members stay `()`, while `SlotExt` is claimed by the preset for
+trait-based body marking. [§dd-dr:slot-roles].)*
+
+#### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
+
+Status: DECIDED (user, API-review policy session P3; supersedes the delimiter-fact
+half of [§dd-dr:group-taxonomy] — that entry's revisit condition fired).
+
+`GroupType` becomes `{ Content, Math(MathGroupForm), Verbatim }`, with
+`MathGroupForm { Inline, Display }` a **closed (exhaustive) enum**; the rule author
+declares the form at `GroupRule` registration, and the preset sugar becomes
+`NodeRef::math_form()` = `group_type()?.math_form()` — no table, no string matching,
+no state lookup, correct for embedder-registered and mid-parse-minted delimiters. The
+`MATH_DELIMITERS` table dissolves into `default_token_rules` (rule construction, its
+only remaining consumer) and stops existing as read infrastructure.
+The decisive structural argument: **`group_type` is the one datum that already flows
+from rule registration into the stored tree** (rule → token match → `GroupData`), so
+the class payload needs no new plumbing — every alternative home has to build some.
+Supporting principles: the node tree must contain all logical information about the
+parsed content (inline/display was previously recoverable only by re-matching recorded
+delimiter text against a static preset table — effectively re-parsing a source token —
+and failed on custom delimiters); pylatexenc parity (`LatexMathNode.displaytype`) is
+restored. [§dd-dr:group-taxonomy]'s operative concern survives intact: parse wiring
+stays single-armed (`Math(_)` matches once; interior delta, visibility, and
+forbidden-char logic are form-blind).
+
+**Payload-admission rule** (so class payloads don't become a dumping ground): a
+payload is admissible only when it is (a) parse-behavior-invariant (a single wiring
+arm), (b) semantically universal for downstream consumers, and (c) declared at rule
+registration, never derived from delimiter spellings. Inline/display passes all
+three; a hypothetical `Content(BraceKind)` fails (b).
+
+Role-trait shape ([§dd-dr:latexlike-generalization]): constructor + classifier —
+`math_group(form: MathGroupForm) -> Self` and `math_form(self) ->
+Option<MathGroupForm>` with the coherence contract `math_group(f).math_form() ==
+Some(f)`, plus the predicate `is_math(self)` defaulting to `math_form().is_some()`.
+The split is deliberate: the driver's math plug keys on `is_math` (parse behavior),
+readers key on `math_form` (presentation); an extending language with a math-like
+class that has no inline/display presentation overrides `is_math` to decouple them.
+
+Naming: **`MathGroupForm`, not `MathStyle`** — "style" collides with typesetting
+style (fonts, script level, `\displaystyle`): `$\displaystyle …$` renders
+display-*style* math inside an inline-*form* group. The type names the form in which
+the math group appears, not how its content is typeset. Exhaustive because renderers
+match on it constantly and a wildcard arm on every consumer is a permanent tax
+against a third form nobody can name.
+
+Boundary note: `\begin{equation}` records no form — it is an environment (its body
+enters `Mode::Math` via the body delta; no math *group* node exists), and the logical
+information is the environment name. The completeness principle is not violated
+there.
+
+Rejected alternatives: a per-`LLL` delimiter→form table (fixes the hard-coding but
+keeps read-time string matching and stays blind to dynamically registered rules — no
+principled read-time lookup exists once the rule set is state-dynamic);
+`GroupNodeExt` (nominally the "kind-specific per-instance parse result" home, but it
+still needs a rule-side source for the form, and the preset claiming the ext budget
+would force an ext-composition story onto every framework — the preset stays
+`NodeExts = ()`); two bare classes `MathInline`/`MathDisplay` (forks the parse wiring
+— the original [§dd-dr:group-taxonomy] concern; the payload keeps one arm).
+
+Revisit if: a third math-group form with distinct downstream semantics is identified
+(the closed enum makes adding it a conscious breaking change, accepted).
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 
