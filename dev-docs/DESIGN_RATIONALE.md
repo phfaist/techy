@@ -1082,6 +1082,23 @@ restore that context, never by seeking or naming a text mode as the target
 wording above reads accordingly; `restore_text_context_delta` is a superseded
 name.)*
 
+*(Amended — API-review T5 session: the hook's stack view becomes the owning,
+session-independent type **`ParsingStateStack`** — it holds
+`Vec<Arc<ParsingState<L>>>`; the session stores its live stack as one and lends
+`&` to hooks (zero extra cost; the states themselves are never copied). The
+`ParsingStateDelta` specificity precedent rules out bare `StateStack`, and
+"View" misnames an owning value — `StateStackView`/`StateStack` both superseded.
+It is constructible outside any session: `from_states(states)` and
+**`from_node_ancestors(node)`** — the node's own recorded state first, then
+parents outward via the stored parent table ([§dd-dr:tree-navigation]), i.e.
+exactly the ruled innermost-first/current-state-first order — so post-parse
+synthesis feeds the same pillar signatures the driver hook feeds
+([§dd-dr:preset-driver-pillars] amendment). Contract note: the walk's sequence
+is not entry-for-entry the parse-time stack (ancestor chains contain Arc-equal
+duplicates and non-group nodes); the documented contract is the **scan
+semantics** — first non-math state, outermost fallback — which duplicates cannot
+affect.)*
+
 #### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
 
 Status: DECIDED (user, API-review T3 session).
@@ -2172,12 +2189,49 @@ Rejected names: `label()` (reads as user-provided/dynamic data), `kind_as_string
 (stutters as `NodeKind::kind_as_string`; `_string` connotes allocation), `name()`
 (sibling collision with `NodeRef::name()`, the callable's spelling).
 
+#### `validate_tree`: the all-trees law as a `Result`, in `core::node` [§dd-dr:tree-validation]
+
+Status: DECIDED (user, API-review T5 session; realizes [§dd-dr:restage]'s validator
+rider; application pending).
+
+`pub fn validate_tree<L: Lang, A>(tree: &NodeTree<L, A>) -> Result<(),
+TreeViolation>` (with `#[non_exhaustive] TreeViolation { node: Option<NodeId>,
+kind, … }`) checks the **all-trees law** — what every finished tree must satisfy
+regardless of origin: structural sanity (child ranges in-bounds, after-parent,
+single-parent, all reachable), region tiling on resolved records (content ranges
+within content parents, content-parent-inside-region), `TextContent` residency
+(valid char-boundary range of the node's own source), regions resolved.
+Deliberately NOT checked: byte partition, children-share-parent's-source, sibling
+source order — the parse-tree law, which legitimate transform output (spliced,
+reordered, synthesized nodes) breaks by design. It returns `Err`, never panics:
+its persona is a framework validating rebuilt/spliced trees at runtime (FFI
+included) — the panic policy's outer-layer case; the panicking
+`check_tree_invariants` keeps its declared test-utility role for the parse-tree
+law (and must scope its byte accounting per source via the `Attached` role once
+`\input` lands, or every multi-source parse tree fails it; the two doc pages
+cross-reference — all-trees law ⊂ parse-tree law).
+**Home `core::node`, not `techy::transform`** (user): the function checks the
+universal node-tree law and accepts any tree — transform output is merely its
+commonest client; placement follows logical function, not audience. Name
+`validate_tree`: the verb deliberately differs from the panicking `check_*`
+family because the contract differs; the walkthrough wish-name
+`check_transform_tree_invariants` under-claims (parse trees pass too) and is
+superseded. A `validate_parse_tree` sibling (all-trees law + parse-law geometry)
+was proposed and **withdrawn** together with the byte-reconstruction guarantee
+([§dd-dr:recompose] amendment): the geometric half certifies only that
+gap-filling reproduces source *bytes*, while the semantic half — that those bytes
+match the tree's *content* — is parse provenance no runtime checker can verify;
+a checker that cannot check what its users would believe it checks is a trap.
+Revisit if: a runtime consumer genuinely needs the geometric parse-law check —
+additive as a sibling, with the semantic limitation stated on it.
+
 ## Tree transformation, annotations, and ext minting [§dd-dr:transform]
 
 The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
-piece — the entries below cross-depend. None is applied yet (application in the
-review's Phase 3, together with the P1 topology move). Working detail for the
-application sessions: `dev-docs/api-review/P4_RULING.md` (a process file, deleted when
+piece — the entries below cross-depend — plus the 2b T5 session's exact-type
+detailing. None is applied yet (application in the review's Phase 3, together with
+the P1 topology move). Working detail for the application sessions:
+`dev-docs/api-review/P4_RULING.md` and `T5_RULINGS.md` (process files, deleted when
 the review completes — these entries are the durable record).
 
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
@@ -2219,6 +2273,62 @@ in `NodeData<L, A>` (the original sketch — forfeits zero-copy re-annotation);
 annotations on argument/slot records (declined — per-node only, kept simple).
 Revisit if: adding the parameter later were the question — it isn't; the reason to
 decide *now* is that the builder, restage, and extract surfaces are shaped around it.
+
+*(Amended — API-review T5 session: accessors ruled — `NodeRef::annotation()`,
+`NodeTree::annotations()`, `annotate()` in storage order with the loud doc
+sentence ([§dd-dr:restage-ops]); the read types gain the defaulted `A` parameter
+at application (`NodeRef<'t, L, A = ()>`, `NodeSlice`, `Descendants`, the extract
+helpers — every existing spelling keeps compiling). The "extract-built trees
+produce `A = ()`" clause and its recorded later option are **superseded**: the
+user ruled annotation handling into present scope — extract producers mint output
+annotations through a general callback ([§dd-dr:extract-annotations]).)*
+
+#### Extract producers mint annotations: general callback + suffixed shorthands [§dd-dr:extract-annotations]
+
+Status: DECIDED (user, API-review T5 session; supersedes the `A = ()` extract
+clause of [§dd-dr:node-annotations]; application pending).
+
+The four extract producers that build backing trees — `split_at_chars`,
+`parse_keyval`, `split_embellishments`, `split_tack_on_fields` (the tree is built
+eagerly inside the producer, so the annotation mint lives there; `into_tree`
+stays a field move) — each ship three spellings, **the general form owning the
+bare name** (user: the canonical path is the general one; shorthands carry the
+suffixes):
+
+- `split_at_chars(nodes, sep, f) -> SplitAtChars<L, B>` — general per-part
+  `A → B` mint;
+- `split_at_chars_drop_annotations(nodes, sep)` — the `B = ()` shorthand;
+- `split_at_chars_keep_annotations(nodes, sep)` — `A → A` clone-through,
+  bound-where-used `A: Clone + Default`.
+
+Clone-through as the *default* was withdrawn on user counterexamples: measure-like
+annotations (say, a recorded chars length) go silently stale across a split — an
+op knowingly minting wrong values fails API hygiene even if post-fixable — and
+output annotations can be *split-semantic* (entry/part discrimination), information
+only the op holds at mint time. The callback is the consumer-side mirror of
+`make_node_ext` (consumer-owned data ⇒ consumer callback, [§dd-dr:ext-minting]
+symmetry), and it erases the `Clone`/`Default` bounds from the general path —
+synthesized nodes are just another callback call.
+Part context: one opaque accessor-based struct per op (`SplitPart`/`KeyValsPart`
+working names), accessors admitted under the inclusion test — *only what the
+callback cannot recover itself*: the original node (`original() ->
+Option<NodeRef>`, `None` exactly for the synthesized `List` wrappers/roots;
+`copied_from` rejected — partials are cut, not copied), partial-piece info,
+segment/entry index. KeyVals keys are plain strings, not nodes — no key-side
+annotations arise. Final accessor names land at the application naming pass.
+The result struct is kept — it owns the backing tree and the segment view API; a
+bare-`NodeTree` return would promote the root-List-of-segment-Lists shape into
+frozen contract — and renamed **`Split` → `SplitAtChars<L, B = ()>`** (std
+producer-fn precedent: `SplitWhitespace`, `CharIndices`; the name carries the
+load-bearing semantics — only chars nodes are cut, groups protect their
+interior). `KeyVals<L, B = ()>` keeps its concept name (three producers share
+it). Boundary recorded: the callback is **annotation minting only** — vetoing or
+modifying nodes is restage's job.
+Rejected alternatives: clone-through as default (above); a callback parameter on
+the bare name only, taxing the `()` case (resolved by the name flip instead);
+`SplitAtChars::split()`-style operation methods (the free fn already performed
+the split — the struct is the result, not the operation).
+Revisit if: a fifth producer materializes trees — it adopts the same triple.
 
 #### Always-on tree tags: `TreeTag` joins `NodeId` identity [§dd-dr:tree-tags]
 
@@ -2414,6 +2524,91 @@ Revisit if: the 2b T5 detailing finds the bundle shapes insufficient for a real 
 pass — the layering (primitive / driver / raw builder) is the stable part, the op
 signatures are not frozen until then.
 
+*(Amended — API-review T5 session: the revisit clause fired and the op surface is
+ruled — exact types in [§dd-dr:restage-ops]. `Restage::Continue` is finalized as
+**`Descend(B)`** — the name states the always-descends invariant in itself;
+`Continue` said too little, `Keep`/`Retain` actively suggested the shallow-keep
+misreading, `Auto` was vague (all four superseded). The transform-tier validator
+rider landed as `validate_tree` in **`core::node`**, not `techy::transform` —
+placement follows what it checks, not its commonest client
+([§dd-dr:tree-validation]).)*
+
+#### Restage op surface: visitor trait, generic errors, constructible bundles [§dd-dr:restage-ops]
+
+Status: DECIDED (user, API-review T5 session; completes [§dd-dr:restage]'s deferred
+detailing; application pending).
+
+The exact types of the restage driver:
+
+- **Callback = trait + closure blanket.** `RestageVisitor<L, A, B> { type Error;
+  fn restage(&mut self, node: NodeRef<'_, L, A>, cx: &mut RestageContext<'_, L, A, B>)
+  -> Result<Restage<B>, Self::Error> }`, with a blanket impl for `FnMut` closures.
+  The trait exists because the region ops re-enter the visitor from *inside* a
+  visitor call (`cx.restage_argument(node, i, self)`) — a closure cannot pass
+  itself; the blanket keeps `restage(&tree, &mut |node, cx| …)` for non-reentrant
+  passes. **No `Send`/`Sync` bounds anywhere on visitors or `annotate()`
+  callbacks** — the driver runs them synchronously on the calling thread; the bound
+  would be a demand on callers buying techy nothing, and it would wall off
+  GIL-bound FFI callbacks (the primary T5 consumer). Parallel variants, if ever
+  wanted, are new entry points with their own bounds (the `&mut` visitor contract
+  is inherently serial).
+- **Errors generic, not boxed**: `restage(tree, visitor) -> Result<NodeTree<L, B>,
+  RestageError<V::Error>>` with `RestageError<E> { Build(NodeBuildError),
+  ContentParentDropped { … }, Visitor(E) }` — the framework's own error type rides
+  through typed; `Clone where E: Clone` keeps the uniform-Clone principle
+  conditionally. Fixed `Arc<dyn Error>` boxing rejected (loses typing for nothing);
+  infallible visitors rejected (panic policy).
+- **Bundles are opaque but constructible**: `RestagedArgument::provided(spec,
+  nodes, content, ext)` / `::absent(spec)`; `RestagedSlot::new(name, role, nodes,
+  content, ext)`. The constructor IS the general take-both form — staged nodes plus
+  the `ContentNodes` designation, the same field vocabulary the
+  `ParsedArgument`/`ParsedSlot` records carry. Ops: `restage_subtree`,
+  `restage_children`, `restage_argument[_named]` (unknown name = `Err` — the
+  named-accessor doctrine transfers), `restage_slot`,
+  `restage_invocation(node, arguments, slots, annotation)`, raw `builder()`.
+- **Region-edit policy: no silent repair.** A drop that empties a region restages
+  as provided-with-empty-region (absent ≠ empty is parser semantics; true absence
+  is the explicit `absent(spec)`); a dropped `InChildrenOf` content parent is
+  `RestageError::ContentParentDropped`, whose message points at the takeover route
+  — the same law the builder enforces at construction time, with better diagnosis
+  (and `Emit(vec![a, b])` replacements make any auto-re-anchor ill-defined even in
+  principle). Auto-flip-to-absent and re-anchoring rejected (silently change what
+  the record *means*); forbidding region-member drops rejected (kills the one-line
+  strip pass).
+- **Content-replacement helpers**: `restage_argument_with_content(node, i,
+  content)` + `restage_slot_with_content` — wrapper syntax and noise restaged
+  verbatim *by contract*, content swapped, designation re-anchored. Changing noise
+  uses the visitor op (noise flows through the visitor) or the hand-built bundle;
+  a both-taking helper was rejected as a second path duplicating the constructor
+  modulo a one-line spec/ext transcription. P4's working name
+  `stage_argument_like` superseded.
+- **Level-0 primitive**: `NodeTreeBuilder::restage_node(node, replacements:
+  &[Vec<BuildId>], content_parents: impl Fn(NodeId) -> Option<BuildId>,
+  annotation)` in `core::node` — positional per-child replacement slices (length
+  checked against `child_count()`); **cross-tree by contract**: it accepts a
+  `NodeRef` from *any* tree and a same-tree debug assertion may never be added —
+  this is the sanctioned splice door.
+- **Builder `add` stays positional** (six parameters, order: identity, provenance,
+  context, structure, lang-data, consumer-data; nearly every mis-ordering is a type
+  error). A params struct is additive later if real transform code demonstrates
+  confusion; the reverse is breaking, and struct-update sugar would reintroduce
+  exactly the partial-initialization reading [§dd-dr:ext-minting] killed.
+- **Annotation accessors**: `NodeRef::annotation() -> &A`,
+  `NodeTree::annotations() -> &[A]` (storage-order slice — also the FFI
+  bulk-export shape); no setter (trees frozen; re-annotate via `annotate`).
+  `annotate()` runs its callback in **storage order**, documented loudly — a
+  stateful closure must not assume document order (a document-order variant buys
+  no structure for an order-walk cost; consumers wanting it read off
+  `descendants()` first).
+- **Restage descends into `Attached` and `Hidden` slot children uniformly** — the
+  driver is structural, never role-conditional; protective verbatim treatment of
+  attached content is one explicit visitor arm ([§dd-dr:slot-roles] amendment).
+
+Rejected alternatives are recorded inline per point.
+Revisit if: the closure blanket's `E` inference proves awkward at application —
+the recorded fallback is the fixed-error shape; a flag-level change, not a
+re-session.
+
 #### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
 
 Status: DECIDED (user, API-review P4 session — direction and scope; detailed design
@@ -2448,6 +2643,29 @@ rejected because flat iteration loses structure, and the walker is recompose's
 skeleton, so the walk vocabulary is designed once, there. `descendants()` itself
 stays: flat iteration is legitimate for structure-free queries.)*
 
+*(Amended — API-review T5 session, binding inputs for the dedicated session:
+(1) **Per-node recomposition doctrine** (user): spans give provenance, not output
+location — recomposition reconstructs each node from its **own recorded data** (a
+chars node contributes its content; a callable/environment its scaffolding from
+escape char + name + post_space + recorded delimiters) and never performs
+**inter-node** span arithmetic ("apparent gaps" between siblings resurrect
+deleted content on any transformed tree) nor reads source text beyond a node's
+own recorded content. The span-verbatim strategy above is re-examined under this
+constraint in the dedicated session — its sound domain is unmodified parse trees.
+(2) Consequently there is **no framework-facing byte-reconstruction guarantee**
+(the walkthrough-era gap-filling framing is not promised API): the parse-law byte
+accounting stays an in-crate acceptance-suite *oracle* — reassembling the input
+from a fresh parse proves lossless parsing — and parse-output span semantics stay
+documented for the analyze-only/span-patch tooling architecture with the
+provenance warning (structural edits void inter-node span arithmetic). The
+interim `validate_parse_tree` proposal was withdrawn with the guarantee
+([§dd-dr:tree-validation]). (3) Trigger-spelling residue on the session agenda:
+node data lacks some scaffolding spellings (pathological `\begin  {name}`
+spacing, multi-escape-char languages). The user's sketch — the environment
+parser storing the scaffolding noise as **`Hidden` slots** (e.g.
+`"begin_tokens"`/`"end_tokens"`, precise form TBD) — turns scaffolding spelling
+into node data, a further argument for the per-node direction.)*
+
 #### Slot roles and trait-based body marking [§dd-dr:slot-roles]
 
 Status: DECIDED (user, API-review P4 session; amends
@@ -2478,6 +2696,20 @@ body-by-position (slot 0 — positional convention as API contract).
 Revisit if: 2b details (does `body()` also filter on `role == Content`? extract
 readers vs `Hidden`? `#[non_exhaustive]`? `Attached` vs `Derived` naming) change the
 edges — the enum, the exclusion rule, and the trait are the ruled part.
+
+*(Amended — API-review T5 session, the listed edges ruled: `body()` filters on
+the ext axis alone — no hidden `role == Content` conjunction (a framework's
+`Attached`-body choice must not become silently unfindable; one doc sentence
+instead); readers and extract stay **role-blind everywhere except recompose** —
+`Hidden` means "no recomposition, no byte accounting", never invisibility to
+reads (structural walks and `display_tree` show reality — debug honesty);
+`SlotRole` is **exhaustive** (match-heavy consumers — validators, recompose
+strategies, FFI mappings; a fourth role changes byte-accounting semantics and
+must be a conscious breaking change, the [§dd-dr:math-group-form] argument);
+**`Attached` confirmed** over `Derived` (T4's shipped door names
+`parse_attached_source`/`attach_source_reference` already teach the vocabulary);
+restage descends into `Attached`/`Hidden` children uniformly
+([§dd-dr:restage-ops]).)*
 
 #### `\input` attachment: same-builder sub-parse; multi-source trees are first-class [§dd-dr:input-attachment]
 
@@ -2511,6 +2743,21 @@ the session:
   the `with_resolver` remainder of [§dd-dr:source-resolver]'s wiring).
 Revisit if: the T4 wiring session finds the sub-parse-into-same-builder mechanics
 unworkable — the fallback is the restage-splice route, accepting its copy cost.
+
+*(Amended — API-review T5 session: the caching parenthetical above is closed —
+input caching is neither implemented nor recommended. User-identified flaw in
+the cache-then-splice recipe: `\input` can return a **modified parsing state**
+to the caller — the included content's delta sequence continues into the rest of
+the including document (the preamble-defines-macros case; preset-configurable
+via how the `\input` spec is defined) — so a document parsed with attachment off
+is wrongly-stated downstream of every state-modifying `\input`, and included
+files must in general be read on the spot at parse time. Phase 4's include
+chapter gets a short discussion of these challenges and presents the splice
+recipe only under the explicit precondition that the framework's `\input` does
+not modify caller state. Riders: the level-0 primitive stays the sanctioned
+cross-tree door ([§dd-dr:restage-ops]); latexpp's verbatim output path needs no
+splicing at all — recompose emits `\input{file}` per source, so per-file
+pipelines compose without tree merging.)*
 
 #### Parent links, `SourcePos` lookup, and read-side honesty [§dd-dr:tree-navigation]
 
@@ -2561,6 +2808,16 @@ editor-cursor lookup) and the retired char-scanning `SourceCursor`
 ([§dd-dr:source-cursor-retired]) are disjoint concepts sharing a word. `Span`
 gains `contains(pos)` with the ruled empty-span semantics —
 [§dd-dr:span-extend-to]'s awaited consumer.)*
+
+*(Amended — API-review T5 session: the honest-slices bullet is contract-final —
+`NodeSlice::span()`/`source_text()` answer only when the **whole run** lies in a
+single source (uniformity verified across the run unless the `finish()`
+single-source flag short-circuits); `source_text()` gains `span()`'s ordering
+guard so the two contracts read identically; `None` = no single-source answer;
+per-node accessors stay valid on any tree (a node's own span is its provenance).
+Doc-vocabulary rule (user): the word "honest" must not appear in the rustdoc
+contracts — state the concrete condition ("the run lies within a single source");
+"honest slices" stays internal design-record vocabulary.)*
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
@@ -3646,6 +3903,24 @@ multiplying delta helpers); ruling the helper signature now (above).
 Revisit if: the T5 restage detailing changes the staging-door shape itself (the
 helper follows it).
 
+*(Amended — API-review T5 session, the committed helper's signature ruled:
+`cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
+ParsedSlots<L>, children: Vec<BuildId>, end_pos: Option<usize>) ->
+ConstructParserResult<L, BuildId>`. `end_pos: None` = the std rule — last staged
+child's span end, else the trigger's end; `Some` serves takeovers whose consumed
+extent outruns their last child (rest-of-line, heredoc shapes). **No
+`callable_type`/`name` overrides**: the helper is the transcription-case
+shorthand only — the environment takeover overrides both and its span outruns
+its children ([§dd-dr:environment-scaffolding]), so environment-class
+composition stays on the canonical `cx.stage_node` door (in-crate:
+`StdInvocationParser` and the tack-on parser collapse onto the helper; the
+environment parsers stay on the door). Parse-side/restage-side symmetry is by
+**vocabulary, not arity** ([§dd-dr:restage-ops]): the parse side passes
+caller-tiled records plus a flat child list, the restage side driver-tiled
+bundles — who owns the region arithmetic differs by design, and the two
+signatures are not to be "unified". No ext/annotation parameters (`stage_node`
+mints the ext; parse annotations are `()`).)*
+
 #### `\input` engine wiring: driver resolver accessor + the `parse_attached_source` door [§dd-dr:input-wiring]
 
 Status: DECIDED (user, API-review T4 session; realizes [§dd-dr:input-attachment]).
@@ -4567,6 +4842,19 @@ re-opens a settled argument:
   `cx.parse_source` as the sub-parse door name (collides with
   `Language::parse_source` under a different contract — the door is
   `parse_attached_source`; [§dd-dr:input-wiring]).
+- From the API-review T5 session: `stage_argument_like` — the content-replacement
+  helper is `restage_argument_with_content` (+ the `_slot_` twin;
+  [§dd-dr:restage-ops]); `Restage::Continue`/`Keep`/`Retain`/`Auto` — the
+  variant is `Descend` ([§dd-dr:restage] amendment); `StateStackView`/
+  `StateStack` — the owning type is `ParsingStateStack`
+  ([§dd-dr:enclosing-state-stack] amendment); `Split` — the split result type is
+  `SplitAtChars`, and the interim `_with_annotations` spellings — the general
+  callback form owns the bare producer name, shorthands carry
+  `_drop_annotations`/`_keep_annotations` ([§dd-dr:extract-annotations]);
+  `copied_from()` — the part-context accessor is `original()` (partials are cut,
+  not copied); `check_transform_tree_invariants` and the withdrawn
+  `validate_parse_tree` — the runtime checker is `validate_tree`
+  ([§dd-dr:tree-validation]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -5432,6 +5720,21 @@ the restore-to-text pillar, re-specified as `exit_math_context_delta`
 role-trait supertrait — "provide, don't require" ([§dd-dr:iter-symbols]
 amendment). The driver question is ruled in [§dd-dr:preset-driver-pillars].)*
 
+*(Amended — API-review T5 session: (1) the role-trait roster gains a fourth
+member, **`LatexlikeEvent`** — constructor + recognizer for the
+exit-math-context event (`exit_math_context()` / `is_exit_math_context()`,
+coherence contract mirroring `math_form`), bound on `LatexlikeLang::Event`.
+Without it the generalization re-opens a cliff of exactly the kind it exists to
+close: the E4 text-restore is an *event* the `LLL`-generic argument factory must
+mint in the host's own `Event` type and the driver must recognize
+([§dd-dr:enclosing-state-stack]); a preset-side event wrapper would violate
+vocabulary-stays-the-host's-own, and an event-less design cannot exist (the
+patch depends on the enclosing stack at use time — that context-dependence is
+the E4 design). (2) The pillar list's "the `finalize_node` spec-dispatch" is
+corrected: P4 deleted `finalize_node` ([§dd-dr:ext-minting]) — no such pillar
+exists; the preset's `make_node_ext` is the trivial `()` mint, and its only
+claimed ext is the `SlotExt` body marker ([§dd-dr:slot-roles]).)*
+
 #### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
 
 Status: DECIDED (user, API-review policy session P3; supersedes the delimiter-fact
@@ -5532,6 +5835,27 @@ post-parse state synthesis (the pillar, not the struct, is then the thing to fix
 optional resolver field ([§dd-dr:input-wiring]) drops `Copy`/`Eq` on
 resolver-carrying drivers ("why would we want `Copy`/`Eq` on the driver?" — no
 in-crate reliance exists); shipped drivers keep `Clone + Debug`.)*
+
+*(Amended — API-review T5 session, the shared-scope items ruled:
+`exit_math_context_delta` takes **`&ParsingStateStack`**
+([§dd-dr:enclosing-state-stack] amendment) — constructible post-parse via
+`from_node_ancestors`, so the state-synthesis rider is served without a session;
+the math-interior recipe is a documented **two-component** obligation on
+`math_group_interior_delta`'s rustdoc — the pillar's delta **plus** the engine's
+`expecting_group_close` descent invariant (a composed `…interior_state()` helper
+rejected: a two-line composition, and wrong for languages overriding the math
+plug); `make_paragraph_break_node` is documented parse-side-only (synthesis
+stages `Chars` directly and never mints tokens). Driver knobs: **nothing
+added** — `recovery`/`paragraph_break_style`/resolver are orthogonal config
+values and every other behavior difference is a different driver over the
+pillars; a `with_group_interior_delta` closure knob was rejected (re-grows a
+behavior-carrying driver; the pillars compose in a custom driver — one doc
+sentence at the struct); resolver field private behind
+`with_resolver`/`source_resolver()`, the two policy knobs stay `pub`. The T5 FLM
+projection confirmed the pillar inventory covers every non-default hook body
+(~30-line Lang + ~12-line driver residue; the Phase 3 acceptance run asserts
+it); the [§dd-dr:latexlike-generalization] pillar list's "`finalize_node`
+spec-dispatch" is corrected there.)*
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 

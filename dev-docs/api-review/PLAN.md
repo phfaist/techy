@@ -124,7 +124,9 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   entries; both P1 deferred placements ruled → **Phase 3 topology unblocked**;
   **T4 session RULED 2026-07-31** — brief T4_BRIEF.md, rulings T4_RULINGS.md +
   decision log + three new DESIGN_RATIONALE entries incl. the frozen
-  wire-identifier slate; remaining: T5, recompose, Tier-C batch).
+  wire-identifier slate; **T5 session RULED 2026-07-31** — brief T5_BRIEF.md,
+  rulings T5_RULINGS.md + decision log + three new DESIGN_RATIONALE entries;
+  remaining: recompose session, Tier-C batch).
   Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -193,6 +195,19 @@ Repo (durable), all under dev-docs/api-review/:
   the parser-parameter door amendment + check_include_chain + LineColProvider
   design evolution, C closure, A's frozen slate, E/D naming, F sweep); durable
   records are the DESIGN_RATIONALE entries listed in the decision log.
+- T5_BRIEF.md — Phase 2b T5 session decision brief (prepared 2026-07-31, verified
+  against 4c324c7 with the Phase-1b probes re-run: restage detailing A, wish-20
+  `stage_invocation` B, FLM projection acceptance C incl. the C1 event-role-trait
+  gap between P3 and E4, driver knobs D, pillar-signature sufficiency E,
+  validator + honest slices F, cached-splice G, scope/FFI/reconstruction H,
+  walkthrough sweep I; projected FLM probe copied to
+  walkthroughs/framework/flm_projected.rs).
+- T5_RULINGS.md — the frozen T5 session rulings in full working detail (A1–A9
+  incl. the user-revised A8 extract-annotation design, B, C, E's
+  `ParsingStateStack` design, D, F incl. the `core::node` home ruling, G's
+  no-caching closure, H incl. the withdrawn reconstruction guarantee and the
+  per-node recomposition doctrine, I sweep); durable records are the
+  DESIGN_RATIONALE entries listed in the decision log.
 - walkthroughs/{consumer,extender,langdesign,tooling,framework}/ — FRICTION.md +
   API-SURFACE.md (+ example code; framework/ adds FRAMEWORK-ANALYSIS.md) per persona.
 
@@ -200,7 +215,10 @@ Scratchpad (session of 2026-07-28/29, survives on disk; copy durables into repo)
 `/private/tmp/claude-501/-Users-philippe-projects-techy/3b71ab8b-6cf7-4ab7-83d6-1a1d982076fb/scratchpad/api-review/`
 — raw rustdoc JSON + extraction scripts, per-agent PROGRESS.md checkpoint files, and the
 runnable walkthrough cargo projects (consumer/, extender/extender-examples/,
-langdesign/notely/, tooling/techy-tooling/, framework/ pending).
+langdesign/notely/, tooling/techy-tooling/, framework/{probes/,techy-py/}).
+The 2026-07-31 T5-brief session's scratchpad (probe re-runs at 4c324c7 +
+projected FLM probe) is at
+`/private/tmp/claude-501/-Users-philippe-projects-techy/e071f0ca-9642-4b1e-b093-efb9232f838b/scratchpad/api-review-t5/`.
 
 ## How to resume with a fresh agent/session
 
@@ -483,11 +501,67 @@ langdesign/notely/, tooling/techy-tooling/, framework/ pending).
   `LineIndexCache` + **`LineColProvider`** rendering seam (editor incremental
   caches plug in); `DEFAULT_MAX_SCAN_LEN` → **500_000** (user); Lang-coupled
   analyzers REJECTED ([§dd-dr:origin-genericity] load-bearing).
-- (pending) **NEXT: 2b T5 session** (then the recompose design session; then the
-  Tier-C batch; then Phase 3 apply). Prepare the T5 brief exactly as for T2/T3/T4
-  (background agent, every claim re-verified against current code, output copied
-  to dev-docs/api-review/, presented point-by-point; interim rulings file per
-  round, hard structural first). T5 inputs/agenda: P4_RULING.md deferred agenda
+- 2026-07-31 (user): **2b T5 SESSION RULED** (interactive; full working detail
+  frozen in **T5_RULINGS.md**; durable records: DESIGN_RATIONALE new entries
+  **[§dd-dr:restage-ops]**, **[§dd-dr:extract-annotations]**,
+  **[§dd-dr:tree-validation]** + amendments on [§dd-dr:restage],
+  [§dd-dr:node-annotations], [§dd-dr:recompose], [§dd-dr:slot-roles],
+  [§dd-dr:input-attachment], [§dd-dr:tree-navigation],
+  [§dd-dr:enclosing-state-stack], [§dd-dr:preset-driver-pillars],
+  [§dd-dr:latexlike-generalization], [§dd-dr:takeover-staging-sugar] +
+  superseded-names T5 block + ARCHITECTURE refs). Headlines: (1) **A/restage
+  ops**: `RestageVisitor` trait + closure blanket (reentrancy needs
+  self-passing); generic `RestageError<E>`; **`Restage::Descend`** final name;
+  opaque-but-constructible bundles (the constructor is the general take-both
+  form); no-silent-repair region policy (`ContentParentDropped`);
+  `restage_argument_with_content` helpers; positional builder `add`; level-0
+  `restage_node` cross-tree by contract; no `Send` on visitors/`annotate`.
+  (2) **A8 (user-revised in session)**: extract producers mint annotations NOW —
+  the general `A→B` callback owns the bare name (`split_at_chars(nodes, sep,
+  f)`), `_drop_annotations`/`_keep_annotations` shorthands, all four producers;
+  `Split` → **`SplitAtChars`**; clone-through default withdrawn on the user's
+  stale-annotation counterexample. (3) **B**: `stage_invocation(invocation,
+  arguments, slots, children, end_pos: Option<usize>)`; no overrides
+  (environments stay on the `stage_node` door); symmetry by vocabulary, not
+  arity. (4) **C1**: fourth role trait **`LatexlikeEvent`** closes the P3×E4
+  gap; FLM projection otherwise clean. (5) **E (user shape)**: `StateStackView`
+  → owning **`ParsingStateStack`** with `from_states` +
+  **`from_node_ancestors`** — the pillar keeps the descriptive stack parameter
+  and post-parse synthesis works without a session; two-component math recipe
+  documented. (6) **D**: no new driver knobs. (7) **F**: **`validate_tree`**
+  (all-trees law, `Result`, home **`core::node`** — user overruled the
+  transform placement); slice accessors answer only whole-run single-source
+  slices ("honest" banned from rustdoc). (8) **G (user)**: input caching
+  dropped — `\input` can return modified caller state, so included files must
+  be read on the spot; docs get a challenges discussion + a conditional recipe.
+  (9) **H (user doctrine)**: NO byte-reconstruction guarantee —
+  **recomposition is per-node, never inter-node span arithmetic** (spans =
+  provenance); parse-law demoted to in-crate acceptance oracle;
+  `validate_parse_tree` withdrawn; the doctrine + the
+  `"begin_tokens"`/`"end_tokens"` Hidden-slot sketch are binding recompose
+  inputs. (10) **I**: all 20 sweep rows dispositioned (binding-guide chapter
+  checklist; post_space doc-only → techy-totext; `into_vec` → Tier-C lean
+  reject; multi-source reconstruction tests → Phase 3 checklist).
+- (pending) **NEXT: recompose design session** (then the Tier-C batch; then
+  Phase 3 apply). Same session pattern (background brief agent, every claim
+  re-verified against current code, point-by-point, interim rulings file).
+  Agenda: P4 open Qs (direct fold vs transform-to-chars; state-threading
+  model; output sink; targeted-replacement integration) + the read-only
+  structural walker (enter/exit, depth, `VisitFlow` — T4 routing) + the
+  verbatim `Attached`-exclusion rule + the T5 binding inputs: **per-node
+  recomposition doctrine** (no inter-node span arithmetic; no source read-back
+  beyond a node's own recorded content; span-verbatim strategy re-examined
+  under it), the trigger-spelling residue (user sketch: environment
+  scaffolding as `Hidden` slots `"begin_tokens"`/`"end_tokens"`, precise form
+  TBD). **Tier-C batch**: 66 no-usage-signal items (SYNTHESIS §3) +
+  accumulated riders (`NoResolver` lean keep; `ProvenanceChain`/
+  `ResolvedContent` placements; free `resolve_source` now canonical;
+  `StdParseDriver` test-carrier docs; `Diagnostics::into_vec` lean reject).
+  **Phase 3 checklist additions from T5**: C2 driver-residue assertion; F5
+  parse-law checker `Attached`-scoping; I-18 multi-source reconstruction
+  tests; A8 extract input-genericity rides the annotation application; the
+  `\text` recipe forbidden_chars fix (T1/T2) and all prior application riders
+  as logged. T5 inputs/agenda: P4_RULING.md deferred agenda
   (restage detailing: op/bundle shapes, region-edit policies, builder-`add`
   ergonomics, naming incl. `Restage::Continue` alternates, Split/KeyVals-on-restage
   option); wish-20 `stage_invocation` signature (T3 commitment — co-design with

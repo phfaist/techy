@@ -422,7 +422,14 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   restage driver — [§dd-dr:restage]) and recomposition (`techy::recompose`,
   [§dd-dr:recompose]) join as top-level modules; `\input` content attaches as an
   `Attached` slot of a same-builder sub-parse, making multi-source parse trees
-  first-class ([§dd-dr:input-attachment]).
+  first-class ([§dd-dr:input-attachment]). The 2b T5 session fixed the exact
+  restage op surface — visitor trait, generic errors, constructible bundles,
+  no-silent-repair edit policy ([§dd-dr:restage-ops]) — ruled that the extract
+  producers mint output annotations through a general callback with suffixed
+  shorthands ([§dd-dr:extract-annotations]), and landed the runtime all-trees-law
+  checker as `core::node::validate_tree` ([§dd-dr:tree-validation]); recomposition
+  is bound to the per-node doctrine (spans are provenance — no inter-node span
+  arithmetic; [§dd-dr:recompose] amendment).
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -431,10 +438,11 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 [§dd-dr:environment-scaffolding], [§dd-dr:span-invariants],
 [§dd-dr:named-argument-errors], [§dd-dr:display-tree],
 [§dd-dr:node-id-provenance], [§dd-dr:iter-storage-order], [§dd-dr:slot-read-api],
-[§dd-dr:read-api], [§dd-dr:node-summary]; the P4 transformation ruling
-([§dd-dr:transform]): [§dd-dr:node-annotations], [§dd-dr:tree-tags],
-[§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:recompose], [§dd-dr:slot-roles],
-[§dd-dr:input-attachment], [§dd-dr:tree-navigation].
+[§dd-dr:read-api], [§dd-dr:node-summary], [§dd-dr:tree-validation]; the P4
+transformation ruling ([§dd-dr:transform]): [§dd-dr:node-annotations],
+[§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:recompose],
+[§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation]; the T5
+detailing: [§dd-dr:restage-ops], [§dd-dr:extract-annotations].
 
 ## Construct parsers [§dd-arch:constructs]
 
