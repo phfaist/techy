@@ -287,7 +287,9 @@ the definition scope stack (`scopes: ScopeStack<L>`), and the language extension
 Decisions behind this section (full topic: [§dd-dr:parsing-state]): [§dd-dr:state-option-c] (the choke-point model and its
 rejected alternatives), [§dd-dr:immutable-state-deltas], [§dd-dr:token-rules-data],
 [§dd-dr:state-ext], [§dd-dr:lang-token-hooks], [§dd-dr:seed-states],
-[§dd-dr:first-class-mode], [§dd-dr:temporary-group-rules] (the state-scoped delimiter
+[§dd-dr:first-class-mode], [§dd-dr:enclosing-state-stack] (session-held enclosing
+context; two-level event consumption, fallible `finalize_transition`),
+[§dd-dr:temporary-group-rules] (the state-scoped delimiter
 lifecycle enforced in `derived()`).
 
 ## Specs and scopes [§dd-arch:specs]
@@ -337,7 +339,9 @@ Decisions behind this section (full topic: [§dd-dr:specs]): [§dd-dr:unified-ca
 [§dd-dr:argument-parser-model], [§dd-dr:closed-type-ids], [§dd-dr:spec-thread-safety],
 [§dd-dr:spec-downcasting], [§dd-dr:scope-stack], [§dd-dr:lexical-shadowing],
 [§dd-dr:callable-query], [§dd-dr:iter-symbols], [§dd-dr:mode-visibility],
-[§dd-dr:no-spec-side-slots], [§dd-dr:slot-terminators], [§dd-dr:emptiness-surface].
+[§dd-dr:no-spec-side-slots], [§dd-dr:slot-terminators], [§dd-dr:emptiness-surface],
+[§dd-dr:registration-ergonomics] (`IntoSpecsProvider` conversion, preset one-liners,
+no insert-time validation — traps caught at resolution/parse-init instead).
 
 ## Node trees [§dd-arch:nodes]
 
@@ -415,6 +419,7 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 [§dd-dr:slot-ext], [§dd-dr:group-delimiters], [§dd-dr:mandatory-node-spans],
 [§dd-dr:staging-builder], [§dd-dr:text-content-s0], [§dd-dr:comment-delimiters],
 [§dd-dr:environment-scaffolding], [§dd-dr:span-invariants],
+[§dd-dr:named-argument-errors], [§dd-dr:display-tree],
 [§dd-dr:node-id-provenance], [§dd-dr:iter-storage-order], [§dd-dr:slot-read-api],
 [§dd-dr:read-api], [§dd-dr:node-summary]; the P4 transformation ruling
 ([§dd-dr:transform]): [§dd-dr:node-annotations], [§dd-dr:tree-tags],
@@ -585,7 +590,8 @@ Decisions behind this section (full topic: [§dd-dr:errors]): [§dd-dr:panic-pol
 [§dd-dr:structured-diagnostics], [§dd-dr:diagnostic-info-data-split],
 [§dd-dr:diagnostic-derive], [§dd-dr:condition-identities], [§dd-dr:serialized-schema],
 [§dd-dr:wire-identifier-stability], [§dd-dr:parse-traceback],
-[§dd-dr:refine-diagnostic-hook], [§dd-dr:diagnostics-retention].
+[§dd-dr:refine-diagnostic-hook], [§dd-dr:diagnostics-retention],
+[§dd-dr:diagnostics-position-sort].
 
 # Generics strategy [§dd-arch:generics]
 
@@ -722,6 +728,8 @@ Decisions behind this section (full topic: [§dd-dr:latexlike]):
 (toy `minilatex` package; deliberately not a definitions database), [§dd-dr:group-taxonomy], [§dd-dr:math-no-nesting],
 [§dd-dr:preset-vocabulary], [§dd-dr:base-package], [§dd-dr:mode-visibility],
 [§dd-dr:ascii-whitespace], [§dd-dr:inherent-preset-sugar],
+[§dd-dr:argument-factory-additions] (`BracedOnly`, named factory, text-restore
+event),
 [§dd-dr:begin-end-dispatch], [§dd-dr:environment-spec-surface],
 [§dd-dr:concrete-spec-types], [§dd-dr:orphan-end-recovery], [§dd-dr:verbatim-family],
 [§dd-dr:environment-body-content], [§dd-dr:argument-specs-factory],

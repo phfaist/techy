@@ -905,6 +905,63 @@ map-key reason). `Default` supplies the seed's mode in the default
 `#[default]` variant names its canonical initial mode. The memoizable-delta *gate* is
 unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
+#### Enclosing-state stack on the session; context-dependent events lowered by the driver [§dd-dr:enclosing-state-stack]
+
+Status: DECIDED (user-led, API-review T1/T2 session; application with the review batch).
+
+The parse **machinery**, not the state model, keeps the enclosing context:
+`ParserSession` maintains a stack of enclosing `ParsingState`s — push/pop at the same
+descent points as the traceback frame stack ([§dd-dr:parse-traceback]), a scoped
+`with_parsing_state(closure)` form for takeover parsers, innermost-first iteration
+starting at the current state. The engine already retains exactly these states
+implicitly (group exit structurally restores the outer `Arc`); the stack only
+materializes them, and it dies with the session — **no ancestry residue survives into
+parsed material** (nodes record parse-time states; a state-side parent pointer would
+freeze parse history into the tree — the same reason node navigation went into a side
+table, not into node values).
+
+Event consumption is two-level, split by the placement doctrine (`Lang` = hooks
+callable outside a driven parse; driver = driven-parse-only behavior):
+
+- **`Lang::finalize_transition` is kept** — it is what keeps bare `derived()`
+  composition coherent (the [§dd-dr:language-init] embedder idiom runs outside any
+  session), and mode-shaped transitions don't even need events (`delta.mode` is the
+  signal). It becomes **fallible** (folded into `DeriveError`, default `Ok(())`): a
+  context-requiring event reaching bare `derived()` errors loudly instead of being
+  silently dropped. The seed still never runs it.
+- **`ParseContext::derive_state(&delta)`** (+ scoped `with_derived_state`) is the
+  parser-facing derivation: it lowers context-dependent events through the new driver
+  hook **`ParseDriver::resolve_state_event(&event, &StateStackView) ->
+  Option<ParsingStateDelta>`** (default `None` = context-free, left for
+  `finalize_transition`), merges the patches, strips the lowered events, then calls
+  plain `derived()` — one choke point preserved. Per-event *policy* lives on the
+  driver; the event *loop* lives in the one cx method — parsers never iterate events.
+
+First consumer: the latexlike text-restore ([§dd-dr:argument-factory-additions]) —
+the driver walks to the nearest text-mode state (else the outermost) and restores its
+whole `TokenRules`; core learns nothing about modes. The preset's event logic (math
+entry, text restore) ships as **public pillar functions** (post-generalization
+`LLL`-generic; the hooks are one-line delegations) so post-parse processing can
+synthesize coherent recorded states for constructed nodes — restaged or synthetic
+children emulating "enter math"/"restore text" ([§dd-dr:transform]).
+
+Rejected alternatives: per-`GroupRule` mode visibility (plants a semantic reading of
+`mode` in core, deliberately unclaimed there — and arbitrarily privileges groups over
+comments/whitespace); an `Arc` parent pointer on `ParsingState` (cycle-free and
+depth-bounded in the enclosing-pointer refinement, but bakes parse history into a
+value type and pins ancestry from every recorded state); a declared/effective rules
+split via `StateExt` (duplicates the vocabulary; generic delta writers bypass it);
+`Enabled` flags on rules (stateful; conflates who disabled a rule and why);
+`TokenRules` keyed by mode (combinatorial duplication; freezes a mode-indexed
+structure); `cx.finalize_parsing_state(data, prev, events)` (re-exposes the
+crate-owned data→state assembly at parser altitude); per-event cx methods
+(`delta_for_derived_event`-style — merge burden and ordering pitfalls at every call
+site).
+
+Revisit if: a Lang needs an event resolvable only between the driver lowering and
+finalize (an ordering the two-level split cannot express), or post-parse synthesis
+needs machinery context beyond what the public pillar functions take as arguments.
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -1240,6 +1297,58 @@ user preferred always-filtered plus statically listable vocabularies); a
 enumeration with visibility data carried on entries (information without a consumer);
 excluding specials or a separate `iter_specials` (the recorded-type framing unifies
 the tables with no extra surface).
+
+#### Registering callables: conversion idiom, one-liners, no insert-time validation [§dd-dr:registration-ergonomics]
+
+Status: DECIDED (user, API-review T1/T2 session).
+
+Three rulings on the registration surface:
+
+1. **Arc removal via one sealed conversion idiom.**
+   `ParsingState::lang_initial_with_packages` takes an `IntoIterator` over a sealed
+   **`IntoSpecsProvider`** conversion (accepting `Package<L>` by value, `Arc<P>`, and
+   `Arc<dyn SpecsProvider<L>>`); `Package::insert`/`insert_specials`/`…_in_modes` get
+   the sibling treatment for specs — `insert(CallableType::Macro, "emph",
+   MacroSpec::new(…))` with no `Arc::new` anywhere, pre-shared flyweights still
+   accepted. (A plain `Into<Arc<dyn …>>` bound cannot express this: unsized coercion
+   is not `From`, and blanket impls hit coherence walls — the sealed trait is the
+   mechanism.) The `insert` vs `insert_specials` parameter-order flip is fixed while
+   breaking is free: `insert_specials(callable_type, trigger, spec)`.
+2. **Preset one-liners**: `define_macro(name, codes)` / `define_environment(name,
+   codes)` as inherent methods on `Package<LLL>` in the latexlike module
+   ([§dd-dr:inherent-preset-sugar] precedent), `Result`-returning (argument codes are
+   parsed), pairing spec type to callable type correctly by construction. Principle
+   recorded (user): **a shorter spelling of the same operation is not a second
+   canonical path** — one-canonical-path targets different *ways* (model-level
+   duplicates like the removed `with_provider`), not shorthands; these collapse a
+   five-name literal ceremony both walkthrough personas flagged.
+3. **No insert-time validation — deliberately.** Escape-char checks at registration
+   are wrong in principle, not merely wrong-layer: escape characters can change
+   mid-parse, and a leading escape char can be intended (`@greet` under
+   `\makeatletter`-style situations — or registered before `@` *becomes* an escape
+   char). The trap is caught where it bites instead: (a) on a resolution miss, a
+   **did-you-mean** detail iterates the scopes' advertised symbols
+   ([§dd-dr:iter-symbols]) and reports near-misses — at minimum the
+   initial-escape-char case, optionally a small edit-distance check (accepted
+   limitation: an in-stack fallback provider means the miss path never fires);
+   (b) at **parse initialization** — the layering-correct moment: the diagnostics
+   sink is live and the `TokenRules` escape char is known — a warning diagnostic
+   fires when *all* (≥ 1) of a provider's command definitions start with the escape
+   char; (c) a loud normalized-name callout on `Package::insert`. The
+   spec-type/callable-type pairing likewise gets **no cross-check**: a mismatched
+   registration is documented-legitimate (the environment composition owns the
+   parse; the spec contributes argument structure), and the one-liners make correct
+   pairing structural on the happy path.
+
+Rejected alternatives: insert-time escape validation (above — also generically
+unimplementable: the escape char is a `TokenRules` fact the author-side layer cannot
+know); a spec/type cross-check (outlaws documented-legitimate combinations and needs
+downcast blacklists); separate conversion traits of different shapes for providers
+vs specs (one idiom, learned once).
+
+Revisit if: the did-you-mean scan measurably slows cold miss paths (bound the
+iteration), or fallback-provider stacks dominate real deployments (the miss detail
+never fires there — the init-time check remains).
 
 ## Nodes and the syntax tree [§dd-dr:nodes]
 
@@ -1753,6 +1862,44 @@ Rejected alternatives: a `Display`-adapter type (the `SearchedProviders` pattern
 surface for a test/log utility whose callers want `String` in assertions anyway;
 leaving it duplicated test-side (the acceptance suite, the preset tests, and the guide would
 carry three copies of the same formatter).
+
+#### `_named` argument accessors: unknown name is an error, absent argument is `None` [§dd-dr:named-argument-errors]
+
+Status: DECIDED (user, API-review T1/T2 session).
+
+`argument_nodes_named`/`argument_content_nodes_named` return `Result<Option<…>, E>`:
+`Err` = category error (the node is not a callable, or the name is not among the
+spec's declared arguments — the misspelling trap), `Ok(None)` = precisely "declared
+but absent", `Ok(Some)` = present. The *indexed* accessors stay pure-`Option` (the
+crate-wide Option-on-mismatch idiom), with the `argument_nodes` contract sentence
+replicated on all of them and a pointer to the `_named` forms as the distinguishing
+alternative. Decisive reason: for a *name*, a silent `None` on a typo is a trap with
+no cheap call-site discriminator — and names, unlike indices, are exactly the form the
+API recommends; the error is a `Result`, never a panic ([§dd-dr:panic-policy]).
+Rejected alternatives: `Result` on the indexed accessors too (forks the crate-wide
+Option idiom where `arguments().get(i)` + `is_provided()` already discriminates);
+panicking on unknown names (this family is the non-panicking companion shape by
+design).
+
+#### `display_tree()`: a free debug renderer; `NodeKind::as_str()` [§dd-dr:display-tree]
+
+Status: DECIDED (user, API-review T1/T2 session).
+
+A free public function `display_tree(node) -> String` renders a subtree one line per
+node: box-drawing guides + `summary()` + **line/col** positions (internal per-source
+`LineIndex`), printing a source name only when it changes from the previous line
+(multi-source trees; the initial source is omitted). Deliberately a *free function*,
+not a `NodeRef`/`NodeTree` method (user): lean surface, trivially dead-code-eliminated
+when unused. The output format is human-oriented and explicitly not a stability
+contract (`summary()`'s caveat restated); v1 ignores tree annotations. Companion
+accessor **`NodeKind::as_str()`** → `"Chars"`/`"Group"`/`"Callable"`/`"Comment"`/
+`"List"` (the visualizer's own need and an independent T1+T4 wish): `as_str` is the
+Rust idiom for a static variant name. Placement: the node read group beside
+`summary()` — display, not content extraction (not `extract`); replaces the rejected
+elaborate plain-text extraction (that gap belongs to the totext companion project).
+Rejected names: `label()` (reads as user-provided/dynamic data), `kind_as_string()`
+(stutters as `NodeKind::kind_as_string`; `_string` connotes allocation), `name()`
+(sibling collision with `NodeRef::name()`, the callable's spelling).
 
 ## Tree transformation, annotations, and ext minting [§dd-dr:transform]
 
@@ -3298,6 +3445,15 @@ on the seed-construction path, not a return to mandatory delta routing.
 resolver moves to the driver ([§dd-dr:input-attachment]), collapsing the surface
 toward the constructor alone.)*
 
+*(Amended — API-review T1/T2 session, application details ruled: `Default for
+Language<L>` is **removed** (it reintroduces the implicit seed by the back door, and
+the turbofish spelling was itself walkthrough friction), as is
+`LatexlikeDriver::default()` (strict-vs-tolerant is the driver's one policy knob —
+it must be explicit; `StdParseDriver::default()` stays pending the language-designer
+session). The packages argument takes the sealed `IntoSpecsProvider` conversion —
+`lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc noise
+([§dd-dr:registration-ergonomics]).)*
+
 ---
 
 ## Generics strategy [§dd-dr:generics]
@@ -3741,6 +3897,17 @@ Revisit if: the soft-freeze condition of [§dd-dr:stability-rubric] arises; or a
 downstream language needs to re-namespace an inherited condition (that would need a
 deliberate identifier-mapping design, not an ad-hoc exception).
 
+#### `Diagnostics::sorted_by_position()` — narrow, source-major [§dd-dr:diagnostics-position-sort]
+
+Status: DECIDED (user, API-review T1/T2 session).
+
+Diagnostics arrive in recovery order, not source order; `sorted_by_position()`
+(returning-adjective form) sorts by (source in first-appearance order, span start),
+documented as source order *within each source*. Narrow by design: a total "position
+order" is ill-defined across multi-source parse trees, which are first-class
+([§dd-dr:input-attachment]). Both `IntoIterator` impls already exist — the
+walkthrough claim to the contrary was a doc gap, not an API gap.
+
 ## Dependencies [§dd-dr:dependencies]
 
 #### Absolute minimal mandatory dependencies [§dd-dr:minimal-dependencies]
@@ -3912,6 +4079,16 @@ re-opens a settled argument:
   vocabulary — restaging ([§dd-dr:restage]); node-level cross-tree tracking says
   *original node* — never "provenance"/"origin", which belong to the source model
   (`SourceProvenance`/`SourceOrigin`).
+- From the API-review T1/T2 session: `"base"` and `base_package()` — the seed
+  package is `"_builtin"`/`builtin_package()` ([§dd-dr:base-package] amendment);
+  minidefs fn name `package()` — it is `minilatex_package()`; `NodeKind::label()`/
+  `kind_as_string()` — the accessor is `as_str()` ([§dd-dr:display-tree]);
+  argument-code names `GroupOnly`/`StrictGroup` — the code is `BracedOnly`;
+  `with_body_provider` (rejected abandoned-at-first-need sugar),
+  `text_mode_argument()`/`text_argument_state_delta()` (text restore is an event,
+  not a factory; [§dd-dr:argument-factory-additions]); as *shapes*: per-`GroupRule`
+  mode visibility and a `ParsingState` parent pointer
+  ([§dd-dr:enclosing-state-stack]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -4257,6 +4434,16 @@ Rejected alternatives: an empty seed stack (purest, but `~`/`&` would parse as p
 box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
 real-data consumer test-side).
 
+*(Amended — API-review T1/T2 session: the seed package is renamed **`"_builtin"`**
+and slimmed to what any latexlike parse must preload — the `\begin`/`\end` dispatch.
+`&` is removed from the preset's specials entirely; `~` and the ligatures move to
+`minidefs`'s `"minilatex"` package (same specs and mode visibilities). A base-only
+parse thus emits these triggers as plain chars — the deliberate positioning
+correction: typography interpretation is definitions content, not parsing substrate;
+pylatexenc default-shape parity for these triggers now requires loading minilatex.
+The fn follows the rename: `base_package()` → `builtin_package()`. The
+pylatexenc-parity rationale above is superseded to this extent.)*
+
 #### Per-definition mode visibility on `Package` — the fine gate under `set_visible_modes` [§dd-dr:mode-visibility]
 
 Status: DECIDED (user).
@@ -4596,6 +4783,50 @@ above techy); naming the module `defs` (overclaims — it is precisely *not* the
 definitions database that name suggests).
 Revisit if: a genuinely shared cross-framework definitions layer emerges — that would
 be its own crate with its own owner, not a techy module.
+
+*(Amended — API-review T1/T2 session, application ruling: one file
+`latexlike/minidefs.rs`; a single public item **`minilatex_package()`** — named for
+the package, not a generic `package()`, keeping room for future mini-siblings;
+target signature `LLL`-generic per [§dd-dr:latexlike-generalization] — returning a
+bare `Package`; activation always explicit. Specs: `\emph`/`\textbf`/`\textit` =
+`MacroSpec` `"m"` (fallback on); `itemize`/`enumerate` = `EnvironmentSpec` with a
+body delta pushing the inner `"minilatex.item"` package defining `\item` (`"o"`) —
+the body-scoped exemplar. Per the [§dd-dr:base-package] amendment, minilatex also
+carries `~` and the text-mode ligatures.)*
+
+#### Argument-code and factory additions: `BracedOnly`, named factory, text-restore event [§dd-dr:argument-factory-additions]
+
+Status: DECIDED (user, API-review T1/T2 session).
+
+Two additions to the latexlike argument vocabulary, and one reshaped wish:
+
+1. **`"BracedOnly"` word code** (list form only; the `AnyDelimited` precedent): a
+   mandatory *content-class* group with the expression fallback **off** —
+   `GroupArgumentParser::new(Content).with_expression_fallback(false)`. "Braced"
+   names the class's delimiters, not literal `{}`: with `<`/`>` declared as the
+   content-group delimiters, `<arg>` is accepted. `m` itself stays TeX-faithful
+   (fallback on, [§dd-dr:expression-fallback]) and gains a loud doc callout.
+2. **`argument_specs_named([("o","greeting"), ("m","name")])`** as a sibling
+   factory: `ArgumentSpec::named` exists but composing it meant rebuilding specs by
+   hand — the docs recommend names while the API fought them; a single
+   tuple-accepting factory hits blanket-impl coherence walls, so the deliberate
+   list/compact duality gains a named sibling.
+3. **Text-mode arguments are an event, not a factory.** The `\text{…}` recipe
+   becomes an `ArgumentSpec` state delta carrying a preset restore event — 
+   composable with every argument shape, optional included. The old guide recipe is
+   repaired: it statically reset `forbidden_chars` and `groups`, clobbering embedder
+   customizations. Restore semantics — nearest enclosing text-mode state (else the
+   outermost), whole `TokenRules` — and the public pillar functions:
+   [§dd-dr:enclosing-state-stack].
+
+Rejected alternatives: a canned `text_mode_argument()` factory (composes with
+nothing — a text-mode *optional* argument would need a second factory; codifies the
+buggy recipe); a `text_argument_state_delta()` helper (barely shorter than the delta
+it wraps; one more permanently-stable name); code names `GroupOnly`/`StrictGroup`; a
+single-char code (near-invisible next to `m`); reusing xparse's `g` (means a
+deprecated *optional* brace group — actively misleading).
+
+Revisit if: compact-string parity for `BracedOnly` is demanded by real spec tables.
 
 #### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
 

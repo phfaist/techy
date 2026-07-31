@@ -117,7 +117,10 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   (stability rubric + wire identifiers: one stability class, soft freeze; see decision
   log + [§dd-dr:stability-rubric], [§dd-dr:wire-identifier-stability]). Routing to 2b
   sessions: POLICY_BRIEF last section, as amended by the decision log.
-- [ ] **Phase 2b — Decision sessions by access tier** (now **five**: T1…T5). Per-item
+- [~] **Phase 2b — Decision sessions by access tier** (in progress; **T1/T2 session
+  RULED 2026-07-31** — brief T1T2_BRIEF.md, rulings T1T2_RULINGS.md + decision log +
+  six new DESIGN_RATIONALE entries; remaining: T3, T4, T5, recompose, Tier-C batch).
+  Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
   + FS-trait option (T4 session); SimpleLang role + on-ramp cliffs F10 (T3 session);
@@ -164,6 +167,11 @@ Repo (durable), all under dev-docs/api-review/:
 - P4_RULING.md — the frozen P4 ruling in full working detail (12 points + deferred
   agenda + naming decisions); durable records are the DESIGN_RATIONALE
   [§dd-dr:transform] entries it lists.
+- T1T2_BRIEF.md — Phase 2b T1/T2 session decision brief (F5 traps, minidefs
+  application + base-package rider, P2 application details, visualizer, sugar batch).
+- T1T2_RULINGS.md — the frozen T1/T2 session rulings in full working detail (B, A1–A4,
+  C1–C2, E1–E6, D incl. the E4 enclosing-state-stack design); durable records are the
+  DESIGN_RATIONALE entries listed in the decision log.
 - walkthroughs/{consumer,extender,langdesign,tooling,framework}/ — FRICTION.md +
   API-SURFACE.md (+ example code; framework/ adds FRAMEWORK-ANALYSIS.md) per persona.
 
@@ -346,6 +354,48 @@ langdesign/notely/, tooling/techy-tooling/, framework/ pending).
   identifier names the raising machinery, not the parsed language); lang-dependent
   identifiers REJECTED; one-time pre-freeze re-homing rides with the P3 application
   (types relocated preset→core). **Phase 2a complete.**
-- (pending) **NEXT: Phase 2b decision sessions** per POLICY_BRIEF routing as amended
-  by this log (T1/T2, T3, T4 — incl. wire-area rename slate —, T5, recompose design
-  session, Tier-C batch).
+- 2026-07-31 (user): **2b T1/T2 SESSION RULED** (interactive; full working detail
+  frozen in **T1T2_RULINGS.md**; durable records: DESIGN_RATIONALE new entries
+  **[§dd-dr:enclosing-state-stack]**, **[§dd-dr:registration-ergonomics]**,
+  **[§dd-dr:argument-factory-additions]**, **[§dd-dr:named-argument-errors]**,
+  **[§dd-dr:display-tree]**, **[§dd-dr:diagnostics-position-sort]** + amendments on
+  [§dd-dr:base-package], [§dd-dr:minidefs], [§dd-dr:language-init] +
+  superseded-names additions + ARCHITECTURE footer refs). Headlines:
+  (1) **base package → `"_builtin"`/`builtin_package()`**, slimmed to \begin/\end;
+  `&` removed entirely; `~` + ligatures move to minilatex (preset default-shape
+  change accepted). (2) **minidefs**: `minilatex_package()` (LLL-generic target),
+  specs as briefed, inner `"minilatex.item"` package. (3) **F5 traps**: NO
+  insert-time validation anywhere (escape chars can change mid-parse; `@greet`
+  legitimate) — instead did-you-mean resolution detail + parse-init all-escape-char
+  package warning + docs; `"BracedOnly"` word code (content-class group, no
+  fallback); `_named` accessors return `Result` (unknown name = error, absent =
+  `Ok(None)`); no spec/type cross-check (documented-legitimate). (4) **Language
+  init**: `Default for Language` + `LatexlikeDriver::default()` removed; sealed
+  `IntoSpecsProvider` conversion (also on `Package::insert`; param-order flip
+  fixed). (5) **Sugar**: `define_macro`/`define_environment` one-liners
+  (shorthand-not-second-path principle recorded); `argument_specs_named`;
+  `NodeKind::as_str()`; `sorted_by_position()`; `with_body_provider` REJECTED;
+  wish 15 = guide gap; wish 8 → T3. (6) **E4 (major design)**: text-mode arguments
+  via preset restore *event*; **enclosing-state stack on the session** (rejected:
+  mode-visibility-on-GroupRule — mode semantics unclaimed in core; ParsingState
+  parent pointer — history residue in parsed material); two-level event
+  consumption: fallible `finalize_transition` (kept, per placement doctrine) +
+  `cx.derive_state` lowering context events via new driver hook
+  `resolve_state_event(&event, &StateStackView)`; preset event logic (math entry,
+  text restore) extracted as **public pillar functions** so post-parse processing
+  can synthesize coherent recorded states (transform tie-in); guide `\text` recipe
+  bug (forbidden_chars/groups clobber) fixed at application.
+- (pending) **NEXT: 2b T3 session** (then T4 — incl. wire-area rename slate; T5;
+  recompose design session; Tier-C batch). Prepare the T3 brief exactly as for
+  T1/T2 (background agent, every claim re-verified against current code, output
+  copied to dev-docs/api-review/, presented point-by-point). T3 inputs/agenda:
+  POLICY_BRIEF routing (SimpleLang role — ties to the TODO_Big item; on-ramp
+  cliffs F10: neutral `TokenRules`/`StateData` values, specials wiring; takeover
+  staging F11; preset-reusability design with T5); SYNTHESIS wishes 17–22 + wish 8
+  (rerouted from T1/T2); walkthroughs/langdesign/; decision-log riders routed to
+  T3: role-accessor naming incl. the `macro` keyword + `ClosedVocabulary` as
+  role-trait supertrait? + `LatexlikeDriver<LLL>` vs extracted driver core (P3);
+  `StdParseDriver::default()` fate (T1/T2 C1); P1 deferred item (a)
+  resolution-family extraction sits in the T3/T4 orbit (Phase 3 topology
+  application waits on it). Session pattern that worked: interim rulings file
+  (T1T2_RULINGS.md-style) updated every round — hard structural points first.
