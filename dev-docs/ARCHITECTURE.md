@@ -290,7 +290,10 @@ rejected alternatives), [§dd-dr:immutable-state-deltas], [§dd-dr:token-rules-d
 [§dd-dr:first-class-mode], [§dd-dr:enclosing-state-stack] (session-held enclosing
 context; two-level event consumption, fallible `finalize_transition`),
 [§dd-dr:temporary-group-rules] (the state-scoped delimiter
-lifecycle enforced in `derived()`).
+lifecycle enforced in `derived()`), [§dd-dr:trivial-lang] (`SimpleLang` renamed
+`TrivialLang`, repositioned as the test lang), [§dd-dr:on-ramp-defaults]
+(`TokenRules::empty()`/`StateData::empty()`; specials defaults stay
+recognize-nothing).
 
 ## Specs and scopes [§dd-arch:specs]
 
@@ -341,7 +344,11 @@ Decisions behind this section (full topic: [§dd-dr:specs]): [§dd-dr:unified-ca
 [§dd-dr:callable-query], [§dd-dr:iter-symbols], [§dd-dr:mode-visibility],
 [§dd-dr:no-spec-side-slots], [§dd-dr:slot-terminators], [§dd-dr:emptiness-surface],
 [§dd-dr:registration-ergonomics] (`IntoSpecsProvider` conversion, preset one-liners,
-no insert-time validation — traps caught at resolution/parse-init instead).
+no insert-time validation — traps caught at resolution/parse-init instead),
+[§dd-dr:resolution-extraction] (the standalone `resolve_command_in_scopes` in
+`core::specs`; the resolution family beside it),
+[§dd-dr:named-first-constructors] (`new(parser, name)` primary, `new_unnamed`
+marked; `ParsedSlot` mirrored).
 
 ## Node trees [§dd-arch:nodes]
 
@@ -538,7 +545,10 @@ state; infallible seed+packages construction), [§dd-dr:parse-driver], [§dd-dr:
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node],
 [§dd-dr:resolve-command-hook], [§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:paragraph-break-hook], [§dd-dr:language-parse-api], [§dd-dr:with-provider],
-[§dd-dr:stateless-language]. Ruled, not yet applied (API-review P4): `finalize_node`
+[§dd-dr:stateless-language], [§dd-dr:scopes-resolving-driver] (the canned
+command-resolving driver component), [§dd-dr:takeover-staging-sugar]
+(`disable_all`, collection constructors, the committed `stage_invocation`
+helper). Ruled, not yet applied (API-review P4): `finalize_node`
 is replaced by parse-once minting — parse staging via `ParseContext::stage_node`,
 `ParserSession::builder` crate-private ([§dd-dr:ext-minting]); the source resolver
 moves from `Language` to the driver ([§dd-dr:input-attachment]).
@@ -724,6 +734,8 @@ revising the single-bare-math-class and `math_style()` shapes described above.
 
 Decisions behind this section (full topic: [§dd-dr:latexlike]):
 [§dd-dr:latexlike-generalization] (role traits + `LatexlikeLang`; `Lang` stays whole),
+[§dd-dr:preset-driver-pillars] (pillar functions + generic `LatexlikeDriver<LLL>`
+assembly),
 [§dd-dr:math-group-form] (`Math(MathGroupForm)` class payload), [§dd-dr:minidefs]
 (toy `minilatex` package; deliberately not a definitions database), [§dd-dr:group-taxonomy], [§dd-dr:math-no-nesting],
 [§dd-dr:preset-vocabulary], [§dd-dr:base-package], [§dd-dr:mode-visibility],

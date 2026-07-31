@@ -962,6 +962,79 @@ Revisit if: a Lang needs an event resolvable only between the driver lowering an
 finalize (an ordering the two-level split cannot express), or post-parse synthesis
 needs machinery context beyond what the public pillar functions take as arguments.
 
+*(Amended — API-review T3 session: the text-restore pillar is renamed and
+re-specified as **`exit_math_context_delta`** — the delta is defined by *exiting
+the math context*: look up the first non-math enclosing group in the stack and
+restore that context, never by seeking or naming a text mode as the target
+(consistently, the mode role trait carries no text-mode constructor —
+[§dd-dr:latexlike-generalization] amendment). The "nearest text-mode state"
+wording above reads accordingly; `restore_text_context_delta` is a superseded
+name.)*
+
+#### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
+
+Status: DECIDED (user, API-review T3 session).
+
+The blanket-impl marker trait stays public, renamed **`TrivialLang`**, and is
+repositioned honestly: the trivial language — for tests and machinery experiments;
+implement `Lang` directly for anything real. The dead-end is structural, not a doc
+gap: the blanket impl defaults all nine associated types, so the trait and *any*
+customization are mutually exclusive — the first command, real id enum, or hook
+forces the full `Lang` implementation. "Simple" over-promised an on-ramp (the
+language-designer walkthrough's false start was believing it); the on-ramp job
+belongs to the real fixes ([§dd-dr:on-ramp-defaults],
+[§dd-dr:scopes-resolving-driver]). What keeps it public: `make_node_ext` is now a
+required `Lang` method ([§dd-dr:ext-minting]), so without the blanket even a
+throwaway test lang needs a hand-written stub — external construct-parser and
+tooling authors writing unit tests are the persona it serves (in-crate: ten
+`#[cfg(test)]` impl sites, zero non-test uses).
+
+Rejected alternatives: growing it into a quick-start tier (an overridable `Driver`
+associated type fixes exactly one abandonment point; each further mirrored hook
+escalates toward a parallel `Lang` with double maintenance); `pub(crate)` demotion
+or deletion (kills the one-line test lang for external authors exactly when the
+required `make_node_ext` makes hand-rolling heavier).
+
+Revisit if: Rust stabilizes associated-type defaults — the trait then dissolves
+entirely (it is documented as that workaround).
+
+#### On-ramp values: `empty()` constructors; recognize-nothing specials defaults stay [§dd-dr:on-ramp-defaults]
+
+Status: DECIDED (user, API-review T3 session).
+
+Two rulings on the from-scratch `Lang` cliff:
+
+1. **`TokenRules::empty()` + `StateData::empty()`** — the all-empty starting value
+   (every gate off, every collection/string empty, empty scope stack, default
+   mode/ext); the default `initial_state_data` body is re-expressed over it (one
+   source of truth), and language authors call-and-tweak instead of transcribing a
+   13-field literal from the docs. Deliberately *named constructors*, not `Default`
+   impls: `Default` invites `..Default::default()` struct updates that silently
+   zero unmentioned fields when fields are added later, and the no-`Default`
+   doctrine on `TokenRules` (banning privileged LaTeX values) stays intact — the
+   empty value contains none. The name `empty` matches the verified contents and
+   keeps "disable(d)" reserved for the gate-action family
+   (`TokenRulesOverrides::disable_all()`, [§dd-dr:takeover-staging-sugar]).
+2. **`scan_specials`/`specials_trigger_chars` defaults stay recognize-nothing**,
+   with loud pairing documentation and a guide recipe — defaulting both hooks to
+   the scope-stack fold was REJECTED (user): simple-by-default — a tiny lang must
+   not override hooks to *remove* behavior, and opt-in keeps dead code eliminable;
+   real consumers mostly sit behind frameworks that have already plugged these
+   hooks. Moving the hooks onto the driver is structurally impossible without a
+   strata violation: `scan_specials` is called by the token reader, which holds
+   only a `ParsingState` — the driver is engine-stratum. The silent trap
+   (overriding the scan but not the trigger-chars twin) remains
+   documentation-guarded — accepted.
+
+Rejected alternatives: scope-fold default hook bodies, driver-side specials hooks,
+error-returning or required-hook variants (all above); `Default` impls;
+constructor names `neutral()` (the walkthrough's proposal) and `disabled()`.
+
+Revisit if: evidence accumulates of standalone custom-`Lang` authors (not
+framework users) hitting the specials pairing trap despite the docs — the
+fold-as-default option is sound in isolation (a `SpecialsMatch` carries its own
+resolution, so no vocabulary conjuring is needed) and could be reconsidered.
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -1298,6 +1371,17 @@ enumeration with visibility data carried on entries (information without a consu
 excluding specials or a separate `iter_specials` (the recorded-type framing unifies
 the tables with no extra surface).
 
+*(Amended — API-review T3 session: `ClosedVocabulary` stays opt-in under the
+generalized preset — **not** a role-trait or `LatexlikeLang` supertrait
+("provide, don't require", user): no shipped function requires the bound; the
+did-you-mean miss detail needs no vocabulary enumeration (its callable type and
+mode are already in hand at the miss site, [§dd-dr:resolution-extraction]); and
+the parse-init escape-char check ([§dd-dr:registration-ergonomics]) ships as a
+bound-where-used check function — wired unconditionally on the monomorphic preset
+path, narrowly bounded at the generic-`LLL` wiring point, and gracefully absent
+for non-enumerable vocabularies (a best-effort diagnostics nicety, not
+semantics).)*
+
 #### Registering callables: conversion idiom, one-liners, no insert-time validation [§dd-dr:registration-ergonomics]
 
 Status: DECIDED (user, API-review T1/T2 session).
@@ -1349,6 +1433,82 @@ vs specs (one idiom, learned once).
 Revisit if: the did-you-mean scan measurably slows cold miss paths (bound the
 iteration), or fallback-provider stacks dominate real deployments (the miss detail
 never fires there — the init-time check remains).
+
+*(Amended — API-review T3 session: (a) the did-you-mean detail's home is the miss
+arm of the extracted `resolve_command_in_scopes`
+([§dd-dr:resolution-extraction]); it enumerates *symbols*, not vocabularies — no
+`ClosedVocabulary` dependency. (b) The parse-init all-escape-char warning is
+realized as a public bound-where-used check function (`where
+L::CallableTypeId: ClosedVocabulary, L::ModeId: ClosedVocabulary`) —
+[§dd-dr:iter-symbols] amendment.)*
+
+#### Command resolution is a standalone `specs` function: `resolve_command_in_scopes` [§dd-dr:resolution-extraction]
+
+Status: DECIDED (user, API-review T3 session; completes the deferred resolver half
+of [§dd-dr:public-namespace-topology]).
+
+The standard command-resolution body — build a `CallableQuery` with
+`CallableSyntax::Command { escape_char }`, consult `state.scopes().retrieve_spec`,
+map hit / clean miss / provider error to `Resolved` / `Unresolved` (with the
+`searched_providers` detail) / `Failed` — is extracted from its associated-fn home
+on the result enum into a free function in `core::specs`:
+`resolve_command_in_scopes<L: Lang>(state, token, callable_type) ->
+CommandResolution<L>`, and the whole resolution family (`CommandResolution`,
+`ResolvedCallable`, `CallableQuery`, `CallableSyntax`, `SearchedProviders`) is
+placed beside it. Grounds: the function's substance is definition lookup — query
+construction, provider semantics, miss reporting — author-side vocabulary under
+the specs/hub boundary rule; placement follows what the items are *for*, and
+`ParseDriver::resolve_command` returning a specs type is an accepted
+cross-boundary signature reference. The associated-fn spelling
+(`CommandResolution::resolve_via_scopes`) is removed — one canonical path; it was
+also a discoverability accident (the walkthrough found it by reading the enum's
+docs, not by looking for a resolver). Interactions: the did-you-mean miss detail
+([§dd-dr:registration-ergonomics]) lives in this function's miss arm;
+`ScopesResolvingDriver` ([§dd-dr:scopes-resolving-driver]) is its one-line
+wrapper; the resolution-condition wire areas
+([§dd-dr:wire-identifier-stability]) name the concept this entry defines.
+
+Rejected alternatives: splitting the family across the boundary (function + query
+types in specs, result types in the hub — honors "hub = run-side" more literally
+but cuts the family across exactly the seam the topology ruling said should stop
+being ambiguous; recorded as the fallback shape); no extraction (the direction was
+already ruled in the topology session, and the assoc-fn home is the
+discoverability accident above).
+
+Revisit if: a second resolution syntax family (beyond `Command`) wants extracting
+— mirror this shape rather than growing this function.
+
+#### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
+
+Status: DECIDED (user, API-review T3 session).
+
+Naming an argument becomes the primary spelling: `ArgumentSpec::new(parser, name)`
+takes the name directly, and the anonymous case is the marked, longer spelling
+`ArgumentSpec::new_unnamed(parser)` — pushing spec authors toward named
+arguments, which the `_named` accessor family ([§dd-dr:named-argument-errors]) and
+the `argument_specs_named` factory already privilege as the robust access path.
+The `.named()` builder method is removed (one canonical path: no two ways to set
+the name). The parser parameter takes the sealed-conversion treatment (the
+[§dd-dr:registration-ergonomics] idiom — by value or pre-`Arc`'d, no `Arc::new`
+at call sites), and `StdCallableSpec::new` accepts an `IntoIterator` of specs by
+value — the generic-layer registration spelling drops from two `Arc::new`s and
+three type names per argument to none. "Unnamed" over "anonymous": the crate's
+existing word — no new synonym. **`ParsedSlot` mirrors the convention** (user):
+`ParsedSlot::new(region, name)` + `ParsedSlot::new_unnamed(region)`,
+`ParsedSlot::named` removed; parameter order is payload-first in both families.
+`ParsedArgument` needs no change — it carries no own name (the name lives on its
+`Arc<ArgumentSpec>`). Final slot-constructor arities land with the ext-minting
+application ([§dd-dr:ext-minting] makes `SlotExt` non-defaultable).
+
+Rejected alternatives: `new(parser, name: Option<…>)` (decorates the *encouraged*
+path with `Some(…)` noise — backwards); a descriptor-enum factory
+(`[Mandatory(rule), Optional(rule)]` — freezes a second, weaker vocabulary
+parallel to the parser types, maintained forever for a rare authoring moment);
+leaving `ParsedSlot` unmirrored (an avoidable convention fork between sibling
+families).
+
+Revisit if: a real consumer class needs many deliberately-unnamed arguments (the
+marked spelling then reads as noise — measure before softening).
 
 ## Nodes and the syntax tree [§dd-dr:nodes]
 
@@ -3290,6 +3450,70 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
 
+#### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
+
+Status: DECIDED (user, API-review T3 session).
+
+A core-provided driver component closes the last on-ramp gap a trait default
+cannot: `ScopesResolvingDriver<L: Lang> { recovery: Recovery, command_type:
+L::CallableTypeId }`, whose `resolve_command` is a one-line delegation to
+`resolve_command_in_scopes(state, token, self.command_type)`
+([§dd-dr:resolution-extraction]); everything else stays trait defaults. Core
+cannot default `resolve_command` itself — it cannot conjure the language's command
+`CallableTypeId`; the field *is* the missing datum (contrast specials, where the
+provider supplies the resolved type with the match). The language-designer
+walkthrough's entire hand-written driver was literally this expression plus the
+recovery knob. It is a component, not a shortcut tier: `StdParseDriver`'s sibling
+with one more field, constructed from real inputs; a language outgrowing it writes
+its own `ParseDriver` — the normal path, nothing abandoned. Home: the engine hub,
+beside `StdParseDriver` (which keeps its pure-recovery test-carrier role;
+`StdParseDriver::default()` is removed — [§dd-dr:language-init] amendment).
+
+Rejected alternatives: defaulting `resolve_command` to scope resolution
+(impossible without the command-type datum, above); the names
+`ScopeResolvingDriver` (user chose the plural — the stack is "scopes"),
+`ScopesDriver` (vague), `StdScopeDriver` (`Std` adds nothing).
+
+Revisit if: languages with several command-syntax callable types appear (a
+single-field component then under-serves; today they write their own driver).
+
+#### Takeover staging sugar: `disable_all`, collection constructors, a committed invocation helper [§dd-dr:takeover-staging-sugar]
+
+Status: DECIDED (user, API-review T3 session; the invocation helper's signature is
+deliberately deferred to the T5 session).
+
+Three shorthand rulings on the takeover-parser ceremony — all shorter spellings of
+the same operations (the [§dd-dr:registration-ergonomics]
+shorthand-not-second-path principle):
+
+1. **`TokenRulesOverrides::disable_all()`** — the overrides value with all six
+   `enable_*` gates `Some(false)`: the raw-state block every rest-of-line and
+   verbatim-like parser hand-builds. Lives on the overrides type so it composes —
+   `verbatim_state_delta` itself becomes `disable_all()` plus its terminator (one
+   source of truth), and parsers tweak fields afterwards.
+2. **`ParsedArguments::new(Vec)` / `ParsedSlots::new(Vec)`** — discoverable
+   constructors for what only `From<Vec<_>>` impls provide today (the walkthrough
+   found them by grepping, not on the types' doc pages); the `From`s stay as
+   conversion plumbing.
+3. **A canned invocation-staging helper WILL exist** as a `ParseContext` method
+   wrapping the one staging door (`cx.stage_node`, [§dd-dr:ext-minting]) — sketch:
+   `cx.stage_invocation(&invocation, arguments, slots, children, end_pos)`,
+   building the `CallableData` (four of its seven fields are transcriptions from
+   the invocation and trigger), computing the node span, staging, returning the
+   id. Committed now; the *signature* is ruled in the T5 session together with the
+   transform-side `restage_invocation` bundles and builder ergonomics
+   ([§dd-dr:restage]), so the parse-side and transform-side spellings share field
+   vocabulary and region semantics — fixing it against the pre-ext-minting surface
+   would guarantee rework.
+
+Rejected alternatives: `all_off()`/`raw()` for the overrides constructor (the
+crate's off-vocabulary is "disable"; "raw" too clever); a terminator-less
+`verbatim_state_delta` sibling (the overrides constructor composes instead of
+multiplying delta helpers); ruling the helper signature now (above).
+
+Revisit if: the T5 restage detailing changes the staging-door shape itself (the
+helper follows it).
+
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
 Status: DECIDED (user; four API-shape decisions on the long-deferred runtime bundle —
@@ -3453,6 +3677,11 @@ it must be explicit; `StdParseDriver::default()` stays pending the language-desi
 session). The packages argument takes the sealed `IntoSpecsProvider` conversion —
 `lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc noise
 ([§dd-dr:registration-ergonomics]).)*
+
+*(Amended — API-review T3 session: `StdParseDriver::default()` is **removed** too —
+after the `Default for Language` removal no `L::Driver: Default` consumer remains,
+and `recovery` is the driver's only field, so a `Default` existed solely to hide
+the one policy knob. The spelling is `StdParseDriver::new(Recovery::Strict)`.)*
 
 ---
 
@@ -4089,6 +4318,25 @@ re-opens a settled argument:
   not a factory; [§dd-dr:argument-factory-additions]); as *shapes*: per-`GroupRule`
   mode visibility and a `ParsingState` parent pointer
   ([§dd-dr:enclosing-state-stack]).
+- From the API-review T3 session: `SimpleLang` — renamed `TrivialLang` ("Simple"
+  over-promised an on-ramp; [§dd-dr:trivial-lang]);
+  `CommandResolution::resolve_via_scopes` (the associated-fn spelling, and the
+  interim `resolve_command_via_scopes`) — the extracted resolver is
+  `resolve_command_in_scopes` ([§dd-dr:resolution-extraction]);
+  `restore_text_context_delta` — the pillar is `exit_math_context_delta`
+  ([§dd-dr:enclosing-state-stack] amendment); role-accessor spellings
+  `r#macro()`/`macro_()`/`macro_kind()`/`macro_type()` — the family is
+  `macro_callable()`/`environment_callable()`/`specials_callable()`;
+  `text_mode()`/`is_text()` — trimmed from the mode role trait
+  ([§dd-dr:latexlike-generalization] amendment); constructor names `neutral()`/
+  `disabled()` — the empty starting values are `TokenRules::empty()`/
+  `StateData::empty()`; `all_off()`/`raw()` — the gate-off overrides value is
+  `disable_all()` ([§dd-dr:on-ramp-defaults], [§dd-dr:takeover-staging-sugar]);
+  `new_anonymous` — the unnamed-constructor spelling is `new_unnamed`; the
+  `ArgumentSpec::named()` builder and `ParsedSlot::named()` constructor — names
+  move into `new(…, name)` ([§dd-dr:named-first-constructors]);
+  `ScopeResolvingDriver`/`ScopesDriver`/`StdScopeDriver` — the component is
+  `ScopesResolvingDriver` ([§dd-dr:scopes-resolving-driver]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -4257,6 +4505,14 @@ re-exports losslessly — the facade model is what makes that lossless).
 
 *(Amended — API-review P4: `techy::recompose` (recomposition, [§dd-dr:recompose])
 joins `techy::transform` ([§dd-dr:restage]) in the role-based top level.)*
+
+*(Amended — API-review T3 session: both deferred placements are ruled — the
+resolution family moves to `core::specs` beside the extracted
+`resolve_command_in_scopes` ([§dd-dr:resolution-extraction]), and the
+`ArgumentParser` trait goes to `core::constructs`, beside `ConstructParser` and
+the shipped argument-parser implementations (a parsing contract; `ArgumentSpec`'s
+`Arc<dyn ArgumentParser>` is an accepted cross-boundary signature reference). The
+topology is fully specified; the Phase 3 application is unblocked.)*
 
 ---
 
@@ -4828,6 +5084,11 @@ deprecated *optional* brace group — actively misleading).
 
 Revisit if: compact-string parity for `BracedOnly` is demanded by real spec tables.
 
+*(Amended — API-review T3 session: item 3's restore semantics are re-specified —
+the event's pillar is `exit_math_context_delta`, restoring the first *non-math*
+enclosing context rather than seeking a text-mode state;
+[§dd-dr:enclosing-state-stack] amendment.)*
+
 #### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
 
 Status: DECIDED (user, API-review policy session P3 — direction and shape; detailed
@@ -4929,6 +5190,18 @@ sensible default becomes unavoidable (accepted as a conscious breaking change).
 the node and argument members stay `()`, while `SlotExt` is claimed by the preset for
 trait-based body marking. [§dd-dr:slot-roles].)*
 
+*(Amended — API-review T3 session, routed items ruled: role-accessor names are
+**`macro_callable()` / `environment_callable()` / `specials_callable()`** with
+predicates `is_macro`/`is_environment`/`is_specials` — the group trait's
+role-plus-vocabulary-noun pattern, which dissolves the `macro` keyword problem as
+a side effect (`r#macro`/`macro_`/`macro_kind`/`macro_type` rejected). The mode
+role trait is **trimmed to `math_mode()` + `is_math()`** — no text-mode
+constructor and no `is_text`: the only known text-mode-constructor consumer was
+the restore-to-text pillar, re-specified as `exit_math_context_delta`
+([§dd-dr:enclosing-state-stack] amendment). `ClosedVocabulary` is **not** a
+role-trait supertrait — "provide, don't require" ([§dd-dr:iter-symbols]
+amendment). The driver question is ruled in [§dd-dr:preset-driver-pillars].)*
+
 #### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
 
 Status: DECIDED (user, API-review policy session P3; supersedes the delimiter-fact
@@ -4989,6 +5262,41 @@ would force an ext-composition story onto every framework — the preset stays
 
 Revisit if: a third math-group form with distinct downstream semantics is identified
 (the closed enum makes adding it a conscious breaking change, accepted).
+
+#### The preset driver: pillar functions + generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
+
+Status: DECIDED (user, API-review T3 session; detailing shared with the T5
+session).
+
+The component the generalization ruling left open resolves as **both, layered** —
+the same shape [§dd-dr:latexlike-generalization] chose for `Lang` (whole type +
+pillar composition): the driver's behavior ships as public `LLL`-generic **pillar
+functions**, and **`LatexlikeDriver<LLL>`** is the canned assembly whose hook
+bodies are precisely the one-line delegations (`PhantomData<LLL>`; manual impls
+keep `Copy`/`Eq`). Pillar inventory: `math_group_interior_delta` (the math plug —
+forbidden set derived from the removed math-class rules, never a restated `'$'`),
+`exit_math_context_delta` ([§dd-dr:enclosing-state-stack] amendment),
+`make_paragraph_break_node`; `resolve_command` composes
+`resolve_command_in_scopes` ([§dd-dr:resolution-extraction]) with the macro role —
+no separate pillar. Why both: structs cannot be partially overridden and subtraits
+cannot re-default supertrait methods (the recorded facet-decomposition flaw), so
+pillars are the only mechanism serving a framework wanting
+preset-behavior-plus-one-custom-hook (FLM's documented `refine_diagnostic`
+posture); pillars alone would make the plain-Latexlike consumer hand-write ~30
+delegation lines for nothing. Not a dual path: component vs building blocks is the
+`StdCallableSpec`-vs-`impl CallableSpec` relationship — the struct contains no
+behavior the pillars don't. Scope split: the T3 session ruled the architecture
+(pillars + generic struct + the inventory); the T5 session keeps the FLM-probe
+acceptance run, extra framework knobs / extension seams, pillar-signature
+sufficiency for post-parse state synthesis, and restage interaction.
+
+Rejected alternatives: generic struct only (a customize-one-hook framework
+wraps-and-delegates ~12 trait methods or forks the bodies — the cliff returns one
+level up); pillars only (every adopt-wholesale consumer pays the delegation
+boilerplate for nothing).
+
+Revisit if: the T5 FLM probe finds a hook whose pillar signature cannot serve
+post-parse state synthesis (the pillar, not the struct, is then the thing to fix).
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 

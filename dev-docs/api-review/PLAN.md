@@ -119,7 +119,10 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   sessions: POLICY_BRIEF last section, as amended by the decision log.
 - [~] **Phase 2b — Decision sessions by access tier** (in progress; **T1/T2 session
   RULED 2026-07-31** — brief T1T2_BRIEF.md, rulings T1T2_RULINGS.md + decision log +
-  six new DESIGN_RATIONALE entries; remaining: T3, T4, T5, recompose, Tier-C batch).
+  six new DESIGN_RATIONALE entries; **T3 session RULED 2026-07-31** — brief
+  T3_BRIEF.md, rulings T3_RULINGS.md + decision log + seven new DESIGN_RATIONALE
+  entries; both P1 deferred placements ruled → **Phase 3 topology unblocked**;
+  remaining: T4, T5, recompose, Tier-C batch).
   Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -172,6 +175,13 @@ Repo (durable), all under dev-docs/api-review/:
 - T1T2_RULINGS.md — the frozen T1/T2 session rulings in full working detail (B, A1–A4,
   C1–C2, E1–E6, D incl. the E4 enclosing-state-stack design); durable records are the
   DESIGN_RATIONALE entries listed in the decision log.
+- T3_BRIEF.md — Phase 2b T3 session decision brief (prepared 2026-07-31, verified
+  against e5b994b: SimpleLang role A, on-ramp F10 B, takeover staging F11 C,
+  preset-driver architecture D, role-accessor naming + ClosedVocabulary E,
+  StdParseDriver::default F, wishes 17–22 + 8 G, resolution-family extraction H).
+- T3_RULINGS.md — the frozen T3 session rulings in full working detail (H, D, E,
+  A+F, B, C+G, sweep incl. the ArgumentParser-placement ruling); durable records
+  are the DESIGN_RATIONALE entries listed in the decision log.
 - walkthroughs/{consumer,extender,langdesign,tooling,framework}/ — FRICTION.md +
   API-SURFACE.md (+ example code; framework/ adds FRAMEWORK-ANALYSIS.md) per persona.
 
@@ -385,17 +395,55 @@ langdesign/notely/, tooling/techy-tooling/, framework/ pending).
   text restore) extracted as **public pillar functions** so post-parse processing
   can synthesize coherent recorded states (transform tie-in); guide `\text` recipe
   bug (forbidden_chars/groups clobber) fixed at application.
-- (pending) **NEXT: 2b T3 session** (then T4 — incl. wire-area rename slate; T5;
-  recompose design session; Tier-C batch). Prepare the T3 brief exactly as for
-  T1/T2 (background agent, every claim re-verified against current code, output
-  copied to dev-docs/api-review/, presented point-by-point). T3 inputs/agenda:
-  POLICY_BRIEF routing (SimpleLang role — ties to the TODO_Big item; on-ramp
-  cliffs F10: neutral `TokenRules`/`StateData` values, specials wiring; takeover
-  staging F11; preset-reusability design with T5); SYNTHESIS wishes 17–22 + wish 8
-  (rerouted from T1/T2); walkthroughs/langdesign/; decision-log riders routed to
-  T3: role-accessor naming incl. the `macro` keyword + `ClosedVocabulary` as
-  role-trait supertrait? + `LatexlikeDriver<LLL>` vs extracted driver core (P3);
-  `StdParseDriver::default()` fate (T1/T2 C1); P1 deferred item (a)
-  resolution-family extraction sits in the T3/T4 orbit (Phase 3 topology
-  application waits on it). Session pattern that worked: interim rulings file
-  (T1T2_RULINGS.md-style) updated every round — hard structural points first.
+- 2026-07-31 (user): **2b T3 SESSION RULED** (interactive; full working detail
+  frozen in **T3_RULINGS.md**; durable records: DESIGN_RATIONALE new entries
+  **[§dd-dr:resolution-extraction]**, **[§dd-dr:preset-driver-pillars]**,
+  **[§dd-dr:trivial-lang]**, **[§dd-dr:on-ramp-defaults]**,
+  **[§dd-dr:scopes-resolving-driver]**, **[§dd-dr:takeover-staging-sugar]**,
+  **[§dd-dr:named-first-constructors]** + amendments on
+  [§dd-dr:enclosing-state-stack], [§dd-dr:argument-factory-additions],
+  [§dd-dr:latexlike-generalization], [§dd-dr:iter-symbols],
+  [§dd-dr:registration-ergonomics], [§dd-dr:language-init],
+  [§dd-dr:public-namespace-topology] + superseded-names additions + ARCHITECTURE
+  footer refs). Headlines: (1) **H**: resolution extraction ratified — free fn
+  **`resolve_command_in_scopes`** in `core::specs` (user naming: "in", not "via");
+  whole family (`CommandResolution`, `ResolvedCallable`, `CallableQuery`,
+  `CallableSyntax`, `SearchedProviders`) moves beside it. (2) **D**: preset driver
+  = pillar functions + **`LatexlikeDriver<LLL>`** canned assembly, layered; **user
+  amendment**: `restore_text_context_delta` → **`exit_math_context_delta`** (first
+  non-math enclosing group in the stack; never names text mode). (3) **E**:
+  accessors `macro_callable()`/`environment_callable()`/`specials_callable()` +
+  `is_*` predicates; mode role trait trimmed to `math_mode()` + `is_math()` (no
+  text-mode constructor); **`ClosedVocabulary` NOT a supertrait** — "provide,
+  don't require" (brief's A1(ii)-needs-it claim corrected: no enumeration
+  dependency; A1(iv) = bound-where-used check fn). (4) **A+F**: `SimpleLang` →
+  **`TrivialLang`**, kept public as the test lang (wish 18a rejected);
+  `StdParseDriver::default()` removed. (5) **B**: `TokenRules::empty()` +
+  `StateData::empty()` (user naming, not `neutral`); **specials defaults stay
+  recognize-nothing** (user; rejects the brief's scope-fold default —
+  simple-by-default, opt-in dead-code elimination; move-to-driver closed as a
+  strata violation); wish 18b accepted as **`ScopesResolvingDriver`** (user
+  naming, plural). (6) **C+G**: `TokenRulesOverrides::disable_all()`;
+  `ParsedArguments::new(Vec)`/`ParsedSlots::new(Vec)`; wish 20 commitment-only
+  (`cx.stage_invocation`, signature ruled in T5 with the restage bundles); wish 8
+  narrow form + **push-to-name rider**: `ArgumentSpec::new(parser, name)` +
+  `new_unnamed(parser)`, `.named()` removed, **`ParsedSlot` mirrored**
+  (`new(region, name)`/`new_unnamed`). (7) **Sweep**: P1 deferred item (b) ruled —
+  **`ArgumentParser` trait → `core::constructs`**; with (a) ruled in H, **both P1
+  deferred placements are closed and the Phase 3 topology application is
+  unblocked**.
+- (pending) **NEXT: 2b T4 session** (then T5; recompose design session; Tier-C
+  batch). Prepare the T4 brief exactly as for T1/T2/T3 (background agent, every
+  claim re-verified against current code, output copied to dev-docs/api-review/,
+  presented point-by-point; interim rulings file updated every round, hard
+  structural points first). T4 inputs/agenda: POLICY_BRIEF routing (cursor
+  primitive F7; `\input` wiring F8 — leaning embedder filesystem-trait, see
+  Companion projects; source-model polish); P4 riders: `\input` engine wiring +
+  resolver move `Language` → driver + reverse-lookup naming (`SourcePos`,
+  deepest-node/covering-slice); P5 rider: **wire-identifier rename slate**
+  (concept-named areas — 14 of 18 core.* identifiers use internal file names; the
+  resolution-concept areas are now definable per [§dd-dr:resolution-extraction]);
+  walkthroughs/tooling/. T5 agenda additions from T3: D acceptance (FLM probe
+  re-run), driver knobs / extension seam, pillar-signature sufficiency for
+  post-parse state synthesis, restage interaction, wish-20 `stage_invocation`
+  signature (co-designed with `restage_invocation` + builder-`add` ergonomics).
