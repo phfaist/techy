@@ -189,7 +189,10 @@ Decisions behind this section (full topic: [§dd-dr:sources-and-spans]): [§dd-d
 [§dd-dr:provenance-on-source], [§dd-dr:source-node-registry], [§dd-dr:lazy-line-col],
 [§dd-dr:source-resolver], [§dd-dr:resolver-contract], [§dd-dr:origin-genericity],
 [§dd-dr:source-content-boundary], [§dd-dr:source-cursor-retired] (the retired cursor
-seam), [§dd-dr:span-extend-to].
+seam), [§dd-dr:span-extend-to], [§dd-dr:include-chain-helpers]
+(`including_sources` + `check_include_chain`; recursion stays embedder policy),
+[§dd-dr:line-col-ownership] (consumer-held `LineIndexCache` + the
+`LineColProvider` rendering seam).
 
 ## Tokens [§dd-arch:token]
 
@@ -548,7 +551,9 @@ state; infallible seed+packages construction), [§dd-dr:parse-driver], [§dd-dr:
 [§dd-dr:stateless-language], [§dd-dr:scopes-resolving-driver] (the canned
 command-resolving driver component), [§dd-dr:takeover-staging-sugar]
 (`disable_all`, collection constructors, the committed `stage_invocation`
-helper). Ruled, not yet applied (API-review P4): `finalize_node`
+helper), [§dd-dr:input-wiring] (driver resolver accessor, the
+`parse_attached_source` door, `attach_source_reference`). Ruled, not yet applied
+(API-review P4): `finalize_node`
 is replaced by parse-once minting — parse staging via `ParseContext::stage_node`,
 `ParserSession::builder` crate-private ([§dd-dr:ext-minting]); the source resolver
 moves from `Language` to the driver ([§dd-dr:input-attachment]).

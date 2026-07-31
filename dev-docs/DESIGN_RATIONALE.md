@@ -229,6 +229,9 @@ Status: DECIDED.
 The parser works purely in byte offsets; `LineIndex` computes line starts lazily and only for
 display (errors, diagnostics).
 Rationale: upfront line indexing costs O(source) on every parse for data usually never read.
+*(Amended — API-review T4 session: ownership layering, the persistent
+`LineIndexCache`, and the `LineColProvider` seam: [§dd-dr:line-col-ownership];
+this entry's doctrine is unchanged.)*
 
 #### Pluggable content resolution [§dd-dr:source-resolver]
 
@@ -243,6 +246,9 @@ retired — cf. [§dd-dr:source-cursor-retired].)*
 *(Direction recorded — API-review P4: the resolver instance moves from `Language` to
 the `ParseDriver` (parse-time instance behavior, the placement doctrine); wiring
 designed in the 2b T4 session. [§dd-dr:input-attachment].)*
+*(Wiring landed — API-review T4 session: [§dd-dr:input-wiring]. `NoResolver`'s
+default-slot role is replaced by the driver accessor's `None`; its own fate rides
+the Tier-C batch.)*
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
@@ -327,6 +333,12 @@ pinned by docs + tests in the same commit. Bridging: `SourceSpan::new` accepts
 and `SourceSpan::span()` is the inverse — `span.rs` itself stays ignorant of
 `SourceSpan` (dependency direction preserved).
 
+*(Amended — API-review T4 session: `contains(pos)` lands — `node_at`
+([§dd-dr:tree-navigation]) is the consumer the deferral awaited; empty-span
+semantics ruled (an empty span contains nothing), pinned by docs + tests in the
+same commit. `overlaps` remains deferred, unless `covering_slice`'s
+implementation wants it.)*
+
 #### `SourceResolver` contract batch: content-returning, `Send + Sync`, no core recursion checking [§dd-dr:resolver-contract]
 
 Status: DECIDED (user, Action-05 session; settled before any consumer existed).
@@ -359,6 +371,105 @@ Status: DECIDED (user, Action-05 session; settled before any consumer existed).
   (drivers may store `Arc<dyn SourceResolver>`), `MapResolver::with_reference_as_origin`
   (its blanket impl narrows to `O: From<String>` — a convenience type may narrow;
   exotic origins write their own ten-line resolver).
+
+*(Amended — API-review T4 session: (1) the cause field becomes
+`Option<Arc<dyn core::error::Error + Send + Sync>>` and `ResolveError` derives
+`Clone` again — principle recorded: **techy error types stay uniformly `Clone`;
+out-of-crate information sits behind the `Arc`**; `Error::source()` downcasting is
+unaffected, `with_cause` wraps with `Arc::new`. (2) "No core recursion checking"
+SURVIVES the engine now recursing on its own stack ([§dd-dr:input-wiring]) —
+reaffirmed for `.dtx`-style legitimate self-inclusion; the embedder's policy tools
+are [§dd-dr:include-chain-helpers].)*
+
+#### Include-chain tools: `including_sources` + `check_include_chain`; recursion stays embedder policy [§dd-dr:include-chain-helpers]
+
+Status: DECIDED (user, API-review T4 session).
+
+Recursion/cycle control for `\input`-style inclusion stays OUT of core — reaffirmed
+against the new fact that the engine now recurses on its own stack
+([§dd-dr:input-wiring]): legitimate self-inclusion exists (`.dtx` self-documenting
+files), so any core depth/cycle mechanism would fight real documents; deep group
+nesting is equally unbounded today, and references stay uninterpreted
+([§dd-dr:resolver-contract]). Instead, two source-model tools make the embedder's
+policy a one-liner:
+
+- **`Source::including_sources()`** — iterator over the chain of including sources
+  (self → primary, following `provenance().triggered_at()` hops): the general
+  primitive under every cycle/depth/counting policy (`.any(…)`, `.count()`,
+  `.filter(…).count()` for `.dtx`-style bounded self-inclusion). The existing
+  `provenance_chain()` yields the provenance *records*; this yields the *sources*,
+  whose origins carry the comparable names.
+- **`check_include_chain<O, K: PartialEq>(target_key: &K, triggered_at:
+  &SourceSpan<O>, origin_key: impl Fn(&O) -> Option<K>, max_depth: Option<usize>)
+  -> Result<(), ResolveError>`** (home: the source topic) — the canned
+  cycle-plus-depth check a resolver calls with `?`. Keying design (user-driven):
+  compare **origins**, not provenance reference strings — the primary source
+  participates (the embedder mints it with a suitable canonical name); the caller
+  passes the already-canonicalized target key (the resolver computes it during
+  resolution anyway); `origin_key` is a cheap conversion when the resolver mints
+  canonical origins (documented invariant); `None` keys are skipped. Distinct
+  messages for cycle vs depth-exceeded.
+
+A `techy::helpers` recipes module was REJECTED (the `util` vague-name problem;
+placement stays by logical function — adding a module later is additive, while
+dissolving a grab-bag is breaking).
+
+Rejected alternatives: a core include-depth knob + condition on the sub-parse door
+(bounds core's stack but fights `.dtx`-legitimate recursion; dropped with its
+reserved identifier); provenance-chain cycle *detection* in core (references are
+opaque strings — two spellings can name one file; false confidence, and it is
+reference interpretation in the contract's sense); keying the check on provenance
+reference strings (blind to the primary source).
+
+Revisit if: a class of embedders demonstrably cannot canonicalize origins (a
+reference-keyed variant could then be added beside, not instead).
+
+#### Line/col ownership: consumer-held `LineIndexCache` + the `LineColProvider` seam [§dd-dr:line-col-ownership]
+
+Status: DECIDED (user, API-review T4 session).
+
+Who computes and caches line/column stays LAYERED, never the `Source`: the parse
+computes nothing ([§dd-dr:lazy-line-col] holds); the diagnostics renderer keeps its
+per-call cache; **persistence belongs to whoever holds a `LineIndexCache<O>`** — a
+new public cache in the source topic holding one owned line-starts table per
+source, keyed by `Arc` identity (entries own `Arc<Source>` + `Vec<usize>`, not the
+borrowing `LineIndex` view). Because source content is immutable, an entry never
+invalidates, and a tool that keeps its own `Arc<Source>` across parse attempts
+(the span-stability doctrine) keeps its cache valid for free. The
+`&self`-vs-`&mut` question dissolves: consumer-held means `&mut` is honest;
+cross-thread sharing is the consumer's own lock on the std side — techy buys no
+no_std synchronization.
+
+**`LineColProvider`** (name over `LineIndexCacheProvider` — the trait provides
+line/col *answers*, not caches): single method `line_col(&mut self, source,
+offset) -> Option<(usize, usize)>`; implemented by `LineIndexCache`; the rendering
+entry points gain `_with(&mut impl LineColProvider)` variants, the no-argument
+forms remaining as transient-cache shorthand (shorthand-not-second-path). Editor
+tools with incremental line tables — surviving per-keystroke re-parses that mint
+new `Source`s — plug in without recomputation: the Arc-keyed cache's
+edit-invalidation limit is answered at the right layer.
+
+Query-surface additions ruled with the ownership: `LineIndex::line_of(offset) ->
+Option<(usize, Range<usize>)>` (line number + byte range — the caret/underline
+path; the inverse `line_range(line_no)` skipped — no demonstrated consumer,
+additive later); `line_col_span(impl Into<Range<usize>>)`; `DEFAULT_MAX_SCAN_LEN`
+raised 100 000 → **500 000** (still bounded; the loud docs on silent `None` past
+the bound stay).
+
+Rejected alternatives: a `Source`-owned lazy cache (blocked dep-free — `alloc` has
+no `Mutex`, `OnceCell` costs `Sync`; recorded at the renderer cache since its
+introduction); `Source` as a `Lang` trait or a `SourceAnalyzer` associated type on
+`Lang` (the source model is deliberately Lang-free — [§dd-dr:origin-genericity] is
+load-bearing for Lang-free rendering and tooling; and precompute/lazy/incremental
+are strategies of one pure function — no consumer is generic over them);
+per-node/per-span `line_col()` methods (hidden per-call index build, O(k·N); the
+bind-the-`Arc` one-index pattern is the guide example); a shipped caret/underline
+renderer (presentation policy frozen forever under P5 for a ~10-line hand-roll
+once `line_of` exists; `format_position`'s output shape is documented as not a
+contract); non-`&mut` `LineIndex` (interior mutability for a transient local).
+
+Revisit if: a no_std embedder needs shared lazy indexing (the provider seam is
+where a lock-free implementation plugs in).
 
 ## Tokens and tokenization [§dd-dr:tokens]
 
@@ -2330,6 +2441,13 @@ state-threading model; output sink type; targeted-replacement integration.
 Revisit if: the dedicated session overturns details — the module, the two
 strategies, and mechanism-not-content are the ruled part.
 
+*(Amended — API-review T4 session: the dedicated session also owns the read-only
+structural walker (`enter(node, depth) -> VisitFlow { Descend, SkipChildren,
+Stop }` + `exit(node)`) — a `Descendants::with_depth()` iterator adapter was
+rejected because flat iteration loses structure, and the walker is recompose's
+skeleton, so the walk vocabulary is designed once, there. `descendants()` itself
+stays: flat iteration is legitimate for structure-free queries.)*
+
 #### Slot roles and trait-based body marking [§dd-dr:slot-roles]
 
 Status: DECIDED (user, API-review P4 session; amends
@@ -2429,6 +2547,20 @@ table (premature); parent-dependent data in `make_node_ext` (impossible bottom-u
 see [§dd-dr:ext-minting]).
 Revisit if: profiling shows the per-node parent word or the honest-slice scans
 mattering — both have obvious opt-out designs, neither worth pre-building.
+
+*(Amended — API-review T4 session, names finalized:
+`NodeTree::node_at(&SourcePos)`; `NodeTree::covering_slice(&SourceSpan)` (the name
+carries the one fact callers must know — the result may cover *more* than the
+query); `NodeRef::parent()`/`index_in_parent()` → `Option`; `SourcePos` accessors
+`source()`/`pos()`; `SourceSpan::start_pos()`/`end_pos()` (exclusive-end doc
+sentence); `NodeRef::tree()` goes pub. `ancestors()` REJECTED — tree visiting is
+top-down and an ancestry walk has zero trap surface
+(`iter::successors(node.parent(), |n| n.parent())`); the one-line recipe lives in
+`parent()`'s rustdoc. Vocabulary note: F7's "cursor primitive" (this entry's
+editor-cursor lookup) and the retired char-scanning `SourceCursor`
+([§dd-dr:source-cursor-retired]) are disjoint concepts sharing a word. `Span`
+gains `contains(pos)` with the ruled empty-span semantics —
+[§dd-dr:span-extend-to]'s awaited consumer.)*
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
@@ -3514,6 +3646,59 @@ multiplying delta helpers); ruling the helper signature now (above).
 Revisit if: the T5 restage detailing changes the staging-door shape itself (the
 helper follows it).
 
+#### `\input` engine wiring: driver resolver accessor + the `parse_attached_source` door [§dd-dr:input-wiring]
+
+Status: DECIDED (user, API-review T4 session; realizes [§dd-dr:input-attachment]).
+
+- **Resolver surface**: defaulted accessor `ParseDriver::source_resolver(&self) ->
+  Option<&dyn SourceResolver<L::SourceOrigin>>`, default `None` ("this language
+  resolves nothing"); shipped drivers gain an `Option<Arc<dyn …>>` field +
+  `with_resolver(…)`. Consequence ruled consciously: the field drops `Copy`/`Eq`
+  on resolver-carrying drivers (nothing relied on driver `Copy`; strikes the
+  keep-`Copy`/`Eq` clause of [§dd-dr:preset-driver-pillars]). The
+  behavior-method variant (a `resolve_reference` hook) lost: carriers still need
+  the storage field, and the accessor keeps stored-object composition.
+- **The door**: `ParseContext::parse_attached_source(source, state, parser) ->
+  ConstructParserResult<L, Vec<BuildId>>` — the *caller supplies the construct
+  parser* driving the sub-parse (user amendment; `\input`-style inclusion passes
+  the root nodes-parse shape). Internals: a fresh inner context (the outer
+  reader's lifetime pins the outer source), same session/builder (`BuildId`s are
+  session-global), local stray-close recovery (an included file's stray `}` never
+  unwinds the includer), a traceback `Frame`. The door stages content nodes only —
+  slot assembly stays the invocation parser's job (the one-staging-door doctrine
+  holds). Resolution stays OUTSIDE the door (accessor → free `resolve_source` →
+  door), so caching frameworks substitute either half; the free fn becomes the
+  canonical composition once `Language::resolve_source` leaves.
+- **`attach_source_reference(cx, reference, at, state, parser)`** (core, beside
+  the door): the resolve-diagnose-attach bundle — kept despite its size as the
+  single raising site for the two failure conditions, so diagnostics wording is
+  uniform across every `\input`-variant spec and framework. Conditions:
+  **`NoSourceResolver`** (`core.sources.no-resolver`) and
+  **`UnresolvableSourceReference`** (`core.sources.unresolvable-reference`,
+  payload: reference + the `ResolveError` — `Clone` again per the
+  [§dd-dr:resolver-contract] amendment).
+- **`Language` collapses**: `with_resolver`, `resolver()`, and
+  `Language::resolve_source` leave — completing [§dd-dr:language-init]'s expected
+  surface (`new(driver, initial_state)` + `parse` + `parse_source` + accessors).
+- **The preset construct is opt-in, never preloaded**:
+  `latexlike::input_macro_spec::<LLL>()` (an always-on `\input` under a
+  resolver-less driver would just diagnose every use); embedders insert it into
+  their own package. Its body is the brief form the helpers exist for — argument
+  text → `attach_source_reference` → `Attached` slot — so `\input[options]{file}`
+  / `\input*{f1,f2,f3}` variants are easy custom-spec work (the form-specific
+  parts stay in the spec).
+
+Rejected alternatives: resolver as a per-parse argument (re-litigates the P4
+direction, and the construct parser mid-descent holds only `cx`);
+`cx.parse_source` as the door name (collides with `Language::parse_source` under
+a different contract — sibling-vocabulary rule); a core-generic
+resolve-then-attach *argument parser* (speculative before a second consumer — the
+door + bundle are the reusable parts).
+
+Revisit if: a framework needs several resolvers per driver (the accessor
+signature admits dispatch behind it), or the T5 restage detailing adds a
+splice-a-cached-parse affordance that changes the caching-framework route.
+
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
 Status: DECIDED (user; four API-shape decisions on the long-deferred runtime bundle —
@@ -3682,6 +3867,11 @@ session). The packages argument takes the sealed `IntoSpecsProvider` conversion 
 after the `Default for Language` removal no `L::Driver: Default` consumer remains,
 and `recovery` is the driver's only field, so a `Default` existed solely to hide
 the one policy knob. The spelling is `StdParseDriver::new(Recovery::Strict)`.)*
+
+*(Amended — API-review T4 session, collapse complete: `with_resolver`,
+`resolver()`, and `Language::resolve_source` leave with the resolver's move to the
+driver ([§dd-dr:input-wiring]) — the surface is `new(driver, initial_state)` +
+`parse` + `parse_source` + accessors.)*
 
 ---
 
@@ -4126,6 +4316,30 @@ Revisit if: the soft-freeze condition of [§dd-dr:stability-rubric] arises; or a
 downstream language needs to re-namespace an inherited condition (that would need a
 deliberate identifier-mapping design, not an ad-hoc exception).
 
+*(Amended — API-review T4 session, THE SLATE RULED (frozen; lands in Phase 3
+before guides print). Area `specs` absorbs command resolution AND the former
+`scopes` area (user: "resolution of what?" — also disambiguates against *source*
+resolution, `core.sources.*`; the wire vocabulary now tracks the public
+`core::specs` home from [§dd-dr:resolution-extraction]; supersedes this entry's
+illustrative `scopes` example). Renames:
+`core.specs.{unresolvable-command, command-resolution-failed,
+callable-defined-as-error, scope-op-failed}`;
+`core.groups.{unclosed-group, stray-group-close}`;
+`core.environments.{terminator-mismatch, malformed-terminator,
+missing-terminator}`;
+`core.arguments.{missing-mandatory-argument, expected-expression-argument,
+expression-callable-requires-content, repeated-tack-on-field}` (the last segment
+renamed from `repeated-field` — too vague outside its own area);
+`core.recovery.unusable-recovery-token`;
+`core.verbatim.{unterminated-verbatim, expected-verbatim-delimiter}`.
+Keeps: `core.token.end-of-stream-after-escape`, `core.token.forbidden-char`,
+`core.constructs.implementation-error`, `latexlike.environments.*` ×3. New:
+`core.sources.{no-resolver, unresolvable-reference}` ([§dd-dr:input-wiring]).
+Reserved: `core.specs.provider-commands-shadowed-by-escape` (the parse-init
+warning; wording at application). The preset→core re-homing rider was verified
+empty. Segment policy: keep segments unchanged (self-descriptive when quoted
+alone). The guide table prints exactly these.)*
+
 #### `Diagnostics::sorted_by_position()` — narrow, source-major [§dd-dr:diagnostics-position-sort]
 
 Status: DECIDED (user, API-review T1/T2 session).
@@ -4337,6 +4551,22 @@ re-opens a settled argument:
   move into `new(…, name)` ([§dd-dr:named-first-constructors]);
   `ScopeResolvingDriver`/`ScopesDriver`/`StdScopeDriver` — the component is
   `ScopesResolvingDriver` ([§dd-dr:scopes-resolving-driver]).
+- From the API-review T4 session: `techy::helpers` (a recipes module — the `util`
+  problem under another name; placement stays by logical function);
+  `resolution` as a wire-identifier area (the area is `specs` — "resolution of
+  what?") and the file-named areas `nodes_parser`/`environment_parser`/
+  `argument_parsers`/`verbatim_parser`/`group_parser`/`tack_on_parser` (the
+  applied slate; [§dd-dr:wire-identifier-stability] amendment);
+  `ancestors()`/`Ancestors` (rejected — `parent()` + `iter::successors`;
+  [§dd-dr:tree-navigation] amendment); `Descendants::with_depth()` (patched flat
+  iteration's structure loss at the wrong layer — the read walker belongs to the
+  recompose session; [§dd-dr:recompose] amendment); `NodeRef::line_col()`/
+  `SourceSpan::line_col()` and `LineIndex::line_range(line_no)`
+  (rejected/skipped — [§dd-dr:line-col-ownership]); `LineIndexCacheProvider` —
+  the seam is `LineColProvider` (provides answers, not caches);
+  `cx.parse_source` as the sub-parse door name (collides with
+  `Language::parse_source` under a different contract — the door is
+  `parse_attached_source`; [§dd-dr:input-wiring]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -5297,6 +5527,11 @@ boilerplate for nothing).
 
 Revisit if: the T5 FLM probe finds a hook whose pillar signature cannot serve
 post-parse state synthesis (the pillar, not the struct, is then the thing to fix).
+
+*(Amended — API-review T4 session: the keep-`Copy`/`Eq` clause is struck — the
+optional resolver field ([§dd-dr:input-wiring]) drops `Copy`/`Eq` on
+resolver-carrying drivers ("why would we want `Copy`/`Eq` on the driver?" — no
+in-crate reliance exists); shipped drivers keep `Clone + Debug`.)*
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 

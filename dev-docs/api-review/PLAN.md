@@ -122,7 +122,9 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   six new DESIGN_RATIONALE entries; **T3 session RULED 2026-07-31** — brief
   T3_BRIEF.md, rulings T3_RULINGS.md + decision log + seven new DESIGN_RATIONALE
   entries; both P1 deferred placements ruled → **Phase 3 topology unblocked**;
-  remaining: T4, T5, recompose, Tier-C batch).
+  **T4 session RULED 2026-07-31** — brief T4_BRIEF.md, rulings T4_RULINGS.md +
+  decision log + three new DESIGN_RATIONALE entries incl. the frozen
+  wire-identifier slate; remaining: T5, recompose, Tier-C batch).
   Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -152,10 +154,11 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   infrastructure for tree→tree transformations; to-text then = transformations ending in
   string nodes + concatenation; useful for FLM. Open Qs: immutable flat NodeTree →
   rebuild API, node identity/provenance across transforms.
-- **\input / file-system resolution**: leaning AGAINST a separate std-tools crate
-  (frameworks own their I/O policy). Evaluate instead: logic stays in techy (no_std),
-  embedder implements a minimal filesystem-interface trait (SourceResolver pattern).
-  T4-session item, ties to friction F8.
+- **\input / file-system resolution**: CLOSED (T4 session, 2026-07-31) —
+  `SourceResolver` verified to already BE the minimal filesystem-interface trait;
+  techy ships nothing beyond the new source-side helpers
+  ([§dd-dr:include-chain-helpers]); the std FS-resolver recipe lands in Phase 4's
+  include chapter. Engine wiring ruled: [§dd-dr:input-wiring].
 
 ## Working files
 
@@ -182,6 +185,14 @@ Repo (durable), all under dev-docs/api-review/:
 - T3_RULINGS.md — the frozen T3 session rulings in full working detail (H, D, E,
   A+F, B, C+G, sweep incl. the ArgumentParser-placement ruling); durable records
   are the DESIGN_RATIONALE entries listed in the decision log.
+- T4_BRIEF.md — Phase 2b T4 session decision brief (prepared 2026-07-31, verified
+  against 9643d7d: \input wiring + resolver move B, FS-trait closure C,
+  wire-identifier rename slate A incl. full 22-condition inventory, navigation
+  naming E, cursor reconciliation D, wishlist sweep F).
+- T4_RULINGS.md — the frozen T4 session rulings in full working detail (B incl.
+  the parser-parameter door amendment + check_include_chain + LineColProvider
+  design evolution, C closure, A's frozen slate, E/D naming, F sweep); durable
+  records are the DESIGN_RATIONALE entries listed in the decision log.
 - walkthroughs/{consumer,extender,langdesign,tooling,framework}/ — FRICTION.md +
   API-SURFACE.md (+ example code; framework/ adds FRAMEWORK-ANALYSIS.md) per persona.
 
@@ -432,18 +443,67 @@ langdesign/notely/, tooling/techy-tooling/, framework/ pending).
   **`ArgumentParser` trait → `core::constructs`**; with (a) ruled in H, **both P1
   deferred placements are closed and the Phase 3 topology application is
   unblocked**.
-- (pending) **NEXT: 2b T4 session** (then T5; recompose design session; Tier-C
-  batch). Prepare the T4 brief exactly as for T1/T2/T3 (background agent, every
-  claim re-verified against current code, output copied to dev-docs/api-review/,
-  presented point-by-point; interim rulings file updated every round, hard
-  structural points first). T4 inputs/agenda: POLICY_BRIEF routing (cursor
-  primitive F7; `\input` wiring F8 — leaning embedder filesystem-trait, see
-  Companion projects; source-model polish); P4 riders: `\input` engine wiring +
-  resolver move `Language` → driver + reverse-lookup naming (`SourcePos`,
-  deepest-node/covering-slice); P5 rider: **wire-identifier rename slate**
-  (concept-named areas — 14 of 18 core.* identifiers use internal file names; the
-  resolution-concept areas are now definable per [§dd-dr:resolution-extraction]);
-  walkthroughs/tooling/. T5 agenda additions from T3: D acceptance (FLM probe
-  re-run), driver knobs / extension seam, pillar-signature sufficiency for
-  post-parse state synthesis, restage interaction, wish-20 `stage_invocation`
-  signature (co-designed with `restage_invocation` + builder-`add` ergonomics).
+- 2026-07-31 (user): **2b T4 SESSION RULED** (interactive; full working detail
+  frozen in **T4_RULINGS.md**; durable records: DESIGN_RATIONALE new entries
+  **[§dd-dr:input-wiring]**, **[§dd-dr:include-chain-helpers]**,
+  **[§dd-dr:line-col-ownership]** + amendments on
+  [§dd-dr:wire-identifier-stability] (THE FROZEN SLATE),
+  [§dd-dr:resolver-contract], [§dd-dr:language-init], [§dd-dr:tree-navigation],
+  [§dd-dr:span-extend-to], [§dd-dr:preset-driver-pillars], [§dd-dr:recompose],
+  [§dd-dr:source-resolver], [§dd-dr:lazy-line-col] + superseded-names T4 block +
+  ARCHITECTURE footer refs). Headlines: (1) **B/\input wiring**: driver accessor
+  `source_resolver() -> Option<&dyn …>` (driver `Copy`/`Eq` DROPPED — no clear
+  reason to keep; T3-D clause struck); door
+  `cx.parse_attached_source(source, state, parser)` (**user amendment: caller
+  supplies the construct parser**); bundle `attach_source_reference` (core,
+  beside the door); TWO failure conditions (`NoSourceResolver`,
+  `UnresolvableSourceReference` — `ResolveError` becomes `Clone` via
+  `Option<Arc<dyn Error>>` cause, **user principle: techy error types uniformly
+  Clone, out-of-crate info behind Arc**); recursion NOT core's job (user; `.dtx`
+  legitimate self-inclusion) — instead `Source::including_sources()` +
+  `check_include_chain(target_key, triggered_at, origin_key, max_depth)` in
+  source (**origin-keyed incl. the primary** — user-driven design);
+  `techy::helpers` REJECTED (util-grounds); `Language` collapses to
+  `new + parse + parse_source + accessors`; preset `input_macro_spec::<LLL>()`
+  opt-in, never preloaded. (2) **C**: `SourceResolver` IS the FS trait; techy
+  ships nothing; companion bullet closed. (3) **A/slate FROZEN**: area **`specs`**
+  absorbs command resolution AND the old `scopes` area (user: "resolution of
+  what?" — also disambiguates vs source resolution); full 22-condition table in
+  the [§dd-dr:wire-identifier-stability] amendment; segments kept; P5's "14 of
+  18" corrected to 19 core.* (14 file-named). (4) **E/D**: `node_at` /
+  `covering_slice` / `parent()` / `index_in_parent()` / `SourcePos::pos()` /
+  `start_pos()`/`end_pos()` / `tree()` pub / `Span::contains` now;
+  **`ancestors()` REJECTED** (user: top-down visiting; zero trap surface);
+  cursor-vocabulary reconciliation recorded (retired `SourceCursor` ≠ F7's
+  editor-cursor lookup); F7 CLOSED. (5) **F**: `line_of` **with line number**
+  (user amendment) + `line_col_span`; `line_range`/per-node `line_col`/caret
+  renderer REJECTED; `Descendants::with_depth()` REJECTED → **read-only walker
+  routed to the recompose session** (user: don't reinvent a visitor);
+  **line/col ownership design (user-driven)**: consumer-held
+  `LineIndexCache` + **`LineColProvider`** rendering seam (editor incremental
+  caches plug in); `DEFAULT_MAX_SCAN_LEN` → **500_000** (user); Lang-coupled
+  analyzers REJECTED ([§dd-dr:origin-genericity] load-bearing).
+- (pending) **NEXT: 2b T5 session** (then the recompose design session; then the
+  Tier-C batch; then Phase 3 apply). Prepare the T5 brief exactly as for T2/T3/T4
+  (background agent, every claim re-verified against current code, output copied
+  to dev-docs/api-review/, presented point-by-point; interim rulings file per
+  round, hard structural first). T5 inputs/agenda: P4_RULING.md deferred agenda
+  (restage detailing: op/bundle shapes, region-edit policies, builder-`add`
+  ergonomics, naming incl. `Restage::Continue` alternates, Split/KeyVals-on-restage
+  option); wish-20 `stage_invocation` signature (T3 commitment — co-design with
+  `restage_invocation`); P3 acceptance: re-run T5's FLM compile probe against the
+  ruled generalization (role traits + `LatexlikeLang` + `LatexlikeDriver<LLL>` +
+  pillars); driver knobs / extension seam (now incl. the T4 resolver field as a
+  datum); pillar-signature sufficiency for post-parse state synthesis (E4
+  tie-in); honest-slice / transform-tier validator application details; `\input`
+  splice-a-cached-parse affordance question; transformation-infra scope + FFI
+  needs + reconstruction guarantees (POLICY_BRIEF routing);
+  walkthroughs/framework/ (FRICTION.md boundary table, FRAMEWORK-ANALYSIS.md
+  top-5). **Recompose session agenda** (after T5): P4 open Qs (direct fold vs
+  transform-to-chars; state-threading model; output sink; targeted-replacement
+  integration) + the read-only structural walker (enter/exit, depth, `VisitFlow`
+  — T4 routing) + the verbatim `Attached`-exclusion rule. **Tier-C batch**: 66
+  no-usage-signal items (SYNTHESIS §3) + accumulated riders (`NoResolver` lean
+  keep; `ProvenanceChain`/`ResolvedContent` placements; free `resolve_source`
+  now canonical; `StdParseDriver` test-carrier docs). Session pattern: interim
+  rulings file updated every round.
