@@ -144,7 +144,9 @@ unchanged, future `techy::transform` — and internal src modules become private
 (internal reorganization stops being public-breaking). The topic modules sketched
 above then describe the *internal* organization only. Full decision incl. the
 specs-vs-hub author-side/run-side rule and rejected shapes:
-[§dd-dr:public-namespace-topology].
+[§dd-dr:public-namespace-topology]. Later rulings add `techy::recompose` and
+`techy::visit` to the top-level set ([§dd-dr:recompose-machinery],
+[§dd-dr:visit-engine]).
 
 **Stability rubric (decided):** everything `pub` is one stability class under one
 semver discipline — no unstable tier; access tiers are expressed by placement and
@@ -392,7 +394,9 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   partition the parent's content interior exactly** — the byte-accounting contract
   exactness consumers build on. Environment `\begin{name}`/`\end{name}` scaffolding is
   deliberately rigid and *reconstructed*, not recorded
-  ([§dd-dr:environment-scaffolding]).
+  ([§dd-dr:environment-scaffolding]). (Superseded, ruled not yet applied: the
+  recompose session reverses reconstruct→*record* — the scaffolding facts land in
+  the Lang-owned invocation-syntax payload; [§dd-dr:invocation-syntax].)
 - **Recomposition levels**: level 1 — a node's own `SourceSpan` → exact original text,
   no external lookup; level 2 — Lang-aware quasi-equivalent reproduction from recorded
   facts. Consequence: per-instance syntax choices the spec does not determine live as
@@ -429,7 +433,14 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   shorthands ([§dd-dr:extract-annotations]), and landed the runtime all-trees-law
   checker as `core::node::validate_tree` ([§dd-dr:tree-validation]); recomposition
   is bound to the per-node doctrine (spans are provenance — no inter-node span
-  arithmetic; [§dd-dr:recompose] amendment).
+  arithmetic; [§dd-dr:recompose] amendment). The dedicated recompose session then
+  fixed the machinery: trigger spelling becomes recorded payload —
+  `Lang::InvocationSyntax` on `CallableData`, replacing the core `post_space`
+  field ([§dd-dr:invocation-syntax]); recomposition is a meaning-free `Piece`
+  value fold with instruction lowering (`techy::recompose`; ONE preset
+  `SourceRecomposer`; [§dd-dr:recompose-machinery]); and the read-only walk and
+  the recompose driver share one traversal engine in the top-level `techy::visit`
+  module ([§dd-dr:visit-engine]).
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -442,7 +453,9 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 transformation ruling ([§dd-dr:transform]): [§dd-dr:node-annotations],
 [§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:recompose],
 [§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation]; the T5
-detailing: [§dd-dr:restage-ops], [§dd-dr:extract-annotations].
+detailing: [§dd-dr:restage-ops], [§dd-dr:extract-annotations]; the recompose
+session: [§dd-dr:invocation-syntax], [§dd-dr:recompose-machinery],
+[§dd-dr:visit-engine].
 
 ## Construct parsers [§dd-arch:constructs]
 
@@ -564,7 +577,9 @@ helper), [§dd-dr:input-wiring] (driver resolver accessor, the
 (API-review P4): `finalize_node`
 is replaced by parse-once minting — parse staging via `ParseContext::stage_node`,
 `ParserSession::builder` crate-private ([§dd-dr:ext-minting]); the source resolver
-moves from `Language` to the driver ([§dd-dr:input-attachment]).
+moves from `Language` to the driver ([§dd-dr:input-attachment]); `Lang` gains the
+`InvocationSyntax` associated type — invocation spelling as recorded `CallableData`
+payload, replacing the core `post_space` field ([§dd-dr:invocation-syntax]).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 
@@ -749,6 +764,10 @@ Decisions behind this section (full topic: [§dd-dr:latexlike]):
 [§dd-dr:latexlike-generalization] (role traits + `LatexlikeLang`; `Lang` stays whole),
 [§dd-dr:preset-driver-pillars] (pillar functions + generic `LatexlikeDriver<LLL>`
 assembly),
+[§dd-dr:invocation-syntax] (the recorded invocation-syntax payload
+`InvocationSyntax<Env>`; `EnvironmentSyntax`; fifth role trait
+`LatexlikeInvocationSyntax`),
+[§dd-dr:recompose-machinery] (the preset `SourceRecomposer`),
 [§dd-dr:math-group-form] (`Math(MathGroupForm)` class payload), [§dd-dr:minidefs]
 (toy `minilatex` package; deliberately not a definitions database), [§dd-dr:group-taxonomy], [§dd-dr:math-no-nesting],
 [§dd-dr:preset-vocabulary], [§dd-dr:base-package], [§dd-dr:mode-visibility],

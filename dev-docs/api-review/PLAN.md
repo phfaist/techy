@@ -126,7 +126,9 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   decision log + three new DESIGN_RATIONALE entries incl. the frozen
   wire-identifier slate; **T5 session RULED 2026-07-31** — brief T5_BRIEF.md,
   rulings T5_RULINGS.md + decision log + three new DESIGN_RATIONALE entries;
-  remaining: recompose session, Tier-C batch).
+  **recompose session RULED 2026-08-03/04** — brief RECOMPOSE_BRIEF.md, rulings
+  RECOMPOSE_RULINGS.md + decision log + three new DESIGN_RATIONALE entries;
+  remaining: Tier-C batch).
   Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -156,6 +158,10 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   infrastructure for tree→tree transformations; to-text then = transformations ending in
   string nodes + concatenation; useful for FLM. Open Qs: immutable flat NodeTree →
   rebuild API, node identity/provenance across transforms.
+  CLOSED (P4/T5/recompose sessions): restage ruled ([§dd-dr:restage],
+  [§dd-dr:restage-ops]); recompose is a direct value fold — the
+  to-text-by-concatenation route is demoted to a documented restage→recompose
+  pipeline pattern ([§dd-dr:recompose-machinery]).
 - **\input / file-system resolution**: CLOSED (T4 session, 2026-07-31) —
   `SourceResolver` verified to already BE the minimal filesystem-interface trait;
   techy ships nothing beyond the new source-side helpers
@@ -202,6 +208,16 @@ Repo (durable), all under dev-docs/api-review/:
   validator + honest slices F, cached-splice G, scope/FFI/reconstruction H,
   walkthrough sweep I; projected FLM probe copied to
   walkthroughs/framework/flm_projected.rs).
+- RECOMPOSE_BRIEF.md — recompose design-session decision brief (prepared 2026-07-31,
+  verified against 3ae9c67: substrate table = per-node-kind re-emission inventory,
+  doctrine operationalization, trigger-spelling residue design S1, direct-fold
+  architecture, walker, state/sink, targeted replacement, Attached-exclusion,
+  naming Qs 1–7, recommendations R1–R15).
+- RECOMPOSE_RULINGS.md — the frozen recompose-session rulings in full working
+  detail (Round 1 doctrine, Round 2 trigger-spelling storage incl. the CallSyntax
+  rejection and the InvocationSyntax mechanism, Rounds A–D machinery/walker/scope/
+  naming sweep); durable records are the DESIGN_RATIONALE entries listed in the
+  decision log.
 - T5_RULINGS.md — the frozen T5 session rulings in full working detail (A1–A9
   incl. the user-revised A8 extract-annotation design, B, C, E's
   `ParsingStateStack` design, D, F incl. the `core::node` home ruling, G's
@@ -542,42 +558,74 @@ projected FLM probe) is at
   inputs. (10) **I**: all 20 sweep rows dispositioned (binding-guide chapter
   checklist; post_space doc-only → techy-totext; `into_vec` → Tier-C lean
   reject; multi-source reconstruction tests → Phase 3 checklist).
-- (pending) **NEXT: recompose design session** (then the Tier-C batch; then
-  Phase 3 apply). Same session pattern (background brief agent, every claim
-  re-verified against current code, point-by-point, interim rulings file).
-  Agenda: P4 open Qs (direct fold vs transform-to-chars; state-threading
-  model; output sink; targeted-replacement integration) + the read-only
-  structural walker (enter/exit, depth, `VisitFlow` — T4 routing) + the
-  verbatim `Attached`-exclusion rule + the T5 binding inputs: **per-node
-  recomposition doctrine** (no inter-node span arithmetic; no source read-back
-  beyond a node's own recorded content; span-verbatim strategy re-examined
-  under it), the trigger-spelling residue (user sketch: environment
-  scaffolding as `Hidden` slots `"begin_tokens"`/`"end_tokens"`, precise form
-  TBD). **Tier-C batch**: 66 no-usage-signal items (SYNTHESIS §3) +
-  accumulated riders (`NoResolver` lean keep; `ProvenanceChain`/
-  `ResolvedContent` placements; free `resolve_source` now canonical;
-  `StdParseDriver` test-carrier docs; `Diagnostics::into_vec` lean reject).
-  **Phase 3 checklist additions from T5**: C2 driver-residue assertion; F5
-  parse-law checker `Attached`-scoping; I-18 multi-source reconstruction
-  tests; A8 extract input-genericity rides the annotation application; the
-  `\text` recipe forbidden_chars fix (T1/T2) and all prior application riders
-  as logged. T5 inputs/agenda: P4_RULING.md deferred agenda
-  (restage detailing: op/bundle shapes, region-edit policies, builder-`add`
-  ergonomics, naming incl. `Restage::Continue` alternates, Split/KeyVals-on-restage
-  option); wish-20 `stage_invocation` signature (T3 commitment — co-design with
-  `restage_invocation`); P3 acceptance: re-run T5's FLM compile probe against the
-  ruled generalization (role traits + `LatexlikeLang` + `LatexlikeDriver<LLL>` +
-  pillars); driver knobs / extension seam (now incl. the T4 resolver field as a
-  datum); pillar-signature sufficiency for post-parse state synthesis (E4
-  tie-in); honest-slice / transform-tier validator application details; `\input`
-  splice-a-cached-parse affordance question; transformation-infra scope + FFI
-  needs + reconstruction guarantees (POLICY_BRIEF routing);
-  walkthroughs/framework/ (FRICTION.md boundary table, FRAMEWORK-ANALYSIS.md
-  top-5). **Recompose session agenda** (after T5): P4 open Qs (direct fold vs
-  transform-to-chars; state-threading model; output sink; targeted-replacement
-  integration) + the read-only structural walker (enter/exit, depth, `VisitFlow`
-  — T4 routing) + the verbatim `Attached`-exclusion rule. **Tier-C batch**: 66
+- 2026-08-03/04 (user): **RECOMPOSE SESSION RULED** (interactive; full working
+  detail frozen in **RECOMPOSE_RULINGS.md**; durable records: DESIGN_RATIONALE
+  new entries **[§dd-dr:invocation-syntax]**, **[§dd-dr:recompose-machinery]**,
+  **[§dd-dr:visit-engine]** + amendments on [§dd-dr:recompose],
+  [§dd-dr:slot-roles], [§dd-dr:environment-scaffolding] (SUPERSESSION),
+  [§dd-dr:tree-navigation], [§dd-dr:restage-ops], [§dd-dr:span-invariants],
+  [§dd-dr:latexlike-generalization] + superseded-names recompose block +
+  ARCHITECTURE notes in [§dd-arch:arch], [§dd-arch:nodes], [§dd-arch:engine],
+  [§dd-arch:latexlike]). Headlines: (1) **Round 1 doctrine** (user-simplified
+  R7): the recomposer may read any field of the node's own payload (span-backed
+  `TextContent` resolution permitted as a storage detail) and may NEVER resolve
+  span content — the node's own span included — against the source; no span
+  fast path (a tree carries no freshness signal); `span_content()` stays a
+  consumer affordance; "span-verbatim" retired as a strategy name; R15 in-crate
+  oracle suite (reemit == input; strict + tolerant; multi-source rides I-18).
+  (2) **CallSyntax slot role REJECTED outright** — and with it the brief's
+  R9–R12 (Hidden-slot scaffolding storage, core `escape_char` field,
+  Hidden-emission carve-out, order-free tiling); `SlotRole` stays three
+  variants. (3) **Accuracy doctrine**: the preset owns recomposition accuracy =
+  what the parse records; **`Lang::InvocationSyntax`** as a `CallableData`
+  field REPLACING core `post_space`; two-trait split (required core data bound
+  incl. `materialized()`, name at application aligned with the ext-bound
+  family, fallback `InvocationSyntaxData` + opt-in `FromInvocation`/
+  `from_invocation`, techy-implemented for `()`); latexlike enum
+  `InvocationSyntax<Env = StdEnvironmentSyntax<L>>` — `Macro { escape_char,
+  post_space }` / `Environment(Env)` / `Specials` unit; Specials Option 1
+  (name = spelling as written; canonical-`"\n\n"` superseded; identification by
+  spec identity — driver.rs:127 fix now load-bearing); per-side environment
+  record `{ escape_char, command_word, post_space, name_group_rule:
+  Arc<GroupRule<L>> }`; `EnvironmentSyntax` trait, accumulator shape (b),
+  spelling writers `write_begin`/`write_end`; fifth role trait
+  **`LatexlikeInvocationSyntax`**. (4) **Machinery**: meaning-free `Piece`
+  value fold, no sink concept (streaming = recomposer-held writer,
+  `Piece = ()`); `Recomposer` (State/Piece/Error, no Send/Sync);
+  `Recompose { Emit, Concat(ConcatPieces) }` head/sep/tail + chainable
+  constructors; `ComposePiece` monoid; wrapping contract (instructions lower
+  against the outermost recomposer); Concat default scope skips Attached AND
+  Hidden; `RecomposeContext` restage-mirror helpers; `core_source_instruction`;
+  preset `SourceRecomposer<LLL>` + `source_recomposer()`; targeted replacement
+  = wrapper pattern + documented restage→recompose pipeline. (5) **Shared
+  visit engine**: walker-on-recompose-core direction; top-level `techy::visit`
+  (`core::node` vetoed; free-fn `walk`, no `NodeRef::walk`); `NodeVisitor` +
+  `VisitFlow`; `VisitContext` = engine bookkeeping only (three-channel state
+  discipline); walk role-blind vs Concat's content default — the ruled
+  asymmetry. (6) **Naming sweep**: `Bit`→`Piece`, `ConcatSpec`/`ConcatParts`→
+  `ConcatPieces`, `VisitContext`/`RecomposeContext` spelled out,
+  `recompose::recompose` stutter accepted, `walk_tree`/`recompose_tree`
+  rejected, `new_for_invocation`→`from_invocation`, `RecomposeError` variants
+  mirror `RestageError` exactly.
+- (pending) **NEXT: Tier-C batch** (then Phase 3 apply). **Tier-C batch**: 66
   no-usage-signal items (SYNTHESIS §3) + accumulated riders (`NoResolver` lean
   keep; `ProvenanceChain`/`ResolvedContent` placements; free `resolve_source`
-  now canonical; `StdParseDriver` test-carrier docs). Session pattern: interim
-  rulings file updated every round.
+  now canonical; `StdParseDriver` test-carrier docs; `Diagnostics::into_vec`
+  lean reject). Session pattern: interim rulings file updated every round.
+  **Phase 3 checklist additions from the recompose session**: driver.rs:127
+  canonical paragraph-break spec object (spec identity is load-bearing — no
+  anonymous `SpecialsSpec::default()` per break); `materialize()` extended
+  through the invocation-syntax bound trait (`materialized(source_content)`);
+  T5-B `stage_invocation` signature amendment (the bundle carries the
+  `InvocationSyntax` value); `CallableData` `post_space` → `invocation_syntax`
+  field swap; kind.rs invariant-3 rewording; the in-crate oracle suite
+  (reemit == input; strict + tolerant matrices; multi-source rides T5 I-18);
+  the `Invocation` bundle carries trigger-token facts through to
+  `from_invocation`; parse-law checker update (the callable arm reads the
+  invocation-syntax payload); `RecomposeError` variant names mirror
+  `RestageError`; the core invocation-syntax bound trait named at application,
+  aligned with the ext-bound family (fallback `InvocationSyntaxData`). Prior
+  checklist items stand: C2 driver-residue assertion; F5 parse-law checker
+  `Attached`-scoping; A8 extract input-genericity rides the annotation
+  application; the `\text` recipe forbidden_chars fix (T1/T2) and all prior
+  application riders as logged.

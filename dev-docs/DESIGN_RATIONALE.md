@@ -1950,7 +1950,10 @@ Rejected alternatives: recovering either from the span (fails for synthesized co
 #### Environment scaffolding is rigid syntax, reconstructed — not nodes, not a record [§dd-dr:environment-scaffolding]
 
 Status: DECIDED (user; closes the terminator-representation question left open by the
-regions session).
+regions session; **superseded** — API-review recompose session: the
+reconstruct-don't-record half is reversed — scaffolding facts are recorded as
+invocation-syntax payload, cf. [§dd-dr:invocation-syntax] and the amendment note
+below).
 
 An environment-shaped callable's span covers the whole `\begin{align}…\end{align}` extent
 (plus post-space); its children are the argument regions followed by the body `List` — one
@@ -1976,6 +1979,17 @@ Revisit if: a construct's closing syntax is genuinely per-instance-variable (a f
 closing with its own trigger text is fine — that is `name`; a freely chosen close spelling
 is not): that construct's parser then records the choice on the node, following the
 `GroupData` delimiter precedent.
+
+*(Amended — API-review recompose session, SUPERSESSION: the per-node recomposition
+doctrine ([§dd-dr:recompose] amendments) reversed reconstruct → **record** — the
+begin/end facts (per side: escape char, command word, post-space, name-group rule)
+are recorded on the node as the environment arm of the Lang-owned invocation-syntax
+payload ([§dd-dr:invocation-syntax]). What stands: the rigid parse syntax (with
+strictness now Env-owned — a tolerance variant is a newtype over
+`StdEnvironmentSyntax`), and both recorded rejections above — scaffolding is still
+neither nodes nor slot records (the recompose session separately rejected the
+`Hidden`-slot storage design). The "tolerated and *not recorded*" post-space clause
+no longer holds: the per-side record keeps it.)*
 
 #### Whitespace and span invariants pinned [§dd-dr:span-invariants]
 
@@ -2012,6 +2026,14 @@ Status: DECIDED (user).
    mechanically by a test-utility `check_tree_invariants()` — deliberately a test aid, not
    builder law, so a future construct that legitimately breaks byte-accounting amends a
    test, not the architecture.
+
+*(Amended — API-review recompose session: invariant 3's *storage* moves — the core
+`CallableData.post_space` field is replaced by the Lang-owned invocation-syntax
+payload ([§dd-dr:invocation-syntax]); the recorded fact and its token-only rule are
+unchanged (latexlike records it in `Macro { escape_char, post_space }` and per
+environment side). The kind.rs invariant-3 rewording and the parse-law checker's
+callable arm (byte accounting now reads the invocation-syntax payload) are Phase 3
+application items.)*
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
@@ -2229,9 +2251,10 @@ additive as a sibling, with the semantic limitation stated on it.
 
 The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
 piece — the entries below cross-depend — plus the 2b T5 session's exact-type
-detailing. None is applied yet (application in the review's Phase 3, together with
-the P1 topology move). Working detail for the application sessions:
-`dev-docs/api-review/P4_RULING.md` and `T5_RULINGS.md` (process files, deleted when
+detailing and the recompose session's machinery/payload rulings. None is applied yet
+(application in the review's Phase 3, together with the P1 topology move). Working
+detail for the application sessions: `dev-docs/api-review/P4_RULING.md`,
+`T5_RULINGS.md`, and `RECOMPOSE_RULINGS.md` (process files, deleted when
 the review completes — these entries are the durable record).
 
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
@@ -2609,6 +2632,14 @@ Revisit if: the closure blanket's `E` inference proves awkward at application �
 the recorded fallback is the fixed-error shape; a flag-level change, not a
 re-session.
 
+*(Amended — API-review recompose session, vocabulary alignment: the recompose
+surface mirrors this entry deliberately — `RecomposeError` variants mirror
+`RestageError` exactly; `RecomposeContext`'s argument/slot helper roster mirrors
+the restage family; no `Send`/`Sync` bounds, same argument. One recorded contrast:
+a restage takeover stages its subtree explicitly, while a wrap-intended recomposer
+returns instructions that lower against the *outermost* recomposer and never
+descends explicitly — the wrapping contract; [§dd-dr:recompose-machinery].)*
+
 #### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
 
 Status: DECIDED (user, API-review P4 session — direction and scope; detailed design
@@ -2666,6 +2697,239 @@ parser storing the scaffolding noise as **`Hidden` slots** (e.g.
 `"begin_tokens"`/`"end_tokens"`, precise form TBD) — turns scaffolding spelling
 into node data, a further argument for the per-node direction.)*
 
+*(Amended — API-review recompose session: the dedicated session ruled; detailed
+records: [§dd-dr:invocation-syntax] (the payload axis), [§dd-dr:recompose-machinery]
+(the fold machinery), [§dd-dr:visit-engine] (the shared traversal engine).
+Superseded above: the **two-strategies sentence** — "span-verbatim" is retired as a
+named strategy (the recomposer never resolves span content, the node's own span
+included; no span fast path — a tree carries no reliable freshness signal to gate
+one; `span_content()` stays a public consumer affordance the recomposer simply never
+uses); the open sink question — there is **no sink concept** in the machinery (value
+fold; streaming = a recomposer-held writer with `Piece = ()`); and amendment (3)'s
+`Hidden`-slot scaffolding sketch — **rejected** together with the `CallSyntax` role:
+trigger spelling is recorded *payload* (`Lang::InvocationSyntax`), never slots. The
+node-data strategy survives as the ONE preset `SourceRecomposer`; the parse-law byte
+accounting stays an in-crate acceptance-suite oracle, now certifying payload
+completeness with no span crutch.)*
+
+#### Invocation syntax is recorded payload: `Lang::InvocationSyntax` [§dd-dr:invocation-syntax]
+
+Status: DECIDED (user, API-review recompose session; supersedes the
+reconstruct-don't-record half of [§dd-dr:environment-scaffolding] and the core
+`post_space` storage of [§dd-dr:span-invariants] invariant 3; application pending).
+
+**Accuracy doctrine (user):** the *preset* (the `Lang`), not core, owns
+recomposition accuracy — byte-exact vs up-to-noise vs loose is the preset's choice,
+implemented by what invocation-syntax information it records in node payload, in
+logical canonical form. Recomposition accuracy is thereby coupled to
+parse-recording accuracy: recomposition reads **raw node payload only** — no hidden
+slots, no side channels (extending [§dd-dr:recompose]'s per-node doctrine). The
+in-crate oracle acceptance suite (reemit == input; strict + tolerant matrices;
+multi-source rides the T5 I-18 obligation) certifies payload completeness with no
+span crutch — it can only pass once these recordings land (Phase 3 sequencing).
+
+The mechanism: a new Lang-associated invocation-syntax type,
+**`Lang::InvocationSyntax`**, stored as a `CallableData` field **replacing the core
+`post_space` field** (and no `escape_char` is ever added to core); minted by the
+invocation parser; a parse-level-syntax channel, distinct from the lang's node ext
+(preset-logic info). Two-trait split:
+
+- the **required core data-bound trait** on `Lang::InvocationSyntax`: `Clone +
+  Debug + Send + Sync + 'static` plus `materialized(&self, source_content) -> Self`
+  (the `()` impl is trivial) — final name at application, aligned with the
+  ext-bound family (fallback `InvocationSyntaxData`);
+- the **opt-in constructor trait `FromInvocation`** with `from_invocation`,
+  consulted by the std staging sites (`StdInvocationParser` + the specials site)
+  and implemented for `()` by techy.
+
+**The latexlike payload** is an enum with a type-parameter default,
+`InvocationSyntax<Env = StdEnvironmentSyntax<L>>`:
+
+- `Macro { escape_char, post_space }`.
+- `Environment(Env)` — the std record holds per side `{ escape_char, command_word,
+  post_space, name_group_rule: Arc<GroupRule<L>> }`, the name group recorded as the
+  **rule `Arc` cloned from the matched token** (user counterproposal, verified
+  sound: `TokenKind::GroupOpen` carries the matched rule Arc, token.rs:45–53; the
+  rule's open/close `String`s are the exact matched bytes, rules.rs:42–50; the name
+  group can never exist in delimiter-diverged form — a malformed begin takes the
+  chars-recovery path, environments.rs:478–493 — so rule == bytes always; the Arc
+  is source-independent, hence exempt from `materialized`; and it records the group
+  *class*, which byte-recording would lose). End-side facts are reported back by
+  the body parser (the terminator consumer, environments.rs:545–549).
+- `Specials` — a **unit variant**; Option 1 (user, reversing an earlier
+  literal_form lean): `name` is the actual invocation spelling *always*, matching
+  the macro rule (`\foo` vs `\fooooo`, both spec-resolved by prefix, both record
+  the name as written) — no second field, no two-field rename hazard.
+  Paragraph-break `Specials` nodes record the actual whitespace run as `name`; the
+  canonical-`"\n\n"` contract is superseded; identification is by **spec
+  identity** — the definite, identifiable paragraph-break spec object (directive:
+  the latexlike driver must not mint an anonymous `SpecialsSpec::default()` per
+  break, driver.rs:127; that fix is now load-bearing, not hygiene).
+
+**Env consolidation** (user): everything anchors on the Env type — a defaulted
+`LLL`-method tier was dropped (user worry upheld: too many customization entry
+points on `Lang`); the single customization entry is the Lang's choice of
+`InvocationSyntax` type. A new **`EnvironmentSyntax<L>` trait**, implemented by Env
+types, consolidates begin/end *scanning* and payload construction in the
+**accumulator shape (b)**: `parse_begin -> (NameInfo, Self)` with the end side
+empty; `parse_end(&mut self)` fills it — zero extra associated types, and the
+intermediate state doubles as the synthesis constructor's shape.
+`EnvironmentInvocationParser` becomes generic over `LLL`, delegating scanning to
+Env while resolution + argument parsing stay composition-owned (`parse_begin`
+returns the name info the composition needs). Same-record/different-tolerance is a
+newtype over `StdEnvironmentSyntax` (strict default; noise-tolerant swappable).
+Verbatim caveat (verified): the verbatim terminator is one literal `GroupClose`
+token (rules replaced; close = the full `\end{name}` string,
+verbatim_parser.rs:5–24, 106–123) — end-scanning delegation cannot apply to raw
+bodies; the verbatim path records std end facts from the matched literal via the
+one std-facts method the trait keeps. `EnvironmentSyntax` also carries the
+**spelling writers `write_begin`/`write_end`** — the Env type owns its own
+re-emission (the accuracy doctrine made literal); a `source_content` parameter
+resolves span-backed fields.
+
+**The fifth role trait** joins the [§dd-dr:latexlike-generalization] roster:
+`LatexlikeInvocationSyntax`, on the syntax type — `type Env:
+EnvironmentSyntax<L>`, form constructors
+(`macro_form`/`environment_form`/`specials_form`), accessors
+(`macro_syntax`/`environment_syntax`/`is_specials`).
+
+Honest costs accepted (user): Lang-agnostic tooling sees only name + span of
+foreign callables (by design); variant/`callable_type` coherence is unenforced (a
+recomposer error variant reports it); +1 `Lang` associated type.
+
+Rejected alternatives: a **`CallSyntax` fourth `SlotRole`** storing trigger
+spelling in slots — rejected outright (user): it duplicates information the node
+already owns (macro/environment names re-appear in scaffolding bytes); it cannot be
+a preset-agnostic recomposition mechanism (core cannot reconstruct preset-owned
+constructs); and it makes transforms hazardous (a rename requires synchronized
+spelling updates). With it fall the brief's `Hidden`-slot scaffolding storage
+(`"begin_tokens"`/`"end_tokens"` span-backed `Chars` nodes), the `escape_char` core
+`CallableData` field, the `Hidden`-emission carve-out, and the order-free-tiling
+builder change: `SlotRole` stays the ruled three-variant enum, `Hidden` stays
+reserved, and the builder tiling check stays as-is ([§dd-dr:slot-roles]).
+
+Revisit if: a construct's invocation syntax cannot be expressed as per-node
+recorded payload — that is a new axis to design, not a reason to resurrect
+slot-side scaffolding storage.
+
+#### Recompose machinery: the meaning-free `Piece` fold with instruction lowering [§dd-dr:recompose-machinery]
+
+Status: DECIDED (user, API-review recompose session; completes [§dd-dr:recompose]'s
+deferred detailing; application pending).
+
+The recompose machinery is **meaning-free** (user decoupling directive): it
+composes generic *pieces* over the visit; source recomposition is ONE `Recomposer`
+implementation (latexlike's), never a machinery default. Architecture = **direct
+value fold** — the P4 transform-to-chars-then-concatenate alternative is dead as a
+mechanism, surviving only as the documented restage→recompose pipeline pattern.
+There is **no sink concept** in the machinery: streaming is a recomposer-held
+writer with `Piece = ()`.
+
+- **Reading contract (user-simplified; replaces the brief's permits/forbids
+  list):** *permitted* — reading any field of the node's own payload, including
+  resolving span-*backed payload* (`TextContent::Spanned`), an internal detail of
+  how a content field is stored (parse trees recompose zero-copy). *Forbidden* —
+  the recomposer resolving any span content, **including the node's own span**,
+  against the source. No span fast path exists in the shipped recomposer: a tree
+  carries no reliable "still fresh from parse" signal, so a span shortcut could
+  never be safely gated (user rationale). `span_content()` remains a public
+  *consumer* affordance (level-1 lookup); the recomposer simply never uses it.
+  Byte-exactness rests entirely on payload completeness
+  ([§dd-dr:invocation-syntax]).
+- **`Recomposer` trait**: `State`/`Piece`/`Error` associated types +
+  `recompose_node`; **no `Send`/`Sync` bounds** (the [§dd-dr:restage-ops]
+  argument transfers). State is consumer-defined and threaded downward by
+  explicit descent; run-spanning state lives in the recomposer's `&mut self`
+  fields (the three-channel discipline, [§dd-dr:visit-engine]). Entry:
+  `recompose::recompose(tree, recomposer)`.
+- **Instruction enum** `Recompose { Emit(Piece), Concat(ConcatPieces) }`.
+  `ConcatPieces` is the joiner payload — `head + child₁ + sep + … + childₙ +
+  tail` (user amendment) — plus optional derived state and scope, built by
+  chainable constructors (`children()`/`wrap(head, tail)`/`join(sep)`).
+- **`ComposePiece`**: the piece monoid (`empty`/`append`; techy impls `String`
+  and `()`); it carries a `Clone` requirement — `sep` is duplicated per gap
+  (option (a), ruled).
+- **The wrapping contract**: instructions lower against the **outermost**
+  recomposer, so layering is free; wrap-intended recomposers return instructions
+  and never descend explicitly (contrast restage, where a takeover visitor stages
+  explicitly — [§dd-dr:restage-ops]).
+- **Default `Concat` scope skips `Attached` AND `Hidden`** (plain children +
+  `Content` regions); widening is the explicit opt-in
+  (`include_attached()`/`include_hidden()`). This operationalizes the ruled role
+  semantics — reads are role-blind, recompose is the one role-sensitive site
+  ([§dd-dr:slot-roles]); `SourceRecomposer` needs no scope call at all; the walk
+  stays role-blind ([§dd-dr:visit-engine]) — the read/compose asymmetry is
+  frozen as ruled.
+- **`RecomposeContext`** (spelled-out Context per the `ParseContext` convention):
+  self-passing helper methods, surface kept minimal; the argument/slot roster
+  mirrors the restage family — `recompose_argument` / `_argument_content` /
+  `_named` variants (`Result`, per the `_named` convention) /
+  `_slot_content_named` / `recompose_body` — final spellings at application.
+  **`RecomposeError`** variants mirror `RestageError` exactly.
+- **`core_source_instruction`**: the instruction-returning free helper for the
+  core-complete kinds (`B: ComposePiece + From<&str>`); it declines callables —
+  their payload is Lang-owned ([§dd-dr:invocation-syntax]).
+- **`SourceRecomposer<LLL>`** (public; constructor `latexlike::
+  source_recomposer()`): the preset source re-emission — `State = ()`,
+  `Piece = String`, instruction-only, plus a coherence error variant
+  (variant/`callable_type` mismatch).
+- **Targeted replacement** = the wrapper pattern (a wrapping recomposer overrides
+  the targeted nodes; no span fast path) + the documented restage→recompose
+  pipeline; the P4 integration question and the session's Attached-exclusion
+  point close here.
+- Naming: **`Piece`** over `Bit` (binary connotation; `Fragment` recorded
+  considered — DocumentFragment precedent; `Part` considered; `Output` rejected —
+  collides with `ConstructParser::Output`); the **`recompose::recompose` stutter
+  is accepted** (module = a domain whose sole operation shares its name);
+  `recompose_tree` rejected on one-canonical-path.
+
+Rejected alternatives: a machinery-level sink type/parameter (the fold returns
+values; streaming is a recomposer concern); `ConcatSpec` ("Spec" is author-side
+vocabulary) and the interim `ConcatParts` — the payload is `ConcatPieces`.
+
+Revisit if: a real consumer's piece type cannot satisfy `Clone` — the per-gap
+`sep` duplication is the one place the monoid demands it.
+
+#### `techy::visit`: one shared traversal engine for walk and recompose [§dd-dr:visit-engine]
+
+Status: DECIDED (user, API-review recompose session; realizes the read-only walker
+routed by [§dd-dr:recompose]'s T4 amendment; application pending).
+
+The read-only structural walker and the recompose driver share **one traversal
+engine**, in direction **walker-on-recompose-core** (user challenge upheld: the
+brief's separation argument refuted only the reverse — recompose cannot be built on
+a plain read walker, because the fold composes values and threads state,
+capabilities enter/exit walking deliberately lacks). Home: **`techy::visit`**, a
+top-level module — the user vetoed `core::node`; strata consequence: entries are
+free functions, and there is no `NodeRef::walk` (core cannot name the techy-level
+engine). `validate_tree` is unaffected and stays `core::node`
+([§dd-dr:tree-validation]) — placement follows logical function in both rulings.
+
+- **`NodeVisitor`**: `enter` returning `VisitFlow { Descend, SkipChildren, Stop }`
+  + defaulted `exit`; blanket impl for enter-only closures; single entry
+  **`visit::walk`** (`walk_tree` rejected on one-canonical-path).
+- **`VisitContext`** carries **engine bookkeeping only** — depth, tree access,
+  cross-tree guards — and NO user state. The **three-channel discipline** stands
+  (user): run-spanning state = the visitor's/recomposer's `&mut self` fields; fold
+  accumulation = driver locals + the call stack; downward context = the
+  argument-threaded `S`. A walk needing scoped state IS a `Recomposer` with
+  `Piece = ()` — no fourth channel exists.
+- All descent funnels through one `each_child` kernel — the recompose driver and
+  the walk are clients of the same engine, which is what makes the wrapping
+  contract's uniform lowering possible ([§dd-dr:recompose-machinery]).
+- **`walk` is role-blind** — it visits everything, `Attached` and `Hidden` slot
+  children included (debug honesty, [§dd-dr:slot-roles]) — in deliberate contrast
+  to `Concat`'s content-scoped default: the read/compose asymmetry IS the ruled
+  role semantics, not an accident of implementation.
+
+Rejected alternatives: recompose-on-walker (above); `core::node` as the home (user
+veto); `walk_tree`/`recompose_tree` twin entries (one-canonical-path); a
+`Descendants::with_depth()` adapter (already rejected in T4 — flat iteration loses
+structure; `descendants()` itself stays for structure-free queries).
+
+Revisit if: an engine need tempts user state into `VisitContext` — the ruled
+answer is the three-channel discipline, not context growth.
+
 #### Slot roles and trait-based body marking [§dd-dr:slot-roles]
 
 Status: DECIDED (user, API-review P4 session; amends
@@ -2710,6 +2974,15 @@ must be a conscious breaking change, the [§dd-dr:math-group-form] argument);
 `parse_attached_source`/`attach_source_reference` already teach the vocabulary);
 restage descends into `Attached`/`Hidden` children uniformly
 ([§dd-dr:restage-ops]).)*
+
+*(Amended — API-review recompose session: a fourth **`CallSyntax` role was
+rejected outright** — `SlotRole` stays the three-variant enum, and techy itself
+mints NO `Hidden` slots (`Hidden` stays reserved for frameworks; trigger/scaffolding
+spelling is invocation-syntax *payload*, [§dd-dr:invocation-syntax]). The one
+role-sensitive site is made concrete: `Concat`'s default scope is plain children +
+`Content` regions — `Attached` AND `Hidden` skipped, widening explicit via
+`include_attached()`/`include_hidden()` — while the walk stays role-blind
+([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).)*
 
 #### `\input` attachment: same-builder sub-parse; multi-source trees are first-class [§dd-dr:input-attachment]
 
@@ -2818,6 +3091,13 @@ per-node accessors stay valid on any tree (a node's own span is its provenance).
 Doc-vocabulary rule (user): the word "honest" must not appear in the rustdoc
 contracts — state the concrete condition ("the run lies within a single source");
 "honest slices" stays internal design-record vocabulary.)*
+
+*(Amended — API-review recompose session: the read-side structural walk (T4's
+routed walker) lands as the free function `walk` in the top-level `techy::visit`
+module — trait `NodeVisitor` (enter/exit) + `VisitFlow`, one engine shared with
+the recompose driver; no `NodeRef::walk` (strata: core cannot name the
+techy-level engine). `descendants()` stays the flat stream.
+[§dd-dr:visit-engine].)*
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
@@ -4855,6 +5135,25 @@ re-opens a settled argument:
   not copied); `check_transform_tree_invariants` and the withdrawn
   `validate_parse_tree` — the runtime checker is `validate_tree`
   ([§dd-dr:tree-validation]).
+- From the API-review recompose session: `CallSyntax` (a proposed fourth
+  `SlotRole`) and the `"begin_tokens"`/`"end_tokens"` `Hidden`-slot scaffolding
+  storage — rejected outright: trigger spelling is invocation-syntax *payload*
+  ([§dd-dr:invocation-syntax]); with them `escape_char` as a core `CallableData`
+  field (rejected), and `post_space` as a core `CallableData` field — the fact
+  moves into the invocation-syntax payload; "span-verbatim" — retired as a
+  strategy name (no named span strategy exists; [§dd-dr:recompose] amendment);
+  the canonical-`"\n\n"` paragraph-break `name` — superseded by name-as-written +
+  spec-identity identification; `CallableNodeInvocationSyntax` — the payload
+  type is `InvocationSyntax`; `new_for_invocation` — the constructor
+  trait/method is `FromInvocation`/`from_invocation`; `Bit`/`ComposeBit` — the
+  piece vocabulary is `Piece`/`ComposePiece` (`Fragment`/`Part` recorded
+  considered; `Output` rejected — collides with `ConstructParser::Output`);
+  `ConcatSpec` ("Spec" is author-side vocabulary) and the interim `ConcatParts`
+  — the instruction payload is `ConcatPieces`; `VisitCx`/`RecomposeCx` —
+  spelled-out `VisitContext`/`RecomposeContext` (the `ParseContext` convention);
+  `walk_tree`/`recompose_tree` — rejected on one-canonical-path (`visit::walk`,
+  `recompose::recompose`; [§dd-dr:visit-engine],
+  [§dd-dr:recompose-machinery]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -5734,6 +6033,13 @@ the E4 design). (2) The pillar list's "the `finalize_node` spec-dispatch" is
 corrected: P4 deleted `finalize_node` ([§dd-dr:ext-minting]) — no such pillar
 exists; the preset's `make_node_ext` is the trivial `()` mint, and its only
 claimed ext is the `SlotExt` body marker ([§dd-dr:slot-roles]).)*
+
+*(Amended — API-review recompose session: the role-trait roster gains a fifth
+member, **`LatexlikeInvocationSyntax`** — implemented by the Lang's
+invocation-syntax payload type: `type Env: EnvironmentSyntax<L>`, form
+constructors (`macro_form`/`environment_form`/`specials_form`), accessors
+(`macro_syntax`/`environment_syntax`/`is_specials`) — so the preset's staging
+sites and `SourceRecomposer` work over any `LLL`; [§dd-dr:invocation-syntax].)*
 
 #### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
 
