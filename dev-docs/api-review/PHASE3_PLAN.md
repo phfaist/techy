@@ -63,7 +63,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   ruled path and no other; identifier-asserting tests updated to the slate; docs
   build clean.
 
-### S2 — Engine init + resolver strategy  [status: pending]
+### S2 — Engine init + resolver strategy  [status: DONE — merged 2026-08-03]
 
 - P2 Language-init: `Language::new(driver, initial_state)` (initial state
   mandatory); `ParsingState::initial()` → `lang_initial()`;
@@ -279,3 +279,12 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   should-fix (derive doc identifier). Fixes verified and committed (7th commit;
   finished by the supervising session after the implementer hit a session usage
   limit). Reports: reports/S1_REPORT.md. Merged into api-review.
+- 2026-08-03: S2 launched (worktree branch `phase3-s2-engine-init`).
+- 2026-08-03: S2 implemented (5 commits; gates green). Review verdict: conformant,
+  no blockers; deviations D1 (sealed-conversion inference markers), D2 (`Arc<R>`
+  forwarding impl removed for the no-double-wrap pass-through), D3
+  (`StdParseDriver<R = (), O = Option<String>>` origin param) — all verified
+  FORCED (compiler arguments reproduced) and **user-confirmed 2026-08-03**;
+  D4 `IntoCallableSpec` delegated-name accepted; D5/D6 not deviations.
+  Should-fix ([§dd-dr:resolver-contract] smalls line) applied. Reports:
+  reports/S2_REPORT.md. Merged into api-review.
