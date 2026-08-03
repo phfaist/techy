@@ -28,7 +28,7 @@ techy = "0.1"
 Parse LaTeX-like input with the built-in `latexlike` preset:
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::Latexlike;
 
 let language: Language<Latexlike> = Language::default();
@@ -43,19 +43,30 @@ modes, verbatim, error recovery, and content extraction.
 
 ## Architecture
 
-The crate is organized in three strata: S0, a `Lang`-free foundation; S1, the
-mutually recursive core; and S2, the presets.
+The public API is exported exclusively through facade modules — exactly one
+canonical public path per item, placed by role: data models and consumer tool
+libraries at the top level, the machinery in `techy::core`, the preset in
+`techy::latexlike`:
 
-- **`source`** (S0): source content, byte spans, provenance, lazy line/column
-- **`error`** (S0): span-based structured diagnostics, tolerant parsing policy
-- **`token`** (S1): zero-copy tokens, data-driven tokenization rules, readers
-- **`state`** (S1): the `Lang` trait, immutable parsing state, state deltas
-- **`spec`** (S1): callable specs and argument structures
-- **`scopes`** (S1): definition packages, the scope stack, spec lookup
-- **`node`** (S1): the flat, frozen node tree and its accessors
-- **`constructs`** (S1): the construct parsers and the content dispatch loop
-- **`engine`** (S1): `Language`, parse sessions, drivers, results
-- **`latexlike`** (S2): the familiar LaTeX behavior as a preset
+- **`techy::source`**: source content, byte spans, provenance, pluggable
+  resolution, lazy line/column
+- **`techy::error`**: span-based structured diagnostics, tolerant parsing policy
+- **`techy::extract`**: content-extraction helpers over parsed node trees
+- **`techy::core`**: the flat machinery hub — the `Lang` trait and immutable
+  parsing state, zero-copy tokens and data-driven tokenization rules, and the
+  parse engine (`Language` + `parse()`, drivers, sessions, results) — with three
+  satellites:
+  - **`techy::core::specs`**: defining callables — callable specs and argument
+    structures, definition packages, the scope stack, command resolution
+  - **`techy::core::constructs`**: the construct parsers and the content
+    dispatch loop
+  - **`techy::core::node`**: the flat, frozen node tree — reading, payloads,
+    building
+- **`techy::latexlike`**: the familiar LaTeX behavior as a preset
+
+Internally the crate is organized in three strata (a `Lang`-free foundation, one
+mutually recursive core, the presets); that file layout is private and never
+shows in public paths.
 
 To build HTML documentation:
 

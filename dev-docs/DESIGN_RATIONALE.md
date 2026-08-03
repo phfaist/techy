@@ -3296,7 +3296,7 @@ Status: DECIDED (user, review follow-up).
 miss — the name is defined nowhere the query saw), and `Failed { detail }` (a definition
 *provider* errored while answering — a broken or unavailable source). The dispatch sites
 diagnose `Failed` as a distinct condition — `CommandResolutionFailed`
-(`core.nodes_parser.command-resolution-failed`), separate from `UnresolvableCommand` —
+(`core.specs.command-resolution-failed`), separate from `UnresolvableCommand` —
 recovering the same way (span-backed chars). The shared scope-stack resolver
 `CommandResolution::resolve_via_scopes` (the one home for the preset and the test langs)
 maps a provider `Err` to `Failed`, where the per-driver copies previously flattened it into
@@ -3881,7 +3881,7 @@ Status: DECIDED (user; names user-decided; pylatexenc precedent:
   as the argument.
 - The condition was renamed with the semantics: `ExpressionCallableTakesArguments` →
   `ExpressionCallableRequiresContent` (identifier
-  `core.nodes_parser.expression-callable-requires-content`), message "…it requires
+  `core.arguments.expression-callable-requires-content`), message "…it requires
   content (arguments or a body)" — the old "it takes arguments" would be a false
   message for a body-bearing takeover that declares none. (An implementation-forced
   naming consequence, user-signed-off.)
@@ -4910,7 +4910,8 @@ need — promote the cache if one appears).
 #### Wire identifiers: stable namespace, concept-named areas, owner = defining vocabulary [§dd-dr:wire-identifier-stability]
 
 Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate was
-ruled in the API-review T4 session and is applied — Phase 3 S1).
+ruled in the API-review T4 session and is applied — Phase 3 S1; the slate's NEW
+`core.sources.*` conditions land with the Phase 3 `\input`-wiring stage, S6).
 
 `IDENTIFIER` strings are semver-stable under the same rubric and soft freeze as public
 paths ([§dd-dr:stability-rubric]) — they are wire/config material (match tables,

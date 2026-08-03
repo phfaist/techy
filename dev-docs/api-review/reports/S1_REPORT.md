@@ -156,3 +156,25 @@ Script over `target/doc/techy/**` real item pages (redirect stubs filtered):
 - S6: `core.sources.no-resolver` / `core.sources.unresolvable-reference`
   conditions.
 - The `guide` module's "parsing model" page is still a stub (pre-existing).
+
+## Review-fixes addendum (2026-08-03, supervising session)
+
+The independent S1 review found the stage conformant except doc-only findings,
+fixed in the follow-up commit on this branch (applied by the supervising session
+after the implementer agent hit a session usage limit mid-fix; its in-progress
+edits were verified and completed):
+
+- README.md: quick-start import `techy::engine::Language` → `techy::core::Language`
+  (snippet compile-verified against the built rlib, incl. runtime assert);
+  Architecture section rewritten to the ruled facade topology (still uses
+  `Language::default()` — correct until S2 removes it; S2 must update this example).
+- techy-derive/src/lib.rs doc example: identifier updated to
+  `core.specs.unresolvable-command` (frozen-slate value).
+- DESIGN_RATIONALE: two stale identifier parentheticals updated
+  (`core.specs.command-resolution-failed`,
+  `core.arguments.expression-callable-requires-content`); wire-identifier status
+  line gains the "`core.sources.*` land at S6" parenthetical.
+
+Re-verified after fixes: cargo build (0 warnings), cargo test (598 passed,
+0 failed, 4 pre-existing ignored), clean `cargo docs`, stale-path and
+old-identifier sweeps clean over README/techy-derive/docs/src.

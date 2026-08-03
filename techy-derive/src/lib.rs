@@ -22,7 +22,7 @@ use syn::{parse_macro_input, DeriveInput};
 /// #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 /// #[non_exhaustive]
 /// #[diagnostic(
-///     id = "core.nodes_parser.unresolvable-command",
+///     id = "core.specs.unresolvable-command",
 ///     message = "cannot resolve command ‘{escape_char}{name}’"
 /// )]
 /// pub struct UnresolvableCommand {
