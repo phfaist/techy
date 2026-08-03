@@ -220,18 +220,30 @@ pub struct ParsedArgument<L: Lang> {
     pub region: Option<ChildRegion>,
     /// Extension data attached to this argument (`Lang::NodeExts::ArgumentExt`) — e.g. a
     /// reference extension caching `{domain, key}` parsed out of the argument's content.
-    pub ext: ArgumentExt<L>,
+    /// Minted by the [`ArgumentParser`](crate::spec::ArgumentParser) that provided the
+    /// argument (its [`ParsedArgumentNodes`](crate::spec::ParsedArgumentNodes) output
+    /// carries the value) — so `Some` exactly when the argument was provided: an absent
+    /// argument was never parsed, and no party holds the knowledge to mint instance
+    /// data for it (the population-is-initialization rule,
+    /// [`NodeExtTypes`](crate::state::NodeExtTypes)).
+    pub ext: Option<ArgumentExt<L>>,
 }
 
 impl<L: Lang> ParsedArgument<L> {
-    /// An argument parsed against `spec` occupying `region`.
-    pub fn provided(spec: Arc<ArgumentSpec<L>>, region: ChildRegion) -> ParsedArgument<L> {
-        ParsedArgument { spec, region: Some(region), ext: Default::default() }
+    /// An argument parsed against `spec` occupying `region`, with the ext its parser
+    /// minted (`()` for no-ext languages).
+    pub fn provided(
+        spec: Arc<ArgumentSpec<L>>,
+        region: ChildRegion,
+        ext: ArgumentExt<L>,
+    ) -> ParsedArgument<L> {
+        ParsedArgument { spec, region: Some(region), ext: Some(ext) }
     }
 
-    /// An argument parsed against `spec` that was not provided.
+    /// An argument parsed against `spec` that was not provided. Absent arguments carry
+    /// no ext (see [`ext`](ParsedArgument::ext)).
     pub fn absent(spec: Arc<ArgumentSpec<L>>) -> ParsedArgument<L> {
-        ParsedArgument { spec, region: None, ext: Default::default() }
+        ParsedArgument { spec, region: None, ext: None }
     }
 
     /// Whether the argument was provided (pylatexenc's `was_provided()`).
@@ -291,6 +303,75 @@ impl<L: Lang> From<Vec<ParsedArgument<L>>> for ParsedArguments<L> {
     }
 }
 
+/// How a slot's content relates to its callable's source bytes — the recorded *role*
+/// of one [`ParsedSlot`], declared by the parser that minted the record.
+///
+/// - [`Content`](SlotRole::Content) — **constitutive**: the node's meaning is
+///   incomplete without it (an environment's body). The parent's source bytes tile
+///   over it like over any other child region.
+/// - [`Attached`](SlotRole::Attached) — **derived/redundant**: reconstructible from
+///   the invocation itself (the paradigm: `\input`'s resolved content — the
+///   invocation text *is* the recomposition). Attached slots are **excluded from the
+///   parent's byte-tiling**: their children live in their own source, and the
+///   declaration replaces source-change inference in the parse-law checker.
+/// - [`Hidden`](SlotRole::Hidden) — framework/callable-defined attachments techy core
+///   ignores: **no recomposition, no byte accounting** — and nothing else. `Hidden`
+///   is *not* read-invisibility: readers, extract helpers, and structural walks stay
+///   role-blind everywhere except recomposition (debug output shows reality).
+///   Semantics ride on the slot's name and the callable's spec.
+///
+/// Deliberately **exhaustive** (not `#[non_exhaustive]`): consumers match on roles in
+/// validators, recomposition strategies, and FFI mappings, and a fourth role would
+/// change byte-accounting semantics — that must be a conscious breaking change, not a
+/// silently-ignored variant.
+///
+/// Body-ness is a *different axis*, marked on the slot's ext via [`BodySlotExt`] —
+/// a body slot is usually [`Content`](SlotRole::Content), but the two are recorded
+/// independently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum SlotRole {
+    /// Constitutive content (the conceptual default): discarding it loses meaning.
+    #[default]
+    Content,
+    /// Derived from the invocation itself; excluded from the parent's byte-tiling.
+    Attached,
+    /// Framework-defined; techy core neither recomposes nor byte-accounts it —
+    /// readers stay role-blind (see the type docs).
+    Hidden,
+}
+
+/// Marking a slot ext type as able to designate **the body**: the trait behind
+/// [`NodeRef::body`](super::NodeRef::body), and the *generic* minting mechanism the
+/// preset's environment machinery uses (a body slot's ext is created via
+/// [`make_body`](BodySlotExt::make_body), so machinery generic over the language
+/// needs no concrete ext type).
+///
+/// Coherence contract: `Self::make_body().is_body()` must be `true`.
+///
+/// A framework forking the ext bundle implements this trait on its own
+/// [`SlotExt`](crate::state::NodeExtTypes::SlotExt) and every preset mechanism keeps
+/// working. The unit impl for `()` marks **every** slot as body — a no-ext language
+/// carries no marking information, so [`body()`](super::NodeRef::body) degenerates to
+/// the first slot.
+pub trait BodySlotExt {
+    /// Does this ext designate its slot as the body?
+    fn is_body(&self) -> bool;
+
+    /// Mint the ext of a body slot ([`is_body`](BodySlotExt::is_body) reports `true`
+    /// on the result).
+    fn make_body() -> Self;
+}
+
+/// The no-ext degenerate: every slot reports body, so
+/// [`body()`](super::NodeRef::body) selects the first slot.
+impl BodySlotExt for () {
+    fn is_body(&self) -> bool {
+        true
+    }
+
+    fn make_body() -> Self {}
+}
+
 /// One content region ("slot") of one invocation. Slots always have a region (a region
 /// that *exists*, with possibly empty content — unlike an absent optional argument):
 /// for the standard environment shape it holds the body `List` node, whose children are
@@ -310,20 +391,34 @@ pub struct ParsedSlot<L: Lang> {
     pub name: Option<Box<str>>,
     /// The slot's child region.
     pub region: ChildRegion,
+    /// The slot's [`SlotRole`]: how its content relates to the callable's source
+    /// bytes ([`Content`](SlotRole::Content) for ordinary in-source regions).
+    pub role: SlotRole,
     /// Extension data attached to this slot (`Lang::NodeExts::SlotExt`) — e.g. a tabular
-    /// extension caching the cell structure derived from a body slot's content.
+    /// extension caching the cell structure derived from a body slot's content; the
+    /// latexlike preset's body marker ([`BodySlotExt`]). Minted by the invocation
+    /// composition that mints the record — there is no default value
+    /// (population is initialization, [`NodeExtTypes`](crate::state::NodeExtTypes)).
     pub ext: SlotExt<L>,
 }
 
 impl<L: Lang> ParsedSlot<L> {
-    /// An unnamed slot occupying `region`, with default ext.
-    pub fn new(region: ChildRegion) -> ParsedSlot<L> {
-        ParsedSlot { name: None, region, ext: Default::default() }
+    /// A named slot occupying `region` (payload-first, the
+    /// [`ArgumentSpec::new`](crate::spec::ArgumentSpec::new) convention: naming is the
+    /// encouraged spelling).
+    pub fn new(
+        region: ChildRegion,
+        name: impl Into<Box<str>>,
+        role: SlotRole,
+        ext: SlotExt<L>,
+    ) -> ParsedSlot<L> {
+        ParsedSlot { name: Some(name.into()), region, role, ext }
     }
 
-    /// A named slot occupying `region`, with default ext.
-    pub fn named(name: impl Into<Box<str>>, region: ChildRegion) -> ParsedSlot<L> {
-        ParsedSlot { name: Some(name.into()), region, ext: Default::default() }
+    /// An unnamed slot occupying `region` — the marked, longer spelling
+    /// ([`new`](ParsedSlot::new) names the slot).
+    pub fn new_unnamed(region: ChildRegion, role: SlotRole, ext: SlotExt<L>) -> ParsedSlot<L> {
+        ParsedSlot { name: None, region, role, ext }
     }
 
     /// The slot's name ([`get_named`](ParsedSlots::get_named) symmetry with
@@ -418,6 +513,7 @@ impl<L: Lang> Clone for ParsedSlot<L> {
         ParsedSlot {
             name: self.name.clone(),
             region: self.region.clone(),
+            role: self.role,
             ext: self.ext.clone(),
         }
     }
@@ -428,6 +524,7 @@ impl<L: Lang> fmt::Debug for ParsedSlot<L> {
         f.debug_struct("ParsedSlot")
             .field("name", &self.name)
             .field("region", &self.region)
+            .field("role", &self.role)
             .field("ext", &self.ext)
             .finish()
     }

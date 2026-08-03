@@ -55,7 +55,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::node::{ContentNodes, GroupData, NodeKind};
+use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::Lang;
@@ -91,12 +91,15 @@ impl EmbellishmentsArgumentParser {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser {
+impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut nodes = Vec::new();
         let mut used = alloc::vec![false; self.markers.len()];
         let mut content_start: Option<u32> = None;
@@ -172,10 +175,14 @@ impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser {
         match content_start {
             // The content: the full run from the first wrapper group on (intermediate
             // noise included, leading noise excluded — module docs).
-            Some(start) => Ok(Some(ParsedArgumentNodes {
-                content: ContentNodes::InRegion(start..nodes.len() as u32),
-                nodes,
-            })),
+            Some(start) => {
+                let end = nodes.len() as u32;
+                Ok(Some(ParsedArgumentNodes::new(
+                    nodes,
+                    ContentNodes::InRegion(start..end),
+                    Default::default(),
+                )))
+            }
             // No pair matched; the reader is back at the entry position (the first
             // iteration's rewind).
             None => Ok(None),

@@ -508,7 +508,7 @@ mod tests {
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::{
         CallableData, ChildRegion, ContentNodes, NodeRef, ParsedArguments, ParsedSlot,
-        ParsedSlots,
+        ParsedSlots, SlotRole,
     };
     use crate::source::{Source, TextContent};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
@@ -770,9 +770,11 @@ mod tests {
             // The slot record is pure node vocabulary: minted here, name carried on
             // the record itself (the A.2 reshape); content designation from the body
             // parser (7.7).
-            let slots = ParsedSlots::from(vec![ParsedSlot::named(
-                "body",
+            let slots = ParsedSlots::from(vec![ParsedSlot::new(
                 ChildRegion::new(offset..offset + 1, body.content.clone()),
+                "body",
+                SlotRole::Content,
+                (),
             )]);
 
             let data = CallableData {
@@ -911,9 +913,11 @@ mod tests {
             ).unwrap();
             // The slot record is minted by the parser — pure node vocabulary, the
             // name carried on the record itself ([§dd-dr:nodes] self-description).
-            let slots = ParsedSlots::from(vec![ParsedSlot::named(
-                "raw",
+            let slots = ParsedSlots::from(vec![ParsedSlot::new(
                 ChildRegion::new(0..1, ContentNodes::InChildrenOf(list, 0..body_children)),
+                "raw",
+                SlotRole::Content,
+                (),
             )]);
             let data = CallableData {
                 callable_type: self.invocation.callable_type,

@@ -72,7 +72,7 @@ mod tests {
             &self,
             _cx: &mut crate::constructs::ParseContext<'_, '_, L>,
             _spec: &ArgumentSpec<L>,
-        ) -> crate::constructs::ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+        ) -> crate::constructs::ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
             Ok(None)
         }
     }
@@ -118,7 +118,7 @@ mod tests {
                 &self,
                 _cx: &mut crate::constructs::ParseContext<'_, '_, L>,
                 _spec: &ArgumentSpec<L>,
-            ) -> crate::constructs::ConstructParserResult<L, Option<ParsedArgumentNodes>>
+            ) -> crate::constructs::ConstructParserResult<L, Option<ParsedArgumentNodes<L>>>
             {
                 Ok(None)
             }
@@ -166,7 +166,7 @@ mod tests {
                 _spec: &ArgumentSpec<PlainLang>,
             ) -> crate::constructs::ConstructParserResult<
                 PlainLang,
-                Option<ParsedArgumentNodes>,
+                Option<ParsedArgumentNodes<PlainLang>>,
             > {
                 Ok(None)
             }

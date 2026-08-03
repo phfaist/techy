@@ -58,7 +58,7 @@ use core::fmt;
 
 use crate::engine::ParseDriver;
 use crate::error::DiagnosticInfo;
-use crate::node::ContentNodes;
+use crate::node::{ArgumentExt, ContentNodes};
 use crate::source::SourceSpan;
 use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes};
 use crate::state::Lang;
@@ -140,12 +140,15 @@ impl<L: Lang> TackOnFieldsArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for TackOnFieldsArgumentParser<L> {
+impl<L: Lang> ArgumentParser<L> for TackOnFieldsArgumentParser<L>
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut nodes = Vec::new();
         let mut seen = alloc::vec![false; self.fields.len()];
         let mut content_start: Option<u32> = None;
@@ -210,10 +213,14 @@ impl<L: Lang> ArgumentParser<L> for TackOnFieldsArgumentParser<L> {
         match content_start {
             // The content: the full run from the first field node on (intermediate
             // noise included, leading noise excluded — module docs).
-            Some(start) => Ok(Some(ParsedArgumentNodes {
-                content: ContentNodes::InRegion(start..nodes.len() as u32),
-                nodes,
-            })),
+            Some(start) => {
+                let end = nodes.len() as u32;
+                Ok(Some(ParsedArgumentNodes::new(
+                    nodes,
+                    ContentNodes::InRegion(start..end),
+                    Default::default(),
+                )))
+            }
             // No field matched; the reader is back at the entry position (the first
             // iteration's rewind).
             None => Ok(None),

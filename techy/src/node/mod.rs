@@ -38,7 +38,8 @@ mod slice;
 mod tree;
 
 pub use arguments::{
-    ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
+    BodySlotExt, ChildRegion, ContentNodes, ParsedArgument, ParsedArguments, ParsedSlot,
+    ParsedSlots, SlotRole,
 };
 pub use builder::{
     BuildId, NodeBuildError, NodeTreeBuilder, StagedChildView, StagedChildren,
@@ -141,7 +142,7 @@ mod tests {
             _spec: &ArgumentSpec<L>,
         ) -> crate::constructs::ConstructParserResult<
             L,
-            Option<crate::spec::ParsedArgumentNodes>,
+            Option<crate::spec::ParsedArgumentNodes<L>>,
         > {
             Ok(None)
         }
@@ -203,10 +204,12 @@ mod tests {
                     ParsedArgument::provided(
                         arg_specs[0].clone(),
                         ChildRegion::new(0..1, ContentNodes::InChildrenOf(a_group, 0..1)),
+                        (),
                     ),
                     ParsedArgument::provided(
                         arg_specs[1].clone(),
                         ChildRegion::new(1..2, ContentNodes::InChildrenOf(b_group, 0..1)),
+                        (),
                     ),
                 ]
                 .into(),
@@ -365,11 +368,12 @@ mod tests {
                 name: "section".into(),
                 spec,
                 arguments: vec![
-                    ParsedArgument::provided(star_spec, ChildRegion::single(0)),
+                    ParsedArgument::provided(star_spec, ChildRegion::single(0), ()),
                     ParsedArgument::absent(placement_spec),
                     ParsedArgument::provided(
                         title_spec,
                         ChildRegion::new(1..2, ContentNodes::InChildrenOf(title, 0..1)),
+                        (),
                     ),
                 ]
                 .into(),
@@ -431,9 +435,11 @@ mod tests {
                 arguments: ParsedArguments::empty(),
                 // The slot record is minted by the driving parser and carries its own
                 // name (record-level slots, July 2026 slots session).
-                slots: vec![ParsedSlot::named(
-                    "body",
+                slots: vec![ParsedSlot::new(
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(body, 0..1)),
+                    "body",
+                    SlotRole::Content,
+                    (),
                 )]
                 .into(),
                 post_space: TextContent::empty(),
@@ -485,7 +491,8 @@ mod tests {
                 name: "it".into(),
                 spec,
                 arguments: ParsedArguments::empty(),
-                slots: vec![ParsedSlot::named("body", ChildRegion::single(0))].into(),
+                slots: vec![ParsedSlot::new(ChildRegion::single(0), "body", SlotRole::Content, ())]
+                    .into(),
                 post_space: TextContent::empty(),
             }),
             SourceSpan::entire(&source),
@@ -627,10 +634,12 @@ mod tests {
                     ParsedArgument::provided(
                         arg_specs[0].clone(),
                         ChildRegion::new(0..4, ContentNodes::InChildrenOf(a_group, 0..1)),
+                        (),
                     ),
                     ParsedArgument::provided(
                         arg_specs[1].clone(),
                         ChildRegion::new(4..5, ContentNodes::InChildrenOf(b_group, 0..1)),
+                        (),
                     ),
                 ]
                 .into(),
@@ -703,6 +712,7 @@ mod tests {
                 arguments: vec![ParsedArgument::provided(
                     arg_spec,
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(inner, 0..1)),
+                    (),
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
@@ -751,6 +761,7 @@ mod tests {
                 arguments: vec![ParsedArgument::provided(
                     arg_spec,
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(group, 0..0)),
+                    (),
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
@@ -804,7 +815,8 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("\\m"));
         let st = state::<PlainLang>();
         let mut b = NodeTreeBuilder::new();
-        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0))];
+        let args =
+            vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0), ())];
         let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![]);
         assert_eq!(
             result,
@@ -824,8 +836,8 @@ mod tests {
             vec![], (), (),
         ).unwrap();
         let args = vec![
-            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
-            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0)),
+            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0), ()),
+            ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0), ()),
         ];
         let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]);
         assert_eq!(
@@ -852,7 +864,8 @@ mod tests {
             vec![], (), (),
         ).unwrap();
         // One argument claiming only the second child: the first belongs to no region.
-        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(1))];
+        let args =
+            vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(1), ())];
         let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
         assert_eq!(
             result,
@@ -878,7 +891,8 @@ mod tests {
             vec![], (), (),
         ).unwrap();
         // One argument claiming only the first child: the second belongs to no region.
-        let args = vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0))];
+        let args =
+            vec![ParsedArgument::provided(brace_arg_spec(), ChildRegion::single(0), ())];
         let result = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]);
         assert_eq!(result, Err(NodeBuildError::ChildrenNotInRegions { unassigned: 1..2 }));
     }
@@ -899,6 +913,7 @@ mod tests {
         let args = vec![ParsedArgument::provided(
             brace_arg_spec(),
             ChildRegion::new(0..1, ContentNodes::InChildrenOf(stray, 0..0)),
+            (),
         )];
         let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![group]).unwrap();
         assert_eq!(
@@ -929,10 +944,12 @@ mod tests {
             ParsedArgument::provided(
                 brace_arg_spec(),
                 ChildRegion::new(0..1, ContentNodes::InChildrenOf(g2, 0..0)),
+                (),
             ),
             ParsedArgument::provided(
                 brace_arg_spec(),
                 ChildRegion::new(1..2, ContentNodes::InChildrenOf(g2, 0..0)),
+                (),
             ),
         ];
         let m = stage_callable_with_arg(&mut b, &source, &st, args, vec![g1, g2]).unwrap();
@@ -1114,11 +1131,153 @@ mod tests {
     /// `ParsedSlot` record itself, not on the whole-callable ext.
     #[test]
     fn parsed_slot_carries_ext() {
-        let mut slot: ParsedSlot<ExtLang> = ParsedSlot::named("body", ChildRegion::single(0));
+        let mut slot: ParsedSlot<ExtLang> =
+            ParsedSlot::new(ChildRegion::single(0), "body", SlotRole::Content, 0);
         assert_eq!(slot.name(), Some("body"));
-        assert_eq!(slot.ext, 0); // the constructors Default-initialize the ext
+        assert_eq!(slot.ext, 0); // demanded at construction — no Default fill exists
         slot.ext = 3;
         assert_eq!(slot.clone().ext, 3);
+    }
+
+    // --- slot roles + trait-based body marking ---------------------------------------
+
+    /// A marker-style slot ext without `Default` (the preset's `BodyMarker` shape).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct BodyFlag {
+        body: bool,
+    }
+    impl BodySlotExt for BodyFlag {
+        fn is_body(&self) -> bool {
+            self.body
+        }
+        fn make_body() -> BodyFlag {
+            BodyFlag { body: true }
+        }
+    }
+
+    /// A non-`Default` argument ext (a reference-cache shape): custom parsers mint it;
+    /// the record constructors demand it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RefExt {
+        key: String,
+    }
+
+    struct RoleBundle;
+    impl crate::state::NodeExtTypes for RoleBundle {
+        type NodeExt = ();
+        type ArgumentExt = RefExt;
+        type SlotExt = BodyFlag;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct RoleLang;
+    impl Lang for RoleLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = RoleBundle;
+        type Driver = crate::engine::StdParseDriver;
+
+        fn make_node_ext(
+            _kind: &NodeKind<Self>,
+            _span: &SourceSpan,
+            _state: &Arc<ParsingState<Self>>,
+            _children: StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+
+    /// Roles are stored and read back; `body()` selects on the **ext axis alone**
+    /// (`BodySlotExt`) — a non-slot-0 body is found, and its `Attached` role does
+    /// not hide it (no role conjunction).
+    #[test]
+    fn body_selects_by_ext_marker_across_roles() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state::<RoleLang>();
+        let mut b = NodeTreeBuilder::new();
+        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![], (), ()).unwrap();
+        let y = b.add(NodeKind::chars(Span::new(1, 2)), spanned(&source, 1..2), st.clone(), vec![], (), ()).unwrap();
+        let spec: Arc<dyn CallableSpec<RoleLang>> = Arc::new(StdCallableSpec::default());
+        let env = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_ENVIRONMENT,
+                name: "it".into(),
+                spec,
+                arguments: ParsedArguments::empty(),
+                slots: vec![
+                    // Slot 0 is NOT the body; the body sits at slot 1, and its
+                    // `Attached` role must not hide it from `body()`.
+                    ParsedSlot::new(
+                        ChildRegion::single(0),
+                        "preamble",
+                        SlotRole::Content,
+                        BodyFlag { body: false },
+                    ),
+                    ParsedSlot::new(
+                        ChildRegion::single(1),
+                        "body",
+                        SlotRole::Attached,
+                        BodySlotExt::make_body(),
+                    ),
+                ]
+                .into(),
+                post_space: TextContent::empty(),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![x, y], (), (),
+        ).unwrap();
+        let tree = b.finish(env).unwrap();
+
+        let node = tree.root();
+        let slots = node.slots().unwrap();
+        assert_eq!(slots.get(0).unwrap().role, SlotRole::Content);
+        assert_eq!(slots.get(1).unwrap().role, SlotRole::Attached);
+        assert!(!slots.get(0).unwrap().ext.is_body());
+        assert!(slots.get(1).unwrap().ext.is_body());
+        // body() = the first slot whose ext reports body — slot 1 here.
+        let body: Vec<_> = node.body().unwrap().iter().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some("y"));
+    }
+
+    /// `SlotRole` defaults to `Content` (the conceptual default) and is plain data.
+    #[test]
+    fn slot_role_default_is_content() {
+        assert_eq!(SlotRole::default(), SlotRole::Content);
+    }
+
+    /// The argument-ext pipeline for a language whose `ArgumentExt` has no `Default`:
+    /// `ParsedArgumentNodes` demands the parser-minted value, `provided` carries it
+    /// into the record, `absent` carries none.
+    #[test]
+    fn parsed_argument_nodes_demands_the_ext() {
+        // A custom parser's output: the record constructor demands the minted ext.
+        let region: crate::spec::ParsedArgumentNodes<RoleLang> =
+            crate::spec::ParsedArgumentNodes::new(
+                vec![],
+                ContentNodes::InRegion(0..0),
+                RefExt { key: String::from("fig:abc") },
+            );
+        assert_eq!(region.ext.key, "fig:abc");
+
+        // StubParser is a *custom* parser (mints its own ext — here it never provides),
+        // so it implements `ArgumentParser<RoleLang>` although `RefExt: !Default`.
+        let spec: Arc<ArgumentSpec<RoleLang>> = Arc::new(ArgumentSpec::new(Arc::new(StubParser)));
+        let provided = ParsedArgument::provided(
+            Arc::clone(&spec),
+            ChildRegion::single(0),
+            region.ext.clone(),
+        );
+        assert_eq!(provided.ext.as_ref().unwrap().key, "fig:abc");
+        // Absent arguments carry no ext: nothing was parsed, nothing was minted.
+        let absent = ParsedArgument::absent(spec);
+        assert!(absent.ext.is_none());
+        assert!(!absent.is_provided());
     }
 
     // --- make_node_ext computing from the descent-only children view -----------------
@@ -1434,6 +1593,7 @@ mod tests {
                 arguments: vec![ParsedArgument::provided(
                     arg_spec,
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(group, 0..0)),
+                    (),
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
@@ -1503,17 +1663,20 @@ mod tests {
                 name: "section".into(),
                 spec,
                 arguments: vec![
-                    ParsedArgument::provided(star_spec, ChildRegion::single(0)),
+                    ParsedArgument::provided(star_spec, ChildRegion::single(0), ()),
                     ParsedArgument::absent(placement_spec),
                     ParsedArgument::provided(
                         title_spec,
                         ChildRegion::new(1..2, ContentNodes::InChildrenOf(title, 0..1)),
+                        (),
                     ),
                 ]
                 .into(),
-                slots: vec![ParsedSlot::named(
-                    "annex",
+                slots: vec![ParsedSlot::new(
                     ChildRegion::new(2..3, ContentNodes::InChildrenOf(body, 0..1)),
+                    "annex",
+                    SlotRole::Content,
+                    (),
                 )]
                 .into(),
                 post_space: TextContent::empty(),
@@ -1613,6 +1776,7 @@ mod tests {
                 arguments: vec![ParsedArgument::provided(
                     arg_spec,
                     ChildRegion::new(0..1, ContentNodes::InChildrenOf(inner, 0..1)),
+                    (),
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),

@@ -48,8 +48,8 @@ use core::mem;
 
 use crate::error::DiagnosticInfo;
 use crate::node::{
-    BuildId, CallableData, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
-    ParsedSlots,
+    ArgumentExt, BuildId, CallableData, ContentNodes, NodeKind, ParsedArgument,
+    ParsedArguments, ParsedSlots,
 };
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
@@ -414,12 +414,18 @@ impl ExpressionParser {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for ExpressionParser {
+// A standard parser's knowledge about a custom argument ext is "nothing" — the
+// `where ArgumentExt<L>: Default` eligibility bound says so ([`NodeExtTypes`]'s
+// population-is-initialization rule; same on every standard argument parser).
+impl<L: Lang> ArgumentParser<L> for ExpressionParser
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
         let expression = match noise.next.clone() {
             Some(next) => parse_expression_node(cx, &next, &mut noise.nodes)?,
@@ -449,10 +455,17 @@ impl<L: Lang> ArgumentParser<L> for ExpressionParser {
 
 /// A region whose **last** node is the content — the shape of every committed
 /// expression (the noise, including the expression's own pre-space, precedes it).
-fn region_with_last_as_content(nodes: Vec<BuildId>) -> ParsedArgumentNodes {
+fn region_with_last_as_content<L: Lang>(nodes: Vec<BuildId>) -> ParsedArgumentNodes<L>
+where
+    ArgumentExt<L>: Default,
+{
     debug_assert!(!nodes.is_empty(), "a committed expression staged its node");
     let last = nodes.len() as u32 - 1;
-    ParsedArgumentNodes { nodes, content: ContentNodes::InRegion(last..last + 1) }
+    ParsedArgumentNodes::new(
+        nodes,
+        ContentNodes::InRegion(last..last + 1),
+        Default::default(),
+    )
 }
 
 /// The standard mandatory-argument parser (pylatexenc's `'{'` shorthand as a core
@@ -548,12 +561,15 @@ impl<L: Lang> GroupArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
+impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L>
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
 
         match &self.form {
@@ -573,10 +589,11 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
                         )?;
                         let child_count = staged_child_count(cx, id);
                         noise.nodes.push(id);
-                        return Ok(Some(ParsedArgumentNodes {
-                            nodes: noise.nodes,
-                            content: ContentNodes::InChildrenOf(id, 0..child_count),
-                        }));
+                        return Ok(Some(ParsedArgumentNodes::new(
+                            noise.nodes,
+                            ContentNodes::InChildrenOf(id, 0..child_count),
+                            Default::default(),
+                        )));
                     }
                 }
             }
@@ -593,10 +610,11 @@ impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L> {
                                 cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?;
                             let child_count = staged_child_count(cx, id);
                             noise.nodes.push(id);
-                            return Ok(Some(ParsedArgumentNodes {
-                                nodes: noise.nodes,
-                                content: ContentNodes::InChildrenOf(id, 0..child_count),
-                            }));
+                            return Ok(Some(ParsedArgumentNodes::new(
+                                noise.nodes,
+                                ContentNodes::InChildrenOf(id, 0..child_count),
+                                Default::default(),
+                            )));
                         }
                     }
                 }
@@ -628,7 +646,7 @@ pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     noise: ArgumentNoise<'_, L>,
     spec: &ArgumentSpec<L>,
-) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
     let at = noise
         .next
         .as_ref()
@@ -783,12 +801,15 @@ impl<L: Lang> OptionalGroupArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
+impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L>
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
         if noise.next.is_none() {
             noise.rewind(cx);
@@ -840,10 +861,11 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
             (parent, len)
         };
         noise.nodes.push(id);
-        Ok(Some(ParsedArgumentNodes {
-            nodes: noise.nodes,
-            content: ContentNodes::InChildrenOf(content_parent, 0..content_len),
-        }))
+        Ok(Some(ParsedArgumentNodes::new(
+            noise.nodes,
+            ContentNodes::InChildrenOf(content_parent, 0..content_len),
+            Default::default(),
+        )))
     }
 
     /// Optional: absent is a valid, silent outcome (the trait default, stated
@@ -871,12 +893,15 @@ impl MarkerArgumentParser {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser {
+impl<L: Lang> ArgumentParser<L> for MarkerArgumentParser
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
         let (Some(first), Some(first_char)) = (noise.next.clone(), self.marker.chars().next())
         else {

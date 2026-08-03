@@ -132,9 +132,12 @@ pub fn parse_declared_arguments<L: Lang>(
                 let start = children.len() as u32;
                 children.extend_from_slice(&region.nodes);
                 let end = children.len() as u32;
+                // The parser's minted ext travels into the record ([`ParsedArgument`]'s
+                // population-is-initialization contract); an absent argument gets none.
                 arguments.push(ParsedArgument::provided(
                     Arc::clone(argument_spec),
                     ChildRegion::new(start..end, region.content),
+                    region.ext,
                 ));
             }
             None => arguments.push(ParsedArgument::absent(Arc::clone(argument_spec))),

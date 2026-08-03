@@ -70,9 +70,10 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::node::BodySlotExt;
 use crate::scopes::{Package, ScopeStack};
 use crate::spec::CallableSpec;
-use crate::state::{ClosedVocabulary, Lang, ParsingState, StateData};
+use crate::state::{ClosedVocabulary, Lang, NodeExtTypes, ParsingState, StateData};
 use crate::token::{
     CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
     TriggerChars, WhitespaceRules,
@@ -165,6 +166,47 @@ impl ClosedVocabulary for Mode {
     const ALL: &'static [Mode] = &[Mode::Text, Mode::Math];
 }
 
+/// The preset's slot ext: marks whether a slot is **the body** of its callable
+/// ([`BodySlotExt`]). Minted by the preset's environment machinery via
+/// [`BodySlotExt::make_body`]; a non-body slot's value comes from
+/// [`not_body`](BodyMarker::not_body). Deliberately no `Default` — an ext value is
+/// minted, never conjured (population is initialization, [`NodeExtTypes`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BodyMarker {
+    body: bool,
+}
+
+impl BodyMarker {
+    /// The marker of a slot that is *not* the body.
+    pub fn not_body() -> BodyMarker {
+        BodyMarker { body: false }
+    }
+}
+
+impl BodySlotExt for BodyMarker {
+    fn is_body(&self) -> bool {
+        self.body
+    }
+
+    fn make_body() -> BodyMarker {
+        BodyMarker { body: true }
+    }
+}
+
+/// The preset's node-ext bundle ([`Lang::NodeExts`]): no per-node and no per-argument
+/// data (`NodeExt`/`ArgumentExt` are `()`), while **`SlotExt` is claimed** for the
+/// [`BodyMarker`] — the preset marks environment body slots through the generic
+/// [`BodySlotExt`] mechanism, so [`NodeRef::body`](crate::node::NodeRef::body) selects
+/// the marked slot rather than relying on slot positions.
+#[derive(Debug, Clone, Copy)]
+pub struct LatexlikeNodeExts;
+
+impl NodeExtTypes for LatexlikeNodeExts {
+    type NodeExt = ();
+    type ArgumentExt = ();
+    type SlotExt = BodyMarker;
+}
+
 /// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
 /// vocabularies ([`GroupType`], [`CallableType`], [`Mode`]), the canonical seed
 /// ([`default_token_rules`] + the [`base_package`] on the scope stack), and the
@@ -180,7 +222,7 @@ impl Lang for Latexlike {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
-    type NodeExts = ();
+    type NodeExts = LatexlikeNodeExts;
     type Driver = LatexlikeDriver;
 
     /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding

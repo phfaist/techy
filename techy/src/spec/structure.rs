@@ -31,24 +31,65 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constructs::{ConstructParserResult, ParseContext};
-use crate::node::{BuildId, ContentNodes};
+use crate::node::{ArgumentExt, BuildId, ContentNodes};
 use crate::state::{Lang, ParsingStateDelta};
 
 /// What an [`ArgumentParser`] returns for a *provided* argument: the region's staged
-/// nodes and the content designation among them (the `parse_argument` shape).
+/// nodes, the content designation among them, and the argument's minted ext (the
+/// `parse_argument` shape).
 ///
 /// The nodes are the argument's full syntactic extent in source order — leading noise
 /// (comment nodes, whitespace-only `Chars` nodes), then the syntax-bearing node(s). The
 /// standard invocation parser appends them to the callable's child list and records a
 /// staged [`ChildRegion`](crate::node::ChildRegion) over them; `content` passes through
 /// as the region's designation (both [`ContentNodes`] forms are already relative to the
-/// region / anchored on a staged node).
-#[derive(Debug, Clone)]
-pub struct ParsedArgumentNodes {
+/// region / anchored on a staged node); `ext` becomes the
+/// [`ParsedArgument`](crate::node::ParsedArgument) record's ext.
+pub struct ParsedArgumentNodes<L: Lang> {
     /// The region's nodes, in source order (staged, not yet claimed by a parent).
     pub nodes: Vec<BuildId>,
     /// The content designation, relative to this region.
     pub content: ContentNodes,
+    /// The argument's ext (`Lang::NodeExts::ArgumentExt`), minted by the parser — the
+    /// knowledge-holder for the argument it just parsed. The standard parsers know
+    /// nothing about a custom ext and fill `Default::default()` under their
+    /// `where ArgumentExt<L>: Default` bound; custom parsers mint their own.
+    pub ext: ArgumentExt<L>,
+}
+
+impl<L: Lang> ParsedArgumentNodes<L> {
+    /// A provided argument's output: the region's `nodes`, the `content` designation
+    /// among them, and the argument's minted `ext` (`()` for no-ext languages).
+    pub fn new(
+        nodes: Vec<BuildId>,
+        content: ContentNodes,
+        ext: ArgumentExt<L>,
+    ) -> ParsedArgumentNodes<L> {
+        ParsedArgumentNodes { nodes, content, ext }
+    }
+}
+
+// Manual impls: derives would demand `L:` bounds although only associated types
+// (already bounded in `Lang`) are stored.
+
+impl<L: Lang> Clone for ParsedArgumentNodes<L> {
+    fn clone(&self) -> Self {
+        ParsedArgumentNodes {
+            nodes: self.nodes.clone(),
+            content: self.content.clone(),
+            ext: self.ext.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ParsedArgumentNodes<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedArgumentNodes")
+            .field("nodes", &self.nodes)
+            .field("content", &self.content)
+            .field("ext", &self.ext)
+            .finish()
+    }
 }
 
 /// An argument parser: how one argument of an invocation is recognized and parsed —
@@ -108,7 +149,7 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>>;
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>>;
 
     /// Can this argument be satisfied consuming nothing — is reporting it absent a
     /// *valid* outcome rather than a diagnosed recovery? An optional group or `*`

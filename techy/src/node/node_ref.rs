@@ -11,11 +11,11 @@ use crate::state::{Lang, ParsingState};
 
 use alloc::vec::Vec;
 
-use super::arguments::{ChildRegion, ParsedArguments, ParsedSlots};
+use super::arguments::{BodySlotExt, ChildRegion, ParsedArguments, ParsedSlots};
 use super::kind::{CallableData, GroupData, NodeKind};
 use super::slice::NodeSlice;
 use super::tree::{NodeData, NodeId, NodeTree};
-use super::NodeExt;
+use super::{NodeExt, SlotExt};
 
 /// A reference to one node of a [`NodeTree`]: `Copy`, resolves indices, and borrows the
 /// tree — the borrow checker guarantees a `NodeRef` cannot outlive the storage its index
@@ -343,12 +343,25 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         self.region_content(&self.callable()?.slots.get_named(name)?.region)
     }
 
-    /// The content nodes of the first slot — the *body* of environment-shaped callables
-    /// (which have exactly one slot), in source order. Sugar for
-    /// [`slot_content_nodes(0)`](NodeRef::slot_content_nodes); the body `List` node
-    /// itself, when one exists, is [`slot_content_parent(0)`](NodeRef::slot_content_parent).
-    pub fn body(&self) -> Option<NodeSlice<'t, L, A>> {
-        self.slot_content_nodes(0)
+    /// The content nodes of the **body slot** — the *body* of environment-shaped
+    /// callables, in source order: the first slot whose ext reports
+    /// [`is_body()`](BodySlotExt::is_body) (available where the language's
+    /// [`SlotExt`](crate::state::NodeExtTypes::SlotExt) implements [`BodySlotExt`];
+    /// for no-ext languages every slot reports body, so this is the first slot).
+    ///
+    /// The selection is the **ext axis alone** — deliberately no conjunction with the
+    /// slot's [`SlotRole`](super::SlotRole): a framework marking an
+    /// `Attached` or `Hidden` slot as its body must not find it silently
+    /// unlocatable here.
+    ///
+    /// The body's wrapper node, when one exists, is
+    /// [`slot_content_parent`](NodeRef::slot_content_parent) at the same slot's index.
+    pub fn body(&self) -> Option<NodeSlice<'t, L, A>>
+    where
+        SlotExt<L>: BodySlotExt,
+    {
+        let slot = self.callable()?.slots.iter().find(|slot| slot.ext.is_body())?;
+        self.region_content(&slot.region)
     }
 }
 

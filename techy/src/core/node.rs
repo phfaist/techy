@@ -16,9 +16,9 @@
 //! Extraction helpers over parsed trees live in [`extract`](crate::extract).
 
 pub use crate::node::{
-    check_tree_invariants, ArgumentExt, BuildId, CallableData, ChildRegion, ContentNodes,
-    Descendants, GroupData, NodeBuildError, NodeExt, NodeId, NodeKind, NodeRef, NodeSlice,
-    NodeSliceIter, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot,
-    ParsedSlots, SlotExt, StagedChildView, StagedChildren, StagedNodeView, StagedNodes,
-    TreeTag,
+    check_tree_invariants, ArgumentExt, BodySlotExt, BuildId, CallableData, ChildRegion,
+    ContentNodes, Descendants, GroupData, NodeBuildError, NodeExt, NodeId, NodeKind,
+    NodeRef, NodeSlice, NodeSliceIter, NodeTree, NodeTreeBuilder, ParsedArgument,
+    ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole, StagedChildView,
+    StagedChildren, StagedNodeView, StagedNodes, TreeTag,
 };

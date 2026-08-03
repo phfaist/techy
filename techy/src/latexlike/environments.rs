@@ -68,8 +68,8 @@ use crate::constructs::{
 };
 use crate::error::DiagnosticInfo;
 use crate::node::{
-    BuildId, CallableData, ChildRegion, NodeKind, ParsedArguments, ParsedSlot,
-    ParsedSlots,
+    BodySlotExt, BuildId, CallableData, ChildRegion, NodeKind, ParsedArguments,
+    ParsedSlot, ParsedSlots, SlotRole,
 };
 use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{SourceSpan, Span, TextContent};
@@ -555,10 +555,13 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         // The slot record is pure node vocabulary: minted here, name carried on the
         // record itself; the content designation is the body parser's
         // (`EnvironmentBody::content` — a verbatim body designates its gobbled
-        // newline out, Phase 7.7).
-        let slots = ParsedSlots::from(vec![ParsedSlot::named(
-            "body",
+        // newline out, Phase 7.7). The ext is minted through `BodySlotExt` (not a
+        // concrete marker type), so machinery generic over the language keeps working.
+        let slots = ParsedSlots::from(vec![ParsedSlot::new(
             ChildRegion::new(offset..offset + 1, body.content),
+            "body",
+            SlotRole::Content,
+            BodySlotExt::make_body(),
         )]);
 
         let data = CallableData {
@@ -779,6 +782,19 @@ mod tests {
         assert_eq!(env.arguments().unwrap().len(), 0);
         assert_eq!(env.slots().unwrap().len(), 1);
         assert!(env.slots().unwrap().get_named("body").is_some());
+    }
+
+    /// The preset's body slot is minted with `SlotRole::Content` and the
+    /// `BodySlotExt` body marker — `body()` finds it through the marker, not
+    /// through a slot position.
+    #[test]
+    fn body_slot_carries_content_role_and_body_marker() {
+        let result = parse_ok("\\begin{itemize} a \\end{itemize}");
+        let env = result.tree.root().child(0).unwrap();
+        let slot = env.slots().unwrap().get_named("body").expect("the body slot");
+        assert_eq!(slot.role, SlotRole::Content);
+        assert!(slot.ext.is_body());
+        assert_eq!(body_shapes(env), ["chars( a )"]);
     }
 
     #[test]

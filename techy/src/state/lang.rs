@@ -46,17 +46,21 @@ pub trait NodeExtTypes {
     /// attached to one argument of one invocation — e.g. a reference-parsing extension
     /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
     /// derives from, instead of re-parsing the argument node. Minted by the argument's
-    /// [`ArgumentParser`](crate::spec::ArgumentParser) (the standard parsers are
-    /// defined only `where ArgumentExt<L>: Default` — their knowledge about a custom
-    /// ext *is* "nothing", and the bound says so).
-    type ArgumentExt: Clone + fmt::Debug + Default + Send + Sync;
+    /// [`ArgumentParser`](crate::spec::ArgumentParser) — its
+    /// [`ParsedArgumentNodes`](crate::spec::ParsedArgumentNodes) output carries the
+    /// value (the standard parsers are defined only `where ArgumentExt<L>: Default` —
+    /// their knowledge about a custom ext *is* "nothing", and the bound says so).
+    /// Absent arguments carry no ext (nothing was parsed, so nothing was minted).
+    type ArgumentExt: Clone + fmt::Debug + Send + Sync;
     /// Ext of a *parsed slot* record (not a node kind): per-instance derived data about
     /// one content region of one invocation — e.g. a tabular extension caching the cell
     /// structure of an environment's body slot, or an itemize extension caching item
     /// boundaries (the slot-side symmetry of
     /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)). Demanded at
-    /// [`ParsedSlot`](crate::node::ParsedSlot) construction.
-    type SlotExt: Clone + fmt::Debug + Default + Send + Sync;
+    /// [`ParsedSlot`](crate::node::ParsedSlot) construction; the latexlike preset
+    /// claims this member for its body marker
+    /// ([`BodySlotExt`](crate::node::BodySlotExt)).
+    type SlotExt: Clone + fmt::Debug + Send + Sync;
 }
 
 /// The no-ext bundle: every ext type is `()`.

@@ -48,7 +48,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::error::DiagnosticInfo;
-use crate::node::{ContentNodes, GroupData, NodeKind};
+use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::engine::{Frame, FrameTitle};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
@@ -270,12 +270,15 @@ impl<L: Lang> VerbatimArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L> {
+impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L>
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let entry = cx.tokens.pos();
 
         // Read the opening delimiter: one raw char after optional whitespace.
@@ -389,10 +392,11 @@ impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L> {
             )
             .map_err(|error| cx.implementation_error(error, group_span))?;
         nodes.push(group);
-        Ok(Some(ParsedArgumentNodes {
+        Ok(Some(ParsedArgumentNodes::new(
             nodes,
-            content: ContentNodes::InChildrenOf(group, 0..child_count),
-        }))
+            ContentNodes::InChildrenOf(group, 0..child_count),
+            Default::default(),
+        )))
     }
 
     /// The delimited region is mandatory: absent is a diagnosed recovery, not a valid

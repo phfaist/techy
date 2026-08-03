@@ -49,7 +49,7 @@
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::node::ContentNodes;
+use crate::node::{ArgumentExt, ContentNodes};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::TokenKind;
@@ -133,12 +133,15 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for CharsGroupArgumentParser<L> {
+impl<L: Lang> ArgumentParser<L> for CharsGroupArgumentParser<L>
+where
+    ArgumentExt<L>: Default,
+{
     fn parse_argument(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
-    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes>> {
+    ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
         let mut noise = scan_argument_noise(cx)?;
         let open = match noise.next.clone() {
             Some(next) => match &next.kind {
@@ -178,10 +181,11 @@ impl<L: Lang> ArgumentParser<L> for CharsGroupArgumentParser<L> {
             staged.get(id).expect("the group was just staged").children().len() as u32
         };
         noise.nodes.push(id);
-        Ok(Some(ParsedArgumentNodes {
-            nodes: noise.nodes,
-            content: ContentNodes::InChildrenOf(id, 0..child_count),
-        }))
+        Ok(Some(ParsedArgumentNodes::new(
+            noise.nodes,
+            ContentNodes::InChildrenOf(id, 0..child_count),
+            Default::default(),
+        )))
     }
 
     /// The argument is mandatory: absent is a diagnosed recovery, not a valid match.

@@ -7,7 +7,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] 0. Implementation plan written + committed (this document)
 - [x] A. Tree tags + annotations core (`TreeTag`, `NodeId` identity, `TreeCore`/`Arc`, `annotate`, accessors; parent table + single-source flag stored)
 - [x] B. Ext minting (`make_node_ext` + `StagedChildren`, tier-2 deletion, hook-free 6-param `add`, `cx.stage_node`, `ParserSession::builder` → pub(crate), extract minting)
-- [ ] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`)
+- [x] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`) — done (successor agent 1; see Deviation D-C1: absent arguments carry no ext)
 - [ ] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`)
 - [ ] D. Level-0 `restage_node` (+ copy.rs rebased on it)
 - [ ] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub)
@@ -520,13 +520,54 @@ Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
 | `cx.session.builder.add(…)` (parser idiom) | `cx.stage_node(kind, span, state, children)` (mints + stages, annotation `()`) |
 | `cx.session.builder.staged_nodes()` | `cx.staged_nodes()` |
 
-## Signature table (old → new)
+## Signature table (old → new) — C1/C2 portion
 
-(to be filled)
+| Old | New |
+|---|---|
+| — | `pub enum SlotRole { Content (default), Attached, Hidden }` (exhaustive; Copy/Eq/Hash/Default) |
+| — | `pub trait BodySlotExt { is_body(&self) -> bool; make_body() -> Self }` + unit impl for `()` (every slot reports body) |
+| `ParsedSlot { name, region, ext }` | `ParsedSlot { name, region, role: SlotRole, ext }` |
+| `ParsedSlot::new(region)` (unnamed, Default-ext) | `ParsedSlot::new(region, name, role, ext)` (named form) |
+| `ParsedSlot::named(name, region)` | REMOVED → `ParsedSlot::new(region, name, role, ext)` |
+| — | `ParsedSlot::new_unnamed(region, role, ext)` |
+| `ParsedArgument.ext: ArgumentExt<L>` (Default-filled) | `ParsedArgument.ext: Option<ArgumentExt<L>>` (`Some` ⟺ provided; see D-C1) |
+| `ParsedArgument::provided(spec, region)` | `provided(spec, region, ext)` |
+| `ParsedArgument::absent(spec)` | unchanged arity — now stores `ext: None` (D-C1) |
+| `ParsedArgumentNodes { nodes, content }` (L-free) | `ParsedArgumentNodes<L> { nodes, content, ext: ArgumentExt<L> }` + `new(nodes, content, ext)` |
+| `ArgumentParser::parse_argument -> …Option<ParsedArgumentNodes>` | `…Option<ParsedArgumentNodes<L>>` |
+| std argument parsers: `impl<L: Lang> ArgumentParser<L> for …` | `… where ArgumentExt<L>: Default` (all 8: Group/OptionalGroup/Marker/Expression/CharsGroup/Embellishments/TackOnFields/Verbatim) |
+| `NodeExtTypes::{ArgumentExt, SlotExt}: … + Default` | `Default` dropped (bundle carries none) |
+| `NodeRef::body()` = `slot_content_nodes(0)` | first slot with `ext.is_body()`, `where SlotExt<L>: BodySlotExt` (ext axis only — doc sentence) |
+| `Latexlike::NodeExts = ()` | `= LatexlikeNodeExts` (`NodeExt = ()`, `ArgumentExt = ()`, `SlotExt = BodyMarker`) |
+| — | `latexlike::BodyMarker` (`not_body()`; `BodySlotExt` impl supplies `make_body()`; no Default) |
+| `ArgumentSpec::new(parser: Arc<dyn ArgumentParser<L>>)` (unnamed) + `.named(name)` builder | `ArgumentSpec::new(parser, name)` + `new_unnamed(parser)` via sealed `IntoArgumentParser<L, M>`; `.named()` REMOVED; `.with_state_delta()` stays |
+| — | sealed `IntoArgumentParser<L, M>` (by-value / `Arc<P>` / `Arc<dyn ArgumentParser<L>>`; S2-D1 marker idiom) |
+| `StdCallableSpec::new(Vec<Arc<ArgumentSpec<L>>>)` | `new(impl IntoIterator<Item = ArgumentSpec<L>>)` (by value, Arc'd inside; shared-Arc sites use the pub `arguments` field) |
+| `ParsedArguments`/`ParsedSlots`: `From<Vec>` only | + `new(Vec)` constructors (`From<Vec>` stays) |
 
 ## Delegated-arity decisions
 
-(to be filled)
+1. **`ParsedSlot::new(region, name, role, ext)` / `new_unnamed(region, role, ext)`** —
+   payload-first (region leads, the T3 §C6b mirror), then name (the named/unnamed
+   split per [§dd-dr:named-first-constructors]), then role, ext last
+   (consumer-data-last, matching the builder-`add` axis order
+   identity→structure→consumer).
+2. **`ParsedArgumentNodes::new(nodes, content, ext)`** — payload-first, ext last.
+3. **`ParsedArgument::provided(spec, region, ext)`** — ext appended last; `absent(spec)`
+   takes NO ext (deviation D-C1 — see below; matches T5-A2's ruled
+   `RestagedArgument::absent(spec)` mirror).
+4. **`impl BodySlotExt for ()`** with `is_body() = true` / `make_body() = ()`: the only
+   coherent unit impl (`make_body().is_body()` must hold — coherence sentence added to
+   the trait docs); consequence documented: on no-ext languages `body()` degenerates
+   to the first slot, preserving the old slot-0 behavior for `TrivialLang`-style
+   langs. Delegated-room call, flagged for review.
+5. **Preset names `BodyMarker` / `LatexlikeNodeExts`** — as sketched in the plan
+   (LatexlikeDriver naming precedent).
+6. **`where ArgumentExt<L>: Default` placement** — on the 8 standard argument-parser
+   impls ONLY (the ruling's literal target). NOT on `parse_declared_arguments` /
+   `StdInvocationParser`: with D-C1 they need no bound (provided-arm ext comes from
+   the parser output, absent-arm stores none), and bounding them would break
+   `CallableSpec::make_invocation_parser`'s unconditional default body (see D-C1).
 
 ## Gate results
 
@@ -537,6 +578,32 @@ Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
 (to be filled)
 
 ## Deviations / ambiguities
+
+- **D-C1 — absent arguments carry no ext** (`ParsedArgument.ext:
+  Option<ArgumentExt<L>>`; `absent(spec)` unchanged in arity; the plan's spelling
+  `absent(spec, ext)` + `where ArgumentExt<L>: Default` on
+  `parse_declared_arguments`/`StdInvocationParser` NOT applied). The plan's
+  spelling is **uncompilable**, verified two ways:
+  1. `CallableSpec::make_invocation_parser`'s ruled-unchanged default body
+     (`Box::new(StdInvocationParser::new(invocation))`) must type-check for every
+     `L: Lang`; a conditional `impl … ConstructParser<L> for StdInvocationParser
+     where ArgumentExt<L>: Default` fails that coercion (E0277), and putting the
+     bound on the trait method ripples it through `ParseDriver` + the dispatch
+     loops — the whole engine would demand `ArgumentExt: Default`, contradicting
+     the ruled custom-parsers-mint-their-own open door.
+  2. The expression-position bare-callable guard (argument_parsers.rs, dispatch
+     path, generic over every `L`) constructs `ParsedArgument::absent` entries —
+     an ext demand there bounds the core dispatch loop the same way.
+  Resolution grounds: T5-A2 rules the transform mirror as
+  `RestagedArgument::provided(spec, nodes, content, ext)` / **`absent(spec)`** —
+  no ext on absent — and S7's generic restage driver could never conjure a
+  non-Default ext for a hand-built absent bundle; P4 pt 3's bound sentence targets
+  "the standard parsers" (the ArgumentParser impls), which keep it. Semantics:
+  `ext` is `Some` exactly for provided arguments ("nothing was parsed, so nothing
+  was minted" — population-is-initialization); documented on the field. The
+  representable `{region: Some, ext: None}` literal mismatch is the accepted cost
+  (constructors are the canonical path). **Flagged for supervisor/user
+  confirmation**, S2-D1/D2/D3 precedent (forced deviation, implemented + flagged).
 
 (final classification at close; live list above)
 
