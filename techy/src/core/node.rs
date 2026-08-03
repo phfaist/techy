@@ -20,5 +20,5 @@ pub use crate::node::{
     CharsNodeExt, ChildRegion, CommentNodeExt, ContentNodes, Descendants, GroupData,
     GroupNodeExt, ListNodeExt, NodeBuildError, NodeExt, NodeId, NodeKind, NodeRef,
     NodeSlice, NodeSliceIter, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
-    ParsedSlot, ParsedSlots, SlotExt, StagedNodeView, StagedNodes,
+    ParsedSlot, ParsedSlots, SlotExt, StagedNodeView, StagedNodes, TreeTag,
 };

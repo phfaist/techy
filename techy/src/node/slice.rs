@@ -28,19 +28,19 @@ use super::tree::NodeTree;
 /// borrow checker guarantees it cannot outlive the tree. Iterate it directly
 /// (`for node in slice`, via [`IntoIterator`]) or through [`iter`](NodeSlice::iter) for
 /// adaptor chains.
-pub struct NodeSlice<'t, L: Lang> {
-    tree: &'t NodeTree<L>,
+pub struct NodeSlice<'t, L: Lang, A = ()> {
+    tree: &'t NodeTree<L, A>,
     // Stored unpacked (not `Range<u32>`) so the view stays `Copy`.
     start: u32,
     end: u32,
 }
 
-impl<'t, L: Lang> NodeSlice<'t, L> {
+impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
     /// A slice over `range` of `tree`'s flat storage. In-crate constructor: public
     /// values come from the accessors ([`NodeRef::children`](super::NodeRef::children),
     /// the region/content accessors, the extract helpers), which only mint ranges of
     /// sibling nodes.
-    pub(crate) fn new(tree: &'t NodeTree<L>, range: Range<u32>) -> NodeSlice<'t, L> {
+    pub(crate) fn new(tree: &'t NodeTree<L, A>, range: Range<u32>) -> NodeSlice<'t, L, A> {
         assert!(
             range.start <= range.end && range.end as usize <= tree.node_count(),
             "node range {:?} out of range",
@@ -60,18 +60,18 @@ impl<'t, L: Lang> NodeSlice<'t, L> {
     }
 
     /// The `i`-th node of the run.
-    pub fn get(&self, i: usize) -> Option<NodeRef<'t, L>> {
+    pub fn get(&self, i: usize) -> Option<NodeRef<'t, L, A>> {
         let id = self.start.checked_add(u32::try_from(i).ok()?)?;
         (id < self.end).then(|| self.tree.node(self.tree.make_id(id)))
     }
 
     /// The first node of the run.
-    pub fn first(&self) -> Option<NodeRef<'t, L>> {
+    pub fn first(&self) -> Option<NodeRef<'t, L, A>> {
         self.get(0)
     }
 
     /// The last node of the run.
-    pub fn last(&self) -> Option<NodeRef<'t, L>> {
+    pub fn last(&self) -> Option<NodeRef<'t, L, A>> {
         if self.is_empty() {
             return None;
         }
@@ -79,7 +79,7 @@ impl<'t, L: Lang> NodeSlice<'t, L> {
     }
 
     /// The nodes, in source order.
-    pub fn iter(&self) -> NodeSliceIter<'t, L> {
+    pub fn iter(&self) -> NodeSliceIter<'t, L, A> {
         NodeSliceIter { tree: self.tree, next: self.start, end: self.end }
     }
 
@@ -91,7 +91,7 @@ impl<'t, L: Lang> NodeSlice<'t, L> {
 
     /// The tree this slice views (in-crate: the extract helpers' anchor for empty
     /// slices).
-    pub(crate) fn tree(&self) -> &'t NodeTree<L> {
+    pub(crate) fn tree(&self) -> &'t NodeTree<L, A> {
         self.tree
     }
 
@@ -125,16 +125,16 @@ impl<'t, L: Lang> NodeSlice<'t, L> {
 }
 
 /// Iterator over a [`NodeSlice`]'s nodes, in source order.
-pub struct NodeSliceIter<'t, L: Lang> {
-    tree: &'t NodeTree<L>,
+pub struct NodeSliceIter<'t, L: Lang, A = ()> {
+    tree: &'t NodeTree<L, A>,
     next: u32,
     end: u32,
 }
 
-impl<'t, L: Lang> Iterator for NodeSliceIter<'t, L> {
-    type Item = NodeRef<'t, L>;
+impl<'t, L: Lang, A> Iterator for NodeSliceIter<'t, L, A> {
+    type Item = NodeRef<'t, L, A>;
 
-    fn next(&mut self) -> Option<NodeRef<'t, L>> {
+    fn next(&mut self) -> Option<NodeRef<'t, L, A>> {
         if self.next >= self.end {
             return None;
         }
@@ -149,10 +149,10 @@ impl<'t, L: Lang> Iterator for NodeSliceIter<'t, L> {
     }
 }
 
-impl<L: Lang> ExactSizeIterator for NodeSliceIter<'_, L> {}
+impl<L: Lang, A> ExactSizeIterator for NodeSliceIter<'_, L, A> {}
 
-impl<'t, L: Lang> DoubleEndedIterator for NodeSliceIter<'t, L> {
-    fn next_back(&mut self) -> Option<NodeRef<'t, L>> {
+impl<'t, L: Lang, A> DoubleEndedIterator for NodeSliceIter<'t, L, A> {
+    fn next_back(&mut self) -> Option<NodeRef<'t, L, A>> {
         if self.next >= self.end {
             return None;
         }
@@ -161,20 +161,20 @@ impl<'t, L: Lang> DoubleEndedIterator for NodeSliceIter<'t, L> {
     }
 }
 
-impl<'t, L: Lang> IntoIterator for NodeSlice<'t, L> {
-    type Item = NodeRef<'t, L>;
-    type IntoIter = NodeSliceIter<'t, L>;
+impl<'t, L: Lang, A> IntoIterator for NodeSlice<'t, L, A> {
+    type Item = NodeRef<'t, L, A>;
+    type IntoIter = NodeSliceIter<'t, L, A>;
 
-    fn into_iter(self) -> NodeSliceIter<'t, L> {
+    fn into_iter(self) -> NodeSliceIter<'t, L, A> {
         self.iter()
     }
 }
 
-impl<'t, L: Lang> IntoIterator for &NodeSlice<'t, L> {
-    type Item = NodeRef<'t, L>;
-    type IntoIter = NodeSliceIter<'t, L>;
+impl<'t, L: Lang, A> IntoIterator for &NodeSlice<'t, L, A> {
+    type Item = NodeRef<'t, L, A>;
+    type IntoIter = NodeSliceIter<'t, L, A>;
 
-    fn into_iter(self) -> NodeSliceIter<'t, L> {
+    fn into_iter(self) -> NodeSliceIter<'t, L, A> {
         self.iter()
     }
 }
@@ -183,27 +183,27 @@ impl<'t, L: Lang> IntoIterator for &NodeSlice<'t, L> {
 // the iterator is Clone (resumable position, deliberately not Copy — mutating
 // iterators that silently copy are a footgun).
 
-impl<L: Lang> Clone for NodeSlice<'_, L> {
+impl<L: Lang, A> Clone for NodeSlice<'_, L, A> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<L: Lang> Copy for NodeSlice<'_, L> {}
+impl<L: Lang, A> Copy for NodeSlice<'_, L, A> {}
 
-impl<L: Lang> Clone for NodeSliceIter<'_, L> {
+impl<L: Lang, A> Clone for NodeSliceIter<'_, L, A> {
     fn clone(&self) -> Self {
         NodeSliceIter { tree: self.tree, next: self.next, end: self.end }
     }
 }
 
-impl<L: Lang> fmt::Debug for NodeSlice<'_, L> {
+impl<L: Lang, A> fmt::Debug for NodeSlice<'_, L, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NodeSlice").field("range", &(self.start..self.end)).finish()
     }
 }
 
-impl<L: Lang> fmt::Debug for NodeSliceIter<'_, L> {
+impl<L: Lang, A> fmt::Debug for NodeSliceIter<'_, L, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NodeSliceIter").field("range", &(self.next..self.end)).finish()
     }

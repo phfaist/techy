@@ -26,13 +26,13 @@ use super::NodeExt;
 ///
 /// Kind-specific accessors are `Option`-returning on the wrong kind; preset-level sugar
 /// (`as_math()`-style environment/macro views) arrives with the latexlike preset.
-pub struct NodeRef<'t, L: Lang> {
-    tree: &'t NodeTree<L>,
+pub struct NodeRef<'t, L: Lang, A = ()> {
+    tree: &'t NodeTree<L, A>,
     id: NodeId,
 }
 
-impl<'t, L: Lang> NodeRef<'t, L> {
-    pub(crate) fn new(tree: &'t NodeTree<L>, id: NodeId) -> NodeRef<'t, L> {
+impl<'t, L: Lang, A> NodeRef<'t, L, A> {
+    pub(crate) fn new(tree: &'t NodeTree<L, A>, id: NodeId) -> NodeRef<'t, L, A> {
         debug_assert_eq!(
             id.tree_tag(),
             tree.tree_tag(),
@@ -43,12 +43,20 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     }
 
     fn data(&self) -> &'t NodeData<L> {
-        &self.tree.nodes[self.id.index()]
+        &self.tree.nodes()[self.id.index()]
     }
 
     /// The tree this reference points into (in-crate: copy/extract machinery).
-    pub(crate) fn tree(&self) -> &'t NodeTree<L> {
+    pub(crate) fn tree(&self) -> &'t NodeTree<L, A> {
         self.tree
+    }
+
+    /// This node's annotation (the tree's consumer-owned per-node data; see
+    /// [`NodeTree`]'s annotation notes). Annotations have no setter — trees are
+    /// frozen; a new annotation stage comes from
+    /// [`NodeTree::annotate`](super::NodeTree::annotate).
+    pub fn annotation(&self) -> &'t A {
+        &self.tree.annotations[self.id.index()]
     }
 
     /// This node's id within its tree.
@@ -124,7 +132,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     }
 
     /// The `i`-th structural child.
-    pub fn child(&self, i: usize) -> Option<NodeRef<'t, L>> {
+    pub fn child(&self, i: usize) -> Option<NodeRef<'t, L, A>> {
         let children = &self.data().children;
         let id = children.start.checked_add(u32::try_from(i).ok()?)?;
         (id < children.end).then(|| NodeRef::new(self.tree, self.tree.make_id(id)))
@@ -132,7 +140,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
 
     /// The structural children, in order, as a [`NodeSlice`] (iterable directly; use
     /// [`iter()`](NodeSlice::iter) for adaptor chains).
-    pub fn children(&self) -> NodeSlice<'t, L> {
+    pub fn children(&self) -> NodeSlice<'t, L, A> {
         NodeSlice::new(self.tree, self.data().children.clone())
     }
 
@@ -142,7 +150,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// math group — that flat storage order
     /// ([`NodeTree::iter_storage_order`](super::NodeTree::iter_storage_order),
     /// breadth-first) deliberately does not provide.
-    pub fn descendants(&self) -> Descendants<'t, L> {
+    pub fn descendants(&self) -> Descendants<'t, L, A> {
         let mut stack = Vec::new();
         push_children_reversed(&mut stack, self.data());
         Descendants { tree: self.tree, stack }
@@ -277,35 +285,35 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// (leading comment/whitespace noise plus the syntax-bearing nodes), in source
     /// order. `None` for non-callables, out-of-range indices, and absent arguments
     /// (consult [`arguments`](NodeRef::arguments) to distinguish).
-    pub fn argument_nodes(&self, i: usize) -> Option<NodeSlice<'t, L>> {
+    pub fn argument_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_nodes(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
     /// The nodes of the region of the argument named `name` (per its
     /// [`ArgumentSpec`](crate::spec::ArgumentSpec)) — [`argument_nodes`](NodeRef::argument_nodes)
     /// by name.
-    pub fn argument_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L>> {
+    pub fn argument_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
         self.region_nodes(self.callable()?.arguments.get_named(name)?.region.as_ref()?)
     }
 
     /// The content nodes of argument `i`, noise and delimiters excluded: the group's
     /// children for `\textbf{abc}`, the single `Chars` node for `\frac 1 2` — exactly
     /// what the argument's parser designated, no unwrap heuristics.
-    pub fn argument_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L>> {
+    pub fn argument_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
     /// The content nodes of the argument named `name` —
     /// [`argument_content_nodes`](NodeRef::argument_content_nodes) by name.
-    pub fn argument_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L>> {
+    pub fn argument_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(self.callable()?.arguments.get_named(name)?.region.as_ref()?)
     }
 
-    fn region_nodes(&self, region: &ChildRegion) -> Option<NodeSlice<'t, L>> {
+    fn region_nodes(&self, region: &ChildRegion) -> Option<NodeSlice<'t, L, A>> {
         Some(NodeSlice::new(self.tree, region.children()))
     }
 
-    fn region_content(&self, region: &ChildRegion) -> Option<NodeSlice<'t, L>> {
+    fn region_content(&self, region: &ChildRegion) -> Option<NodeSlice<'t, L, A>> {
         Some(NodeSlice::new(self.tree, region.content_range()))
     }
 
@@ -316,7 +324,7 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// wrapper node exists — returning the callable itself would send naive recursive
     /// walkers into a loop. Content access that works for *both* shapes is
     /// [`slot_content_nodes`](NodeRef::slot_content_nodes) / [`body`](NodeRef::body).
-    pub fn slot_content_parent(&self, i: usize) -> Option<NodeRef<'t, L>> {
+    pub fn slot_content_parent(&self, i: usize) -> Option<NodeRef<'t, L, A>> {
         let region = &self.callable()?.slots.get(i)?.region;
         let parent = region.content_parent();
         (parent != self.id).then(|| NodeRef::new(self.tree, parent))
@@ -324,14 +332,14 @@ impl<'t, L: Lang> NodeRef<'t, L> {
 
     /// The content nodes of slot `i` (the body nodes, for the standard environment
     /// shape), in source order.
-    pub fn slot_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L>> {
+    pub fn slot_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(&self.callable()?.slots.get(i)?.region)
     }
 
     /// The content nodes of the slot named `name` (per its
     /// [`ParsedSlot`](super::ParsedSlot) record) —
     /// [`slot_content_nodes`](NodeRef::slot_content_nodes) by name.
-    pub fn slot_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L>> {
+    pub fn slot_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(&self.callable()?.slots.get_named(name)?.region)
     }
 
@@ -339,15 +347,15 @@ impl<'t, L: Lang> NodeRef<'t, L> {
     /// (which have exactly one slot), in source order. Sugar for
     /// [`slot_content_nodes(0)`](NodeRef::slot_content_nodes); the body `List` node
     /// itself, when one exists, is [`slot_content_parent(0)`](NodeRef::slot_content_parent).
-    pub fn body(&self) -> Option<NodeSlice<'t, L>> {
+    pub fn body(&self) -> Option<NodeSlice<'t, L, A>> {
         self.slot_content_nodes(0)
     }
 }
 
 /// Iterator over a node's descendants in document order (see
 /// [`NodeRef::descendants`]; preorder depth-first via an explicit stack).
-pub struct Descendants<'t, L: Lang> {
-    tree: &'t NodeTree<L>,
+pub struct Descendants<'t, L: Lang, A = ()> {
+    tree: &'t NodeTree<L, A>,
     /// Nodes not yet yielded, next on top; a yielded node's children are pushed in
     /// reverse so the leftmost comes off first.
     stack: Vec<u32>,
@@ -359,18 +367,18 @@ fn push_children_reversed<L: Lang>(stack: &mut Vec<u32>, data: &NodeData<L>) {
     }
 }
 
-impl<'t, L: Lang> Iterator for Descendants<'t, L> {
-    type Item = NodeRef<'t, L>;
+impl<'t, L: Lang, A> Iterator for Descendants<'t, L, A> {
+    type Item = NodeRef<'t, L, A>;
 
-    fn next(&mut self) -> Option<NodeRef<'t, L>> {
+    fn next(&mut self) -> Option<NodeRef<'t, L, A>> {
         let index = self.stack.pop()?;
         let node = self.tree.node(self.tree.make_id(index));
-        push_children_reversed(&mut self.stack, &self.tree.nodes[index as usize]);
+        push_children_reversed(&mut self.stack, &self.tree.nodes()[index as usize]);
         Some(node)
     }
 }
 
-impl<L: Lang> fmt::Debug for Descendants<'_, L> {
+impl<L: Lang, A> fmt::Debug for Descendants<'_, L, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Descendants").field("pending", &self.stack.len()).finish()
     }
@@ -378,15 +386,15 @@ impl<L: Lang> fmt::Debug for Descendants<'_, L> {
 
 // Manual impls: `NodeRef` is Copy regardless of `L` (it stores only a borrow and an id).
 
-impl<L: Lang> Clone for NodeRef<'_, L> {
+impl<L: Lang, A> Clone for NodeRef<'_, L, A> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<L: Lang> Copy for NodeRef<'_, L> {}
+impl<L: Lang, A> Copy for NodeRef<'_, L, A> {}
 
-impl<L: Lang> fmt::Debug for NodeRef<'_, L> {
+impl<L: Lang, A> fmt::Debug for NodeRef<'_, L, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NodeRef")
             .field("id", &self.id)

@@ -31,7 +31,7 @@ use crate::state::{Lang, ParsingState};
 
 use super::arguments::ContentNodes;
 use super::kind::{CallableData, NodeKind};
-use super::tree::{NodeData, NodeTree};
+use super::tree::{NodeData, NodeTree, TreeCore, TreeTag, NO_PARENT};
 use super::NodeExt;
 
 /// Id of a staged node within its builder. Deliberately distinct from
@@ -90,16 +90,23 @@ struct Staged<L: Lang> {
 ///
 /// Staged nodes unreachable from the root are silently dropped: parsers may abandon
 /// speculatively built nodes (tolerant-parsing recovery paths).
-pub struct NodeTreeBuilder<L: Lang> {
+pub struct NodeTreeBuilder<L: Lang, A = ()> {
     staged: Vec<Staged<L>>,
+    /// The staged nodes' annotations, parallel to `staged` (kept out of `Staged` so
+    /// the staged read views stay annotation-free — `Lang` never sees `A`).
+    annotations: Vec<A>,
 }
 
-impl<L: Lang> NodeTreeBuilder<L> {
+impl<L: Lang, A> NodeTreeBuilder<L, A> {
     /// An empty builder.
-    pub fn new() -> NodeTreeBuilder<L> {
-        NodeTreeBuilder { staged: Vec::new() }
+    pub fn new() -> NodeTreeBuilder<L, A> {
+        NodeTreeBuilder { staged: Vec::new(), annotations: Vec::new() }
     }
+}
 
+// Interim `A = ()` staging surface (replaced by the single six-parameter `add` in the
+// ext-minting milestone of this same stage).
+impl<L: Lang> NodeTreeBuilder<L> {
     /// Stage a node with the default uniform ext. `children` are the node's structural
     /// children in order (for a `Callable`: the concatenation of one child region per
     /// provided argument, then one per slot — the `ParsedArguments`/`ParsedSlots`
@@ -200,9 +207,12 @@ impl<L: Lang> NodeTreeBuilder<L> {
 
         let id = BuildId(self.staged.len() as u32);
         self.staged.push(Staged { kind, ext, span, parsing_state, children, claimed: false });
+        self.annotations.push(());
         Ok(id)
     }
+}
 
+impl<L: Lang, A> NodeTreeBuilder<L, A> {
     /// A read-only view of the nodes staged so far (what [`Lang::finalize_node`] and
     /// node-based stop predicates consume).
     pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
@@ -215,8 +225,8 @@ impl<L: Lang> NodeTreeBuilder<L> {
     /// the module docs). Staged nodes not reachable from `root` are dropped. `Err`
     /// means the staged input violated the contract's layout-time obligations (root
     /// staged and unclaimed; content parents inside their region's subtree).
-    pub fn finish(self, root: BuildId) -> Result<NodeTree<L>, NodeBuildError> {
-        const NONE: u32 = u32::MAX; // safe sentinel: add() caps staging below u32::MAX
+    pub fn finish(self, root: BuildId) -> Result<NodeTree<L, A>, NodeBuildError> {
+        const NONE: u32 = NO_PARENT; // safe sentinel: add() caps staging below u32::MAX
         let tree_tag = super::tree::next_tree_tag();
         match self.staged.get(root.0 as usize) {
             None => return Err(NodeBuildError::RootNotStaged { root }),
@@ -224,6 +234,8 @@ impl<L: Lang> NodeTreeBuilder<L> {
             Some(_) => {}
         }
         let mut staged: Vec<Option<Staged<L>>> = self.staged.into_iter().map(Some).collect();
+        let mut staged_annotations: Vec<Option<A>> =
+            self.annotations.into_iter().map(Some).collect();
 
         // Pass 1: breadth-first order, per-node children ranges, parent links, and the
         // staged-id → final-index map (the layout tables region resolution needs).
@@ -250,12 +262,16 @@ impl<L: Lang> NodeTreeBuilder<L> {
             pos += 1;
         }
 
-        // Pass 2: move the staged data into place, resolving callable region records
-        // (only possible here, where the flattened layout exists).
+        // Pass 2: move the staged data (and its annotation) into place, resolving
+        // callable region records (only possible here, where the flattened layout
+        // exists).
         let mut nodes = Vec::with_capacity(order.len());
+        let mut annotations = Vec::with_capacity(order.len());
         for (f, &sid) in order.iter().enumerate() {
             let children = ranges[f].clone();
             let mut staged = staged[sid as usize].take().expect("staged node used twice");
+            annotations
+                .push(staged_annotations[sid as usize].take().expect("staged node used twice"));
             if let NodeKind::Callable(data) = &mut staged.kind {
                 resolve_regions(data, f as u32, &children, &ranges, &parent, &final_of, tree_tag)?;
             }
@@ -267,10 +283,18 @@ impl<L: Lang> NodeTreeBuilder<L> {
                 children,
             });
         }
+        // The single-source fast-path flag: whether every node's span lies in one and
+        // the same `Source` (the O(1) short-circuit for whole-run slice verification).
+        let single_source = match nodes.split_first() {
+            Some((first, rest)) => {
+                let source = first.span.source();
+                rest.iter().all(|data| Arc::ptr_eq(data.span.source(), source))
+            }
+            None => true,
+        };
         Ok(NodeTree {
-            nodes,
-            #[cfg(debug_assertions)]
-            tag: tree_tag,
+            core: Arc::new(TreeCore { nodes, parent, tree_tag, single_source }),
+            annotations,
         })
     }
 }
@@ -287,9 +311,9 @@ fn resolve_regions<L: Lang>(
     ranges: &[Range<u32>],
     parent: &[u32],
     final_of: &[u32],
-    tree_tag: u32,
+    tree_tag: TreeTag,
 ) -> Result<(), NodeBuildError> {
-    const NONE: u32 = u32::MAX;
+    const NONE: u32 = NO_PARENT;
     let regions = data
         .arguments
         .arguments
@@ -439,13 +463,13 @@ impl<L: Lang> fmt::Debug for StagedNodeView<'_, L> {
     }
 }
 
-impl<L: Lang> Default for NodeTreeBuilder<L> {
+impl<L: Lang, A> Default for NodeTreeBuilder<L, A> {
     fn default() -> Self {
         NodeTreeBuilder::new()
     }
 }
 
-impl<L: Lang> fmt::Debug for NodeTreeBuilder<L> {
+impl<L: Lang, A> fmt::Debug for NodeTreeBuilder<L, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NodeTreeBuilder").field("staged", &self.staged.len()).finish()
     }

@@ -66,7 +66,7 @@ use crate::spec::ArgumentSpec;
 use crate::state::Lang;
 
 use super::builder::BuildId;
-use super::tree::NodeId;
+use super::tree::{NodeId, TreeTag};
 use super::{ArgumentExt, SlotExt};
 
 /// Parser-side designation of a region's content nodes, in staging coordinates. Both
@@ -115,10 +115,9 @@ enum RegionState {
         children: Range<u32>,
         content: Range<u32>,
         content_parent: u32,
-        /// Debug-only provenance tag of the resolving tree, stamped into the
-        /// [`NodeId`]s this record mints (see `NodeTree`'s `tag` field).
-        #[cfg(debug_assertions)]
-        tree_tag: u32,
+        /// The resolving tree's layout tag, stamped into the [`NodeId`]s this
+        /// record mints (see [`TreeTag`]).
+        tree_tag: TreeTag,
     },
 }
 
@@ -174,30 +173,20 @@ impl ChildRegion {
     ///
     /// Panics on a staged region (see [`ChildRegion`]).
     pub fn content_parent(&self) -> NodeId {
-        let index = self.resolved().2;
-        NodeId::new(index, self.resolved_tree_tag())
+        let (_, _, content_parent, tree_tag) = self.resolved();
+        NodeId::new(content_parent, tree_tag)
     }
 
-    fn resolved(&self) -> (&Range<u32>, &Range<u32>, u32) {
+    fn resolved(&self) -> (&Range<u32>, &Range<u32>, u32, TreeTag) {
         match &self.state {
-            RegionState::Resolved { children, content, content_parent, .. } => {
-                (children, content, *content_parent)
+            RegionState::Resolved { children, content, content_parent, tree_tag } => {
+                (children, content, *content_parent, *tree_tag)
             }
             RegionState::Staged { .. } => panic!(
                 "child region still staged: node-index ranges are minted by \
                  NodeTreeBuilder::finish() (two-phase record contract, node::arguments docs)"
             ),
         }
-    }
-
-    /// The resolving tree's provenance tag (`0` in release builds; only called on
-    /// resolved regions — `resolved()` has already panicked otherwise).
-    fn resolved_tree_tag(&self) -> u32 {
-        #[cfg(debug_assertions)]
-        if let RegionState::Resolved { tree_tag, .. } = &self.state {
-            return *tree_tag;
-        }
-        0
     }
 
     /// The staged form, if not yet resolved (builder-side validation).
@@ -214,16 +203,9 @@ impl ChildRegion {
         children: Range<u32>,
         content: Range<u32>,
         content_parent: u32,
-        tree_tag: u32,
+        tree_tag: TreeTag,
     ) {
-        let _ = tree_tag;
-        self.state = RegionState::Resolved {
-            children,
-            content,
-            content_parent,
-            #[cfg(debug_assertions)]
-            tree_tag,
-        };
+        self.state = RegionState::Resolved { children, content, content_parent, tree_tag };
     }
 }
 

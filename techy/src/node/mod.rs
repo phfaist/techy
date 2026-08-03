@@ -44,7 +44,7 @@ pub use invariants::check_tree_invariants;
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::{Descendants, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
-pub use tree::{NodeId, NodeTree};
+pub use tree::{NodeId, NodeTree, TreeTag};
 
 // `NodeData` is deliberately NOT re-exported ([§dd-dr:public-visibility-sweep] Theme C):
 // it is crate-internal — zero public signatures use it; `NodeRef` is the read API.
@@ -514,17 +514,80 @@ mod tests {
         assert_eq!(body[0].chars(), Some("hi"));
     }
 
-    /// Debug builds stamp ids with their tree's provenance tag: using an id minted by
-    /// one tree on another trips the assertion instead of silently resolving to an
-    /// unrelated node (release builds cannot detect this — `NodeTree::node`'s docs).
+    /// Every id carries its tree layout's tag ([`TreeTag`]), in every build: using an
+    /// id minted by one tree on another trips [`NodeTree::node`]'s own-tree assertion
+    /// instead of silently resolving to an unrelated node.
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "did not mint")]
-    fn cross_tree_node_id_is_caught_in_debug() {
+    #[should_panic(expected = "does not belong")]
+    fn cross_tree_node_id_is_caught() {
         let tree_a = example_tree();
         let tree_b = example_tree();
         let id_from_a = tree_a.root().child(0).unwrap().id();
         let _ = tree_b.node(id_from_a); // in range for tree_b, but foreign
+    }
+
+    /// The tag participates in id identity (`Eq`/`Hash`): same-index ids of two
+    /// layouts are different values, so one map can key ids from several trees.
+    #[test]
+    fn tree_tags_participate_in_node_id_identity() {
+        let tree_a = example_tree();
+        let tree_b = example_tree();
+        let a0 = tree_a.root().id();
+        let b0 = tree_b.root().id();
+        assert_eq!(a0.index(), b0.index());
+        assert_ne!(a0, b0); // the tag distinguishes them
+        assert_eq!(a0.tree_tag(), tree_a.root().child(1).unwrap().id().tree_tag());
+
+        let mut map = hashbrown::HashMap::new();
+        map.insert(a0, "a");
+        map.insert(b0, "b");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&a0], "a");
+        assert_eq!(map[&b0], "b");
+    }
+
+    /// `get()` rejects an in-range foreign id in **every** build (the tag check is
+    /// no longer debug-only), and layout-preserving copies (`clone`, `materialize`,
+    /// `annotate`) share the tag — their ids are interchangeable.
+    #[test]
+    fn get_rejects_foreign_ids_and_copies_share_the_tag() {
+        let tree_a = example_tree();
+        let tree_b = example_tree(); // same shape: every id is in range for both
+        let id_from_a = tree_a.root().child(1).unwrap().id();
+        assert!(tree_a.get(id_from_a).is_some());
+        assert!(tree_b.get(id_from_a).is_none());
+
+        let cloned = tree_a.clone();
+        let materialized = tree_a.materialize();
+        let annotated = tree_a.annotate(|node| node.id().index());
+        assert!(cloned.get(id_from_a).is_some());
+        assert!(materialized.get(id_from_a).is_some());
+        assert_eq!(annotated.get(id_from_a).unwrap().annotation(), &id_from_a.index());
+    }
+
+    /// `annotate` is zero-copy over the layout: the stages share the frozen core
+    /// (`Arc` identity) and the input tree is untouched; the callback runs in
+    /// storage order.
+    #[test]
+    fn annotate_shares_the_core_and_runs_in_storage_order() {
+        let tree = example_tree();
+        let mut seen: Vec<usize> = Vec::new();
+        let annotated = tree.annotate(|node| {
+            seen.push(node.id().index());
+            node.span_content().len()
+        });
+        // Storage order = 0..n in index order (breadth-first layout).
+        assert_eq!(seen, (0..tree.node_count()).collect::<Vec<_>>());
+        // Same core, same tag; only the annotation vector is new.
+        assert!(Arc::ptr_eq(&tree.core, &annotated.core));
+        assert_eq!(annotated.annotations().len(), tree.node_count());
+        // The input tree is untouched (still `A = ()`).
+        assert_eq!(tree.annotations().len(), tree.node_count());
+        let x = annotated.root().child(0).unwrap();
+        assert_eq!(*x.annotation(), 1); // "x"
+        // Re-annotation over the annotated stage reads the current annotations.
+        let doubled = annotated.annotate(|node| node.annotation() * 2);
+        assert_eq!(*doubled.node(x.id()).annotation(), 2);
     }
 
     /// Noise between arguments: `\frac %h␊ {a}{b}` — the comment and the surrounding
@@ -1234,7 +1297,7 @@ mod tests {
         let dump = alloc::format!("{:?}", cloned);
         assert!(dump.contains("Chars"));
         let node_dump = alloc::format!("{:?}", tree.root().child(0).unwrap());
-        assert!(node_dump.contains("NodeId(1)"));
+        assert!(node_dump.contains("NodeId(1@"));
     }
 
     #[test]

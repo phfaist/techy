@@ -52,7 +52,7 @@ pub fn check_tree_invariants<L: Lang>(tree: &NodeTree<L>) {
 
     // --- 1. structural sanity ---------------------------------------------------------
     let mut parent: Vec<Option<u32>> = vec![None; n];
-    for (i, data) in tree.nodes.iter().enumerate() {
+    for (i, data) in tree.nodes().iter().enumerate() {
         let children = &data.children;
         assert!(
             children.start <= children.end && (children.end as usize) <= n,
@@ -85,7 +85,7 @@ pub fn check_tree_invariants<L: Lang>(tree: &NodeTree<L>) {
     }
 
     // --- 2..5. per-node span and payload checks ----------------------------------------
-    for (i, data) in tree.nodes.iter().enumerate() {
+    for (i, data) in tree.nodes().iter().enumerate() {
         check_node(tree, &parent, i, data);
     }
 }
@@ -353,7 +353,7 @@ fn check_regions<L: Lang>(
                 children
             );
         } else {
-            let parent_children = &tree.nodes[content_parent.index()].children;
+            let parent_children = &tree.nodes()[content_parent.index()].children;
             assert!(
                 parent_children.start <= content.start && content.end <= parent_children.end,
                 "node {}: region {} content {:?} escapes its content parent's children {:?}",
