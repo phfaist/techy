@@ -26,11 +26,10 @@ use super::NodeBuildError;
 
 /// Stage a copy of `node` and its whole subtree into `builder`, returning the copy's
 /// [`BuildId`]. Children are staged bottom-up in source order; callable region records
-/// are translated back to staging coordinates (module docs).
-///
-/// [`Lang::finalize_node`] runs again on every copied node (it runs in
-/// [`NodeTreeBuilder::add`], the single mutation boundary) — sanctioned by the hook's
-/// idempotence contract ("transforms re-stage nodes").
+/// are translated back to staging coordinates (module docs). Copied nodes carry their
+/// exts **verbatim** (frozen parse facts — `make_node_ext` never re-runs on copies);
+/// the extract-built trees these helpers feed are `A = ()`, so every copy's
+/// annotation is `()`.
 pub(crate) fn copy_subtree_into<L: Lang>(
     builder: &mut NodeTreeBuilder<L>,
     node: NodeRef<'_, L>,
@@ -71,12 +70,13 @@ fn copy_node<L: Lang>(
         other => other.clone(),
     };
 
-    let id = builder.add_with_ext(
+    let id = builder.add(
         kind,
         node.span().clone(),
         node.parsing_state().clone(),
         children,
         node.ext().clone(),
+        (),
     )?;
     ids.insert(index_of(node), id);
     Ok(id)

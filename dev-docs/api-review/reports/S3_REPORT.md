@@ -6,7 +6,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 
 - [x] 0. Implementation plan written + committed (this document)
 - [x] A. Tree tags + annotations core (`TreeTag`, `NodeId` identity, `TreeCore`/`Arc`, `annotate`, accessors; parent table + single-source flag stored)
-- [ ] B. Ext minting (`make_node_ext` + `StagedChildren`, tier-2 deletion, hook-free 6-param `add`, `cx.stage_node`, `ParserSession::builder` → pub(crate), extract minting)
+- [x] B. Ext minting (`make_node_ext` + `StagedChildren`, tier-2 deletion, hook-free 6-param `add`, `cx.stage_node`, `ParserSession::builder` → pub(crate), extract minting)
 - [ ] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`)
 - [ ] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`)
 - [ ] D. Level-0 `restage_node` (+ copy.rs rebased on it)

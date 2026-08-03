@@ -482,10 +482,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
             cx.recover(MalformedBegin, SourceSpan::new(&cx.source, trigger.span))?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
             // accepted tolerant-recovery artifact); nothing past it is consumed.
-            let id = cx
-                .session
-                .builder
-                .add(
+            let id = cx.stage_node(
                     NodeKind::chars(trigger.span),
                     SourceSpan::new(&cx.source, trigger.span),
                     Arc::clone(&cx.state),
@@ -575,12 +572,8 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
             // amended): whitespace after `\begin` is unrecorded scaffolding
             // normalization, whitespace after `\end{…}` is sibling content.
             post_space: TextContent::empty(),
-            ext: Default::default(),
         };
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::callable(data),
                 SourceSpan::new(&cx.source, trigger.span.start()..body.end),
                 Arc::clone(&cx.state),
@@ -619,10 +612,7 @@ impl ConstructParser<Latexlike> for OrphanEndParser<'_, '_> {
         };
         let span = Span::new(trigger.span.start(), end);
         cx.recover(OrphanEnd::new(name), SourceSpan::new(&cx.source, span))?;
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::chars(span),
                 SourceSpan::new(&cx.source, span),
                 Arc::clone(&cx.state),

@@ -4,7 +4,7 @@
 //! list as plain data — as concrete preset types (decided at the 7.6 checkpoint):
 //! parse tracebacks speak the preset's vocabulary ("macro ‘\frac’", "specials ‘~’"
 //! instead of the core's "callable ‘…’"), and each type is a stable downcast target
-//! for preset `finalize_node`-style hooks. The environment counterpart is
+//! for preset `make_node_ext`-style minting. The environment counterpart is
 //! [`EnvironmentSpec`](super::EnvironmentSpec), which carries body behavior and lives
 //! with the `\begin` composition.
 

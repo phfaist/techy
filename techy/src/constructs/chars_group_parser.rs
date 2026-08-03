@@ -174,7 +174,7 @@ impl<L: Lang> ArgumentParser<L> for CharsGroupArgumentParser<L> {
         let (id, _delta) = cx.parse_group(contents_state, open.span, rule, child_states)?;
 
         let child_count = {
-            let staged = cx.session.builder.staged_nodes();
+            let staged = cx.staged_nodes();
             staged.get(id).expect("the group was just staged").children().len() as u32
         };
         noise.nodes.push(id);

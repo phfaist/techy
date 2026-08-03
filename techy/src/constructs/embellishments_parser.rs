@@ -140,7 +140,7 @@ impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser {
             // its open delimiter (pylatexenc's `(marker, '')` shape).
             let end = wrapper_children
                 .last()
-                .and_then(|last| cx.session.builder.staged_nodes().get(*last))
+                .and_then(|last| cx.staged_nodes().get(*last))
                 .map(|child| child.span().end())
                 .unwrap_or(marker_span.end());
             let span = Span::new(marker_span.start(), end);
@@ -148,10 +148,7 @@ impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser {
                 TextContent::Spanned(marker_span),
                 TextContent::empty(),
             );
-            let wrapper = cx
-                .session
-                .builder
-                .add(
+            let wrapper = cx.stage_node(
                     NodeKind::group(data),
                     SourceSpan::new(&cx.source, span),
                     Arc::clone(&cx.state),

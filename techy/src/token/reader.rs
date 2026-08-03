@@ -504,6 +504,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = crate::engine::StdParseDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     /// Hardcoded LaTeX-flavored rules; the real defaults arrive with the latexlike
@@ -1241,6 +1248,13 @@ mod tests {
             }
             Ok(None)
         }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     fn specials_state(rules: TokenRules<SpecialsLang>) -> Arc<ParsingState<SpecialsLang>> {
@@ -1322,6 +1336,13 @@ mod tests {
                 _pos: usize,
             ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
                 panic!("scan_specials consulted for a non-trigger character");
+            }
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
             }
         }
         let st: Arc<ParsingState<PanickyLang>> = Arc::new(ParsingState::new(StateData {

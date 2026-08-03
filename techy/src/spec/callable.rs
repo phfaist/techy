@@ -59,8 +59,9 @@ pub enum FrameRole {
 /// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
 /// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.
 ///
-/// **Downcasting is part of the contract** (`Any` supertrait): a preset's [`Lang::finalize_node`](crate::state::Lang::finalize_node)
-/// hook recovers its concrete spec type from a stored `Arc<dyn CallableSpec<L>>` via
+/// **Downcasting is part of the contract** (`Any` supertrait): a preset's
+/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)
+/// mint recovers its concrete spec type from a stored `Arc<dyn CallableSpec<L>>` via
 /// trait upcasting — `(&*spec as &dyn core::any::Any).downcast_ref::<MySpec>()`. The
 /// `Arc`'d trait object was already implicitly `'static`; the supertrait makes it
 /// per-implementor law. Downcasting to a preset's own spec *trait* (an open set of

@@ -135,13 +135,17 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
 
 /// The root object of one parse: node building, diagnostics, and the recovery policy.
 ///
-/// Fields are public: construct parsers reach the builder and diagnostics through
+/// The diagnostics and ext fields are public: construct parsers reach them through
 /// [`ParseContext::session`](crate::constructs::ParseContext) — the session *is* the
 /// shared mutable surface of a parse (trees stay immutable; this is the mutation
-/// boundary, consumed by [`finish`](ParserSession::finish)).
+/// boundary, consumed by [`finish`](ParserSession::finish)). The staging builder is
+/// deliberately **not** public: parse staging goes exclusively through the one door,
+/// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node) (which
+/// mints the node ext — no parser can stage an unpopulated node); the read view is
+/// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes).
 pub struct ParserSession<L: Lang> {
-    /// The staging node builder.
-    pub builder: NodeTreeBuilder<L>,
+    /// The staging node builder (crate-internal; see the type docs).
+    pub(crate) builder: NodeTreeBuilder<L>,
     /// The diagnostics accumulated so far.
     pub diagnostics: Diagnostics<L::SourceOrigin>,
     /// The parse-global mutable language extension ([`Lang::SessionExt`],
@@ -548,7 +552,7 @@ mod tests {
         > {
             let token = cx.tokens.next(&cx.state).expect("test token stream is error-free");
             let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };
-            let id = cx.session.builder.add(
+            let id = cx.stage_node(
                 NodeKind::chars(token.span),
                 crate::source::SourceSpan::new(&cx.source, token.span),
                 cx.state.clone(),
@@ -817,6 +821,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = ObserverDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     /// ObserverLang's driver: counts every transition observation (the hook lives on the driver, not on `Lang`).
@@ -1011,6 +1022,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = DescentDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Default)]
@@ -1109,6 +1127,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = QuietDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -1155,6 +1180,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = HelperDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -1232,6 +1264,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = FailingDescentDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     impl ParseDriver<FailingDescentLang> for FailingDescentDriver {

@@ -173,10 +173,7 @@ impl<L: Lang> Language<L> {
                     // Stage the consumed delimiter as a chars node (the
                     // markup-in-chars recovery artifact; 7.9): the root partition
                     // stays exact across the skip.
-                    let id = cx
-                        .session
-                        .builder
-                        .add(
+                    let id = cx.stage_node(
                             NodeKind::chars(span),
                             SourceSpan::new(&cx.source, span),
                             Arc::clone(&cx.state),
@@ -201,10 +198,7 @@ impl<L: Lang> Language<L> {
                 }
             }
         }
-        let root = cx
-            .session
-            .builder
-            .add(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
+        let root = cx.stage_node(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
             .map_err(|error| cx.implementation_error(error, Span::empty(0)))?;
         session.finish(root).map_err(|error| {
             ParseError::new(
@@ -287,6 +281,13 @@ mod tests {
                 mode: (),
                 ext: (),
             }
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
         }
     }
 
@@ -469,6 +470,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = BogusDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -546,6 +554,13 @@ mod tests {
                 mode: (),
                 ext: (),
             }
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
         }
     }
 

@@ -11,59 +11,57 @@ use core::fmt;
 use core::hash::Hash;
 
 use crate::engine::{ParseDriver, StdParseDriver};
-use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
+use crate::node::{NodeExt, NodeKind, StagedChildren};
 use crate::source::{SourceOrigin, SourceSpan};
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
 use super::parsing_state::{ParsingState, StateData};
 
-/// The bundle of node extension types of a language: the **two-tier ext system**, orthogonal to structural node identity (a group with custom
-/// data is still a group to all generic tooling).
+/// The bundle of node extension types of a language — per-instance language data
+/// attached alongside the structural node/record data, orthogonal to structural
+/// identity (a group with custom data is still a group to all generic tooling).
 ///
-/// Tier 1 — [`NodeExt`](NodeExtTypes::NodeExt) — sits uniformly on every node
-/// (cross-cutting per-instance concerns: bindings handles, IDs, …). Tier 2 — the
-/// per-kind `<Kind>NodeExt` types — carries kind-specific per-instance parse results.
+/// - [`NodeExt`](NodeExtTypes::NodeExt) sits uniformly on **every node**; a lang
+///   wanting kind-shaped data uses an enum inside it (coherence is enforced at the
+///   single minting point, [`Lang::make_node_ext`]).
+/// - [`ArgumentExt`](NodeExtTypes::ArgumentExt) /
+///   [`SlotExt`](NodeExtTypes::SlotExt) ride on the parsed argument/slot records.
 ///
 /// Bundled behind one associated type (`Lang::NodeExts`) to keep [`Lang`] small; `()`
 /// implements the bundle with every type `()`. Keep ext types word-sized where possible
-/// (an index or `Arc` into Lang-owned storage) — `NodeKind` stores tier-2 exts inline.
+/// (an index or `Arc` into Lang-owned storage) — nodes store the ext inline.
 ///
-/// The `Default` bound supplies the value builders use when a node carries no meaningful
-/// ext (consistent with `Lang::StateExt: Default`).
+/// **Population is initialization** — deliberately **no `Default` bounds**: an ext
+/// value is minted exactly once, at creation, by the party with the knowledge — the
+/// node ext by [`Lang::make_node_ext`] at staging, the argument ext by the
+/// [`ArgumentParser`](crate::spec::ArgumentParser) that parsed the argument, the slot
+/// ext by the invocation composition that mints the
+/// [`ParsedSlot`](crate::node::ParsedSlot) record. There is no
+/// "default-initialized, populated later" state anywhere in the ext system; restaged
+/// copies carry their exts verbatim as frozen parse facts.
 pub trait NodeExtTypes {
-    /// Tier 1: the uniform ext on every node.
-    type NodeExt: Clone + fmt::Debug + Default + Send + Sync;
-    /// Tier 2: ext of `Chars` nodes.
-    type CharsNodeExt: Clone + fmt::Debug + Default + Send + Sync;
-    /// Tier 2: ext of `Group` nodes.
-    type GroupNodeExt: Clone + fmt::Debug + Default + Send + Sync;
-    /// Tier 2: ext of `Callable` nodes.
-    type CallableNodeExt: Clone + fmt::Debug + Default + Send + Sync;
-    /// Tier 2: ext of `Comment` nodes.
-    type CommentNodeExt: Clone + fmt::Debug + Default + Send + Sync;
-    /// Tier 2: ext of `List` nodes.
-    type ListNodeExt: Clone + fmt::Debug + Default + Send + Sync;
+    /// The uniform ext on every node, minted by [`Lang::make_node_ext`].
+    type NodeExt: Clone + fmt::Debug + Send + Sync;
     /// Ext of a *parsed argument* record (not a node kind): language/extension data
     /// attached to one argument of one invocation — e.g. a reference-parsing extension
     /// caching `{domain: "fig", key: "Abc"}` next to the argument whose content it
-    /// derives from, instead of re-parsing the argument node.
+    /// derives from, instead of re-parsing the argument node. Minted by the argument's
+    /// [`ArgumentParser`](crate::spec::ArgumentParser) (the standard parsers are
+    /// defined only `where ArgumentExt<L>: Default` — their knowledge about a custom
+    /// ext *is* "nothing", and the bound says so).
     type ArgumentExt: Clone + fmt::Debug + Default + Send + Sync;
     /// Ext of a *parsed slot* record (not a node kind): per-instance derived data about
     /// one content region of one invocation — e.g. a tabular extension caching the cell
     /// structure of an environment's body slot, or an itemize extension caching item
     /// boundaries (the slot-side symmetry of
-    /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)).
+    /// [`ArgumentExt`](NodeExtTypes::ArgumentExt)). Demanded at
+    /// [`ParsedSlot`](crate::node::ParsedSlot) construction.
     type SlotExt: Clone + fmt::Debug + Default + Send + Sync;
 }
 
 /// The no-ext bundle: every ext type is `()`.
 impl NodeExtTypes for () {
     type NodeExt = ();
-    type CharsNodeExt = ();
-    type GroupNodeExt = ();
-    type CallableNodeExt = ();
-    type CommentNodeExt = ();
-    type ListNodeExt = ();
     type ArgumentExt = ();
     type SlotExt = ();
 }
@@ -71,9 +69,12 @@ impl NodeExtTypes for () {
 /// The compile-time type bundle of a language definition. Every core type takes one
 /// `L: Lang` parameter — never five (the one-generic-parameter principle).
 ///
-/// A minimal language is a ZST with only the associated types filled in; all methods have
-/// working defaults (no transition customization, no specials). The latexlike preset
-/// and FLM are the intended full implementors.
+/// A minimal language is a ZST with only the associated types filled in; every method
+/// except [`make_node_ext`](Lang::make_node_ext) has a working default (no transition
+/// customization, no specials) — the one exception exists because node exts have no
+/// default value ([`NodeExtTypes`]'s population-is-initialization rule; a no-ext lang's
+/// body is the empty one-liner). The latexlike preset and FLM are the intended full
+/// implementors.
 ///
 /// All associated types are `Send + Sync`: thread-safe states and trees are a core
 /// contract — in practice these types are
@@ -171,7 +172,7 @@ pub trait Lang: Sized + 'static {
     /// [`finalize_transition`](Lang::finalize_transition) (state layer; `derived()` is
     /// out-of-parse-callable), [`scan_specials`](Lang::scan_specials)/
     /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (tokenizer layer),
-    /// [`finalize_node`](Lang::finalize_node) (builder/transform layer). Everything
+    /// [`make_node_ext`](Lang::make_node_ext) (staging/transform layer). Everything
     /// that only runs while a parse is driven lives on the driver. [`TrivialLang`]
     /// defaults this to [`StdParseDriver`].
     type Driver: ParseDriver<Self>;
@@ -297,36 +298,47 @@ pub trait Lang: Sized + 'static {
         TriggerChars::default()
     }
 
-    // --- Phase 6 finalization hook (July 2026, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]) ---------------
+    // --- Node-ext minting (API review, DESIGN_RATIONALE.md [§dd-dr:ext-minting]) -----
     //
     // The parse-time dispatch hooks that used to sit here — `resolve_command`,
     // `make_paragraph_break_node`, `refine_diagnostic`, `observe_transition` — migrated
     // to the `ParseDriver` in Phase 7.2 (placement doctrine, DESIGN_RATIONALE.md [§dd-dr:parsers-engine]):
     // `Lang` keeps only hooks of layers callable outside a driven parse.
 
-    /// Centralized node finalization, run by
-    /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add) for **every** staged
-    /// node (all kinds, before the staging checks). The builder is the single mutation
-    /// boundary, so no node escapes finalization — no parser cooperation required;
-    /// transforms and tests included. A preset dispatches to spec-specific behavior
-    /// itself (match a `Callable`, read its `spec`, downcast, attach ext), and uniform
-    /// per-node initialization gets a natural home.
+    /// Mint the [`NodeExt`] of one node about to be staged — the language's **one**
+    /// chance to compute per-node data, with the node's full parts in view.
     ///
-    /// Implementations must be **idempotent**: transform-built trees pass nodes through
-    /// a new builder, re-running finalization on already-finalized data. The hook also
-    /// runs on speculatively staged nodes that may be abandoned (harmless — they drop
-    /// unreachable). `staged` is the read-only view of the already-staged nodes, so a
-    /// callable's hook can inspect its `children`. The default does nothing.
-    fn finalize_node(
-        kind: &mut NodeKind<Self>,
-        ext: &mut NodeExt<Self>,
+    /// **The only required [`Lang`] method** (every other method has a working
+    /// default): [`NodeExt`] carries no `Default` bound, so a lang that declares a
+    /// real ext type must say how it is initialized — and a lang without one returns
+    /// `()` (what [`TrivialLang`]'s blanket impl does; a `Lang` written directly
+    /// spells the empty one-liner).
+    ///
+    /// **Who runs it, when**: `make_node_ext` runs inside
+    /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node)
+    /// during parsing, and wherever a transform author writes the call explicitly
+    /// (mint, inspect/adjust if needed, then
+    /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add)); nowhere else,
+    /// ever. It runs **once per node, at creation** — restaged copies carry their
+    /// already-minted exts verbatim as frozen parse facts, never re-minted (there is
+    /// no idempotence contract because there is no re-run).
+    ///
+    /// `kind` is the node's structural payload, by shared reference — the hook reads,
+    /// it cannot change the kind. A preset dispatches to spec-specific behavior
+    /// itself (match a `Callable`, read its `spec`, downcast, compute ext).
+    /// `children` is the **subtree-deep, descent-only** view of the node's staged
+    /// children ([`StagedChildren`]): child views resolve *their* children
+    /// recursively — argument content at grandchild depth is reachable (computing
+    /// `{domain, key}` from `\ref{fig:abc}`) — but no siblings, ancestors, or
+    /// unrelated staged nodes are exposed. There is deliberately no parent access:
+    /// staging is bottom-up, the parent does not exist yet; downward context is
+    /// [`StateExt`](Lang::StateExt)'s job.
+    fn make_node_ext(
+        kind: &NodeKind<Self>,
         span: &SourceSpan<Self::SourceOrigin>,
-        parsing_state: &Arc<ParsingState<Self>>,
-        children: &[BuildId],
-        staged: &StagedNodes<'_, Self>,
-    ) {
-        let _ = (kind, ext, span, parsing_state, children, staged);
-    }
+        state: &Arc<ParsingState<Self>>,
+        children: StagedChildren<'_, Self>,
+    ) -> NodeExt<Self>;
 }
 
 /// The trivial language — for tests and machinery experiments: `impl TrivialLang for
@@ -351,6 +363,15 @@ impl<T: TrivialLang> Lang for T {
     type SourceOrigin = Option<String>;
     type NodeExts = ();
     type Driver = StdParseDriver;
+
+    /// The trivial mint: no ext data (`NodeExt = ()`).
+    fn make_node_ext(
+        _kind: &NodeKind<Self>,
+        _span: &SourceSpan<Self::SourceOrigin>,
+        _state: &Arc<ParsingState<Self>>,
+        _children: StagedChildren<'_, Self>,
+    ) {
+    }
 }
 
 /// A closed vocabulary type that can list all of its values — the opt-in tooling bound

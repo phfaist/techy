@@ -198,13 +198,9 @@ impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
             group_type: Some(self.rule.group_type),
             open: TextContent::Spanned(self.open_span),
             close,
-            ext: Default::default(),
         };
         let span = Span::new(self.open_span.start(), end);
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::group(data),
                 SourceSpan::new(&cx.source, span),
                 Arc::clone(&cx.state),

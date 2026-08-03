@@ -216,6 +216,16 @@ impl Lang for Latexlike {
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
         data.scopes.specials_trigger_chars()
     }
+
+    /// The preset carries no per-node ext data (`NodeExt = ()`): the mint is the
+    /// empty one-liner.
+    fn make_node_ext(
+        _kind: &crate::node::NodeKind<Self>,
+        _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+        _state: &Arc<ParsingState<Self>>,
+        _children: crate::node::StagedChildren<'_, Self>,
+    ) {
+    }
 }
 
 /// The preset's canonical [`TokenRules`]: `\` + letters commands (single non-letter

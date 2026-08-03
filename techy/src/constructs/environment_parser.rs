@@ -47,7 +47,7 @@
 //!
 //! Under [`Recovery::Strict`](crate::error::Recovery) each condition aborts instead.
 //! "Was this environment properly terminated?" lives in the diagnostics, not on the
-//! node — a preset wanting it on the node flags it in ext via `Lang::finalize_node`.
+//! node — a preset wanting it on the node computes it in ext via `Lang::make_node_ext`.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -427,7 +427,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
         let body_end = outcome
             .nodes
             .last()
-            .and_then(|&last| cx.session.builder.staged_nodes().get(last))
+            .and_then(|&last| cx.staged_nodes().get(last))
             .map(|node| node.span().end())
             .unwrap_or(body_start);
 
@@ -462,10 +462,7 @@ impl<L: Lang> EnvironmentBodyParser<'_, L> {
         };
 
         let child_count = outcome.nodes.len() as u32;
-        let body = cx
-            .session
-            .builder
-            .add(
+        let body = cx.stage_node(
                 NodeKind::list(),
                 SourceSpan::new(&cx.source, body_start..body_end),
                 Arc::clone(&cx.state),
@@ -568,6 +565,13 @@ mod tests {
 
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
             TriggerChars::Only("~".into())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
         }
     }
 
@@ -703,7 +707,7 @@ mod tests {
                 )?;
                 // Chars fallback over the trigger alone (markup in a Chars node is the
                 // accepted tolerant-recovery artifact); nothing past it is consumed.
-                let id = cx.session.builder.add(
+                let id = cx.stage_node(
                     NodeKind::chars(trigger.span),
                     SourceSpan::new(&cx.source, trigger.span),
                     Arc::clone(&cx.state),
@@ -782,9 +786,8 @@ mod tests {
                 // amended in 6.4): whitespace after `\begin` is unrecorded scaffolding
                 // normalization, whitespace after `\end{…}` is sibling content.
                 post_space: TextContent::empty(),
-                ext: Default::default(),
             };
-            let id = cx.session.builder.add(
+            let id = cx.stage_node(
                 NodeKind::callable(data),
                 SourceSpan::new(&cx.source, trigger.span.start()..body.end),
                 Arc::clone(&cx.state),
@@ -892,7 +895,7 @@ mod tests {
 
             let mut body_nodes = Vec::new();
             if body_end > body_start {
-                body_nodes.push(cx.session.builder.add(
+                body_nodes.push(cx.stage_node(
                     NodeKind::chars(Span::new(body_start, body_end)),
                     SourceSpan::new(&cx.source, body_start..body_end),
                     Arc::clone(&cx.state),
@@ -900,7 +903,7 @@ mod tests {
                 ).unwrap());
             }
             let body_children = body_nodes.len() as u32;
-            let list = cx.session.builder.add(
+            let list = cx.stage_node(
                 NodeKind::list(),
                 SourceSpan::new(&cx.source, body_start..body_end),
                 Arc::clone(&cx.state),
@@ -919,9 +922,8 @@ mod tests {
                 arguments: ParsedArguments::empty(),
                 slots,
                 post_space: TextContent::empty(),
-                ext: Default::default(),
             };
-            let id = cx.session.builder.add(
+            let id = cx.stage_node(
                 NodeKind::callable(data),
                 SourceSpan::new(&cx.source, trigger.span.start()..end),
                 Arc::clone(&cx.state),
@@ -1089,7 +1091,7 @@ mod tests {
             NodeKind::list(),
             SourceSpan::new(&source, root_span),
             Arc::clone(state),
-            outcome.nodes,
+            outcome.nodes, (), (),
         ).unwrap();
         let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);

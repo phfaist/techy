@@ -177,7 +177,7 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         // trigger's span — the builder diagnoses the foreign id in `add` below.
         let end = children
             .last()
-            .and_then(|last| cx.session.builder.staged_nodes().get(*last))
+            .and_then(|last| cx.staged_nodes().get(*last))
             .map(|child| child.span().end())
             .unwrap_or(token.span.end());
 
@@ -189,12 +189,8 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
             slots: ParsedSlots::empty(),
             // Exactly the trigger token's syntactic post-space (module docs).
             post_space: TextContent::Spanned(token.post_space()),
-            ext: Default::default(),
         };
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::callable(data),
                 SourceSpan::new(&cx.source, token.span.start()..end),
                 Arc::clone(&cx.state),

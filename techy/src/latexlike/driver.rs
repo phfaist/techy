@@ -170,7 +170,6 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
                 arguments: ParsedArguments::empty(),
                 slots: ParsedSlots::empty(),
                 post_space: TextContent::empty(),
-                ext: Default::default(),
             }),
         }
     }

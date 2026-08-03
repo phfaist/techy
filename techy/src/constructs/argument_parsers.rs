@@ -209,9 +209,7 @@ pub(super) fn stage<L: Lang>(
     kind: NodeKind<L>,
     span: Span,
 ) -> ConstructParserResult<L, BuildId> {
-    cx.session
-        .builder
-        .add(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), Vec::new())
+    cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), Vec::new())
         .map_err(|error| cx.implementation_error(error, span))
 }
 
@@ -362,12 +360,8 @@ fn dispatch_expression_invocation<'s, L: Lang>(
             arguments: ParsedArguments::from(arguments),
             slots: ParsedSlots::empty(),
             post_space: TextContent::Spanned(token.post_space()),
-            ext: Default::default(),
         };
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::callable(data),
                 SourceSpan::new(&cx.source, token.span),
                 Arc::clone(&cx.state),
@@ -650,7 +644,7 @@ pub(super) fn missing_mandatory<L: Lang>(
 
 /// The number of children of a staged node (builder read-back).
 fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32 {
-    let staged = cx.session.builder.staged_nodes();
+    let staged = cx.staged_nodes();
     let view = staged.get(id).expect("the node was just staged");
     view.children().len() as u32
 }
@@ -828,7 +822,7 @@ impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L> {
 
         // Content: the option group's children, or a lone protective child group's.
         let (content_parent, content_len) = {
-            let staged = cx.session.builder.staged_nodes();
+            let staged = cx.staged_nodes();
             let children = staged.get(id).expect("the group was just staged").children();
             let unwrapped = match (self.unwrap_lone_group, children) {
                 (Some(protective), [only]) => {
@@ -991,6 +985,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = ArgDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1178,7 +1179,7 @@ mod tests {
             NodeKind::list(),
             SourceSpan::new(&source, root_span),
             Arc::clone(state),
-            outcome.nodes,
+            outcome.nodes, (), (),
         ).unwrap();
         let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
@@ -2045,7 +2046,7 @@ mod tests {
                         (BuildId, Option<ParsingStateDelta<ArgLang>>),
                     > {
                         let span = self.invocation.token.span;
-                        let id = cx.session.builder.add(
+                        let id = cx.stage_node(
                             NodeKind::chars(span),
                             SourceSpan::new(&cx.source, span),
                             Arc::clone(&cx.state),

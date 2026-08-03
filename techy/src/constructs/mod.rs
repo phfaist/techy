@@ -71,6 +71,7 @@ pub use verbatim_parser::{
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use alloc::sync::Arc;
 use core::fmt;
 
@@ -78,7 +79,7 @@ use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession};
 use crate::error::{DiagnosticData, DiagnosticInfo, ParseError};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
-use crate::node::BuildId;
+use crate::node::{BuildId, NodeBuildError, NodeKind, StagedNodes};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenReader};
 
@@ -141,6 +142,46 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         driver: &'a L::Driver,
     ) -> ParseContext<'a, 's, L> {
         ParseContext { tokens, source, state, session, driver }
+    }
+
+    /// Stage one parsed node — **the** staging door of parsing, and the one automatic
+    /// [`Lang::make_node_ext`] site: the node's ext is minted here (with the
+    /// descent-only [`StagedChildren`](crate::node::StagedChildren) view of
+    /// `children`), then the node is staged with annotation `()` (parse output is the
+    /// unannotated `NodeTree<L>`; annotations are consumer vocabulary).
+    ///
+    /// Construct parsers have no other route to the builder — no node escapes ext
+    /// minting, with zero parser cooperation required. `children` are the node's
+    /// structural children in order (for a `Callable`: one region per provided
+    /// argument, then one per slot — see
+    /// [`NodeTreeBuilder::add`](crate::node::NodeTreeBuilder::add)).
+    ///
+    /// `Err` reports a staging-contract violation
+    /// ([`NodeBuildError`](crate::node::NodeBuildError)) — an implementation bug in an
+    /// extension, not a source condition; lift it with
+    /// [`implementation_error`](ParseContext::implementation_error).
+    pub fn stage_node(
+        &mut self,
+        kind: NodeKind<L>,
+        span: SourceSpan<L::SourceOrigin>,
+        state: Arc<ParsingState<L>>,
+        children: Vec<BuildId>,
+    ) -> Result<BuildId, NodeBuildError> {
+        let ext = L::make_node_ext(
+            &kind,
+            &span,
+            &state,
+            self.session.builder.staged_children(&children),
+        );
+        self.session.builder.add(kind, span, state, children, ext, ())
+    }
+
+    /// The read-only view of the nodes staged so far, keyed by
+    /// [`BuildId`](crate::node::BuildId) — what node-based stop predicates and span
+    /// arithmetic over already-staged children consume. Read view only: staging goes
+    /// through [`stage_node`](ParseContext::stage_node).
+    pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
+        self.session.builder.staged_nodes()
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error

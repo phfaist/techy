@@ -1225,10 +1225,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
         )?;
         // Tolerant continuation: markup in a Chars node is the accepted recovery
         // artifact (DESIGN_RATIONALE.md [§dd-dr:errors]).
-        let id = cx
-            .session
-            .builder
-            .add(
+        let id = cx.stage_node(
                 NodeKind::chars(token.span),
                 SourceSpan::new(&cx.source, token.span),
                 Arc::clone(&cx.state),
@@ -1798,6 +1795,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = crate::engine::StdParseDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     fn moded_state(scopes: ScopeStack<ModedLang>, mode: Mode) -> ParsingState<ModedLang> {

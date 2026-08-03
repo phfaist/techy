@@ -54,6 +54,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = crate::engine::StdParseDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     /// Stand-in for the standard argument parsers (delimited group, optional group,

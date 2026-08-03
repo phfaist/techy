@@ -91,9 +91,8 @@ pub enum ExtractError {
         /// The offending node, in the tree the input nodes came from.
         node: NodeId,
     },
-    /// Building the result tree failed — the builder surfaced an implementation bug
-    /// (e.g. a misbehaving [`Lang::finalize_node`] hook mutating copies into invalid
-    /// shapes), never a source-input condition.
+    /// Building the result tree failed — the builder surfaced an implementation bug,
+    /// never a source-input condition.
     Build(NodeBuildError),
 }
 
@@ -379,7 +378,12 @@ fn stage_piece<L: Lang>(
             piece.node.span().clone(),
         ),
     };
-    builder.add(NodeKind::chars(content), span, piece.node.parsing_state().clone(), Vec::new())
+    // Boundary partials are fresh nodes: their ext is minted properly via
+    // `make_node_ext` (the explicit transform-side recipe; copies keep their exts).
+    let kind = NodeKind::chars(content);
+    let state = piece.node.parsing_state().clone();
+    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+    builder.add(kind, span, state, Vec::new(), ext, ())
 }
 
 /// Stage one segment as a `List` node over its pieces. Empty segments (keyval's
@@ -401,7 +405,10 @@ fn stage_segment_list<L: Lang>(
         ),
         _ => (fallback_span.clone(), fallback_state.clone()),
     };
-    builder.add(NodeKind::list(), span, state, children)
+    // Synthesized `List` wrappers are fresh nodes too: mint via `make_node_ext`.
+    let kind = NodeKind::list();
+    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children));
+    builder.add(kind, span, state, children, ext, ())
 }
 
 // --- split_at_chars ---------------------------------------------------------------------
@@ -440,7 +447,9 @@ pub fn split_at_chars<L: Lang>(
         (Some(first), Some(last)) => covering(&piece_span(first), &piece_span(last)),
         _ => anchor_span,
     };
-    let root = builder.add(NodeKind::list(), span, anchor_state, lists)?;
+    let kind = NodeKind::list();
+    let ext = L::make_node_ext(&kind, &span, &anchor_state, builder.staged_children(&lists));
+    let root = builder.add(kind, span, anchor_state, lists, ext, ())?;
     Ok(Split { tree: builder.finish(root)? })
 }
 
@@ -547,7 +556,10 @@ fn finish_keyvals<L: Lang>(
     anchor_span: SourceSpan<L::SourceOrigin>,
     anchor_state: Arc<ParsingState<L>>,
 ) -> Result<KeyVals<L>, ExtractError> {
-    let root = builder.add(NodeKind::list(), anchor_span, anchor_state, value_lists)?;
+    let kind = NodeKind::list();
+    let ext =
+        L::make_node_ext(&kind, &anchor_span, &anchor_state, builder.staged_children(&value_lists));
+    let root = builder.add(kind, anchor_span, anchor_state, value_lists, ext, ())?;
     let tree = builder.finish(root)?;
     // The root's children are the staged value lists, in staging order.
     let value_ids: Vec<NodeId> = tree.root().children().iter().map(|list| list.id()).collect();
@@ -741,19 +753,21 @@ impl<L: Lang> KeyVals<L> {
         for (i, value) in values.iter().enumerate() {
             if i > 0 {
                 if let Some(sep_source) = &sep_source {
-                    children.push(builder.add(
-                        NodeKind::chars(TextContent::Owned(Box::from(sep))),
-                        SourceSpan::entire(sep_source),
-                        state.clone(),
-                        Vec::new(),
-                    )?);
+                    let kind = NodeKind::chars(TextContent::Owned(Box::from(sep)));
+                    let span = SourceSpan::entire(sep_source);
+                    let ext =
+                        L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+                    children.push(builder.add(kind, span, state.clone(), Vec::new(), ext, ())?);
                 }
             }
             for node in value.iter() {
                 children.push(copy_subtree_into(&mut builder, node)?);
             }
         }
-        let root = builder.add(NodeKind::list(), root_span, state, children)?;
+        let kind = NodeKind::list();
+        let ext =
+            L::make_node_ext(&kind, &root_span, &state, builder.staged_children(&children));
+        let root = builder.add(kind, root_span, state, children, ext, ())?;
         Ok(Some(builder.finish(root)?))
     }
 

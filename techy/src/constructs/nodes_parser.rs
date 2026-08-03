@@ -535,10 +535,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         kind: NodeKind<L>,
         span: Span,
     ) -> ConstructParserResult<L, BuildId> {
-        let id = cx
-            .session
-            .builder
-            .add(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), vec![])
+        let id = cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), vec![])
             .map_err(|error| cx.implementation_error(error, span))?;
         self.nodes.push(id);
         Ok(id)
@@ -563,7 +560,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         let Some(condition) = &mut self.stop.node else {
             return false;
         };
-        let staged = cx.session.builder.staged_nodes();
+        let staged = cx.staged_nodes();
         // A miss means a child construct parser handed back a foreign id (an
         // implementation bug — the builder diagnoses it when the id lands in a child
         // list); treat it as "condition did not fire" rather than panic (panic policy).
@@ -1026,7 +1023,7 @@ mod tests {
     use crate::scopes::{
         CallableQuery, CallableSyntax, Package, ProviderError, ScopeStack, SpecsProvider,
     };
-    use crate::node::{GroupData, NodeExt, StagedNodes};
+    use crate::node::GroupData;
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
@@ -1085,6 +1082,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = CmdDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1146,6 +1150,13 @@ mod tests {
 
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
             TriggerChars::Only("~".into())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
         }
     }
 
@@ -1278,12 +1289,19 @@ mod tests {
                 _ => Span::empty(0),
             }
         };
-        let root = session.builder.add(
-            NodeKind::list(),
-            SourceSpan::new(&source, root_span),
-            Arc::clone(state),
-            outcome.nodes,
-        ).unwrap();
+        let root = {
+            // The generic test harness stages its root list via the explicit recipe
+            // (the harness plays the transform-author role here).
+            let kind = NodeKind::list();
+            let span = SourceSpan::new(&source, root_span);
+            let ext = L::make_node_ext(
+                &kind,
+                &span,
+                state,
+                session.builder.staged_children(&outcome.nodes),
+            );
+            session.builder.add(kind, span, Arc::clone(state), outcome.nodes, ext, ()).unwrap()
+        };
         let result = session.finish(root).unwrap();
         crate::node::check_tree_invariants(&result.tree);
         Ok(Parsed { result, stop: outcome.stop, pos })
@@ -1464,6 +1482,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = MarkDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -2054,6 +2079,13 @@ mod tests {
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
             TriggerChars::Only("!".into())
         }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[test]
@@ -2298,6 +2330,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = HintDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -2367,6 +2406,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = RefineDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -2668,7 +2714,7 @@ mod tests {
                         _ => content.extend_to(token.span.end()),
                     }
                 };
-                let child = cx.session.builder.add(
+                let child = cx.stage_node(
                     NodeKind::chars(content),
                     SourceSpan::new(&cx.source, content),
                     Arc::clone(&cx.state),
@@ -2678,7 +2724,7 @@ mod tests {
                     TextContent::Spanned(open_span),
                     TextContent::Spanned(close_span),
                 );
-                let id = cx.session.builder.add(
+                let id = cx.stage_node(
                     NodeKind::group(data),
                     SourceSpan::new(&cx.source, open_span.start()..close_span.end()),
                     Arc::clone(&cx.state),
@@ -2721,20 +2767,18 @@ mod tests {
     }
 
     #[test]
-    fn finalize_node_populates_callable_ext_through_the_dispatch_loop() {
-        // FLM pattern rehearsal ([§dd-dr:parsers-engine]): the builder-run hook sees every staged
-        // `Callable`, downcasts `data.spec` to the concrete spec type (the `Any`
-        // supertrait contract, Action-05), and attaches derived data as its per-kind
-        // ext. A preset dispatching on an *open* set of spec types funnels them
-        // through one concrete wrapper first (DESIGN_RATIONALE.md [§dd-dr:specs]).
+    fn make_node_ext_mints_through_the_dispatch_loop() {
+        // FLM pattern rehearsal ([§dd-dr:ext-minting]): parse staging goes through the
+        // one automatic minting site (`cx.stage_node`), so every node the dispatch
+        // loop stages — third-party construct parsers included — carries a properly
+        // minted ext. The mint sees the kind: a preset downcasts a `Callable`'s
+        // `data.spec` to its concrete spec type (the `Any` supertrait contract) and
+        // derives ext data from spec + invocation facts. A preset dispatching on an
+        // *open* set of spec types funnels them through one concrete wrapper first
+        // (DESIGN_RATIONALE.md [§dd-dr:specs]).
         struct ExtBundle;
         impl NodeExtTypes for ExtBundle {
-            type NodeExt = ();
-            type CharsNodeExt = ();
-            type GroupNodeExt = ();
-            type CallableNodeExt = Box<str>;
-            type CommentNodeExt = ();
-            type ListNodeExt = ();
+            type NodeExt = Option<Box<str>>; // Some for callables, None elsewhere
             type ArgumentExt = ();
             type SlotExt = ();
         }
@@ -2778,24 +2822,19 @@ mod tests {
             type NodeExts = ExtBundle;
             type Driver = ExtDriver;
 
-            fn finalize_node(
-                kind: &mut NodeKind<Self>,
-                _ext: &mut NodeExt<Self>,
+            fn make_node_ext(
+                kind: &NodeKind<Self>,
                 _span: &SourceSpan<Self::SourceOrigin>,
-                _parsing_state: &Arc<ParsingState<Self>>,
-                _children: &[BuildId],
-                _staged: &StagedNodes<'_, Self>,
-            ) {
-                if let NodeKind::Callable(data) = kind {
-                    // The downcast: trait-upcast the stored spec to `&dyn Any`, then
-                    // recover the concrete type — field access included.
-                    let spec = (&*data.spec as &dyn core::any::Any)
-                        .downcast_ref::<StdCallableSpec<ExtLang>>()
-                        .expect("the test library registers StdCallableSpec");
-                    // Idempotent: recomputing from the same facts yields the same ext.
-                    data.ext = format!("{}#{}", data.name, spec.arguments.len())
-                        .into_boxed_str();
-                }
+                _state: &Arc<ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) -> Option<Box<str>> {
+                let NodeKind::Callable(data) = kind else { return None };
+                // The downcast: trait-upcast the stored spec to `&dyn Any`, then
+                // recover the concrete type — field access included.
+                let spec = (&*data.spec as &dyn core::any::Any)
+                    .downcast_ref::<StdCallableSpec<ExtLang>>()
+                    .expect("the test library registers StdCallableSpec");
+                Some(format!("{}#{}", data.name, spec.arguments.len()).into_boxed_str())
             }
         }
 
@@ -2807,7 +2846,9 @@ mod tests {
         let parsed =
             run_both("\\foo x", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
         let node = parsed.result.tree.root().child(0).unwrap();
-        assert_eq!(&*node.callable().unwrap().ext, "foo#0");
+        assert_eq!(node.ext().as_deref(), Some("foo#0"));
+        // Non-callable siblings got the mint's other arm.
+        assert_eq!(*parsed.result.tree.root().child(1).unwrap().ext(), None);
     }
 
     #[test]
@@ -3125,7 +3166,7 @@ mod tests {
             NodeKind::list(),
             SourceSpan::entire(&source),
             Arc::clone(&st),
-            nodes,
+            nodes, (), (),
         ).unwrap();
         let result = session.finish(root).unwrap();
         let texts: Vec<_> = result
@@ -3296,6 +3337,13 @@ mod tests {
             ) {
                 FINALIZE_RUNS.fetch_add(1, Ordering::Relaxed);
             }
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         /// Counts observations (the hook moved to the driver in 7.2); strict by
@@ -3417,6 +3465,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = DriveDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
 
         #[derive(Debug, Default)]
@@ -3515,7 +3570,7 @@ mod tests {
                 NodeKind::list(),
                 SourceSpan::new(&source, 0..content.len()),
                 Arc::clone(&st),
-                outcome.nodes,
+                outcome.nodes, (), (),
             )
             .unwrap();
         let result = session.finish(root).unwrap();
@@ -3606,6 +3661,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = FailingMathDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -3696,6 +3758,13 @@ mod tests {
 
         fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
             data.scopes.specials_trigger_chars()
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
         }
     }
 

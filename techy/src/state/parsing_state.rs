@@ -661,6 +661,13 @@ mod tests {
         fn initial_state_data() -> StateData<Self> {
             StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () }
         }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[test]
@@ -768,6 +775,13 @@ mod tests {
                 Arc::make_mut(rule).escape_char = if new.ext.in_math { '#' } else { '\\' };
             }
         }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[test]
@@ -872,6 +886,13 @@ mod tests {
             new.ext =
                 SeenEdge { entered_math: prev.mode() == Mode::Text && new.mode == Mode::Math };
         }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[test]
@@ -890,6 +911,13 @@ mod tests {
             type SourceOrigin = Option<String>;
             type NodeExts = ();
             type Driver = crate::engine::StdParseDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
         }
         let state: ParsingState<DefaultSeedLang> = ParsingState::lang_initial();
         assert_eq!(state.mode(), Mode::Text);

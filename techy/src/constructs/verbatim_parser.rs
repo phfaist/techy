@@ -361,10 +361,7 @@ impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L> {
         let mut children = Vec::new();
         if raw_end.content_end > content_start {
             let span = Span::new(content_start, raw_end.content_end);
-            let id = cx
-                .session
-                .builder
-                .add(
+            let id = cx.stage_node(
                     NodeKind::chars(span),
                     SourceSpan::new(&cx.source, span),
                     Arc::clone(&content_state),
@@ -383,12 +380,8 @@ impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L> {
                 .terminator
                 .map(TextContent::Spanned)
                 .unwrap_or_else(TextContent::empty),
-            ext: Default::default(),
         };
-        let group = cx
-            .session
-            .builder
-            .add(
+        let group = cx.stage_node(
                 NodeKind::group(data),
                 SourceSpan::new(&cx.source, group_span),
                 Arc::clone(&cx.state),
@@ -536,10 +529,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
             if let Some(token) = cx.probe_token(&verbatim_state)? {
                 if matches!(token.kind, TokenKind::Char('\n')) {
                     cx.tokens.move_past(&token, true);
-                    let id = cx
-                        .session
-                        .builder
-                        .add(
+                    let id = cx.stage_node(
                             NodeKind::chars(token.span),
                             SourceSpan::new(&cx.source, token.span),
                             Arc::clone(&verbatim_state),
@@ -566,10 +556,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
 
         if raw_end.content_end > content_start {
             let span = Span::new(content_start, raw_end.content_end);
-            let id = cx
-                .session
-                .builder
-                .add(
+            let id = cx.stage_node(
                     NodeKind::chars(span),
                     SourceSpan::new(&cx.source, span),
                     Arc::clone(&verbatim_state),
@@ -581,10 +568,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
 
         let child_count = children.len() as u32;
         let body_span = Span::new(body_start, raw_end.content_end);
-        let body = cx
-            .session
-            .builder
-            .add(
+        let body = cx.stage_node(
                 NodeKind::list(),
                 SourceSpan::new(&cx.source, body_span),
                 Arc::clone(&cx.state),
@@ -654,6 +638,13 @@ mod tests {
         type SourceOrigin = Option<String>;
         type NodeExts = ();
         type Driver = VerbDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -794,7 +785,7 @@ mod tests {
                 NodeKind::list(),
                 SourceSpan::new(&source, root_span),
                 Arc::clone(state),
-                outcome.nodes,
+                outcome.nodes, (), (),
             )
             .unwrap();
         let result = session.finish(root).unwrap();
@@ -1091,7 +1082,7 @@ mod tests {
                 NodeKind::list(),
                 SourceSpan::new(&source, span),
                 Arc::clone(&state),
-                vec![body.body],
+                vec![body.body], (), (),
             )
             .unwrap();
         let result = session.finish(root).unwrap();
