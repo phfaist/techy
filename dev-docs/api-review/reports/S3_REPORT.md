@@ -522,6 +522,68 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
    than trusting the A+B offsets. `check_tree_invariants` acceptance.rs sites
    for milestone G are now at lines 219/226/392 ± a few — re-grep.
 
+### Additions at the D+E+F stop point (successor agent 2 → the G–I successor)
+
+State: commits `340e9f8` (D), `34c85f7` (E), `5ed9524` (F) on top of `d812c74`.
+Gates at this point: `cargo build` 0 warnings; `cargo test` 565 lib + 30
+acceptance + 8 + 1 derive green; doctests 27 passed / 2 ignored (the +1 is the
+new `SourcePos` doctest; ignored baseline unchanged); `rm -rf target/doc &&
+cargo docs` clean; grep gates: zero `ancestors()` (src + docs/ + README), zero
+`add_subtree`, zero "honest" in slice.rs.
+
+1. **`restage_node` lives in copy.rs** (an `impl NodeTreeBuilder` block there —
+   the region-translation home), not builder.rs; the public path is unchanged
+   (`core::node::NodeTreeBuilder::restage_node`). copy.rs module docs were
+   rewritten around the primitive; the internal names `copy.rs` /
+   `copy_subtree_into` / `copy_node` were deliberately kept (crate-internal;
+   the superseded-names ban is on public transform vocabulary — worth a
+   sentence in milestone I's superseded-names verification if the register's
+   bar is read more strictly).
+2. **New `NodeBuildError` variants** (milestone D, delegated names, plan risk
+   #7): `ReplacementsLengthMismatch { children, replacements }` and
+   `ContentParentUnmapped { parent: NodeId }` — NodeId in a builder-error
+   variant is new (the enum previously carried only `BuildId`s); Display arms
+   name `restage_node` explicitly.
+3. **The builder's "exactly one staging method" doc** got a parenthetical:
+   `restage_node` is documented as *not* a second staging path (it clones and
+   lowers onto `add`). Keep that sentence intact in any G–I doc sweeps.
+4. **`deepest_containing` + `covering_child_run`/`binary_candidate_run`/
+   `partition_point`/`verify_covering_run`** are private free fns at the bottom
+   of tree.rs — shared by `node_at`/`covering_slice`. `verify_covering_run`
+   is the authority on what a child run must satisfy (same-source, edge
+   overlap+coverage, exact tiling `end == next start`, minimality); any
+   covering failure degrades to the covering node as a single-node run, and
+   `deepest_containing` prunes same-source non-containing subtrees (exact
+   spans trusted). If G's validator work touches sibling-span expectations,
+   note the tiling equality here is *verification*, not an invariant claim —
+   restaged trees legitimately fail it and degrade.
+5. **`NodeTree` in-crate accessors** now include `parent_table()` and
+   `is_single_source()` (beside `nodes()`/`tree_tag()`/`make_id()`); use them
+   rather than reaching through `tree.core` in new code (G's validator should
+   too).
+6. **Pre-existing "honest" occurrences** (the "accepted honest cost" idiom in
+   builder.rs, arguments.rs, kind.rs, environment_parser.rs, node/mod.rs and
+   docs/learn-by-example.md) were left alone: T5-F1's ban is scoped to the
+   slice `span()`/`source_text()` rustdoc contracts ("honest slices" session
+   jargon), and those files use a different, older idiom. Milestone I should
+   consciously decide whether the ban is read wider (unruled — if so, surface
+   to the user rather than silently rewording).
+7. **`input_like_tree()` test helper** (node/mod.rs tests): a two-source
+   `\input`-like shape (Attached slot, body `List` in a resolved source) —
+   reusable for G's Attached-exclusion tests instead of building a new shape.
+8. **Doc-link phrasing note**: `parent()`'s rustdoc contains the
+   `iter::successors` recipe but deliberately never spells the rejected
+   iterator's name (grep gate); keep it that way in I's sweeps. `SourcePos`'s
+   rustdoc says "the query currency for position lookups over parsed trees"
+   without naming `NodeTree` (S0 stays node-layer-free); the node_at/
+   covering_slice rustdoc links point *at* source types, not the reverse.
+9. **DR status lines due at I** for this chunk: [§dd-dr:tree-navigation]
+   (applied — incl. the T4/T5 amendments' spellings), [§dd-dr:span-extend-to]
+   (contains landed with docs+tests in the same commit; `overlaps` NOT added —
+   `covering_slice`'s impl did not want it), [§dd-dr:restage-ops] (level-0
+   half applied; visitor/ops/errors S7), and the honest-slices amendment under
+   [§dd-dr:tree-navigation] (applied).
+
 ## What landed per work-order item
 
 - **Item 1 (tree tags)** — landed in milestone A (commit 052e096): always-on
@@ -653,6 +715,22 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
 | `StdCallableSpec::new(Vec<Arc<ArgumentSpec<L>>>)` | `new(impl IntoIterator<Item = ArgumentSpec<L>>)` (by value, Arc'd inside; shared-Arc sites use the pub `arguments` field) |
 | `ParsedArguments`/`ParsedSlots`: `From<Vec>` only | + `new(Vec)` constructors (`From<Vec>` stays) |
 
+## Signature table (old → new) — D/E/F portion
+
+| Old | New |
+|---|---|
+| — | `NodeTreeBuilder::restage_node<AOld>(node: NodeRef<'_, L, AOld>, replacements: &[Vec<BuildId>], content_parents: impl Fn(NodeId) -> Option<BuildId>, annotation: A) -> Result<BuildId, NodeBuildError>` (cross-tree sanctioned; ext cloned verbatim) |
+| — | `NodeBuildError::{ReplacementsLengthMismatch { children, replacements }, ContentParentUnmapped { parent: NodeId }}` |
+| `copy_subtree_into` (bespoke recursion + region shift) | same signature, now the degenerate recursion over `restage_node` (NodeId-keyed id map) |
+| `NodeRef::tree()` pub(crate) | pub |
+| — | `NodeRef::parent() -> Option<NodeRef>` / `index_in_parent() -> Option<usize>` (O(1); successors recipe in `parent()` docs; no ancestry iterator) |
+| — | `pub struct SourcePos<O = Option<String>>` in `techy::source` (`new(&Arc<Source<O>>, pos)`, `source()`, `pos()`; Clone/PartialEq(identity)/Eq/Debug) |
+| — | `SourceSpan::start_pos()` / `end_pos()` (exclusive-end doc sentence) |
+| — | `Span::contains(pos) -> bool` (half-open; empty spans never match) |
+| — | `NodeTree::node_at(&SourcePos<L::SourceOrigin>) -> Option<NodeRef>` (deepest containing; per-source descent) |
+| — | `NodeTree::covering_slice(&SourceSpan<L::SourceOrigin>) -> Option<NodeSlice>` (minimal covering sibling run; binary search + verified fallback) |
+| `NodeSlice::span()`/`source_text()` (first/last endpoint check) | whole-run single-source verification (O(1) `finish()` flag fast path) + ordering guard on both |
+
 ## Delegated-arity decisions
 
 1. **`ParsedSlot::new(region, name, role, ext)` / `new_unnamed(region, role, ext)`** —
@@ -678,6 +756,22 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
    `CallableSpec::make_invocation_parser`'s unconditional default body (see D-C1).
 
 ## Gate results
+
+At the F stop point (successor agent 2; commits through F):
+- `cargo build`: clean, 0 warnings.
+- `cargo test`: 565 lib + 30 acceptance + 8 + 1 (derive) green; doctests 27
+  passed / 2 ignored (baseline; +1 passing from the `SourcePos` doctest).
+- `rm -rf target/doc && cargo docs`: clean, 0 warnings.
+- Grep gates: zero `ancestors()` (src + docs/ + README — the recipe rustdoc
+  deliberately never spells the name), zero `add_subtree`, zero "honest" in
+  slice.rs (the F1-scoped ban; pre-existing "honest cost" idiom elsewhere
+  flagged in handoff note 6).
+- Ruled tests present: restage region translation (drop/empty/multiply),
+  cross-tree restage, cloned-ext verbatim, unmapped parent Err, length-mismatch
+  Err; parent/index_in_parent + successors walk; node_at deepest/empty-span/
+  gap-offset/multi-source-descent; covering_slice minimal-run/delimiter-
+  fallback/empty/no-cover; slice `None` on a restage-spliced mixed run;
+  `Span::contains` edges.
 
 At the C2 stop point (successor agent 1; commits through C2):
 - `cargo build`: clean, 0 warnings.
