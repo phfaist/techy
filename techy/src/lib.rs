@@ -104,12 +104,18 @@ pub mod guide {
     pub mod concepts_overview {}
 }
 
-/// Support module for `techy-derive`-generated code only: `alloc` paths spelled so they
-/// resolve from both `std` and `no_std` consumer crates. Not public API.
+/// Support module for `techy-derive`-generated code only: everything the generated code
+/// references — `alloc` paths spelled so they resolve from both `std` and `no_std`
+/// consumer crates, plus the diagnostics items the derives implement/construct. The
+/// derives emit only `::techy::__private::…` paths (the serde discipline), so the
+/// public topology never constrains, and is never constrained by, derive output.
+/// Not public API.
 #[doc(hidden)]
 pub mod __private {
     pub use alloc::string::String;
     pub use alloc::vec::Vec;
+
+    pub use crate::error::{DiagnosticInfo, DiagnosticValue, ToDiagnosticValue};
 }
 
 

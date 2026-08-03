@@ -45,9 +45,9 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl ::techy::error::ToDiagnosticValue for #name {
-            fn to_diagnostic_value(&self) -> ::techy::error::DiagnosticValue {
-                ::techy::error::DiagnosticValue::Str(::techy::__private::String::from(
+        impl ::techy::__private::ToDiagnosticValue for #name {
+            fn to_diagnostic_value(&self) -> ::techy::__private::DiagnosticValue {
+                ::techy::__private::DiagnosticValue::Str(::techy::__private::String::from(
                     match self {
                         #(#arms)*
                     },

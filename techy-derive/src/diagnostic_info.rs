@@ -152,7 +152,7 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
 /// declaration.
 fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field]) -> TokenStream {
     let body = if fields.is_empty() {
-        quote! { ::techy::error::DiagnosticValue::empty_map() }
+        quote! { ::techy::__private::DiagnosticValue::empty_map() }
     } else {
         let len = fields.len();
         let entries = fields.iter().map(|field| {
@@ -161,23 +161,23 @@ fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field]) -> TokenStream
             quote_spanned! {field.ty.span()=>
                 __data.push((
                     ::techy::__private::String::from(#key),
-                    ::techy::error::ToDiagnosticValue::to_diagnostic_value(&self.#ident),
+                    ::techy::__private::ToDiagnosticValue::to_diagnostic_value(&self.#ident),
                 ));
             }
         });
         quote! {
             let mut __data = ::techy::__private::Vec::with_capacity(#len);
             #(#entries)*
-            ::techy::error::DiagnosticValue::Map(__data)
+            ::techy::__private::DiagnosticValue::Map(__data)
         }
     };
 
     quote! {
         #[automatically_derived]
-        impl ::techy::error::DiagnosticInfo for #name {
+        impl ::techy::__private::DiagnosticInfo for #name {
             const IDENTIFIER: &'static str = #id;
 
-            fn serializable_data(&self) -> ::techy::error::DiagnosticValue {
+            fn serializable_data(&self) -> ::techy::__private::DiagnosticValue {
                 #body
             }
         }
