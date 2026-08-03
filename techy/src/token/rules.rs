@@ -186,6 +186,42 @@ pub struct TokenRules<L: Lang> {
     pub expecting_group_close: Option<Arc<GroupRule<L>>>,
 }
 
+impl<L: Lang> TokenRules<L> {
+    /// The all-empty rules value: every `enable_*` gate `false`, every collection and
+    /// string empty, no expected group close — nothing is recognized, and content is
+    /// consumed as plain characters (character-level access mode). The default
+    /// [`Lang::initial_state_data`] builds its seed over exactly this value (via
+    /// [`StateData::empty`](crate::state::StateData::empty)); real languages start
+    /// from it and fill in their canonical rules.
+    ///
+    /// This is the *constitutive* off (the language has no such features) — for the
+    /// *scoped* off over existing rules, see
+    /// [`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all),
+    /// which flips the gates while the data stays in place.
+    ///
+    /// Deliberately a named constructor, not a `Default` impl: there is no privileged
+    /// "default language" here (see the module docs), and a struct-update
+    /// `..Default::default()` would silently zero future fields where the named
+    /// constructor documents the all-empty intent.
+    pub fn empty() -> TokenRules<L> {
+        TokenRules {
+            enable_whitespace: false,
+            whitespace: WhitespaceRules { chars: "".into() },
+            enable_multi_newline_paragraphs: false,
+            enable_groups: false,
+            groups: Vec::new(),
+            temporary_groups: Vec::new(),
+            enable_commands: false,
+            commands: Vec::new(),
+            enable_comments: false,
+            comments: Vec::new(),
+            enable_specials: false,
+            forbidden_chars: "".into(),
+            expecting_group_close: None,
+        }
+    }
+}
+
 // Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: PartialEq` although only
 // the `Lang::GroupTypeId` associated type (already bounded) is stored.
 

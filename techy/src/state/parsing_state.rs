@@ -30,6 +30,26 @@ pub struct StateData<L: Lang> {
     pub ext: L::StateExt,
 }
 
+impl<L: Lang> StateData<L> {
+    /// The all-empty state data: [`TokenRules::empty`] rules (every syntax gate off —
+    /// character-level content), an empty [`ScopeStack`], the default mode and ext —
+    /// the most neutral starting value. The default [`Lang::initial_state_data`]
+    /// returns exactly this; a language filling in its canonical seed starts here and
+    /// replaces what it defines.
+    ///
+    /// Deliberately a named constructor, not a `Default` impl: a struct-update
+    /// `..Default::default()` would silently zero future fields, where the named
+    /// constructor documents the all-empty intent.
+    pub fn empty() -> StateData<L> {
+        StateData {
+            rules: TokenRules::empty(),
+            scopes: ScopeStack::new(),
+            mode: Default::default(),
+            ext: Default::default(),
+        }
+    }
+}
+
 /// An immutable parsing state: [`StateData`] behind a getter-only surface, plus derived
 /// caches valid for this instance's lifetime.
 ///

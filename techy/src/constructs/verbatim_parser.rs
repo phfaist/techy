@@ -114,14 +114,8 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 /// stays diagnosable inside verbatim content.
 pub fn verbatim_state_delta<L: Lang>(terminator: Arc<GroupRule<L>>) -> ParsingStateDelta<L> {
     ParsingStateDelta::new().rules(TokenRulesOverrides {
-        enable_whitespace: Some(false),
-        enable_multi_newline_paragraphs: Some(false),
-        enable_groups: Some(false),
-        enable_commands: Some(false),
-        enable_comments: Some(false),
-        enable_specials: Some(false),
         expecting_group_close: Some(Some(terminator)),
-        ..TokenRulesOverrides::default()
+        ..TokenRulesOverrides::disable_all()
     })
 }
 

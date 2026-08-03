@@ -55,6 +55,30 @@ pub struct TokenRulesOverrides<L: Lang> {
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
+    /// The overrides value with all six `enable_*` gates `Some(false)` (whitespace,
+    /// multi-newline paragraphs, groups, commands, comments, specials) and every other
+    /// field untouched — the raw-state block a rest-of-line or verbatim-like takeover
+    /// parser starts from. It composes: tweak fields afterwards, e.g. install the
+    /// terminator that ends the raw region
+    /// ([`verbatim_state_delta`](crate::constructs::verbatim_state_delta) is exactly
+    /// this plus its [`expecting_group_close`](TokenRules::expecting_group_close)).
+    ///
+    /// This is the *scoped* off — the gates flip while the rules data stays in place,
+    /// so a later delta can re-enable a feature with its original rules. The
+    /// *constitutive* off (a language without the features at all) is
+    /// [`TokenRules::empty`](crate::token::TokenRules::empty).
+    pub fn disable_all() -> TokenRulesOverrides<L> {
+        TokenRulesOverrides {
+            enable_whitespace: Some(false),
+            enable_multi_newline_paragraphs: Some(false),
+            enable_groups: Some(false),
+            enable_commands: Some(false),
+            enable_comments: Some(false),
+            enable_specials: Some(false),
+            ..TokenRulesOverrides::default()
+        }
+    }
+
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
     pub fn apply(&self, rules: &mut TokenRules<L>) {
         if let Some(v) = self.enable_whitespace {
@@ -311,5 +335,36 @@ impl<L: Lang> fmt::Debug for ParsingStateDelta<L> {
             .field("ext", &self.ext)
             .field("events", &self.events)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct PlainLang;
+    impl crate::state::TrivialLang for PlainLang {}
+
+    #[test]
+    fn disable_all_flips_exactly_the_six_gates() {
+        let overrides: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::disable_all();
+        // All six gates off…
+        assert_eq!(overrides.enable_whitespace, Some(false));
+        assert_eq!(overrides.enable_multi_newline_paragraphs, Some(false));
+        assert_eq!(overrides.enable_groups, Some(false));
+        assert_eq!(overrides.enable_commands, Some(false));
+        assert_eq!(overrides.enable_comments, Some(false));
+        assert_eq!(overrides.enable_specials, Some(false));
+        // …and nothing else touched: the value is the default plus the gate flips, so
+        // rules data (and the expected close) survives for later re-enabling.
+        let mut expected: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::default();
+        expected.enable_whitespace = Some(false);
+        expected.enable_multi_newline_paragraphs = Some(false);
+        expected.enable_groups = Some(false);
+        expected.enable_commands = Some(false);
+        expected.enable_comments = Some(false);
+        expected.enable_specials = Some(false);
+        assert_eq!(overrides, expected);
     }
 }

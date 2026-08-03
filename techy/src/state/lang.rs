@@ -10,16 +10,10 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::hash::Hash;
 
-use alloc::vec::Vec;
-
 use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{BuildId, NodeExt, NodeKind, StagedNodes};
-use crate::scopes::ScopeStack;
 use crate::source::{SourceOrigin, SourceSpan};
-use crate::token::{
-    SpecialsMatch, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
-};
-
+use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
 use super::parsing_state::{ParsingState, StateData};
 
@@ -199,31 +193,12 @@ pub trait Lang: Sized + 'static {
     /// asserting `initial().derived(&ParsingStateDelta::new())` is data-equivalent to
     /// `initial()` pins it mechanically.
     ///
-    /// The default is the most neutral data: every syntax gate off (character-level
-    /// content — no whitespace handling, groups, commands, comments, or specials), an
-    /// empty scope stack, default mode and ext. Real languages return their canonical
-    /// rules instead.
+    /// The default is the most neutral data — [`StateData::empty`]: every syntax gate
+    /// off (character-level content — no whitespace handling, groups, commands,
+    /// comments, or specials), an empty scope stack, default mode and ext. Real
+    /// languages return their canonical rules instead.
     fn initial_state_data() -> StateData<Self> {
-        StateData {
-            rules: TokenRules {
-                enable_whitespace: false,
-                whitespace: WhitespaceRules { chars: "".into() },
-                enable_multi_newline_paragraphs: false,
-                enable_groups: false,
-                groups: Vec::new(),
-                temporary_groups: Vec::new(),
-                enable_commands: false,
-                commands: Vec::new(),
-                enable_comments: false,
-                comments: Vec::new(),
-                enable_specials: false,
-                forbidden_chars: "".into(),
-                expecting_group_close: None,
-            },
-            scopes: ScopeStack::new(),
-            mode: Default::default(),
-            ext: Default::default(),
-        }
+        StateData::empty()
     }
 
     /// Transition customizer — the choke-point hook, run exactly once per
