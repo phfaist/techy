@@ -377,7 +377,9 @@ Status: DECIDED (user, Action-05 session; settled before any consumer existed).
   travels the standard `Error::source()` chain so embedders can downcast (e.g.
   `io::Error` kind). Consequence: `ResolveError` is no longer `Clone` (single-owner
   box; nothing relied on it).
-- Smalls: forwarding impls (`&R`/`Box<R>`/`Arc<R>`), a compile-time object-safety pin
+- Smalls: forwarding impls (`&R`/`Box<R>`; the `Arc<R>` forwarding impl was removed at
+  the Phase 3 S2 application — with it, the ruled no-double-wrap `Arc` pass-through of
+  `with_source_resolver` is coherence-ambiguous; user-confirmed), a compile-time object-safety pin
   (drivers may store `Arc<dyn SourceResolver>`), `MapResolver::with_reference_as_origin`
   (its blanket impl narrows to `O: From<String>` — a convenience type may narrow;
   exotic origins write their own ten-line resolver).
