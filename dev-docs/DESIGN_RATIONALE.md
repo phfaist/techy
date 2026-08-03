@@ -249,6 +249,10 @@ designed in the 2b T4 session. [§dd-dr:input-attachment].)*
 *(Wiring landed — API-review T4 session: [§dd-dr:input-wiring]. `NoResolver`'s
 default-slot role is replaced by the driver accessor's `None`; its own fate rides
 the Tier-C batch.)*
+*(Tier-C ruling — `NoResolver` is REMOVED: with `None` as the canonical "resolves
+nothing", an always-fail resolver value adds nothing (an empty `MapResolver`
+covers deterministic-failure tests), and a `pub(crate)` residue would be dead
+code. [§dd-dr:public-visibility-sweep].)*
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
@@ -1606,6 +1610,10 @@ discoverability accident above).
 Revisit if: a second resolution syntax family (beyond `Command`) wants extracting
 — mirror this shape rather than growing this function.
 
+*(Amended — API-review Tier-C session: the one-line wrapper is now the strategy
+value `ScopesCommandResolver`, placed beside this function and the family;
+[§dd-dr:command-resolver] supersedes [§dd-dr:scopes-resolving-driver].)*
+
 #### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
 
 Status: DECIDED (user, API-review T3 session).
@@ -2246,6 +2254,14 @@ match the tree's *content* — is parse provenance no runtime checker can verify
 a checker that cannot check what its users would believe it checks is a trap.
 Revisit if: a runtime consumer genuinely needs the geometric parse-law check —
 additive as a sibling, with the semantic limitation stated on it.
+
+*(Amended — API-review Tier-C session: `check_tree_invariants` becomes
+`pub(crate)` and is re-implemented as a panic-assert wrapper over
+`validate_tree`'s `Result` (user: ONE canonical check implementation — no
+duplicated invariant logic; the returned violation must carry enough detail that
+the wrapper's panic message stays as informative as today's asserts). The
+demotion rides the same commit that adds `validate_tree`, so the public surface
+never lacks a checker. [§dd-dr:public-visibility-sweep].)*
 
 ## Tree transformation, annotations, and ext minting [§dd-dr:transform]
 
@@ -4121,7 +4137,11 @@ custom driver `recover` uses for per-condition decisions. The default
 
 #### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
 
-Status: DECIDED (user, API-review T3 session).
+Status: SUPERSEDED (user, API-review Tier-C session) — the component struct is
+replaced by a pluggable strategy parameter on the one canned driver:
+[§dd-dr:command-resolver]. The on-ramp analysis below (core cannot default
+`resolve_command`; the command-type field is the missing datum) carries over
+unchanged — only the packaging changed.
 
 A core-provided driver component closes the last on-ramp gap a trait default
 cannot: `ScopesResolvingDriver<L: Lang> { recovery: Recovery, command_type:
@@ -4145,6 +4165,64 @@ Rejected alternatives: defaulting `resolve_command` to scope resolution
 
 Revisit if: languages with several command-syntax callable types appear (a
 single-field component then under-serves; today they write their own driver).
+
+#### `CommandResolver`: the pluggable resolve-command strategy on `StdParseDriver` [§dd-dr:command-resolver]
+
+Status: DECIDED (user, API-review Tier-C session; supersedes
+[§dd-dr:scopes-resolving-driver]).
+
+Command resolution plugs into the one canned driver as a strategy value instead of
+shipping one driver struct per behavior: `trait CommandResolver<L: Lang>:
+fmt::Debug + Send + Sync` (a single method mirroring
+`ParseDriver::resolve_command`), carried by **`StdParseDriver<R = ()> { recovery,
+command_resolver: R, source_resolver: Option<Arc<dyn …>> }`**. `()` implements the
+trait as "resolves nothing" (inheriting the hook default's helpful
+not-implemented detail message); `ScopesCommandResolver { command_type:
+L::CallableTypeId }` — home `core::specs`, beside `resolve_command_in_scopes` and
+the resolution family it packages — is the one-line scope-stack delegation the
+superseded ruling shipped as a whole struct. Decisive reasons: (1) one driver
+struct instead of near-identical siblings each duplicating the recovery knob and
+the [§dd-dr:input-wiring] source-resolver field; (2) the defaulted-`()`-type-
+parameter idiom is established house style (`NodeTree<L, A = ()>`,
+[§dd-dr:node-annotations]; the `()` invocation-syntax impl,
+[§dd-dr:invocation-syntax]); (3) `HashMap`/`RandomState`-precedented ergonomics —
+`type Driver = StdParseDriver` and `StdParseDriver::new(Recovery::Strict, ())`
+stay annotation-free.
+
+Constructor doctrine (user): `new(recovery, command_resolver)` — the command
+resolver is a mandatory by-value argument (`R` inferred; no `Default`/`Clone`
+bounds anywhere); the source resolver initializes `None` and is set via the
+chainable `with_source_resolver(…)` builder taking a sealed-conversion argument
+(a by-value resolver is `Arc`'d internally, a pre-made `Arc` passes through — the
+[§dd-dr:registration-ergonomics] Arc-removal idiom; renames
+[§dd-dr:input-wiring]'s `with_resolver` builder now that two resolvers coexist on
+one struct). Fields stay `pub`.
+
+**The ruled asymmetry — storage matches the consumption seam** (documented in
+rustdoc and at the field pair, per user directive): the command resolver is part
+of the language *definition* (fixed when `type Driver = …` is written), consumed
+monomorphized through the concretely-typed `ParseContext::driver` on the
+per-command-token hot path — a generic parameter is collected in full. The source
+resolver is an *embedding-environment* capability (varies per deployment/run),
+consumed only through the type-erased `ParseDriver::source_resolver` accessor on
+the once-per-`\input` cold path — a generic parameter there would be erased at
+its only point of use, while costing a none-placeholder type and `None`-inference
+noise. Proliferation guard (recorded): `resolve_command` is the ONLY hook that
+gets a strategy seam — it is the sole `ParseDriver` hook that is both
+non-defaultable for a real command-bearing language and has more than one canned
+behavior worth shipping; no other hook grows one.
+
+Rejected alternatives: the two-component shape (superseded above — duplicated
+knobs, one more public type); `NoCommandResolver` as the no-op (a named unit
+where house style says `()`; one more name frozen forever); both resolvers
+generic (the erased-at-the-seam argument above); a three-argument
+`new(recovery, command_resolver, source_resolver)` (a bare `None` third argument
+fails type inference under a generic parameter — the setter shape never spells
+`None` at all).
+
+Revisit if: languages with several command-syntax callable types appear (they
+write a custom `CommandResolver` — the point of the seam), or a second hook
+genuinely meets both proliferation-guard criteria.
 
 #### Takeover staging sugar: `disable_all`, collection constructors, a committed invocation helper [§dd-dr:takeover-staging-sugar]
 
@@ -4253,6 +4331,14 @@ door + bundle are the reusable parts).
 Revisit if: a framework needs several resolvers per driver (the accessor
 signature admits dispatch behind it), or the T5 restage detailing adds a
 splice-a-cached-parse affordance that changes the caching-framework route.
+
+*(Amended — API-review Tier-C session: the free composition is renamed
+**`resolve_source_reference`** (user: the fn drives the bookkeeping around a
+*delegated* resolution; the new name uses the ruled "source reference"
+vocabulary — family: `attach_source_reference`, `UnresolvableSourceReference` —
+and the resolver parameter carries the delegation visibly). The shipped-driver
+builder named `with_resolver` above becomes **`with_source_resolver`** — two
+resolvers now coexist on `StdParseDriver` ([§dd-dr:command-resolver]).)*
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
@@ -5154,6 +5240,16 @@ re-opens a settled argument:
   `walk_tree`/`recompose_tree` — rejected on one-canonical-path (`visit::walk`,
   `recompose::recompose`; [§dd-dr:visit-engine],
   [§dd-dr:recompose-machinery]).
+- From the API-review Tier-C session: `ScopesResolvingDriver` — the component
+  struct is replaced by the strategy parameter
+  (`StdParseDriver<ScopesCommandResolver<…>>`; [§dd-dr:command-resolver]), and
+  `NoCommandResolver` — the no-op command resolver is `()`; `resolve_source`
+  (the free fn) — renamed `resolve_source_reference`, and the mechanism-first
+  candidates `delegate_resolve_source`/`call_resolve_source` (a verb name says
+  what the caller gets, not the internal wiring; [§dd-dr:input-wiring]
+  amendment); `with_resolver` (the shipped-driver builder) —
+  `with_source_resolver`; `NoResolver` — removed entirely (`None` is the
+  canonical "resolves nothing"; [§dd-dr:source-resolver] amendment).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -5368,6 +5464,71 @@ module placement).
 
 Revisit if: a framework starts depending on techy in earnest — from that moment the
 freeze is hard and breaking changes need migration paths and dependent coordination.
+
+*(The per-item Tier-C rulings this rubric's consequence clause called for are
+complete — [§dd-dr:public-visibility-sweep].)*
+
+#### The public-visibility sweep: pub-vs-pub(crate) rulings for the walkthrough-untouched items [§dd-dr:public-visibility-sweep]
+
+Status: DECIDED (user, API-review Tier-C session; completes the per-item ruling
+clause of [§dd-dr:stability-rubric]).
+
+The 76 root re-exports untouched by all five persona walkthroughs were ruled
+item-by-item: **73 keep `pub`-and-stable; `NodeData` and `check_tree_invariants`
+→ `pub(crate)`; `NoResolver` removed**. The batch's empirical finding, recorded
+because it supports the keep rulings: "no usage signal" overwhelmingly meant
+*signature closure of the used API* — most items are forced pub (named in
+signatures of items the walkthroughs did use: returns, public fields,
+trait-method parameters) or doctrine-bound (shipped condition types under the
+frozen wire-identifier slate + typed matching + the implementors-page plan; the
+condition-defining surface the planned downstream `flm.*` vocabularies require).
+Notable per-item rationales:
+
+- **`NodeData` → `pub(crate)`**: the only node-module item in zero public
+  signatures — `NodeRef` is the read API, the builder the write API; nothing
+  reachable disappears.
+- **`check_tree_invariants` → `pub(crate)`**, re-implemented over
+  `validate_tree` ([§dd-dr:tree-validation] amendment).
+- **`VERSION` stays** the crate root's compile-time `&str` const — the ecosystem
+  idiom when a crate exposes its own version; a `version()` getter is the
+  wrapped-C-library idiom, and structured `(major, minor, patch)` consts have no
+  convention behind them (consumers parse with the `semver` crate — the string is
+  guaranteed valid semver by Cargo). Concrete consumer: bindings version
+  reporting.
+- **`FrameRole` homes in the hub** beside `Frame`/`FrameTitle`, not `core::specs`
+  (user): the frame vocabulary is engine-wide — groups, environments, and
+  invocations all mint frames — so it is traceback vocabulary a spec hook
+  references, not spec vocabulary.
+- **Parsed-residue placement rule** (user): parser-*contract* residue follows its
+  trait (`ParsedArgumentNodes` → `core::constructs` with `ArgumentParser`);
+  *stored* built-node containers stay `core::node` (`ParsedArguments`,
+  `ParsedArgument`, `ParsedSlots`, `ParsedSlot`, `ChildRegion`, `ContentNodes`).
+- **`skip_whitespace` stays pub**: the paragraph rule (never silently consume a
+  paragraph break) is subtle shared semantics deserving one public source of
+  truth over N hand-transcriptions in custom tokenizers.
+- **Shipped implementations of public contracts stay pub** (`Scope`,
+  `FallbackProvider`, `ErrorCallableSpec`, `StdTokenReader`, `NodesParser`,
+  `GroupParser`): a public seam whose only shipped implementation is invisible
+  inverts the seam's purpose (drivers could replace but never reuse/wrap the
+  standard behavior); `Scope` in particular is the load-bearing carrier of
+  runtime (`\newcommand`-class) definitions despite zero walkthrough use.
+- Free `resolve_source` renamed **`resolve_source_reference`**
+  ([§dd-dr:input-wiring] amendment); `Diagnostics::into_vec` — never existed;
+  recorded as reject-do-not-add (`iter().cloned().collect()` +
+  `sorted_by_position()` cover it).
+
+Rejected alternatives: demoting never-downcast condition types (the diagnostic
+would still raise its frozen wire identifier but become unmatchable by type —
+silently breaking the typed-matching contract in favor of exactly the
+string-matching the documentation plan exists to prevent); demoting the two
+derive re-exports (every downstream condition author re-writes the boilerplate
+techy wrote a derive to avoid — and techy itself uses it 32×); a spartan-root
+`VERSION` demotion (reversible, but the cost of keeping is ~zero and the
+bindings consumer is concrete).
+
+Revisit if: a demoted item acquires a real external consumer (re-publishing is
+additive), or a framework's usage evidence contradicts a keep's stated consumer
+story at hard-freeze time.
 
 ## Documentation [§dd-dr:documentation]
 

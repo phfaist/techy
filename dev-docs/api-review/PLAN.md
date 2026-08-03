@@ -117,7 +117,7 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   (stability rubric + wire identifiers: one stability class, soft freeze; see decision
   log + [§dd-dr:stability-rubric], [§dd-dr:wire-identifier-stability]). Routing to 2b
   sessions: POLICY_BRIEF last section, as amended by the decision log.
-- [~] **Phase 2b — Decision sessions by access tier** (in progress; **T1/T2 session
+- [x] **Phase 2b — Decision sessions by access tier** (COMPLETE 2026-08-03; **T1/T2 session
   RULED 2026-07-31** — brief T1T2_BRIEF.md, rulings T1T2_RULINGS.md + decision log +
   six new DESIGN_RATIONALE entries; **T3 session RULED 2026-07-31** — brief
   T3_BRIEF.md, rulings T3_RULINGS.md + decision log + seven new DESIGN_RATIONALE
@@ -128,7 +128,8 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   rulings T5_RULINGS.md + decision log + three new DESIGN_RATIONALE entries;
   **recompose session RULED 2026-08-03/04** — brief RECOMPOSE_BRIEF.md, rulings
   RECOMPOSE_RULINGS.md + decision log + three new DESIGN_RATIONALE entries;
-  remaining: Tier-C batch).
+  **Tier-C batch RULED 2026-08-03** — brief TIERC_BRIEF.md, rulings
+  TIERC_RULINGS.md + decision log + two new DESIGN_RATIONALE entries).
   Per-item
   rulings (promote / keep-off-root / pub(crate)) over the 66 no-usage-signal items
   (SYNTHESIS §3); trap fixes F5a–d (T2 session); cursor primitive F7 + \input wiring F8
@@ -224,6 +225,16 @@ Repo (durable), all under dev-docs/api-review/:
   no-caching closure, H incl. the withdrawn reconstruction guarantee and the
   per-node recomposition doctrine, I sweep); durable records are the
   DESIGN_RATIONALE entries listed in the decision log.
+- TIERC_BRIEF.md — Tier-C batch decision brief (prepared 2026-08-03, verified against
+  6326db2: 12/76 items already ruled by later sessions; 8 decision groups G1–G8 with
+  forced-pub analysis; ~50 forced/doctrine-bound, ~11 genuine judgment calls; riders
+  R1–R5; full 76-row sweep table; proposed round order).
+- TIERC_RULINGS.md — the frozen Tier-C session rulings in full working detail
+  (Rounds 1–2 ratification blocks, Round 3 judgment calls incl. the
+  check_tree_invariants-over-validate_tree wrapper shape, Round 4 placements,
+  Round 5 riders incl. the reopened-and-re-ruled R4 command-resolver design,
+  closing sweep); durable records are the DESIGN_RATIONALE entries listed in the
+  decision log.
 - walkthroughs/{consumer,extender,langdesign,tooling,framework}/ — FRICTION.md +
   API-SURFACE.md (+ example code; framework/ adds FRAMEWORK-ANALYSIS.md) per persona.
 
@@ -607,11 +618,54 @@ projected FLM probe) is at
   `recompose::recompose` stutter accepted, `walk_tree`/`recompose_tree`
   rejected, `new_for_invocation`→`from_invocation`, `RecomposeError` variants
   mirror `RestageError` exactly.
-- (pending) **NEXT: Tier-C batch** (then Phase 3 apply). **Tier-C batch**: 66
-  no-usage-signal items (SYNTHESIS §3) + accumulated riders (`NoResolver` lean
-  keep; `ProvenanceChain`/`ResolvedContent` placements; free `resolve_source`
-  now canonical; `StdParseDriver` test-carrier docs; `Diagnostics::into_vec`
-  lean reject). Session pattern: interim rulings file updated every round.
+- 2026-08-03 (user): **2b TIER-C BATCH RULED — Phase 2b COMPLETE** (interactive;
+  full working detail frozen in **TIERC_RULINGS.md**; durable records:
+  DESIGN_RATIONALE new entries **[§dd-dr:public-visibility-sweep]** and
+  **[§dd-dr:command-resolver]** (supersedes [§dd-dr:scopes-resolving-driver]) +
+  amendments on [§dd-dr:input-wiring], [§dd-dr:source-resolver],
+  [§dd-dr:tree-validation], [§dd-dr:resolution-extraction],
+  [§dd-dr:stability-rubric] + superseded-names Tier-C block + ARCHITECTURE refs).
+  Headlines: (1) all 76 no-usage-signal items dispositioned — **73 keep
+  pub-and-stable; `NodeData` + `check_tree_invariants` → pub(crate)** (the
+  latter re-implemented as a panic-assert wrapper over `validate_tree`'s
+  `Result` — user-ruled one-canonical-implementation shape, riding the
+  `validate_tree` commit); **`NoResolver` REMOVED** (R1 flipped from lean-keep:
+  original default-slot use gone). Forced-pub finding ratified: "no usage
+  signal" ≈ signature closure of the used API. (2) Conditions doctrine
+  completed: all 17 shipped condition types + the 5 defining items (incl. both
+  derive re-exports) keep pub. (3) **R4 REOPENED and re-ruled (major)**:
+  `ScopesResolvingDriver` superseded by **`trait CommandResolver<L>`** +
+  **`StdParseDriver<R = ()>`** (`()` = resolves nothing;
+  `ScopesCommandResolver { command_type }` → core::specs); constructor doctrine
+  `new(recovery, command_resolver)` (mandatory by-value strategy, no
+  Default/Clone bounds) + chainable sealed-conversion `with_source_resolver`
+  (renames T4-B1's `with_resolver`); ruled asymmetry documented in
+  rustdoc + code: command resolver generic (consumed monomorphized, hot path) vs
+  source resolver value-level dyn (consumed via the type-erased accessor, cold
+  path); strategy-seam proliferation guard recorded. (4) Free `resolve_source`
+  renamed **`resolve_source_reference`**. (5) Homes: `FrameRole` → hub (user:
+  frames are engine-wide — groups mint them too; overrules the brief);
+  `ParsedArgumentNodes` → core::constructs with its trait; parsed-residue rule:
+  contract residue follows the trait, stored containers stay core::node.
+  (6) `VERSION` keeps the ecosystem-idiom compile-time const (getter +
+  structured-semver forms rejected). (7) Remaining riders closed:
+  `ProvenanceChain`/`ResolvedContent` keep in source; `StdParseDriver` doc
+  sentence → resolver-choice guidance; `Diagnostics::into_vec` never existed,
+  reject-do-not-add.
+- (pending) **NEXT: Phase 3 — apply + harden** (all 2b sessions ruled; topology
+  and all placements closed). **Phase 3 checklist additions from the Tier-C
+  session**: `NodeData` + `check_tree_invariants` → pub(crate) (wrapper shape
+  above; violation detail must keep panic messages informative); delete
+  `NoResolver` (rides the T4 resolver-move application); rename free
+  `resolve_source` → `resolve_source_reference`; `StdParseDriver` reshape per
+  [§dd-dr:command-resolver] (CommandResolver supertraits Debug+Send+Sync; `()`
+  no-op keeps the helpful not-implemented detail message;
+  origin-parameter alignment with T4-B1's `L::SourceOrigin` accessor; asymmetry
+  rationale in rustdoc AND a code comment at the field pair; resolver-choice
+  doc sentence pairing with `TrivialLang`); `FrameRole` home = hub;
+  `ParsedArgumentNodes` home = core::constructs; `PrefixEntry` lives beside
+  `PrefixTable`; `VERSION` rustdoc sentence (Cargo package version, always
+  valid semver).
   **Phase 3 checklist additions from the recompose session**: driver.rs:127
   canonical paragraph-break spec object (spec identity is load-bearing — no
   anonymous `SpecialsSpec::default()` per break); `materialize()` extended

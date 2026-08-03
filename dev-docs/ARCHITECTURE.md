@@ -158,6 +158,7 @@ from that adoption on, the freeze is hard. Full decision: [§dd-dr:stability-rub
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
 extracted subsets), [§dd-dr:stability-rubric] (one stability class, soft freeze),
+[§dd-dr:public-visibility-sweep] (the completed per-item pub-vs-pub(crate) sweep),
 [§dd-dr:workspace-layout] (virtual workspace, crates in
 subfolders), [§dd-dr:decisions] (how the register itself is organized).
 
@@ -569,8 +570,10 @@ state; infallible seed+packages construction), [§dd-dr:parse-driver], [§dd-dr:
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node],
 [§dd-dr:resolve-command-hook], [§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:paragraph-break-hook], [§dd-dr:language-parse-api], [§dd-dr:with-provider],
-[§dd-dr:stateless-language], [§dd-dr:scopes-resolving-driver] (the canned
-command-resolving driver component), [§dd-dr:takeover-staging-sugar]
+[§dd-dr:stateless-language], [§dd-dr:command-resolver] (the pluggable
+command-resolution strategy on `StdParseDriver<R = ()>`, with the ruled
+generic/dyn resolver asymmetry and constructor doctrine; supersedes the
+[§dd-dr:scopes-resolving-driver] component struct), [§dd-dr:takeover-staging-sugar]
 (`disable_all`, collection constructors, the committed `stage_invocation`
 helper), [§dd-dr:input-wiring] (driver resolver accessor, the
 `parse_attached_source` door, `attach_source_reference`). Ruled, not yet applied
