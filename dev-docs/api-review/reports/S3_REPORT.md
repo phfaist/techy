@@ -483,6 +483,45 @@ Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
 - **Doctest count**: adding ```rust doctests (e.g. on `SourcePos`) will shift
   the doctest totals; the ignored-count baseline is 2.
 
+### Additions at the C1+C2 stop point (successor agent 1 → D–I successors)
+
+State: commits `52a4d94` (C1), `2ceafcb` (C2); all gates green (see Gate
+results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
+
+1. **D-C1 is pending user confirmation** (see Deviations): `ParsedArgument.ext`
+   is `Option<ArgumentExt<L>>`, `absent(spec)` takes no ext, and
+   `parse_declared_arguments`/`StdInvocationParser` carry NO
+   `ArgumentExt: Default` bound (only the 8 std argument parsers do). If the
+   supervisor/user overrules, the compile-blocking chain documented in D-C1
+   must be re-litigated first — do not "fix" it back mechanically.
+2. **Milestone D (restage/copy)**: unaffected by D-C1 — copy.rs clones whole
+   `ParsedArgument`/`ParsedSlot` records (`Clone` covers `role` + optional
+   ext). S7's `RestagedArgument::absent(spec)` now maps 1:1 onto
+   `ParsedArgument::absent(spec)`.
+3. **Milestone I (superseded names)**: register additions due at application
+   for `ArgumentSpec::named` (builder) and `ParsedSlot::named` — both are now
+   gone from code; also verify `SlotRole`-adjacent vocabulary (`Derived` was
+   considered-and-closed, T5-A9(iv)).
+4. **Milestone I (DR status lines)**: [§dd-dr:slot-roles],
+   [§dd-dr:named-first-constructors], [§dd-dr:registration-ergonomics] (the
+   `IntoArgumentParser` extension), and the ArgumentExt/SlotExt half of
+   [§dd-dr:ext-minting] are now APPLIED (C1/C2) — status lines must note the
+   D-C1 shape (absent-ext `Option`) if confirmed.
+5. **`NodeRef::body()` is now bounded** (`where SlotExt<L>: BodySlotExt`).
+   Generic code over arbitrary `L` (milestones E/H: navigation, display_tree)
+   must not call `body()` without the bound — `display_tree` should use the
+   structural accessors only.
+6. **`impl BodySlotExt for ()`** exists (is_body = true → body() = first slot
+   on no-ext langs). Test langs need nothing special; a lang wanting "no body"
+   semantics needs a real marker ext.
+7. **Sealed-marker modules**: spec/callable.rs and spec/structure.rs each have
+   a private `mod sealed` with `ByValue`/`SharedConcrete`/`SharedDyn` —
+   file-local by design (S2 pattern); don't unify them.
+8. **Line numbers in the earlier churn lists have shifted** (C1/C2 edits in
+   node/mod.rs, argument_parsers.rs, environment_parser.rs); re-grep rather
+   than trusting the A+B offsets. `check_tree_invariants` acceptance.rs sites
+   for milestone G are now at lines 219/226/392 ± a few — re-grep.
+
 ## What landed per work-order item
 
 - **Item 1 (tree tags)** — landed in milestone A (commit 052e096): always-on
