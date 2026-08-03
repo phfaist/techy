@@ -95,6 +95,15 @@ impl Span {
         Span { start: self.start.min(other.start), end: self.end.max(other.end) }
     }
 
+    /// Whether `pos` lies within the span — **half-open** containment, like standard
+    /// Rust ranges: `start() <= pos < end()`. In particular the end offset itself is
+    /// *not* contained, and an **empty span contains no position** (not even its own
+    /// start — there is no byte at it to contain).
+    #[inline]
+    pub fn contains(&self, pos: usize) -> bool {
+        self.start <= pos && pos < self.end
+    }
+
     /// Borrow the spanned text out of the content the span refers into.
     ///
     /// Use this for spans minted from `content` itself; for spans of unknown
@@ -192,6 +201,21 @@ mod tests {
     fn extend_to_rejects_shrinking() {
         let mut span = Span::new(2, 9);
         span.extend_to(4);
+    }
+
+    #[test]
+    fn contains_is_half_open_and_empty_spans_never_match() {
+        let span = Span::new(3, 7);
+        assert!(!span.contains(2));
+        assert!(span.contains(3)); // start included
+        assert!(span.contains(6)); // last byte included
+        assert!(!span.contains(7)); // end excluded (half-open)
+        assert!(!span.contains(8));
+
+        let empty = Span::empty(5);
+        assert!(!empty.contains(4));
+        assert!(!empty.contains(5)); // an empty span contains nothing
+        assert!(!empty.contains(6));
     }
 
     #[test]

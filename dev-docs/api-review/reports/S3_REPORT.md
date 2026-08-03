@@ -10,7 +10,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`) — done (successor agent 1; see Deviation D-C1: absent arguments carry no ext)
 - [x] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`) — done (successor agent 1)
 - [x] D. Level-0 `restage_node` (+ copy.rs rebased on it) — done (successor agent 2)
-- [ ] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub)
+- [x] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub) — done (successor agent 2)
 - [ ] F. Slices single-source whole-run contract (fast-path flag wired)
 - [ ] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, Attached byte-tiling exclusion, S6 TODO)
 - [ ] H. Consumer polish (`display_tree`, `NodeKind::as_str`)
@@ -563,6 +563,30 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
   visitor/driver/ops/bundles/`RestageError` (S7). 8 new tests (drop/empty/
   multiply regions, cross-tree splice, unmapped parent, length mismatch,
   cloned-ext verbatim on MintLang, caller-supplied annotations).
+- **Item 7 (navigation)** — landed in milestone E (successor agent 2):
+  `NodeRef::parent()`/`index_in_parent()` (O(1) over the stored parent table; the
+  `iter::successors` ancestry recipe in `parent()`'s rustdoc — the rejected
+  iterator's name does not appear in docs, keeping the grep gate clean);
+  `NodeRef::tree()` → pub; `SourcePos<O = Option<String>>` in `techy::source`
+  beside `SourceSpan` (`new` with SourceSpan-parity debug asserts incl. `pos ==
+  len` valid, `source()`/`pos()`, Clone/PartialEq(identity)/Eq/Debug, line/col
+  documented via the `source().line_index()` route with a doctest);
+  `SourceSpan::start_pos()`/`end_pos()` (exclusive-end sentence);
+  `Span::contains(pos)` (half-open, empty-never-match, doc + tests in the same
+  commit per [§dd-dr:span-extend-to]); `NodeTree::node_at(&SourcePos)` and
+  `NodeTree::covering_slice(&SourceSpan)` in tree.rs over a shared
+  `deepest_containing` per-source descent (exact plan algorithm: same-source
+  match refines only through same-source children — includer queries stop at the
+  `\input` node; foreign-source nodes are traversed, never matched);
+  `covering_slice` computes the minimal child run with opportunistic binary
+  search (`partition_point` candidates verified locally: same-source, edge
+  overlap, edge coverage, gap-free tiling, minimality vs both neighbors) and a
+  verified linear fallback; unverifiable runs degrade to the covering node as a
+  single-node run; empty queries resolve by point containment; NO offset→index
+  table; NO `ancestors()`. 8 new tests (parent/index + successors walk; node_at
+  deepest/gap-offset/empty-span/foreign-source; per-source descent over an
+  `\input`-like two-source tree incl. covering_slice; covering_slice
+  single/multi/delimiter-fallback/empty/no-cover).
 - **Item 5 (constructor reshapes)** — landed in milestone C2:
   `ArgumentSpec::new(parser, name)`/`new_unnamed` over sealed
   `IntoArgumentParser<L, M>` (S2-D1 marker realization; `'static` spelled on the

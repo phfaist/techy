@@ -6,11 +6,12 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::source::SourceSpan;
+use crate::source::{Source, SourcePos, SourceSpan};
 use crate::state::{Lang, ParsingState};
 
 use super::kind::NodeKind;
 use super::node_ref::NodeRef;
+use super::slice::NodeSlice;
 use super::NodeExt;
 
 /// Wrapping counter minting tree-layout tags ([`TreeTag`]) in **all builds**.
@@ -170,6 +171,13 @@ impl<L: Lang, A> NodeTree<L, A> {
         &self.core.nodes
     }
 
+    /// The stored parent table, indexed like [`nodes`](NodeTree::nodes) (in-crate:
+    /// [`NO_PARENT`] marks the root; behind [`NodeRef::parent`]).
+    #[inline]
+    pub(crate) fn parent_table(&self) -> &[u32] {
+        &self.core.parent
+    }
+
     /// The root node (index 0; a tree always has at least one node).
     pub fn root(&self) -> NodeRef<'_, L, A> {
         self.node(self.make_id(0))
@@ -287,6 +295,61 @@ impl<L: Lang, A> NodeTree<L, A> {
         NodeTree { core: Arc::clone(&self.core), annotations }
     }
 
+    /// The **deepest** node whose span contains the position — half-open
+    /// containment (`start ≤ pos < end`; a node with an empty span never matches) —
+    /// or `None` when no node's span contains it.
+    ///
+    /// A position inside a node's span but inside none of its children — a group's
+    /// delimiter bytes, a callable's trigger spelling — resolves to that node.
+    /// Ancestors of the answer come free via [`NodeRef::parent`].
+    ///
+    /// Multi-source trees are answered **per source**, on exact per-node spans only:
+    /// the lookup enters a *different-source* child only while still searching for
+    /// the query's source, never from a node that already matched. A query in the
+    /// including source therefore stops at the `\input`-like node itself (its
+    /// resolved content lives in its own source), while a query in an attached
+    /// source finds the attached content. On restaged trees with rearranged spans
+    /// this degrades to the shallowest node whose exact span answers.
+    pub fn node_at(&self, pos: &SourcePos<L::SourceOrigin>) -> Option<NodeRef<'_, L, A>> {
+        deepest_containing(self.root(), pos.source(), &|span: &SourceSpan<
+            L::SourceOrigin,
+        >| span.span().contains(pos.pos()))
+    }
+
+    /// The **minimal covering sibling run** for a span query: the shortest run of
+    /// siblings, within the deepest node list that can answer, covering every byte
+    /// of `span` — as the name says, the run may cover *more* than the query (a
+    /// query cutting into the middle of a node returns the whole node).
+    ///
+    /// The descent mirrors [`node_at`](NodeTree::node_at) (per source, exact spans
+    /// only, half-open containment): it walks to the deepest node whose span
+    /// contains the whole query, then answers the minimal run of that node's
+    /// children covering the query. When the children cannot cover it — query bytes
+    /// in the node's own delimiters or trigger spelling, or (on restaged trees)
+    /// children whose spans do not tile — the covering node itself is the answer,
+    /// as a single-node run within its parent's child list. An **empty** query span
+    /// resolves by point containment like `node_at`, to a single-node run of the
+    /// deepest containing node. `None` when no node's span contains the query.
+    pub fn covering_slice(
+        &self,
+        span: &SourceSpan<L::SourceOrigin>,
+    ) -> Option<NodeSlice<'_, L, A>> {
+        let node = deepest_containing(self.root(), span.source(), &|node_span: &SourceSpan<
+            L::SourceOrigin,
+        >| {
+            if span.is_empty() {
+                node_span.span().contains(span.start())
+            } else {
+                node_span.start() <= span.start() && span.end() <= node_span.end()
+            }
+        })?;
+        if let Some(run) = covering_child_run(node, span) {
+            return Some(NodeSlice::new(self, run));
+        }
+        let index = node.id().index() as u32;
+        Some(NodeSlice::new(self, index..index + 1))
+    }
+
     /// A new tree with every [`TextContent`](crate::source::TextContent) owned
     /// (node contents, group delimiters, and callable post-spaces). Trees stay
     /// immutable — `self` is untouched; spans, states, and specs are Arc-shared, and
@@ -321,6 +384,150 @@ impl<L: Lang, A> NodeTree<L, A> {
             annotations: self.annotations.clone(),
         }
     }
+}
+
+/// The deepest node under `node` whose span, lying in `source`, satisfies
+/// `contains` — the shared per-source descent of
+/// [`NodeTree::node_at`]/[`NodeTree::covering_slice`]. A node in the query's source
+/// either satisfies the predicate (a match — refined only through *same-source*
+/// children) or prunes its whole subtree (exact spans trusted); a node in a
+/// different source never matches, but its children are searched (the route towards
+/// attached-source content).
+fn deepest_containing<'t, L: Lang, A>(
+    node: NodeRef<'t, L, A>,
+    source: &Arc<Source<L::SourceOrigin>>,
+    contains: &impl Fn(&SourceSpan<L::SourceOrigin>) -> bool,
+) -> Option<NodeRef<'t, L, A>> {
+    if Arc::ptr_eq(node.span().source(), source) {
+        if !contains(node.span()) {
+            return None;
+        }
+        for child in node.children() {
+            if Arc::ptr_eq(child.span().source(), source) {
+                if let Some(deeper) = deepest_containing(child, source, contains) {
+                    return Some(deeper);
+                }
+            }
+        }
+        Some(node)
+    } else {
+        for child in node.children() {
+            if let Some(found) = deepest_containing(child, source, contains) {
+                return Some(found);
+            }
+        }
+        None
+    }
+}
+
+/// The minimal run of `node`'s children covering the `query`, as a global node-index
+/// range — `None` when the children cannot cover the query's bytes (the caller then
+/// answers with `node` itself). Binary search over the children first (sibling spans
+/// of a parsed tree are sorted and tile); the candidate is verified locally, and any
+/// failure falls back to a linear scan whose result is verified the same way — no
+/// verified run, no answer.
+fn covering_child_run<L: Lang, A>(
+    node: NodeRef<'_, L, A>,
+    query: &SourceSpan<L::SourceOrigin>,
+) -> Option<Range<u32>> {
+    if query.is_empty() || node.child_count() == 0 {
+        // An empty query resolves by point containment: no child contains the point
+        // (the descent would have gone deeper), so only the node itself answers.
+        return None;
+    }
+    let tree = node.tree();
+    let block = node.children().range();
+    if let Some(run) = binary_candidate_run(tree, &block, query) {
+        if verify_covering_run(tree, &block, &run, query) {
+            return Some(run);
+        }
+    }
+    // Linear fallback: the first and the last child overlapping the query.
+    let overlaps = |i: u32| {
+        let span = &tree.nodes()[i as usize].span;
+        Arc::ptr_eq(span.source(), query.source())
+            && span.start() < query.end()
+            && span.end() > query.start()
+    };
+    let first = block.clone().find(|&i| overlaps(i))?;
+    let last = block.clone().rev().find(|&i| overlaps(i))?;
+    let run = first..last + 1;
+    verify_covering_run(tree, &block, &run, query).then_some(run)
+}
+
+/// Binary-search candidate for the covering run, assuming span-sorted same-source
+/// siblings (true for parsed trees; the caller verifies before trusting it): the
+/// first child whose span reaches past the query's start, through the last child
+/// starting before the query's end.
+fn binary_candidate_run<L: Lang, A>(
+    tree: &NodeTree<L, A>,
+    block: &Range<u32>,
+    query: &SourceSpan<L::SourceOrigin>,
+) -> Option<Range<u32>> {
+    let len = (block.end - block.start) as usize;
+    let span_at = |k: usize| &tree.nodes()[block.start as usize + k].span;
+    let first = partition_point(len, |k| span_at(k).end() <= query.start());
+    let one_past_last = partition_point(len, |k| span_at(k).start() < query.end());
+    (first < one_past_last)
+        .then(|| block.start + first as u32..block.start + one_past_last as u32)
+}
+
+/// `[T]::partition_point` over plain indices (the predicate's inputs are read out of
+/// the node storage, not a slice).
+fn partition_point(len: usize, pred: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, len);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Verify a candidate covering run against exact spans: same-source throughout,
+/// query bytes in both end nodes, the query's edges covered, gap-free tiling across
+/// the run, and minimality against both neighbors. Anything else is not trusted to
+/// cover the query (the caller degrades to the covering node itself).
+fn verify_covering_run<L: Lang, A>(
+    tree: &NodeTree<L, A>,
+    block: &Range<u32>,
+    run: &Range<u32>,
+    query: &SourceSpan<L::SourceOrigin>,
+) -> bool {
+    if run.start < block.start || run.end > block.end || run.start >= run.end {
+        return false;
+    }
+    let span_at = |i: u32| &tree.nodes()[i as usize].span;
+    let same_source = |i: u32| Arc::ptr_eq(span_at(i).source(), query.source());
+    let overlaps = |i: u32| {
+        same_source(i) && span_at(i).start() < query.end() && span_at(i).end() > query.start()
+    };
+    if !run.clone().all(same_source) {
+        return false;
+    }
+    // The run's end nodes carry query bytes and cover the query's edges.
+    if !overlaps(run.start) || !overlaps(run.end - 1) {
+        return false;
+    }
+    if span_at(run.start).start() > query.start() || span_at(run.end - 1).end() < query.end() {
+        return false;
+    }
+    // Gap-free across the run: exact sibling spans must tile, or the interior bytes
+    // are not covered by these children.
+    if !(run.start..run.end - 1).all(|i| span_at(i).end() == span_at(i + 1).start()) {
+        return false;
+    }
+    // Minimal: the neighbors carry no query bytes.
+    if run.start > block.start && overlaps(run.start - 1) {
+        return false;
+    }
+    if run.end < block.end && overlaps(run.end) {
+        return false;
+    }
+    true
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug` although only associated

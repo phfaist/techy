@@ -12,6 +12,8 @@
 //!   `SourceSpan`s, making them self-contained — no lifetime parameters, no external
 //!   source store. The construct-parser layer is where a byte `Span` becomes a
 //!   `SourceSpan`, via its `ParseContext`'s source.
+//! - [`SourcePos`] is an `Arc<Source>` + single byte offset — the point counterpart
+//!   of `SourceSpan` (position lookups over parsed trees query with it).
 //! - [`SourceProvenance`] records where a source came from (`Primary` / `Resolved` /
 //!   `Synthesized`), with a `triggered_at: SourceSpan` back-reference forming a provenance
 //!   tree walkable for error reporting. Provenance lives on the *source* (one hop per
@@ -60,6 +62,6 @@ pub use resolver::{
     resolve_source_reference, IntoSourceResolver, MapResolver, ResolveError,
     ResolvedContent, SourceResolver,
 };
-pub use source::{ProvenanceChain, Source, SourceProvenance, SourceSpan};
+pub use source::{ProvenanceChain, Source, SourcePos, SourceProvenance, SourceSpan};
 pub use span::Span;
 pub use text_content::TextContent;

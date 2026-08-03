@@ -1820,6 +1820,171 @@ mod tests {
         assert_eq!(copy.node(record.content_parent()).span_content(), "{x}");
     }
 
+    // --- navigation: parent links and position/span lookup ----------------------------
+
+    #[test]
+    fn parent_and_index_in_parent_are_o1_lookups() {
+        let tree = example_tree();
+        let root = tree.root();
+        assert!(root.parent().is_none());
+        assert!(root.index_in_parent().is_none());
+        let frac = root.child(1).unwrap();
+        assert_eq!(frac.parent().unwrap().id(), root.id());
+        assert_eq!(frac.index_in_parent(), Some(1));
+        assert_eq!(root.child(3).unwrap().index_in_parent(), Some(3));
+        let a_group = frac.child(0).unwrap();
+        let a_chars = a_group.child(0).unwrap();
+        assert_eq!(a_chars.parent().unwrap().id(), a_group.id());
+        assert_eq!(a_chars.index_in_parent(), Some(0));
+
+        // The documented ancestry-walk one-liner, innermost first.
+        let chain: Vec<_> = core::iter::successors(a_chars.parent(), |n| n.parent())
+            .map(|n| n.id())
+            .collect();
+        assert_eq!(chain, vec![a_group.id(), frac.id(), root.id()]);
+    }
+
+    #[test]
+    fn node_at_finds_the_deepest_containing_node() {
+        let tree = example_tree();
+        let source = Arc::clone(tree.root().span().source());
+        let at = |pos: usize| tree.node_at(&crate::source::SourcePos::new(&source, pos));
+        // Deepest: offset 7 is inside "a", inside the first group, inside \frac.
+        assert_eq!(at(7).unwrap().chars(), Some("a"));
+        // Offsets in a node but in none of its children resolve to that node:
+        // 6 is the first group's `{` delimiter, 2 is inside the `\frac` spelling.
+        let frac = tree.root().child(1).unwrap();
+        assert_eq!(at(6).unwrap().id(), frac.child(0).unwrap().id());
+        assert_eq!(at(2).unwrap().id(), frac.id());
+        assert_eq!(at(14).unwrap().comment(), Some(" note"));
+        // Half-open: one past the end of the last node matches nothing.
+        assert!(at(19).is_none());
+        // A position in a source the tree does not use matches nothing.
+        let other: Arc<Source> = Arc::new(Source::new("x"));
+        assert!(tree.node_at(&crate::source::SourcePos::new(&other, 0)).is_none());
+    }
+
+    #[test]
+    fn node_at_never_matches_empty_spans() {
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let a = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), st.clone(), vec![], (), ()).unwrap();
+        let marker =
+            b.add(NodeKind::chars(Span::empty(1)), spanned(&source, 1..1), st.clone(), vec![], (), ()).unwrap();
+        let b_chars =
+            b.add(NodeKind::chars(Span::new(1, 2)), spanned(&source, 1..2), st.clone(), vec![], (), ()).unwrap();
+        let root = b
+            .add(NodeKind::list(), SourceSpan::entire(&source), st.clone(), vec![a, marker, b_chars], (), ())
+            .unwrap();
+        let tree = b.finish(root).unwrap();
+        // The empty-span node at offset 1 never matches; its non-empty sibling does.
+        let hit = tree.node_at(&crate::source::SourcePos::new(&source, 1)).unwrap();
+        assert_eq!(hit.chars(), Some("b"));
+    }
+
+    /// An `\input`-like shape: the resolved content (its own `Source`) attached as
+    /// an `Attached` slot below the callable, between same-source siblings.
+    fn input_like_tree() -> (NodeTree<PlainLang>, Arc<Source>, Arc<Source>) {
+        let main: Arc<Source> = Arc::new(Source::new(r"x\input{f}y"));
+        let inc: Arc<Source> =
+            Arc::new(Source::resolved("ab", "f", SourceSpan::new(&main, 1..10)));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let x = b.add(NodeKind::chars(Span::new(0, 1)), spanned(&main, 0..1), st.clone(), vec![], (), ()).unwrap();
+        let ab =
+            b.add(NodeKind::chars(Span::new(0, 2)), SourceSpan::entire(&inc), st.clone(), vec![], (), ()).unwrap();
+        let body = b.add(NodeKind::list(), SourceSpan::entire(&inc), st.clone(), vec![ab], (), ()).unwrap();
+        let input = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "input".into(),
+                spec: Arc::new(StdCallableSpec::default()) as Arc<dyn CallableSpec<PlainLang>>,
+                arguments: ParsedArguments::empty(),
+                slots: ParsedSlots::new(vec![ParsedSlot::new(
+                    ChildRegion::new(0..1, ContentNodes::InChildrenOf(body, 0..1)),
+                    "attached",
+                    SlotRole::Attached,
+                    (),
+                )]),
+                post_space: TextContent::empty(),
+            }),
+            spanned(&main, 1..10),
+            st.clone(),
+            vec![body],
+            (),
+            (),
+        ).unwrap();
+        let y = b.add(NodeKind::chars(Span::new(10, 11)), spanned(&main, 10..11), st.clone(), vec![], (), ()).unwrap();
+        let root = b
+            .add(NodeKind::list(), SourceSpan::entire(&main), st.clone(), vec![x, input, y], (), ())
+            .unwrap();
+        (b.finish(root).unwrap(), main, inc)
+    }
+
+    #[test]
+    fn lookups_descend_per_source_across_attached_content() {
+        let (tree, main, inc) = input_like_tree();
+        let input = tree.root().child(1).unwrap();
+        // A position in the attached source is found inside the attached content
+        // (different-source nodes on the way are traversed, never matched).
+        let hit = tree.node_at(&crate::source::SourcePos::new(&inc, 1)).unwrap();
+        assert_eq!(hit.chars(), Some("ab"));
+        // A position in the including source, inside the `\input` trigger, stops at
+        // the callable: a matching node never descends into different-source children.
+        assert_eq!(
+            tree.node_at(&crate::source::SourcePos::new(&main, 3)).unwrap().id(),
+            input.id()
+        );
+        // Span queries answer per source the same way.
+        let run = tree.covering_slice(&SourceSpan::new(&inc, 0..2)).unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!(run.first().unwrap().chars(), Some("ab"));
+        let run = tree.covering_slice(&SourceSpan::new(&main, 1..10)).unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!(run.first().unwrap().id(), input.id());
+    }
+
+    #[test]
+    fn covering_slice_finds_the_minimal_sibling_run() {
+        let tree = example_tree();
+        let source = Arc::clone(tree.root().span().source());
+        let q = |range: Range<usize>| SourceSpan::new(&source, range);
+        let frac = tree.root().child(1).unwrap();
+
+        // A query equal to one deep node's span: that node, as a single-node run.
+        let run = tree.covering_slice(&q(7..8)).unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!(run.first().unwrap().chars(), Some("a"));
+
+        // A query cutting into the middle of nodes covers the whole nodes:
+        // bytes 0..8 need the `x` chars node and the whole `\frac{a}{b}` callable.
+        let run = tree.covering_slice(&q(0..8)).unwrap();
+        assert_eq!(run.len(), 2);
+        assert_eq!(run.first().unwrap().chars(), Some("x"));
+        assert_eq!(run.last().unwrap().id(), frac.id());
+
+        // Inside the callable: both argument groups, the minimal run of its children.
+        let run = tree.covering_slice(&q(6..12)).unwrap();
+        assert_eq!(run.len(), 2);
+        assert_eq!(run.range(), frac.children().range());
+
+        // Query bytes inside the trigger spelling: the children cannot cover them —
+        // the covering node itself, as a single-node run within its parent's list.
+        let run = tree.covering_slice(&q(5..8)).unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!(run.first().unwrap().id(), frac.id());
+
+        // An empty query resolves by point containment, like node_at.
+        let run = tree.covering_slice(&q(7..7)).unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!(run.first().unwrap().chars(), Some("a"));
+
+        // No node of the tree lies in the query's source: no answer.
+        let other: Arc<Source> = Arc::new(Source::new("x\\frac{a}{b} % note"));
+        assert!(tree.covering_slice(&SourceSpan::new(&other, 0..2)).is_none());
+    }
+
     // --- the level-0 restage primitive ------------------------------------------------
 
     /// A callable whose one argument region holds two children (noise + content),

@@ -1,4 +1,5 @@
-//! `Source`, `SourceSpan`, and `SourceProvenance` — the Arc-based source model.
+//! `Source`, `SourceSpan`, `SourcePos`, and `SourceProvenance` — the Arc-based source
+//! model.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -265,6 +266,18 @@ impl<O: SourceOrigin> SourceSpan<O> {
     pub fn same_source(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source, &other.source)
     }
+
+    /// The span's start, as a [`SourcePos`].
+    pub fn start_pos(&self) -> SourcePos<O> {
+        SourcePos { source: Arc::clone(&self.source), pos: self.start }
+    }
+
+    /// The span's end, as a [`SourcePos`] — **exclusive**: one past the span's last
+    /// byte (the position where content *after* the span begins), not a position
+    /// inside the span.
+    pub fn end_pos(&self) -> SourcePos<O> {
+        SourcePos { source: Arc::clone(&self.source), pos: self.end }
+    }
 }
 
 impl<O: SourceOrigin> PartialEq for SourceSpan<O> {
@@ -282,6 +295,85 @@ impl<O: SourceOrigin> fmt::Debug for SourceSpan<O> {
             write!(f, "[{}] ", label)?;
         }
         write!(f, "{}..{} {:?})", self.start, self.end, ContentPreview(self.content()))
+    }
+}
+
+/// A single location within one [`Source`], carrying an `Arc` to that source — the
+/// *point* counterpart of [`SourceSpan`]: one value instead of a loose
+/// `(source, offset)` argument pair.
+///
+/// This is the query currency for position lookups over parsed trees (a span query
+/// uses [`SourceSpan`] itself). The offset is a byte position into the source
+/// content; like a span's offsets it is expected to fall on a `char` boundary
+/// (checked in debug builds). Equality is *identity-based* for the source (same
+/// `Arc`) plus equal offset, exactly as for [`SourceSpan`].
+///
+/// Line/column display goes through the source's lazy
+/// [`LineIndex`](crate::source::LineIndex), as for spans — there is deliberately no
+/// per-position method:
+///
+/// ```
+/// use std::sync::Arc;
+/// use techy::source::{Source, SourcePos};
+///
+/// let source: Arc<Source> = Arc::new(Source::new("ab\ncd"));
+/// let pos = SourcePos::new(&source, 4);
+/// let mut index = pos.source().line_index();
+/// assert_eq!(index.line_col(pos.pos()), Some((2, 2)));
+/// ```
+#[derive(Clone)]
+pub struct SourcePos<O: SourceOrigin = Option<String>> {
+    source: Arc<Source<O>>,
+    pos: usize,
+}
+
+impl<O: SourceOrigin> SourcePos<O> {
+    /// A position at byte offset `pos` within `source`.
+    ///
+    /// The offset must lie within the source content (`0..=len`; the length itself is
+    /// a valid end-of-content position) and fall on a `char` boundary (checked in
+    /// debug builds).
+    pub fn new(source: &Arc<Source<O>>, pos: usize) -> Self {
+        debug_assert!(
+            pos <= source.content.len(),
+            "SourcePos {} out of bounds (source length {})",
+            pos,
+            source.content.len(),
+        );
+        debug_assert!(
+            source.content.is_char_boundary(pos),
+            "SourcePos {} not on a char boundary",
+            pos,
+        );
+        SourcePos { source: Arc::clone(source), pos }
+    }
+
+    /// The source this position points into.
+    pub fn source(&self) -> &Arc<Source<O>> {
+        &self.source
+    }
+
+    /// The byte offset within the source content.
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+}
+
+impl<O: SourceOrigin> PartialEq for SourcePos<O> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source, &other.source) && self.pos == other.pos
+    }
+}
+
+impl<O: SourceOrigin> Eq for SourcePos<O> {}
+
+impl<O: SourceOrigin> fmt::Debug for SourcePos<O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SourcePos(")?;
+        if let Some(label) = self.source.origin.label() {
+            write!(f, "[{}] ", label)?;
+        }
+        write!(f, "{})", self.pos)
     }
 }
 
@@ -432,6 +524,32 @@ mod tests {
             SourceSpan::new(&source, 0..9)
         };
         assert_eq!(span.content(), "transient");
+    }
+
+    #[test]
+    fn source_pos_points_at_one_location() {
+        let source = arc_source("Hello");
+        let pos = SourcePos::new(&source, 2);
+        assert_eq!(pos.pos(), 2);
+        assert!(Arc::ptr_eq(pos.source(), &source));
+        assert_eq!(pos, SourcePos::new(&source, 2));
+        assert_ne!(pos, SourcePos::new(&source, 3));
+        // Identity-based source equality, like SourceSpan.
+        let twin = arc_source("Hello");
+        assert_ne!(pos, SourcePos::new(&twin, 2));
+        assert_eq!(format!("{:?}", pos), "SourcePos(2)");
+        // End-of-content is a valid position.
+        let end = SourcePos::new(&source, 5);
+        assert_eq!(end.pos(), 5);
+    }
+
+    #[test]
+    fn span_start_and_end_pos_bridge_to_positions() {
+        let source = arc_source("Hello");
+        let span = SourceSpan::new(&source, 1..4);
+        assert_eq!(span.start_pos(), SourcePos::new(&source, 1));
+        // end_pos is exclusive: one past the span's last byte.
+        assert_eq!(span.end_pos(), SourcePos::new(&source, 4));
     }
 
     #[test]

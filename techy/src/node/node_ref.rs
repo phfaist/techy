@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use super::arguments::{BodySlotExt, ChildRegion, ParsedArguments, ParsedSlots};
 use super::kind::{CallableData, GroupData, NodeKind};
 use super::slice::NodeSlice;
-use super::tree::{NodeData, NodeId, NodeTree};
+use super::tree::{NodeData, NodeId, NodeTree, NO_PARENT};
 use super::{NodeExt, SlotExt};
 
 /// A reference to one node of a [`NodeTree`]: `Copy`, resolves indices, and borrows the
@@ -46,9 +46,29 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.tree.nodes()[self.id.index()]
     }
 
-    /// The tree this reference points into (in-crate: copy/extract machinery).
-    pub(crate) fn tree(&self) -> &'t NodeTree<L, A> {
+    /// The tree this reference points into — the anchor for tree-level operations
+    /// ([`NodeTree::node_at`](super::NodeTree::node_at),
+    /// [`annotations`](super::NodeTree::annotations), …) from a node in hand.
+    pub fn tree(&self) -> &'t NodeTree<L, A> {
         self.tree
+    }
+
+    /// This node's parent — `None` at the root. O(1): the tree stores its parent
+    /// table (`finish()` computes it for region resolution anyway).
+    ///
+    /// Walking all ancestors is a one-liner, innermost first:
+    /// `core::iter::successors(node.parent(), |n| n.parent())`.
+    pub fn parent(&self) -> Option<NodeRef<'t, L, A>> {
+        let parent = self.tree.parent_table()[self.id.index()];
+        (parent != NO_PARENT).then(|| NodeRef::new(self.tree, self.tree.make_id(parent)))
+    }
+
+    /// This node's position in its parent's child list (`parent().child(i)` is this
+    /// node) — `None` at the root. O(1): the own index minus the parent's
+    /// children-block start.
+    pub fn index_in_parent(&self) -> Option<usize> {
+        let parent = self.parent()?;
+        Some(self.id.index() - parent.data().children.start as usize)
     }
 
     /// This node's annotation (the tree's consumer-owned per-node data; see
