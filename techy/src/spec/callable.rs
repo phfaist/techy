@@ -197,9 +197,15 @@ pub struct StdCallableSpec<L: Lang> {
 }
 
 impl<L: Lang> StdCallableSpec<L> {
-    /// A spec with the given argument structure.
-    pub fn new(arguments: Vec<Arc<ArgumentSpec<L>>>) -> StdCallableSpec<L> {
-        StdCallableSpec { arguments }
+    /// A spec with the given argument structure — specs by value, `Arc`'d inside
+    /// (`StdCallableSpec::new([ArgumentSpec::new(parser, "title")])`, no `Arc::new`
+    /// noise). A caller that shares pre-`Arc`'d specs (flyweights referenced from
+    /// parsed records) builds the pub [`arguments`](StdCallableSpec::arguments) field
+    /// directly.
+    pub fn new(
+        arguments: impl IntoIterator<Item = ArgumentSpec<L>>,
+    ) -> StdCallableSpec<L> {
+        StdCallableSpec { arguments: arguments.into_iter().map(Arc::new).collect() }
     }
 }
 

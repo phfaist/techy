@@ -1082,7 +1082,7 @@ mod tests {
     // --- spec builders ----------------------------------------------------------------
 
     fn brace_arg() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GT_BRACE))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::new(GT_BRACE))))
     }
 
     fn option_rule() -> Arc<GroupRule<ArgLang>> {
@@ -1090,11 +1090,11 @@ mod tests {
     }
 
     fn optional_arg() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(OptionalGroupArgumentParser::new(option_rule()))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(OptionalGroupArgumentParser::new(option_rule()))))
     }
 
     fn optional_arg_unwrapping() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             OptionalGroupArgumentParser::new(option_rule()).with_unwrap_lone_group(GT_BRACE),
         )))
     }
@@ -1104,27 +1104,27 @@ mod tests {
     }
 
     fn rule_arg() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::with_rule(paren_rule()))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::with_rule(paren_rule()))))
     }
 
     fn rule_arg_with_fallback() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             GroupArgumentParser::with_rule(paren_rule()).with_expression_fallback(true),
         )))
     }
 
     fn brace_arg_without_fallback() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             GroupArgumentParser::new(GT_BRACE).with_expression_fallback(false),
         )))
     }
 
     fn marker_arg(marker: &str) -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(MarkerArgumentParser::new(marker))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(MarkerArgumentParser::new(marker))))
     }
 
     fn expression_arg() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(ExpressionParser::new())))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(ExpressionParser::new())))
     }
 
     /// A state whose library defines each named macro with the given argument specs.
@@ -1136,7 +1136,7 @@ mod tests {
                 .iter()
                 .map(|(name, arguments)| {
                     let spec: Arc<dyn CallableSpec<ArgLang>> =
-                        Arc::new(StdCallableSpec::new(arguments.clone()));
+                        Arc::new(StdCallableSpec { arguments: arguments.clone() });
                     (*name, spec)
                 })
                 .collect::<Vec<_>>(),
@@ -1474,7 +1474,7 @@ mod tests {
             "section",
             vec![
                 Arc::new(
-                    ArgumentSpec::new(Arc::new(MarkerArgumentParser::new("*"))).named("star"),
+                    ArgumentSpec::new(Arc::new(MarkerArgumentParser::new("*")), "star"),
                 ),
                 brace_arg(),
             ],
@@ -1770,7 +1770,7 @@ mod tests {
         lib.insert(
             CT_MACRO,
             "item",
-            Arc::new(StdCallableSpec::new(vec![optional_arg_unwrapping()]))
+            Arc::new(StdCallableSpec { arguments: vec![optional_arg_unwrapping()] })
                 as Arc<dyn CallableSpec<ArgLang>>,
         );
         let mut scopes = ScopeStack::new();
@@ -1827,10 +1827,10 @@ mod tests {
             "frac",
             vec![
                 brace_arg(),
-                Arc::new(
-                    ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GT_BRACE)))
-                        .named("denominator"),
-                ),
+                Arc::new(ArgumentSpec::new(
+                    GroupArgumentParser::new(GT_BRACE),
+                    "denominator",
+                )),
             ],
         )]);
         let parsed = parse_std(r"\frac{a}", &st, Recovery::Tolerant);
@@ -2028,7 +2028,7 @@ mod tests {
             ..TokenRulesOverrides::default()
         });
         let arg = Arc::new(
-            ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GT_BRACE)))
+            ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::new(GT_BRACE)))
                 .with_state_delta(delta),
         );
         let st = state_with(&[("m", vec![arg])]);
@@ -2089,7 +2089,7 @@ mod tests {
         }
 
         let w: Arc<dyn CallableSpec<ArgLang>> =
-            Arc::new(StdCallableSpec::new(vec![brace_arg()]));
+            Arc::new(StdCallableSpec { arguments: vec![brace_arg()] });
         let def: Arc<dyn CallableSpec<ArgLang>> = Arc::new(DefSpec);
         let st = state_with_specs(&[("w", w), ("def", def)]);
         let parsed = parse_std("\\w\\def %c", &st, Recovery::Strict);
@@ -2148,7 +2148,7 @@ mod tests {
         }
 
         let a: Arc<dyn CallableSpec<ArgLang>> =
-            Arc::new(StdCallableSpec::new(vec![brace_arg()]));
+            Arc::new(StdCallableSpec { arguments: vec![brace_arg()] });
         let env: Arc<dyn CallableSpec<ArgLang>> = Arc::new(TakesBodySpec);
         let st = state_with_specs(&[("a", a), ("env", env)]);
         let parsed = parse_both(r"\a\env{x}", &st, Recovery::Tolerant);
@@ -2178,7 +2178,7 @@ mod tests {
     }
 
     fn any_of_arg() -> Arc<ArgumentSpec<ArgLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::any_of([
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::any_of([
             paren_rule(),
             angle_rule(),
             option_rule(),
@@ -2246,8 +2246,8 @@ mod tests {
 
     #[test]
     fn optional_any_of_matches_listed_pairs_and_stays_silent_otherwise() {
-        let optional_any: Arc<ArgumentSpec<ArgLang>> = Arc::new(ArgumentSpec::new(
-            Arc::new(OptionalGroupArgumentParser::any_of([option_rule(), angle_rule()])),
+        let optional_any: Arc<ArgumentSpec<ArgLang>> = Arc::new(ArgumentSpec::new_unnamed(
+            OptionalGroupArgumentParser::any_of([option_rule(), angle_rule()]),
         ));
         let st = state_with(&[("m", vec![optional_any])]);
 

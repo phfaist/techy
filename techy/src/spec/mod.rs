@@ -32,7 +32,7 @@ mod callable;
 mod structure;
 
 pub use callable::{CallableSpec, FrameRole, IntoCallableSpec, StdCallableSpec};
-pub use structure::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
+pub use structure::{ArgumentParser, ArgumentSpec, IntoArgumentParser, ParsedArgumentNodes};
 
 #[cfg(test)]
 mod tests {
@@ -81,6 +81,33 @@ mod tests {
         Arc::new(StubParser)
     }
 
+    /// The named-first constructor family ([§dd-dr:named-first-constructors]):
+    /// `new(parser, name)` is the encouraged spelling, `new_unnamed(parser)` the
+    /// marked anonymous one; the parser passes by value, pre-`Arc`'d, or as an
+    /// `Arc<dyn …>` through the sealed [`IntoArgumentParser`] conversion — shared
+    /// handles pass through without double-wrap.
+    #[test]
+    fn argument_spec_constructors_take_names_and_any_parser_shape() {
+        // By value — no `Arc::new` at the call site.
+        let by_value: ArgumentSpec<PlainLang> = ArgumentSpec::new(StubParser, "title");
+        assert_eq!(by_value.name.as_deref(), Some("title"));
+
+        // Pre-`Arc`'d concrete parser: the same allocation ends up stored.
+        let shared = Arc::new(StubParser);
+        let from_arc: ArgumentSpec<PlainLang> = ArgumentSpec::new_unnamed(Arc::clone(&shared));
+        assert_eq!(from_arc.name, None);
+        assert!(core::ptr::eq(
+            Arc::as_ptr(&shared) as *const (),
+            Arc::as_ptr(&from_arc.parser) as *const (),
+        ));
+
+        // `Arc<dyn ArgumentParser>` passes through as-is.
+        let dyn_parser: Arc<dyn ArgumentParser<PlainLang>> = Arc::new(StubParser);
+        let from_dyn = ArgumentSpec::new(Arc::clone(&dyn_parser), "label");
+        assert!(Arc::ptr_eq(&from_dyn.parser, &dyn_parser));
+        assert_eq!(from_dyn.name.as_deref(), Some("label"));
+    }
+
     #[test]
     fn default_trait_methods_are_the_neutral_callable() {
         #[derive(Debug)]
@@ -97,10 +124,10 @@ mod tests {
     fn std_callable_spec_exposes_its_structure() {
         // \section*[placement]{title}-shaped (the stubs stand in for the core's
         // marker / optional-group / group parsers).
-        let spec = StdCallableSpec::new(vec![
-            Arc::new(ArgumentSpec::new(stub())),
-            Arc::new(ArgumentSpec::new(stub()).named("placement")),
-            Arc::new(ArgumentSpec::new(stub())),
+        let spec = StdCallableSpec::new([
+            ArgumentSpec::new_unnamed(stub()),
+            ArgumentSpec::new(stub(), "placement"),
+            ArgumentSpec::new_unnamed(stub()),
         ]);
 
         let dyn_spec: &dyn CallableSpec<PlainLang> = &spec;
@@ -130,12 +157,12 @@ mod tests {
         // StubParser keeps the trait default: can match empty (the pylatexenc
         // base-class polarity).
         let optional_only: StdCallableSpec<PlainLang> =
-            StdCallableSpec::new(vec![Arc::new(ArgumentSpec::new(stub()))]);
+            StdCallableSpec::new([ArgumentSpec::new_unnamed(stub())]);
         assert!(!CallableSpec::requires_content(&optional_only));
 
-        let with_mandatory: StdCallableSpec<PlainLang> = StdCallableSpec::new(vec![
-            Arc::new(ArgumentSpec::new(stub())),
-            Arc::new(ArgumentSpec::new(Arc::new(MandatoryStub))),
+        let with_mandatory: StdCallableSpec<PlainLang> = StdCallableSpec::new([
+            ArgumentSpec::new_unnamed(stub()),
+            ArgumentSpec::new_unnamed(MandatoryStub),
         ]);
         assert!(CallableSpec::requires_content(&with_mandatory));
 
@@ -172,11 +199,10 @@ mod tests {
             }
         }
 
-        let spec: StdCallableSpec<PlainLang> = StdCallableSpec::new(vec![Arc::new(
-            ArgumentSpec::new(Arc::new(CharsOnly))
-                .named("label")
+        let spec: StdCallableSpec<PlainLang> = StdCallableSpec::new([
+            ArgumentSpec::new(CharsOnly, "label")
                 .with_state_delta(crate::state::ParsingStateDelta::new()),
-        )]);
+        ]);
 
         let arg = &spec.arguments[0];
         assert!(arg.parsing_state_delta.is_some());

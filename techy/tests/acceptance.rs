@@ -56,7 +56,7 @@ mod support {
     /// statically undone).
     pub fn text_mode_arg() -> Arc<ArgumentSpec<Latexlike>> {
         Arc::new(
-            ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GroupType::Content)))
+            ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
                 .with_state_delta(
                     ParsingStateDelta::new().mode(Mode::Text).rules(TokenRulesOverrides {
                         groups: Some(default_token_rules().groups),

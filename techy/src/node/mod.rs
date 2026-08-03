@@ -149,7 +149,7 @@ mod tests {
     }
 
     fn brace_arg_spec<L: Lang<GroupTypeId = u32>>() -> Arc<ArgumentSpec<L>> {
-        Arc::new(ArgumentSpec::new(Arc::new(StubParser)))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(StubParser)))
     }
 
     /// Compile-time proof of the thread-safety contract: trees,
@@ -194,7 +194,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(arg_specs.to_vec()));
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec() });
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -352,16 +352,14 @@ mod tests {
         ).unwrap();
 
         let star_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("star"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "star"));
         let placement_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("placement"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "placement"));
         let title_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("title"));
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(vec![
-            star_spec.clone(),
-            placement_spec.clone(),
-            title_spec.clone(),
-        ]));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "title"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec {
+            arguments: vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
+        });
         let section = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -624,7 +622,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(arg_specs.to_vec()));
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec() });
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -703,7 +701,7 @@ mod tests {
 
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -752,7 +750,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -794,7 +792,8 @@ mod tests {
         children: Vec<BuildId>,
     ) -> Result<BuildId, NodeBuildError> {
         let specs: Vec<_> = args.iter().map(|a| a.spec.clone()).collect();
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(specs));
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec { arguments: specs });
         b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -1251,6 +1250,30 @@ mod tests {
         assert_eq!(SlotRole::default(), SlotRole::Content);
     }
 
+    /// The record collections have discoverable constructors (`new(Vec)`; the
+    /// `From<Vec>` conversions stay as plumbing), and `ParsedSlot` follows the
+    /// named-first family: `new(region, name, …)` names the slot,
+    /// `new_unnamed(region, …)` is the marked anonymous spelling.
+    #[test]
+    fn record_collections_and_slot_constructors() {
+        let args: ParsedArguments<PlainLang> = ParsedArguments::new(vec![
+            ParsedArgument::absent(brace_arg_spec()),
+        ]);
+        assert_eq!(args.len(), 1);
+
+        let named: ParsedSlot<PlainLang> =
+            ParsedSlot::new(ChildRegion::single(0), "body", SlotRole::Content, ());
+        assert_eq!(named.name(), Some("body"));
+        let unnamed: ParsedSlot<PlainLang> =
+            ParsedSlot::new_unnamed(ChildRegion::single(1), SlotRole::Hidden, ());
+        assert_eq!(unnamed.name(), None);
+        assert_eq!(unnamed.role, SlotRole::Hidden);
+
+        let slots: ParsedSlots<PlainLang> = ParsedSlots::new(vec![named, unnamed]);
+        assert_eq!(slots.len(), 2);
+        assert!(slots.get_named("body").is_some());
+    }
+
     /// The argument-ext pipeline for a language whose `ArgumentExt` has no `Default`:
     /// `ParsedArgumentNodes` demands the parser-minted value, `provided` carries it
     /// into the record, `absent` carries none.
@@ -1267,7 +1290,7 @@ mod tests {
 
         // StubParser is a *custom* parser (mints its own ext — here it never provides),
         // so it implements `ArgumentParser<RoleLang>` although `RefExt: !Default`.
-        let spec: Arc<ArgumentSpec<RoleLang>> = Arc::new(ArgumentSpec::new(Arc::new(StubParser)));
+        let spec: Arc<ArgumentSpec<RoleLang>> = Arc::new(ArgumentSpec::new_unnamed(Arc::new(StubParser)));
         let provided = ParsedArgument::provided(
             Arc::clone(&spec),
             ChildRegion::single(0),
@@ -1584,7 +1607,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -1644,16 +1667,14 @@ mod tests {
             vec![t], (), (),
         ).unwrap();
         let star_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("star"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "star"));
         let placement_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("placement"));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "placement"));
         let title_spec: Arc<ArgumentSpec<PlainLang>> =
-            Arc::new(ArgumentSpec::new(Arc::new(StubParser)).named("title"));
-        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec::new(vec![
-            star_spec.clone(),
-            placement_spec.clone(),
-            title_spec.clone(),
-        ]));
+            Arc::new(ArgumentSpec::new(Arc::new(StubParser), "title"));
+        let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec {
+            arguments: vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
+        });
         let body_chars =
             b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![], (), ()).unwrap();
         let body = b.add(NodeKind::list(), spanned(&source, 10..11), st.clone(), vec![body_chars], (), ()).unwrap();
@@ -1767,7 +1788,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec::new(vec![arg_spec.clone()]));
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,

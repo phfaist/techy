@@ -197,7 +197,7 @@ fn scan_word_code(code: &str) -> Option<Arc<ArgumentSpec<Latexlike>>> {
         ),
         _ => return None,
     };
-    Some(Arc::new(ArgumentSpec::new(parser)))
+    Some(Arc::new(ArgumentSpec::new_unnamed(parser)))
 }
 
 /// The default delimiter alternatives of the `AnyDelimited` codes (pylatexenc's
@@ -300,7 +300,7 @@ fn scan_code(
         },
         _ => return Err(ArgumentCodeError::UnknownCode { index, offset, code }),
     };
-    Ok(Some(Arc::new(ArgumentSpec::new(parser))))
+    Ok(Some(Arc::new(ArgumentSpec::new_unnamed(parser))))
 }
 
 /// The minted per-use content-class rule of the `o`/`r`/`d` codes.

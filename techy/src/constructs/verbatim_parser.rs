@@ -727,7 +727,7 @@ mod tests {
         let mut package = Package::new("test-macros");
         for (name, arguments) in macros {
             let spec: Arc<dyn CallableSpec<VerbLang>> =
-                Arc::new(StdCallableSpec::new(arguments.clone()));
+                Arc::new(StdCallableSpec { arguments: arguments.clone() });
             package.insert(CT_MACRO, *name, spec);
         }
         let mut scopes = ScopeStack::new();
@@ -736,15 +736,15 @@ mod tests {
     }
 
     fn verb_arg() -> Arc<ArgumentSpec<VerbLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(VerbatimArgumentParser::new(GT_VERB))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(VerbatimArgumentParser::new(GT_VERB))))
     }
 
     fn verb_arg_with(parser: VerbatimArgumentParser<VerbLang>) -> Arc<ArgumentSpec<VerbLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(parser)))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(parser)))
     }
 
     fn brace_arg() -> Arc<ArgumentSpec<VerbLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(super::super::GroupArgumentParser::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(super::super::GroupArgumentParser::new(
             GT_BRACE,
         ))))
     }

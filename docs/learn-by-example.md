@@ -236,7 +236,7 @@ use techy::core::{ParsingStateDelta, TokenRulesOverrides};
 // re-enabled — inside math, the preset forbids nested math delimiters, and this
 // delta statically undoes that for the argument's extent.
 let text_mode_argument = Arc::new(
-    ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GroupType::Content)))
+    ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
         .with_state_delta(
             ParsingStateDelta::new().mode(Mode::Text).rules(TokenRulesOverrides {
                 groups: Some(default_token_rules().groups),

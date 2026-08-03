@@ -295,7 +295,7 @@ mod tests {
         package.insert(
             CallableType::Macro,
             "m",
-            Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new(Arc::new(parser)))])),
+            Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new_unnamed(Arc::new(parser)))])),
         );
         package.insert(CallableType::Macro, "alpha", Arc::new(MacroSpec::new(vec![])));
         Language::new(

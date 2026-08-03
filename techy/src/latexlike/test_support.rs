@@ -62,7 +62,7 @@ pub(super) fn macro_package(
     visible_modes: Option<Vec<Mode>>,
 ) -> Package<Latexlike> {
     let mut package = Package::new(pkg_name);
-    package.insert(CallableType::Macro, macro_name, Arc::new(StdCallableSpec::new(Vec::new())));
+    package.insert(CallableType::Macro, macro_name, Arc::new(StdCallableSpec::<Latexlike>::default()));
     if visible_modes.is_some() {
         package.set_visible_modes(visible_modes);
     }

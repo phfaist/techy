@@ -645,17 +645,17 @@ mod tests {
     // --- the suite's definitions: the §G environment matrix over the real preset ------
 
     fn brace_arg() -> Arc<ArgumentSpec<Latexlike>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GroupType::Content))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::new(GroupType::Content))))
     }
 
     fn optional_arg() -> Arc<ArgumentSpec<Latexlike>> {
-        Arc::new(ArgumentSpec::new(Arc::new(OptionalGroupArgumentParser::new(Arc::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(OptionalGroupArgumentParser::new(Arc::new(
             GroupRule { group_type: GroupType::Content, open: "[".into(), close: "]".into() },
         )))))
     }
 
     fn expr_arg() -> Arc<ArgumentSpec<Latexlike>> {
-        Arc::new(ArgumentSpec::new(Arc::new(ExpressionParser::new())))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(ExpressionParser::new())))
     }
 
     fn env(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> Arc<EnvironmentSpec> {
@@ -1199,7 +1199,7 @@ mod tests {
         package.insert(
             CallableType::Environment,
             "gen",
-            Arc::new(crate::spec::StdCallableSpec::new(vec![brace_arg()])),
+            Arc::new(crate::spec::StdCallableSpec { arguments: vec![brace_arg()] }),
         );
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Strict),

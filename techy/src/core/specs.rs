@@ -14,7 +14,9 @@
 //!   [`ScopeStack`] searches innermost-first (lexical shadowing). Definitions are
 //!   reshaped mid-parse through [`ScopeOp`]s / [`DefinitionOp`]s carried by parsing
 //!   state deltas. Registration takes the crate's sealed Arc-removal conversions:
-//!   [`IntoCallableSpec`] (specs into [`Package::insert`] and siblings) and
+//!   [`IntoCallableSpec`] (specs into [`Package::insert`] and siblings),
+//!   [`IntoArgumentParser`] (parsers into [`ArgumentSpec::new`] and
+//!   [`new_unnamed`](ArgumentSpec::new_unnamed)), and
 //!   [`IntoSpecsProvider`] (packages/providers into
 //!   [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)).
 //! - **Command resolution** — [`resolve_command_in_scopes`] is the standard
@@ -37,4 +39,6 @@ pub use crate::scopes::{
     ScopeOpError, ScopeStack, ScopeStackError, SearchedProviders, SpecsProvider,
     SymbolEntry,
 };
-pub use crate::spec::{ArgumentSpec, CallableSpec, IntoCallableSpec, StdCallableSpec};
+pub use crate::spec::{
+    ArgumentSpec, CallableSpec, IntoArgumentParser, IntoCallableSpec, StdCallableSpec,
+};

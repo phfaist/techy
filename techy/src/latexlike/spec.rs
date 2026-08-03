@@ -107,7 +107,7 @@ mod tests {
     use super::super::{CallableType, GroupType};
 
     fn brace_arg() -> Arc<ArgumentSpec<Latexlike>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GroupType::Content))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::new(GroupType::Content))))
     }
 
     #[test]

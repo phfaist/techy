@@ -265,6 +265,11 @@ pub struct ParsedArguments<L: Lang> {
 }
 
 impl<L: Lang> ParsedArguments<L> {
+    /// A record over the given per-argument entries, in invocation order.
+    pub fn new(arguments: Vec<ParsedArgument<L>>) -> ParsedArguments<L> {
+        ParsedArguments { arguments }
+    }
+
     /// A record with no arguments (matches the no-argument default spec).
     pub fn empty() -> ParsedArguments<L> {
         ParsedArguments { arguments: Vec::new() }
@@ -436,6 +441,11 @@ pub struct ParsedSlots<L: Lang> {
 }
 
 impl<L: Lang> ParsedSlots<L> {
+    /// A record over the given per-slot entries, in source order.
+    pub fn new(slots: Vec<ParsedSlot<L>>) -> ParsedSlots<L> {
+        ParsedSlots { slots }
+    }
+
     /// A record with no slots (macro-shaped callables).
     pub fn empty() -> ParsedSlots<L> {
         ParsedSlots { slots: Vec::new() }

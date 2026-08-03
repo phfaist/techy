@@ -169,6 +169,63 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
     }
 }
 
+mod sealed {
+    use super::{ArgumentParser, Lang};
+    use alloc::sync::Arc;
+
+    // Inference markers: they let the by-value blanket coexist with the Arc
+    // pass-through impls (trait coherence would otherwise reject the pair on a
+    // Lang-generic trait — the [`IntoCallableSpec`](crate::spec::IntoCallableSpec)
+    // mechanism note). Callers never name them — the marker parameter is inferred;
+    // each argument shape matches exactly one impl.
+    pub struct ByValue;
+    pub struct SharedConcrete;
+    pub struct SharedDyn;
+
+    pub trait SealedParser<L: Lang, M> {}
+    impl<L: Lang, P: ArgumentParser<L> + 'static> SealedParser<L, ByValue> for P {}
+    impl<L: Lang, P: ArgumentParser<L> + 'static> SealedParser<L, SharedConcrete> for Arc<P> {}
+    impl<L: Lang> SealedParser<L, SharedDyn> for Arc<dyn ArgumentParser<L>> {}
+}
+
+/// Sealed conversion into a shared [`ArgumentParser`] — the parser argument contract
+/// of [`ArgumentSpec::new`]/[`new_unnamed`](ArgumentSpec::new_unnamed), following the
+/// crate's one Arc-removal conversion idiom (the spec-side sibling is
+/// [`IntoCallableSpec`](super::IntoCallableSpec)): a parser passes **by value**
+/// (`ArgumentSpec::new(GroupArgumentParser::new(…), "title")`, no `Arc::new` noise),
+/// while an already-shared **`Arc<P>`** or **`Arc<dyn ArgumentParser<L>>`** passes
+/// through as-is — no double-wrap, so pre-shared parser flyweights keep their sharing.
+///
+/// Sealed: the three impls are the whole vocabulary; downstream code implements
+/// [`ArgumentParser`], never this trait. (The `M` parameter is a sealed inference
+/// marker distinguishing the three argument shapes — it never needs to be named.)
+pub trait IntoArgumentParser<L: Lang, M>: sealed::SealedParser<L, M> {
+    /// Convert into the shared parser handle [`ArgumentSpec`]s store.
+    fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>>;
+}
+
+// `'static` spelled out: `ArgumentParser` has no `Any` supertrait (unlike
+// `CallableSpec`), and the stored handle is `Arc<dyn ArgumentParser<L>>` = `… + 'static`.
+impl<L: Lang, P: ArgumentParser<L> + 'static> IntoArgumentParser<L, sealed::ByValue> for P {
+    fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>> {
+        Arc::new(self)
+    }
+}
+
+impl<L: Lang, P: ArgumentParser<L> + 'static> IntoArgumentParser<L, sealed::SharedConcrete>
+    for Arc<P>
+{
+    fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>> {
+        self
+    }
+}
+
+impl<L: Lang> IntoArgumentParser<L, sealed::SharedDyn> for Arc<dyn ArgumentParser<L>> {
+    fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>> {
+        self
+    }
+}
+
 /// One argument accepted by a callable (pylatexenc's `LatexArgumentSpec`).
 pub struct ArgumentSpec<L: Lang> {
     /// The parser recognizing and parsing this argument ([`ArgumentParser`]).
@@ -185,15 +242,29 @@ pub struct ArgumentSpec<L: Lang> {
 }
 
 impl<L: Lang> ArgumentSpec<L> {
-    /// An unnamed argument with the given parser and no state delta.
-    pub fn new(parser: Arc<dyn ArgumentParser<L>>) -> ArgumentSpec<L> {
-        ArgumentSpec { parser, name: None, parsing_state_delta: None }
+    /// An argument named `name` (for by-name access), parsed by `parser` — the
+    /// encouraged spelling: names survive argument-list evolution where positions do
+    /// not. The parser passes by value or pre-`Arc`'d ([`IntoArgumentParser`]); the
+    /// deliberately-anonymous case is the marked, longer
+    /// [`new_unnamed`](ArgumentSpec::new_unnamed).
+    pub fn new<M>(
+        parser: impl IntoArgumentParser<L, M>,
+        name: impl Into<Box<str>>,
+    ) -> ArgumentSpec<L> {
+        ArgumentSpec {
+            parser: parser.into_argument_parser(),
+            name: Some(name.into()),
+            parsing_state_delta: None,
+        }
     }
 
-    /// Attach a name for by-name access.
-    pub fn named(mut self, name: impl Into<Box<str>>) -> ArgumentSpec<L> {
-        self.name = Some(name.into());
-        self
+    /// An unnamed argument with the given parser ([`new`](ArgumentSpec::new) names it).
+    pub fn new_unnamed<M>(parser: impl IntoArgumentParser<L, M>) -> ArgumentSpec<L> {
+        ArgumentSpec {
+            parser: parser.into_argument_parser(),
+            name: None,
+            parsing_state_delta: None,
+        }
     }
 
     /// Parse the argument under the state derived through `delta`.

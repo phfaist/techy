@@ -267,7 +267,7 @@ mod tests {
     /// The `\label{…}` field spec: one chars-group argument (the intended pairing of
     /// N4 and N6).
     fn label_spec() -> Arc<dyn CallableSpec<Latexlike>> {
-        Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new(Arc::new(
+        Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new_unnamed(Arc::new(
             CharsGroupArgumentParser::new(GroupType::Content),
         )))]))
     }
@@ -280,7 +280,7 @@ mod tests {
         recovery: Recovery,
     ) -> Language<Latexlike> {
         let mut arguments = argument_specs(["m"]).unwrap();
-        arguments.push(Arc::new(ArgumentSpec::new(Arc::new(tack_on))));
+        arguments.push(Arc::new(ArgumentSpec::new_unnamed(Arc::new(tack_on))));
         let mut package = Package::new("tack-on-tests");
         package.insert(CallableType::Macro, "section", Arc::new(MacroSpec::new(arguments)));
         Language::new(

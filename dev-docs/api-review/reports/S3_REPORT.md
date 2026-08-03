@@ -8,7 +8,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] A. Tree tags + annotations core (`TreeTag`, `NodeId` identity, `TreeCore`/`Arc`, `annotate`, accessors; parent table + single-source flag stored)
 - [x] B. Ext minting (`make_node_ext` + `StagedChildren`, tier-2 deletion, hook-free 6-param `add`, `cx.stage_node`, `ParserSession::builder` → pub(crate), extract minting)
 - [x] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`) — done (successor agent 1; see Deviation D-C1: absent arguments carry no ext)
-- [ ] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`)
+- [x] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`) — done (successor agent 1)
 - [ ] D. Level-0 `restage_node` (+ copy.rs rebased on it)
 - [ ] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub)
 - [ ] F. Slices single-source whole-run contract (fast-path flag wired)
@@ -496,9 +496,24 @@ Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
   no setter; O(annotations) clone; defaulted-A ripple through all view types;
   `ParseResult` spelling unchanged; extract stays `A = ()`.
 - **Item 3 (ext minting)** — landed in milestone B (commit 3028fc3): see the
-  commit message / handoff notes; `ArgumentExt`/`SlotExt` Default removal +
-  record arities deliberately deferred to C1 (sequencing).
-- Items 4–11: not started (handoff).
+  commit message / handoff notes; the `ArgumentExt`/`SlotExt` halves (Default
+  removal, `ParsedArgumentNodes` ext carriage, std-parser bounds, `SlotExt`
+  demanded at `ParsedSlot` construction, `BodySlotExt` + preset claim) landed in
+  milestone C1 (successor agent 1) — with deviation D-C1 on the absent-argument
+  ext.
+- **Item 4 (slot roles)** — landed in milestone C1: exhaustive `SlotRole` on
+  `ParsedSlot` (default `Content`), `Hidden` read-blindness doc note, `Attached`
+  byte-tiling exclusion documented on the variant (the validator arm itself is
+  milestone G's).
+- **Item 5 (constructor reshapes)** — landed in milestone C2:
+  `ArgumentSpec::new(parser, name)`/`new_unnamed` over sealed
+  `IntoArgumentParser<L, M>` (S2-D1 marker realization; `'static` spelled on the
+  by-value/`Arc<P>` impls — `ArgumentParser` has no `Any` supertrait);
+  `.named()` removed; `StdCallableSpec::new(impl IntoIterator<Item =
+  ArgumentSpec<L>>)` (shared-Arc sites moved to the pub-field literal);
+  `ParsedSlot::new/new_unnamed` (C1); `ParsedArguments::new`/`ParsedSlots::new`
+  (`From<Vec>` kept).
+- Items 6–11: not started (handoff).
 
 ## Signature table (old → new) — A+B portion
 
@@ -571,11 +586,29 @@ Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
 
 ## Gate results
 
-(to be filled)
+At the C2 stop point (successor agent 1; commits through C2):
+- `cargo build`: clean, 0 warnings.
+- `cargo test`: 548 lib + 30 acceptance + 8 + 1 (derive) green; doctests 26
+  passed / 2 ignored (baseline).
+- `rm -rf target/doc && cargo docs`: clean, 0 warnings.
+- Grep gates (src + tests + docs/ + README): zero `.named(` builder calls
+  (only the `get_named`/`*_nodes_named` accessor family matches remain), zero
+  `ParsedSlot::named`, zero `stage_argument_like`; `finalize_node`/
+  `add_with_ext`/tier-2 family still zero.
 
 ## Churn stats
 
-(to be filled)
+C1+C2 (on top of the A+B stats above):
+- 35 single-arg `ArgumentSpec::new(…)` → `new_unnamed(…)`; 10 `.named("x")`
+  chains → `ArgumentSpec::new(parser, "x")`; the doc/acceptance showcase sites
+  prettified to by-value (no `Arc::new`).
+- 7 `ParsedSlot::named` → `ParsedSlot::new(region, name, role, ext)`.
+- 21 `StdCallableSpec::new` sites: 4 → the by-value iterator form, 16 → the
+  pub-field literal (they share `Arc<ArgumentSpec>`s with parsed records), 1 →
+  `StdCallableSpec::default()`.
+- ~20 `ParsedArgument::provided` sites gained the ext argument; 9
+  `ParsedArgumentNodes` literals → `new(nodes, content, ext)`; 8 std
+  argument-parser impls gained `where ArgumentExt<L>: Default`.
 
 ## Deviations / ambiguities
 

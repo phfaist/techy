@@ -965,7 +965,7 @@ mod tests {
     }
 
     fn brace_arg() -> Arc<ArgumentSpec<EnvLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(GroupArgumentParser::new(GT_BRACE))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(GroupArgumentParser::new(GT_BRACE))))
     }
 
     fn option_rule() -> Arc<GroupRule<EnvLang>> {
@@ -973,17 +973,17 @@ mod tests {
     }
 
     fn optional_arg() -> Arc<ArgumentSpec<EnvLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(OptionalGroupArgumentParser::new(
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(OptionalGroupArgumentParser::new(
             option_rule(),
         ))))
     }
 
     fn marker_arg(marker: &str) -> Arc<ArgumentSpec<EnvLang>> {
-        Arc::new(ArgumentSpec::new(Arc::new(MarkerArgumentParser::new(marker))))
+        Arc::new(ArgumentSpec::new_unnamed(Arc::new(MarkerArgumentParser::new(marker))))
     }
 
     fn macro_spec(arguments: Vec<Arc<ArgumentSpec<EnvLang>>>) -> Arc<dyn CallableSpec<EnvLang>> {
-        Arc::new(StdCallableSpec::new(arguments))
+        Arc::new(StdCallableSpec { arguments })
     }
 
     /// The test-lang environment spec (an `EnvironmentSpec` rehearsal): arguments
