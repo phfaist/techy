@@ -14,15 +14,16 @@
 //!   [`ScopeStack`] searches innermost-first (lexical shadowing). Definitions are
 //!   reshaped mid-parse through [`ScopeOp`]s / [`DefinitionOp`]s carried by parsing
 //!   state deltas.
-//! - **Command resolution** — [`CommandResolution`] (with [`ResolvedCallable`]) is
-//!   the outcome vocabulary of resolving a command token against the scope stack;
+//! - **Command resolution** — [`resolve_command_in_scopes`] is the standard
+//!   resolution body (build the query, consult the scope stack, map the outcome);
+//!   [`CommandResolution`] (with [`ResolvedCallable`]) is the outcome vocabulary;
 //!   [`CallableQuery`], [`CallableSyntax`], and [`SearchedProviders`] describe the
 //!   lookup.
 //!
 //! The run-side machinery that consumes these definitions — state, tokens, engine —
 //! is the [`core`](crate::core) hub.
 
-pub use crate::engine::{CommandResolution, ResolvedCallable};
+pub use crate::engine::{resolve_command_in_scopes, CommandResolution, ResolvedCallable};
 pub use crate::scopes::{
     CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
     FallbackProvider, Package, ProviderError, Scope, ScopeOp, ScopeOpError, ScopeStack,

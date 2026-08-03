@@ -1021,7 +1021,7 @@ impl<L: Lang> fmt::Debug for NodesParser<'_, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ParseResult, ParserSession, StdParseDriver};
+    use crate::engine::{resolve_command_in_scopes, ParseResult, ParserSession, StdParseDriver};
     use crate::error::Recovery;
     use crate::scopes::{
         CallableQuery, CallableSyntax, Package, ProviderError, ScopeStack, SpecsProvider,
@@ -1050,13 +1050,13 @@ mod tests {
 
     /// The preset resolution pattern, shared by the 6.4 test langs: dispatch a
     /// `Command` token to the state's scope stack under the `CT_MACRO` form. Delegates
-    /// to the blessed [`CommandResolution::resolve_via_scopes`] so the test langs and
+    /// to the standard [`resolve_command_in_scopes`] so the test langs and
     /// the latexlike preset share one query-and-dispatch implementation.
-    fn resolve_macro_via_scopes<L: Lang<CallableTypeId = u32>>(
+    fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
         token: &Token<'_, L>,
     ) -> CommandResolution<L> {
-        CommandResolution::resolve_via_scopes(state, token, CT_MACRO)
+        resolve_command_in_scopes(state, token, CT_MACRO)
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -1108,7 +1108,7 @@ mod tests {
             state: &ParsingState<CmdLang>,
             token: &Token<'_, CmdLang>,
         ) -> CommandResolution<CmdLang> {
-            resolve_macro_via_scopes(state, token)
+            resolve_macro_in_scopes(state, token)
         }
     }
 
@@ -2206,7 +2206,7 @@ mod tests {
             ["chars 0..2 \"a \"", "chars 2..7 \"\\\\foo \"", "chars 7..8 \"b\""]
         );
         assert_eq!(parsed.result.diagnostics.len(), 1);
-        // `CmdLang` resolves through the shared `CommandResolution::resolve_via_scopes`,
+        // `CmdLang` resolves through the shared `resolve_command_in_scopes`,
         // which reports the searched providers as the miss detail — one behavior across
         // the test langs and the latexlike preset (unified in the 7.5 review).
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
@@ -2229,7 +2229,7 @@ mod tests {
     #[test]
     fn provider_failure_takes_the_command_resolution_failed_recovery() {
         // An operational provider failure (vs. a clean miss) surfaces the distinct
-        // CommandResolutionFailed condition through resolve_via_scopes, recovered as
+        // CommandResolutionFailed condition through resolve_command_in_scopes, recovered as
         // chars like an unresolvable command.
         #[derive(Debug)]
         struct BrokenProvider;
@@ -2763,7 +2763,7 @@ mod tests {
                 state: &ParsingState<ExtLang>,
                 token: &Token<'_, ExtLang>,
             ) -> CommandResolution<ExtLang> {
-                resolve_macro_via_scopes(state, token)
+                resolve_macro_in_scopes(state, token)
             }
         }
 
@@ -3432,7 +3432,7 @@ mod tests {
                 state: &ParsingState<DriveLang>,
                 token: &Token<'_, DriveLang>,
             ) -> CommandResolution<DriveLang> {
-                resolve_macro_via_scopes(state, token)
+                resolve_macro_in_scopes(state, token)
             }
 
             fn group_interior_delta(

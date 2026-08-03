@@ -39,7 +39,10 @@ use state_memo::{
     StateMemoKey, StateMemoProbe,
 };
 
-pub use driver::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
+pub use driver::{
+    resolve_command_in_scopes, CommandResolution, ParseDriver, ResolvedCallable,
+    StdParseDriver,
+};
 pub use language::Language;
 
 /// One live entry of the session's parse-frame stack:

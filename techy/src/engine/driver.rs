@@ -432,41 +432,43 @@ pub enum CommandResolution<L: Lang> {
     },
 }
 
-impl<L: Lang> CommandResolution<L> {
-    /// The shared "resolve a command through the scope stack" pattern, under the given
-    /// `callable_type` — the single home for every driver's
-    /// [`resolve_command`](ParseDriver::resolve_command) that dispatches to the state's
-    /// scope stack (the latexlike preset and the test langs), so query construction and
-    /// the miss/failure detail policy live in one place rather than drifting per copy.
-    ///
-    /// A hit is [`Resolved`](CommandResolution::Resolved); a clean miss is
-    /// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers as
-    /// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
-    /// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
-    /// token — a caller-contract violation — yields `Unresolved { detail: None }`.
-    pub fn resolve_via_scopes(
-        state: &ParsingState<L>,
-        token: &Token<'_, L>,
-        callable_type: L::CallableTypeId,
-    ) -> CommandResolution<L> {
-        let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-            return CommandResolution::Unresolved { detail: None };
-        };
-        let query = CallableQuery::new(
-            callable_type,
-            name,
-            CallableSyntax::Command { escape_char: *escape_char },
-        )
-        .with_token(token);
-        match state.scopes().retrieve_spec(&query, state) {
-            Ok(Some(spec)) => {
-                CommandResolution::Resolved(ResolvedCallable { callable_type, spec })
-            }
-            Ok(None) => CommandResolution::Unresolved {
-                detail: Some(state.scopes().searched_providers().to_string()),
-            },
-            Err(error) => CommandResolution::Failed { detail: Some(error.to_string()) },
+/// The standard "resolve a command through the scope stack" body, under the given
+/// `callable_type` — the single home for every driver's
+/// [`resolve_command`](ParseDriver::resolve_command) that dispatches to the state's
+/// scope stack (the latexlike preset and the test langs), so query construction and
+/// the miss/failure detail policy live in one place rather than drifting per copy.
+///
+/// Builds a [`CallableQuery`] with
+/// [`CallableSyntax::Command`](crate::scopes::CallableSyntax::Command) (the token's
+/// fired escape character), consults
+/// [`ScopeStack::retrieve_spec`](crate::scopes::ScopeStack::retrieve_spec), and maps
+/// the outcome: a hit is [`Resolved`](CommandResolution::Resolved); a clean miss is
+/// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers as
+/// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
+/// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
+/// token — a caller-contract violation — yields `Unresolved { detail: None }`.
+pub fn resolve_command_in_scopes<L: Lang>(
+    state: &ParsingState<L>,
+    token: &Token<'_, L>,
+    callable_type: L::CallableTypeId,
+) -> CommandResolution<L> {
+    let TokenKind::Command { name, escape_char, .. } = &token.kind else {
+        return CommandResolution::Unresolved { detail: None };
+    };
+    let query = CallableQuery::new(
+        callable_type,
+        name,
+        CallableSyntax::Command { escape_char: *escape_char },
+    )
+    .with_token(token);
+    match state.scopes().retrieve_spec(&query, state) {
+        Ok(Some(spec)) => {
+            CommandResolution::Resolved(ResolvedCallable { callable_type, spec })
         }
+        Ok(None) => CommandResolution::Unresolved {
+            detail: Some(state.scopes().searched_providers().to_string()),
+        },
+        Err(error) => CommandResolution::Failed { detail: Some(error.to_string()) },
     }
 }
 

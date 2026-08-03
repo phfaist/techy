@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::engine::{CommandResolution, ParseDriver};
+use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
 use crate::source::TextContent;
@@ -95,7 +95,8 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
     }
 
     /// Resolve a command token as a [`Macro`](CallableType::Macro) through the state's
-    /// scope stack, via the shared [`CommandResolution::resolve_via_scopes`]: a hit
+    /// scope stack, via the standard
+    /// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes): a hit
     /// dispatches; a clean miss reports the searched providers as the
     /// unresolvable-command detail; an operational provider failure is a distinct
     /// [`Failed`](CommandResolution::Failed) resolution.
@@ -104,7 +105,7 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         state: &ParsingState<Latexlike>,
         token: &Token<'_, Latexlike>,
     ) -> CommandResolution<Latexlike> {
-        CommandResolution::resolve_via_scopes(state, token, CallableType::Macro)
+        resolve_command_in_scopes(state, token, CallableType::Macro)
     }
 
     /// Emit the paragraph-break node per the driver's
