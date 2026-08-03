@@ -40,7 +40,6 @@ mod tests {
     use crate::state::Lang;
     use alloc::string::String;
     use alloc::sync::Arc;
-    use alloc::vec;
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
