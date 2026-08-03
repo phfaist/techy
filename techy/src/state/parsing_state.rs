@@ -354,11 +354,11 @@ mod tests {
         }
     }
 
-    // --- a minimal lang: no customization at all (the SimpleLang shortcut) -----------
+    // --- a minimal lang: no customization at all (the TrivialLang shortcut) -----------
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct PlainLang;
-    impl crate::state::SimpleLang for PlainLang {}
+    impl crate::state::TrivialLang for PlainLang {}
 
     #[test]
     fn derived_applies_overrides_and_keeps_the_rest() {
@@ -787,7 +787,7 @@ mod tests {
         }
         let state: ParsingState<DefaultSeedLang> = ParsingState::initial();
         assert_eq!(state.mode(), Mode::Text);
-        // SimpleLang languages are modeless: `ModeId = ()`.
+        // TrivialLang languages are modeless: `ModeId = ()`.
         let plain: ParsingState<PlainLang> = ParsingState::initial();
         assert_eq!(plain.mode(), ());
     }

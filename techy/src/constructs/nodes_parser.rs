@@ -1030,7 +1030,7 @@ mod tests {
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
-    use crate::state::{NodeExtTypes, SimpleLang, StateData, TokenRulesOverrides};
+    use crate::state::{NodeExtTypes, TrivialLang, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
@@ -1046,7 +1046,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct TestLang;
-    impl SimpleLang for TestLang {}
+    impl TrivialLang for TestLang {}
 
     /// The preset resolution pattern, shared by the 6.4 test langs: dispatch a
     /// `Command` token to the state's scope stack under the `CT_MACRO` form. Delegates

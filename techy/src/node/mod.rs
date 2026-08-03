@@ -72,7 +72,7 @@ mod tests {
     use crate::scopes::ScopeStack;
     use crate::source::{Source, SourceSpan, Span, TextContent};
     use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, StdCallableSpec};
-    use crate::state::{Lang, ParsingState, SimpleLang, StateData};
+    use crate::state::{Lang, ParsingState, TrivialLang, StateData};
     use crate::token::{GroupRule, TokenRules, WhitespaceRules};
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -82,7 +82,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl SimpleLang for PlainLang {} // GroupTypeId / CallableTypeId = u32
+    impl TrivialLang for PlainLang {} // GroupTypeId / CallableTypeId = u32
 
     const GT_BRACE: u32 = 0;
     const CT_MACRO: u32 = 0;
@@ -1215,7 +1215,7 @@ mod tests {
     // --- Debug does not demand anything of the lang ZST itself -----------------------
 
     struct NoDeriveLang; // deliberately neither Clone nor Debug
-    impl SimpleLang for NoDeriveLang {}
+    impl TrivialLang for NoDeriveLang {}
 
     #[test]
     fn debug_and_clone_without_lang_bounds() {

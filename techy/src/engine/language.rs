@@ -21,7 +21,8 @@ use crate::error::ParseError;
 use crate::node::NodeKind;
 use crate::scopes::SpecsProvider;
 use crate::source::{
-    resolve_source, NoResolver, ResolveError, Source, SourceResolver, SourceSpan, Span,
+    resolve_source_reference, NoResolver, ResolveError, Source, SourceResolver, SourceSpan,
+    Span,
 };
 use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta};
 use crate::token::StdTokenReader;
@@ -40,10 +41,10 @@ use super::{ParseResult, ParserSession};
 /// parses driven without a `Language` (the advanced path).
 ///
 /// ```
-/// # use techy::{Language, Recovery, SimpleLang, StdParseDriver};
+/// # use techy::{Language, Recovery, TrivialLang, StdParseDriver};
 /// # #[derive(Debug, Clone, Copy)]
 /// # struct MyLang;
-/// # impl SimpleLang for MyLang {}
+/// # impl TrivialLang for MyLang {}
 /// let language: Language<MyLang> = Language::new(StdParseDriver::new(Recovery::Tolerant));
 /// let result = language.parse("hello").unwrap();
 /// assert_eq!(result.tree.root().chars(), None); // the root is a List
@@ -152,7 +153,7 @@ impl<L: Lang> Language<L> {
     }
 
     /// Resolve an external reference through this language's resolver and mint the
-    /// [`Source`] — the [`resolve_source`] composition: provenance
+    /// [`Source`] — the [`resolve_source_reference`] composition: provenance
     /// (`Resolved { reference, triggered_at }`) is stamped here, per include site,
     /// so diagnostics inside the inclusion render the right include chain. Feed the
     /// result to [`parse_source`](Language::parse_source).
@@ -161,7 +162,7 @@ impl<L: Lang> Language<L> {
         reference: &str,
         triggered_at: &SourceSpan<L::SourceOrigin>,
     ) -> Result<Arc<Source<L::SourceOrigin>>, ResolveError> {
-        resolve_source(&self.resolver, reference, triggered_at)
+        resolve_source_reference(&self.resolver, reference, triggered_at)
     }
 
     /// Parse `content` as an anonymous in-memory [`Source`]. For a pre-minted source

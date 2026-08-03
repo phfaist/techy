@@ -1,5 +1,5 @@
 //! The [`Lang`] trait: the compile-time customization bundle; with it, the
-//! [`NodeExtTypes`] node-ext bundle and the [`SimpleLang`] all-defaults convenience.
+//! [`NodeExtTypes`] node-ext bundle and the [`TrivialLang`] all-defaults convenience.
 //!
 //! `NodeExtTypes` is defined here, next to `Lang`, rather than in the `node` topic:
 //! its *meaning* is a node concern, but it is a constituent of the compile-time bundle,
@@ -97,15 +97,15 @@ pub trait Lang: Sized + 'static {
     /// ([`GroupRule`](crate::token::GroupRule) values in the state's token rules) that
     /// any construct parser may extend mid-parse; only the class vocabulary is fixed —
     /// the exact parallel of [`CallableTypeId`](Lang::CallableTypeId) (closed invocation
-    /// *forms*, runtime-registered *callables*). [`SimpleLang`] defaults this to `u32`
-    /// for quick-start and test languages.
+    /// *forms*, runtime-registered *callables*). [`TrivialLang`] defaults this to `u32`
+    /// for test languages.
     type GroupTypeId: Copy + Eq + Hash + fmt::Debug + Send + Sync;
 
     /// Identifier of a callable *type* — an invocation form (the latexlike preset:
     /// macro / environment / specials). **Closed per language**:
     /// new invocation *forms* are never registered at runtime (new *callables* are —
     /// via the scope stack), so this is a per-language enum, not an open id. `Ord`
-    /// because providers key their maps by it. [`SimpleLang`] defaults this to `u32`.
+    /// because providers key their maps by it. [`TrivialLang`] defaults this to `u32`.
     type CallableTypeId: Copy + Ord + Hash + fmt::Debug + Send + Sync;
 
     /// Identifier of the **parsing mode** a state is in (the latexlike preset: text /
@@ -123,7 +123,7 @@ pub trait Lang: Sized + 'static {
     /// `Copy + Eq + Hash` because modes are memo-key material — the session's
     /// derivation memo keys the delta's mode override *by value* (exact, unlike the
     /// identity-keyed rule payloads); `Default` supplies the seed state's mode (the
-    /// default [`initial_state_data`](Lang::initial_state_data)). [`SimpleLang`]
+    /// default [`initial_state_data`](Lang::initial_state_data)). [`TrivialLang`]
     /// defaults this to `()` — no modes.
     type ModeId: Copy + Eq + Hash + Default + fmt::Debug + Send + Sync;
 
@@ -178,7 +178,7 @@ pub trait Lang: Sized + 'static {
     /// out-of-parse-callable), [`scan_specials`](Lang::scan_specials)/
     /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (tokenizer layer),
     /// [`finalize_node`](Lang::finalize_node) (builder/transform layer). Everything
-    /// that only runs while a parse is driven lives on the driver. [`SimpleLang`]
+    /// that only runs while a parse is driven lives on the driver. [`TrivialLang`]
     /// defaults this to [`StdParseDriver`].
     type Driver: ParseDriver<Self>;
 
@@ -354,20 +354,19 @@ pub trait Lang: Sized + 'static {
     }
 }
 
-/// All-defaults language marker: `impl SimpleLang for MyLang {}` yields a [`Lang`] with
-/// every associated type defaulted (`ModeId`/`StateExt`/`Event`/`SessionExt`/`NodeExts`
-/// = `()`, `SourceOrigin` = `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`)
-/// and the default method behavior — the workaround for associated-type defaults being
-/// unstable.
+/// The trivial language — for tests and machinery experiments: `impl TrivialLang for
+/// MyLang {}` yields a [`Lang`] with every associated type defaulted
+/// (`ModeId`/`StateExt`/`Event`/`SessionExt`/`NodeExts` = `()`, `SourceOrigin` =
+/// `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
+/// behavior — the workaround for associated-type defaults being unstable. The default
+/// driver resolves nothing.
 ///
-/// The `u32` type ids are the quick-start escape from declaring id enums; a real language
-/// definition should implement [`Lang`] directly and give both ids closed enum types.
-///
-/// A language needing *any* customization implements [`Lang`] directly instead (the
-/// blanket impl makes the two mutually exclusive).
-pub trait SimpleLang: Sized + 'static {}
+/// Any customization means implementing [`Lang`] directly: the blanket impl makes the
+/// two mutually exclusive, so the first command, real id enum, or hook forces the full
+/// [`Lang`] implementation.
+pub trait TrivialLang: Sized + 'static {}
 
-impl<T: SimpleLang> Lang for T {
+impl<T: TrivialLang> Lang for T {
     type GroupTypeId = u32;
     type CallableTypeId = u32;
     type ModeId = ();
@@ -388,8 +387,8 @@ impl<T: SimpleLang> Lang for T {
 /// (e.g. drive [`ScopeStack::iter_symbols`](crate::scopes::ScopeStack::iter_symbols)
 /// once per callable type in `L::CallableTypeId::ALL`).
 ///
-/// Deliberately **not** a required bound on the `Lang` associated types: [`SimpleLang`]
-/// defaults the type ids to `u32` (the quick-start escape from declaring id enums), and
+/// Deliberately **not** a required bound on the `Lang` associated types: [`TrivialLang`]
+/// defaults the type ids to `u32`, and
 /// an open integer type has no value list. Languages with real id enums implement it
 /// (the latexlike preset does for all three vocabularies); tooling that needs
 /// enumeration states the bound where it is used
@@ -403,7 +402,7 @@ pub trait ClosedVocabulary: Copy + Sized + 'static {
     const ALL: &'static [Self];
 }
 
-/// The unit vocabulary: one value. (Matches [`SimpleLang`]'s `ModeId = ()` — "no modes"
+/// The unit vocabulary: one value. (Matches [`TrivialLang`]'s `ModeId = ()` — "no modes"
 /// still has the one mode a state is always in.)
 impl ClosedVocabulary for () {
     const ALL: &'static [()] = &[()];

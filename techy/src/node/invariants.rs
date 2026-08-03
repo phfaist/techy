@@ -406,13 +406,13 @@ mod tests {
     use super::*;
     use crate::scopes::ScopeStack;
     use crate::source::{Source, SourceSpan, Span};
-    use crate::state::{ParsingState, SimpleLang, StateData};
+    use crate::state::{ParsingState, TrivialLang, StateData};
     use crate::token::{TokenRules, WhitespaceRules};
     use alloc::sync::Arc;
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl SimpleLang for PlainLang {}
+    impl TrivialLang for PlainLang {}
 
     fn state() -> Arc<ParsingState<PlainLang>> {
         Arc::new(ParsingState::new(StateData {

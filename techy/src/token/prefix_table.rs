@@ -163,14 +163,14 @@ impl<L: Lang> Eq for PrefixTable<L> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::SimpleLang;
+    use crate::state::TrivialLang;
     use crate::token::WhitespaceRules;
     use alloc::vec;
     use alloc::vec::Vec;
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl SimpleLang for PlainLang {} // GroupTypeId = u32
+    impl TrivialLang for PlainLang {} // GroupTypeId = u32
 
     fn rules_with_groups(groups: Vec<Arc<GroupRule<PlainLang>>>) -> TokenRules<PlainLang> {
         TokenRules {

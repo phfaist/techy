@@ -1486,7 +1486,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl crate::state::SimpleLang for PlainLang {}
+    impl crate::state::TrivialLang for PlainLang {}
 
     fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {

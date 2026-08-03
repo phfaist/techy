@@ -418,7 +418,7 @@ mod tests {
     use crate::node::NodeKind;
     use crate::source::{Source, Span};
     use crate::state::{
-        Lang, ParsingState, ParsingStateDelta, SimpleLang, StateData, TokenRulesOverrides,
+        Lang, ParsingState, ParsingStateDelta, TrivialLang, StateData, TokenRulesOverrides,
     };
     use crate::token::{
         GroupRule, Token, TokenKind, TokenListReader, TokenRules, WhitespaceRules,
@@ -430,7 +430,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
-    impl SimpleLang for PlainLang {}
+    impl TrivialLang for PlainLang {}
 
     /// A third-party-style condition — the extension surface demonstration: a
     /// plain data struct, a `Display` for the wording, and a `DiagnosticInfo` impl,

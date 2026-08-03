@@ -134,7 +134,7 @@ pub use error::{
     TraceFrame,
 };
 pub use source::{
-    resolve_source, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,
+    resolve_source_reference, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,
     ResolvedContent, Source, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
     Span, TextContent,
 };
@@ -155,7 +155,7 @@ pub use spec::{
 };
 pub use state::{
     ClosedVocabulary, DeriveError, Lang, NodeExtTypes, ParsingState, ParsingStateDelta,
-    SimpleLang, StateData, TokenRulesOverrides,
+    TrivialLang, StateData, TokenRulesOverrides,
 };
 pub use token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,

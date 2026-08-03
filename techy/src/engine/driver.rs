@@ -39,7 +39,7 @@
 //! helpers [`ParserSession::derived_state`]/[`ParserSession::group_interior_state`]
 //! own), and per-language *data* belongs to the parsing state. [`StdParseDriver`] is
 //! the all-defaults implementation — a plain `Recovery` carrier, and the
-//! [`SimpleLang`](crate::state::SimpleLang) default.
+//! [`TrivialLang`](crate::state::TrivialLang) default.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -333,7 +333,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 }
 
 /// The all-defaults [`ParseDriver`]: a plain [`Recovery`] carrier, implementing the
-/// trait for **every** language — the [`SimpleLang`](crate::state::SimpleLang) default
+/// trait for **every** language — the [`TrivialLang`](crate::state::TrivialLang) default
 /// driver, and the strict-parsing default value.
 ///
 /// ```

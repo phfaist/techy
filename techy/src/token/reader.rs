@@ -482,7 +482,7 @@ mod tests {
     use alloc::vec::Vec;
 
     // Group classes used by the hardcoded latexlike-flavored test rules (the test langs
-    // use the SimpleLang-style `u32` class space; a real preset would use a small enum,
+    // use the TrivialLang-style `u32` class space; a real preset would use a small enum,
     // with several rules sharing a class). Distinct per rule here so tests can look
     // rules up by class.
     const BRACES: u32 = 0;

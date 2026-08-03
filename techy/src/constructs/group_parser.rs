@@ -232,7 +232,7 @@ mod tests {
     use crate::error::Recovery;
     use crate::scopes::ScopeStack;
     use crate::source::Source;
-    use crate::state::{ParsingState, SimpleLang, StateData};
+    use crate::state::{ParsingState, TrivialLang, StateData};
     use crate::token::{
         StdTokenReader, Token, TokenKind, TokenReader, TokenRules, WhitespaceRules,
     };
@@ -241,7 +241,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct TestLang;
-    impl SimpleLang for TestLang {}
+    impl TrivialLang for TestLang {}
 
     fn rules() -> TokenRules<TestLang> {
         TokenRules {

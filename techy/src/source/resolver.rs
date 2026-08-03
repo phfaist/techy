@@ -18,7 +18,7 @@ use super::source::{Source, SourceSpan};
 /// the zero-sized, zero-cost default for builds that must not perform any lookup or I/O.
 ///
 /// **The resolver returns content, not a [`Source`]** (Action-05):
-/// the caller mints the `Source` — see [`resolve_source`] — stamping the include-site
+/// the caller mints the `Source` — see [`resolve_source_reference`] — stamping the include-site
 /// provenance (`SourceProvenance::Resolved { reference, triggered_at }`) itself. A
 /// twice-included file thereby gets a *distinct* `Source` per include site, each
 /// recording its own trigger, so diagnostics inside either inclusion render the right
@@ -97,7 +97,7 @@ impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Arc<R
 /// each call produces a fresh `Source` whose provenance records *this* `triggered_at`,
 /// which is what keeps a twice-included file's diagnostics pointing at the right
 /// include site (see the trait docs).
-pub fn resolve_source<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
+pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     resolver: &R,
     reference: &str,
     triggered_at: &SourceSpan<O>,
@@ -110,7 +110,7 @@ pub fn resolve_source<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 }
 
 /// What a [`SourceResolver`] returns: the referenced content, plus origin metadata for
-/// the [`Source`] the caller mints (see [`resolve_source`]).
+/// the [`Source`] the caller mints (see [`resolve_source_reference`]).
 #[derive(Debug, Clone)]
 pub struct ResolvedContent<O: SourceOrigin = Option<String>> {
     /// The resolved content.
@@ -282,12 +282,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_source_mints_the_source_with_this_triggers_provenance() {
+    fn resolve_source_reference_mints_the_source_with_this_triggers_provenance() {
         let mut resolver = MapResolver::new();
         resolver.insert("chapter.tex", "chapter content");
 
         let trigger = trigger_span();
-        let resolved = resolve_source(&resolver, "chapter.tex", &trigger).unwrap();
+        let resolved = resolve_source_reference(&resolver, "chapter.tex", &trigger).unwrap();
 
         assert_eq!(resolved.content(), "chapter content");
         // The reference is recorded in the provenance; the origin stays at its default
@@ -315,8 +315,8 @@ mod tests {
         let first = SourceSpan::new(&main, 0..19);
         let second = SourceSpan::new(&main, 19..38);
 
-        let a = resolve_source(&resolver, "chapter.tex", &first).unwrap();
-        let b = resolve_source(&resolver, "chapter.tex", &second).unwrap();
+        let a = resolve_source_reference(&resolver, "chapter.tex", &first).unwrap();
+        let b = resolve_source_reference(&resolver, "chapter.tex", &second).unwrap();
 
         assert!(!Arc::ptr_eq(&a, &b), "distinct sources per include site");
         match (a.provenance(), b.provenance()) {
@@ -339,7 +339,7 @@ mod tests {
         ]);
 
         let trigger = trigger_span();
-        let resolved = resolve_source(&resolver, "appendix.tex", &trigger).unwrap();
+        let resolved = resolve_source_reference(&resolver, "appendix.tex", &trigger).unwrap();
         assert_eq!(resolved.content(), "appendix content");
         // Origin labeling defaults to off, same as `MapResolver::new()`.
         assert_eq!(resolved.origin().label(), None);
@@ -360,7 +360,7 @@ mod tests {
         let resolver = resolver.with_reference_as_origin();
 
         let trigger = trigger_span();
-        let resolved = resolve_source(&resolver, "chapter.tex", &trigger).unwrap();
+        let resolved = resolve_source_reference(&resolver, "chapter.tex", &trigger).unwrap();
         assert_eq!(resolved.origin().label().as_deref(), Some("chapter.tex"));
     }
 
@@ -392,7 +392,7 @@ mod tests {
 
         let trigger = trigger_span();
         let arc: Arc<dyn SourceResolver> = Arc::new(resolver);
-        let resolved = resolve_source(&arc, "chapter.tex", &trigger).unwrap();
+        let resolved = resolve_source_reference(&arc, "chapter.tex", &trigger).unwrap();
         assert_eq!(resolved.content(), "chapter content");
         // And through a plain borrow.
         let borrowed = &arc;

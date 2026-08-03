@@ -142,7 +142,7 @@ impl<L: Lang> core::fmt::Debug for TokenListReader<'_, L> {
 mod tests {
     use super::*;
     use crate::scopes::ScopeStack;
-    use crate::state::{SimpleLang, StateData};
+    use crate::state::{TrivialLang, StateData};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, StdTokenReader, TokenRules, WhitespaceRules,
     };
@@ -152,7 +152,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy)]
     struct TestLang;
-    impl SimpleLang for TestLang {}
+    impl TrivialLang for TestLang {}
 
     fn latex_rules() -> TokenRules<TestLang> {
         TokenRules {

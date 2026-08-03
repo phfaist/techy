@@ -34,12 +34,12 @@
 //! [`DeriveError`].
 //!
 //! [`Lang::NodeExts`] selects the node extension type bundle ([`NodeExtTypes`]);
-//! [`SimpleLang`] is the all-defaults shortcut for languages with no customization.
+//! [`TrivialLang`] is the all-defaults trivial language for tests and machinery experiments.
 
 mod delta;
 mod lang;
 mod parsing_state;
 
 pub use delta::{ParsingStateDelta, TokenRulesOverrides};
-pub use lang::{ClosedVocabulary, Lang, NodeExtTypes, SimpleLang};
+pub use lang::{ClosedVocabulary, Lang, NodeExtTypes, TrivialLang};
 pub use parsing_state::{DeriveError, ParsingState, StateData};
