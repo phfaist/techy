@@ -14,8 +14,8 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] F. Slices single-source whole-run contract (fast-path flag wired) — done (successor agent 2)
 - [x] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, S6 TODO for the Attached byte-tiling scoping — SUPERVISOR-RESOLVED: the exclusion itself is parse-law-side and lands at S6; `validate_tree` does no byte accounting) — done (successor agent 3)
 - [x] H. Consumer polish (`display_tree`, `NodeKind::as_str`) — done (successor agent 3)
-- [ ] I. Docs (rustdoc sweeps, DR status lines, superseded-names verification, guide pages/CLAUDE.md)
-- [ ] Gates (build 0 warnings / test / docs clean / grep gates / README rlib)
+- [x] I. Docs (rustdoc sweeps, DR status lines, superseded-names verification, guide pages/CLAUDE.md, ARCHITECTURE.md passages) — done (successor agent 3)
+- [x] Gates (build 0 warnings / test / docs clean / grep gates / README rlib) — ALL GREEN (see Consolidated stage summary)
 
 ## Implementation plan (digest of all ruling inputs — written before implementation)
 
@@ -716,7 +716,50 @@ cargo docs` clean; grep gates: zero `ancestors()` (src + docs/ + README), zero
   3 new tests: guides/line-col exact-line smoke (line count = subtree size),
   source-name-on-change (incl. the return-to-main line), `as_str` on all five
   variants.
-- Item 11 (docs): not started (handoff).
+- **Item 11 (docs + closure)** — landed in milestone I (successor agent 3):
+  - **Rustdoc sweep**: all ruled sentences verified in place (WHO/WHEN minting on
+    `make_node_ext`, storage-order loud sentence, exclusive `end_pos`, whole-run
+    single-source slice condition, wrap-around note, cross-tree restage sanction,
+    `body()` ext-axis sentence, Hidden-is-not-read-invisibility, the Lang
+    required-method exception). One stale passage FIXED: extract.rs module doc
+    still claimed partials "carry default (not copied) ext data" — stale since
+    milestone B (extract mints via `make_node_ext` at all its sites); now says
+    partials are fresh nodes minted by `make_node_ext`.
+  - **DR status lines** (surgical, honest scoping): tree-tags, node-annotations
+    (tree/accessor half; extract flow S7), ext-minting (D-C1 noted as
+    pending-confirmation deviation), slot-roles (Attached parse-law scoping S6,
+    LLL S4), named-first-constructors, registration-ergonomics (conversion idiom
+    S2/S3; one-liners + F5 measures S9), tree-navigation, span-extend-to
+    (`contains` landed; `overlaps` stays unadded), tree-validation (Attached
+    scoping S6), display-tree, restage-ops (level-0 half; visitor surface S7) —
+    all now carry "applied — Phase 3 S3" with their scope notes.
+  - **Superseded-names register**: verified present — `finalize_node` (+ interim
+    names), tier-2 `<Kind>NodeExt` family + `NodeDataExt`, `ProcessedNodeData`,
+    `tree_identifier`, `add_subtree`/"copy" as transform vocabulary, `ancestors()`,
+    `ArgumentSpec::named`, `ParsedSlot::named`, `stage_argument_like`,
+    `check_transform_tree_invariants`/`validate_parse_tree`,
+    `NodeKind::label`/`kind_as_string`. ONE genuinely-missing at-application entry
+    added: `add_with_ext` (appended to the ext-minting bullet). `Derived` (vs
+    `Attached`) is recorded in [§dd-dr:slot-roles]'s amendment (ruling-time
+    considered-and-closed) — no register duplicate added. **Handoff note 6
+    outcome (`copy_subtree_into`)**: verified the register bans "copy" as *public
+    transform vocabulary* — the crate-internal `copy.rs`/`copy_subtree_into`/
+    `copy_node` names are not public API and stay; no register change.
+  - **ARCHITECTURE.md** passages S3 invalidated, updated (labels untouched):
+    [§dd-arch:nodes] head paragraph (two-tier ext + `check_tree_invariants` →
+    uniform minted ext, `NodeTree<L, A = ()>` over the Arc core, `validate_tree`),
+    the debug-only-provenance-tags sentence (→ always-on `TreeTag` + the
+    `display_tree` mention), the P4 "ruled, not yet applied" bullet split into
+    applied-in-S3 vs still-pending halves; [§dd-arch:engine] hooks list
+    (`finalize_node` → required `make_node_ext`) and its applied/pending tail
+    (ext minting S3, driver-resolver S2; `InvocationSyntax` still pending).
+  - **Guides/CLAUDE.md/README**: grepped for every S3-changed idiom
+    (`finalize_node`, `.named(`, `ParsedSlot::named`, `check_tree_invariants`,
+    `ancestors`, `add_subtree`, `add_with_ext`, tier-2 names, `session.builder`,
+    old constructor arities) — zero stale hits; docs/learn-by-example.md already
+    uses the new spellings (predecessors' churn); no edits needed. The
+    pre-existing "honest cost" idiom outside slice.rs left untouched
+    (supervisor-resolved: the T5 ban is scoped to the slice contracts).
 
 ## Signature table (old → new) — A+B portion
 
@@ -883,8 +926,137 @@ C1+C2 (on top of the A+B stats above):
   (constructors are the canonical path). **Flagged for supervisor/user
   confirmation**, S2-D1/D2/D3 precedent (forced deviation, implemented + flagged).
 
-(final classification at close; live list above)
+(final classification: see the Consolidated stage summary below — D-C1 is the one
+deviation requiring user sign-off; everything else is delegated-room detail.)
 
 ## Riders noticed for later stages
 
-(to be filled)
+- **S6**: the `// TODO(S6):` in node/invariants.rs (parse-law arm,
+  `check_parse_law_node`) — scope the byte accounting per source via the
+  `Attached` slot role once the `\input` wiring lands; until then multi-source
+  trees must not be fed to the in-crate parse-law oracle (they pass
+  `validate_tree`).
+- **S6**: tests/acceptance.rs now exercises only the all-trees law
+  (`validate_tree`) — when S6 touches acceptance, consider whether any
+  integration-level parse-law probe is wanted (in-src suites keep the full
+  oracle; forced by the pub(crate) demotion).
+- **S7**: [§dd-dr:node-annotations]' extract-side flow and [§dd-dr:restage-ops]'
+  visitor/ops/bundles surface — status lines updated to say exactly that.
+- **S5**: kind.rs invariant-3 rewording + the parse-law checker's callable arm
+  reading the invocation-syntax payload (already in the S5 work order; the
+  callable arm is now isolated in `check_parse_law_node`, easy to retarget).
+- **Observation (v1-accepted)**: `display_tree` embeds `summary()` verbatim — a
+  `Chars` node whose text contains a newline renders across two physical lines
+  (the format is documented as not a stability contract; a later variant may
+  escape control characters).
+
+## Consolidated stage summary (A–I) — for review + user sign-off
+
+Branch `phase3-s3-node-core`, 14 commits over `api-review` @ c45f126 (plan,
+9 milestone commits, 3 handoff-note commits, this closure commit).
+
+### Signature table (old → new), all milestones
+
+| # | Old | New | Milestone |
+|---|---|---|---|
+| 1 | `NodeTree<L>` (monolithic struct) | `NodeTree<L, A = ()>` = `{ core: Arc<TreeCore<L>>, annotations: Vec<A> }` | A |
+| 2 | — | `NodeTree::annotations() -> &[A]`; `annotate<B>(f) -> NodeTree<L, B>` (zero-copy, storage order); `NodeRef::annotation() -> &'t A` | A |
+| 3 | `NodeId(u32 [, u32 debug-only])`, index-only identity | `NodeId { index: u32, tree_tag: TreeTag }`, tag in `Eq`/`Ord`/`Hash`; `tree_tag()` pub | A |
+| 4 | — | `pub struct TreeTag(u32)` (no public constructor; always-on wrapping mint) | A |
+| 5 | `NodeTree::get`/`node` tag check debug-only | foreign-id rejection in **every build** | A |
+| 6 | `NodeExtTypes`: 8 assoc types, all `Default` | `{ NodeExt, ArgumentExt, SlotExt }`, none `Default` | B+C1 |
+| 7 | `Lang::finalize_node(…)` (defaulted, idempotent) | DELETED → **required** `Lang::make_node_ext(kind, span, state, StagedChildren<'_>) -> NodeExt` | B |
+| 8 | `NodeKind` variants/payloads with `ext` fields | ext fields deleted; `List` a unit variant; kind purely structural | B |
+| 9 | `NodeTreeBuilder::add(kind, span, state, children)` + `add_with_ext(…, ext)` | ONE staging method `add(kind, span, parsing_state, children, ext, annotation)` | B |
+| 10 | — | `NodeTreeBuilder::staged_children(&[BuildId]) -> StagedChildren<'_, L>` (+ `StagedChildView`, descent-only) | B |
+| 11 | `ParserSession.builder` (pub field) | `pub(crate)`; parsers use `cx.stage_node(…)` (the one automatic mint site) + `cx.staged_nodes()` | B |
+| 12 | — | `pub enum SlotRole { Content (default), Attached, Hidden }` (exhaustive) on `ParsedSlot` | C1 |
+| 13 | — | `pub trait BodySlotExt { is_body, make_body }`; unit impl for `()`; `NodeRef::body()` = first `is_body()` slot `where SlotExt<L>: BodySlotExt` | C1 |
+| 14 | `ParsedSlot::new(region)` / `::named(name, region)` | `new(region, name, role, ext)` / `new_unnamed(region, role, ext)` | C1 |
+| 15 | `ParsedArgument.ext: ArgumentExt<L>` (Default-filled); `provided(spec, region)` | `ext: Option<ArgumentExt<L>>` (`Some` ⟺ provided — D-C1); `provided(spec, region, ext)`; `absent(spec)` unchanged | C1 |
+| 16 | `ParsedArgumentNodes { nodes, content }` (L-free) | `ParsedArgumentNodes<L> { nodes, content, ext }` + `new(nodes, content, ext)`; std parsers `where ArgumentExt<L>: Default` | C1 |
+| 17 | `Latexlike::NodeExts = ()` | `= LatexlikeNodeExts` (SlotExt = `BodyMarker`, body minted via `BodySlotExt::make_body()`) | C1 |
+| 18 | `ArgumentSpec::new(Arc<dyn ArgumentParser>)` + `.named(name)` builder | `new(parser, name)` / `new_unnamed(parser)` over sealed `IntoArgumentParser<L, M>`; `.named()` gone | C2 |
+| 19 | `StdCallableSpec::new(Vec<Arc<ArgumentSpec<L>>>)` | `new(impl IntoIterator<Item = ArgumentSpec<L>>)` (Arc'd inside; shared-Arc sites use the pub field) | C2 |
+| 20 | `ParsedArguments`/`ParsedSlots`: `From<Vec>` only | + `new(Vec)` constructors | C2 |
+| 21 | — | `NodeTreeBuilder::restage_node<AOld>(node, replacements, content_parents, annotation) -> Result<BuildId, NodeBuildError>` (cross-tree sanctioned; ext cloned verbatim) | D |
+| 22 | — | `NodeBuildError::{ReplacementsLengthMismatch, ContentParentUnmapped}` | D |
+| 23 | `copy_subtree_into` (bespoke recursion) | same signature, degenerate recursion over `restage_node` (crate-internal) | D |
+| 24 | `NodeRef::tree()` pub(crate) | pub | E |
+| 25 | — | `NodeRef::parent()` / `index_in_parent()` (O(1); successors recipe in docs; NO ancestry iterator) | E |
+| 26 | — | `pub struct SourcePos<O = Option<String>>` (`techy::source`); `SourceSpan::start_pos()`/`end_pos()`; `Span::contains(pos)` | E |
+| 27 | — | `NodeTree::node_at(&SourcePos)` / `covering_slice(&SourceSpan)` (per-source descent; minimal covering run) | E |
+| 28 | `NodeSlice::span()`/`source_text()` endpoint-only checks | whole-run single-source verification (O(1) `finish()` flag fast path) + ordering guard | F |
+| 29 | `pub fn check_tree_invariants<L>(&NodeTree<L>)` (public; panics) | public checker is `pub fn validate_tree<L, A>(&NodeTree<L, A>) -> Result<(), TreeViolation>` (all-trees law, never panics); `check_tree_invariants` → `pub(crate)` `#[cfg(test)]` wrapper (all-trees panic + parse-law byte extras) | G |
+| 30 | — | `TreeViolation { node: Option<NodeId>, kind: TreeViolationKind }` + 15-variant kind enum (both non_exhaustive; Clone/Debug/PartialEq/Eq/Display/Error) | G |
+| 31 | — | free `pub fn display_tree<L, A>(NodeRef<'_, L, A>) -> String` (`core::node`) | H |
+| 32 | — | `NodeKind::as_str() -> &'static str` (`"Chars"`…`"List"`) | H |
+
+### Consolidated deviations / delegated decisions (user sign-off list)
+
+**Deviation (needs explicit confirmation):**
+
+- **D-C1 — absent arguments carry no ext.** `ParsedArgument.ext:
+  Option<ArgumentExt<L>>`; `absent(spec)` keeps its arity; NO `ArgumentExt:
+  Default` bound on `parse_declared_arguments`/`StdInvocationParser` (only the 8
+  std argument parsers carry it). The ruled spelling `absent(spec, ext)` +
+  broader bound is uncompilable (two independent compiler chains, documented in
+  the Deviations section above); T5-A2's `RestagedArgument::absent(spec)` mirror
+  supports the shape. The DR ext-minting status line records it as
+  pending-confirmation.
+
+**Delegated-room decisions (flagged, no ruling contradicted):**
+
+1. Record arities: `ParsedSlot::new(region, name, role, ext)` /
+   `new_unnamed(region, role, ext)`; `ParsedArgumentNodes::new(nodes, content,
+   ext)`; `ParsedArgument::provided(spec, region, ext)` (payload-first, ext last).
+2. `impl BodySlotExt for ()` with `is_body() = true` (the only coherent unit
+   impl; no-ext langs keep the old slot-0 `body()` behavior).
+3. `NodeId::tree_tag()` public; `NodeId` Debug `NodeId(1@17)`; derived index-major
+   order documented as total-but-unspecified.
+4. `StagedChildren` unstaged-id behavior: `get` → `None`, `iter` skips (the
+   subsequent `add` diagnoses).
+5. `NodeBuildError` variant names `ReplacementsLengthMismatch` /
+   `ContentParentUnmapped { parent: NodeId }`.
+6. Preset names `BodyMarker` / `LatexlikeNodeExts`.
+7. `TreeViolationKind` (name + 15-variant slate, `NodeBuildError` vocabulary
+   reused; PartialEq/Eq derived per that precedent).
+8. `check_tree_invariants` is `#[cfg(test)]` on top of the ruled `pub(crate)`
+   (all callers are test code; keeps the 0-warnings gate).
+9. `display_tree` format details: `summary() @ l:c..l:c`, ` [source: name]` on
+   change (label → provenance reference/description → `<primary>`), ` @ bytes
+   N..N` fallback for unindexed sources, per-Arc `LineIndex` cache.
+10. Forced consequence: tests/acceptance.rs (integration crate) uses
+    `validate_tree(...).unwrap()` — 11 sites (parse-law coverage there narrows;
+    in-src suites keep the full oracle).
+11. `A`-bounds realized bound-where-used (crate doctrine; ruled bound sentence on
+    the `NodeTree` docs).
+12. `add_with_ext` added to the superseded-names register (at-application
+    replaced name); `Derived` deliberately NOT added (already recorded in
+    [§dd-dr:slot-roles]).
+
+### Churn stats (whole stage, api-review → HEAD)
+
+- 44 files changed, ~5000 insertions, ~1250 deletions (src-only: 41 files,
+  +4114/−1234); 14 commits.
+- Call-site churn: 27 parser staging sites → `cx.stage_node`; 45
+  `ArgumentSpec::new` sites (35 → `new_unnamed`, 10 `.named` chains → named
+  `new`); 21 `StdCallableSpec::new` sites; 7 `ParsedSlot::named` → `new`; ~20
+  `ParsedArgument::provided` + 9 `ParsedArgumentNodes` literals; 11
+  acceptance-test checker sites → `validate_tree`.
+- Tests: 542 lib at stage start → **576** at close (+30 acceptance +8 +1 derive;
+  doctests 27 passed / 2 ignored — the ignored baseline).
+
+### Gate results (final, at the I/closure commit)
+
+- `cargo build`: clean, **0 warnings**.
+- `cargo test`: **576 lib + 30 acceptance + 8 + 1 derive green**; doctests 27
+  passed / 2 ignored (baseline).
+- `rm -rf target/doc && cargo docs`: clean, 0 warnings.
+- README quick-start: compiles as an rlib against the built `libtechy.rlib`
+  (verified with `rustc --crate-type rlib --extern techy=…`).
+- Grep gates, all **zero** over `techy/src` + `techy/tests` + `docs/` + README:
+  `finalize_node`, `CharsNodeExt|GroupNodeExt|CallableNodeExt|CommentNodeExt|
+  ListNodeExt`, `.named(` (builder form), `ParsedSlot::named`, `ancestors()`,
+  `add_subtree`, `stage_argument_like`, `add_with_ext`; "honest" absent from
+  slice.rs (the F1-scoped ban).

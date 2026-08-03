@@ -22,10 +22,11 @@
 //! partials become fresh `Chars` nodes whose content is span-backed into the *same*
 //! source (exact sub-spans, zero-copy text). Segments are then ordinary [`NodeSlice`]
 //! views into the result — one node-list currency everywhere, and every helper composes
-//! with every other. Two documented approximations at the edges: a partial of an
+//! with every other. Two documented edge behaviors: a partial of an
 //! **owned-content** chars node (materialized trees) keeps the whole original node's
 //! span as its provenance (there is no byte mapping to subdivide), and partial nodes
-//! carry default (not copied) ext data. Result trees are derived views: their sibling
+//! are *fresh* nodes — their ext is minted by `Lang::make_node_ext`, not copied from
+//! the node they were cut from. Result trees are derived views: their sibling
 //! spans do *not* tile their parents' interiors (separators are omitted) — they satisfy
 //! the all-trees law ([`validate_tree`](crate::core::node::validate_tree)) but not the
 //! parse-tree byte accounting.

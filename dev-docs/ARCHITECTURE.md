@@ -361,13 +361,19 @@ marked; `ParsedSlot` mirrored).
 
 ## Node trees [§dd-arch:nodes]
 
-Flat, frozen, index-based storage with a **unified callable kind** and a **two-tier ext
-system**. A `NodeTree<L>` is one `Vec<NodeData<L>>`; every node carries its kind, the
-uniform tier-1 `L::NodeExt`, its `SourceSpan`, its parse-time `Arc<ParsingState<L>>`,
-and a contiguous `children: Range<u32>`. `NodeKind<L>` is closed:
-`Chars`/`Group`/`Callable`/`Comment`/`List`, each kind with its tier-2 per-kind ext.
-Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
-`check_tree_invariants` is the mechanical test-utility checker.
+Flat, frozen, index-based storage with a **unified callable kind** and a **uniform,
+parse-once-minted ext**. A `NodeTree<L, A = ()>` is an `Arc`-shared frozen core (one
+`Vec<NodeData<L>>`, the stored parent table, the layout's `TreeTag`) plus a
+consumer-owned per-node annotation vector `Vec<A>`; every node carries its kind, the
+uniform `NodeExt<L>` (minted exactly once at staging by `Lang::make_node_ext`), its
+`SourceSpan`, its parse-time `Arc<ParsingState<L>>`, and a contiguous `children:
+Range<u32>`. `NodeKind<L>` is closed **and purely structural**:
+`Chars`/`Group`/`Callable`/`Comment`/`List` — kind-shaped custom data is an enum
+inside the ext. Access goes through `NodeRef` proxies (`Copy`, borrow-checked
+against the tree; upward via the stored `parent()`, position-keyed via
+`NodeTree::node_at`/`covering_slice`); `validate_tree` is the public all-trees-law
+checker (a `Result`, never panics); the parse-law byte-accounting oracle is an
+in-crate test utility ([§dd-dr:tree-validation]).
 
 - **No `Macro`/`Environment`/`Specials`/`Math`/`Custom` variants.** "Is this an
   environment" is two-level dispatch on `CallableData.callable_type`; `$…$` parses as
@@ -410,34 +416,40 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   currency (exact spans by the partition invariant); `techy::extract` helpers
   (`split_at_chars`, `parse_keyval`, `content_as_chars`) mint real trees through the
   builder route; slot access is content-first ([§dd-dr:slot-read-api]);
-  `NodeRef::summary()` renders compact one-line node descriptions. Cross-tree id
-  misuse is caught by debug-only provenance tags ([§dd-dr:node-id-provenance]).
+  `NodeRef::summary()` renders compact one-line node descriptions and the free
+  `display_tree()` a guided subtree listing ([§dd-dr:display-tree]). Cross-tree id
+  misuse is caught in **every build** by the always-on `TreeTag` in `NodeId`
+  identity ([§dd-dr:tree-tags], superseding the debug-only scheme of
+  [§dd-dr:node-id-provenance]).
 - Indices are `u32` behind a private newtype; the one safeguard that matters is the
   checked conversion at the single mint site.
-- **Ruled, not yet applied (API-review P4** — full topic [§dd-dr:transform]; working
-  detail in `dev-docs/api-review/P4_RULING.md` while the review runs**)**: trees gain
-  consumer-owned per-node **annotations** (`NodeTree<L, A = ()>`, a parallel `Vec<A>`
-  over an `Arc`-shared node core; zero-copy `annotate()`;
-  [§dd-dr:node-annotations]); tree tags become always-on `NodeId` identity
-  (`TreeTag`, [§dd-dr:tree-tags]); the two-tier ext system is replaced by
-  **parse-once ext minting** — per-kind node exts removed, required
+- **The API-review P4 redesign** (full topic [§dd-dr:transform]; working detail in
+  `dev-docs/api-review/P4_RULING.md` while the review runs) — **its node-core half
+  applied in Phase 3 S3**: trees carry consumer-owned per-node **annotations**
+  (`NodeTree<L, A = ()>`, a parallel `Vec<A>` over an `Arc`-shared node core;
+  zero-copy `annotate()`; [§dd-dr:node-annotations]); tree tags are always-on
+  `NodeId` identity (`TreeTag`, [§dd-dr:tree-tags]); the two-tier ext system is
+  replaced by **parse-once ext minting** — per-kind node exts removed, required
   `Lang::make_node_ext`, a hook-free builder demanding ready ext + annotation, parse
-  staging only via `ParseContext::stage_node` ([§dd-dr:ext-minting]); slots gain
+  staging only via `ParseContext::stage_node` ([§dd-dr:ext-minting]); slots carry
   `SlotRole { Content, Attached, Hidden }` and trait-based body marking
-  (`BodySlotExt`, [§dd-dr:slot-roles]); parent links are stored and
-  `SourcePos`-keyed reverse lookup lands with the read-side honesty fixes
-  ([§dd-dr:tree-navigation]). Transformation (`techy::transform`, the streaming
-  restage driver — [§dd-dr:restage]) and recomposition (`techy::recompose`,
-  [§dd-dr:recompose]) join as top-level modules; `\input` content attaches as an
-  `Attached` slot of a same-builder sub-parse, making multi-source parse trees
-  first-class ([§dd-dr:input-attachment]). The 2b T5 session fixed the exact
-  restage op surface — visitor trait, generic errors, constructible bundles,
-  no-silent-repair edit policy ([§dd-dr:restage-ops]) — ruled that the extract
-  producers mint output annotations through a general callback with suffixed
-  shorthands ([§dd-dr:extract-annotations]), and landed the runtime all-trees-law
-  checker as `core::node::validate_tree` ([§dd-dr:tree-validation]); recomposition
-  is bound to the per-node doctrine (spans are provenance — no inter-node span
-  arithmetic; [§dd-dr:recompose] amendment). The dedicated recompose session then
+  (`BodySlotExt`, [§dd-dr:slot-roles]); parent links are stored, `SourcePos`-keyed
+  reverse lookup (`node_at`/`covering_slice`) landed with the whole-run
+  single-source slice contracts ([§dd-dr:tree-navigation]); the runtime
+  all-trees-law checker is `core::node::validate_tree` ([§dd-dr:tree-validation]);
+  and the level-0 cross-tree `restage_node` primitive is in
+  ([§dd-dr:restage-ops] — its visitor/ops/bundles surface still pending).
+  **Still ruled, not yet applied**: transformation (`techy::transform`, the
+  streaming restage driver — [§dd-dr:restage]; visitor trait, generic errors,
+  constructible bundles, no-silent-repair edit policy [§dd-dr:restage-ops]) and
+  recomposition (`techy::recompose`, [§dd-dr:recompose]) join as top-level
+  modules; `\input` content attaches as an `Attached` slot of a same-builder
+  sub-parse, making multi-source parse trees first-class
+  ([§dd-dr:input-attachment]); the extract producers mint output annotations
+  through a general callback with suffixed shorthands
+  ([§dd-dr:extract-annotations]); recomposition is bound to the per-node doctrine
+  (spans are provenance — no inter-node span arithmetic; [§dd-dr:recompose]
+  amendment). The dedicated recompose session then
   fixed the machinery: trigger spelling becomes recorded payload —
   `Lang::InvocationSyntax` on `CallableData`, replacing the core `post_space`
   field ([§dd-dr:invocation-syntax]); recomposition is a meaning-free `Piece`
@@ -530,8 +542,10 @@ Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:p
 `Lang` is the compile-time bundle: the associated types (`StateExt`, `SessionExt`,
 `Event`, `ModeId`, `NodeExts`, `SourceOrigin`, `Driver`) plus the hooks of layers
 callable outside a driven parse — `initial_state_data`/`finalize_transition` (state
-layer), `scan_specials`/`specials_trigger_chars` (tokenizer layer), `finalize_node`
-(builder layer, run for every staged node; idempotent because transforms re-stage).
+layer), `scan_specials`/`specials_trigger_chars` (tokenizer layer), `make_node_ext`
+(builder layer — the one *required* method: it mints each node's ext exactly once at
+staging; restaged copies carry their exts verbatim, never re-minted;
+[§dd-dr:ext-minting]).
 `Lang` and `NodeExtTypes` are *defined* next to the state types (their signatures name
 `StateData`/`ParsingState`); only `Language<L>` is genuinely an orchestration type.
 
@@ -581,13 +595,14 @@ generic/dyn resolver asymmetry and constructor doctrine; supersedes the
 [§dd-dr:scopes-resolving-driver] component struct), [§dd-dr:takeover-staging-sugar]
 (`disable_all`, collection constructors, the committed `stage_invocation`
 helper), [§dd-dr:input-wiring] (driver resolver accessor, the
-`parse_attached_source` door, `attach_source_reference`). Ruled, not yet applied
-(API-review P4): `finalize_node`
-is replaced by parse-once minting — parse staging via `ParseContext::stage_node`,
-`ParserSession::builder` crate-private ([§dd-dr:ext-minting]); the source resolver
-moves from `Language` to the driver ([§dd-dr:input-attachment]); `Lang` gains the
-`InvocationSyntax` associated type — invocation spelling as recorded `CallableData`
-payload, replacing the core `post_space` field ([§dd-dr:invocation-syntax]).
+`parse_attached_source` door, `attach_source_reference`). Applied in Phase 3:
+`finalize_node` is replaced by parse-once minting — parse staging via
+`ParseContext::stage_node`, `ParserSession::builder` crate-private
+([§dd-dr:ext-minting], S3); the source resolver lives on the driver, not
+`Language` ([§dd-dr:input-attachment], S2). Ruled, not yet applied: `Lang` gains
+the `InvocationSyntax` associated type — invocation spelling as recorded
+`CallableData` payload, replacing the core `post_space` field
+([§dd-dr:invocation-syntax]).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 

@@ -325,7 +325,9 @@ then, with a content abstraction shaped by its real requirements.
 
 #### `Span` has private fields; in-place growth is the monotone `extend_to` [§dd-dr:span-extend-to]
 
-Status: DECIDED (user).
+Status: DECIDED (user; the T4 amendment's `contains` applied — Phase 3 S3, docs +
+tests in the same commit; `overlaps` stays unadded — `covering_slice`'s
+implementation did not need it).
 
 `Span`'s `start`/`end` went private with the
 `start()`/`end()` accessors, closing the gap where the `start <= end` invariant was only
@@ -1528,7 +1530,9 @@ semantics).)*
 
 #### Registering callables: conversion idiom, one-liners, no insert-time validation [§dd-dr:registration-ergonomics]
 
-Status: DECIDED (user, API-review T1/T2 session).
+Status: DECIDED (user, API-review T1/T2 session; conversion idiom applied — the
+spec/provider side Phase 3 S2, the `IntoArgumentParser` sibling Phase 3 S3; the
+one-liners and the miss-path/init-warning/insert-callout measures ride S9).
 
 Three rulings on the registration surface:
 
@@ -1646,7 +1650,7 @@ consumer-polish stage.)*
 
 #### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
 
-Status: DECIDED (user, API-review T3 session).
+Status: DECIDED (user, API-review T3 session; applied — Phase 3 S3).
 
 Naming an argument becomes the primary spelling: `ArgumentSpec::new(parser, name)`
 takes the name directly, and the anonymous case is the marked, longer spelling
@@ -2231,7 +2235,7 @@ design).
 
 #### `display_tree()`: a free debug renderer; `NodeKind::as_str()` [§dd-dr:display-tree]
 
-Status: DECIDED (user, API-review T1/T2 session).
+Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S3).
 
 A free public function `display_tree(node) -> String` renders a subtree one line per
 node: box-drawing guides + `summary()` + **line/col** positions (internal per-source
@@ -2252,7 +2256,8 @@ Rejected names: `label()` (reads as user-provided/dynamic data), `kind_as_string
 #### `validate_tree`: the all-trees law as a `Result`, in `core::node` [§dd-dr:tree-validation]
 
 Status: DECIDED (user, API-review T5 session; realizes [§dd-dr:restage]'s validator
-rider; application pending).
+rider; applied — Phase 3 S3, incl. the Tier-C wrapper demotion; the parse-law
+oracle's `Attached` byte-accounting scoping rides S6).
 
 `pub fn validate_tree<L: Lang, A>(tree: &NodeTree<L, A>) -> Result<(),
 TreeViolation>` (with `#[non_exhaustive] TreeViolation { node: Option<NodeId>,
@@ -2305,7 +2310,9 @@ the review completes — these entries are the durable record).
 
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
 
-Status: DECIDED (user, API-review P4 session; application pending).
+Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 for the tree
+core and the read/annotate accessors; the extract-side annotation flow rides S7
+with [§dd-dr:extract-annotations]).
 
 Trees gain a second, defaulted generic parameter: the **annotation** type `A` — one
 value per node, uniform across kinds, chosen by the *consumer* per processing stage.
@@ -2402,7 +2409,8 @@ Revisit if: a fifth producer materializes trees — it adopts the same triple.
 #### Always-on tree tags: `TreeTag` joins `NodeId` identity [§dd-dr:tree-tags]
 
 Status: DECIDED (user, API-review P4 session; supersedes the debug-only scheme of
-[§dd-dr:node-id-provenance] — that entry's revisit condition fired).
+[§dd-dr:node-id-provenance] — that entry's revisit condition fired; applied —
+Phase 3 S3).
 
 Every tree layout mints a `TreeTag` (newtype over `u32`, from the existing wrapping
 global counter) in **all builds**; `NodeId` becomes `{ index: u32, tree_tag:
@@ -2432,7 +2440,10 @@ that needs a registry design, not a wider tag.
 #### Ext minting: population is initialization — `make_node_ext` replaces `finalize_node` [§dd-dr:ext-minting]
 
 Status: DECIDED (user, API-review P4 session; supersedes [§dd-dr:finalize-node] and
-the two-tier ext half of [§dd-dr:closed-node-kind]; application pending).
+the two-tier ext half of [§dd-dr:closed-node-kind]; applied — Phase 3 S3, with one
+flagged deviation: absent arguments store no ext (`ParsedArgument.ext:
+Option<ArgumentExt<L>>`, `absent(spec)` — deviation D-C1 in the stage report,
+pending user confirmation)).
 
 **Principle: an ext is minted exactly once, at creation, by the party with the
 knowledge — no "default-initialized, populated later" state exists anywhere in the
@@ -2605,7 +2616,8 @@ placement follows what it checks, not its commonest client
 #### Restage op surface: visitor trait, generic errors, constructible bundles [§dd-dr:restage-ops]
 
 Status: DECIDED (user, API-review T5 session; completes [§dd-dr:restage]'s deferred
-detailing; application pending).
+detailing; applied — Phase 3 S3 for the level-0 `restage_node` primitive; the
+visitor/ops/bundles/error surface rides S7).
 
 The exact types of the restage driver:
 
@@ -2980,7 +2992,9 @@ answer is the three-channel discipline, not context growth.
 
 Status: DECIDED (user, API-review P4 session; amends
 [§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
-application pending).
+applied — Phase 3 S3 (record + roles + `BodySlotExt` + the preset's `BodyMarker`
+claim); the parse-law checker's `Attached` byte-accounting scoping rides S6, the
+`LLL` genericization S4).
 
 `ParsedSlot` gains `role: SlotRole { Content, Attached, Hidden }` (default
 `Content`). `Content` = constitutive — the node's meaning is incomplete without it
@@ -3080,8 +3094,8 @@ pipelines compose without tree merging.)*
 
 #### Parent links, `SourcePos` lookup, and read-side honesty [§dd-dr:tree-navigation]
 
-Status: DECIDED (user, API-review P4 session; application pending; method naming in
-2b).
+Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 with the 2b
+method spellings, incl. the amendments' whole-run single-source slice contract).
 
 - **Parent table stored**: the `Vec<u32>` that `finish()` already computes for
   region resolution is kept on the tree (4 bytes/node; reverses
@@ -5211,7 +5225,8 @@ re-opens a settled argument:
   parse-once minting hook is `make_node_ext`; the tier-2 per-kind ext family
   (`CharsNodeExt`…`ListNodeExt`) and the `NodeDataExt` parallel bundle — removed
   outright; `NodeTreeBuilder::for_parsing()` — the rejected hook-firing builder
-  mode ([§dd-dr:ext-minting]).
+  mode; `add_with_ext` — the `add`/`add_with_ext` pair folded into the single
+  six-parameter `add` at application ([§dd-dr:ext-minting]).
 - `ProcessedNodeData` — the annotation parameter's working name (collides with
   `NodeData` in the same scope; the vocabulary is *annotations*,
   [§dd-dr:node-annotations]); `tree_identifier` — the tag term is `tree_tag`
