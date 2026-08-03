@@ -363,9 +363,162 @@ present), as_str.
 9. Latexlike stays monomorphic this stage (LLL generalization = S4); preset body
    minting written through `BodySlotExt` so S4 is mechanical.
 
+## Handoff notes (written at the A+B stop point — read together with the plan above)
+
+State at handoff: commits `4b91a01` (plan), `052e096` (milestone A), `3028fc3`
+(milestone B). Gates at this point: `cargo build` 0 warnings; `cargo test` all
+green (542 lib + 30 acceptance + 8 + 1 derive + 26 doctests, 2 doctests ignored —
+one pre-existing, one the new ```ignore recipe example on
+`NodeTreeBuilder::staged_children`); `rm -rf target/doc && cargo docs` clean.
+Grep gates already clean for: `finalize_node`, `add_with_ext`, the tier-2
+`<Kind>NodeExt` family (src + tests + docs/ + README). NOT yet checked/relevant:
+`\.named(`, `ParsedSlot::named`, `ancestors()` (those fall in C1/C2/E).
+
+### Discoveries / decisions inside delegated room (A+B)
+
+1. **`TreeCore` fields beyond the ruled sketch**: `parent: Vec<u32>`
+   (`NO_PARENT = u32::MAX` sentinel at root; finish() pass 1 already computed it)
+   and `single_source: bool` are ALREADY stored and populated by `finish()` —
+   milestone E only adds `NodeRef::parent()`/`index_in_parent()` accessors over
+   `tree.core.parent`, and milestone F only reads `tree.core.single_source`.
+2. **`A`-bounds realized bound-where-used** (plan risk #4): `Clone for
+   NodeTree where A: Clone`, `Debug where A: Debug`; ruled bound sentence
+   documented on the `NodeTree` type docs ("Annotations: the second generic
+   parameter" section). `materialize()` is `where A: Clone` and layout-preserving.
+3. **Builder annotations parallel vec**: `Staged<L>` deliberately does NOT carry
+   `A` — that keeps `StagedNodes`/`StagedChildren` A-free (required: they appear
+   in `make_node_ext`'s and stop predicates' signatures, and `Lang` never sees
+   `A`). Don't move the annotation into `Staged` in later milestones.
+4. **`NodeId` Debug format** is now `NodeId(1@17)` (index@tag); one test asserts
+   the `NodeId(1@` prefix. `NodeId` derives Eq/Ord/Hash on field order
+   `{ index, tree_tag }` (index-major order; not ruled, documented as total).
+   `NodeId::tree_tag()` is public (plan risk #5).
+5. **`NodeTree::node()` asserts the tag in ALL builds now** (the "panicking
+   own-tree contract" made fully enforceable); `NodeRef::new` keeps only a
+   debug_assert (internal call sites are same-tree by construction).
+6. **`StagedChildren` unstaged-id behavior** (plan risk #6): `get` → `None`,
+   `iter` skips; documented on the type; test
+   `staged_children_is_descent_only_and_skips_unstaged_ids`.
+7. **`cx.stage_node` signature**: returns `Result<BuildId, NodeBuildError>` so
+   the existing `.map_err(|e| cx.implementation_error(e, span))` idiom at all 27
+   converted sites still reads the same.
+8. **The generic test harness in nodes_parser.rs** (`try_run`'s root staging,
+   around line 1290) stages its root `List` via the explicit recipe with
+   `L::make_node_ext` — it is generic over test langs with real ext types, so
+   `(), ()` literals don't type there. Same pattern anywhere a generic-L test
+   stages manually.
+9. **Interim left for C1** (deliberate): `NodeExtTypes::ArgumentExt` /
+   `SlotExt` still carry `Default`, and `ParsedArgument::provided/absent`,
+   `ParsedSlot::new/named`, `ParsedArgumentNodes` still Default-fill exts. The
+   `NodeExtTypes` rustdoc header already states the FINAL no-Default doctrine
+   (one commit of doc/impl skew — C1 resolves it by dropping the two bounds and
+   applying the ruled arities). The `ArgumentExt` assoc-type doc already
+   describes the `where ArgumentExt<L>: Default` std-parser realization C1 must
+   implement.
+10. **`ext: ()` literals in `StateData { … }` are STATE exts** — do not confuse
+    with the removed node exts when grepping (the 18 removed `ext:` lines were
+    all inside `CallableData`/`GroupData` literals; a brace-matching pass was
+    needed because plain grep windows miss the deep literals).
+
+### Exact churn sites remaining (C1..I), verified by grep at handoff
+
+- `.named(` builder calls: 10 sites — spec/mod.rs:95,170;
+  constructs/argument_parsers.rs:1451,1806; node/mod.rs:358,360,362 and the
+  named_accessors test (~1428-1432, now shifted). All become
+  `ArgumentSpec::new(parser, "name")`.
+- `ParsedSlot::named`: 7 sites — constructs/environment_parser.rs:769,911
+  (region shifted after edits); node/mod.rs (4 sites); latexlike/environments.rs
+  (the body-slot mint, search `ParsedSlot::named`).
+- `ArgumentSpec::new(`: ~45 sites crate-wide (all currently pass
+  `Arc::new(parser)` — the sealed conversion accepts `Arc<P>`, so
+  `new_unnamed(Arc::new(p))` compiles unchanged; prettifying to by-value is
+  optional churn).
+- `StdCallableSpec::new(` sites pass `Vec<Arc<ArgumentSpec>>` today; the ruled
+  `IntoIterator<Item = ArgumentSpec<L>>` (by value) breaks the sites that Arc
+  and SHARE the spec with `ParsedArgument::provided` records (node/mod.rs tests,
+  spec/mod.rs tests): those should switch to the pub `arguments` field literal
+  (`StdCallableSpec { arguments: vec![...] }`) to keep sharing.
+- `check_tree_invariants` in tests/acceptance.rs: 3 call sites (219, 226, 392)
+  must switch to public `validate_tree` when G demotes it (integration crate
+  cannot see pub(crate)).
+- `NodeRef::body()` current impl = `slot_content_nodes(0)` sugar — C1 replaces
+  it with the `is_body()` scan under `where SlotExt<L>: BodySlotExt`; its
+  callers: latexlike tests + node/mod.rs tests (`body()` in slots_and_body,
+  region_level_slot_content_has_no_content_parent).
+- docs/ guide pages: `docs/guide.md` / `learn-by-example.md` etc. were NOT
+  grepped for stale builder/`.named(` idioms beyond the finalize_node sweep
+  (which found nothing in docs/) — milestone I must grep
+  `\.named(|builder|check_tree_invariants|ancestors` over docs/ and README.
+- CLAUDE.md's `core::node` line mentions `check_tree_invariants`? (not checked —
+  verify at I; its architecture section otherwise still accurate after A+B).
+
+### In-flight knowledge for specific milestones
+
+- **C1 body-marker naming**: plan says `BodyMarker` + `LatexlikeNodeExts`
+  (delegated names, LatexlikeDriver precedent). The preset's mint in
+  environments.rs should be written through `BodySlotExt::make_body()` (trait
+  call, type-inferred) so S4's LLL genericization is textual-only.
+- **C1 `where ArgumentExt<L>: Default` targets**: GroupArgumentParser,
+  OptionalGroupArgumentParser, MarkerArgumentParser, ExpressionParser,
+  CharsGroupArgumentParser, EmbellishmentsArgumentParser,
+  TackOnFieldsArgumentParser, VerbatimArgumentParser (their `ArgumentParser`
+  impls), plus free `parse_declared_arguments` and `StdInvocationParser`'s
+  `ConstructParser` impl (both construct `ParsedArgument::provided/absent`).
+- **D restage_node**: copy.rs's `copy_node` is the intended degenerate-recursion
+  rewrite target; its region translation helper `restage_region` is the code the
+  primitive generalizes (prefix sums over replacement lengths replace the
+  uniform `- base` shift). New `NodeBuildError` variants planned:
+  `ReplacementsLengthMismatch`, `ContentParentUnmapped { parent: NodeId }`
+  (enum is non_exhaustive).
+- **E node_at/covering_slice**: the exact descent algorithm (incl. the
+  foreign-source search phase vs same-source refine phase) is spelled out in the
+  plan's Milestone E — it was derived carefully against the multi-source rulings;
+  implement as written there.
+- **G validate_tree**: plan risk #1 (where the Attached exclusion lands) is the
+  one point the reviewing session may want to double-check with the user; the
+  chosen reading: validate_tree = all-trees law with NO byte checks; the
+  parse-law extras stay inside the pub(crate) `check_tree_invariants` wrapper in
+  the same invariants.rs, and THAT is where the Attached byte-tiling exclusion +
+  `// TODO(S6)` land.
+- **Doctest count**: adding ```rust doctests (e.g. on `SourcePos`) will shift
+  the doctest totals; the ignored-count baseline is 2.
+
 ## What landed per work-order item
 
-(to be filled as milestones complete)
+- **Item 1 (tree tags)** — landed in milestone A (commit 052e096): always-on
+  `TreeTag` over a wrapping `core` atomic; `NodeId { index, tree_tag }` with tag
+  in Eq/Ord/Hash; `get()` foreign-id rejection in all builds; `node()` panicking
+  own-tree contract enforced via the tag; layout-preserving copies share the tag;
+  wrap-around/misuse-detector/never-wire documented; regions stay untagged.
+- **Item 2 (annotations)** — landed in milestone A: `NodeTree<L, A = ()>` over
+  `Arc<TreeCore<L>>` + parallel `Vec<A>`; zero-copy `annotate` (storage order,
+  loud doc, no Send bounds); `NodeRef::annotation()` / `NodeTree::annotations()`;
+  no setter; O(annotations) clone; defaulted-A ripple through all view types;
+  `ParseResult` spelling unchanged; extract stays `A = ()`.
+- **Item 3 (ext minting)** — landed in milestone B (commit 3028fc3): see the
+  commit message / handoff notes; `ArgumentExt`/`SlotExt` Default removal +
+  record arities deliberately deferred to C1 (sequencing).
+- Items 4–11: not started (handoff).
+
+## Signature table (old → new) — A+B portion
+
+| Old | New |
+|---|---|
+| `NodeTree<L>` (monolithic struct) | `NodeTree<L, A = ()>` = `{ core: Arc<TreeCore<L>>, annotations: Vec<A> }` |
+| — | `NodeTree::annotations() -> &[A]`, `NodeTree::annotate<B>(f) -> NodeTree<L, B>` |
+| — | `NodeRef::annotation() -> &'t A` |
+| `NodeId(u32 [, u32 debug-only])`, index-only Eq/Ord/Hash | `NodeId { index: u32, tree_tag: TreeTag }`, tag in Eq/Ord/Hash; `tree_tag()` pub |
+| — | `pub struct TreeTag(u32)` (no public constructor) |
+| `NodeTree::get` (debug-only tag check) | rejects foreign ids in every build |
+| `NodeExtTypes` (8 assoc types, all `Default`) | `{ NodeExt (no Default), ArgumentExt, SlotExt }` (last two lose `Default` in C1) |
+| `Lang::finalize_node(&mut kind, &mut ext, span, state, &[BuildId], &StagedNodes)` (defaulted) | DELETED → required `Lang::make_node_ext(&kind, &span, &state, StagedChildren<'_>) -> NodeExt` |
+| `NodeKind::Chars { content, ext }` / `Comment { …, ext }` / `List { ext }`; `GroupData.ext`; `CallableData.ext` | ext fields deleted; `List` is a unit variant |
+| `NodeTreeBuilder<L>::add(kind, span, state, children)` + `add_with_ext(…, ext)` | `NodeTreeBuilder<L, A>::add(kind, span, parsing_state, children, ext, annotation)` (the only staging method) |
+| — | `NodeTreeBuilder::staged_children(&self, &[BuildId]) -> StagedChildren<'_, L>` |
+| — | `StagedChildren` / `StagedChildView` (descent-only staged views) |
+| `ParserSession.builder` (pub field) | pub(crate) |
+| `cx.session.builder.add(…)` (parser idiom) | `cx.stage_node(kind, span, state, children)` (mints + stages, annotation `()`) |
+| `cx.session.builder.staged_nodes()` | `cx.staged_nodes()` |
 
 ## Signature table (old → new)
 
