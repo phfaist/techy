@@ -12,7 +12,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] D. Level-0 `restage_node` (+ copy.rs rebased on it) — done (successor agent 2)
 - [x] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub) — done (successor agent 2)
 - [x] F. Slices single-source whole-run contract (fast-path flag wired) — done (successor agent 2)
-- [ ] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, Attached byte-tiling exclusion, S6 TODO)
+- [x] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, S6 TODO for the Attached byte-tiling scoping — SUPERVISOR-RESOLVED: the exclusion itself is parse-law-side and lands at S6; `validate_tree` does no byte accounting) — done (successor agent 3)
 - [ ] H. Consumer polish (`display_tree`, `NodeKind::as_str`)
 - [ ] I. Docs (rustdoc sweeps, DR status lines, superseded-names verification, guide pages/CLAUDE.md)
 - [ ] Gates (build 0 warnings / test / docs clean / grep gates / README rlib)
@@ -668,7 +668,38 @@ cargo docs` clean; grep gates: zero `ancestors()` (src + docs/ + README), zero
   ArgumentSpec<L>>)` (shared-Arc sites moved to the pub-field literal);
   `ParsedSlot::new/new_unnamed` (C1); `ParsedArguments::new`/`ParsedSlots::new`
   (`From<Vec>` kept).
-- Items 6–11: not started (handoff).
+- **Item 9 (validation)** — landed in milestone G (successor agent 3): public
+  `validate_tree<L, A>(&NodeTree<L, A>) -> Result<(), TreeViolation>` in
+  invariants.rs, exported `core::node` — the all-trees law ONLY: structural sanity
+  (in-bounds/after-parent/single-parent/reachability/root-unparented +
+  Chars/Comment childless), region tiling in node-index space (regions resolved,
+  tile the children block role-independently, content inside content parents,
+  content parent inside its own region's subtree), `TextContent` residency
+  (char-boundary range of the node's own source — NO positional pins). Explicitly
+  NO byte accounting (multi-source/spliced trees pass — tested on the
+  `input_like_tree` shape). Never panics: recomputes the parent relation instead
+  of trusting the stored table, `.get()`-guards the content-parent index (an
+  out-of-range recorded parent reports `ContentParentOutsideSubtree`, doc'd on the
+  variant). `TreeViolation { node: Option<NodeId>, kind: TreeViolationKind }` —
+  both non_exhaustive, Clone/Debug/PartialEq/Eq + Display (full detail, "node N:
+  …" prefix) + `core::error::Error`; 15 kind variants named after the
+  `NodeBuildError` vocabulary where checks correspond (`RegionNotTiling`,
+  `ChildrenNotInRegions`, `SpannedContentInvalid`, `ContentParentOutside*`).
+  `check_tree_invariants` → `pub(crate)` **`#[cfg(test)]`** panic-assert wrapper:
+  `validate_tree(...)` Err → `panic!("tree invariant violated: {violation}")`,
+  then the parse-law byte-accounting extras (interior partition, positional pins,
+  callable contiguity, children-share-parent's-source) with today's exact
+  messages — ONE implementation of the shared checks; the `// TODO(S6):` for the
+  `Attached` byte-accounting scoping sits on the parse-law arm (supervisor-resolved
+  reading: the exclusion lands at S6 with the `\input` wiring). tests/acceptance.rs
+  switched to public `validate_tree(...).unwrap()` — **11 sites, not the 3 the
+  earlier handoff listed** (a second block at lines 819–1028 had accrued).
+  Public-doc mentions of the demoted name reworded (engine/language.rs
+  `parse_source` recovery note; extract.rs module doc — now cites `validate_tree` +
+  "parse-tree byte accounting"). 8 new tests (violations: multiple-parents,
+  unreachable, region-tiling, residency; byte-accounting-free pass; multi-source
+  pass; wrapper detail panic; valid/materialized accepted).
+- Items 10–11: not started (handoff).
 
 ## Signature table (old → new) — A+B portion
 
@@ -754,6 +785,16 @@ cargo docs` clean; grep gates: zero `ancestors()` (src + docs/ + README), zero
    `StdInvocationParser`: with D-C1 they need no bound (provided-arm ext comes from
    the parser output, absent-arm stores none), and bounding them would break
    `CallableSpec::make_invocation_parser`'s unconditional default body (see D-C1).
+7. **`TreeViolationKind` name + variant slate** (milestone G) — the ruling names only
+   `TreeViolation { node, kind, … }`; the kind enum follows the `NodeKind`/`TokenKind`
+   `-Kind` convention, variants reuse `NodeBuildError`'s vocabulary where the checks
+   correspond. Both types also derive PartialEq/Eq (the `NodeBuildError` precedent;
+   violation tests assert exact values).
+8. **`check_tree_invariants` is `#[cfg(test)]` on top of `pub(crate)`** (milestone G) —
+   after the demotion every remaining caller is `#[cfg(test)]` code (the in-src test
+   suites + `latexlike::test_support`, itself cfg(test)); without the gate the lib
+   build carries dead code (a 0-warnings gate violation). The ruled "test-utility
+   role" realized literally; the fn stays `pub(crate)` for crate-wide test use.
 
 ## Gate results
 

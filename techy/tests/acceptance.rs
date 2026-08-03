@@ -39,7 +39,7 @@ mod support {
         argument_specs, base_package, default_token_rules, CallableType, EnvironmentSpec,
         GroupType, Latexlike, LatexlikeDriver, MacroSpec, Mode, VerbatimBehavior,
     };
-    use techy::core::node::{check_tree_invariants, NodeRef};
+    use techy::core::node::{validate_tree, NodeRef};
     use techy::core::specs::{FallbackProvider, Package, ScopeOp};
     use techy::core::specs::ArgumentSpec;
     use techy::core::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
@@ -216,14 +216,14 @@ mod support {
         input: &str,
     ) -> ParseResult<Latexlike> {
         let result = language_for(Recovery::Strict).parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert!(
             result.diagnostics.is_empty(),
             "unexpected strict diagnostics: {:?}",
             result.diagnostics
         );
         let tolerant_result = language_for(Recovery::Tolerant).parse(input).unwrap();
-        check_tree_invariants(&tolerant_result.tree);
+        validate_tree(&tolerant_result.tree).unwrap();
         assert!(
             tolerant_result.diagnostics.is_empty(),
             "unexpected tolerant diagnostics: {:?}",
@@ -389,7 +389,7 @@ mod environments {
         assert!(err.to_string().contains("unknown environment"), "{err}");
 
         let result = tolerant().parse(input).unwrap();
-        techy::core::node::check_tree_invariants(&result.tree);
+        techy::core::node::validate_tree(&result.tree).unwrap();
         assert_eq!(result.diagnostics.len(), 1);
         // The body-only fallback still runs the body to its terminator.
         let env = result.tree.root().child(0).unwrap();
@@ -816,7 +816,7 @@ mod errors {
     use std::sync::Arc;
     use techy::error::Recovery;
     use techy::latexlike::{CallableType, SpecialsSpec};
-    use techy::core::node::check_tree_invariants;
+    use techy::core::node::validate_tree;
     use techy::core::specs::Package;
 
     /// pylatexenc's `get_test_latex_data_with_possible_inconsistencies()`: a
@@ -882,7 +882,7 @@ This is a final sentence. { <-- this brace is not closed.
 
         let result =
             with_macro_fallback(Recovery::Tolerant).parse(INCONSISTENT_DOCUMENT).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert!(!result.diagnostics.is_empty());
     }
 
@@ -923,7 +923,7 @@ This is a final sentence. { <-- this brace is not closed.
         // commented out); techy's is defined: the macro stages with the argument
         // recorded absent.
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(
             outline(result.tree.root().children()),
@@ -941,7 +941,7 @@ This is a final sentence. { <-- this brace is not closed.
         assert!(strict().parse(input).is_err());
 
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert!(!result.diagnostics.is_empty());
         let env = result.tree.root().child(1).unwrap();
         assert_eq!(env.environment_name(), Some("tabular"));
@@ -966,7 +966,7 @@ This is a final sentence. { <-- this brace is not closed.
         assert!(err.to_string().contains("missing mandatory argument"), "{err}");
 
         let result = language_for(Recovery::Tolerant).parse("Test _").unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(
             outline(result.tree.root().children()),
@@ -990,7 +990,7 @@ This is a final sentence. { <-- this brace is not closed.
         // the rest parses normally, and the now-orphan `\end{itemize}` recovers as
         // chars over its consumed extent.
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert_eq!(result.diagnostics.len(), 2);
         assert_eq!(
             outline(result.tree.root().children()),
@@ -1011,7 +1011,7 @@ This is a final sentence. { <-- this brace is not closed.
         assert!(strict().parse(input).is_err());
 
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert!(!result.diagnostics.is_empty());
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("itemize"));
@@ -1025,7 +1025,7 @@ This is a final sentence. { <-- this brace is not closed.
     fn bare_begin_and_end_recover_as_chars_in_tolerant_mode() {
         let input = "\\begin\n  \\item stuff\n\\end";
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        validate_tree(&result.tree).unwrap();
         assert_eq!(result.diagnostics.len(), 2);
         assert_eq!(
             outline(result.tree.root().children()),

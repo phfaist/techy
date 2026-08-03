@@ -117,7 +117,7 @@ impl<L: Lang> Language<L> {
     /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recover
     /// funnel; tolerant parses consume the delimiter, stage it as a `Chars` node
     /// (the markup-in-chars recovery artifact: the root span partition holds across the
-    /// skip, so `check_tree_invariants` stays clean on recovered parses), and
+    /// skip, so recovered parse trees keep the parse-tree byte accounting), and
     /// resume; strict parses abort. Diagnosis and resume both run under the state the content loop had
     /// reached at the close (the segment's exit state,
     /// [`NodesOutcome::state`](crate::constructs::NodesOutcome::state)): the reported

@@ -45,7 +45,7 @@ pub use builder::{
     BuildId, NodeBuildError, NodeTreeBuilder, StagedChildView, StagedChildren,
     StagedNodeView, StagedNodes,
 };
-pub use invariants::check_tree_invariants;
+pub use invariants::{validate_tree, TreeViolation, TreeViolationKind};
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::{Descendants, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
@@ -55,6 +55,11 @@ pub use tree::{NodeId, NodeTree, TreeTag};
 // it is crate-internal — zero public signatures use it; `NodeRef` is the read API.
 // Crate-internal subtree copying, shared with `crate::extract`'s builder helpers.
 pub(crate) use copy::copy_subtree_into;
+// The parse-law test oracle: pub(crate) per [§dd-dr:tree-validation]'s amendment —
+// `validate_tree` is the one public checker; the panicking byte-accounting extras
+// are an in-crate test utility (all callers are test code, hence `cfg(test)`).
+#[cfg(test)]
+pub(crate) use invariants::check_tree_invariants;
 
 use crate::state::{Lang, NodeExtTypes};
 
@@ -1943,6 +1948,16 @@ mod tests {
         let run = tree.covering_slice(&SourceSpan::new(&main, 1..10)).unwrap();
         assert_eq!(run.len(), 1);
         assert_eq!(run.first().unwrap().id(), input.id());
+    }
+
+    #[test]
+    fn validate_tree_accepts_multi_source_trees() {
+        // The all-trees law is source-blind: the `\input`-like shape — attached-source
+        // children under a same-source sibling run — passes `validate_tree`, even
+        // though the parse-law byte accounting (children share the parent's source,
+        // interior partition) does not hold for it.
+        let (tree, _main, _inc) = input_like_tree();
+        validate_tree(&tree).unwrap();
     }
 
     #[test]

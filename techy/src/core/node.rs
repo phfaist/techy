@@ -11,14 +11,16 @@
 //!   [`ParsedArguments`]/[`ParsedSlots`] records and their [`ChildRegion`]s.
 //! - **Building** — trees come out of a [`NodeTreeBuilder`] (staging
 //!   [`BuildId`]s, contract violations reported as [`NodeBuildError`]);
-//!   [`check_tree_invariants`] is the testing/debug assertion over a finished tree.
+//!   [`validate_tree`] checks any finished tree — parsed, restaged, or spliced —
+//!   against the all-trees law, reporting the first [`TreeViolation`].
 //!
 //! Extraction helpers over parsed trees live in [`extract`](crate::extract).
 
 pub use crate::node::{
-    check_tree_invariants, ArgumentExt, BodySlotExt, BuildId, CallableData, ChildRegion,
+    validate_tree, ArgumentExt, BodySlotExt, BuildId, CallableData, ChildRegion,
     ContentNodes, Descendants, GroupData, NodeBuildError, NodeExt, NodeId, NodeKind,
     NodeRef, NodeSlice, NodeSliceIter, NodeTree, NodeTreeBuilder, ParsedArgument,
     ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole, StagedChildView,
-    StagedChildren, StagedNodeView, StagedNodes, TreeTag,
+    StagedChildren, StagedNodeView, StagedNodes, TreeTag, TreeViolation,
+    TreeViolationKind,
 };

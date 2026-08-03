@@ -26,8 +26,9 @@
 //! **owned-content** chars node (materialized trees) keeps the whole original node's
 //! span as its provenance (there is no byte mapping to subdivide), and partial nodes
 //! carry default (not copied) ext data. Result trees are derived views: their sibling
-//! spans do *not* tile their parents' interiors (separators are omitted), so they are
-//! not subject to `check_tree_invariants`' byte-accounting.
+//! spans do *not* tile their parents' interiors (separators are omitted) — they satisfy
+//! the all-trees law ([`validate_tree`](crate::core::node::validate_tree)) but not the
+//! parse-tree byte accounting.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
