@@ -13,7 +13,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub) — done (successor agent 2)
 - [x] F. Slices single-source whole-run contract (fast-path flag wired) — done (successor agent 2)
 - [x] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, S6 TODO for the Attached byte-tiling scoping — SUPERVISOR-RESOLVED: the exclusion itself is parse-law-side and lands at S6; `validate_tree` does no byte accounting) — done (successor agent 3)
-- [ ] H. Consumer polish (`display_tree`, `NodeKind::as_str`)
+- [x] H. Consumer polish (`display_tree`, `NodeKind::as_str`) — done (successor agent 3)
 - [ ] I. Docs (rustdoc sweeps, DR status lines, superseded-names verification, guide pages/CLAUDE.md)
 - [ ] Gates (build 0 warnings / test / docs clean / grep gates / README rlib)
 
@@ -699,7 +699,24 @@ cargo docs` clean; grep gates: zero `ancestors()` (src + docs/ + README), zero
   "parse-tree byte accounting"). 8 new tests (violations: multiple-parents,
   unreachable, region-tiling, residency; byte-accounting-free pass; multi-source
   pass; wrapper detail panic; valid/materialized accepted).
-- Items 10–11: not started (handoff).
+- **Item 10 (consumer polish)** — landed in milestone H (successor agent 3): free
+  `pub fn display_tree<L, A>(node: NodeRef<'_, L, A>) -> String` in new
+  node/display.rs, exported `core::node` — one line per node: box-drawing guides
+  (`├── `/`└── `/`│   `), `summary()`, span position as ` @ line:col..line:col`
+  (per-source lazy `LineIndex`, cached per `Source`-Arc identity within the call;
+  sources over the index's max scan length fall back to ` @ bytes N..N`);
+  multi-source: a line whose source differs from the previous line's carries
+  ` [source: <name>]` (origin label, else provenance reference/description,
+  `<primary>` for unlabeled primary), initial source unnamed — a return to an
+  earlier source is a change and is named again; the not-a-stability-contract
+  caveat + annotations-ignored + free-fn rationale in the rustdoc; uses only
+  structural accessors (`summary`/`child`/`span` — NO `body()`, no `BodySlotExt`
+  bound, per the handoff caveat). `NodeKind::as_str() -> &'static str`
+  ("Chars"/"Group"/"Callable"/"Comment"/"List") beside the kind constructors.
+  3 new tests: guides/line-col exact-line smoke (line count = subtree size),
+  source-name-on-change (incl. the return-to-main line), `as_str` on all five
+  variants.
+- Item 11 (docs): not started (handoff).
 
 ## Signature table (old → new) — A+B portion
 

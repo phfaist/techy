@@ -98,6 +98,20 @@ impl<L: Lang> NodeKind<L> {
         NodeKind::List
     }
 
+    /// The variant's static name: `"Chars"`, `"Group"`, `"Callable"`, `"Comment"`,
+    /// or `"List"` — for kind labels in messages and renderings (the
+    /// [`display_tree`](super::display_tree) companion; payload-aware one-liners are
+    /// [`NodeRef::summary`](super::NodeRef::summary)'s job).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NodeKind::Chars { .. } => "Chars",
+            NodeKind::Group(_) => "Group",
+            NodeKind::Callable(_) => "Callable",
+            NodeKind::Comment { .. } => "Comment",
+            NodeKind::List => "List",
+        }
+    }
+
     /// A copy with every [`TextContent`] owned; `source_content` is the content of the
     /// carrying node's own source (the `Spanned` invariant).
     pub(crate) fn materialized(&self, source_content: &str) -> NodeKind<L> {

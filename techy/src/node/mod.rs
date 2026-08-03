@@ -31,6 +31,7 @@
 mod arguments;
 mod builder;
 mod copy;
+mod display;
 mod invariants;
 mod kind;
 mod node_ref;
@@ -45,6 +46,7 @@ pub use builder::{
     BuildId, NodeBuildError, NodeTreeBuilder, StagedChildView, StagedChildren,
     StagedNodeView, StagedNodes,
 };
+pub use display::display_tree;
 pub use invariants::{validate_tree, TreeViolation, TreeViolationKind};
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::{Descendants, NodeRef};
