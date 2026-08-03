@@ -30,11 +30,15 @@
 //! not subject to `check_tree_invariants`' byte-accounting.
 //!
 //! ```
-//! use techy::core::Language;
+//! use techy::core::{Language, ParsingState};
+//! use techy::error::Recovery;
 //! use techy::extract;
-//! use techy::latexlike::Latexlike;
+//! use techy::latexlike::{Latexlike, LatexlikeDriver};
 //!
-//! let language: Language<Latexlike> = Language::default();
+//! let language: Language<Latexlike> = Language::new(
+//!     LatexlikeDriver::new(Recovery::Strict),
+//!     ParsingState::lang_initial(),
+//! );
 //! let result = language.parse("alpha,beta{x,y},gamma").unwrap();
 //!
 //! let split = extract::split_at_chars(result.tree.root().children(), ",").unwrap();
@@ -843,7 +847,13 @@ mod tests {
     /// Parse `input` with the out-of-the-box latexlike preset (strict; the base package
     /// defines `\begin`/`\end` and the typography specials — no other callables).
     fn parse(input: &str) -> NodeTree<Latexlike> {
-        let language: Language<Latexlike> = Language::default();
+        use crate::error::Recovery;
+        use crate::latexlike::LatexlikeDriver;
+        use crate::state::ParsingState;
+        let language: Language<Latexlike> = Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial(),
+        );
         let result = language.parse(input).expect("test inputs parse cleanly");
         assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);
         result.tree

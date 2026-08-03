@@ -253,6 +253,7 @@ mod tests {
     use crate::extract::{content_as_chars, split_tack_on_fields};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
+    use crate::state::ParsingState;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -275,7 +276,10 @@ mod tests {
         arguments.push(Arc::new(ArgumentSpec::new(Arc::new(tack_on))));
         let mut package = Package::new("tack-on-tests");
         package.insert(CallableType::Macro, "section", Arc::new(MacroSpec::new(arguments)));
-        Language::new(LatexlikeDriver::new(recovery)).with_provider(Arc::new(package)).unwrap()
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([package]),
+        )
     }
 
     fn repeatable_label() -> TackOnFieldsArgumentParser<Latexlike> {

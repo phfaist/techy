@@ -136,6 +136,59 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     }
 }
 
+mod sealed {
+    use super::{CallableSpec, Lang};
+    use alloc::sync::Arc;
+
+    // Inference markers: they let the by-value blanket coexist with the Arc
+    // pass-through impls (trait coherence would otherwise reject the pair on a
+    // Lang-generic trait). Callers never name them — the marker parameter is
+    // inferred; each argument shape matches exactly one impl.
+    pub struct ByValue;
+    pub struct SharedConcrete;
+    pub struct SharedDyn;
+
+    pub trait SealedSpec<L: Lang, M> {}
+    impl<L: Lang, S: CallableSpec<L>> SealedSpec<L, ByValue> for S {}
+    impl<L: Lang, S: CallableSpec<L>> SealedSpec<L, SharedConcrete> for Arc<S> {}
+    impl<L: Lang> SealedSpec<L, SharedDyn> for Arc<dyn CallableSpec<L>> {}
+}
+
+/// Sealed conversion into a shared [`CallableSpec`] — the spec argument contract of
+/// [`Package::insert`](crate::scopes::Package::insert) and its siblings, following
+/// the crate's one Arc-removal conversion idiom (the provider-side sibling is
+/// [`IntoSpecsProvider`](crate::scopes::IntoSpecsProvider)): a spec passes **by
+/// value** (`insert(CallableType::Macro, "emph", MacroSpec::new(…))`, no `Arc::new`
+/// noise), while an already-shared **`Arc<S>`** or **`Arc<dyn CallableSpec<L>>`**
+/// passes through as-is — no double-wrap, so pre-shared flyweight specs (one spec
+/// backing several names) keep their sharing.
+///
+/// Sealed: the three impls are the whole vocabulary; downstream code implements
+/// [`CallableSpec`], never this trait. (The `M` parameter is a sealed inference
+/// marker distinguishing the three argument shapes — it never needs to be named.)
+pub trait IntoCallableSpec<L: Lang, M>: sealed::SealedSpec<L, M> {
+    /// Convert into the shared spec handle providers store.
+    fn into_callable_spec(self) -> Arc<dyn CallableSpec<L>>;
+}
+
+impl<L: Lang, S: CallableSpec<L>> IntoCallableSpec<L, sealed::ByValue> for S {
+    fn into_callable_spec(self) -> Arc<dyn CallableSpec<L>> {
+        Arc::new(self)
+    }
+}
+
+impl<L: Lang, S: CallableSpec<L>> IntoCallableSpec<L, sealed::SharedConcrete> for Arc<S> {
+    fn into_callable_spec(self) -> Arc<dyn CallableSpec<L>> {
+        self
+    }
+}
+
+impl<L: Lang> IntoCallableSpec<L, sealed::SharedDyn> for Arc<dyn CallableSpec<L>> {
+    fn into_callable_spec(self) -> Arc<dyn CallableSpec<L>> {
+        self
+    }
+}
+
 /// The standard declarative [`CallableSpec`]: the argument structure as plain data.
 pub struct StdCallableSpec<L: Lang> {
     /// The argument structure.

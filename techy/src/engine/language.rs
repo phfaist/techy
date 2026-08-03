@@ -1,12 +1,12 @@
 //! [`Language<L>`]: the long-lived runtime bundle and the `parse()` convenience entry.
 //!
 //! A `Language` is everything a parse needs that outlives any one parse: the frozen
-//! seed [`ParsingState`], the [`ParseDriver`](crate::engine::ParseDriver) instance, and
-//! the [`SourceResolver`] for `\input`-like external references. It contributes at
-//! exactly one moment — seeding — and owns **no per-parse state**: define a language
-//! once, parse many documents in it. Per-parse accumulation lives on the transient
-//! [`ParserSession`]; results are frozen [`ParseResult`]s owning their tree and
-//! diagnostics (no borrow of the `Language` — nodes are self-contained).
+//! initial [`ParsingState`] and the [`ParseDriver`](crate::engine::ParseDriver)
+//! instance. It contributes at exactly one moment — seeding — and owns **no per-parse
+//! state**: define a language once, parse many documents in it. Per-parse
+//! accumulation lives on the transient [`ParserSession`]; results are frozen
+//! [`ParseResult`]s owning their tree and diagnostics (no borrow of the `Language` —
+//! nodes are self-contained).
 
 use core::fmt;
 
@@ -19,34 +19,35 @@ use crate::constructs::{
 };
 use crate::error::ParseError;
 use crate::node::NodeKind;
-use crate::scopes::SpecsProvider;
-use crate::source::{
-    resolve_source_reference, NoResolver, ResolveError, Source, SourceResolver, SourceSpan,
-    Span,
-};
-use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta};
+use crate::source::{Source, SourceSpan, Span};
+use crate::state::{Lang, ParsingState};
 use crate::token::StdTokenReader;
 
 use super::{ParseResult, ParserSession};
 
-/// The runtime bundle of a language: seed state, driver, resolver — long-lived,
-/// shareable (`Send + Sync` through its parts), owning no per-parse state.
+/// The runtime bundle of a language: initial state and driver — long-lived, shareable
+/// (`Send + Sync` through its parts), owning no per-parse state.
 ///
-/// Construction starts from the `Lang`'s canonical seed
-/// ([`Lang::initial_state_data`], frozen through [`ParsingState::initial`]) and
-/// customizes by *deriving*, never by assembling states from scratch:
-/// [`with_seed_delta`](Language::with_seed_delta) routes through
-/// [`derived()`](ParsingState::derived), so [`Lang::finalize_transition`] holds its
-/// invariants over every customized seed. The `Lang` hook remains the seed source for
-/// parses driven without a `Language` (the advanced path).
+/// [`new`](Language::new) asks for the real inputs — the driver (with its explicit
+/// recovery policy) and the initial state — kept cheap by the two seed constructors:
+/// [`ParsingState::lang_initial()`] is the `Lang`'s canonical seed, and
+/// [`ParsingState::lang_initial_with_packages`] is the everyday "seed plus these
+/// packages" form (infallible — see its docs). Any further customization derives
+/// *before* construction, through the transition choke point:
+/// `Language::new(driver, ParsingState::lang_initial().derived(&delta)?)` — so
+/// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition) holds its
+/// invariants over every customized seed.
 ///
 /// ```
-/// # use techy::core::{Language, StdParseDriver, TrivialLang};
+/// # use techy::core::{Language, ParsingState, StdParseDriver, TrivialLang};
 /// # use techy::error::Recovery;
 /// # #[derive(Debug, Clone, Copy)]
 /// # struct MyLang;
 /// # impl TrivialLang for MyLang {}
-/// let language: Language<MyLang> = Language::new(StdParseDriver::new(Recovery::Tolerant));
+/// let language: Language<MyLang> = Language::new(
+///     StdParseDriver::new(Recovery::Tolerant, ()),
+///     ParsingState::lang_initial(),
+/// );
 /// let result = language.parse("hello").unwrap();
 /// assert_eq!(result.tree.root().chars(), None); // the root is a List
 /// ```
@@ -69,106 +70,37 @@ use super::{ParseResult, ParserSession};
 pub struct Language<L: Lang> {
     /// The language's parse-behavior instance ([`Lang::Driver`]).
     driver: L::Driver,
-    /// The frozen seed state every parse starts from — shared by `Arc` across parses
-    /// (states are immutable).
+    /// The frozen initial state every parse starts from — shared by `Arc` across
+    /// parses (states are immutable).
     initial_state: Arc<ParsingState<L>>,
-    /// Resolver for `\input`-like external references;
-    /// [`NoResolver`] by default — no lookup, no I/O.
-    resolver: Arc<dyn SourceResolver<L::SourceOrigin>>,
 }
 
 impl<L: Lang> Language<L> {
-    /// A language over `driver`, seeded from [`Lang::initial_state_data`] and with no
-    /// source resolution ([`NoResolver`]).
-    pub fn new(driver: L::Driver) -> Language<L> {
-        Language {
-            driver,
-            initial_state: Arc::new(ParsingState::initial()),
-            resolver: Arc::new(NoResolver),
-        }
+    /// A language over `driver`, parsing from `initial_state`. Both inputs are
+    /// mandatory — the type-level docs show the canonical construction, and the
+    /// [`ParsingState::lang_initial`]`[_with_packages]` constructors keep the everyday
+    /// spellings short.
+    pub fn new(driver: L::Driver, initial_state: ParsingState<L>) -> Language<L> {
+        Language { driver, initial_state: Arc::new(initial_state) }
     }
 
-    /// Customize the seed state by deriving with `delta` — the sanctioned
-    /// customization path ([`Lang::initial_state_data`]'s contract): the derivation
-    /// runs [`Lang::finalize_transition`], so language invariants hold over the
-    /// customized seed. Everything a delta expresses is available: token-rules
-    /// overrides, a mode override, scope ops (pushing packages), an ext replacement.
-    ///
-    /// Fallible because scope ops are: a failing op yields the
-    /// [`DeriveError`], and the `Language` under construction is dropped — a bad
-    /// definition setup is an embedder bug to surface at build time, not a source
-    /// condition to recover from.
-    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
-    pub fn with_seed_delta(
-        mut self,
-        delta: ParsingStateDelta<L>,
-    ) -> Result<Language<L>, DeriveError<L>> {
-        self.initial_state = Arc::new(self.initial_state.derived(&delta)?);
-        Ok(self)
-    }
-
-    /// Push `provider` onto the seed state's scope stack (innermost — it shadows
-    /// what is below) — sugar for the dominant [`with_seed_delta`](Language::with_seed_delta)
-    /// shape, "define a package, add it to the language" (promoted from the preset's
-    /// test support):
-    ///
-    /// ```ignore
-    /// let language = Language::<Latexlike>::default()
-    ///     .with_provider(Arc::new(my_package))?;
-    /// ```
-    ///
-    /// Fallible like [`with_seed_delta`](Language::with_seed_delta) (the sanctioned
-    /// derive path underneath): the push itself cannot fail today, but the derivation
-    /// runs the full transition machinery.
-    #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
-    pub fn with_provider(
-        self,
-        provider: Arc<dyn SpecsProvider<L>>,
-    ) -> Result<Language<L>, DeriveError<L>> {
-        self.with_seed_delta(ParsingStateDelta::new().push_provider(provider))
-    }
-
-    /// Use `resolver` for `\input`-like external references (default: [`NoResolver`]).
-    pub fn with_resolver(
-        mut self,
-        resolver: impl SourceResolver<L::SourceOrigin> + 'static,
-    ) -> Language<L> {
-        self.resolver = Arc::new(resolver);
-        self
-    }
-
-    /// The frozen seed state every parse starts from.
+    /// The frozen initial state every parse starts from.
     pub fn initial_state(&self) -> &Arc<ParsingState<L>> {
         &self.initial_state
     }
 
     /// The language's [`ParseDriver`](crate::engine::ParseDriver) instance —
-    /// concretely typed, so preset helper methods are directly reachable.
+    /// concretely typed, so preset helper methods (and driver-configured capabilities
+    /// like [`source_resolver`](crate::engine::ParseDriver::source_resolver)) are
+    /// directly reachable.
     pub fn driver(&self) -> &L::Driver {
         &self.driver
     }
 
-    /// The language's source resolver.
-    pub fn resolver(&self) -> &Arc<dyn SourceResolver<L::SourceOrigin>> {
-        &self.resolver
-    }
-
-    /// Resolve an external reference through this language's resolver and mint the
-    /// [`Source`] — the [`resolve_source_reference`] composition: provenance
-    /// (`Resolved { reference, triggered_at }`) is stamped here, per include site,
-    /// so diagnostics inside the inclusion render the right include chain. Feed the
-    /// result to [`parse_source`](Language::parse_source).
-    pub fn resolve_source(
-        &self,
-        reference: &str,
-        triggered_at: &SourceSpan<L::SourceOrigin>,
-    ) -> Result<Arc<Source<L::SourceOrigin>>, ResolveError> {
-        resolve_source_reference(&self.resolver, reference, triggered_at)
-    }
-
     /// Parse `content` as an anonymous in-memory [`Source`]. For a pre-minted source
-    /// carrying origin or provenance (a file, a [`resolve_source`](Language::resolve_source)
-    /// result), use [`parse_source`](Language::parse_source).
+    /// carrying origin or provenance (a file, a
+    /// [`resolve_source_reference`](crate::source::resolve_source_reference) result),
+    /// use [`parse_source`](Language::parse_source).
     pub fn parse(
         &self,
         content: impl Into<String>,
@@ -283,25 +215,16 @@ impl<L: Lang> Language<L> {
     }
 }
 
-/// The all-defaults language bundle, for drivers constructible without configuration
-/// (e.g. [`StdParseDriver`](crate::engine::StdParseDriver), whose default is strict).
-impl<L: Lang> Default for Language<L>
-where
-    L::Driver: Default,
-{
-    fn default() -> Self {
-        Language::new(L::Driver::default())
-    }
-}
-
-// Manual Debug: a derive would demand `L: Debug`, and `dyn SourceResolver` carries no
-// `Debug` bound — the field is shown by presence only.
+// Manual Debug: a derive would demand `L: Debug` although only associated types
+// (already bounded) are stored. There is deliberately no `Default` impl: it would
+// reintroduce an implicit seed by the back door, and the driver's recovery policy
+// must be an explicit choice.
 impl<L: Lang> fmt::Debug for Language<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Language")
             .field("driver", &self.driver)
             .field("initial_state", &self.initial_state)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -317,7 +240,7 @@ mod tests {
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeOp, ScopeStack};
     use crate::source::{MapResolver, SourceProvenance};
     use crate::spec::{CallableSpec, StdCallableSpec};
-    use crate::state::{StateData, TokenRulesOverrides};
+    use crate::state::{ParsingStateDelta, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommentRule, GroupRule, Token, TokenKind, TokenRules, WhitespaceRules,
     };
@@ -368,11 +291,14 @@ mod tests {
     }
 
     fn strict() -> Language<DocLang> {
-        Language::new(StdParseDriver::new(Recovery::Strict))
+        Language::new(StdParseDriver::new(Recovery::Strict, ()), ParsingState::lang_initial())
     }
 
     fn tolerant() -> Language<DocLang> {
-        Language::new(StdParseDriver::new(Recovery::Tolerant))
+        Language::new(
+            StdParseDriver::new(Recovery::Tolerant, ()),
+            ParsingState::lang_initial(),
+        )
     }
 
     /// The staged child shapes of a result's root list, as compact strings.
@@ -454,14 +380,16 @@ mod tests {
     }
 
     #[test]
-    fn with_seed_delta_customizes_through_the_derive_path() {
-        // Disabling comments through a seed delta: `%` becomes plain content.
-        let language = strict()
-            .with_seed_delta(ParsingStateDelta::new().rules(TokenRulesOverrides {
+    fn a_derived_seed_customizes_through_the_choke_point() {
+        // Disabling comments through the delta idiom — the seed derives *before*
+        // construction: `Language::new(driver, lang_initial().derived(&delta)?)`.
+        let seed = ParsingState::<DocLang>::lang_initial()
+            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 enable_comments: Some(false),
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();
+        let language = Language::new(StdParseDriver::new(Recovery::Strict, ()), seed);
         assert!(!language.initial_state().rules().enable_comments);
         let result = language.parse("a%b").unwrap();
         check_tree_invariants(&result.tree);
@@ -469,10 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn with_seed_delta_surfaces_scope_op_failures() {
-        let error = strict()
-            .with_seed_delta(
-                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() }),
+    fn the_delta_idiom_surfaces_scope_op_failures_before_construction() {
+        // A failing scope op aborts seed derivation — no `Language` is ever built.
+        let error = ParsingState::<DocLang>::lang_initial()
+            .derived(
+                &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() }),
             )
             .unwrap_err();
         assert_eq!(error.failures.len(), 1);
@@ -480,13 +409,24 @@ mod tests {
 
     #[test]
     fn resolver_round_trip_parses_a_resolved_source() {
+        // The source resolver lives on the driver ([§dd-dr:input-wiring]): configure
+        // it there, reach it through the `ParseDriver::source_resolver` accessor, and
+        // compose with the free `resolve_source_reference`.
+        use crate::source::resolve_source_reference;
+
         let mut resolver = MapResolver::new();
         resolver.insert("chapter.tex", "chapter {content}");
-        let language = strict().with_resolver(resolver);
+        let language: Language<DocLang> = Language::new(
+            StdParseDriver::new(Recovery::Strict, ()).with_source_resolver(resolver),
+            ParsingState::lang_initial(),
+        );
 
         let main = language.parse(r"\input{chapter.tex}").unwrap();
         let trigger = main.tree.root().span().clone();
-        let resolved = language.resolve_source("chapter.tex", &trigger).unwrap();
+        let driver_resolver =
+            ParseDriver::<DocLang>::source_resolver(language.driver()).unwrap();
+        let resolved =
+            resolve_source_reference(driver_resolver, "chapter.tex", &trigger).unwrap();
         match resolved.provenance() {
             SourceProvenance::Resolved { reference, triggered_at } => {
                 assert_eq!(reference, "chapter.tex");
@@ -503,18 +443,9 @@ mod tests {
     }
 
     #[test]
-    fn the_default_resolver_resolves_nothing() {
+    fn an_unconfigured_driver_resolves_no_sources() {
         let language = strict();
-        let root = language.parse("x").unwrap();
-        let trigger = root.tree.root().span().clone();
-        assert!(language.resolve_source("chapter.tex", &trigger).is_err());
-    }
-
-    #[test]
-    fn default_language_uses_the_default_driver() {
-        let language: Language<DocLang> = Language::default();
-        assert_eq!(language.driver().recovery, Recovery::Strict);
-        assert!(language.parse("a}b").is_err());
+        assert!(ParseDriver::<DocLang>::source_resolver(language.driver()).is_none());
     }
 
     /// A driver whose nodes-parser factory violates the output contract by stopping on
@@ -579,7 +510,8 @@ mod tests {
             }
         }
 
-        let language: Language<BogusLang> = Language::new(BogusDriver);
+        let language: Language<BogusLang> =
+            Language::new(BogusDriver, ParsingState::lang_initial());
         let err = language.parse("x").unwrap_err();
         assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
     }
@@ -726,16 +658,17 @@ mod tests {
     }
 
     /// A tolerant `MacroLang` whose seed defines `name` as a command with after-effect
-    /// `delta`.
+    /// `delta` (the everyday seed-plus-packages construction — infallible).
     fn macro_lang_defining(
         name: &str,
         delta: ParsingStateDelta<MacroLang>,
     ) -> Language<MacroLang> {
         let mut lib: Package<MacroLang> = Package::new("test");
-        lib.insert(CT_MACRO, name, Arc::new(AfterEffectSpec { delta }));
-        Language::new(MacroDriver::new(Recovery::Tolerant))
-            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(lib)))
-            .unwrap()
+        lib.insert(CT_MACRO, name, AfterEffectSpec { delta });
+        Language::new(
+            MacroDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial_with_packages([lib]),
+        )
     }
 
     /// A zero-arg macro package defining `name` — a `\def`-style after-effect payload.

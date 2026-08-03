@@ -19,10 +19,14 @@ canonical tokenization (`\` commands, `{…}` groups, `$…$` math, `%` comments
 `"base"` package (`\begin`/`\end` dispatch plus the standard specials):
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::Latexlike;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse("Hello {brave} world!").unwrap();
 
 // The tree's root is a List node covering the whole input; its children are the
@@ -47,10 +51,14 @@ and the original text is always reachable — level-1 recomposition needs no loo
 tables:
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::Latexlike;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse("one {two} three").unwrap();
 let group = result.tree.root().child(1).unwrap();
 
@@ -82,14 +90,14 @@ Definitions live in [`SpecsProvider`](crate::core::specs::SpecsProvider)s on the
 state's scope stack. The everyday provider is a [`Package`](crate::core::specs::Package):
 immutable, built once, loaded wholesale. Register a
 [`MacroSpec`](crate::latexlike::MacroSpec) under
-[`CallableType::Macro`](crate::latexlike::CallableType) and push the package onto a
-language's seed with
-[`Language::with_provider`](crate::core::Language::with_provider):
+[`CallableType::Macro`](crate::latexlike::CallableType) and build the language's seed
+with the package via
+[`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages):
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, MacroSpec};
 use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
@@ -99,12 +107,13 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "cite",
-    Arc::new(MacroSpec::new(argument_specs(["o", "m"]).unwrap())),
+    MacroSpec::new(argument_specs(["o", "m"]).unwrap()),
 );
 
-let language = Language::<Latexlike>::default()
-    .with_provider(Arc::new(package))
-    .unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse(r"see \cite[Lemma 3]{Author}!").unwrap();
 let cite = result.tree.root().child(1).unwrap();
@@ -125,18 +134,21 @@ of input is no error (pylatexenc issue #57's regression test lives in the accept
 suite):
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, MacroSpec};
 use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "item",
-    Arc::new(MacroSpec::new(argument_specs(["o"]).unwrap())),
+    MacroSpec::new(argument_specs(["o"]).unwrap()),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse(r"\item plain").unwrap();
 let item = result.tree.root().child(0).unwrap();
@@ -160,10 +172,14 @@ display is a *delimiter* fact, read back by
 [`math_style`](crate::core::node::NodeRef::math_style):
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::{Latexlike, MathStyle, Mode};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver, MathStyle, Mode};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse(r"a $x+y$ b \[z\]").unwrap();
 
 let inline = result.tree.root().child(1).unwrap();
@@ -183,10 +199,14 @@ assert_eq!(display.group_delimiters(), Some((r"\[", r"\]")));
 closer wins (pylatexenc's dollar-boundary parity):
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::Latexlike;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse("$a$$b$").unwrap();
 let shapes: Vec<String> =
     result.tree.root().children().iter().map(|node| node.summary()).collect();
@@ -202,9 +222,11 @@ delimiters as openers:
 ```rust
 use std::sync::Arc;
 use techy::core::constructs::GroupArgumentParser;
-use techy::core::Language;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
 use techy::latexlike::{
-    default_token_rules, CallableType, GroupType, Latexlike, MacroSpec, Mode,
+    default_token_rules, CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
+    Mode,
 };
 use techy::core::specs::Package;
 use techy::core::specs::ArgumentSpec;
@@ -228,9 +250,12 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "text",
-    Arc::new(MacroSpec::new(vec![text_mode_argument])),
+    MacroSpec::new(vec![text_mode_argument]),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse(r"\[ x \text{if $y<0$} \]").unwrap();
 let math = result.tree.root().child(0).unwrap();
@@ -254,18 +279,23 @@ an [`EnvironmentSpec`](crate::latexlike::EnvironmentSpec) registered under
 is a callable node whose *body* is a slot:
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, EnvironmentSpec, Latexlike};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{
+    argument_specs, CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver,
+};
 use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Environment,
     "enumerate",
-    Arc::new(EnvironmentSpec::new(argument_specs(["o"]).unwrap())),
+    EnvironmentSpec::new(argument_specs(["o"]).unwrap()),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse(r"\begin{enumerate}[(i)] a b \end{enumerate}").unwrap();
 let env = result.tree.root().child(0).unwrap();
@@ -280,22 +310,22 @@ An environment can install a parsing-state delta for its body's whole extent —
 `equation` entering math mode is one line:
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, Mode};
+use techy::core::{Language, ParsingState, ParsingStateDelta};
+use techy::error::Recovery;
+use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver, Mode};
 use techy::core::specs::Package;
-use techy::core::ParsingStateDelta;
 
 let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Environment,
     "equation",
-    Arc::new(
-        EnvironmentSpec::new(Vec::new())
-            .with_body_delta(ParsingStateDelta::new().mode(Mode::Math)),
-    ),
+    EnvironmentSpec::new(Vec::new())
+        .with_body_delta(ParsingStateDelta::new().mode(Mode::Math)),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse(r"\begin{equation}x+y\end{equation}").unwrap();
 let env = result.tree.root().child(0).unwrap();
@@ -313,9 +343,11 @@ group+chars shapes with the raw text as ordinary chars content:
 
 ```rust
 use std::sync::Arc;
-use techy::core::Language;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
 use techy::latexlike::{
-    argument_specs, CallableType, EnvironmentSpec, Latexlike, MacroSpec, VerbatimBehavior,
+    argument_specs, CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver, MacroSpec,
+    VerbatimBehavior,
 };
 use techy::core::specs::Package;
 
@@ -323,14 +355,17 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "verb",
-    Arc::new(MacroSpec::new(argument_specs(["v"]).unwrap())),
+    MacroSpec::new(argument_specs(["v"]).unwrap()),
 );
 package.insert(
     CallableType::Environment,
     "verbatim",
-    Arc::new(EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default()))),
+    EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default())),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 // `\verb|…|`: everything between the delimiters is raw — `%`, `\`, `{`, `$` inert.
 let result = language.parse(r"\verb|a%\x{| z").unwrap();
@@ -358,10 +393,14 @@ ligatures ``` `` ```, `''`, `--`, `---`); the scan takes the longest match, and
 per-entry mode visibility keeps the ligatures out of math:
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::Latexlike;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse("x---y--z").unwrap();
 let shapes: Vec<String> =
     result.tree.root().children().iter().map(|node| node.summary()).collect();
@@ -371,18 +410,21 @@ assert_eq!(shapes, ["chars(x)", "Specials(---)", "chars(y)", "Specials(--)", "ch
 Your own specials are package entries too — including ones that take arguments:
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, Latexlike, SpecialsSpec};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, SpecialsSpec};
 use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert_specials(
-    "_",
     CallableType::Specials,
-    Arc::new(SpecialsSpec::new(argument_specs(["m"]).unwrap())),
+    "_",
+    SpecialsSpec::new(argument_specs(["m"]).unwrap()),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 let result = language.parse("x_{down}").unwrap();
 let sub = result.tree.root().child(1).unwrap();
@@ -399,13 +441,14 @@ emission policy, deliberately not package data: the tokenizer detects paragraph
 breaks before the specials scan could ever run):
 
 ```rust
-use techy::core::Language;
+use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver, ParagraphBreakStyle};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict)
         .with_paragraph_break_style(ParagraphBreakStyle::Specials),
+    ParsingState::lang_initial(),
 );
 let result = language.parse("one\n\ntwo").unwrap();
 
@@ -423,18 +466,24 @@ The recovery policy lives on the driver. Strict parses abort on the first error
 recovery, and keep going — and every diagnostic carries an exact source span:
 
 ```rust
-use techy::core::Language;
+use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-// Strict (the default): an unresolvable command aborts.
-let strict: Language<Latexlike> = Language::default();
+// Strict: an unresolvable command aborts.
+let strict: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let err = strict.parse(r"a \foo b").unwrap_err();
 assert!(err.to_string().contains("cannot resolve command ‘\\foo’"));
 
 // Tolerant: the command recovers as chars, the parse completes, the diagnostic is
 // on the result.
-let tolerant: Language<Latexlike> = Language::new(LatexlikeDriver::new(Recovery::Tolerant));
+let tolerant: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Tolerant),
+    ParsingState::lang_initial(),
+);
 let result = tolerant.parse(r"a \foo b").unwrap();
 let shapes: Vec<String> =
     result.tree.root().children().iter().map(|node| node.summary()).collect();
@@ -448,11 +497,14 @@ A stray `}` at top level follows the same pattern — strict aborts, tolerant di
 it, stages the consumed delimiter as a chars node, and resumes:
 
 ```rust
-use techy::core::Language;
+use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let tolerant: Language<Latexlike> = Language::new(LatexlikeDriver::new(Recovery::Tolerant));
+let tolerant: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Tolerant),
+    ParsingState::lang_initial(),
+);
 let result = tolerant.parse("a}b").unwrap();
 let shapes: Vec<String> =
     result.tree.root().children().iter().map(|node| node.summary()).collect();
@@ -469,9 +521,9 @@ a separator with grouped content protected; `parse_keyval` reads
 `key=value,…` content:
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, MacroSpec};
 use techy::extract;
 use techy::core::specs::Package;
 
@@ -479,9 +531,12 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "usetikzlibrary",
-    Arc::new(MacroSpec::new(argument_specs(["m"]).unwrap())),
+    MacroSpec::new(argument_specs(["m"]).unwrap()),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 // A comma-separated list argument:
 let result = language.parse(r"\usetikzlibrary{arrows,shapes.geometric,calc}").unwrap();
@@ -497,9 +552,9 @@ assert_eq!(libraries, ["arrows", "shapes.geometric", "calc"]);
 ```
 
 ```rust
-use std::sync::Arc;
-use techy::core::Language;
-use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, MacroSpec};
 use techy::extract;
 use techy::core::specs::Package;
 
@@ -507,9 +562,12 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "includegraphics",
-    Arc::new(MacroSpec::new(argument_specs(["o", "m"]).unwrap())),
+    MacroSpec::new(argument_specs(["o", "m"]).unwrap()),
 );
-let language = Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial_with_packages([package]),
+);
 
 // Keyval options, grouped values protected:
 let result = language

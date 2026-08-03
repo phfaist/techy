@@ -7,7 +7,7 @@
 //! `&self` methods on a value, so behavior can carry configuration that static `Lang`
 //! hooks never could (a recovery policy, a preset's package registry).
 //!
-//! The driver owns four concerns:
+//! The driver owns five concerns:
 //!
 //! - **policy** — the [`Recovery`] knob ([`recovery`](ParseDriver::recovery)) and the
 //!   funnels consulting it ([`recover`](ParseDriver::recover),
@@ -17,6 +17,10 @@
 //!   [`make_paragraph_break_node`](ParseDriver::make_paragraph_break_node),
 //!   [`refine_diagnostic`](ParseDriver::refine_diagnostic),
 //!   [`observe_transition`](ParseDriver::observe_transition);
+//! - **source resolution** — the
+//!   [`source_resolver`](ParseDriver::source_resolver) accessor exposing the
+//!   embedding environment's [`SourceResolver`] for `\input`-like external
+//!   references (`None` = resolves nothing);
 //! - **the group descent-delta channel** —
 //!   [`group_interior_delta`](ParseDriver::group_interior_delta), the data plug that
 //!   lets a group class change the parsing state of its interior (a math group entering
@@ -38,7 +42,8 @@
 //! belongs to the [`ParserSession`] (whose derivation memos the driver-consulting
 //! helpers [`ParserSession::derived_state`]/[`ParserSession::group_interior_state`]
 //! own), and per-language *data* belongs to the parsing state. [`StdParseDriver`] is
-//! the all-defaults implementation — a plain `Recovery` carrier, and the
+//! the one canned implementation — the recovery knob, a pluggable [`CommandResolver`]
+//! strategy, an optional source resolver — and the
 //! [`TrivialLang`](crate::state::TrivialLang) default.
 
 use alloc::boxed::Box;
@@ -53,7 +58,9 @@ use crate::constructs::{
 use crate::error::{DiagnosticData, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
 use crate::scopes::{CallableQuery, CallableSyntax};
-use crate::source::{Source, SourceSpan, Span};
+use crate::source::{
+    IntoSourceResolver, Source, SourceOrigin, SourceResolver, SourceSpan, Span,
+};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenKind, TokenReader};
@@ -157,24 +164,19 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// string is surfaced on that diagnostic: the place for a resolver to say *why*
     /// ("searched libraries x, y, z"; "load the {amsmath} library for this command").
     ///
-    /// The default resolves nothing, with a detail reporting that command resolution
-    /// is not implemented. A missing implementation has no compile-time signal — a
-    /// language that enables commands but never overrides this hook would otherwise
-    /// see every command fail with a bare "cannot resolve", nothing pointing at the
-    /// actual cause.
+    /// The default resolves nothing — it delegates to the no-op [`CommandResolver`]
+    /// `()`, whose detail reports that command resolution is not implemented. A
+    /// missing implementation has no compile-time signal — a language that enables
+    /// commands but never overrides this hook would otherwise see every command fail
+    /// with a bare "cannot resolve", nothing pointing at the actual cause.
+    /// ([`StdParseDriver`] does not use this default: it routes the hook through its
+    /// pluggable [`CommandResolver`] strategy.)
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
     ) -> CommandResolution<L> {
-        let _ = (state, token);
-        CommandResolution::Unresolved {
-            detail: Some(
-                "command resolution is not implemented by this language’s driver — \
-                 implement ‘ParseDriver::resolve_command’ or use a preset"
-                    .into(),
-            ),
-        }
+        CommandResolver::resolve_command(&(), state, token)
     }
 
     /// The node kind representing a paragraph break. The *core* stages the returned
@@ -245,6 +247,26 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         delta: &ParsingStateDelta<L>,
     ) {
         let _ = (ext, prev, new, delta);
+    }
+
+    // --- source resolution ---------------------------------------------------------
+
+    /// The driver's [`SourceResolver`] for `\input`-like external source references,
+    /// if one is configured. The default is `None`: **this language resolves
+    /// nothing** — no lookup, no I/O; an `\input`-style construct then diagnoses
+    /// every use instead of resolving it.
+    ///
+    /// The resolver is an *embedding-environment* capability (where content comes
+    /// from varies per deployment), which is why it is reached through this
+    /// type-erased accessor rather than a generic driver parameter — see the
+    /// asymmetry note on [`StdParseDriver`]. Shipped drivers store an
+    /// `Option<Arc<dyn SourceResolver<…>>>` field set via their chainable
+    /// `with_source_resolver(…)` builder; a custom driver returns whatever resolver
+    /// composition it owns. Resolution itself stays *outside* the parse machinery:
+    /// callers compose accessor → [`resolve_source_reference`](crate::source::resolve_source_reference)
+    /// → parse, so caching frameworks can substitute either half.
+    fn source_resolver(&self) -> Option<&dyn SourceResolver<L::SourceOrigin>> {
+        None
     }
 
     // --- the group descent-delta channel ------------------------------------------
@@ -332,40 +354,211 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 }
 
-/// The all-defaults [`ParseDriver`]: a plain [`Recovery`] carrier, implementing the
-/// trait for **every** language — the [`TrivialLang`](crate::state::TrivialLang) default
-/// driver, and the strict-parsing default value.
+/// The pluggable body of [`ParseDriver::resolve_command`] — the strategy value
+/// carried by [`StdParseDriver`], so command resolution plugs into the one canned
+/// driver instead of one driver struct existing per behavior.
+///
+/// `resolve_command` is deliberately the **only** [`ParseDriver`] hook with a
+/// strategy seam: it is the sole hook that is both non-defaultable for a real
+/// command-bearing language (the core cannot conjure the language's command
+/// [`CallableTypeId`](Lang::CallableTypeId)) and has more than one canned behavior
+/// worth shipping. No other hook grows one; a language outgrowing the canned
+/// strategies writes its own [`ParseDriver`] — the normal path.
+///
+/// Shipped strategies: `()` resolves nothing (the [`StdParseDriver`] default —
+/// test languages and languages without commands);
+/// [`ScopesCommandResolver`] is the standard scope-stack resolution
+/// ([`resolve_command_in_scopes`]) under a fixed command callable type.
+pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
+    /// Resolve a [`Command`](TokenKind::Command) token — the contract is
+    /// [`ParseDriver::resolve_command`]'s, which [`StdParseDriver`] forwards here.
+    fn resolve_command(
+        &self,
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> CommandResolution<L>;
+}
+
+/// The no-op resolver: resolves nothing, with a detail reporting that command
+/// resolution is not implemented (so a language that enables commands without
+/// configuring resolution sees the actual cause, not a bare "cannot resolve").
+impl<L: Lang> CommandResolver<L> for () {
+    fn resolve_command(
+        &self,
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> CommandResolution<L> {
+        let _ = (state, token);
+        CommandResolution::Unresolved {
+            detail: Some(
+                "command resolution is not implemented by this language’s driver — \
+                 implement ‘ParseDriver::resolve_command’ or use a preset"
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// The standard scope-stack [`CommandResolver`] strategy: every command token
+/// resolves through [`resolve_command_in_scopes`] under the one fixed
+/// [`command_type`](ScopesCommandResolver::command_type). The field **is** the datum
+/// core cannot default — a language's command [`CallableTypeId`](Lang::CallableTypeId)
+/// (contrast specials, where the provider supplies the resolved type with the match);
+/// languages with several command-syntax callable types write their own resolver —
+/// the point of the seam.
+///
+/// Public home: `techy::core::specs`, beside [`resolve_command_in_scopes`] and the
+/// resolution family it packages.
+pub struct ScopesCommandResolver<L: Lang> {
+    /// The callable type every command token resolves under (the latexlike preset's
+    /// analogue is its macro callable type).
+    pub command_type: L::CallableTypeId,
+}
+
+impl<L: Lang> CommandResolver<L> for ScopesCommandResolver<L> {
+    fn resolve_command(
+        &self,
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> CommandResolution<L> {
+        resolve_command_in_scopes(state, token, self.command_type)
+    }
+}
+
+// Manual impls: derives would demand `L: Clone`/`L: Debug` although only the
+// `CallableTypeId` associated type (already `Copy` + `Debug`) is stored.
+
+impl<L: Lang> Clone for ScopesCommandResolver<L> {
+    fn clone(&self) -> Self {
+        ScopesCommandResolver { command_type: self.command_type }
+    }
+}
+
+impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScopesCommandResolver")
+            .field("command_type", &self.command_type)
+            .finish()
+    }
+}
+
+/// The one canned [`ParseDriver`]: the [`Recovery`] policy knob, a pluggable
+/// [`CommandResolver`] strategy, and an optional [`SourceResolver`] — everything else
+/// keeps the trait defaults. It implements the trait for **every** language whose
+/// [`SourceOrigin`](Lang::SourceOrigin) is `O` and whose commands `R` can resolve —
+/// the [`TrivialLang`](crate::state::TrivialLang) default driver (`type Driver =
+/// StdParseDriver`, all parameters defaulted).
+///
+/// **Which command resolver to reach for:** `()` resolves nothing — the
+/// [`TrivialLang`](crate::state::TrivialLang)-style test-language pairing
+/// (`StdParseDriver::new(Recovery::Strict, ())`), and right for languages without
+/// command syntax; [`ScopesCommandResolver`]
+/// resolves every command through the state's scope stack under one fixed callable
+/// type — the standard shape for a command-bearing language; beyond those, implement
+/// [`CommandResolver`] (or a whole [`ParseDriver`]) yourself.
+///
+/// # The two resolvers are deliberately asymmetric
+///
+/// Storage matches the consumption seam. The **command resolver** is part of the
+/// language *definition* — fixed when `type Driver = …` is written — and is consumed
+/// monomorphized through the concretely-typed
+/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) on the
+/// per-command-token hot path: a generic parameter is collected in full. The
+/// **source resolver** is an *embedding-environment* capability — it varies per
+/// deployment or run — and is consumed only through the type-erased
+/// [`ParseDriver::source_resolver`] accessor on the once-per-`\input` cold path: a
+/// generic parameter there would be erased at its only point of use, while costing a
+/// none-placeholder type and `None`-inference noise. Hence `R` by value,
+/// [`source_resolver`](StdParseDriver::source_resolver) behind `Option<Arc<dyn …>>`.
 ///
 /// ```
 /// # use techy::core::StdParseDriver;
 /// # use techy::error::Recovery;
-/// let strict = StdParseDriver::default();
+/// let strict: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
 /// assert_eq!(strict.recovery, Recovery::Strict);
-/// let tolerant = StdParseDriver { recovery: Recovery::Tolerant };
+/// let tolerant: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
 /// # let _ = tolerant;
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StdParseDriver {
-    /// The tolerant-parsing policy to drive under (default: [`Recovery::Strict`]).
+pub struct StdParseDriver<R = (), O: SourceOrigin = Option<String>> {
+    /// The tolerant-parsing policy to drive under.
     pub recovery: Recovery,
+    // The ruled asymmetry (storage matches the consumption seam — see the type-level
+    // docs): the command resolver is language-definition data, consumed monomorphized
+    // on the per-command-token hot path — a by-value generic, collected in full; the
+    // source resolver is an embedding-environment capability, consumed only through
+    // the type-erased `ParseDriver::source_resolver` accessor on the once-per-`\input`
+    // cold path — value-level `dyn` behind `Option<Arc<…>>`, `None` = resolves
+    // nothing.
+    /// The [`CommandResolver`] strategy behind
+    /// [`ParseDriver::resolve_command`] (`()` = resolves nothing).
+    pub command_resolver: R,
+    /// The [`SourceResolver`] behind [`ParseDriver::source_resolver`]
+    /// (`None` = this language resolves no external source references); set via
+    /// [`with_source_resolver`](StdParseDriver::with_source_resolver).
+    pub source_resolver: Option<Arc<dyn SourceResolver<O>>>,
 }
 
-impl StdParseDriver {
-    /// A driver with the given recovery policy.
-    pub fn new(recovery: Recovery) -> StdParseDriver {
-        StdParseDriver { recovery }
+impl<R, O: SourceOrigin> StdParseDriver<R, O> {
+    /// A driver with the given recovery policy and command resolver (`()` = resolves
+    /// nothing), and no source resolver.
+    pub fn new(recovery: Recovery, command_resolver: R) -> StdParseDriver<R, O> {
+        StdParseDriver { recovery, command_resolver, source_resolver: None }
+    }
+
+    /// Use `resolver` for `\input`-like external source references — exposed through
+    /// [`ParseDriver::source_resolver`]. Takes a resolver by value (shared internally)
+    /// or an already-shared `Arc` (passed through, no double-wrap).
+    pub fn with_source_resolver<M>(
+        mut self,
+        resolver: impl IntoSourceResolver<O, M>,
+    ) -> StdParseDriver<R, O> {
+        self.source_resolver = Some(resolver.into_source_resolver());
+        self
     }
 }
 
-impl Default for StdParseDriver {
-    fn default() -> Self {
-        StdParseDriver { recovery: Recovery::Strict }
-    }
-}
-
-impl<L: Lang> ParseDriver<L> for StdParseDriver {
+impl<L: Lang, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin> {
     fn recovery(&self) -> Recovery {
         self.recovery
+    }
+
+    /// Forwards to the driver's [`command_resolver`](StdParseDriver::command_resolver)
+    /// strategy.
+    fn resolve_command(
+        &self,
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> CommandResolution<L> {
+        self.command_resolver.resolve_command(state, token)
+    }
+
+    fn source_resolver(&self) -> Option<&dyn SourceResolver<L::SourceOrigin>> {
+        self.source_resolver.as_deref()
+    }
+}
+
+// Manual impls: a `Clone` derive would spuriously demand `O: Clone` (the `Arc` field
+// clones by refcount), and a `Debug` derive would demand a `Debug` bound the
+// `dyn SourceResolver` cannot supply — that field is shown by presence only.
+// Driver `Copy`/`Eq` are deliberately gone (API-review T4 ruling): nothing relied on
+// them, and the resolver fields are not `Copy`/`Eq` material.
+
+impl<R: Clone, O: SourceOrigin> Clone for StdParseDriver<R, O> {
+    fn clone(&self) -> Self {
+        StdParseDriver {
+            recovery: self.recovery,
+            command_resolver: self.command_resolver.clone(),
+            source_resolver: self.source_resolver.clone(),
+        }
+    }
+}
+
+impl<R: fmt::Debug, O: SourceOrigin> fmt::Debug for StdParseDriver<R, O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StdParseDriver")
+            .field("recovery", &self.recovery)
+            .field("command_resolver", &self.command_resolver)
+            .finish_non_exhaustive()
     }
 }
 
@@ -437,6 +630,8 @@ pub enum CommandResolution<L: Lang> {
 /// [`resolve_command`](ParseDriver::resolve_command) that dispatches to the state's
 /// scope stack (the latexlike preset and the test langs), so query construction and
 /// the miss/failure detail policy live in one place rather than drifting per copy.
+/// [`ScopesCommandResolver`] is its one-line packaging as the [`CommandResolver`]
+/// strategy for [`StdParseDriver`].
 ///
 /// Builds a [`CallableQuery`] with
 /// [`CallableSyntax::Command`](crate::scopes::CallableSyntax::Command) (the token's

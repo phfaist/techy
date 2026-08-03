@@ -14,8 +14,10 @@ use super::origin::SourceOrigin;
 use super::source::{Source, SourceSpan};
 
 /// Resolves an external reference (e.g. a file name from an `\input`-like construct) to
-/// the referenced **content**. The parser will be generic over the resolver; [`NoResolver`] is
-/// the zero-sized, zero-cost default for builds that must not perform any lookup or I/O.
+/// the referenced **content**. Resolvers are configured on the parse driver
+/// (`with_source_resolver`) and reached through its `source_resolver` accessor;
+/// `None` there — the default — is the canonical "resolves nothing" (no lookup,
+/// no I/O).
 ///
 /// **The resolver returns content, not a [`Source`]** (Action-05):
 /// the caller mints the `Source` — see [`resolve_source_reference`] — stamping the include-site
@@ -59,8 +61,12 @@ pub trait SourceResolver<O: SourceOrigin = Option<String>>: Send + Sync {
 // `Arc<dyn SourceResolver<O>>` rather than a generic parameter).
 const _: fn(&dyn SourceResolver) = |_| {};
 
-// Forwarding impls, so borrowed/boxed/shared resolvers plug in wherever an
-// `impl SourceResolver` is expected without newtype shims.
+// Forwarding impls, so borrowed/boxed resolvers plug in wherever an
+// `impl SourceResolver` is expected without newtype shims. There is deliberately no
+// `Arc<R>` forwarding impl: shared resolvers travel as `Arc<dyn SourceResolver<O>>`
+// through the sealed [`IntoSourceResolver`] conversion, whose pass-through impls for
+// `Arc<R>`/`Arc<dyn …>` (no double-wrap) would conflict with a blanket-covered
+// `Arc<R>: SourceResolver`.
 
 impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for &R {
     fn resolve(
@@ -82,13 +88,58 @@ impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Box<R
     }
 }
 
-impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Arc<R> {
-    fn resolve(
-        &self,
-        reference: &str,
-        triggered_at: &SourceSpan<O>,
-    ) -> Result<ResolvedContent<O>, ResolveError> {
-        (**self).resolve(reference, triggered_at)
+mod sealed {
+    use super::{SourceOrigin, SourceResolver};
+    use alloc::sync::Arc;
+
+    // Inference markers: they let the by-value blanket coexist with the Arc
+    // pass-through impls (trait coherence would otherwise reject the pair on an
+    // origin-generic trait). Callers never name them — the marker parameter is
+    // inferred; each argument shape matches exactly one impl.
+    pub struct ByValue;
+    pub struct SharedConcrete;
+    pub struct SharedDyn;
+
+    pub trait Sealed<O, M> {}
+    impl<O: SourceOrigin, R: SourceResolver<O> + 'static> Sealed<O, ByValue> for R {}
+    impl<O: SourceOrigin, R: SourceResolver<O> + 'static> Sealed<O, SharedConcrete> for Arc<R> {}
+    impl<O: SourceOrigin> Sealed<O, SharedDyn> for Arc<dyn SourceResolver<O>> {}
+}
+
+/// Sealed conversion into a shared [`SourceResolver`] — the argument contract of the
+/// shipped drivers' `with_source_resolver(…)` builders, following the crate's one
+/// Arc-removal conversion idiom: a resolver passed **by value** is shared internally
+/// (`Arc::new`), while an already-shared **`Arc<R>`** or **`Arc<dyn
+/// SourceResolver<O>>`** passes through as-is — no `Arc::new` at any call site, and
+/// no double-wrap of pre-shared resolvers.
+///
+/// Sealed: the three impls are the whole vocabulary; downstream code implements
+/// [`SourceResolver`], never this trait. (The `M` parameter is a sealed inference
+/// marker distinguishing the three argument shapes — it never needs to be named.)
+pub trait IntoSourceResolver<O: SourceOrigin, M>: sealed::Sealed<O, M> {
+    /// Convert into the shared resolver handle the drivers store.
+    fn into_source_resolver(self) -> Arc<dyn SourceResolver<O>>;
+}
+
+impl<O: SourceOrigin, R: SourceResolver<O> + 'static> IntoSourceResolver<O, sealed::ByValue>
+    for R
+{
+    fn into_source_resolver(self) -> Arc<dyn SourceResolver<O>> {
+        Arc::new(self)
+    }
+}
+
+impl<O: SourceOrigin, R: SourceResolver<O> + 'static>
+    IntoSourceResolver<O, sealed::SharedConcrete> for Arc<R>
+{
+    fn into_source_resolver(self) -> Arc<dyn SourceResolver<O>> {
+        self
+    }
+}
+
+impl<O: SourceOrigin> IntoSourceResolver<O, sealed::SharedDyn> for Arc<dyn SourceResolver<O>> {
+    fn into_source_resolver(self) -> Arc<dyn SourceResolver<O>> {
+        self
     }
 }
 
@@ -189,21 +240,6 @@ impl core::error::Error for ResolveError {
     }
 }
 
-/// Resolver that always fails: for parsers with no source-resolution capability (no I/O,
-/// no lookup tables). Zero-sized, so it costs nothing.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoResolver;
-
-impl<O: SourceOrigin> SourceResolver<O> for NoResolver {
-    fn resolve(
-        &self,
-        reference: &str,
-        _triggered_at: &SourceSpan<O>,
-    ) -> Result<ResolvedContent<O>, ResolveError> {
-        Err(ResolveError::new(reference, "source resolution is not enabled"))
-    }
-}
-
 /// Resolver backed by an in-memory map from reference strings to content — for tests,
 /// preloaded database extracts, or any fully preloaded setup.
 ///
@@ -270,15 +306,6 @@ mod tests {
     fn trigger_span() -> SourceSpan {
         let main: Arc<Source> = Arc::new(Source::new(r"\input{chapter.tex}"));
         SourceSpan::entire(&main)
-    }
-
-    #[test]
-    fn no_resolver_always_fails() {
-        let trigger = trigger_span();
-        let result = NoResolver.resolve("chapter.tex", &trigger);
-        let err = result.unwrap_err();
-        assert_eq!(err.reference(), "chapter.tex");
-        assert!(err.to_string().contains("chapter.tex"));
     }
 
     #[test]
@@ -386,16 +413,40 @@ mod tests {
     }
 
     #[test]
-    fn forwarding_impls_resolve_through_shared_and_dyn_handles() {
+    fn forwarding_impls_resolve_through_borrowed_and_boxed_handles() {
         let mut resolver = MapResolver::new();
         resolver.insert("chapter.tex", "chapter content");
 
         let trigger = trigger_span();
         let arc: Arc<dyn SourceResolver> = Arc::new(resolver);
-        let resolved = resolve_source_reference(&arc, "chapter.tex", &trigger).unwrap();
+        // Through the unsized dyn value (the driver-accessor shape)…
+        let resolved = resolve_source_reference(&*arc, "chapter.tex", &trigger).unwrap();
         assert_eq!(resolved.content(), "chapter content");
-        // And through a plain borrow.
-        let borrowed = &arc;
+        // …and through a plain borrow of it.
+        let borrowed: &dyn SourceResolver = &*arc;
         assert!(borrowed.resolve("chapter.tex", &trigger).is_ok());
+    }
+
+    #[test]
+    fn into_source_resolver_shares_by_value_and_passes_arcs_through() {
+        // By value: the sealed conversion does the sharing — no `Arc::new` at the
+        // call site.
+        let mut resolver = MapResolver::new();
+        resolver.insert("chapter.tex", "chapter content");
+        let shared: Arc<dyn SourceResolver> = resolver.into_source_resolver();
+        let trigger = trigger_span();
+        assert!(shared.resolve("chapter.tex", &trigger).is_ok());
+
+        // A pre-shared `Arc<R>` passes through — same allocation, no double-wrap.
+        let premade = Arc::new(MapResolver::new());
+        let witness = Arc::clone(&premade);
+        let converted: Arc<dyn SourceResolver> = premade.into_source_resolver();
+        assert!(Arc::ptr_eq(&converted, &(witness as Arc<dyn SourceResolver>)));
+
+        // A pre-shared `Arc<dyn …>` passes through unchanged too.
+        let dyn_made: Arc<dyn SourceResolver> = Arc::new(MapResolver::new());
+        let witness = Arc::clone(&dyn_made);
+        let converted = dyn_made.into_source_resolver();
+        assert!(Arc::ptr_eq(&converted, &witness));
     }
 }

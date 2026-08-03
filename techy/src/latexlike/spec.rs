@@ -100,7 +100,8 @@ mod tests {
     use crate::engine::Language;
     use crate::node::check_tree_invariants;
     use crate::scopes::Package;
-    use crate::state::ParsingStateDelta;
+    use crate::state::ParsingState;
+    use crate::latexlike::LatexlikeDriver;
     use alloc::vec;
 
     use super::super::{CallableType, GroupType};
@@ -145,11 +146,12 @@ mod tests {
         package.insert(
             CallableType::Macro,
             "emph",
-            Arc::new(MacroSpec::new(vec![brace_arg()])),
+            MacroSpec::new(vec![brace_arg()]),
         );
-        let language = Language::<Latexlike>::default()
-            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-            .unwrap();
+        let language = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
 
         let result = language.parse(r"\emph{x} y").unwrap();
         check_tree_invariants(&result.tree);

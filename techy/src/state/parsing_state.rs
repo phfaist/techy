@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::scopes::{ScopeOpError, ScopeStack};
+use crate::scopes::{IntoSpecsProvider, ScopeOpError, ScopeStack};
 use crate::token::{PrefixTable, TokenRules, TriggerChars};
 
 use super::delta::ParsingStateDelta;
@@ -76,21 +76,64 @@ pub struct ParsingState<L: Lang> {
 }
 
 impl<L: Lang> ParsingState<L> {
-    /// The seed state: [`Lang::initial_state_data`] frozen — the one public path from
-    /// data to state, so every state a parse sees is either this seed or a
+    /// The *Lang's* seed state: [`Lang::initial_state_data`] frozen — the one public
+    /// path from data to state, so every state a parse sees is either this seed or a
     /// [`derived()`](ParsingState::derived) descendant that passed through
     /// [`Lang::finalize_transition`]. Callers customize the starting point by deriving
-    /// from the seed with a delta. The seed itself does *not* run `finalize_transition`
-    /// (it has no predecessor); its coherence is the language author's contract (the
-    /// hook's docs).
-    pub fn initial() -> ParsingState<L> {
+    /// from the seed with a delta (`ParsingState::lang_initial().derived(&delta)?`) —
+    /// or, for the everyday "seed plus these packages" case,
+    /// [`lang_initial_with_packages`](ParsingState::lang_initial_with_packages). The
+    /// seed itself does *not* run `finalize_transition` (it has no predecessor); its
+    /// coherence is the language author's contract (the hook's docs).
+    pub fn lang_initial() -> ParsingState<L> {
         ParsingState::freeze(L::initial_state_data())
+    }
+
+    /// The *Lang's* seed state with `packages` pushed onto its scope stack (in
+    /// iteration order — the last pushed is innermost and shadows the ones below):
+    /// the everyday "define a package, add it to the language" construction,
+    /// **infallible** where the delta path is not. Packages pass by value through the
+    /// sealed [`IntoSpecsProvider`] conversion (pre-shared `Arc`s pass through):
+    ///
+    /// ```
+    /// # use techy::core::{Language, ParsingState, StdParseDriver};
+    /// # use techy::core::specs::Package;
+    /// # use techy::error::Recovery;
+    /// # #[derive(Debug, Clone, Copy)]
+    /// # struct MyLang;
+    /// # impl techy::core::TrivialLang for MyLang {}
+    /// # let my_package: Package<MyLang> = Package::new("mydefs");
+    /// let language = Language::new(
+    ///     StdParseDriver::new(Recovery::Strict, ()),
+    ///     ParsingState::lang_initial_with_packages([my_package]),
+    /// );
+    /// ```
+    ///
+    /// # Why this cannot fail
+    ///
+    /// The two failure sources of the derive path are structurally absent here: the
+    /// seed never runs [`Lang::finalize_transition`] (it has no predecessor — see
+    /// [`lang_initial`](ParsingState::lang_initial)), and pushing providers directly
+    /// onto the seed's scope stack involves no by-name scope ops (the only failing
+    /// kind). The transition choke point is untouched — packages-at-seed is not a
+    /// transition, and the freeze rebuilds the derived caches over the augmented
+    /// data. Anything beyond packages — rules overrides, a mode, events — goes
+    /// through the (fallible) delta idiom instead:
+    /// `ParsingState::lang_initial().derived(&delta)?`.
+    pub fn lang_initial_with_packages(
+        packages: impl IntoIterator<Item: IntoSpecsProvider<L>>,
+    ) -> ParsingState<L> {
+        let mut data = L::initial_state_data();
+        for package in packages {
+            data.scopes.push(package.into_specs_provider());
+        }
+        ParsingState::freeze(data)
     }
 
     /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`].
     /// Test-internal: tests assemble ad-hoc states; the public paths are
-    /// [`initial()`](ParsingState::initial) and [`derived()`](ParsingState::derived),
-    /// which keep the choke point airtight.
+    /// [`lang_initial()`](ParsingState::lang_initial) (+ the packages form) and
+    /// [`derived()`](ParsingState::derived), which keep the choke point airtight.
     #[cfg(test)]
     pub(crate) fn new(data: StateData<L>) -> ParsingState<L> {
         ParsingState::freeze(data)
@@ -242,7 +285,7 @@ impl<L: Lang> ParsingState<L> {
 // are identity-bearing (`Arc` pointer identity keys the engine's memoization and links
 // nodes to the state that parsed them), so duplicating one would fork that identity —
 // and a `Clone` impl would make `Arc::make_mut` on a "frozen" state expressible. The
-// only constructors are `initial()` and `derived()`.
+// only constructors are `lang_initial()` (with its packages form) and `derived()`.
 
 impl<L: Lang> Clone for StateData<L> {
     fn clone(&self) -> Self {
@@ -547,7 +590,7 @@ mod tests {
     #[test]
     fn default_initial_state_is_neutral() {
         // The default `Lang::initial_state_data`: every syntax gate off, no libraries.
-        let state: ParsingState<PlainLang> = ParsingState::initial();
+        let state: ParsingState<PlainLang> = ParsingState::lang_initial();
         assert!(!state.rules().enable_whitespace);
         assert!(!state.rules().enable_groups);
         assert!(!state.rules().enable_commands);
@@ -557,7 +600,50 @@ mod tests {
         assert!(state.prefix_table().match_at("{x").is_none());
     }
 
-    // --- a lang with a canonical seed: initial() is the crate-owned freeze of its data --
+    #[test]
+    fn lang_initial_with_packages_pushes_in_order_over_the_seed() {
+        use crate::scopes::{CallableQuery, CallableSyntax, Package, SpecsProvider};
+        use crate::spec::StdCallableSpec;
+        use alloc::sync::Arc;
+
+        // Packages by value — no `Arc::new` (the sealed `IntoSpecsProvider`
+        // conversion); a pre-shared Arc passes through too.
+        let mut outer: Package<PlainLang> = Package::new("outer");
+        outer.insert(0u32, "cmd", StdCallableSpec::default());
+        let mut inner: Package<PlainLang> = Package::new("inner");
+        inner.insert(0u32, "cmd", StdCallableSpec::default());
+
+        let state: ParsingState<PlainLang> =
+            ParsingState::lang_initial_with_packages([outer, inner]);
+        // Iteration order: last pushed is innermost (provider_names lists
+        // innermost-first) — it shadows the ones below.
+        assert_eq!(
+            state.scopes().provider_names().collect::<alloc::vec::Vec<_>>(),
+            ["inner", "outer"]
+        );
+        let query =
+            CallableQuery::new(0u32, "cmd", CallableSyntax::Command { escape_char: '\\' });
+        assert!(state.scopes().retrieve_spec(&query, &state).unwrap().is_some());
+
+        // The pre-shared spellings: `Arc<P>` and `Arc<dyn SpecsProvider<L>>`.
+        let premade = Arc::new(Package::<PlainLang>::new("premade"));
+        let dyn_made: Arc<dyn SpecsProvider<PlainLang>> =
+            Arc::new(Package::<PlainLang>::new("dyn"));
+        let state: ParsingState<PlainLang> =
+            ParsingState::lang_initial_with_packages([premade]);
+        assert_eq!(
+            state.scopes().provider_names().collect::<alloc::vec::Vec<_>>(),
+            ["premade"]
+        );
+        let state: ParsingState<PlainLang> =
+            ParsingState::lang_initial_with_packages([dyn_made]);
+        assert_eq!(
+            state.scopes().provider_names().collect::<alloc::vec::Vec<_>>(),
+            ["dyn"]
+        );
+    }
+
+    // --- a lang with a canonical seed: lang_initial() is the crate-owned freeze of its data --
 
     #[derive(Debug, Clone, Copy)]
     struct SeededLang;
@@ -579,7 +665,7 @@ mod tests {
 
     #[test]
     fn initial_freezes_the_langs_seed_data() {
-        let state: ParsingState<SeededLang> = ParsingState::initial();
+        let state: ParsingState<SeededLang> = ParsingState::lang_initial();
         assert!(state.rules().enable_groups);
         // The caches are built from the seed data at freeze:
         assert!(state.prefix_table().match_at("{x").is_some());
@@ -805,17 +891,17 @@ mod tests {
             type NodeExts = ();
             type Driver = crate::engine::StdParseDriver;
         }
-        let state: ParsingState<DefaultSeedLang> = ParsingState::initial();
+        let state: ParsingState<DefaultSeedLang> = ParsingState::lang_initial();
         assert_eq!(state.mode(), Mode::Text);
         // TrivialLang languages are modeless: `ModeId = ()`.
-        let plain: ParsingState<PlainLang> = ParsingState::initial();
+        let plain: ParsingState<PlainLang> = ParsingState::lang_initial();
         assert_eq!(plain.mode(), ());
     }
 
     #[test]
     fn moded_seed_is_coherent_under_the_empty_delta() {
         // The mechanical pin of the coherence contract, mode included.
-        let seed: ParsingState<ModedLang> = ParsingState::initial();
+        let seed: ParsingState<ModedLang> = ParsingState::lang_initial();
         assert_eq!(seed.mode(), Mode::Text);
         assert!(seed.rules().enable_comments);
         let derived = seed.derived(&ParsingStateDelta::new()).unwrap();
@@ -826,7 +912,7 @@ mod tests {
 
     #[test]
     fn mode_overrides_via_delta_and_is_inherited_otherwise() {
-        let state: ParsingState<ModedLang> = ParsingState::initial();
+        let state: ParsingState<ModedLang> = ParsingState::lang_initial();
 
         let math = state.derived(&ParsingStateDelta::new().mode(Mode::Math)).unwrap();
         assert_eq!(math.mode(), Mode::Math);
@@ -853,7 +939,7 @@ mod tests {
 
     #[test]
     fn finalize_interprets_mode_changes_seeing_prev_and_new() {
-        let state: ParsingState<ModedLang> = ParsingState::initial();
+        let state: ParsingState<ModedLang> = ParsingState::lang_initial();
 
         // Entering math: level normalization applies (comments off), and the hook saw
         // the Text→Math edge.

@@ -90,14 +90,14 @@ impl<'t> NodeRef<'t, Latexlike> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::test_support::{macro_package, strict};
+    use super::super::test_support::{macro_package, with_package};
     use crate::engine::Language;
-    use alloc::sync::Arc;
+    use crate::error::Recovery;
     use alloc::vec::Vec;
 
     /// A latexlike `Language` seeded with the zero-argument macro `\emph`.
     fn language() -> Language<Latexlike> {
-        strict().with_provider(Arc::new(macro_package("testpkg", "emph", None))).unwrap()
+        with_package(Recovery::Strict, macro_package("testpkg", "emph", None))
     }
 
     #[test]

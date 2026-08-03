@@ -26,10 +26,14 @@
 //!   `NodeRef<'_, Latexlike>`.
 //!
 //! ```
-//! use techy::core::Language;
-//! use techy::latexlike::{Latexlike, Mode};
+//! use techy::core::{Language, ParsingState};
+//! use techy::error::Recovery;
+//! use techy::latexlike::{Latexlike, LatexlikeDriver, Mode};
 //!
-//! let language: Language<Latexlike> = Language::default();
+//! let language: Language<Latexlike> = Language::new(
+//!     LatexlikeDriver::new(Recovery::Strict),
+//!     ParsingState::lang_initial(),
+//! );
 //! let result = language.parse("inline $x+y$ math").unwrap();
 //! let math = result.tree.root().child(1).unwrap();
 //! assert!(math.is_math_group());
@@ -38,9 +42,8 @@
 //!
 //! **What the preset does not ship yet:** macro and environment *definitions*. The
 //! standard spec database (pylatexenc's default-specs port) is a later phase; until
-//! then embedders and tests register the specs they need via scope-stack deltas
-//! ([`Language::with_seed_delta`](crate::engine::Language::with_seed_delta) +
-//! [`ParsingStateDelta::push_provider`](crate::state::ParsingStateDelta::push_provider)),
+//! then embedders and tests register the specs they need in their own packages
+//! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
 //! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
 //! [`CallableSpec`]) — `\verb` and `verbatim` included: the machinery ships here, the
 //! definitions with the database.
@@ -185,7 +188,7 @@ impl Lang for Latexlike {
     ///
     /// Coherence contract: `finalize_transition` is not customized (nothing to
     /// normalize yet — math groups only set the mode), so the seed is trivially
-    /// finalize-coherent; a test pins `initial().derived(&empty) == initial()`
+    /// finalize-coherent; a test pins `lang_initial().derived(&empty) == lang_initial()`
     /// data-equivalence mechanically.
     fn initial_state_data() -> StateData<Self> {
         let mut scopes = ScopeStack::new();
@@ -301,14 +304,14 @@ pub fn base_package() -> Package<Latexlike> {
     // Alignment `&` and non-breaking space `~` occur in text and math alike.
     // ### PhF -- We should not include & here
     for trigger in ["&", "~"] {
-        package.insert_specials(trigger, CallableType::Specials, Arc::clone(&spec));
+        package.insert_specials(CallableType::Specials, trigger, Arc::clone(&spec));
     }
     // Typography ligatures are text-mode only (no math meaning): inside `$…$` they stay
     // plain chars (7.5 review — per-entry mode visibility).
     for trigger in ["``", "''", "--", "---"] {
         package.insert_specials_in_modes(
-            trigger,
             CallableType::Specials,
+            trigger,
             Arc::clone(&spec),
             Some(vec![Mode::Text]),
         );
@@ -346,7 +349,7 @@ mod tests {
     fn the_seed_is_finalize_coherent() {
         // The initial_state_data() contract: deriving with an empty delta must be
         // data-equivalent to the seed itself (pins the coherence obligation).
-        let seed = ParsingState::<Latexlike>::initial();
+        let seed = ParsingState::<Latexlike>::lang_initial();
         let rederived = seed.derived(&ParsingStateDelta::new()).unwrap();
         assert_eq!(seed.rules(), rederived.rules());
         assert_eq!(seed.mode(), rederived.mode());
@@ -394,7 +397,9 @@ mod tests {
         // ParagraphBreakStyle::Specials (7.9): pylatexenc-modern's paragraph shape —
         // a Specials-formed callable named "\n\n".
         let language = Language::new(
-            LatexlikeDriver::default().with_paragraph_break_style(ParagraphBreakStyle::Specials),
+            LatexlikeDriver::new(crate::error::Recovery::Strict)
+                .with_paragraph_break_style(ParagraphBreakStyle::Specials),
+            ParsingState::lang_initial(),
         );
         let result = language.parse("a\n\nb").unwrap();
         check_tree_invariants(&result.tree);
@@ -489,16 +494,16 @@ mod tests {
 
     // --- scope stack: commands, visibility, specials ----------------------------------
 
-    /// `language` seeded with the zero-argument macro `\alpha` in a package
-    /// `"alphapkg"`, optionally math-only (package-level visibility).
-    fn with_alpha(language: Language<Latexlike>, math_only: bool) -> Language<Latexlike> {
+    /// A `recovery` language seeded with the zero-argument macro `\alpha` in a
+    /// package `"alphapkg"`, optionally math-only (package-level visibility).
+    fn with_alpha(recovery: crate::error::Recovery, math_only: bool) -> Language<Latexlike> {
         let modes = math_only.then(|| vec![Mode::Math]);
-        language.with_provider(Arc::new(macro_package("alphapkg", "alpha", modes))).unwrap()
+        test_support::with_package(recovery, macro_package("alphapkg", "alpha", modes))
     }
 
     #[test]
     fn commands_resolve_through_the_scope_stack() {
-        let language = with_alpha(strict(), false);
+        let language = with_alpha(crate::error::Recovery::Strict, false);
         let result = language.parse(r"\alpha x").unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(root_shapes(&result), ["Macro(alpha)", "chars(x)"]);
@@ -506,7 +511,7 @@ mod tests {
 
     #[test]
     fn mode_visibility_gates_package_definitions() {
-        let language = with_alpha(tolerant(), true);
+        let language = with_alpha(crate::error::Recovery::Tolerant, true);
 
         // Inside math: the package is visible, `\alpha` resolves.
         let math = language.parse(r"$\alpha$").unwrap();
@@ -607,11 +612,15 @@ mod tests {
 
     #[test]
     fn the_base_package_is_unloadable_by_name() {
-        let language = strict()
-            .with_seed_delta(
-                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
+        let seed = ParsingState::<Latexlike>::lang_initial()
+            .derived(
+                &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
             )
             .unwrap();
+        let language = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            seed,
+        );
         let result = language.parse("a~b --- c").unwrap();
         assert_eq!(root_shapes(&result), ["chars(a~b --- c)"]);
     }

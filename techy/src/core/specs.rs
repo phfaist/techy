@@ -13,9 +13,14 @@
 //!   implementations; [`FallbackProvider`] expresses the unknown-callable policy;
 //!   [`ScopeStack`] searches innermost-first (lexical shadowing). Definitions are
 //!   reshaped mid-parse through [`ScopeOp`]s / [`DefinitionOp`]s carried by parsing
-//!   state deltas.
+//!   state deltas. Registration takes the crate's sealed Arc-removal conversions:
+//!   [`IntoCallableSpec`] (specs into [`Package::insert`] and siblings) and
+//!   [`IntoSpecsProvider`] (packages/providers into
+//!   [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)).
 //! - **Command resolution** — [`resolve_command_in_scopes`] is the standard
-//!   resolution body (build the query, consult the scope stack, map the outcome);
+//!   resolution body (build the query, consult the scope stack, map the outcome),
+//!   packaged as the [`ScopesCommandResolver`] strategy for
+//!   [`StdParseDriver`](crate::core::StdParseDriver);
 //!   [`CommandResolution`] (with [`ResolvedCallable`]) is the outcome vocabulary;
 //!   [`CallableQuery`], [`CallableSyntax`], and [`SearchedProviders`] describe the
 //!   lookup.
@@ -23,10 +28,13 @@
 //! The run-side machinery that consumes these definitions — state, tokens, engine —
 //! is the [`core`](crate::core) hub.
 
-pub use crate::engine::{resolve_command_in_scopes, CommandResolution, ResolvedCallable};
+pub use crate::engine::{
+    resolve_command_in_scopes, CommandResolution, ResolvedCallable, ScopesCommandResolver,
+};
 pub use crate::scopes::{
     CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
-    FallbackProvider, Package, ProviderError, Scope, ScopeOp, ScopeOpError, ScopeStack,
-    ScopeStackError, SearchedProviders, SpecsProvider, SymbolEntry,
+    FallbackProvider, IntoSpecsProvider, Package, ProviderError, Scope, ScopeOp,
+    ScopeOpError, ScopeStack, ScopeStackError, SearchedProviders, SpecsProvider,
+    SymbolEntry,
 };
-pub use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
+pub use crate::spec::{ArgumentSpec, CallableSpec, IntoCallableSpec, StdCallableSpec};

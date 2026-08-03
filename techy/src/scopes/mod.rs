@@ -56,7 +56,7 @@ use crate::constructs::{ConstructParser, ConstructParserResult, Invocation, Pars
 use crate::error::DiagnosticInfo;
 use crate::node::{BuildId, NodeKind};
 use crate::source::SourceSpan;
-use crate::spec::CallableSpec;
+use crate::spec::{CallableSpec, IntoCallableSpec};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
 
@@ -520,6 +520,49 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
     }
 }
 
+mod sealed {
+    use super::{Lang, Package, SpecsProvider};
+    use alloc::sync::Arc;
+
+    pub trait SealedProvider<L: Lang> {}
+    impl<L: Lang> SealedProvider<L> for Package<L> {}
+    impl<L: Lang, P: SpecsProvider<L> + 'static> SealedProvider<L> for Arc<P> {}
+    impl<L: Lang> SealedProvider<L> for Arc<dyn SpecsProvider<L>> {}
+}
+
+/// Sealed conversion into a shared [`SpecsProvider`] — the item contract of
+/// [`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages),
+/// following the crate's one Arc-removal conversion idiom (the spec-side sibling is
+/// [`IntoCallableSpec`](crate::spec::IntoCallableSpec)): a [`Package`] passes **by
+/// value** (`lang_initial_with_packages([minilatex_package(), my_pkg])`, no `Arc::new`
+/// noise), while an already-shared **`Arc<P>`** or **`Arc<dyn SpecsProvider<L>>`**
+/// passes through as-is — no double-wrap.
+///
+/// Sealed: the three impls above are the whole vocabulary; downstream code implements
+/// [`SpecsProvider`], never this trait.
+pub trait IntoSpecsProvider<L: Lang>: sealed::SealedProvider<L> {
+    /// Convert into the shared provider handle scope stacks store.
+    fn into_specs_provider(self) -> Arc<dyn SpecsProvider<L>>;
+}
+
+impl<L: Lang> IntoSpecsProvider<L> for Package<L> {
+    fn into_specs_provider(self) -> Arc<dyn SpecsProvider<L>> {
+        Arc::new(self)
+    }
+}
+
+impl<L: Lang, P: SpecsProvider<L> + 'static> IntoSpecsProvider<L> for Arc<P> {
+    fn into_specs_provider(self) -> Arc<dyn SpecsProvider<L>> {
+        self
+    }
+}
+
+impl<L: Lang> IntoSpecsProvider<L> for Arc<dyn SpecsProvider<L>> {
+    fn into_specs_provider(self) -> Arc<dyn SpecsProvider<L>> {
+        self
+    }
+}
+
 /// One enumerated definition (see [`SpecsProvider::iter_symbols`]): a borrowed,
 /// self-describing row — callers clone the `Arc` if they keep it.
 pub struct SymbolEntry<'a, L: Lang> {
@@ -651,11 +694,15 @@ impl<L: Lang> Package<L> {
     /// Define `name` (normalized spelling) under the invocation form `callable_type`,
     /// visible in every mode the package is. Returns the spec previously defined under
     /// that key, if any.
-    pub fn insert(
+    ///
+    /// The spec passes through the sealed [`IntoCallableSpec`] conversion: by value
+    /// (`insert(CallableType::Macro, "emph", MacroSpec::new(…))` — no `Arc::new`), or
+    /// pre-shared as an `Arc` for flyweight sharing across names.
+    pub fn insert<M>(
         &mut self,
         callable_type: L::CallableTypeId,
         name: impl Into<Box<str>>,
-        spec: Arc<dyn CallableSpec<L>>,
+        spec: impl IntoCallableSpec<L, M>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
         self.insert_in_modes(callable_type, name, spec, None)
     }
@@ -666,31 +713,36 @@ impl<L: Lang> Package<L> {
     /// default). This is the fine gate under the package-level
     /// [`set_visible_modes`](Package::set_visible_modes): both must admit the mode. A
     /// text-only accent and a math-only script can live in one loadable package.
-    pub fn insert_in_modes(
+    pub fn insert_in_modes<M>(
         &mut self,
         callable_type: L::CallableTypeId,
         name: impl Into<Box<str>>,
-        spec: Arc<dyn CallableSpec<L>>,
+        spec: impl IntoCallableSpec<L, M>,
         visible_modes: Option<Vec<L::ModeId>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
         self.specs
             .entry(callable_type)
             .or_default()
-            .insert(name.into(), PackageEntry { spec, visible_modes })
+            .insert(
+                name.into(),
+                PackageEntry { spec: spec.into_callable_spec(), visible_modes },
+            )
             .map(|previous| previous.spec)
     }
 
     /// Define the specials `trigger` (e.g. `"---"`) as resolving to `spec` under the
     /// invocation form `callable_type`, visible in every mode the package is. One entry
     /// per trigger string: inserting an existing trigger replaces it (and returns the
-    /// previous spec).
-    pub fn insert_specials(
+    /// previous spec). The spec passes through the sealed [`IntoCallableSpec`]
+    /// conversion, exactly as in [`insert`](Package::insert) — whose parameter order
+    /// (callable type first, then the key) this method mirrors.
+    pub fn insert_specials<M>(
         &mut self,
-        trigger: impl Into<Box<str>>,
         callable_type: L::CallableTypeId,
-        spec: Arc<dyn CallableSpec<L>>,
+        trigger: impl Into<Box<str>>,
+        spec: impl IntoCallableSpec<L, M>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
-        self.insert_specials_in_modes(trigger, callable_type, spec, None)
+        self.insert_specials_in_modes(callable_type, trigger, spec, None)
     }
 
     /// Like [`insert_specials`](Package::insert_specials), but with per-entry mode
@@ -698,13 +750,14 @@ impl<L: Lang> Package<L> {
     /// `visible_modes` (`None` = every mode the package is visible in). Text-mode
     /// typography ligatures (`` `` ``, `---`) and math-mode scripts can share one
     /// package, each firing only in its own mode.
-    pub fn insert_specials_in_modes(
+    pub fn insert_specials_in_modes<M>(
         &mut self,
-        trigger: impl Into<Box<str>>,
         callable_type: L::CallableTypeId,
-        spec: Arc<dyn CallableSpec<L>>,
+        trigger: impl Into<Box<str>>,
+        spec: impl IntoCallableSpec<L, M>,
         visible_modes: Option<Vec<L::ModeId>>,
     ) -> Option<Arc<dyn CallableSpec<L>>> {
+        let spec = spec.into_callable_spec();
         let trigger = trigger.into();
         if let Some(existing) =
             self.specials.iter_mut().find(|entry| entry.trigger == trigger)
@@ -1758,7 +1811,7 @@ mod tests {
 
         let mut math_pkg: Package<ModedLang> = Package::new("math-only");
         math_pkg.insert(MACRO, "vec", Arc::clone(&math_spec));
-        math_pkg.insert_specials("&", MACRO, Arc::clone(&math_spec));
+        math_pkg.insert_specials(MACRO, "&", Arc::clone(&math_spec));
         math_pkg.set_visible_modes(Some(vec![Mode::Math]));
 
         let mut base: Package<ModedLang> = Package::new("base");
@@ -1798,8 +1851,8 @@ mod tests {
         let mut pkg: Package<ModedLang> = Package::new("mixed");
         pkg.insert_in_modes(MACRO, "emph", Arc::clone(&text_spec), Some(vec![Mode::Text]));
         pkg.insert(MACRO, "vec", Arc::clone(&any_spec)); // all modes
-        pkg.insert_specials_in_modes("--", MACRO, Arc::clone(&text_spec), Some(vec![Mode::Text]));
-        pkg.insert_specials("~", MACRO, Arc::clone(&any_spec)); // all modes
+        pkg.insert_specials_in_modes(MACRO, "--", Arc::clone(&text_spec), Some(vec![Mode::Text]));
+        pkg.insert_specials(MACRO, "~", Arc::clone(&any_spec)); // all modes
 
         let mut stack = ScopeStack::new();
         stack.push(Arc::new(pkg));
@@ -1996,7 +2049,7 @@ mod tests {
     ) -> Package<PlainLang> {
         let mut package = Package::new(name);
         for (trigger, spec) in triggers {
-            package.insert_specials(*trigger, MACRO, Arc::clone(spec));
+            package.insert_specials(MACRO, *trigger, Arc::clone(spec));
         }
         package
     }
@@ -2023,7 +2076,7 @@ mod tests {
 
         // Re-inserting an existing trigger replaces its resolution.
         let replacement = new_spec();
-        let previous = package.insert_specials("---", MACRO, Arc::clone(&replacement)).unwrap();
+        let previous = package.insert_specials(MACRO, "---", Arc::clone(&replacement)).unwrap();
         assert!(Arc::ptr_eq(&previous, &long));
         let matched = package.scan_specials(&st, "---", 0).unwrap().unwrap();
         assert!(Arc::ptr_eq(&matched.spec, &replacement));
@@ -2116,7 +2169,7 @@ mod tests {
         let mut pkg: Package<PlainLang> = Package::new("p");
         pkg.insert(MACRO, "alpha", Arc::clone(&spec));
         pkg.insert(ENVIRONMENT, "itemize", Arc::clone(&spec));
-        pkg.insert_specials("--", MACRO, Arc::clone(&spec));
+        pkg.insert_specials(MACRO, "--", Arc::clone(&spec));
 
         let mut macros = names_of(&pkg.iter_symbols(MACRO, ()).unwrap().collect::<Vec<_>>());
         macros.sort_unstable();
@@ -2138,7 +2191,7 @@ mod tests {
         let mut pkg: Package<ModedLang> = Package::new("mixed");
         pkg.insert(MACRO, "vec", Arc::clone(&spec)); // all modes
         pkg.insert_in_modes(MACRO, "emph", Arc::clone(&spec), Some(vec![Mode::Text]));
-        pkg.insert_specials_in_modes("--", MACRO, Arc::clone(&spec), Some(vec![Mode::Text]));
+        pkg.insert_specials_in_modes(MACRO, "--", Arc::clone(&spec), Some(vec![Mode::Text]));
 
         let mut in_text = names_of(&pkg.iter_symbols(MACRO, Mode::Text).unwrap().collect::<Vec<_>>());
         in_text.sort_unstable();

@@ -277,6 +277,9 @@ mod tests {
     use crate::extract::{content_as_chars, split_embellishments};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
+    use crate::state::ParsingState;
+    use crate::error::Recovery;
+    use crate::latexlike::LatexlikeDriver;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -291,7 +294,10 @@ mod tests {
             Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new(Arc::new(parser)))])),
         );
         package.insert(CallableType::Macro, "alpha", Arc::new(MacroSpec::new(vec![])));
-        Language::<Latexlike>::default().with_provider(Arc::new(package)).unwrap()
+        Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        )
     }
 
     fn parse(markers: &[&str], input: &str) -> crate::engine::ParseResult<Latexlike> {

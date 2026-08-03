@@ -138,21 +138,21 @@ impl core::error::Error for ArgumentCodeError {}
 /// requirement; any hand-built parser remains first-class).
 ///
 /// ```
-/// use std::sync::Arc;
-/// use techy::core::Language;
-/// use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
+/// use techy::core::{Language, ParsingState};
+/// use techy::error::Recovery;
+/// use techy::latexlike::{argument_specs, CallableType, Latexlike, LatexlikeDriver, MacroSpec};
 /// use techy::core::specs::Package;
-/// use techy::core::ParsingStateDelta;
 ///
 /// let mut package = Package::new("mydefs");
 /// package.insert(
 ///     CallableType::Macro,
 ///     "includegraphics",
-///     Arc::new(MacroSpec::new(argument_specs(["o", "{"]).unwrap())),
+///     MacroSpec::new(argument_specs(["o", "{"]).unwrap()),
 /// );
-/// let language = Language::<Latexlike>::default()
-///     .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-///     .unwrap();
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict),
+///     ParsingState::lang_initial_with_packages([package]),
+/// );
 ///
 /// let result = language.parse(r"\includegraphics[width=5cm]{fig.png}").unwrap();
 /// let node = result.tree.root().child(0).unwrap();
@@ -328,7 +328,7 @@ mod tests {
     use crate::error::Recovery;
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
-    use crate::state::ParsingStateDelta;
+    use crate::state::ParsingState;
     use alloc::format;
     use alloc::string::ToString;
 
@@ -508,9 +508,10 @@ mod tests {
             .unwrap();
         let mut package = Package::new("factory-tests");
         package.insert(CallableType::Macro, "m", Arc::new(MacroSpec::new(specs)));
-        Language::new(LatexlikeDriver::new(recovery))
-            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-            .unwrap()
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([package]),
+        )
     }
 
     fn parse_ok(codes: &str, input: &str) -> ParseResult<Latexlike> {

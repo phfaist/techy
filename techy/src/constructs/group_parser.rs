@@ -290,7 +290,7 @@ mod tests {
         let rule = Arc::clone(rule);
         reader.move_past(&open, true);
         let mut session = ParserSession::new();
-        let driver = crate::engine::StdParseDriver::new(recovery);
+        let driver = crate::engine::StdParseDriver::new(recovery, ());
         let mut cx = ParseContext::new(
             &mut reader,
             Arc::clone(&source),

@@ -212,6 +212,7 @@ mod tests {
     use crate::extract::content_as_chars;
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
+    use crate::state::ParsingState;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -229,7 +230,10 @@ mod tests {
             "emph",
             Arc::new(MacroSpec::new(argument_specs(["m"]).unwrap())),
         );
-        Language::new(LatexlikeDriver::new(recovery)).with_provider(Arc::new(package)).unwrap()
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([package]),
+        )
     }
 
     fn parser() -> CharsGroupArgumentParser<Latexlike> {

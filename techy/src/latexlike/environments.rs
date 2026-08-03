@@ -30,21 +30,21 @@
 //! the rigid name group.
 //!
 //! ```
-//! use std::sync::Arc;
-//! use techy::core::Language;
-//! use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike};
+//! use techy::core::{Language, ParsingState};
+//! use techy::error::Recovery;
+//! use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver};
 //! use techy::core::specs::Package;
-//! use techy::core::ParsingStateDelta;
 //!
 //! let mut package = Package::new("mydefs");
 //! package.insert(
 //!     CallableType::Environment,
 //!     "itemize",
-//!     Arc::new(EnvironmentSpec::new(vec![])),
+//!     EnvironmentSpec::new(vec![]),
 //! );
-//! let language = Language::<Latexlike>::default()
-//!     .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-//!     .unwrap();
+//! let language: Language<Latexlike> = Language::new(
+//!     LatexlikeDriver::new(Recovery::Strict),
+//!     ParsingState::lang_initial_with_packages([package]),
+//! );
 //!
 //! let result = language.parse(r"\begin{itemize} a b \end{itemize}").unwrap();
 //! let env = result.tree.root().child(0).unwrap();
@@ -249,20 +249,23 @@ impl EnvironmentBehavior for StdEnvironmentBehavior {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use techy::core::Language;
-/// use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, VerbatimBehavior};
+/// use techy::core::{Language, ParsingState};
+/// use techy::error::Recovery;
+/// use techy::latexlike::{
+///     CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver, VerbatimBehavior,
+/// };
 /// use techy::core::specs::Package;
-/// use techy::core::ParsingStateDelta;
 ///
 /// let mut package = Package::new("mydefs");
 /// package.insert(
 ///     CallableType::Environment,
 ///     "verbatim",
-///     Arc::new(EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default()))),
+///     EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::default())),
 /// );
-/// let language = Language::<Latexlike>::default()
-///     .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-///     .unwrap();
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict),
+///     ParsingState::lang_initial_with_packages([package]),
+/// );
 ///
 /// let result = language
 ///     .parse("\\begin{verbatim}\na % b \\x{\n\\end{verbatim}")
@@ -642,7 +645,7 @@ mod tests {
     use crate::error::Recovery;
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::{Package, ScopeOp};
-    use crate::state::TokenRulesOverrides;
+    use crate::state::{ParsingState, TokenRulesOverrides};
     use crate::token::GroupRule;
     use alloc::string::ToString;
 
@@ -716,11 +719,10 @@ mod tests {
     }
 
     fn language(recovery: Recovery) -> Language<Latexlike> {
-        Language::new(LatexlikeDriver::new(recovery))
-            .with_seed_delta(
-                ParsingStateDelta::new().push_provider(Arc::new(test_definitions())),
-            )
-            .unwrap()
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([test_definitions()]),
+        )
     }
 
     fn strict() -> Language<Latexlike> {
@@ -902,11 +904,10 @@ mod tests {
             let mut math_envs = Package::new("mathenvs");
             math_envs.insert(CallableType::Environment, "aligned", env(vec![]));
             math_envs.set_visible_modes(Some(vec![Mode::Math]));
-            Language::new(LatexlikeDriver::new(recovery))
-                .with_seed_delta(
-                    ParsingStateDelta::new().push_provider(Arc::new(math_envs)),
-                )
-                .unwrap()
+            Language::new(
+                LatexlikeDriver::new(recovery),
+                ParsingState::lang_initial_with_packages([math_envs]),
+            )
         };
 
         let math = with_math_envs(Recovery::Strict)
@@ -928,7 +929,10 @@ mod tests {
         // No extra packages: `\begin`/`\end` are `"base"` entries; the environment
         // name is unknown, but the composition still parses the body to its
         // terminator under the tolerant fallback.
-        let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant));
+        let language = Language::new(
+            LatexlikeDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial(),
+        );
         let result = language.parse("\\begin{itemize}x\\end{itemize}").unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(messages(&result), ["unknown environment ‘itemize’"]);
@@ -939,11 +943,12 @@ mod tests {
 
     #[test]
     fn unloading_base_removes_the_dispatch_pair() {
-        let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant))
-            .with_seed_delta(
-                ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
+        let seed = ParsingState::<Latexlike>::lang_initial()
+            .derived(
+                &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
             )
             .unwrap();
+        let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed);
         let result = language.parse("\\begin{itemize}").unwrap();
         let all = messages(&result);
         assert_eq!(all.len(), 1);
@@ -1190,9 +1195,10 @@ mod tests {
             "gen",
             Arc::new(crate::spec::StdCallableSpec::new(vec![brace_arg()])),
         );
-        let language = Language::new(LatexlikeDriver::new(Recovery::Strict))
-            .with_seed_delta(ParsingStateDelta::new().push_provider(Arc::new(package)))
-            .unwrap();
+        let language = Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
         let result = language.parse("\\begin{gen}{a}x\\end{gen}").unwrap();
         check_tree_invariants(&result.tree);
         assert!(result.diagnostics.is_empty());

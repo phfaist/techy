@@ -31,7 +31,7 @@
 mod callable;
 mod structure;
 
-pub use callable::{CallableSpec, FrameRole, StdCallableSpec};
+pub use callable::{CallableSpec, FrameRole, IntoCallableSpec, StdCallableSpec};
 pub use structure::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 
 #[cfg(test)]

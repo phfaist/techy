@@ -3,9 +3,9 @@
 //! vocabulary so each sibling test file doesn't re-derive its own (7.5 review — #13/#14).
 //!
 //! Shrunk in 7.9: the genuinely multi-purpose pieces were promoted to public API —
-//! the compact node description is [`NodeRef::summary`], and pushing a provider onto
-//! a language's seed is [`Language::with_provider`]. What remains here is thin
-//! test-only wiring.
+//! the compact node description is [`NodeRef::summary`], and pushing packages onto
+//! a language's seed is [`ParsingState::lang_initial_with_packages`]. What remains
+//! here is thin test-only wiring.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -16,17 +16,27 @@ use crate::error::Recovery;
 use crate::node::check_tree_invariants;
 use crate::scopes::Package;
 use crate::spec::StdCallableSpec;
+use crate::state::ParsingState;
 
 use super::{CallableType, Latexlike, LatexlikeDriver, Mode};
 
 /// A strict-recovery latexlike `Language` (the seed defaults).
 pub(super) fn strict() -> Language<Latexlike> {
-    Language::default()
+    Language::new(LatexlikeDriver::new(Recovery::Strict), ParsingState::lang_initial())
 }
 
 /// A tolerant-recovery latexlike `Language`.
 pub(super) fn tolerant() -> Language<Latexlike> {
-    Language::new(LatexlikeDriver::new(Recovery::Tolerant))
+    Language::new(LatexlikeDriver::new(Recovery::Tolerant), ParsingState::lang_initial())
+}
+
+/// A latexlike `Language` under `recovery` with `package` pushed innermost over the
+/// seed defaults.
+pub(super) fn with_package(recovery: Recovery, package: Package<Latexlike>) -> Language<Latexlike> {
+    Language::new(
+        LatexlikeDriver::new(recovery),
+        ParsingState::lang_initial_with_packages([package]),
+    )
 }
 
 /// The root list's child summaries ([`NodeRef::summary`]).

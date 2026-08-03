@@ -179,7 +179,7 @@ pub trait Lang: Sized + 'static {
     /// The language's canonical initial (seed) state data: base token rules, the seed
     /// scope stack (fallback providers included), and the initial state ext.
     /// The crate freezes the returned data into the seed state
-    /// ([`ParsingState::initial`]) — the data→state step is crate-owned, so every other
+    /// ([`ParsingState::lang_initial`]) — the data→state step is crate-owned, so every other
     /// state a parse sees comes from [`derived()`](ParsingState::derived) and passes
     /// through [`finalize_transition`](Lang::finalize_transition). Callers customize the
     /// starting point by deriving from the seed with a delta, never by assembling a
@@ -190,8 +190,8 @@ pub trait Lang: Sized + 'static {
     /// customizer maintains — if `finalize_transition` installs a `$…$` group rule
     /// whenever the mode is math, a seed whose mode is math must come with that rule in
     /// place. Both hooks have the same author, which keeps the contract local; a test
-    /// asserting `initial().derived(&ParsingStateDelta::new())` is data-equivalent to
-    /// `initial()` pins it mechanically.
+    /// asserting `lang_initial().derived(&ParsingStateDelta::new())` is data-equivalent to
+    /// `lang_initial()` pins it mechanically.
     ///
     /// The default is the most neutral data — [`StateData::empty`]: every syntax gate
     /// off (character-level content — no whitespace handling, groups, commands,

@@ -40,8 +40,8 @@ use state_memo::{
 };
 
 pub use driver::{
-    resolve_command_in_scopes, CommandResolution, ParseDriver, ResolvedCallable,
-    StdParseDriver,
+    resolve_command_in_scopes, CommandResolution, CommandResolver, ParseDriver,
+    ResolvedCallable, ScopesCommandResolver, StdParseDriver,
 };
 pub use language::Language;
 
@@ -566,7 +566,7 @@ mod tests {
             vec![Token::new(TokenKind::Char('q'), Span::new(0, 1), Span::empty(0))];
         let mut reader = TokenListReader::new(tokens);
         let mut session = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Tolerant);
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
 
         let mut cx =
             ParseContext::new(&mut reader, source.clone(), st.clone(), &mut session, &driver);
@@ -586,7 +586,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Tolerant);
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session, &driver);
 
         let condition = TestUnresolvable { name: "boom".into() };
@@ -602,7 +602,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Tolerant);
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx =
             ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
 
@@ -629,7 +629,7 @@ mod tests {
         let st = state();
         let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
         let mut session = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Strict);
+        let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx =
             ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
 
@@ -704,7 +704,7 @@ mod tests {
             Span::empty(0),
         );
         let resolved: CommandResolution<PlainLang> =
-            StdParseDriver::default().resolve_command(&st, &token);
+            StdParseDriver::new(Recovery::Strict, ()).resolve_command(&st, &token);
         match resolved {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("command resolution is not implemented"));
@@ -717,11 +717,69 @@ mod tests {
     }
 
     #[test]
+    fn scopes_command_resolver_resolves_through_the_scope_stack() {
+        use crate::scopes::Package;
+        use crate::spec::StdCallableSpec;
+
+        // A state whose scope stack defines `foo` under callable type 0.
+        let mut package: Package<PlainLang> = Package::new("defs");
+        package.insert(0u32, "foo", StdCallableSpec::default());
+        let st = ParsingState::<PlainLang>::lang_initial_with_packages([package]);
+
+        let token: Token<'static, PlainLang> = Token::new(
+            TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
+            Span::new(0, 4),
+            Span::empty(0),
+        );
+        // Through the strategy value carried by StdParseDriver…
+        let driver = StdParseDriver::new(
+            Recovery::Strict,
+            ScopesCommandResolver::<PlainLang> { command_type: 0u32 },
+        );
+        assert!(matches!(
+            driver.resolve_command(&st, &token),
+            CommandResolution::Resolved(_)
+        ));
+        // …and a clean miss carries the searched-providers detail.
+        let miss: Token<'static, PlainLang> = Token::new(
+            TokenKind::Command { name: "bar", escape_char: '\\', post_space: Span::empty(4) },
+            Span::new(0, 4),
+            Span::empty(0),
+        );
+        match driver.resolve_command(&st, &miss) {
+            CommandResolution::Unresolved { detail } => {
+                assert!(detail.unwrap().contains("defs"));
+            }
+            other => panic!("expected a clean miss, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn std_driver_source_resolver_defaults_none_and_is_configurable() {
+        use crate::source::{MapResolver, SourceResolver};
+
+        let bare: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
+        assert!(ParseDriver::<PlainLang>::source_resolver(&bare).is_none());
+
+        // By value: the builder shares internally.
+        let by_value: StdParseDriver =
+            StdParseDriver::new(Recovery::Strict, ()).with_source_resolver(MapResolver::new());
+        assert!(ParseDriver::<PlainLang>::source_resolver(&by_value).is_some());
+
+        // Pre-shared Arcs pass through without double-wrap (pointer identity holds).
+        let premade: Arc<dyn SourceResolver> = Arc::new(MapResolver::new());
+        let witness = Arc::clone(&premade);
+        let shared: StdParseDriver =
+            StdParseDriver::new(Recovery::Strict, ()).with_source_resolver(premade);
+        assert!(Arc::ptr_eq(shared.source_resolver.as_ref().unwrap(), &witness));
+    }
+
+    #[test]
     fn default_paragraph_break_node_is_spanned_whitespace_chars() {
         let st = state();
         let token: Token<'static, PlainLang> =
             Token::new(TokenKind::ParagraphBreak, Span::new(3, 5), Span::new(1, 3));
-        let kind = StdParseDriver::default().make_paragraph_break_node(&st, &token);
+        let kind = StdParseDriver::new(Recovery::Strict, ()).make_paragraph_break_node(&st, &token);
         match kind {
             NodeKind::Chars { content, .. } => {
                 // Span-backed over the full token span (newlines included), per the

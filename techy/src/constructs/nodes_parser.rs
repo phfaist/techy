@@ -1067,7 +1067,7 @@ mod tests {
 
     impl TestDriver for StdParseDriver {
         fn with_recovery(recovery: Recovery) -> Self {
-            StdParseDriver::new(recovery)
+            StdParseDriver::new(recovery, ())
         }
     }
 
@@ -3091,7 +3091,7 @@ mod tests {
         let st = state();
         let mut reader = StdTokenReader::new(content);
         let mut session: ParserSession<TestLang> = ParserSession::new();
-        let driver = StdParseDriver::new(Recovery::Tolerant);
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut nodes = Vec::new();
         let stop = loop {
             let mut cx = ParseContext::new(
@@ -3709,10 +3709,10 @@ mod tests {
             Arc::new(StdCallableSpec::default());
 
         let mut inner: Package<StackSpecialsLang> = Package::new("inner");
-        inner.insert_specials("--", CT_SPECIALS, Arc::clone(&inner_short));
+        inner.insert_specials(CT_SPECIALS, "--", Arc::clone(&inner_short));
         let mut outer: Package<StackSpecialsLang> = Package::new("outer");
-        outer.insert_specials("--", CT_SPECIALS, Arc::clone(&outer_short));
-        outer.insert_specials("---", CT_SPECIALS, Arc::clone(&outer_long));
+        outer.insert_specials(CT_SPECIALS, "--", Arc::clone(&outer_short));
+        outer.insert_specials(CT_SPECIALS, "---", Arc::clone(&outer_long));
 
         let mut scopes = ScopeStack::new();
         scopes.push(Arc::new(outer));

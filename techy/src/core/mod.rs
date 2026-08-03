@@ -39,7 +39,8 @@ pub mod node;
 pub mod specs;
 
 pub use crate::engine::{
-    Frame, FrameTitle, Language, ParseDriver, ParseResult, ParserSession, StdParseDriver,
+    CommandResolver, Frame, FrameTitle, Language, ParseDriver, ParseResult, ParserSession,
+    StdParseDriver,
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{

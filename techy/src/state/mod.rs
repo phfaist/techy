@@ -16,7 +16,7 @@
 //!   applies the overrides, runs the [`Lang::finalize_transition`] customizer exactly
 //!   once, and freezes the result (caches rebuilt). Cross-cutting rules ("in math mode
 //!   the escape char is `#`") live in the customizer, not in delta writers. The seed
-//!   state comes only from [`ParsingState::initial`], which freezes the language's
+//!   state comes only from [`ParsingState::lang_initial`], which freezes the language's
 //!   canonical [`Lang::initial_state_data`] — the data→state step is crate-owned, so no
 //!   caller can assemble a state that bypasses the choke point (seed coherence itself is
 //!   the `Lang` author's contract; see the hook's docs).

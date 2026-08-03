@@ -5,11 +5,12 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
-use crate::source::TextContent;
+use crate::source::{IntoSourceResolver, SourceResolver, TextContent};
 use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token};
 
@@ -54,26 +55,44 @@ pub enum ParagraphBreakStyle {
 /// scope stack (as [`Macro`](CallableType::Macro)s — `\begin`/`\end` resolve like any
 /// other command to the [`base_package`](super::base_package)'s dispatch entries),
 /// plugs [`Math`](GroupType::Math) group interiors into [`Mode::Math`] through
-/// the descent-delta channel, and emits paragraph-break nodes per its
-/// [`ParagraphBreakStyle`].
+/// the descent-delta channel, emits paragraph-break nodes per its
+/// [`ParagraphBreakStyle`], and exposes an optional [`SourceResolver`] for
+/// `\input`-like external references
+/// ([`with_source_resolver`](LatexlikeDriver::with_source_resolver); the default is
+/// none — the driver resolves nothing).
+///
+/// The recovery policy is the driver's one mandatory knob — strict vs. tolerant must
+/// be an explicit [`new`](LatexlikeDriver::new) argument (there is deliberately no
+/// `Default`).
 ///
 /// Construct-provision and the remaining hooks keep their trait defaults; preset
 /// helper methods (e.g. package loading by name) arrive with the standard spec
 /// database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct LatexlikeDriver {
-    /// The tolerant-parsing policy to drive under (default: [`Recovery::Strict`]).
+    /// The tolerant-parsing policy to drive under.
     pub recovery: Recovery,
     /// How paragraph-break tokens become nodes (default:
     /// [`ParagraphBreakStyle::Chars`]).
     pub paragraph_break_style: ParagraphBreakStyle,
+    /// The [`SourceResolver`] behind
+    /// [`ParseDriver::source_resolver`] (`None` — the default — resolves nothing);
+    /// set via [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
+    /// Value-level `dyn` deliberately (an embedding-environment capability consumed
+    /// on the cold path) — see the asymmetry note on
+    /// [`StdParseDriver`](crate::engine::StdParseDriver).
+    pub source_resolver: Option<Arc<dyn SourceResolver<Option<String>>>>,
 }
 
 impl LatexlikeDriver {
     /// A driver with the given recovery policy (and the default
-    /// [`ParagraphBreakStyle::Chars`]).
+    /// [`ParagraphBreakStyle::Chars`], no source resolver).
     pub fn new(recovery: Recovery) -> LatexlikeDriver {
-        LatexlikeDriver { recovery, paragraph_break_style: ParagraphBreakStyle::default() }
+        LatexlikeDriver {
+            recovery,
+            paragraph_break_style: ParagraphBreakStyle::default(),
+            source_resolver: None,
+        }
     }
 
     /// Emit paragraph-break nodes in the given style.
@@ -81,17 +100,37 @@ impl LatexlikeDriver {
         self.paragraph_break_style = style;
         self
     }
+
+    /// Use `resolver` for `\input`-like external source references — exposed through
+    /// [`ParseDriver::source_resolver`]. Takes a resolver by value (shared internally)
+    /// or an already-shared `Arc` (passed through, no double-wrap).
+    pub fn with_source_resolver<M>(
+        mut self,
+        resolver: impl IntoSourceResolver<Option<String>, M>,
+    ) -> LatexlikeDriver {
+        self.source_resolver = Some(resolver.into_source_resolver());
+        self
+    }
 }
 
-impl Default for LatexlikeDriver {
-    fn default() -> Self {
-        LatexlikeDriver::new(Recovery::Strict)
+// Manual Debug: the `dyn SourceResolver` carries no `Debug` bound — the resolver
+// field is shown by presence only.
+impl fmt::Debug for LatexlikeDriver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LatexlikeDriver")
+            .field("recovery", &self.recovery)
+            .field("paragraph_break_style", &self.paragraph_break_style)
+            .finish_non_exhaustive()
     }
 }
 
 impl ParseDriver<Latexlike> for LatexlikeDriver {
     fn recovery(&self) -> Recovery {
         self.recovery
+    }
+
+    fn source_resolver(&self) -> Option<&dyn SourceResolver<Option<String>>> {
+        self.source_resolver.as_deref()
     }
 
     /// Resolve a command token as a [`Macro`](CallableType::Macro) through the state's
@@ -119,9 +158,10 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
     ) -> NodeKind<Latexlike> {
         match self.paragraph_break_style {
             ParagraphBreakStyle::Chars => NodeKind::chars(token.span),
-            // The spec is minted per break rather than cached on the driver: caching
-            // an `Arc` would cost the driver its `Copy`/`Eq` config-value nature for
-            // a negligible allocation (specs are behavior, never compared).
+            // The spec is minted per break rather than cached on the driver: the
+            // allocation is negligible (once per paragraph break, cold next to a
+            // parse), and a cached `Arc` would be one more field carrying no
+            // configuration (specs are behavior, never compared).
             ParagraphBreakStyle::Specials => NodeKind::callable(CallableData {
                 callable_type: CallableType::Specials,
                 name: "\n\n".into(),
@@ -186,19 +226,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_driver_is_strict() {
-        assert_eq!(LatexlikeDriver::default().recovery, Recovery::Strict);
+    fn the_recovery_knob_is_explicit() {
+        assert_eq!(LatexlikeDriver::new(Recovery::Strict).recovery, Recovery::Strict);
         assert_eq!(LatexlikeDriver::new(Recovery::Tolerant).recovery, Recovery::Tolerant);
     }
 
     #[test]
     fn the_default_paragraph_break_style_is_chars() {
         assert_eq!(
-            LatexlikeDriver::default().paragraph_break_style,
+            LatexlikeDriver::new(Recovery::Strict).paragraph_break_style,
             ParagraphBreakStyle::Chars
         );
         assert_eq!(
-            LatexlikeDriver::default()
+            LatexlikeDriver::new(Recovery::Strict)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials)
                 .paragraph_break_style,
             ParagraphBreakStyle::Specials
@@ -206,9 +246,21 @@ mod tests {
     }
 
     #[test]
+    fn the_driver_resolves_no_sources_unless_configured() {
+        use crate::source::MapResolver;
+
+        let bare = LatexlikeDriver::new(Recovery::Strict);
+        assert!(ParseDriver::<Latexlike>::source_resolver(&bare).is_none());
+
+        let configured =
+            LatexlikeDriver::new(Recovery::Strict).with_source_resolver(MapResolver::new());
+        assert!(ParseDriver::<Latexlike>::source_resolver(&configured).is_some());
+    }
+
+    #[test]
     fn math_rules_enter_math_mode_content_rules_do_not() {
-        let driver = LatexlikeDriver::default();
-        let state = ParsingState::<Latexlike>::initial();
+        let driver = LatexlikeDriver::new(Recovery::Strict);
+        let state = ParsingState::<Latexlike>::lang_initial();
 
         let math = Arc::new(GroupRule {
             group_type: GroupType::Math,

@@ -42,7 +42,7 @@ mod support {
     use techy::core::node::{check_tree_invariants, NodeRef};
     use techy::core::specs::{FallbackProvider, Package, ScopeOp};
     use techy::core::specs::ArgumentSpec;
-    use techy::core::{ParsingStateDelta, TokenRulesOverrides};
+    use techy::core::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
 
     /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
     pub fn args(codes: &[&str]) -> Vec<Arc<ArgumentSpec<Latexlike>>> {
@@ -147,9 +147,22 @@ mod support {
 
     /// A latexlike `Language` with [`testdb`] pushed, under `recovery`.
     pub fn with_recovery(recovery: Recovery) -> Language<Latexlike> {
-        Language::new(LatexlikeDriver::new(recovery))
-            .with_provider(Arc::new(testdb()))
-            .unwrap()
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([testdb()]),
+        )
+    }
+
+    /// Like [`with_recovery`], with one more `package` pushed innermost (it shadows
+    /// [`testdb`]) — the per-test extra-definitions shape.
+    pub fn with_recovery_plus(
+        recovery: Recovery,
+        package: Package<Latexlike>,
+    ) -> Language<Latexlike> {
+        Language::new(
+            LatexlikeDriver::new(recovery),
+            ParsingState::lang_initial_with_packages([testdb(), package]),
+        )
     }
 
     /// The strict suite language ([`testdb`] over the seed defaults).
@@ -170,13 +183,14 @@ mod support {
     pub fn with_macro_fallback(recovery: Recovery) -> Language<Latexlike> {
         let mut fallback = FallbackProvider::new("anymacro");
         fallback.set(CallableType::Macro, Arc::new(MacroSpec::default()));
-        Language::new(LatexlikeDriver::new(recovery))
-            .with_seed_delta(ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
+        let seed = ParsingState::lang_initial()
+            .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
                 Arc::new(base_package()),
                 Arc::new(testdb()),
             ])))
-            .unwrap()
+            .unwrap();
+        Language::new(LatexlikeDriver::new(recovery), seed)
     }
 
     /// `{byte range} {summary}` per node — the suite's exact-shape currency.
@@ -300,7 +314,7 @@ mod optional_args {
                 "foo",
                 Arc::new(MacroSpec::new(args(&["o", "m", "o"]))),
             );
-            with_recovery(recovery).with_provider(Arc::new(package)).unwrap()
+            with_recovery_plus(recovery, package)
         };
         let result = parse_ok_in(language_for, r"\foo{test}");
 
@@ -425,7 +439,7 @@ mod general {
                 "cite",
                 Arc::new(MacroSpec::new(args(&["m", "m", "m", "m"]))),
             );
-            with_recovery(recovery).with_provider(Arc::new(package)).unwrap()
+            with_recovery_plus(recovery, package)
         };
         let input = r"Indeed thanks to \cite[Lemma 3]{Author}, we know that...";
         let result = parse_ok_in(language_for, input);
@@ -941,11 +955,11 @@ This is a final sentence. { <-- this brace is not closed.
         let language_for = |recovery: Recovery| {
             let mut package = Package::new("underscore");
             package.insert_specials(
-                "_",
                 CallableType::Specials,
+                "_",
                 Arc::new(SpecialsSpec::new(args(&["m"]))),
             );
-            with_recovery(recovery).with_provider(Arc::new(package)).unwrap()
+            with_recovery_plus(recovery, package)
         };
 
         let err = language_for(Recovery::Strict).parse("Test _").unwrap_err();
@@ -1033,8 +1047,7 @@ This is a final sentence. { <-- this brace is not closed.
 
 mod paragraph_breaks {
     use super::support::*;
-    use std::sync::Arc;
-    use techy::core::Language;
+    use techy::core::{Language, ParsingState};
     use techy::error::Recovery;
     use techy::latexlike::{Latexlike, LatexlikeDriver, ParagraphBreakStyle};
     use techy::extract::content_as_chars;
@@ -1043,9 +1056,8 @@ mod paragraph_breaks {
         Language::new(
             LatexlikeDriver::new(recovery)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials),
+            ParsingState::lang_initial_with_packages([testdb()]),
         )
-        .with_provider(Arc::new(testdb()))
-        .unwrap()
     }
 
     // The default style: a paragraph break is a whitespace chars node

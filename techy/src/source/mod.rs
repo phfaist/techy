@@ -17,7 +17,8 @@
 //!   tree walkable for error reporting. Provenance lives on the *source* (one hop per
 //!   resolved/synthesized source), not on every location.
 //! - [`SourceResolver`] is the pluggable content-lookup extension point (`\input`-like
-//!   references); [`NoResolver`] is the zero-cost default.
+//!   references), configured on a parse driver through the sealed
+//!   [`IntoSourceResolver`] conversion; an unconfigured driver resolves nothing.
 //! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
 //!   owned when synthesized or normalized. Node payloads carry it.
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
@@ -56,7 +57,8 @@ mod text_content;
 pub use line_index::LineIndex;
 pub use origin::SourceOrigin;
 pub use resolver::{
-    resolve_source_reference, MapResolver, NoResolver, ResolveError, ResolvedContent, SourceResolver,
+    resolve_source_reference, IntoSourceResolver, MapResolver, ResolveError,
+    ResolvedContent, SourceResolver,
 };
 pub use source::{ProvenanceChain, Source, SourceProvenance, SourceSpan};
 pub use span::Span;
