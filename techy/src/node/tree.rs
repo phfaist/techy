@@ -178,6 +178,15 @@ impl<L: Lang, A> NodeTree<L, A> {
         &self.core.parent
     }
 
+    /// Whether every node's span lies in one and the same `Source` — the flag
+    /// `finish()` computes (in-crate: the O(1) fast path for the whole-run
+    /// single-source verification of [`NodeSlice::span`](super::NodeSlice::span)/
+    /// [`source_text`](super::NodeSlice::source_text)).
+    #[inline]
+    pub(crate) fn is_single_source(&self) -> bool {
+        self.core.single_source
+    }
+
     /// The root node (index 0; a tree always has at least one node).
     pub fn root(&self) -> NodeRef<'_, L, A> {
         self.node(self.make_id(0))

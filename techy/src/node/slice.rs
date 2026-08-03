@@ -8,7 +8,9 @@
 //! Beyond iteration it answers *where the run is in the source* ([`span`](NodeSlice::span),
 //! [`source_text`](NodeSlice::source_text)) **exactly** — sibling runs are
 //! span-contiguous by the partition invariant, so the covering span is the first
-//! node's start to the last node's end, not an approximation. The extraction helpers
+//! node's start to the last node's end, not an approximation. The two accessors
+//! answer only when the whole run lies within a single source (see their contracts;
+//! restaged trees can mix sources within one run). The extraction helpers
 //! ([`extract`](crate::extract)) consume and produce these views.
 
 use core::fmt;
@@ -95,29 +97,52 @@ impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
         self.tree
     }
 
-    /// The run's covering [`SourceSpan`] — **exact**: sibling runs are span-contiguous
-    /// (the partition invariant), so this is the first node's start to the last
-    /// node's end, in the run's own source.
+    /// Whether the whole run lies within one single `Source` — the contract gate of
+    /// [`span`](NodeSlice::span)/[`source_text`](NodeSlice::source_text). O(1) when
+    /// the whole tree is single-source (the flag `finish()` computes); otherwise a
+    /// scan of every node of the run. `false` for an empty run (no source to name).
+    fn is_single_source_run(&self) -> bool {
+        if self.tree.is_single_source() {
+            return true;
+        }
+        let Some(first) = self.first() else {
+            return false;
+        };
+        let source = first.span().source();
+        self.iter().all(|node| alloc::sync::Arc::ptr_eq(node.span().source(), source))
+    }
+
+    /// The run's covering [`SourceSpan`] — **exact**: sibling runs of a parsed tree
+    /// are span-contiguous (the partition invariant), so this is the first node's
+    /// start to the last node's end.
     ///
-    /// `None` in exactly two honest cases: the run is **empty** (no source material to
-    /// point at), or its first and last nodes live in **different sources** (possible
-    /// in synthesized/spliced trees only — a parsed tree's siblings share one source).
+    /// Answers only when **the whole run lies within a single source**: every node
+    /// of the run — not just the endpoints — must live in one and the same `Source`
+    /// (verified across the run; O(1) on single-source trees via the flag computed
+    /// at `finish()`), with the endpoints in source order (first start ≤ last end).
+    /// `None` means there is no single-source answer: the run is empty, a node of
+    /// the run lives in a different source, or the endpoints are out of order —
+    /// possible on restaged/synthesized trees only; a parsed tree's sibling runs
+    /// always answer. Per-node accessors ([`NodeRef::span`](super::NodeRef::span))
+    /// stay valid on any tree (a node's own span is its provenance).
     pub fn span(&self) -> Option<SourceSpan<L::SourceOrigin>> {
         let (first, last) = (self.first()?, self.last()?);
         let (first, last) = (first.span(), last.span());
-        if !first.same_source(last) || first.start() > last.end() {
+        if !self.is_single_source_run() || first.start() > last.end() {
             return None;
         }
         Some(SourceSpan::new(first.source(), first.start()..last.end()))
     }
 
     /// The exact original source text of the run (the text [`span`](NodeSlice::span)
-    /// points at) — pylatexenc's `latex_verbatim()` for a node list. `None` exactly
-    /// when `span()` is.
+    /// points at) — pylatexenc's `latex_verbatim()` for a node list. Same contract
+    /// as [`span`](NodeSlice::span): answers only when the whole run lies within a
+    /// single source, with the endpoints in source order; `None` exactly when
+    /// `span()` is.
     pub fn source_text(&self) -> Option<&'t str> {
         let (first, last) = (self.first()?, self.last()?);
         let (first, last) = (first.span(), last.span());
-        if !first.same_source(last) {
+        if !self.is_single_source_run() || first.start() > last.end() {
             return None;
         }
         first.source().content().get(first.start()..last.end())

@@ -11,7 +11,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`) — done (successor agent 1)
 - [x] D. Level-0 `restage_node` (+ copy.rs rebased on it) — done (successor agent 2)
 - [x] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub) — done (successor agent 2)
-- [ ] F. Slices single-source whole-run contract (fast-path flag wired)
+- [x] F. Slices single-source whole-run contract (fast-path flag wired) — done (successor agent 2)
 - [ ] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, Attached byte-tiling exclusion, S6 TODO)
 - [ ] H. Consumer polish (`display_tree`, `NodeKind::as_str`)
 - [ ] I. Docs (rustdoc sweeps, DR status lines, superseded-names verification, guide pages/CLAUDE.md)
@@ -587,6 +587,17 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
   deepest/gap-offset/empty-span/foreign-source; per-source descent over an
   `\input`-like two-source tree incl. covering_slice; covering_slice
   single/multi/delimiter-fallback/empty/no-cover).
+- **Item 8 (slice contracts)** — landed in milestone F (successor agent 2):
+  `NodeSlice::span()`/`source_text()` now verify the **whole run** (private
+  `is_single_source_run()`: O(1) via the stored `TreeCore.single_source` flag,
+  else a scan of every node of the run); `source_text()` gained the ordering
+  guard (`first start ≤ last end`) for contract parity; both rustdocs state the
+  concrete condition ("the whole run lies within a single source") — the word
+  "honest" appears nowhere in slice.rs; `None` = no single-source answer; the
+  per-node-accessors-stay-valid sentence included. Slice module doc updated.
+  Test: a foreign-source *middle* sibling spliced via `restage_node` — endpoints
+  agree, whole run does not → `None` from both; sub-runs avoiding the foreign
+  node still answer (scan path); parsed tree answers via the flag (asserted).
 - **Item 5 (constructor reshapes)** — landed in milestone C2:
   `ArgumentSpec::new(parser, name)`/`new_unnamed` over sealed
   `IntoArgumentParser<L, M>` (S2-D1 marker realization; `'static` spelled on the

@@ -1985,6 +1985,55 @@ mod tests {
         assert!(tree.covering_slice(&SourceSpan::new(&other, 0..2)).is_none());
     }
 
+    // --- slices: the whole-run single-source contract ---------------------------------
+
+    #[test]
+    fn slice_span_answers_only_whole_single_source_runs() {
+        // Parsed single-source tree: the O(1) fast path answers, exactly.
+        let tree = example_tree();
+        assert!(tree.is_single_source());
+        let children = tree.root().children();
+        assert_eq!(children.span().unwrap().range(), 0..19);
+        assert_eq!(children.source_text(), Some("x\\frac{a}{b} % note"));
+
+        // Splice a foreign-source *middle* sibling via the restage door: the
+        // endpoints still agree on the source, the run as a whole does not — no
+        // single-source answer from either accessor.
+        let foreign: Arc<Source> = Arc::new(Source::new("Z"));
+        let st = state::<PlainLang>();
+        let root = tree.root();
+        let mut b = NodeTreeBuilder::new();
+        let x2 = super::copy::copy_subtree_into(&mut b, root.child(0).unwrap()).unwrap();
+        let frac2 = super::copy::copy_subtree_into(&mut b, root.child(1).unwrap()).unwrap();
+        let z = b
+            .add(NodeKind::chars(Span::new(0, 1)), SourceSpan::entire(&foreign), st.clone(), vec![], (), ())
+            .unwrap();
+        let c2 = super::copy::copy_subtree_into(&mut b, root.child(3).unwrap()).unwrap();
+        let new_root = b
+            .restage_node(root, &[vec![x2], vec![frac2], vec![z], vec![c2]], |_| None, ())
+            .unwrap();
+        let spliced = b.finish(new_root).unwrap();
+        assert!(!spliced.is_single_source());
+
+        let run = spliced.root().children();
+        // The endpoint check alone would have answered — the whole-run check must not.
+        assert!(run.first().unwrap().span().same_source(run.last().unwrap().span()));
+        assert_eq!(run.span(), None);
+        assert_eq!(run.source_text(), None);
+
+        // Runs avoiding the foreign node still answer (scanned, without the flag).
+        let frac_children = spliced.root().child(1).unwrap().children();
+        assert_eq!(frac_children.span().unwrap().range(), 6..12);
+        assert_eq!(frac_children.source_text(), Some("{a}{b}"));
+        // A run that IS the foreign node answers in the foreign source.
+        let z_run = spliced.root().child(2).unwrap();
+        assert_eq!(
+            NodeSlice::new(&spliced, z_run.id().index() as u32..z_run.id().index() as u32 + 1)
+                .source_text(),
+            Some("Z")
+        );
+    }
+
     // --- the level-0 restage primitive ------------------------------------------------
 
     /// A callable whose one argument region holds two children (noise + content),
