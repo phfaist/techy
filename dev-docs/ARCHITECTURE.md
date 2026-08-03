@@ -178,7 +178,9 @@ tokenization. `TextContent` (span-backed or owned logical text) is likewise S0.
   synthesized source" is a higher-level concern: a session-owned registry (general
   direction decided, details open — [§dd-dr:source-node-registry]).
 - **Content resolution is pluggable**: the `SourceResolver` trait serves `\input`-like
-  lookups; `NoResolver` is the zero-sized default. Resolvers return *content* (the
+  lookups; resolvers are configured on the parse driver (`with_source_resolver`, via
+  the sealed `IntoSourceResolver` conversion), and an unconfigured driver resolves
+  nothing (`None` — no zero-sized placeholder type). Resolvers return *content* (the
   caller mints the `Source`), are `Send + Sync`, and recursion/cycle policy belongs to
   the embedder ([§dd-dr:resolver-contract]).
 - **Line/column is lazy and display-only** (`LineIndex`): the parser works purely in
@@ -279,8 +281,9 @@ the definition scope stack (`scopes: ScopeStack<L>`), and the language extension
   the driver's math-group descent delta) and *interpreted* by finalize (disable
   features, adjust rules).
 - **Airtightness is structural**: private fields, crate-owned freeze, the seed only
-  from `ParsingState::initial()` (freezing `Lang::initial_state_data()`), everything
-  else only from `derived()` ([§dd-dr:seed-states]).
+  from `ParsingState::lang_initial()` (freezing `Lang::initial_state_data()`; the
+  infallible `lang_initial_with_packages` pushes providers directly onto the seed's
+  stack), everything else only from `derived()` ([§dd-dr:seed-states]).
 - **Hot path = plain field reads.** Per-instance caches (the delimiter `PrefixTable`,
   the specials `TriggerChars`) are rebuilt eagerly at freeze — `no_std` has no
   `OnceLock` — with the `PrefixTable` reused across derivations when its inputs are
@@ -555,9 +558,11 @@ on every transition event, memo hits included — the two-level transition doctr
 (finalize constructs, observe accumulates).
 
 **`Language<L>` is the long-lived runtime bundle** ([§dd-dr:language-parse-api]): the
-driver instance, the frozen initial state (seeded from `Lang::initial_state_data`,
-customized only through the fallible `with_seed_delta`/`with_provider` derive path —
-[§dd-dr:with-provider]), and the source resolver. Entry points are two named methods —
+driver instance and the frozen initial state, both mandatory `new` arguments
+([§dd-dr:language-init]: seeds come from `ParsingState::lang_initial()` /
+`lang_initial_with_packages(…)`, and further customization derives *before*
+construction — `lang_initial().derived(&delta)?`). The source resolver lives on the
+driver, not here ([§dd-dr:input-wiring]). Entry points are two named methods —
 `parse(content)` and `parse_source(Arc<Source>)` — plus accessors for the advanced
 path; the root drive loop diagnoses stray closes through the recover funnel, stages the
 consumed delimiter as a `Chars` node, threads the loop's evolved state through

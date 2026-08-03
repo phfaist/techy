@@ -28,10 +28,14 @@ techy = "0.1"
 Parse LaTeX-like input with the built-in `latexlike` preset:
 
 ```rust
-use techy::core::Language;
-use techy::latexlike::Latexlike;
+use techy::core::{Language, ParsingState};
+use techy::error::Recovery;
+use techy::latexlike::{Latexlike, LatexlikeDriver};
 
-let language: Language<Latexlike> = Language::default();
+let language: Language<Latexlike> = Language::new(
+    LatexlikeDriver::new(Recovery::Strict),
+    ParsingState::lang_initial(),
+);
 let result = language.parse("inline $x+y$ math").unwrap();
 let math = result.tree.root().child(1).unwrap();
 assert!(math.is_math_group());

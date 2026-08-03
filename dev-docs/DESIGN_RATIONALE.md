@@ -253,6 +253,12 @@ the Tier-C batch.)*
 nothing", an always-fail resolver value adds nothing (an empty `MapResolver`
 covers deterministic-failure tests), and a `pub(crate)` residue would be dead
 code. [§dd-dr:public-visibility-sweep].)*
+*(Applied — Phase 3 S2: `NoResolver` deleted; drivers carry the resolver behind
+`with_source_resolver` + the `ParseDriver::source_resolver` accessor. Application
+note: `SourceResolver`'s `Arc<R>` forwarding impl was removed with it — it made
+the sealed `IntoSourceResolver` conversion's ruled no-double-wrap `Arc`
+pass-through impls incoherent (blanket-covered `Arc<R>: SourceResolver` overlaps
+them); the `&R`/`Box<R>` forwarding impls stay.)*
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
@@ -1167,6 +1173,10 @@ framework users) hitting the specials pairing trap despite the docs — the
 fold-as-default option is sound in isolation (a `SpecialsMatch` carries its own
 resolution, so no vocabulary conjuring is needed) and could be reconsidered.
 
+*(Applied — Phase 3 S2, ruling 1: `TokenRules::empty()`/`StateData::empty()`
+landed; the default `initial_state_data` body is the `StateData::empty()` call.
+Ruling 2's loud pairing docs/guide recipe ride the later guide stage.)*
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -1574,6 +1584,19 @@ realized as a public bound-where-used check function (`where
 L::CallableTypeId: ClosedVocabulary, L::ModeId: ClosedVocabulary`) —
 [§dd-dr:iter-symbols] amendment.)*
 
+*(Ruling 1 applied — Phase 3 S2: `IntoSpecsProvider` (impls exactly as ruled:
+`Package<L>` by value, `Arc<P>`, `Arc<dyn SpecsProvider<L>>`) and the spec-side
+sibling **`IntoCallableSpec`** on `Package::insert`/`insert_specials`/`…_in_modes`,
+with the parameter-order flip. Mechanism note (coherence pitfall found at
+application): on a `Lang`-generic conversion trait, a *blanket* by-value impl and
+the `Arc` pass-through impls overlap (downstream `impl CallableSpec<TheirL> for
+Arc<…>` is orphan-legal), so `IntoCallableSpec` — and the resolver-side
+`IntoSourceResolver` — carry a sealed, never-named inference-marker type
+parameter distinguishing the three argument shapes; `IntoSpecsProvider` needs no
+marker (its by-value impl is the concrete `Package<L>`). All ruled call shapes
+hold; no double-wrap. Rulings 2 (preset one-liners) and 3's did-you-mean /
+parse-init checks ride S9.)*
+
 #### Command resolution is a standalone `specs` function: `resolve_command_in_scopes` [§dd-dr:resolution-extraction]
 
 Status: DECIDED (user, API-review T3 session; completes the deferred resolver half
@@ -1613,6 +1636,11 @@ Revisit if: a second resolution syntax family (beyond `Command`) wants extractin
 *(Amended — API-review Tier-C session: the one-line wrapper is now the strategy
 value `ScopesCommandResolver`, placed beside this function and the family;
 [§dd-dr:command-resolver] supersedes [§dd-dr:scopes-resolving-driver].)*
+
+*(Applied — Phase 3 S2: `resolve_command_in_scopes` + `ScopesCommandResolver`
+live at `techy::core::specs`; `CommandResolution::resolve_via_scopes` removed.
+The did-you-mean miss detail is deliberately NOT included yet — it rides the S9
+consumer-polish stage.)*
 
 #### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
 
@@ -4224,6 +4252,17 @@ Revisit if: languages with several command-syntax callable types appear (they
 write a custom `CommandResolver` — the point of the seam), or a second hook
 genuinely meets both proliferation-guard criteria.
 
+*(Applied — Phase 3 S2. Application details: the entry's `StdParseDriver<R = ()>`
+spelling gains a second defaulted origin parameter — `StdParseDriver<R = (),
+O: SourceOrigin = Option<String>>` — because the ruled `Option<Arc<dyn
+SourceResolver<…>>>` field needs the origin type while `type Driver =
+StdParseDriver` must stay annotation-free (decisive reason 3); the `ParseDriver`
+impl is `impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R,
+L::SourceOrigin>`. A standalone binding needs the alias-defaults annotation
+(`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`) — inside
+`Language::new`/`type Driver` positions the ruled annotation-free spelling
+holds.)*
+
 #### Takeover staging sugar: `disable_all`, collection constructors, a committed invocation helper [§dd-dr:takeover-staging-sugar]
 
 Status: DECIDED (user, API-review T3 session; the invocation helper's signature is
@@ -4260,6 +4299,10 @@ multiplying delta helpers); ruling the helper signature now (above).
 
 Revisit if: the T5 restage detailing changes the staging-door shape itself (the
 helper follows it).
+
+*(Item 1 applied — Phase 3 S2: `TokenRulesOverrides::disable_all()` landed;
+`verbatim_state_delta` is `disable_all()` plus its terminator. Items 2–3 ride
+later stages.)*
 
 *(Amended — API-review T5 session, the committed helper's signature ruled:
 `cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
@@ -4339,6 +4382,12 @@ vocabulary — family: `attach_source_reference`, `UnresolvableSourceReference` 
 and the resolver parameter carries the delegation visibly). The shipped-driver
 builder named `with_resolver` above becomes **`with_source_resolver`** — two
 resolvers now coexist on `StdParseDriver` ([§dd-dr:command-resolver]).)*
+
+*(Partially applied — Phase 3 S2, the resolver-surface bullet and the `Language`
+collapse only: the `ParseDriver::source_resolver` accessor, the shipped drivers'
+field + `with_source_resolver` builder, and `Language`'s resolver surface leaving.
+The door (`parse_attached_source`), the `attach_source_reference` bundle, the two
+failure conditions, and the preset `input_macro_spec` are stage S6.)*
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
@@ -4450,15 +4499,15 @@ Rationale: the delta spelling buries the everyday operation under two concepts
 Rejected alternatives: an infallible signature via `expect` ("Push cannot fail today") — fragile
 against future push semantics and against whatever `finalize_transition` does in the
 derivation; the `Result` mirrors `with_seed_delta` honestly.
-*(Superseded, pending application confirmation — [§dd-dr:language-init]:
+*(Superseded — [§dd-dr:language-init]:
 `ParsingState::lang_initial_with_packages` is the infallible spelling of the same
-everyday operation at the seed itself, where no derivation runs; `with_provider` is
-expected to be removed with the construction revision.)*
+everyday operation at the seed itself, where no derivation runs. Application
+confirmed — Phase 3 S2: `with_provider` and `with_seed_delta` are removed.)*
 
 #### Language construction: explicit initial state, infallible seed+packages path [§dd-dr:language-init]
 
-Status: DECIDED (user, API-review policy session; supersedes the construction bullet of
-[§dd-dr:language-parse-api] and — pending application confirmation — [§dd-dr:with-provider]).
+Status: DECIDED (user, API-review policy session; applied — Phase 3 S2; supersedes the
+construction bullet of [§dd-dr:language-parse-api] and [§dd-dr:with-provider]).
 
 `Language::new(driver, initial_state)` takes the initial `ParsingState` as a
 **mandatory** argument; `ParsingState::initial()` is renamed **`lang_initial()`** (it is
@@ -4513,6 +4562,12 @@ the one policy knob. The spelling is `StdParseDriver::new(Recovery::Strict)`.)*
 `resolver()`, and `Language::resolve_source` leave with the resolver's move to the
 driver ([§dd-dr:input-wiring]) — the surface is `new(driver, initial_state)` +
 `parse` + `parse_source` + accessors.)*
+
+*(Applied — Phase 3 S2: `Language::new(driver, initial_state)` landed with the
+full collapse (no `Default`, no `with_*` builders, no resolver surface);
+`ParsingState::lang_initial()` + the infallible `lang_initial_with_packages`
+landed, with the infallibility argument documented on the method; the delta idiom
+is `ParsingState::lang_initial().derived(&delta)?`.)*
 
 ---
 
@@ -5251,6 +5306,13 @@ re-opens a settled argument:
   amendment); `with_resolver` (the shipped-driver builder) —
   `with_source_resolver`; `NoResolver` — removed entirely (`None` is the
   canonical "resolves nothing"; [§dd-dr:source-resolver] amendment).
+- From the language-init revision ([§dd-dr:language-init], applied Phase 3 S2):
+  `Language::with_provider`/`Language::with_seed_delta` — seed customization
+  moves *before* construction (`ParsingState::lang_initial().derived(&delta)?`;
+  packages via the infallible `lang_initial_with_packages`); `Default for
+  Language<L>` / `LatexlikeDriver::default()` / `StdParseDriver::default()` —
+  removed (an implicit seed by the back door, and the recovery knob — the
+  driver's one mandatory policy input — must be an explicit `new` argument).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -6301,7 +6363,11 @@ post-parse state synthesis (the pillar, not the struct, is then the thing to fix
 *(Amended — API-review T4 session: the keep-`Copy`/`Eq` clause is struck — the
 optional resolver field ([§dd-dr:input-wiring]) drops `Copy`/`Eq` on
 resolver-carrying drivers ("why would we want `Copy`/`Eq` on the driver?" — no
-in-crate reliance exists); shipped drivers keep `Clone + Debug`.)*
+in-crate reliance exists); shipped drivers keep `Clone + Debug`. The strike, the
+resolver field (private, behind `with_source_resolver`/`source_resolver()`, the
+two policy knobs `pub`), and the `Copy`/`Eq` drop were applied to the monomorphic
+`LatexlikeDriver` in Phase 3 S2; the `LLL`-generic assembly itself is a later
+stage.)*
 
 *(Amended — API-review T5 session, the shared-scope items ruled:
 `exit_math_context_delta` takes **`&ParsingStateStack`**

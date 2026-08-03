@@ -78,10 +78,11 @@ pub struct LatexlikeDriver {
     /// The [`SourceResolver`] behind
     /// [`ParseDriver::source_resolver`] (`None` — the default — resolves nothing);
     /// set via [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
-    /// Value-level `dyn` deliberately (an embedding-environment capability consumed
-    /// on the cold path) — see the asymmetry note on
+    /// Private (the two policy knobs above stay `pub`); value-level `dyn`
+    /// deliberately (an embedding-environment capability consumed on the cold
+    /// path) — see the asymmetry note on
     /// [`StdParseDriver`](crate::engine::StdParseDriver).
-    pub source_resolver: Option<Arc<dyn SourceResolver<Option<String>>>>,
+    source_resolver: Option<Arc<dyn SourceResolver<Option<String>>>>,
 }
 
 impl LatexlikeDriver {
