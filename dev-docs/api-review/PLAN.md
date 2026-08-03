@@ -138,6 +138,7 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   API needs (owned handles vs lifetimes), reconstruction guarantees.
 - [ ] **Phase 3 — Apply + harden** (agents in worktrees, merged locally): apply rulings;
   guards: cargo-semver-checks baseline, missing_docs → deny (already at zero warnings).
+  **IN PROGRESS 2026-08-03** — stage plan + status: PHASE3_PLAN.md (S1–S10).
 - [ ] **Phase 4 — Guides** (agent-drafted, user-reviewed), written from public docs only
   (needing source = doc gap):
   - Human guide: docs/ chapters + per-tier cookbook; **framework-builder chapter** incl.
@@ -173,6 +174,8 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
 
 Repo (durable), all under dev-docs/api-review/:
 - PLAN.md — this file (master).
+- PHASE3_PLAN.md — Phase 3 execution plan: stage breakdown S1–S10 (worktree
+  protocol, per-stage ruling inputs, acceptance gates, stage log).
 - INVENTORY.md — Phase 0 full item inventory (+ provisional tier tags; see SYNTHESIS §3
   for empirical corrections).
 - SYNTHESIS.md — cross-persona matrix, unused-list, friction themes F1–F13, wishlist.
