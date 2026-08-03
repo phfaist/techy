@@ -30,7 +30,6 @@
 mod arguments;
 mod builder;
 mod copy;
-pub mod extract;
 mod invariants;
 mod kind;
 mod node_ref;
@@ -45,7 +44,12 @@ pub use invariants::check_tree_invariants;
 pub use kind::{CallableData, GroupData, NodeKind};
 pub use node_ref::{Descendants, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
-pub use tree::{NodeData, NodeId, NodeTree};
+pub use tree::{NodeId, NodeTree};
+
+// `NodeData` is deliberately NOT re-exported ([§dd-dr:public-visibility-sweep] Theme C):
+// it is crate-internal — zero public signatures use it; `NodeRef` is the read API.
+// Crate-internal subtree copying, shared with `crate::extract`'s builder helpers.
+pub(crate) use copy::copy_subtree_into;
 
 use crate::state::{Lang, NodeExtTypes};
 

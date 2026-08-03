@@ -30,9 +30,9 @@
 //! not subject to `check_tree_invariants`' byte-accounting.
 //!
 //! ```
-//! use techy::engine::Language;
+//! use techy::core::Language;
+//! use techy::extract;
 //! use techy::latexlike::Latexlike;
-//! use techy::node::extract;
 //!
 //! let language: Language<Latexlike> = Language::default();
 //! let result = language.parse("alpha,beta{x,y},gamma").unwrap();
@@ -57,13 +57,10 @@ use core::ops::Range;
 use crate::source::{Source, SourceSpan, Span, TextContent};
 use crate::state::{Lang, ParsingState};
 
-use super::builder::{BuildId, NodeTreeBuilder};
-use super::copy::copy_subtree_into;
-use super::kind::NodeKind;
-use super::node_ref::NodeRef;
-use super::slice::NodeSlice;
-use super::tree::{NodeId, NodeTree};
-use super::NodeBuildError;
+use crate::node::{
+    copy_subtree_into, BuildId, NodeBuildError, NodeId, NodeKind, NodeRef, NodeSlice,
+    NodeTree, NodeTreeBuilder,
+};
 
 // --- errors -----------------------------------------------------------------------------
 

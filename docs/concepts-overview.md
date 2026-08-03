@@ -28,14 +28,14 @@ so it can change mid-parse through state transitions.
 
 ## Parsing state and deltas
 
-A [`ParsingState`](crate::state::ParsingState) is an immutable snapshot of
+A [`ParsingState`](crate::core::ParsingState) is an immutable snapshot of
 everything that can vary during a parse. Changes are expressed as reified
-[`ParsingStateDelta`](crate::state::ParsingStateDelta) values, applied at a
+[`ParsingStateDelta`](crate::core::ParsingStateDelta) values, applied at a
 single transition point to derive a new state.
 
 ## The `Lang` generic
 
-The [`Lang`](crate::state::Lang) trait bundles all compile-time customization:
+The [`Lang`](crate::core::Lang) trait bundles all compile-time customization:
 extension types, hooks, and the parse driver. Every core type takes the single
 `L: Lang` parameter.
 
@@ -49,41 +49,41 @@ point.
 ## Callable specs and arguments
 
 Anything invocable — macros, environments, specials in LaTeX terms — resolves
-to a [`CallableSpec`](crate::spec::CallableSpec), which describes the
-invocation's argument structure ([`ArgumentSpec`](crate::spec::ArgumentSpec),
-[`ArgumentParser`](crate::spec::ArgumentParser)) and supplies the parser for
+to a [`CallableSpec`](crate::core::specs::CallableSpec), which describes the
+invocation's argument structure ([`ArgumentSpec`](crate::core::specs::ArgumentSpec),
+[`ArgumentParser`](crate::core::constructs::ArgumentParser)) and supplies the parser for
 its invocations.
 
 ## Scopes and packages
 
-Definitions live in [`Package`](crate::scopes::Package)s; a parse resolves
-names through a [`ScopeStack`](crate::scopes::ScopeStack) of
-[`Scope`](crate::scopes::Scope)s with lexical shadowing. Lookup is served by
-the [`SpecsProvider`](crate::scopes::SpecsProvider) contract.
+Definitions live in [`Package`](crate::core::specs::Package)s; a parse resolves
+names through a [`ScopeStack`](crate::core::specs::ScopeStack) of
+[`Scope`](crate::core::specs::Scope)s with lexical shadowing. Lookup is served by
+the [`SpecsProvider`](crate::core::specs::SpecsProvider) contract.
 
 ## The node tree
 
-A parse produces a flat, frozen [`NodeTree`](crate::node::NodeTree). Structure
-is the closed [`NodeKind`](crate::node::NodeKind) (characters, group, callable
+A parse produces a flat, frozen [`NodeTree`](crate::core::node::NodeTree). Structure
+is the closed [`NodeKind`](crate::core::node::NodeKind) (characters, group, callable
 invocation, comment, list); custom per-node data attaches through extension
 types supplied by `Lang`. Nodes are visited through
-[`NodeRef`](crate::node::NodeRef) proxies.
+[`NodeRef`](crate::core::node::NodeRef) proxies.
 
 ## Construct parsers
 
 Each syntactic construct is parsed by a
-[`ConstructParser`](crate::constructs::ConstructParser); the content dispatch
-loop ([`NodesParser`](crate::constructs::NodesParser)) selects parsers by token
+[`ConstructParser`](crate::core::constructs::ConstructParser); the content dispatch
+loop ([`NodesParser`](crate::core::constructs::NodesParser)) selects parsers by token
 kind and definition lookup, with everything a parser needs carried in one
-[`ParseContext`](crate::constructs::ParseContext).
+[`ParseContext`](crate::core::constructs::ParseContext).
 
 ## The engine
 
-A [`Language`](crate::engine::Language) bundles a ready-to-use language for
-embedders; parsing runs in a [`ParserSession`](crate::engine::ParserSession)
-and yields a [`ParseResult`](crate::engine::ParseResult). Parse-driving
+A [`Language`](crate::core::Language) bundles a ready-to-use language for
+embedders; parsing runs in a [`ParserSession`](crate::core::ParserSession)
+and yields a [`ParseResult`](crate::core::ParseResult). Parse-driving
 behavior — recovery policy, parse-time hooks — lives on the language's
-[`ParseDriver`](crate::engine::ParseDriver).
+[`ParseDriver`](crate::core::ParseDriver).
 
 ## Diagnostics and tolerant parsing
 

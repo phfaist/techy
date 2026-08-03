@@ -209,7 +209,7 @@ mod tests {
     use crate::latexlike::{
         argument_specs, CallableType, Latexlike, LatexlikeDriver, GroupType, MacroSpec,
     };
-    use crate::node::extract::content_as_chars;
+    use crate::extract::content_as_chars;
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use alloc::vec;

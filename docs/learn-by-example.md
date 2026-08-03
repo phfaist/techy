@@ -12,14 +12,14 @@ mentioned, that suite pins the parity claim.
 
 ## Your first parse
 
-A [`Language`](crate::engine::Language) bundles everything that outlives one parse:
+A [`Language`](crate::core::Language) bundles everything that outlives one parse:
 the seed parsing state, the parse driver, the source resolver. Define it once, parse
 many documents. The [`Latexlike`](crate::latexlike::Latexlike) defaults give you the
 canonical tokenization (`\` commands, `{…}` groups, `$…$` math, `%` comments) and the
 `"base"` package (`\begin`/`\end` dispatch plus the standard specials):
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::Latexlike;
 
 let language: Language<Latexlike> = Language::default();
@@ -47,7 +47,7 @@ and the original text is always reachable — level-1 recomposition needs no loo
 tables:
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::Latexlike;
 
 let language: Language<Latexlike> = Language::default();
@@ -78,19 +78,19 @@ assert_eq!(texts, ["one ", "two", " three"]);
 
 ## Defining macros
 
-Definitions live in [`SpecsProvider`](crate::scopes::SpecsProvider)s on the parsing
-state's scope stack. The everyday provider is a [`Package`](crate::scopes::Package):
+Definitions live in [`SpecsProvider`](crate::core::specs::SpecsProvider)s on the parsing
+state's scope stack. The everyday provider is a [`Package`](crate::core::specs::Package):
 immutable, built once, loaded wholesale. Register a
 [`MacroSpec`](crate::latexlike::MacroSpec) under
 [`CallableType::Macro`](crate::latexlike::CallableType) and push the package onto a
 language's seed with
-[`Language::with_provider`](crate::engine::Language::with_provider):
+[`Language::with_provider`](crate::core::Language::with_provider):
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
-use techy::scopes::Package;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 // Argument structures come from xparse-like codes, one code string per argument:
@@ -126,9 +126,9 @@ suite):
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
-use techy::scopes::Package;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
@@ -157,10 +157,10 @@ Math is not a core concept — it is preset data. The default rules declare `$�
 [`GroupType::Math`](crate::latexlike::GroupType) class, and the driver's descent
 delta parses their interiors in [`Mode::Math`](crate::latexlike::Mode). Inline vs.
 display is a *delimiter* fact, read back by
-[`math_style`](crate::node::NodeRef::math_style):
+[`math_style`](crate::core::node::NodeRef::math_style):
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{Latexlike, MathStyle, Mode};
 
 let language: Language<Latexlike> = Language::default();
@@ -183,7 +183,7 @@ assert_eq!(display.group_delimiters(), Some((r"\[", r"\]")));
 closer wins (pylatexenc's dollar-boundary parity):
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::Latexlike;
 
 let language: Language<Latexlike> = Language::default();
@@ -195,20 +195,20 @@ assert_eq!(shapes, ["group(Math $ $)", "group(Math $ $)"]);
 
 A macro like `\text{…}` must parse its argument back in *text* mode even inside
 display math. That is per-argument data: an
-[`ArgumentSpec`](crate::spec::ArgumentSpec) carries an optional parsing-state delta
+[`ArgumentSpec`](crate::core::specs::ArgumentSpec) carries an optional parsing-state delta
 (pylatexenc's `args_math_mode`), which here resets the mode and restores the math
 delimiters as openers:
 
 ```rust
 use std::sync::Arc;
-use techy::constructs::GroupArgumentParser;
-use techy::engine::Language;
+use techy::core::constructs::GroupArgumentParser;
+use techy::core::Language;
 use techy::latexlike::{
     default_token_rules, CallableType, GroupType, Latexlike, MacroSpec, Mode,
 };
-use techy::scopes::Package;
-use techy::spec::ArgumentSpec;
-use techy::state::{ParsingStateDelta, TokenRulesOverrides};
+use techy::core::specs::Package;
+use techy::core::specs::ArgumentSpec;
+use techy::core::{ParsingStateDelta, TokenRulesOverrides};
 
 // A mandatory `{…}` argument whose interior parses in text mode, with `$…$` (etc.)
 // re-enabled — inside math, the preset forbids nested math delimiters, and this
@@ -255,9 +255,9 @@ is a callable node whose *body* is a slot:
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, EnvironmentSpec, Latexlike};
-use techy::scopes::Package;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
@@ -281,10 +281,10 @@ An environment can install a parsing-state delta for its body's whole extent —
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, Mode};
-use techy::scopes::Package;
-use techy::state::ParsingStateDelta;
+use techy::core::specs::Package;
+use techy::core::ParsingStateDelta;
 
 let mut package = Package::new("mydefs");
 package.insert(
@@ -313,11 +313,11 @@ group+chars shapes with the raw text as ordinary chars content:
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{
     argument_specs, CallableType, EnvironmentSpec, Latexlike, MacroSpec, VerbatimBehavior,
 };
-use techy::scopes::Package;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
@@ -358,7 +358,7 @@ ligatures ``` `` ```, `''`, `--`, `---`); the scan takes the longest match, and
 per-entry mode visibility keeps the ligatures out of math:
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::Latexlike;
 
 let language: Language<Latexlike> = Language::default();
@@ -372,9 +372,9 @@ Your own specials are package entries too — including ones that take arguments
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, Latexlike, SpecialsSpec};
-use techy::scopes::Package;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert_specials(
@@ -399,7 +399,7 @@ emission policy, deliberately not package data: the tokenizer detects paragraph
 breaks before the specials scan could ever run):
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver, ParagraphBreakStyle};
 
@@ -423,7 +423,7 @@ The recovery policy lives on the driver. Strict parses abort on the first error
 recovery, and keep going — and every diagnostic carries an exact source span:
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
@@ -448,7 +448,7 @@ A stray `}` at top level follows the same pattern — strict aborts, tolerant di
 it, stages the consumed delimiter as a chars node, and resumes:
 
 ```rust
-use techy::engine::Language;
+use techy::core::Language;
 use techy::error::Recovery;
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
@@ -462,7 +462,7 @@ assert_eq!(result.diagnostics.len(), 1);
 
 ## Extracting content
 
-The [`node::extract`](crate::node::extract) helpers answer the everyday
+The [`extract`](crate::extract) helpers answer the everyday
 "give me the *text*" questions. `content_as_chars` flattens chars and groups (and
 fails honestly on anything that is not text); `split_at_chars` splits a node list at
 a separator with grouped content protected; `parse_keyval` reads
@@ -470,10 +470,10 @@ a separator with grouped content protected; `parse_keyval` reads
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
-use techy::node::extract;
-use techy::scopes::Package;
+use techy::extract;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(
@@ -498,10 +498,10 @@ assert_eq!(libraries, ["arrows", "shapes.geometric", "calc"]);
 
 ```rust
 use std::sync::Arc;
-use techy::engine::Language;
+use techy::core::Language;
 use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
-use techy::node::extract;
-use techy::scopes::Package;
+use techy::extract;
+use techy::core::specs::Package;
 
 let mut package = Package::new("mydefs");
 package.insert(

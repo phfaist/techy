@@ -21,7 +21,7 @@
 //! and expression (pylatexenc's `delimiters=(marker, '')` shape). The argument's content
 //! designation covers the run of wrapper groups from the first one on — noise between
 //! embellishments included, leading noise excluded. By-marker access is the read-side
-//! helper [`split_embellishments`](crate::node::extract::split_embellishments).
+//! helper [`split_embellishments`](crate::extract::split_embellishments).
 //!
 //! # Matching rules
 //!
@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use crate::engine::Language;
     use crate::latexlike::{CallableType, Latexlike, MacroSpec};
-    use crate::node::extract::{content_as_chars, split_embellishments};
+    use crate::extract::{content_as_chars, split_embellishments};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use alloc::string::ToString;

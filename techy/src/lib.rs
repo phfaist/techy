@@ -15,40 +15,33 @@
 //! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
 //! as `Arc`, so the target must support atomics). Consequently the library performs no I/O
 //! of its own — content lookup for `\input`-like constructs is delegated to the embedder via
-//! the [`SourceResolver`] trait.
+//! the [`SourceResolver`](source::SourceResolver) trait.
 //!
-//! ## Architecture
+//! ## The public modules
 //!
-//! The crate is organized in three strata: S0, a `Lang`-free foundation; S1, the
-//! mutually recursive core (whose modules are topics, not dependency ranks); and S2,
-//! the presets:
+//! Every item has exactly one canonical public path, placed by role: data models and
+//! consumer tool libraries at the top level, the machinery in [`core`], the preset in
+//! [`latexlike`]:
 //!
-//! - [`source`] (S0) — source content, plain byte [`Span`]s, `Arc`-based [`SourceSpan`]s,
-//!   provenance, pluggable resolution, lazy line/column analysis.
-//! - [`error`] (S0) — span-based structured diagnostics and the tolerant-parsing
-//!   policy.
-//! - [`token`] (S1) — zero-copy tokens, data-driven tokenization rules, the
-//!   `TokenReader<L>` trait and the standard state-driven reader.
-//! - [`state`] (S1) — the `Lang` trait, immutable parsing state, and reified state
-//!   deltas.
-//! - [`spec`] + [`scopes`] (S1) — de-keyed callable specs (argument/slot structures)
-//!   and the definition scope stack (dyn `SpecsProvider` entries, lexical shadowing,
-//!   in-stack fallback providers, definition/stack delta ops).
-//! - [`node`] (S1) — the flat, immutable node tree: closed structural [`NodeKind`],
-//!   two-tier ext system, span-or-owned [`TextContent`] payloads, `NodeRef` proxy
-//!   access, `check_tree_invariants`.
-//! - [`constructs`] (S1) — construct parsing: the [`ConstructParser`] contract and its
-//!   one-value context ([`ParseContext`], [`Invocation`]), the content dispatch loop
-//!   ([`NodesParser`], stop conditions, [`StopCause`]), groups ([`GroupParser`], the
-//!   [`ChildStateSpec`] descent policy), invocations, arguments, environment bodies,
-//!   and verbatim.
-//! - [`engine`] (S1) — the parse-session machinery: [`Language`], [`ParserSession`],
-//!   [`ParseDriver`], [`ParseResult`], and the session derivation seam.
-//! - [`latexlike`] preset (S2) — the familiar LaTeX behavior: the [`Latexlike`](latexlike::Latexlike)
-//!   lang with text/math modes, scope-stack command resolution, default token rules and
-//!   base specials, environments (`\begin`/`\end`), verbatim, and `NodeRef` accessor
-//!   sugar. Preset items are namespaced (`techy::latexlike::…`), not re-exported at
-//!   the crate root.
+//! - [`source`] — source content, plain byte [`Span`](source::Span)s, `Arc`-based
+//!   [`SourceSpan`](source::SourceSpan)s, provenance, pluggable resolution, lazy
+//!   line/column analysis.
+//! - [`error`] — span-based structured diagnostics and the tolerant-parsing policy.
+//! - [`extract`] — content-extraction helpers over parsed node trees.
+//! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
+//!   and the parse engine ([`Language`](core::Language) + `parse()` →
+//!   [`ParseResult`](core::ParseResult)), with three satellites:
+//!   - [`core::specs`] — defining callables: callable specs, providers, packages
+//!     and scopes, command resolution.
+//!   - [`core::constructs`] — construct parsing: the
+//!     [`ConstructParser`](core::constructs::ConstructParser) contract, the standard
+//!     parsers, and their diagnostic conditions.
+//!   - [`core::node`] — the flat, immutable node tree: reading, payloads, building.
+//! - [`latexlike`] — the familiar LaTeX behavior: the
+//!   [`Latexlike`](latexlike::Latexlike) lang with text/math modes, scope-stack
+//!   command resolution, default token rules and base specials, environments
+//!   (`\begin`/`\end`), verbatim, and `NodeRef` accessor sugar. Preset items are
+//!   namespaced (`techy::latexlike::…`).
 //!
 //! ## Quick start
 //!
@@ -70,20 +63,29 @@
 
 extern crate alloc;
 
-// The `techy-derive` macros emit `::techy::…` paths so that generated code resolves in
-// downstream crates; this self-alias makes those paths resolve inside techy itself.
+// The `techy-derive` macros emit `::techy::__private::…` paths so that generated code
+// resolves in downstream crates; this self-alias makes those paths resolve inside techy
+// itself.
 extern crate self as techy;
 
-pub mod constructs;
-pub mod engine;
+// Internal topic modules: private organization, permanently invisible to public paths.
+// The public API is exported exclusively through the facade modules below
+// ([§dd-dr:public-namespace-topology] — one canonical public path per item).
+pub(crate) mod constructs;
+pub(crate) mod engine;
+pub(crate) mod node;
+pub(crate) mod scopes;
+pub(crate) mod spec;
+pub(crate) mod state;
+pub(crate) mod token;
+
+// The public facades. `source` and `error` are their own facades (their submodules are
+// private); `extract` and `latexlike` are ordinary public modules.
+pub mod core;
 pub mod error;
+pub mod extract;
 pub mod latexlike;
-pub mod node;
-pub mod scopes;
 pub mod source;
-pub mod spec;
-pub mod state;
-pub mod token;
 
 // Narrative documentation: markdown pages in the workspace-level `docs/` rendered as
 // doc-only modules. `cfg(doc)` keeps them out of compiled code; rustdoc (including
@@ -118,57 +120,6 @@ pub mod __private {
     pub use crate::error::{DiagnosticInfo, DiagnosticValue, ToDiagnosticValue};
 }
 
-
-// Re-export the public API of the implemented topics.
-pub use constructs::{
-    ChildStateSpec, CommandResolutionFailed, ConstructParser, ConstructParserResult,
-    EnvironmentTerminatorMismatch,
-    ExpectedExpressionArgument, ExpressionCallableRequiresContent, GroupChildState,
-    GroupParser, ImplementationError, Invocation, InvocationChildState,
-    MalformedEnvironmentTerminator, MissingEnvironmentTerminator, MissingMandatoryArgument,
-    MissingTerminatorFound, NodesOutcome, NodesParser, ParseContext, ScopeOpFailed, StopCause,
-    StopSpec, StrayGroupClose, TokenStopCondition, TokenStopKind, UnclosedGroup,
-    UnclosedGroupFound, UnresolvableCommand, UnusableRecoveryToken, UnusableRecoveryTokenKind,
-};
-pub use engine::{
-    CommandResolution, Frame, FrameTitle, Language, ParseDriver, ParseResult, ParserSession,
-    ResolvedCallable, StdParseDriver,
-};
-pub use error::{
-    format_position, format_traceback, Diagnostic, DiagnosticData, DiagnosticInfo,
-    DiagnosticValue, Diagnostics, ParseError, Recovery, Severity, ToDiagnosticValue,
-    TraceFrame,
-};
-pub use source::{
-    resolve_source_reference, LineIndex, MapResolver, NoResolver, ProvenanceChain, ResolveError,
-    ResolvedContent, Source, SourceOrigin, SourceProvenance, SourceResolver, SourceSpan,
-    Span, TextContent,
-};
-pub use node::{
-    check_tree_invariants, BuildId, CallableData, ChildRegion, ContentNodes, Descendants,
-    GroupData, NodeBuildError, NodeData, NodeId, NodeKind, NodeRef, NodeSlice, NodeSliceIter,
-    NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots,
-    StagedNodeView, StagedNodes,
-};
-pub use scopes::{
-    CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
-    FallbackProvider, Package, ProviderError, Scope, ScopeOp, ScopeOpError, ScopeStack,
-    ScopeStackError, SearchedProviders, SpecsProvider, SymbolEntry,
-};
-pub use spec::{
-    ArgumentParser, ArgumentSpec, CallableSpec, FrameRole, ParsedArgumentNodes,
-    StdCallableSpec,
-};
-pub use state::{
-    ClosedVocabulary, DeriveError, Lang, NodeExtTypes, ParsingState, ParsingStateDelta,
-    TrivialLang, StateData, TokenRulesOverrides,
-};
-pub use token::{
-    skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,
-    GroupRule, PrefixTable, SpecialsMatch, StdTokenReader, Token, TokenError, TokenErrorKind,
-    TokenKind, TokenReader, TokenRecovery, TokenResult, TokenRules,
-    TriggerChars, WhitespaceRules,
-};
-
-/// Library version
+/// The version of the `techy` Cargo package (`CARGO_PKG_VERSION`); always a valid
+/// [semver](https://semver.org/) string.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

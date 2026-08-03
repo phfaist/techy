@@ -6,7 +6,7 @@
 //! `{…}` argument uses, whether `[…]` is a group rule of the current state or a
 //! momentarily-minted one — so the standard parsers (delimited group, optional group,
 //! literal marker, expression, delimited verbatim) live in
-//! [`constructs`](crate::constructs) as core `ArgumentParser` implementations,
+//! [`constructs`](crate::core::constructs) as core `ArgumentParser` implementations,
 //! parameterized by group types and rules; the preset's code factory
 //! (`latexlike::argument_specs`) resolves pylatexenc's `'{'` / `'['` /
 //! `'*'` / … shorthands into configured instances.
@@ -64,7 +64,7 @@ pub struct ParsedArgumentNodes {
 /// needing group delimiters install the [`GroupRule`](crate::token::GroupRule)s they
 /// want via a state delta for the argument's extent (an optional-argument parser
 /// momentarily declaring `[`…`]`, a custom spec declaring `<`…`>`). The standard
-/// implementations live in [`constructs`](crate::constructs):
+/// implementations live in [`constructs`](crate::core::constructs):
 /// [`GroupArgumentParser`](crate::constructs::GroupArgumentParser),
 /// [`OptionalGroupArgumentParser`](crate::constructs::OptionalGroupArgumentParser),
 /// [`MarkerArgumentParser`](crate::constructs::MarkerArgumentParser),

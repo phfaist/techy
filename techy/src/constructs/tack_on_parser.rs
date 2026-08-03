@@ -28,7 +28,7 @@
 //! [`ParsedArguments`](crate::node::ParsedArguments) record). Dispatch routes through
 //! [`ParseDriver::make_invocation_parser`], so takeover specs and driver interception
 //! work as everywhere else. By-name reading is the extraction helper
-//! [`split_tack_on_fields`](crate::node::extract::split_tack_on_fields).
+//! [`split_tack_on_fields`](crate::extract::split_tack_on_fields).
 //!
 //! The argument's content designation covers the run of field nodes from the first
 //! one on — noise between fields included, leading noise excluded (the
@@ -250,7 +250,7 @@ mod tests {
     use crate::latexlike::{
         argument_specs, CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
     };
-    use crate::node::extract::{content_as_chars, split_tack_on_fields};
+    use crate::extract::{content_as_chars, split_tack_on_fields};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use alloc::vec;

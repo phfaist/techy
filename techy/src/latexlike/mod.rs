@@ -26,7 +26,7 @@
 //!   `NodeRef<'_, Latexlike>`.
 //!
 //! ```
-//! use techy::engine::Language;
+//! use techy::core::Language;
 //! use techy::latexlike::{Latexlike, Mode};
 //!
 //! let language: Language<Latexlike> = Language::default();

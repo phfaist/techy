@@ -31,10 +31,10 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use techy::engine::Language;
+//! use techy::core::Language;
 //! use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike};
-//! use techy::scopes::Package;
-//! use techy::state::ParsingStateDelta;
+//! use techy::core::specs::Package;
+//! use techy::core::ParsingStateDelta;
 //!
 //! let mut package = Package::new("mydefs");
 //! package.insert(
@@ -249,10 +249,10 @@ impl EnvironmentBehavior for StdEnvironmentBehavior {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use techy::engine::Language;
+/// use techy::core::Language;
 /// use techy::latexlike::{CallableType, EnvironmentSpec, Latexlike, VerbatimBehavior};
-/// use techy::scopes::Package;
-/// use techy::state::ParsingStateDelta;
+/// use techy::core::specs::Package;
+/// use techy::core::ParsingStateDelta;
 ///
 /// let mut package = Package::new("mydefs");
 /// package.insert(

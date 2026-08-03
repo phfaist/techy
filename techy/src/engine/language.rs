@@ -41,7 +41,8 @@ use super::{ParseResult, ParserSession};
 /// parses driven without a `Language` (the advanced path).
 ///
 /// ```
-/// # use techy::{Language, Recovery, TrivialLang, StdParseDriver};
+/// # use techy::core::{Language, StdParseDriver, TrivialLang};
+/// # use techy::error::Recovery;
 /// # #[derive(Debug, Clone, Copy)]
 /// # struct MyLang;
 /// # impl TrivialLang for MyLang {}

@@ -9,7 +9,7 @@
 //! [`source_text`](NodeSlice::source_text)) **exactly** — sibling runs are
 //! span-contiguous by the partition invariant, so the covering span is the first
 //! node's start to the last node's end, not an approximation. The extraction helpers
-//! ([`node::extract`](super::extract)) consume and produce these views.
+//! ([`extract`](crate::extract)) consume and produce these views.
 
 use core::fmt;
 use core::ops::Range;
@@ -22,7 +22,7 @@ use super::tree::NodeTree;
 
 /// A contiguous run of sibling nodes of one [`NodeTree`] — the node-list view returned
 /// by [`NodeRef::children`](super::NodeRef::children) and the argument/slot content
-/// accessors, and the input of the [`extract`](super::extract) helpers.
+/// accessors, and the input of the [`extract`](crate::extract) helpers.
 ///
 /// `Copy` like [`NodeRef`]: it stores only the tree borrow and an index range, and the
 /// borrow checker guarantees it cannot outlive the tree. Iterate it directly

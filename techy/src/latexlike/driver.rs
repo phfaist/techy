@@ -31,7 +31,7 @@ use super::{CallableType, GroupType, Latexlike, Mode, SpecialsSpec};
 pub enum ParagraphBreakStyle {
     /// A whitespace-only `Chars` node over the break's extent — the core default
     /// shape (and pylatexenc-legacy's), friendly to text extraction
-    /// ([`content_as_chars`](crate::node::extract::content_as_chars) folds it into
+    /// ([`content_as_chars`](crate::extract::content_as_chars) folds it into
     /// text).
     #[default]
     Chars,

@@ -337,7 +337,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 /// driver, and the strict-parsing default value.
 ///
 /// ```
-/// # use techy::{Recovery, StdParseDriver};
+/// # use techy::core::StdParseDriver;
+/// # use techy::error::Recovery;
 /// let strict = StdParseDriver::default();
 /// assert_eq!(strict.recovery, Recovery::Strict);
 /// let tolerant = StdParseDriver { recovery: Recovery::Tolerant };

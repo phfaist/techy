@@ -32,17 +32,17 @@
 mod support {
     use std::sync::Arc;
 
-    use techy::constructs::GroupArgumentParser;
-    use techy::engine::{Language, ParseResult};
+    use techy::core::constructs::GroupArgumentParser;
+    use techy::core::{Language, ParseResult};
     use techy::error::Recovery;
     use techy::latexlike::{
         argument_specs, base_package, default_token_rules, CallableType, EnvironmentSpec,
         GroupType, Latexlike, LatexlikeDriver, MacroSpec, Mode, VerbatimBehavior,
     };
-    use techy::node::{check_tree_invariants, NodeRef};
-    use techy::scopes::{FallbackProvider, Package, ScopeOp};
-    use techy::spec::ArgumentSpec;
-    use techy::state::{ParsingStateDelta, TokenRulesOverrides};
+    use techy::core::node::{check_tree_invariants, NodeRef};
+    use techy::core::specs::{FallbackProvider, Package, ScopeOp};
+    use techy::core::specs::ArgumentSpec;
+    use techy::core::{ParsingStateDelta, TokenRulesOverrides};
 
     /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
     pub fn args(codes: &[&str]) -> Vec<Arc<ArgumentSpec<Latexlike>>> {
@@ -248,7 +248,7 @@ mod optional_args {
     use std::sync::Arc;
     use techy::error::Recovery;
     use techy::latexlike::{CallableType, MacroSpec};
-    use techy::scopes::Package;
+    use techy::core::specs::Package;
 
     // pylatexenc: test_get_latex_maybe_optional_arg (the `\cite[Lemma 3]{Author}`
     // half), node-level.
@@ -375,7 +375,7 @@ mod environments {
         assert!(err.to_string().contains("unknown environment"), "{err}");
 
         let result = tolerant().parse(input).unwrap();
-        techy::node::check_tree_invariants(&result.tree);
+        techy::core::node::check_tree_invariants(&result.tree);
         assert_eq!(result.diagnostics.len(), 1);
         // The body-only fallback still runs the body to its terminator.
         let env = result.tree.root().child(0).unwrap();
@@ -393,7 +393,7 @@ mod general {
     use std::sync::Arc;
     use techy::error::Recovery;
     use techy::latexlike::{CallableType, MacroSpec};
-    use techy::scopes::Package;
+    use techy::core::specs::Package;
 
     // pylatexenc: test_get_latex_nodes (the `Also: {\itshape some italic text}.`
     // slice — the part its own expected structure covers).
@@ -802,8 +802,8 @@ mod errors {
     use std::sync::Arc;
     use techy::error::Recovery;
     use techy::latexlike::{CallableType, SpecialsSpec};
-    use techy::node::check_tree_invariants;
-    use techy::scopes::Package;
+    use techy::core::node::check_tree_invariants;
+    use techy::core::specs::Package;
 
     /// pylatexenc's `get_test_latex_data_with_possible_inconsistencies()`: a
     /// document whose deliberate inconsistencies are the mismatched
@@ -1034,10 +1034,10 @@ This is a final sentence. { <-- this brace is not closed.
 mod paragraph_breaks {
     use super::support::*;
     use std::sync::Arc;
-    use techy::engine::Language;
+    use techy::core::Language;
     use techy::error::Recovery;
     use techy::latexlike::{Latexlike, LatexlikeDriver, ParagraphBreakStyle};
-    use techy::node::extract::content_as_chars;
+    use techy::extract::content_as_chars;
 
     fn specials_style(recovery: Recovery) -> Language<Latexlike> {
         Language::new(

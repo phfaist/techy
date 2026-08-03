@@ -139,10 +139,10 @@ impl core::error::Error for ArgumentCodeError {}
 ///
 /// ```
 /// use std::sync::Arc;
-/// use techy::engine::Language;
+/// use techy::core::Language;
 /// use techy::latexlike::{argument_specs, CallableType, Latexlike, MacroSpec};
-/// use techy::scopes::Package;
-/// use techy::state::ParsingStateDelta;
+/// use techy::core::specs::Package;
+/// use techy::core::ParsingStateDelta;
 ///
 /// let mut package = Package::new("mydefs");
 /// package.insert(
@@ -712,18 +712,18 @@ mod tests {
         assert!(result.tree.root().child(1).unwrap().is_group());
 
         // The extraction helper reads the run by marker.
-        let fields = crate::node::extract::split_embellishments(
+        let fields = crate::extract::split_embellishments(
             m.argument_content_nodes(0).unwrap(),
         )
         .unwrap();
         assert_eq!(fields.len(), 2);
         assert_eq!(
-            crate::node::extract::content_as_chars(fields.get("^").unwrap().value_content().unwrap())
+            crate::extract::content_as_chars(fields.get("^").unwrap().value_content().unwrap())
                 .unwrap(),
             "test"
         );
         assert_eq!(
-            crate::node::extract::content_as_chars(fields.get("_").unwrap().value().unwrap())
+            crate::extract::content_as_chars(fields.get("_").unwrap().value().unwrap())
                 .unwrap(),
             "x"
         );
@@ -741,7 +741,7 @@ mod tests {
         let result = parse_ok("e{^_}", r"\m_{b}^{a}");
         let m = macro_node(&result);
         let fields =
-            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         let keys: Vec<_> = fields.iter().map(|entry| entry.key().to_string()).collect();
         assert_eq!(keys, ["_", "^"]);
@@ -763,7 +763,7 @@ mod tests {
         let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
         assert!(region.iter().any(|node| node.comment().is_some()));
         let fields =
-            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         assert_eq!(fields.len(), 2);
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("!"));
@@ -778,12 +778,12 @@ mod tests {
         assert_eq!(wrapper.child(0).unwrap().chars(), Some(" "));
         // …and the extraction values stay noise-free regardless.
         let fields =
-            crate::node::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         let sup = fields.get("^").unwrap();
         assert_eq!(sup.value().unwrap().len(), 1);
         assert_eq!(
-            crate::node::extract::content_as_chars(sup.value_content().unwrap()).unwrap(),
+            crate::extract::content_as_chars(sup.value_content().unwrap()).unwrap(),
             "a"
         );
 
