@@ -68,7 +68,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.verbatim_parser.unterminated-verbatim",
+    id = "core.verbatim.unterminated-verbatim",
     message = "missing closing delimiter ‘{close}’ of the verbatim content"
 )]
 pub struct UnterminatedVerbatim {
@@ -81,7 +81,7 @@ pub struct UnterminatedVerbatim {
 /// character. Recovery reports the argument absent, consuming nothing.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.verbatim_parser.expected-verbatim-delimiter")]
+#[diagnostic(id = "core.verbatim.expected-verbatim-delimiter")]
 pub struct ExpectedVerbatimDelimiter {
     /// The expected opening delimiter, when the parser prescribes one (`None` = any
     /// character would have done, but none was there).

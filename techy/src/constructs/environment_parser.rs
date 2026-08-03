@@ -70,7 +70,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.environment_parser.terminator-mismatch",
+    id = "core.environments.terminator-mismatch",
     message = "missing terminator of environment ‘{expected}’: found the terminator of \
                ‘{found}’ instead"
 )]
@@ -86,7 +86,7 @@ pub struct EnvironmentTerminatorMismatch {
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.environment_parser.malformed-terminator",
+    id = "core.environments.malformed-terminator",
     message = "malformed terminator of environment ‘{environment}’: expected its name \
                group immediately after the command"
 )]
@@ -99,7 +99,7 @@ pub struct MalformedEnvironmentTerminator {
 /// end of input, or unwound by a stray group close nobody at the body's level asked for.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.environment_parser.missing-terminator")]
+#[diagnostic(id = "core.environments.missing-terminator")]
 pub struct MissingEnvironmentTerminator {
     /// The environment being parsed.
     pub environment: String,

@@ -58,7 +58,7 @@ use super::{ConstructParser, ConstructParserResult, ParseContext};
 /// by [`GroupParser`], which defines the condition next to its detection site.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.group_parser.unclosed-group")]
+#[diagnostic(id = "core.groups.unclosed-group")]
 pub struct UnclosedGroup {
     /// The close delimiter the group expected (as written, e.g. `}`).
     pub expected_close: String,

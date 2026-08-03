@@ -1089,7 +1089,7 @@ impl<L: Lang> fmt::Debug for FallbackProvider<L> {
 /// [`ErrorCallableSpec`] mechanism ("undefined on purpose" as an ordinary definition). The invocation recovers as a span-backed chars fallback.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.scopes.callable-defined-as-error")]
+#[diagnostic(id = "core.specs.callable-defined-as-error")]
 pub struct CallableDefinedAsError {
     /// The invocation spelling, as written.
     pub name: String,

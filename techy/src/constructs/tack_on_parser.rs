@@ -75,7 +75,7 @@ use super::{invocation_frame, ConstructParserResult, Invocation, ParseContext};
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.tack_on_parser.repeated-field",
+    id = "core.arguments.repeated-tack-on-field",
     message = "information field ‘{escape_char}{name}’ cannot be specified more than once"
 )]
 pub struct RepeatedTackOnField {

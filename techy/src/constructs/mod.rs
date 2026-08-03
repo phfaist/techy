@@ -447,7 +447,7 @@ pub struct ImplementationError {
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.constructs.scope-op-failed",
+    id = "core.specs.scope-op-failed",
     message = "scope op failed: {detail}"
 )]
 pub struct ScopeOpFailed {

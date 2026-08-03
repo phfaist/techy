@@ -72,7 +72,7 @@ use super::{
 /// the enclosing invocation.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.argument_parsers.missing-mandatory-argument")]
+#[diagnostic(id = "core.arguments.missing-mandatory-argument")]
 pub struct MissingMandatoryArgument {
     /// The argument's declared name, when the spec has one.
     pub argument_name: Option<String>,
@@ -94,7 +94,7 @@ impl fmt::Display for MissingMandatoryArgument {
 /// position ([`ExpressionParser`]).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.argument_parsers.expected-expression-argument")]
+#[diagnostic(id = "core.arguments.expected-expression-argument")]
 pub struct ExpectedExpressionArgument {
     /// The argument's declared name, when the spec has one.
     pub argument_name: Option<String>,

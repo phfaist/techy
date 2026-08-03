@@ -99,7 +99,7 @@ use super::{
 /// with a span-backed chars fallback.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.nodes_parser.unresolvable-command")]
+#[diagnostic(id = "core.specs.unresolvable-command")]
 pub struct UnresolvableCommand {
     /// The command name, as written (without the escape character).
     pub name: String,
@@ -136,7 +136,7 @@ impl fmt::Display for UnresolvableCommand {
 /// scope-op failures).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.nodes_parser.command-resolution-failed")]
+#[diagnostic(id = "core.specs.command-resolution-failed")]
 pub struct CommandResolutionFailed {
     /// The command name, as written (without the escape character).
     pub name: String,
@@ -167,7 +167,7 @@ impl fmt::Display for CommandResolutionFailed {
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.nodes_parser.expression-callable-requires-content",
+    id = "core.arguments.expression-callable-requires-content",
     message = "cannot use ‘{callable}’ as a single expression: it requires content \
                (arguments or a body)"
 )]
@@ -183,7 +183,7 @@ pub struct ExpressionCallableRequiresContent {
 /// recovers with a chars fallback over the error's span.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.nodes_parser.unusable-recovery-token")]
+#[diagnostic(id = "core.recovery.unusable-recovery-token")]
 pub struct UnusableRecoveryToken {
     /// The placeholder's spelling (the specials trigger or open delimiter as written).
     pub spelling: String,
@@ -327,7 +327,7 @@ impl<L: Lang> Default for StopSpec<'_, L> {
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.nodes_parser.stray-group-close",
+    id = "core.groups.stray-group-close",
     message = "unexpected closing ‘{delim}’ — no group is open"
 )]
 pub struct StrayGroupClose {
