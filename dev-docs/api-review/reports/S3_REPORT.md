@@ -9,7 +9,7 @@ Branch `phase3-s3-node-core`, based on `api-review` @ c45f126.
 - [x] B. Ext minting (`make_node_ext` + `StagedChildren`, tier-2 deletion, hook-free 6-param `add`, `cx.stage_node`, `ParserSession::builder` → pub(crate), extract minting)
 - [x] C1. Slot roles + ext demands (`SlotRole`, `BodySlotExt`, `body()`, preset `SlotExt` claim, record arities, std parsers `where ArgumentExt<L>: Default`) — done (successor agent 1; see Deviation D-C1: absent arguments carry no ext)
 - [x] C2. Constructor reshapes (`ArgumentSpec::new/new_unnamed` + `IntoArgumentParser`, `StdCallableSpec::new(IntoIterator)`, `ParsedArguments::new`/`ParsedSlots::new`) — done (successor agent 1)
-- [ ] D. Level-0 `restage_node` (+ copy.rs rebased on it)
+- [x] D. Level-0 `restage_node` (+ copy.rs rebased on it) — done (successor agent 2)
 - [ ] E. Navigation (`parent`/`index_in_parent`, `SourcePos`, `start_pos`/`end_pos`, `Span::contains`, `node_at`, `covering_slice`, `tree()` pub)
 - [ ] F. Slices single-source whole-run contract (fast-path flag wired)
 - [ ] G. Validation (`validate_tree` + `TreeViolation`, `check_tree_invariants` → pub(crate) wrapper, Attached byte-tiling exclusion, S6 TODO)
@@ -544,6 +544,25 @@ results). Lib test count now 548 (was 542 at A+B; +4 C1, +2 C2).
   `ParsedSlot` (default `Content`), `Hidden` read-blindness doc note, `Attached`
   byte-tiling exclusion documented on the variant (the validator arm itself is
   milestone G's).
+- **Item 6, level-0 half (restage primitive)** — landed in milestone D (successor
+  agent 2): `NodeTreeBuilder::restage_node(node, replacements, content_parents,
+  annotation)` in copy.rs (public method on the builder; `core::node` path
+  unchanged) — generic `AOld` on the input `NodeRef`, positional `&[Vec<BuildId>]`
+  replacements, prefix-sum region translation (regions shrink/grow; emptied
+  regions stay provided; `InRegion` content re-based through the same sums;
+  `InChildrenOf` parents mapped through the callback, child offsets carried
+  verbatim), ext/span/state cloned (ext **verbatim, never re-minted**),
+  cross-tree sanctioned in rustdoc (no same-tree assert — the sanctioned splice
+  door sentence), no `Send` bounds. New non_exhaustive `NodeBuildError` variants
+  `ReplacementsLengthMismatch { children, replacements }` /
+  `ContentParentUnmapped { parent: NodeId }` (delegated names, plan risk #7).
+  copy.rs's `copy_subtree_into` rebased as the degenerate recursion (singleton
+  replacements; old-id map keyed by `NodeId` now, not raw index; the old
+  `expect` on a missing content parent became the `ContentParentUnmapped` `Err`
+  path — panic-policy win, behavior unchanged for real copies). NO
+  visitor/driver/ops/bundles/`RestageError` (S7). 8 new tests (drop/empty/
+  multiply regions, cross-tree splice, unmapped parent, length mismatch,
+  cloned-ext verbatim on MintLang, caller-supplied annotations).
 - **Item 5 (constructor reshapes)** — landed in milestone C2:
   `ArgumentSpec::new(parser, name)`/`new_unnamed` over sealed
   `IntoArgumentParser<L, M>` (S2-D1 marker realization; `'static` spelled on the

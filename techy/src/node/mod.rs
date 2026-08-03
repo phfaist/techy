@@ -1820,6 +1820,214 @@ mod tests {
         assert_eq!(copy.node(record.content_parent()).span_content(), "{x}");
     }
 
+    // --- the level-0 restage primitive ------------------------------------------------
+
+    /// A callable whose one argument region holds two children (noise + content),
+    /// with an `InRegion` content designation — the shape whose region arithmetic
+    /// `restage_node` must translate through the replacement prefix sums.
+    /// (`r"\m x y"`: `x` is region noise, `y` the designated content.)
+    fn two_child_region_tree() -> NodeTree<PlainLang> {
+        let source: Arc<Source> = Arc::new(Source::new(r"\m x y"));
+        let st = state::<PlainLang>();
+        let mut b = NodeTreeBuilder::new();
+        let x = b.add(NodeKind::chars(Span::new(3, 4)), spanned(&source, 3..4), st.clone(), vec![], (), ()).unwrap();
+        let y = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![], (), ()).unwrap();
+        let arg_spec = brace_arg_spec();
+        let spec: Arc<dyn CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+        let m = b.add(
+            NodeKind::callable(CallableData {
+                callable_type: CT_MACRO,
+                name: "m".into(),
+                spec,
+                arguments: vec![ParsedArgument::provided(
+                    arg_spec,
+                    ChildRegion::new(0..2, ContentNodes::InRegion(1..2)),
+                    (),
+                )]
+                .into(),
+                slots: ParsedSlots::empty(),
+                post_space: TextContent::empty(),
+            }),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![x, y],
+            (),
+            (),
+        ).unwrap();
+        b.finish(m).unwrap()
+    }
+
+    #[test]
+    fn restage_node_shrinks_regions_under_dropped_children() {
+        let tree = two_child_region_tree();
+        let m = tree.root();
+        let mut b = NodeTreeBuilder::new();
+        // Keep only the content child ("y"); the noise child is dropped. The region
+        // shrinks from two children to one, and the InRegion designation re-bases.
+        let y2 = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
+        let root = b.restage_node(m, &[vec![], vec![y2]], |_| None, ()).unwrap();
+        let new = b.finish(root).unwrap();
+        assert_eq!(new.root().child_count(), 1);
+        assert!(new.root().arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(new.root().argument_nodes(0).unwrap().len(), 1);
+        let content = new.root().argument_content_nodes(0).unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content.first().unwrap().chars(), Some("y"));
+    }
+
+    #[test]
+    fn restage_node_keeps_an_emptied_region_provided() {
+        let tree = two_child_region_tree();
+        let m = tree.root();
+        let mut b = NodeTreeBuilder::new();
+        // Every region child dropped: provided-with-an-empty-region, not absent.
+        let root = b.restage_node(m, &[vec![], vec![]], |_| None, ()).unwrap();
+        let new = b.finish(root).unwrap();
+        assert_eq!(new.root().child_count(), 0);
+        let arg = new.root().arguments().unwrap().get(0).unwrap();
+        assert!(arg.is_provided());
+        assert_eq!(new.root().argument_nodes(0).unwrap().len(), 0);
+        assert_eq!(new.root().argument_content_nodes(0).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn restage_node_grows_regions_under_multiplied_children() {
+        let tree = two_child_region_tree();
+        let m = tree.root();
+        let mut b = NodeTreeBuilder::new();
+        let x2 = super::copy::copy_subtree_into(&mut b, m.child(0).unwrap()).unwrap();
+        // The content child is replaced by two nodes: the region grows to three
+        // children and the content designation covers both replacements.
+        let y2a = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
+        let y2b = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
+        let root = b.restage_node(m, &[vec![x2], vec![y2a, y2b]], |_| None, ()).unwrap();
+        let new = b.finish(root).unwrap();
+        assert_eq!(new.root().child_count(), 3);
+        assert_eq!(new.root().argument_nodes(0).unwrap().len(), 3);
+        let content = new.root().argument_content_nodes(0).unwrap();
+        assert_eq!(content.len(), 2);
+        assert!(content.iter().all(|node| node.chars() == Some("y")));
+    }
+
+    #[test]
+    fn restage_node_is_the_cross_tree_splice_door() {
+        // The input NodeRef comes from a *different* tree than the builder's staged
+        // nodes — sanctioned by contract (no same-tree assertion, ever).
+        let tree = example_tree();
+        let frac = tree.root().child(1).unwrap();
+        let mut b = NodeTreeBuilder::new();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
+        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap()).unwrap();
+        let a_group_id = frac.child(0).unwrap().id();
+        let b_group_id = frac.child(1).unwrap().id();
+        let map = move |old: NodeId| {
+            if old == a_group_id {
+                Some(ag2)
+            } else if old == b_group_id {
+                Some(bg2)
+            } else {
+                None
+            }
+        };
+        let root = b.restage_node(frac, &[vec![ag2], vec![bg2]], map, ()).unwrap();
+        let new = b.finish(root).unwrap();
+        // The records were translated: content designations reach into the new
+        // groups (InChildrenOf parents mapped through the callback).
+        assert_eq!(
+            new.root().argument_content_nodes(0).unwrap().first().unwrap().chars(),
+            Some("a")
+        );
+        assert_eq!(new.root().argument_nodes(1).unwrap().source_text(), Some("{b}"));
+        // Spec, state, span, and name are cloned/shared from the old tree's node.
+        assert!(Arc::ptr_eq(new.root().spec().unwrap(), frac.spec().unwrap()));
+        assert!(Arc::ptr_eq(new.root().parsing_state(), frac.parsing_state()));
+        assert_eq!(new.root().span(), frac.span());
+        assert_eq!(new.root().name(), Some("frac"));
+    }
+
+    #[test]
+    fn restage_node_reports_unmapped_content_parents() {
+        let tree = example_tree();
+        let frac = tree.root().child(1).unwrap();
+        let a_group_id = frac.child(0).unwrap().id();
+        let mut b = NodeTreeBuilder::new();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
+        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap()).unwrap();
+        let err = b.restage_node(frac, &[vec![ag2], vec![bg2]], |_| None, ()).unwrap_err();
+        assert_eq!(err, NodeBuildError::ContentParentUnmapped { parent: a_group_id });
+    }
+
+    #[test]
+    fn restage_node_demands_one_replacement_entry_per_child() {
+        let tree = example_tree();
+        let frac = tree.root().child(1).unwrap();
+        let mut b = NodeTreeBuilder::new();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
+        let err = b.restage_node(frac, &[vec![ag2]], |_| None, ()).unwrap_err();
+        assert_eq!(
+            err,
+            NodeBuildError::ReplacementsLengthMismatch { children: 2, replacements: 1 }
+        );
+    }
+
+    #[test]
+    fn restage_node_clones_the_ext_verbatim() {
+        // Build the MintLang `x{a}` tree (exts minted bottom-up), then restage the
+        // group with a *doubled* child: the copy's ext must be the old node's ext
+        // verbatim — never re-minted from the new children.
+        let source: Arc<Source> = Arc::new(Source::new("x{a}"));
+        let st = state::<MintLang>();
+        let mut b: NodeTreeBuilder<MintLang> = NodeTreeBuilder::new();
+        let stage = |b: &mut NodeTreeBuilder<MintLang>,
+                     kind: NodeKind<MintLang>,
+                     span: SourceSpan,
+                     children: Vec<BuildId>| {
+            let ext = MintLang::make_node_ext(&kind, &span, &st, b.staged_children(&children));
+            b.add(kind, span, st.clone(), children, ext, ()).unwrap()
+        };
+        let a = stage(&mut b, NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), vec![]);
+        let g = stage(&mut b, NodeKind::group(brace_group(1..2, 3..4)), spanned(&source, 1..4), vec![a]);
+        let tree = b.finish(g).unwrap();
+        assert_eq!(*tree.root().ext(), MintExt { descendants: 1, chars_below: 1 });
+
+        let mut b: NodeTreeBuilder<MintLang> = NodeTreeBuilder::new();
+        let a1 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap()).unwrap();
+        let a2 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap()).unwrap();
+        let root = b.restage_node(tree.root(), &[vec![a1, a2]], |_| None, ()).unwrap();
+        let new = b.finish(root).unwrap();
+        assert_eq!(new.root().child_count(), 2);
+        // Cloned verbatim: still the old facts, although two chars now sit below.
+        assert_eq!(*new.root().ext(), MintExt { descendants: 1, chars_below: 1 });
+        // The copied children carry their old exts verbatim too.
+        assert_eq!(
+            *new.root().child(0).unwrap().ext(),
+            MintExt { descendants: 0, chars_below: 0 }
+        );
+    }
+
+    #[test]
+    fn restage_node_supplies_the_callers_annotation() {
+        let tree = two_child_region_tree();
+        let m = tree.root();
+        let st = state::<PlainLang>();
+        let mut b: NodeTreeBuilder<PlainLang, &str> = NodeTreeBuilder::new();
+        let y2 = b
+            .add(
+                NodeKind::chars(Span::new(5, 6)),
+                m.child(1).unwrap().span().clone(),
+                st.clone(),
+                vec![],
+                (),
+                "child",
+            )
+            .unwrap();
+        let root = b.restage_node(m, &[vec![], vec![y2]], |_| None, "restaged").unwrap();
+        let new = b.finish(root).unwrap();
+        assert_eq!(*new.root().annotation(), "restaged");
+        assert_eq!(*new.root().child(0).unwrap().annotation(), "child");
+    }
+
     #[test]
     fn tree_get_is_the_non_panicking_node_access() {
         let tree = example_tree();

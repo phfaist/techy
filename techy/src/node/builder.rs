@@ -67,7 +67,9 @@ struct Staged<L: Lang> {
 ///
 /// The builder is **hook-free and mode-free**: it runs no `Lang` hook and demands
 /// ready values — the one staging method, [`add`](NodeTreeBuilder::add), takes the
-/// already-minted [`NodeExt`] and the node's annotation. During parsing the ext is
+/// already-minted [`NodeExt`] and the node's annotation
+/// ([`restage_node`](NodeTreeBuilder::restage_node), the copying door, is not a
+/// second staging path: it clones an existing node's data and lowers onto `add`). During parsing the ext is
 /// minted automatically by the one staging door,
 /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node); a
 /// transform author writes the explicit two-line recipe (call
@@ -740,6 +742,21 @@ pub enum NodeBuildError {
         /// The offending content-parent id.
         parent: BuildId,
     },
+    /// [`restage_node`](NodeTreeBuilder::restage_node)'s replacement list does not
+    /// have exactly one entry per child of the input node.
+    ReplacementsLengthMismatch {
+        /// The input node's child count.
+        children: usize,
+        /// The number of replacement entries supplied.
+        replacements: usize,
+    },
+    /// [`restage_node`](NodeTreeBuilder::restage_node)'s content-parent mapping
+    /// answered `None` for a content parent the input node's argument/slot records
+    /// designate.
+    ContentParentUnmapped {
+        /// The old tree's id of the unmapped content parent.
+        parent: super::NodeId,
+    },
 }
 
 impl fmt::Display for NodeBuildError {
@@ -802,6 +819,18 @@ impl fmt::Display for NodeBuildError {
             NodeBuildError::ContentParentOutsideRegion { parent } => write!(
                 f,
                 "content parent {:?} lies outside its own argument/slot region",
+                parent
+            ),
+            NodeBuildError::ReplacementsLengthMismatch { children, replacements } => write!(
+                f,
+                "restage_node needs exactly one replacement entry per child \
+                 ({} children, {} entries)",
+                children, replacements
+            ),
+            NodeBuildError::ContentParentUnmapped { parent } => write!(
+                f,
+                "restage_node's content-parent mapping has no staged counterpart \
+                 for content parent {:?}",
                 parent
             ),
         }
