@@ -12,15 +12,21 @@ Original python project is at: https://github.com/phfaist/pylatexenc
 token → constructs → node (AST)
 ```
 
-- **source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, TextContent)
-- **token**: Tokenization (Token, TokenKind, TokenRules, TokenReader, StdTokenReader)
-- **constructs**: Parsers for individual constructs (ConstructParser trait + standard parsers)
-- **engine**: High-level machinery (Language + `parse()`, ParseDriver, ParserSession, ParseResult)
-- **node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData; extraction helpers)
-- **spec** + **scopes**: Extensibility (CallableSpec, StdCallableSpec, ArgumentSpec, ArgumentParser; SpecsProvider, Package, Scope, ScopeStack)
-- **state**: Parsing context (Lang, ParsingState, ParsingStateDelta)
-- **error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery)
-- **latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs)
+**Public topology** ([§dd-dr:public-namespace-topology]): the public API is exported
+exclusively via facades, exactly one canonical public path per item; internal src
+modules are `pub(crate)` and invisible to public paths:
+
+- **techy::source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, TextContent, SourceResolver)
+- **techy::error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery; the DiagnosticInfo/ToDiagnosticValue derives)
+- **techy::extract**: Extraction helpers over parsed trees (Split, KeyVals, free fns)
+- **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), tokens (Token, TokenKind, TokenRules, TokenReader, StdTokenReader), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)
+- **techy::core::specs**: Defining callables (CallableSpec, StdCallableSpec, ArgumentSpec; SpecsProvider, Package, Scope, ScopeStack; the command-resolution family)
+- **techy::core::constructs**: Construct parsers (ConstructParser trait + standard parsers, ArgumentParser, their diagnostic conditions)
+- **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, NodeTreeBuilder)
+- **techy::latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs)
+
+Internal file layout (src/token, src/state, src/engine, src/spec, src/scopes, …) is
+organizational only — it never shows in public paths.
 
 ## Critical Naming Conventions
 
@@ -35,8 +41,7 @@ Key naming rules:
 - Names consciously rejected or replaced must not come back: DESIGN_RATIONALE [§dd-dr:superseded-names]
 
 **Module organization**:
-- `engine` module = high-level machinery (`Language::parse()`, `ParserSession`, `ParseDriver`)
-- `constructs` module = parsers for individual constructs (traits, parsers)
+- `techy::core` = the flat machinery hub (`Language::parse()`, `ParserSession`, `ParseDriver`, state, tokens); `core::constructs` = parsers for individual constructs (traits, parsers); `core::specs` = author-side definitions; `core::node` = the node tree
 - Node taxonomy is the closed `NodeKind`: `Chars`/`Group`/`Callable`/`Comment`/`List` — "macro"/"environment" are preset vocabulary, not node kinds
 
 

@@ -4909,8 +4909,8 @@ need — promote the cache if one appears).
 
 #### Wire identifiers: stable namespace, concept-named areas, owner = defining vocabulary [§dd-dr:wire-identifier-stability]
 
-Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate is
-pending in the API-review T4 decision session).
+Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate was
+ruled in the API-review T4 session and is applied — Phase 3 S1).
 
 `IDENTIFIER` strings are semver-stable under the same rubric and soft freeze as public
 paths ([§dd-dr:stability-rubric]) — they are wire/config material (match tables,
@@ -5340,9 +5340,8 @@ a `crates/` super-directory (needless nesting at three crates; plain siblings su
 
 #### Public export topology: facades, one canonical path, hub + extracted subsets [§dd-dr:public-namespace-topology]
 
-Status: DECIDED (user-led, API-review policy session; application pending — the
-restructure is scheduled within the API review, after the resolver-extraction design
-below).
+Status: DECIDED (user-led, API-review policy session; applied — Phase 3 S1, after the
+resolver-extraction design below closed the deferred placements).
 
 The public API is exported exclusively through **re-export facades** — internal src
 modules become private, so internal file organization is permanently invisible to

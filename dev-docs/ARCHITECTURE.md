@@ -136,13 +136,13 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 `SourceResolver` — plus `Lang` and `ParseDriver`); standard machinery (`StdTokenReader`,
 `Package`/`Scope`, `NodesParser`, …); orchestration (`Language`, `ParserSession`).
 
-**Public export topology (decided; application scheduled within the API review):**
-the public API will be exposed through re-export facades with one canonical path per
+**Public export topology (decided; applied):**
+the public API is exposed through re-export facades with one canonical path per
 item — `techy::{source, error, extract}` top-level, `techy::core` as a flat machinery
 hub with extracted satellites `core::{constructs, specs, node}`, `techy::latexlike`
-unchanged, future `techy::transform` — and internal src modules become private
+unchanged, future `techy::transform` — and internal src modules are private
 (internal reorganization stops being public-breaking). The topic modules sketched
-above then describe the *internal* organization only. Full decision incl. the
+above describe the *internal* organization only. Full decision incl. the
 specs-vs-hub author-side/run-side rule and rejected shapes:
 [§dd-dr:public-namespace-topology]. Later rulings add `techy::recompose` and
 `techy::visit` to the top-level set ([§dd-dr:recompose-machinery],
@@ -205,7 +205,7 @@ single `Char`s (never runs), `GroupOpen`/`GroupClose`, `Command` (escape-led, wi
 firing escape char and syntactic post-space), `Specials` (carrying its full resolution),
 whole `Comment`s, `ParagraphBreak`, and a terminal idempotent `EndOfStream`. The `'s`
 lifetime borrows the current source content and never enters the node tree. The concrete
-shape lives in `techy::token`; the full model with every argument is
+shape lives in `src/token` (public path: `techy::core`); the full model with every argument is
 [§dd-dr:token-model].
 
 - **No invocation forms at the token level**: no macro/environment taxonomy and no
@@ -404,7 +404,7 @@ Access goes through `NodeRef` proxies (`Copy`, borrow-checked against the tree);
   region nodes or on the node itself (group delimiters on `GroupData`, comment start
   delimiters, marker spellings) — recomposability never depends on `Lang` cooperation.
 - **The read/extraction surface** ([§dd-dr:read-api]): `NodeSlice` is the node-list
-  currency (exact spans by the partition invariant); `node::extract` helpers
+  currency (exact spans by the partition invariant); `techy::extract` helpers
   (`split_at_chars`, `parse_keyval`, `content_as_chars`) mint real trees through the
   builder route; slot access is content-first ([§dd-dr:slot-read-api]);
   `NodeRef::summary()` renders compact one-line node descriptions. Cross-tree id
