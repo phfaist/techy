@@ -95,7 +95,7 @@ use crate::token::{
 
 /// The form in which a math group appears: inline or display — the typed class
 /// payload of [`GroupType::Math`], declared by the rule author at
-/// [`GroupRule`](crate::token::GroupRule) registration and read back off the node via
+/// [`GroupRule`] registration and read back off the node via
 /// [`NodeRef::math_form`](crate::node::NodeRef::math_form) (no table, no string
 /// matching, no state lookup — correct for embedder-registered and mid-parse-minted
 /// delimiters alike).
@@ -213,14 +213,14 @@ pub enum Mode {
 pub enum Event {
     /// **Exit the math context** (context-dependent): restore the innermost
     /// enclosing *non-math* context — its whole
-    /// [`TokenRules`](crate::token::TokenRules) and its mode — found on the
+    /// [`TokenRules`] and its mode — found on the
     /// enclosing-state stack (else the outermost, seed context). The `\text{…}`
     /// recipe: an [`ArgumentSpec`](crate::spec::ArgumentSpec) state delta carrying
     /// this event makes the argument parse in the surrounding non-math context
     /// even deep inside display math — composably with every argument shape, and
     /// without clobbering embedder rule customizations the way a static
     /// rules-reset would. Lowered via
-    /// [`exit_math_context_delta`](exit_math_context_delta); deliberately **not**
+    /// [`exit_math_context_delta`]; deliberately **not**
     /// "restore text mode": the target is whatever the enclosing context is, never
     /// a conjured mode value.
     ExitMathContext,
@@ -328,7 +328,8 @@ impl Lang for Latexlike {
 
     /// The two-class event contract's loud arm ([`Event`]): the preset's
     /// [`ExitMathContext`](Event::ExitMathContext) is **context-dependent** — it
-    /// is lowered by [`LatexlikeDriver::resolve_state_event`] (via
+    /// is lowered by the driver
+    /// ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event)) (via
     /// [`exit_math_context_delta`]) inside a driven parse and never reaches this
     /// hook there. Reaching it here means a bare out-of-parse
     /// [`derived()`](ParsingState::derived) call (or a mis-wired driver): the

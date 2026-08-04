@@ -22,8 +22,9 @@ each.
       `with_parsing_state` — build/tests green (588 lib tests), 0 warnings
 - [x] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity
       tests — build/tests green (596 lib tests), 0 warnings
-- [ ] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
+- [x] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
       superseded-names, ARCHITECTURE passages, full gate run, stage summary
+      (all gates green — see Consolidated stage summary)
 
 ## Ruling inputs (digest)
 
@@ -329,6 +330,96 @@ sites (default param covers type positions; value positions infer through
 - D-plan-10 (routing): A1(iv) escape-char check fn skipped entirely → S9, per
   the stage launch instructions (overriding PHASE3_PLAN's S4 bullet).
 
+## Consolidated stage summary
+
+### Outcome
+
+All five milestones implemented in one run, all gates green. The preset now has
+its math-form class payload, the four role traits + `LatexlikeLang` umbrella, the
+E4 enclosing-state-stack machinery with two-class event lowering, the three pillar
+functions, and the `LLL`-generic `LatexlikeDriver` — with parity tests covering
+math entry/exit context restore (nested groups, custom rules, embedder forbidden
+chars), paragraph breaks, the `\text` event recipe, and a foreign-family-member
+smoke test.
+
+### Signature table (new/changed public surface)
+
+| Item | Signature / shape |
+|---|---|
+| `latexlike::MathGroupForm` | `enum { Inline, Display }` — exhaustive; payload-admission rule in rustdoc |
+| `latexlike::GroupType::Math` | `Math(MathGroupForm)` (enum stays `#[non_exhaustive]`) |
+| `NodeRef` preset sugar | `impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A>`: `is_math_group()`, `math_form() -> Option<MathGroupForm>`, `macro_name()`, `environment_name()`, `specials_name()` (via role traits; `math_style` deleted) |
+| `latexlike::Event` | `#[non_exhaustive] enum { ExitMathContext }`; `Latexlike::Event = Event` |
+| `latexlike::LatexlikeGroupType` | `: Copy` — `content_group()`, `math_group(form)`, `verbatim_group()`, `math_form(self)`, `is_math(self)` (defaulted `= math_form().is_some()`) |
+| `latexlike::LatexlikeCallableType` | `: Copy + PartialEq` — `macro_callable()`/`environment_callable()`/`specials_callable()`; `is_macro()`/`is_environment()`/`is_specials()` (defaulted by constructor equality) |
+| `latexlike::LatexlikeMode` | `: Copy + PartialEq` — `math_mode()`, `is_math(self)` (defaulted by equality); NO text-mode vocabulary |
+| `latexlike::LatexlikeEvent` | `exit_math_context() -> Self`, `is_exit_math_context(&self) -> bool` (required) |
+| `latexlike::LatexlikeLang` | `: Lang<GroupTypeId: …, CallableTypeId: …, ModeId: …, Event: …>` + defaulted `math_group_rules() -> Vec<Arc<GroupRule<Self>>>`, `math_interior_forbidden_chars(&[Arc<GroupRule<Self>>]) -> String`; NO blanket impl; `impl LatexlikeLang for Latexlike {}` |
+| `latexlike::default_token_rules` | `fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL>` |
+| `latexlike::SpecialsSpec` | `SpecialsSpec<LLL: LatexlikeLang = Latexlike>` (manual Clone/Debug/Default) |
+| `latexlike::math_group_interior_delta` | `fn <LLL: LatexlikeLang>(&ParsingState<LLL>, &Arc<GroupRule<LLL>>) -> Option<ParsingStateDelta<LLL>>` (two-component-recipe rustdoc) |
+| `latexlike::exit_math_context_delta` | `fn <LLL: LatexlikeLang>(&ParsingStateStack<LLL>) -> ParsingStateDelta<LLL>` (first-non-math scan; whole-rules + mode; outermost fallback; empty-stack no-op) |
+| `latexlike::make_paragraph_break_node` | `fn <LLL: LatexlikeLang>(ParagraphBreakStyle, &ParsingState<LLL>, &Token<'_, LLL>) -> NodeKind<LLL>` (parse-side-only rustdoc) |
+| `latexlike::LatexlikeDriver` | `LatexlikeDriver<LLL: LatexlikeLang = Latexlike>` — `PhantomData<fn() -> LLL>`; `Clone + Debug` only; knobs unchanged (`recovery`/`paragraph_break_style` pub, resolver private); every hook a one-line pillar delegation incl. `resolve_state_event` |
+| `core::ParsingStateStack` | owning `Vec<Arc<ParsingState<L>>>`-backed; `new()`, `from_states(Vec)` (innermost-first input), `from_node_ancestors(NodeRef)`, `iter()` (innermost-first), `outermost()`, `len()`, `is_empty()`; `Clone`/`Debug`/`Default` |
+| `core::FinalizeError` | `new(impl Into<String>)`, `message()`; `Display`/`Error`/`Clone`/`Eq` |
+| `Lang::finalize_transition` | `-> Result<(), FinalizeError>` (default `Ok(())`; seed never runs it); two-class contract on `Lang::Event` |
+| `core::DeriveError` | + `pub finalize_error: Option<FinalizeError>` (failures may now be empty when it is `Some`; `Display` renders both) |
+| `ParseDriver::resolve_state_event` | `fn (&self, &L::Event, &ParsingStateStack<L>) -> Option<ParsingStateDelta<L>>` (default `None`) |
+| `ParseContext::derive_state` | replaces `cx.derived_state` — the one parser-facing derivation choke point, with the event-lowering loop inside |
+| `ParseContext::with_parsing_state` | `pub fn (state, f)` — the ruled scoped closure form (former `pub(crate) with_scoped_state`), maintains the session stack |
+| `ParseContext::with_derived_state` | `pub fn (&delta, f) -> Result<R, …>` — derive + scope composition |
+
+### Deviations / delegated decisions for user sign-off
+
+D-plan-1 … D-plan-10 above (all held as planned), plus applied specifics:
+
+- The session's live stack entries are the scoped states pushed by
+  `with_parsing_state` (the descent chain); the lend inside `derive_state`
+  guarantees current-state-first by pushing the evolved `cx.state` when it is not
+  the innermost entry.
+- `SpecialsSpec` keeps its `pub arguments` field; `MacroSpec` untouched
+  (monomorphic until S5).
+- The driver's `PhantomData` is spelled `PhantomData<fn() -> LLL>` (compiler-forced:
+  a bare `PhantomData<LLL>` makes `Send + Sync` depend on the marker type, which
+  `Lang` deliberately does not bound).
+- Latexlike's in-crate exhaustive match on `Event` in `finalize_transition`
+  (preset-vocabulary convention: new variants must surface every site).
+
+Routings recorded: A1(iv) escape-char check fn → S9 (per stage instructions);
+`MacroSpec`/environments/`argument_specs` + fifth role trait + FLM probe re-run →
+S5; `base_package`/`minidefs` generalization + contents → S9;
+`latexlike::initial_state_data`-style Lang-hook pillar fns → with their stages
+(S5/S9). T5-D rider verified (not redone): the S2-rewritten `Copy`/`Eq` comment
+stands (engine/driver.rs "Driver `Copy`/`Eq` are deliberately gone…"); knobs
+unchanged, resolver private.
+
+### Gate results (final run)
+
+- `cargo build`: 0 warnings; `cargo build --tests`: 0 warnings.
+- `cargo test`: 596 lib + 30 acceptance + 8 derive-conditions + 1 derive +
+  27 doctests — all green (S3 baseline was 576 lib tests; +20).
+- `rm -rf target/doc && cargo docs`: clean (no warnings, no broken links).
+- README quick-start: compiled + ran against the built `libtechy.rlib`
+  (`README-RLIB-OK`).
+- Greps over `techy/src`, `techy/tests`, `docs/`, `README.md`: zero
+  `MATH_DELIMITERS`, `math_style`, `MathStyle`, `restore_text_context_delta`,
+  `StateStackView`, `text_mode()`.
+
+### Commits
+
+1. `668e449` P3-S4: implementation plan (+ `72c020e`-ish checklist fix)
+2. `3901284` M1: GroupType::Math(MathGroupForm)
+3. `a5eb56d` M2: role traits + LatexlikeLang umbrella
+4. `7140631` M3: E4 enclosing-state stack + event lowering
+5. `7bc8161` M4: pillars + LatexlikeDriver<LLL> + parity tests
+6. (this commit) M5: docs + closure
+
+### Churn
+
+Through M4: 25 files, +2478/−310; M5 adds guide/DR/ARCHITECTURE doc churn and
+doc-link fixes (~+130/−60). Lib tests 576 → 596.
+
 ## Handoff notes
 
-(Only if relayed; none yet.)
+None — the stage completed in a single run.

@@ -1032,7 +1032,7 @@ unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
 #### Enclosing-state stack on the session; context-dependent events lowered by the driver [§dd-dr:enclosing-state-stack]
 
-Status: DECIDED (user-led, API-review T1/T2 session; application with the review batch).
+Status: DECIDED (user-led, API-review T1/T2 session; applied — Phase 3 S4).
 
 The parse **machinery**, not the state model, keeps the enclosing context:
 `ParserSession` maintains a stack of enclosing `ParsingState`s — push/pop at the same
@@ -1112,6 +1112,23 @@ is not entry-for-entry the parse-time stack (ancestor chains contain Arc-equal
 duplicates and non-group nodes); the documented contract is the **scan
 semantics** — first non-math state, outermost fallback — which duplicates cannot
 affect.)*
+
+*(Applied — Phase 3 S4. Application details: the scoped form is the public
+`ParseContext::with_parsing_state(state, f)` (the former crate-internal
+`with_scoped_state`, now also maintaining the session stack; `parse_scoped` is its
+parser-shaped sugar, and `with_derived_state(&delta, f)` composes derivation and
+scoping); the parser-facing derivation is `ParseContext::derive_state` (absorbing
+the former `cx.derived_state` — the session-level `ParserSession::derived_state`
+keeps its name and performs no lowering). The finalize refusal type is
+`FinalizeError` (message-carrying), folded into `DeriveError` as the
+`finalize_error: Option<FinalizeError>` field; in-parse, an unlowered
+context-requiring event aborts as an implementation error under any recovery
+policy (extension wiring, not source input). The lend guarantees
+current-state-first: `derive_state` pushes the context's current state for the
+hook call when sibling after-effects have evolved it past the innermost stack
+entry (an `Arc`-equal duplicate otherwise being harmless under scan semantics).
+Patch merging: patches in event order, the delta's own explicit overrides win —
+"the delta author spoke".)*
 
 #### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
 
@@ -5216,7 +5233,9 @@ re-opens a settled argument:
   overclaims; the toy package module is `minidefs`, [§dd-dr:minidefs]).
 - `MathStyle` / `NodeRef::math_style()` — renamed `MathGroupForm` / `math_form()`
   ("style" collides with typesetting style: `$\displaystyle …$` is display-*style*
-  math in an inline-*form* group; [§dd-dr:math-group-form]).
+  math in an inline-*form* group; [§dd-dr:math-group-form]); with them the
+  `MATH_DELIMITERS` table — dissolved into `default_token_rules` (the form is
+  declared class payload, never read infrastructure).
 - `InitialStateDataProvider` / `StateTransitionFinalizer` / `SpecialsProvider` /
   `NodeFinalizer` (a facet-decomposed `Lang`), `Latexlike<X: LatexlikeExt>` (the
   plugin-slot preset) — weighed and rejected during preset generalization
@@ -5802,6 +5821,12 @@ must use an extension trait regardless, and that pattern needs no in-tree demons
 Rejected alternatives: a `LatexNodeRefExt` trait for the preset (a `use` tax on every consumer, buying
 only symmetry with a constraint the preset does not have).
 
+*(Amended — Phase 3 S4, with the preset generalization: the inherent impl is now
+generic over the family (`impl<LLL: LatexlikeLang> NodeRef<'_, LLL, A>`), reading
+vocabulary through the role traits — an in-crate family member gets the sugar
+with no extension trait either; `math_style` is `math_form`
+([§dd-dr:math-group-form]).)*
+
 #### `\begin`/`\end` dispatch is scope-stack data: ordinary `Macro` entries of `"base"` [§dd-dr:begin-end-dispatch]
 
 Status: DECIDED (user).
@@ -6146,10 +6171,18 @@ the event's pillar is `exit_math_context_delta`, restoring the first *non-math*
 enclosing context rather than seeking a text-mode state;
 [§dd-dr:enclosing-state-stack] amendment.)*
 
+*(Item 3 applied — Phase 3 S4: the preset event enum `latexlike::Event` with
+`ExitMathContext`, the `.event(…)` argument recipe, and the repaired guide
+chapter landed with the E4 machinery; items 1–2 land with the T1/T2 batch.)*
+
 #### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
 
 Status: DECIDED (user, API-review policy session P3 — direction and shape; detailed
-design and application in the 2b T3/T5 sessions).
+design in the 2b T3/T5 sessions; applied — Phase 3 S4 for the role traits, the
+umbrella, `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the `NodeRef` sugar,
+the pillars, and `LatexlikeDriver<LLL>`; `MacroSpec`/environments/`argument_specs`
+generalize with the invocation-syntax stage, `base_package`/`minidefs` with the
+preset-definitions stage).
 
 Every latexlike preset component — `LatexlikeDriver`, `MacroSpec`/`SpecialsSpec`, the
 environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`EnvironmentBehavior`/
@@ -6284,7 +6317,8 @@ sites and `SourceRecomposer` work over any `LLL`; [§dd-dr:invocation-syntax].)*
 #### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
 
 Status: DECIDED (user, API-review policy session P3; supersedes the delimiter-fact
-half of [§dd-dr:group-taxonomy] — that entry's revisit condition fired).
+half of [§dd-dr:group-taxonomy] — that entry's revisit condition fired; applied —
+Phase 3 S4).
 
 `GroupType` becomes `{ Content, Math(MathGroupForm), Verbatim }`, with
 `MathGroupForm { Inline, Display }` a **closed (exhaustive) enum**; the rule author
@@ -6345,7 +6379,8 @@ Revisit if: a third math-group form with distinct downstream semantics is identi
 #### The preset driver: pillar functions + generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
 
 Status: DECIDED (user, API-review T3 session; detailing shared with the T5
-session).
+session; applied — Phase 3 S4; the FLM-probe acceptance re-run rides the
+invocation-syntax stage).
 
 The component the generalization ruling left open resolves as **both, layered** —
 the same shape [§dd-dr:latexlike-generalization] chose for `Lang` (whole type +

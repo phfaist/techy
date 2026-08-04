@@ -52,7 +52,7 @@ pub enum ParagraphBreakStyle {
     /// text).
     #[default]
     Chars,
-    /// A [`Specials`](CallableType::Specials)-formed `Callable` node —
+    /// A [`Specials`](super::CallableType::Specials)-formed `Callable` node —
     /// pylatexenc-modern's paragraph-break shape. The node's *name* is the canonical
     /// `"\n\n"` (the vocabulary key, like `"~"` or `"---"`), whatever the actual
     /// whitespace run looked like; the node's *span* covers the actual run. The

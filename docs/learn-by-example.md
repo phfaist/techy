@@ -218,8 +218,16 @@ assert_eq!(shapes, ["group(Math(Inline) $ $)", "group(Math(Inline) $ $)"]);
 A macro like `\text{…}` must parse its argument back in *text* mode even inside
 display math. That is per-argument data: an
 [`ArgumentSpec`](crate::core::specs::ArgumentSpec) carries an optional parsing-state delta
-(pylatexenc's `args_math_mode`), which here resets the mode and restores the math
-delimiters as openers:
+(pylatexenc's `args_math_mode`), which here spells the preset's
+**exit-math-context event** ([`Event::ExitMathContext`](crate::latexlike::Event)).
+The event is context-dependent: at parse time the driver looks up the innermost
+*non-math* enclosing state on the session's enclosing-state stack and restores that
+whole context — token rules and mode
+([`exit_math_context_delta`](crate::latexlike::exit_math_context_delta)). Resist
+the tempting static alternative (a delta resetting `forbidden_chars` to `""` and
+`groups` to the defaults): it would clobber any embedder customization in force
+where the math began — extra group rules, forbidden characters — while the event
+restores the actual enclosing context, whatever it is:
 
 ```rust
 use std::sync::Arc;
@@ -227,25 +235,17 @@ use techy::core::constructs::GroupArgumentParser;
 use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{
-    default_token_rules, CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
-    Mode,
+    CallableType, Event, GroupType, Latexlike, LatexlikeDriver, MacroSpec, Mode,
 };
 use techy::core::specs::Package;
 use techy::core::specs::ArgumentSpec;
-use techy::core::{ParsingStateDelta, TokenRulesOverrides};
+use techy::core::ParsingStateDelta;
 
-// A mandatory `{…}` argument whose interior parses in text mode, with `$…$` (etc.)
-// re-enabled — inside math, the preset forbids nested math delimiters, and this
-// delta statically undoes that for the argument's extent.
+// A mandatory `{…}` argument whose interior parses back in the enclosing
+// non-math context — mode and rules restored, `$…$` (etc.) openers included.
 let text_mode_argument = Arc::new(
     ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
-        .with_state_delta(
-            ParsingStateDelta::new().mode(Mode::Text).rules(TokenRulesOverrides {
-                groups: Some(default_token_rules().groups),
-                forbidden_chars: Some("".into()),
-                ..TokenRulesOverrides::default()
-            }),
-        ),
+        .with_state_delta(ParsingStateDelta::new().event(Event::ExitMathContext)),
 );
 
 let mut package = Package::new("mydefs");

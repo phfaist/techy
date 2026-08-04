@@ -266,8 +266,21 @@ the definition scope stack (`scopes: ScopeStack<L>`), and the language extension
   closures: mergeable, inspectable, propagatable. `derived()` applies a delta, runs
   `Lang::finalize_transition`, and freezes a new state; it is **fallible**
   (`Result<_, DeriveError<L>>`) because scope ops can fail — failing ops are skipped
-  and collected, and the error carries the recovered state plus the applied delta so
-  tolerant callers can continue ([§dd-dr:scope-stack]).
+  and collected — and because `finalize_transition` can refuse the transition
+  (`FinalizeError`, folded into the same `DeriveError`); the error carries the
+  recovered state plus the applied delta so tolerant callers can continue
+  ([§dd-dr:scope-stack], [§dd-dr:enclosing-state-stack]).
+- **Events come in two classes** ([§dd-dr:enclosing-state-stack]): *context-free*
+  events are consumed by `finalize_transition`; *context-dependent* events (needing
+  the enclosing states — the latexlike exit-math restore) are lowered to ordinary
+  override patches by the driver hook `ParseDriver::resolve_state_event(&event,
+  &ParsingStateStack)` inside `cx.derive_state` and never reach finalize — a
+  context-requiring event reaching bare `derived()` is a loud `FinalizeError`,
+  never a silent drop. The session keeps the live enclosing-state stack (the
+  public, owning `ParsingStateStack`, also constructible post-parse via
+  `from_states`/`from_node_ancestors`), pushed/popped at the same descent points as
+  the traceback frame stack; it dies with the session — zero residue in parsed
+  material.
 - **Producer/scope split.** The party producing a change and the party deciding its
   scope differ. Inward scoping (a group interior): the parser derives a child state and
   drops it — reversion is structural, since the caller still holds the outer `Arc`.
@@ -501,7 +514,7 @@ loop:
     Specials(..)    -> make_invocation_parser likewise (resolution rides the token)
     GroupClose      -> stop-condition match? stop : StopCause::UnexpectedGroupClose
     EndOfStream     -> final whitespace chars node from pre_space; stop
-  returned delta -> cx.derived_state(&delta) for subsequent siblings
+  returned delta -> cx.derive_state(&delta) for subsequent siblings
 returns (nodes, StopCause) — the caller interprets the ending.
 ```
 
@@ -519,9 +532,12 @@ returns (nodes, StopCause) — the caller interprets the ending.
   (terminator command + rigid name group + invocation-name back-reference); a
   terminator mismatch closes without consuming, letting enclosing levels claim their
   own terminators ([§dd-dr:terminator-mismatch-recovery]).
-- **State scoping is structural**: `cx.parse_scoped(state, parser)` replaces hand-rolled
-  swap/restore; `cx.probe_token(&state)` is the public probe protocol
-  ([§dd-dr:parse-scoped]).
+- **State scoping is structural**: `cx.parse_scoped(state, parser)` and the
+  closure-shaped `cx.with_parsing_state(state, f)` replace hand-rolled swap/restore
+  (both also maintain the session's enclosing-state stack;
+  `cx.with_derived_state(&delta, f)` composes derivation and scoping);
+  `cx.probe_token(&state)` is the public probe protocol ([§dd-dr:parse-scoped],
+  [§dd-dr:enclosing-state-stack]).
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
@@ -554,7 +570,9 @@ that only runs while a parse is driven lives on `Lang::Driver` — construct-par
 provision (`make_nodes_parser`/`make_group_parser`/`make_invocation_parser`
 interception; one override applies to every descent site through the `cx` wrappers),
 the group descent-delta channel (`group_interior_delta` — the math plug is one line of
-mode-bearing data), the `Recovery` policy and the recover path, and the parse-time
+mode-bearing data), the context-dependent event lowering (`resolve_state_event` over
+the lent enclosing-state stack; [§dd-dr:enclosing-state-stack]), the `Recovery`
+policy and the recover path, and the parse-time
 hooks (`resolve_command` with its three-outcome `CommandResolution`
 ([§dd-dr:resolution-detail], [§dd-dr:resolver-failure]), `make_paragraph_break_node`,
 `refine_diagnostic`, `observe_transition`). Drivers are instances, so behavior carries
@@ -562,10 +580,13 @@ configuration static hooks never could; preset parsers reach preset helper metho
 fully typed.
 
 **`ParserSession` is pure per-parse scratch**: the node builder, the diagnostics sink,
-the live frame stack, the derivation memo, and `L::SessionExt` (the parse-global
+the live frame stack, the enclosing-state stack (lent to `resolve_state_event`;
+dies with the session), the derivation memo, and `L::SessionExt` (the parse-global
 mutable extension). Session-mediated derivation is the in-parse standard
 ([§dd-dr:session-derivation]): `derived_state` is data-equivalent to
-`ParsingState::derived()` — it may dedup and observe, never alter. Rules-only
+`ParsingState::derived()` — it may dedup and observe, never alter; the
+parser-facing choke point is `cx.derive_state`, which lowers context-dependent
+events first. Rules-only
 derivations are memoized uniformly (identity-keyed, retention accepted;
 [§dd-dr:memoized-derivations], [§dd-dr:state-memoization]); `observe_transition` fires
 on every transition event, memo hits included — the two-level transition doctrine
@@ -725,18 +746,32 @@ re-exported at the crate root. The familiar LaTeX behavior, implemented entirely
 through the public extension points — the demonstration that the core needs no
 privileged concepts, and the pattern FLM will follow (as a separate crate).
 
-- **`Latexlike`** is a zero-sized `Lang` with three closed, bare, module-scoped,
+- **`Latexlike`** is a zero-sized `Lang` with closed, bare, module-scoped,
   `#[non_exhaustive]` vocabularies ([§dd-dr:preset-vocabulary]): `GroupType`
-  (`Content`/`Math`/`Verbatim` — a *single* math class; inline vs. display is a
-  delimiter fact read by the `math_style()` sugar, [§dd-dr:group-taxonomy]),
-  `CallableType` (`Macro`/`Environment`/`Specials`), `Mode` (`Text`/`Math`).
-  `StateExt = ()` — the first-class `mode` field is the single source of truth.
-- **`LatexlikeDriver`** carries the recovery knob, the scope-stack `resolve_command`
-  (miss details name the searched providers), the math plug (`group_interior_delta`
-  returns the mode-bearing delta for math-class rules — and inside math the math
-  openers are removed while `$` joins the forbidden set: no nested math,
-  [§dd-dr:math-no-nesting]), and the paragraph-break shape flag
-  ([§dd-dr:paragraph-break-style]).
+  (`Content`/`Math(MathGroupForm)`/`Verbatim` — a *single* math class with
+  inline/display as typed, exhaustive class payload declared at rule registration,
+  [§dd-dr:math-group-form], [§dd-dr:group-taxonomy]), `CallableType`
+  (`Macro`/`Environment`/`Specials`), `Mode` (`Text`/`Math`), and `Event`
+  (`ExitMathContext` — the context-dependent exit-math restore,
+  [§dd-dr:enclosing-state-stack]). `StateExt = ()` — the first-class `mode` field
+  is the single source of truth.
+- **The language family** ([§dd-dr:latexlike-generalization]): the `LatexlikeLang`
+  umbrella (vocabulary bounds + overridable behavior defaults `math_group_rules`/
+  `math_interior_forbidden_chars`; no blanket impl) over the per-vocabulary role
+  traits `LatexlikeGroupType`/`LatexlikeCallableType`/`LatexlikeMode`/
+  `LatexlikeEvent`, implemented by the preset enums — generic preset components
+  take `LLL: LatexlikeLang`, and a framework language joins the family instead of
+  forking the preset.
+- **`LatexlikeDriver<LLL>`** carries the recovery knob and the paragraph-break
+  shape flag ([§dd-dr:paragraph-break-style]); every behavior-bearing hook body is
+  a one-line delegation to a public `LLL`-generic **pillar function**
+  ([§dd-dr:preset-driver-pillars]): scope-stack `resolve_command` under the macro
+  role (miss details name the searched providers), `math_group_interior_delta`
+  (the math plug — inside math the math-class openers are removed while the
+  derived forbidden characters merge in: no nested math,
+  [§dd-dr:math-no-nesting]), `exit_math_context_delta` (the event lowering behind
+  `resolve_state_event` — restore the innermost non-math enclosing context), and
+  `make_paragraph_break_node`.
 - **Default token rules**: `\` escape, `{}` content groups, `$ $$ \( \[` math groups,
   `%` comments. `[]` is deliberately **not** a group type — plain characters; optional
   arguments recognize brackets through per-use temporary rules.
@@ -762,25 +797,23 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   `argument_specs_from_str` for the compact grammar): xparse-like codes resolved to
   configured standard parsers ([§dd-dr:argument-specs-factory],
   [§dd-dr:argument-specs-list-primary], [§dd-dr:expression-fallback]).
-- **`NodeRef` sugar** is inherent on `NodeRef<'_, Latexlike>` (`is_math_group`,
-  `math_style`, `macro_name`, `environment_name`, `specials_name`;
-  [§dd-dr:inherent-preset-sugar]); default whitespace is the six-character ASCII set
-  ([§dd-dr:ascii-whitespace]).
+- **`NodeRef` sugar** is inherent on `NodeRef` for any family member
+  (`impl<LLL: LatexlikeLang> …`: `is_math_group`, `math_form`, `macro_name`,
+  `environment_name`, `specials_name` — reading vocabulary through the role
+  traits; [§dd-dr:inherent-preset-sugar]); default whitespace is the six-character
+  ASCII set ([§dd-dr:ascii-whitespace]).
 - **The acceptance suite** (`techy/tests/acceptance.rs`) is a public-API-only
   integration port of pylatexenc's walker tests — anything the port cannot reach is an
   API gap by construction ([§dd-dr:acceptance-suite]).
 
-**Preset generalization (decided; design + application scheduled in the API review's
-2b sessions):** every preset component becomes generic over a `Lang` family —
-per-vocabulary role traits (`LatexlikeGroupType`/`LatexlikeCallableType`/
-`LatexlikeMode`, implemented by the vocabulary types; techy implements them for its
-own enums) under the umbrella `trait LatexlikeLang: Lang<…>` with defaulted behavior
-methods (conventional parameter `LLL`); preset behaviors also ship as public
-`LLL`-generic pillar functions that a framework's `Lang` impl delegates to, one line
-per hook. `Lang` itself stays whole. With it, `GroupType` becomes `{Content,
-Math(MathGroupForm), Verbatim}` — inline/display as typed class payload declared at
-rule registration (`MathGroupForm` exhaustive; sugar `math_form()`, table-free) —
-revising the single-bare-math-class and `math_style()` shapes described above.
+**Preset generalization (in application):** the role traits, the `LatexlikeLang`
+umbrella, `GroupType::Math(MathGroupForm)` with the `math_form()` sugar, the
+generic `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the pillar functions,
+and `LatexlikeDriver<LLL>` are applied (Phase 3 S4). Still monomorphic pending
+their own stages: `MacroSpec`, the environments machinery, and `argument_specs`
+(the invocation-syntax stage, with the fifth role trait
+`LatexlikeInvocationSyntax`); `base_package` and `minidefs` (the preset-definitions
+stage). `Lang` itself stays whole.
 [§dd-dr:latexlike-generalization], [§dd-dr:math-group-form].
 
 Decisions behind this section (full topic: [§dd-dr:latexlike]):
