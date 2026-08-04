@@ -227,7 +227,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
 - Acceptance: multi-source reconstruction tests (T5 I-18); include-chain policy
   tests (self-include legal; helper detects cycles/depth); line/col cache tests.
 
-### S7 — Transform: restage + extract annotations  [status: pending]
+### S7 — Transform: restage + extract annotations  [status: DONE — merged 2026-08-05]
 
 - `techy::transform`: `RestageVisitor` trait + closure blanket (no `Send`);
   `RestageError<E>` (`Clone where E: Clone`); `Restage::{Descend(B), Emit}`
@@ -551,3 +551,13 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   rustdoc repair; two ContentParentDropped driver-matrix tests — 689 lib
   tests; doctest `Ann` rename). AWAITING USER SIGN-OFF of D-plan-1..7
   before merge.
+- 2026-08-05 (user): **S7 signed off** (D-plan-1..7: 1/3/7 forced, 4 forced
+  in channel, 2/5/6 defensible; closure-inference finding doc-recorded) **and
+  merge authorized.** Merged into api-review (7 stage commits rebased onto
+  the process-log tip; 689 lib + 30 acceptance + 8 + 1 + 30 doc tests green
+  on the merged tree). S7 COMPLETE. NEXT: launch **S8** per § S8 (visit +
+  recompose + oracle suite); mind the S5 flag (malformed terminators record
+  no end-side facts — the tolerant oracle matrix must account) and the
+  S7 anchor (RecomposeError variants + RecomposeContext helper roster mirror
+  the shipped RestageError/RestageContext exactly, incl. the op-misuse
+  variant group — [§dd-dr:restage-ops] amendment).
