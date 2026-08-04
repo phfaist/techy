@@ -800,3 +800,77 @@ Commit steps (each green):
   `(L, L2)` pairs: a lang's environment record materializes against that lang's
   own source-origin type; the broader impl would sanction cross-lang payload
   reuse with nothing to gain.
+
+### M6 closure
+
+All rulings R1–R9 implemented; gates green (below). Realization notes beyond the
+plan:
+
+- **R7 landed with the R1/R6 commit, not as a separate later step** (plan-order
+  note, not a rulings deviation): the `&Source<L::SourceOrigin>` writer
+  signatures make the core-side payload-pin fn untypable over generic `L` (a
+  `&str` was type-erased; a typed source is not — reaching
+  `&Source<Option<String>>` from `Source<L::SourceOrigin>` would need an `Any`
+  dance on sources). The ruled Option B move is exactly what resolves the
+  typing: the preset checker takes `LLL: LatexlikeLang` and downcasts the
+  payload to `InvocationSyntaxData<StdEnvironmentSyntax<LLL>>` — which as a
+  by-product widens pin coverage to foreign family members (the M4 core
+  checker's downcast to the default-Env enum silently skipped `Flavored`
+  parses; the preset checker pins them too).
+- The preset checker home is `latexlike/invariants.rs` (`#[cfg(test)]` module;
+  `pub(crate) use` from latexlike/mod.rs — the exact mirror of
+  node/invariants.rs + node/mod.rs; D-plan-18). All latexlike-side call sites
+  (latexlike/{mod,spec,test_support,arguments,environments,invocation_syntax}.rs)
+  switched; core-side sites stay on the core checker; techy/tests untouched
+  (they use the public payload-blind `validate_tree`, as before). The 4
+  discriminating should_panic pin tests moved into the new module. Core gains a
+  cfg(test) `pub(crate) use tree::NodeData` alias (the checker's helper
+  signature needs the type name).
+- `StdEnvironmentSyntax::from_parsed`'s Literal arm sources the synthesized end
+  command word from the preset's `END_COMMAND_NAME` (`end`) — absorbing the old
+  `record_std_end_facts` logic verbatim; a custom terminator command word means
+  a custom `Env`/composition (the same boundary as the trigger contract).
+- `NodeRef`'s crate-internal `source_content()` helper became `source()`
+  (returns the node's own `Source` — what `resolve` now takes).
+- The `verbatim_environments_record_std_end_facts_from_the_literal` test was
+  renamed `…_synthesize_std_end_facts_…` (the superseded method name must not
+  survive as a test-name spelling).
+
+Updated signature rows (supersede the corresponding rows of the M5 table):
+
+| Item | Signature / shape (post-M6) |
+|---|---|
+| `core::InvocationSyntax<L>` | bound trait (was `InvocationSyntaxData`): `Clone + Debug + Send + Sync + 'static` + `materialized(&self, source: &Source<L::SourceOrigin>) -> Self`; blanket `impl<L: Lang> InvocationSyntax<L> for ()`; Lang bound `type InvocationSyntax: InvocationSyntax<Self>` (R1) |
+| `latexlike::InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>>` | the payload enum (was `InvocationSyntax<Env>`); arms unchanged (R1) |
+| `latexlike::EnvironmentSyntax<L>` | `: InvocationSyntax<L>` — `from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator: Option<EnvironmentTerminatorSyntaxData<L>>) -> Self`, `write_begin`/`write_end(&self, name: &str, source: &Source<L::SourceOrigin>) -> String`; `parse_begin`/`parse_end`/`record_std_end_facts` REMOVED (R2) |
+| `latexlike::StdEnvironmentSideSyntax<L>` | renamed from `EnvironmentSideSyntax<L>`; off the trait surface (R5) |
+| `constructs::EnvironmentBeginSyntaxData<L>` | NEW: `{ escape_char: char, command_word: Span, post_space: Span, name_group: NameGroup<L> }` (R3) |
+| `constructs::EnvironmentTerminatorSyntaxData<L>` | renamed from `EnvironmentTerminatorFacts<L>`; variants/fields unchanged (R3) |
+| `TextContent::resolve` / `materialized` | `resolve<'a, O: SourceOrigin>(&'a self, source: &'a Source<O>) -> &'a str` / `materialized<O: SourceOrigin>(&self, source: &Source<O>) -> TextContent` (R6) |
+| `EnvironmentInvocationParser` | validates the `Command` trigger first (contract violation → implementation error); scans the name group itself; payload built once via `Env::from_parsed` at staging; pass-through-delta guard is an implementation-error path (R4, R8) |
+| parse-law oracle | core `check_tree_invariants` payload-blind; preset `check_latexlike_tree_invariants` = core + payload pins (cfg(test), pub(crate); R7 / D-plan-18) |
+
+### M6 gate results
+
+- `cargo build` and `cargo build --tests`: 0 warnings, 0 errors.
+- `cargo test`: 614 lib + 30 acceptance + 8 derive-conditions + 1 derive +
+  27 doctests — all green (2 ignored doctests pre-existing; test count
+  unchanged from M5 — the 4 pin tests moved, none added/removed).
+- `rm -rf target/doc && cargo docs`: clean.
+- Superseded-names sweep: no bare `EnvironmentSideSyntax`, no
+  `EnvironmentTerminatorFacts`, no `record_std_end_facts`, no
+  `parse_begin`/`parse_end` trait methods, no `InvocationSyntaxData` in the
+  bound-trait role, no `latexlike::InvocationSyntax` enum path — code, tests,
+  and the FLM probe all on the new spellings.
+- FLM probe: `type InvocationSyntax =
+  latexlike::InvocationSyntaxData<latexlike::StdEnvironmentSyntax<Flm>>;` +
+  updated [IS] note (name swap, from_parsed staging).
+
+### M6 commits
+
+- fe10c01 P3-S5 M6: revision plan
+- 75f807c P3-S5 M6: name swap + &Source threading + preset payload pins
+  (R1, R5, R6, R7)
+- eeb0ebc P3-S5 M6: EnvironmentSyntax reduced to from_parsed + writer pair;
+  composition owns scanning (R2, R3, R4, R8)
+- (+ this commit) P3-S5 M6: docs + records (R9)

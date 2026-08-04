@@ -468,7 +468,9 @@ in-crate test utility ([§dd-dr:tree-validation]).
   fixed the machinery: trigger spelling becomes recorded payload —
   `Lang::InvocationSyntax` on `CallableData`, replacing the core `post_space`
   field ([§dd-dr:invocation-syntax]; **applied in Phase 3 S5**, with
-  `stage_invocation` and the parse-law payload pins); recomposition is a meaning-free `Piece`
+  `stage_invocation` and the parse-law payload pins — preset-side since the S5
+  design revision: core's checker is payload-blind, the latexlike checker
+  layers the pins); recomposition is a meaning-free `Piece`
   value fold with instruction lowering (`techy::recompose`; ONE preset
   `SourceRecomposer`; [§dd-dr:recompose-machinery]); and the read-only walk and
   the recompose driver share one traversal engine in the top-level `techy::visit`
@@ -819,7 +821,9 @@ and `LatexlikeDriver<LLL>` are applied (Phase 3 S4); `MacroSpec<LLL>`, the
 environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`VerbatimBehavior`
 and the composition), `argument_specs`, and the fifth role trait
 `LatexlikeInvocationSyntax` — with the invocation-syntax payload
-`InvocationSyntax<Env>`, the `EnvironmentSyntax` recording contract, and the
+`InvocationSyntaxData<Env>`, the `EnvironmentSyntax` record contract
+(`from_parsed` + the writer pair; composition-owned scanning, per the S5
+design-revision amendment on [§dd-dr:invocation-syntax]), and the
 canonical `ParagraphBreakSpec` — are applied (Phase 3 S5). Still monomorphic
 pending the preset-definitions stage: `base_package` and `minidefs`. `Lang`
 itself stays whole.
@@ -830,7 +834,7 @@ Decisions behind this section (full topic: [§dd-dr:latexlike]):
 [§dd-dr:preset-driver-pillars] (pillar functions + generic `LatexlikeDriver<LLL>`
 assembly),
 [§dd-dr:invocation-syntax] (the recorded invocation-syntax payload
-`InvocationSyntax<Env>`; `EnvironmentSyntax`; fifth role trait
+`InvocationSyntaxData<Env>`; `EnvironmentSyntax`; fifth role trait
 `LatexlikeInvocationSyntax`),
 [§dd-dr:recompose-machinery] (the preset `SourceRecomposer`),
 [§dd-dr:math-group-form] (`Math(MathGroupForm)` class payload), [§dd-dr:minidefs]

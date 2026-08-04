@@ -2059,10 +2059,12 @@ strictness now Env-owned — a tolerance variant is a newtype over
 `StdEnvironmentSyntax`), and both recorded rejections above — scaffolding is still
 neither nodes nor slot records (the recompose session separately rejected the
 `Hidden`-slot storage design). The "tolerated and *not recorded*" post-space clause
-no longer holds: the per-side record keeps it. Applied — Phase 3 S5: the
-`EnvironmentSyntax`/`StdEnvironmentSyntax` record with `parse_begin`/`parse_end`/
-`record_std_end_facts` and the spelling writers; the composition's terminator
-facts flow back through `EnvironmentBody::terminator`.)*
+no longer holds: the per-side record keeps it. Applied — Phase 3 S5, revised at
+S5-M6 ([§dd-dr:invocation-syntax] amendment note): the
+`EnvironmentSyntax`/`StdEnvironmentSyntax` record, constructed once at staging
+via `from_parsed(begin, terminator)` with the spelling writer pair; the
+composition owns all scanning, and the body parser's terminator facts flow back
+through `EnvironmentBody::terminator`.)*
 
 #### Whitespace and span invariants pinned [§dd-dr:span-invariants]
 
@@ -2105,12 +2107,14 @@ Status: DECIDED (user).
 payload ([§dd-dr:invocation-syntax]); the recorded fact and its token-only rule are
 unchanged (latexlike records it in `Macro { escape_char, post_space }` and per
 environment side). Applied — Phase 3 S5: kind.rs invariant 3 reworded to the
-payload channel, and the parse-law checker's callable arm reads the shipped
-payloads by downcast — the macro spelling + post-space pins (the childless arm
-pins containment, not span-end: a takeover's `stage_invocation(.., end_pos:
-Some)` legitimately claims extent past the trigger), the specials
-name-as-written prefix pin, and the environment `write_begin`/`write_end` byte
-pins.)*
+payload channel, and the payload pins read the shipped payloads by downcast —
+the macro spelling + post-space pins (the childless arm pins containment, not
+span-end: a takeover's `stage_invocation(.., end_pos: Some)` legitimately
+claims extent past the trigger), the specials name-as-written prefix pin, and
+the environment `write_begin`/`write_end` byte pins. Since the S5-M6 revision
+([§dd-dr:invocation-syntax] amendment note, Option B) the pins live in the
+**preset checker** `check_latexlike_tree_invariants`, layered on the
+payload-blind core `check_tree_invariants`.)*
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
@@ -2810,12 +2814,15 @@ completeness with no span crutch.)*
 Status: DECIDED (user, API-review recompose session; supersedes the
 reconstruct-don't-record half of [§dd-dr:environment-scaffolding] and the core
 `post_space` storage of [§dd-dr:span-invariants] invariant 3; applied — Phase 3
-S5: the core channel (`Lang::InvocationSyntax`/`InvocationSyntaxData`,
-`FromInvocation`, the `CallableData` field swap), the latexlike payload enum with
-the `EnvironmentSyntax` recording contract and the fifth role trait
-`LatexlikeInvocationSyntax`, the paragraph-break name-as-written fix with the
-canonical `ParagraphBreakSpec`, and the parse-law payload pins; the reemit
-oracle suite itself rides the recompose stage, S8).
+S5: the core channel (`Lang::InvocationSyntax` bounded by the core
+`InvocationSyntax<L>` trait, `FromInvocation`, the `CallableData` field swap),
+the latexlike payload enum `InvocationSyntaxData` with the `EnvironmentSyntax`
+record contract and the fifth role trait `LatexlikeInvocationSyntax`, the
+paragraph-break name-as-written fix with the canonical `ParagraphBreakSpec`, and
+the parse-law payload pins; the reemit oracle suite itself rides the recompose
+stage, S8. **REVISED — S5 design-revision session, see the dated amendment note
+at the end of this entry**: name swap, `from_parsed` supersedes the accumulator
+shape, `&Source` threading, preset-side pins.)
 
 **Accuracy doctrine (user):** the *preset* (the `Lang`), not core, owns
 recomposition accuracy — byte-exact vs up-to-noise vs loose is the preset's choice,
@@ -2910,6 +2917,64 @@ reserved, and the builder tiling check stays as-is ([§dd-dr:slot-roles]).
 Revisit if: a construct's invocation syntax cannot be expressed as per-node
 recorded payload — that is a new axis to design, not a reason to resurrect
 slot-side scaffolding storage.
+
+*(Amended — 2026-08-04, S5 **design-revision session** (user-ruled, interactive,
+from the stage's sign-off questions; applied as S5-M6). Five revisions to the
+applied surface:*
+
+*(1) **Name swap.** The core bound trait is **`InvocationSyntax<L>`** —
+L-parameterized, the `ParseDriver<L>` precedent; its `materialized` speaks the
+lang's own source-origin type — and the latexlike payload enum is
+**`InvocationSyntaxData<Env>`** (it IS the data holder — the
+`CallableData`/`NodeData` family). Both names survive with swapped roles;
+[§dd-dr:superseded-names] pins the old role assignments against returning.*
+
+*(2) **Accumulator shape (b) SUPERSEDED by the `from_parsed` constructor
+shape.** The ruled accumulator contained an internal contradiction: the body
+parser is the terminator consumer, so the record's "end-side scanning"
+(`parse_end`) never scanned anything — only the begin-side scan was real — and
+the mutate-in-place accumulator shape-locked custom `Env` types into the
+standard flow's call sequence. `EnvironmentSyntax<L>` is now the pure record
+contract `from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator:
+Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` plus the **writer pair**
+(kept as a pair — an adjustment of the user's single-writer sketch: S8's
+`Concat` head/tail and the parse-law prefix/suffix pins need the two sides
+separately; a fused `recompose_environment` writer is a rejected shape). The
+composition owns ALL scanning (`read_rigid_name_group` called directly) and
+constructs the payload exactly once, at staging. Core's facts channel covers
+both sides: the new `EnvironmentBeginSyntaxData<L>` beside the renamed
+`EnvironmentTerminatorSyntaxData<L>`; `parse_begin`/`parse_end`/
+`record_std_end_facts` die; `EnvironmentSideSyntax` →
+**`StdEnvironmentSideSyntax`** (off the trait surface entirely — the std
+record's own component type). `write_end` on an empty end side still returns
+`""` (reemitting nothing reproduces the recovered input).*
+
+*(3) **Tolerance is a parser concern** (amends this entry's
+same-record/different-tolerance newtype clause): a family member wanting looser
+begin/end syntax swaps the invocation/body parser through the behavior door —
+the record records what its parser consumed; it does not encode a scanning
+policy.*
+
+*(4) **A non-command begin trigger is a documented-contract implementation
+error** — both `'\u{0}'` degenerate-spelling fallback arms die: std
+environments are command-initiated, and a custom trigger shape needs its own
+composition + `Env` type (the contract is rustdoc'd on the composition).*
+
+*(5) **`&Source` threading.** `TextContent::resolve`/`materialized`, the core
+trait's `materialized`, and the writers take `&Source` (origin via
+`L::SourceOrigin`) instead of a bare content `&str` — a bare string was a
+multi-source wrong-string hazard; `NodeTree::materialize` resolves each node
+against its own span's source.*
+
+*Also ruled in the same session: the D-plan-12 strata tension resolves as
+**Option B** — the payload pins move out of core into the preset checker
+`check_latexlike_tree_invariants` (latexlike-side; one call = core
+`check_tree_invariants` + the pins; core's callable arm goes payload-blind),
+which as realized also pins foreign family members (downcast to
+`InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`, not just the default-Env
+enum); and the S5-new `debug_assert!` on the body parser's pass-through delta
+became an implementation-error path per [§dd-dr:panic-policy] (the pre-existing
+sibling asserts are queued as an S10 rider).)*
 
 #### Recompose machinery: the meaning-free `Piece` fold with instruction lowering [§dd-dr:recompose-machinery]
 
@@ -5350,7 +5415,8 @@ re-opens a settled argument:
   strategy name (no named span strategy exists; [§dd-dr:recompose] amendment);
   the canonical-`"\n\n"` paragraph-break `name` — superseded by name-as-written +
   spec-identity identification; `CallableNodeInvocationSyntax` — the payload
-  type is `InvocationSyntax`; `new_for_invocation` — the constructor
+  type is `InvocationSyntaxData` (named `InvocationSyntax` until the S5
+  design-revision role swap, see below); `new_for_invocation` — the constructor
   trait/method is `FromInvocation`/`from_invocation`; `Bit`/`ComposeBit` — the
   piece vocabulary is `Piece`/`ComposePiece` (`Fragment`/`Part` recorded
   considered; `Output` rejected — collides with `ConstructParser::Output`);
@@ -5370,6 +5436,20 @@ re-opens a settled argument:
   amendment); `with_resolver` (the shipped-driver builder) —
   `with_source_resolver`; `NoResolver` — removed entirely (`None` is the
   canonical "resolves nothing"; [§dd-dr:source-resolver] amendment).
+- From the S5 design-revision session ([§dd-dr:invocation-syntax] amendment,
+  applied as S5-M6) — **role-swap pins**: `InvocationSyntaxData` as the *core
+  bound-trait* name, and `InvocationSyntax` as the *latexlike payload-enum*
+  name — both names survive, with swapped roles (the trait is the
+  L-parameterized `InvocationSyntax<L>`, the enum is the data holder
+  `InvocationSyntaxData<Env>`); the old role assignments must not return.
+  Also: `EnvironmentSideSyntax` (bare) — the std record's component type is
+  `StdEnvironmentSideSyntax`; `EnvironmentTerminatorFacts` — the end-side facts
+  type is `EnvironmentTerminatorSyntaxData`; `parse_begin`/`parse_end`/
+  `record_std_end_facts` as `EnvironmentSyntax` method names — the record
+  contract is `from_parsed(begin, terminator)` plus the writer pair, scanning
+  is composition-owned; `recompose_environment` (a single fused environment
+  writer) — rejected shape: the writer PAIR stays (`Concat` head/tail and the
+  parse-law prefix/suffix pins need the sides separately).
 - From the language-init revision ([§dd-dr:language-init], applied Phase 3 S2):
   `Language::with_provider`/`Language::with_seed_delta` — seed customization
   moves *before* construction (`ParsingState::lang_initial().derived(&delta)?`;
