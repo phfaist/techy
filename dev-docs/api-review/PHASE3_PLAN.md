@@ -392,3 +392,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   whole-`TokenRules` restore (amends T1T2-E4's "whole TokenRules of the found
   state"; durable record = amendment note on [§dd-dr:enclosing-state-stack]).
   Fix applied on the stage branch before merge; then merged into api-review.
+- 2026-08-04: S5 launched (worktree branch `phase3-s5-invocation-syntax` off
+  api-review 60dfd2b; relay discipline from the outset; scope = §S5 + the
+  recompose-session checklist additions in PLAN.md's decision log + the S4
+  routings: MacroSpec/environments LLL generalization, fifth role trait,
+  FLM-probe re-check).
