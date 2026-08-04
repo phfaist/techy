@@ -395,7 +395,8 @@ in-crate test utility ([§dd-dr:tree-validation]).
   `TextContent`): [§dd-dr:closed-node-kind].
 - **Division-of-labor rule (load-bearing)**: definition key `(CallableTypeId,
   normalized name)` → resolution; **node** → invocation facts (form, spelling, parsed
-  arguments/slots, `post_space`, per-instance ext); **spec** → shared behavior, stored
+  arguments/slots, the Lang-owned `invocation_syntax` payload, per-instance ext);
+  **spec** → shared behavior, stored
   once; **parsing state** → context at parse time; **uniform `NodeExt`** →
   cross-cutting per-instance concerns. Identity (names) is always owned; textual
   content is `TextContent` (span-backed or owned; accessors return `&str` either way;
@@ -412,14 +413,15 @@ in-crate test utility ([§dd-dr:tree-validation]).
   invariant, contained in one component.
 - **Whitespace and span invariants** (the numbered statement: [§dd-dr:span-invariants]):
   chars accumulate into maximal `Chars` nodes; paragraph breaks are their own nodes
-  (via the driver's `make_paragraph_break_node`); a callable's `post_space` is exactly
-  its trigger token's own syntactic post-space, nothing beyond; **sibling spans
+  (via the driver's `make_paragraph_break_node`); a callable's recorded post-space —
+  the `Macro` arm of the invocation-syntax payload — is exactly its trigger token's
+  own syntactic post-space, nothing beyond; **sibling spans
   partition the parent's content interior exactly** — the byte-accounting contract
-  exactness consumers build on. Environment `\begin{name}`/`\end{name}` scaffolding is
-  deliberately rigid and *reconstructed*, not recorded
-  ([§dd-dr:environment-scaffolding]). (Superseded, ruled not yet applied: the
-  recompose session reverses reconstruct→*record* — the scaffolding facts land in
-  the Lang-owned invocation-syntax payload; [§dd-dr:invocation-syntax].)
+  exactness consumers build on. Environment `\begin{name}`/`\end{name}` scaffolding
+  is rigid at parse time and *recorded* per side in the payload's `Environment` arm
+  (applied Phase 3 S5 — the recompose session's reconstruct→record reversal,
+  [§dd-dr:invocation-syntax], superseding the reconstructed-scaffolding rule of
+  [§dd-dr:environment-scaffolding]).
 - **Recomposition levels**: level 1 — a node's own `SourceSpan` → exact original text,
   no external lookup; level 2 — Lang-aware quasi-equivalent reproduction from recorded
   facts. Consequence: per-instance syntax choices the spec does not determine live as
@@ -465,7 +467,8 @@ in-crate test utility ([§dd-dr:tree-validation]).
   amendment). The dedicated recompose session then
   fixed the machinery: trigger spelling becomes recorded payload —
   `Lang::InvocationSyntax` on `CallableData`, replacing the core `post_space`
-  field ([§dd-dr:invocation-syntax]); recomposition is a meaning-free `Piece`
+  field ([§dd-dr:invocation-syntax]; **applied in Phase 3 S5**, with
+  `stage_invocation` and the parse-law payload pins); recomposition is a meaning-free `Piece`
   value fold with instruction lowering (`techy::recompose`; ONE preset
   `SourceRecomposer`; [§dd-dr:recompose-machinery]); and the read-only walk and
   the recompose driver share one traversal engine in the top-level `techy::visit`
@@ -620,10 +623,12 @@ helper), [§dd-dr:input-wiring] (driver resolver accessor, the
 `finalize_node` is replaced by parse-once minting — parse staging via
 `ParseContext::stage_node`, `ParserSession::builder` crate-private
 ([§dd-dr:ext-minting], S3); the source resolver lives on the driver, not
-`Language` ([§dd-dr:input-attachment], S2). Ruled, not yet applied: `Lang` gains
-the `InvocationSyntax` associated type — invocation spelling as recorded
-`CallableData` payload, replacing the core `post_space` field
-([§dd-dr:invocation-syntax]).
+`Language` ([§dd-dr:input-attachment], S2); `Lang::InvocationSyntax` — invocation
+spelling as recorded `CallableData` payload, replacing the core `post_space`
+field, minted at the standard sites via the opt-in `FromInvocation` constructor
+— and the committed `stage_invocation` shorthand with its ruled end-position
+rule ([§dd-dr:invocation-syntax], [§dd-dr:takeover-staging-sugar] items 2–3,
+S5; `disable_all` and the collection constructors remain pending their stage).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 
@@ -799,8 +804,9 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   [§dd-dr:argument-specs-list-primary], [§dd-dr:expression-fallback]).
 - **`NodeRef` sugar** is inherent on `NodeRef` for any family member
   (`impl<LLL: LatexlikeLang> …`: `is_math_group`, `math_form`, `macro_name`,
-  `environment_name`, `specials_name` — reading vocabulary through the role
-  traits; [§dd-dr:inherent-preset-sugar]); default whitespace is the six-character
+  `environment_name`, `specials_name`, and `post_space` over the
+  invocation-syntax payload — reading vocabulary through the role traits;
+  [§dd-dr:inherent-preset-sugar]); default whitespace is the six-character
   ASCII set ([§dd-dr:ascii-whitespace]).
 - **The acceptance suite** (`techy/tests/acceptance.rs`) is a public-API-only
   integration port of pylatexenc's walker tests — anything the port cannot reach is an
@@ -809,11 +815,14 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
 **Preset generalization (in application):** the role traits, the `LatexlikeLang`
 umbrella, `GroupType::Math(MathGroupForm)` with the `math_form()` sugar, the
 generic `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the pillar functions,
-and `LatexlikeDriver<LLL>` are applied (Phase 3 S4). Still monomorphic pending
-their own stages: `MacroSpec`, the environments machinery, and `argument_specs`
-(the invocation-syntax stage, with the fifth role trait
-`LatexlikeInvocationSyntax`); `base_package` and `minidefs` (the preset-definitions
-stage). `Lang` itself stays whole.
+and `LatexlikeDriver<LLL>` are applied (Phase 3 S4); `MacroSpec<LLL>`, the
+environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`VerbatimBehavior`
+and the composition), `argument_specs`, and the fifth role trait
+`LatexlikeInvocationSyntax` — with the invocation-syntax payload
+`InvocationSyntax<Env>`, the `EnvironmentSyntax` recording contract, and the
+canonical `ParagraphBreakSpec` — are applied (Phase 3 S5). Still monomorphic
+pending the preset-definitions stage: `base_package` and `minidefs`. `Lang`
+itself stays whole.
 [§dd-dr:latexlike-generalization], [§dd-dr:math-group-form].
 
 Decisions behind this section (full topic: [§dd-dr:latexlike]):

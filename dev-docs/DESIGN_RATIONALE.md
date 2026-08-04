@@ -2059,7 +2059,10 @@ strictness now Env-owned — a tolerance variant is a newtype over
 `StdEnvironmentSyntax`), and both recorded rejections above — scaffolding is still
 neither nodes nor slot records (the recompose session separately rejected the
 `Hidden`-slot storage design). The "tolerated and *not recorded*" post-space clause
-no longer holds: the per-side record keeps it.)*
+no longer holds: the per-side record keeps it. Applied — Phase 3 S5: the
+`EnvironmentSyntax`/`StdEnvironmentSyntax` record with `parse_begin`/`parse_end`/
+`record_std_end_facts` and the spelling writers; the composition's terminator
+facts flow back through `EnvironmentBody::terminator`.)*
 
 #### Whitespace and span invariants pinned [§dd-dr:span-invariants]
 
@@ -2101,9 +2104,13 @@ Status: DECIDED (user).
 `CallableData.post_space` field is replaced by the Lang-owned invocation-syntax
 payload ([§dd-dr:invocation-syntax]); the recorded fact and its token-only rule are
 unchanged (latexlike records it in `Macro { escape_char, post_space }` and per
-environment side). The kind.rs invariant-3 rewording and the parse-law checker's
-callable arm (byte accounting now reads the invocation-syntax payload) are Phase 3
-application items.)*
+environment side). Applied — Phase 3 S5: kind.rs invariant 3 reworded to the
+payload channel, and the parse-law checker's callable arm reads the shipped
+payloads by downcast — the macro spelling + post-space pins (the childless arm
+pins containment, not span-end: a takeover's `stage_invocation(.., end_pos:
+Some)` legitimately claims extent past the trigger), the specials
+name-as-written prefix pin, and the environment `write_begin`/`write_end` byte
+pins.)*
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
@@ -2802,7 +2809,13 @@ completeness with no span crutch.)*
 
 Status: DECIDED (user, API-review recompose session; supersedes the
 reconstruct-don't-record half of [§dd-dr:environment-scaffolding] and the core
-`post_space` storage of [§dd-dr:span-invariants] invariant 3; application pending).
+`post_space` storage of [§dd-dr:span-invariants] invariant 3; applied — Phase 3
+S5: the core channel (`Lang::InvocationSyntax`/`InvocationSyntaxData`,
+`FromInvocation`, the `CallableData` field swap), the latexlike payload enum with
+the `EnvironmentSyntax` recording contract and the fifth role trait
+`LatexlikeInvocationSyntax`, the paragraph-break name-as-written fix with the
+canonical `ParagraphBreakSpec`, and the parse-law payload pins; the reemit
+oracle suite itself rides the recompose stage, S8).
 
 **Accuracy doctrine (user):** the *preset* (the `Lang`), not core, owns
 recomposition accuracy — byte-exact vs up-to-noise vs loose is the preset's choice,
@@ -4345,8 +4358,12 @@ Revisit if: the T5 restage detailing changes the staging-door shape itself (the
 helper follows it).
 
 *(Item 1 applied — Phase 3 S2: `TokenRulesOverrides::disable_all()` landed;
-`verbatim_state_delta` is `disable_all()` plus its terminator. Items 2–3 ride
-later stages.)*
+`verbatim_state_delta` is `disable_all()` plus its terminator. Item 2 applied —
+Phase 3 S3 (`ParsedArguments::new`/`ParsedSlots::new`). Item 3 applied — Phase 3
+S5: `ParseContext::stage_invocation` per the T5 amendment below, minting the
+invocation-syntax payload via `FromInvocation`; in-crate `StdInvocationParser`
+and the expression-position tack-on site collapsed onto it, environment
+compositions staying on the canonical `stage_node` door.)*
 
 *(Amended — API-review T5 session, the committed helper's signature ruled:
 `cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
@@ -6192,9 +6209,10 @@ chapter landed with the E4 machinery; items 1–2 land with the T1/T2 batch.)*
 Status: DECIDED (user, API-review policy session P3 — direction and shape; detailed
 design in the 2b T3/T5 sessions; applied — Phase 3 S4 for the role traits, the
 umbrella, `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the `NodeRef` sugar,
-the pillars, and `LatexlikeDriver<LLL>`; `MacroSpec`/environments/`argument_specs`
-generalize with the invocation-syntax stage, `base_package`/`minidefs` with the
-preset-definitions stage).
+the pillars, and `LatexlikeDriver<LLL>`; Phase 3 S5 for
+`MacroSpec<LLL>`/the environments machinery/`argument_specs` and the fifth role
+trait `LatexlikeInvocationSyntax` (the invocation-syntax stage);
+`base_package`/`minidefs` generalize with the preset-definitions stage).
 
 Every latexlike preset component — `LatexlikeDriver`, `MacroSpec`/`SpecialsSpec`, the
 environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`EnvironmentBehavior`/

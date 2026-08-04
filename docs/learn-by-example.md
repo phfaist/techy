@@ -455,8 +455,11 @@ let language: Language<Latexlike> = Language::new(
 let result = language.parse("one\n\ntwo").unwrap();
 
 let break_node = result.tree.root().child(1).unwrap();
-// The node is named by the canonical `"\n\n"` vocabulary key; its span covers the
-// actual whitespace run.
+// The node's name is the actual whitespace run as written (a run like "\n \t\n"
+// is recorded verbatim), and its span covers the same run. Identify
+// paragraph-break nodes by spec identity — the stamped spec is the canonical
+// `techy::latexlike::ParagraphBreakSpec`, recognized by `Any`-downcast — never
+// by a name spelling.
 assert_eq!(break_node.specials_name(), Some("\n\n"));
 assert_eq!(break_node.span().range(), 3..5);
 ```

@@ -391,7 +391,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 }
 
 /// The preset's environment spec: the registration type for
-/// [`CallableType::Environment`] entries — the funnel wrapper through which the `\begin` composition reaches the environment's
+/// [`CallableType::Environment`](super::CallableType::Environment) entries — the funnel wrapper through which the `\begin` composition reaches the environment's
 /// [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so the open set
 /// of behaviors funnels through this one concrete spec type).
 ///
@@ -400,7 +400,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 /// consulted for environment entries (the decided permanent boundary; registering an
 /// `EnvironmentSpec` under another callable type gets the macro-shaped default
 /// parse, which reads the arguments and no body). A generic non-`EnvironmentSpec`
-/// [`CallableSpec`] under [`CallableType::Environment`] is legitimate too: its
+/// [`CallableSpec`] under [`CallableType::Environment`](super::CallableType::Environment) is legitimate too: its
 /// declared arguments parse and the body takes the default handling.
 pub struct EnvironmentSpec<LLL: LatexlikeLang = Latexlike> {
     behavior: Arc<dyn EnvironmentBehavior<LLL>>,
@@ -459,7 +459,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 // --- the `\begin` dispatcher and its composition ------------------------------------
 
 /// The `\begin` dispatcher: every environment enters through this shared spec, an
-/// ordinary [`Macro`](CallableType::Macro) entry of the
+/// ordinary [`Macro`](super::CallableType::Macro) entry of the
 /// [`base_package`](super::base_package) (shadowable and unloadable like any
 /// definition). Its parser is the preset's environment composition (module docs).
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
@@ -529,7 +529,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
 /// The orphan-`\end` spec: a resolved `\end` never belongs to an environment (the
 /// body parser consumes well-formed terminators before command resolution), so its
 /// parser diagnoses [`OrphanEnd`] and recovers. An ordinary
-/// [`Macro`](CallableType::Macro) entry of the [`base_package`](super::base_package),
+/// [`Macro`](super::CallableType::Macro) entry of the [`base_package`](super::base_package),
 /// alongside [`BeginSpec`].
 pub struct EndSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,

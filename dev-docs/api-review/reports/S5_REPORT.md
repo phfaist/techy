@@ -57,8 +57,22 @@ milestone, Progress updated each milestone.
       diverging payloads); the whole in-crate suite passes under the active pins
       (the positive direction — every latexlike parse runs the oracle). FLM
       probe adapted (edit list below). 614 lib tests, 0 warnings.
-- [ ] M5 — Docs + closure (DR status lines, ARCHITECTURE, superseded-names sweep,
-      full gates, stage summary)
+- [x] M5 — Docs + closure: environments.rs doc-link fixes (the M2-era
+      `CallableType::…` references — qualified `super::`); DR status lines
+      ([§dd-dr:invocation-syntax] applied-S5, [§dd-dr:takeover-staging-sugar]
+      items 2 (S3, retroactive) + 3 (S5), [§dd-dr:span-invariants] amendment
+      applied note incl. the D-plan-17 containment arm,
+      [§dd-dr:environment-scaffolding] supersession applied note,
+      [§dd-dr:latexlike-generalization] applied-scope); ARCHITECTURE passages
+      (division-of-labor node facts, span-invariants bullet
+      reconstruct→record applied, nodes recompose-session tracker, engine
+      applied tracker, latexlike generalization tracker + NodeRef sugar
+      roster); learn-by-example paragraph-break passage (canonical-"\n\n"
+      superseded); superseded-names sweep clean (no `CallSyntax` /
+      `CallableNodeInvocationSyntax` / `new_for_invocation`; no core
+      CallableData post_space; token/comment post_space vocabulary sanctioned);
+      CLAUDE.md / README / other guide pages unaffected (grep-verified). Full
+      gates green (below).
 
 ## Ruling inputs (digest)
 
@@ -579,3 +593,82 @@ name-as-written, environment begin/end facts + write_begin/write_end
 round-trips, verbatim std end facts, unterminated/mismatch end-side-empty,
 materialize-through, fifth-role-trait coherence, stage_invocation end-rule
 tests (std rule + `end_pos: Some` via a rest-of-line takeover spec).
+
+## Consolidated stage summary (M5 closure)
+
+### Outcome
+
+All milestones implemented (M0–M2 by the original implementer, M2-addendum–M5 by
+successor 1), all gates green. The trigger spelling of every callable is now
+recorded Lang-owned payload: the core channel (`Lang::InvocationSyntax` +
+`InvocationSyntaxData` + opt-in `FromInvocation`) replaces the core `post_space`
+field; the latexlike enum records macro escape/post-space, per-side environment
+scaffolding (through the `EnvironmentSyntax` accumulator with its spelling
+writers), and unit `Specials` under the name-as-written doctrine — paragraph
+breaks included (actual whitespace run as name, canonical `ParagraphBreakSpec`
+identity). Takeover staging collapsed onto the committed `stage_invocation`
+shorthand; `MacroSpec`, the environments machinery, and `argument_specs`
+generalized over `LLL`; the parse-law oracle pins the recorded spellings against
+the node bytes.
+
+### Signature table (new/changed public surface)
+
+| Item | Signature / shape |
+|---|---|
+| `core::InvocationSyntaxData` | trait: `Clone + Debug + Send + Sync + 'static` + `materialized(&self, source_content: &str) -> Self`; implemented for `()` (D-plan-1; home state/lang.rs, `techy::core` export) |
+| `Lang::InvocationSyntax` | new associated type, `: InvocationSyntaxData`; `()` on every in-crate non-preset lang |
+| `core::constructs::FromInvocation<L>` | opt-in constructor trait: `from_invocation(&Invocation<'_, '_, L>) -> Self`; implemented for `()` and the latexlike enum (D-plan-3) |
+| `CallableData<L>` | `post_space: TextContent` **replaced** by `invocation_syntax: L::InvocationSyntax` |
+| `NodeRef::invocation_syntax` | `-> Option<&'t L::InvocationSyntax>` (core); core `NodeRef::post_space()` **deleted** (D-plan-11) |
+| latexlike `NodeRef::post_space` | preset sugar over the payload: Macro → recorded post-space; Environment/Specials → `Some("")` |
+| `ParseContext::stage_invocation` | `(&invocation, ParsedArguments<L>, ParsedSlots<L>, Vec<BuildId>, end_pos: Option<usize>) -> ConstructParserResult<L, BuildId>` where `L::InvocationSyntax: FromInvocation<L>` (T5-B; `None` = last child's end else trigger end; no overrides) |
+| bound spread | `L::InvocationSyntax: FromInvocation<L>` method-level where clauses through the defaulted factory chain to `Language::{parse, parse_source}` (D-plan-2; roster in the handoff notes) |
+| `constructs::NameGroup<L>` | gains `rule: Arc<GroupRule<L>>` (matched name-group rule; `Copy` dropped) |
+| `constructs::EnvironmentBody<L>` | gains `terminator: Option<EnvironmentTerminatorFacts<L>>`; `enum EnvironmentTerminatorFacts<L> { Scanned { escape_char, command_word, post_space, name_group }, Literal { span } }` (D-plan-6) |
+| `latexlike::InvocationSyntax<Env = StdEnvironmentSyntax<Latexlike>>` | `enum { Macro { escape_char: char, post_space: TextContent }, Environment(Env), Specials }` (unit Specials, name-as-written; D-plan-4) |
+| `latexlike::EnvironmentSideSyntax<L>` | `{ escape_char: char, command_word: TextContent, post_space: TextContent, name_group_rule: Arc<GroupRule<L>> }` (D-plan-10) |
+| `latexlike::EnvironmentSyntax<L>` | `: InvocationSyntaxData` (D-plan-5) — `parse_begin(cx, trigger) -> ConstructParserResult<L, Option<(NameGroup<L>, Self)>>`, `parse_end(&mut self, EnvironmentSideSyntax<L>)`, `record_std_end_facts(&mut self, command_word)`, `write_begin/write_end(&self, name, source_content) -> String` (D-plan-13) |
+| `latexlike::StdEnvironmentSyntax<L>` | `{ begin: EnvironmentSideSyntax<L>, end: Option<EnvironmentSideSyntax<L>> }` — accumulator shape (b) |
+| `latexlike::LatexlikeInvocationSyntax<L>` | fifth role trait: `type Env: EnvironmentSyntax<L>`; `macro_form/environment_form/specials_form`; `macro_syntax/environment_syntax/is_specials`; umbrella bound `InvocationSyntax: LatexlikeInvocationSyntax<Self> + FromInvocation<Self>` (D-plan-9) |
+| environments over `LLL` | `EnvironmentBehavior<LLL = Latexlike>`, `EnvironmentSpec<LLL = Latexlike>`, `VerbatimBehavior<LLL = Latexlike>`, `BeginSpec<LLL = Latexlike>`/`EndSpec<LLL = Latexlike>` (PhantomData ZSTs); `EnvironmentInvocation` gains `escape_char`, `name_group_open`, `name_group_close` (D-plan-14) |
+| `latexlike::MacroSpec` | `MacroSpec<LLL: LatexlikeLang = Latexlike>` (SpecialsSpec pattern: pub `arguments`, `new()`, manual Debug/Clone/Default; D-plan-15) |
+| `latexlike::argument_specs` | `fn argument_specs<LLL, I>(codes: I) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError> where LLL: LatexlikeLang, ArgumentExt<LLL>: Default, …` (+ `argument_specs_from_str<LLL>`; role-trait group classes; D-plan-15/16) |
+| `latexlike::ParagraphBreakSpec` | ZST beside `ParagraphBreakStyle`; `impl<LLL: LatexlikeLang> CallableSpec<LLL>`; "specials" frame vocabulary; identity = type identity via downcast (D-plan-8) |
+| `latexlike::make_paragraph_break_node` | `fn <LLL: LatexlikeLang>(ParagraphBreakStyle, &ParsingState<LLL>, &Token<'_, LLL>, source_content: &str) -> NodeKind<LLL>`; Specials arm records the actual run as name and stamps `ParagraphBreakSpec` (D-plan-7) |
+| `ParseDriver::make_paragraph_break_node` | `fn (&self, &ParsingState<L>, &Token<'_, L>, source_content: &str) -> NodeKind<L>` (default unchanged in behavior) |
+| parse-law oracle | `check_invocation_syntax_payload` (cfg(test)): Macro spelling-prefix + post-space pins (childless containment, D-plan-17), Specials name prefix, Environment `write_begin`/`write_end` byte pins (D-plan-12) |
+
+### Deviations
+
+D-plan-1 … D-plan-17 (running list above) — D-plan-16 and D-plan-17 added by
+successor 1; all queued for user sign-off. The S8 note (malformed terminator
+records no end facts → tolerant oracle matrix must exclude/special-case) stands.
+
+### Gate results (final full run)
+
+- `cargo build` and `cargo build --tests`: 0 warnings, 0 errors.
+- `cargo test`: 614 lib + 30 acceptance + 8 derive-conditions + 1 derive +
+  27 doctests — all green (2 ignored doctests are pre-existing).
+- `rm -rf target/doc && cargo docs`: clean — no broken intra-doc links, no
+  missing_docs warnings.
+- Superseded-names sweep: clean (`CallSyntax`, `CallableNodeInvocationSyntax`,
+  `new_for_invocation`, core `CallableData.post_space`, canonical-`"\n\n"` name
+  claims — none present; token/comment `post_space` vocabulary and the latexlike
+  payload field are sanctioned).
+
+### Commits (60dfd2b → HEAD)
+
+- 6433232 P3-S5: implementation plan
+- 28e9574 P3-S5 M1: Lang::InvocationSyntax channel + stage_invocation + latexlike payload
+- b8233a4 P3-S5 M2: environments machinery over LLL
+- 4725da0 P3-S5: relay handoff notes (M0–M2 done; M3–M5 to a successor)
+- a888682 P3-S5 M2 addendum: foreign-LLL environment smoke test
+- d339c0c P3-S5 M3: MacroSpec<LLL> + argument_specs<LLL> + paragraph-break name-as-written
+- 5f362bb P3-S5 M4: parse-law payload pins + FLM probe adaptation
+- (M5 closure commit: docs riders + DR status lines + this summary)
+
+### Churn
+
+39 files changed, ~2960 insertions, ~430 deletions (whole stage, docs included);
+code portion (techy/src + techy/tests): 37 files, ~2340 insertions, ~410
+deletions.
