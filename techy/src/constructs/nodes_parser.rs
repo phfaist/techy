@@ -393,7 +393,10 @@ pub struct NodesOutcome<L: Lang> {
     /// ([`AttachedSourceOutcome`](super::AttachedSourceOutcome)); a caller that
     /// merely resumes at the stop position wants [`state`](NodesOutcome::state)
     /// instead (re-deriving from the record would re-run fallible scope ops and
-    /// re-fire transition observation on a second path).
+    /// re-fire transition observation on a second path). A scope op that *failed*
+    /// when first applied stays in the record — nothing is silently stripped — so
+    /// a propagating replay re-attempts it and may re-diagnose the same failure
+    /// at the propagation site.
     pub after_effects: Option<ParsingStateDelta<L>>,
 }
 

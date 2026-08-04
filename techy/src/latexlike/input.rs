@@ -959,4 +959,30 @@ mod tests {
         let x = result.tree.root().child(1).unwrap();
         assert!(x.arguments().unwrap().is_empty());
     }
+
+    #[test]
+    fn cross_segment_after_effects_merge_across_a_stray_close_resume() {
+        // Review should-fix: a stray `}` in the included file splits its run into
+        // two segments (local recovery + resume). After-effect deltas from BOTH
+        // segments must ride the door's merged record under `persist_state: true`
+        // — a merge that only kept the first segment's record would leave `\b`
+        // unresolvable in the includer.
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("defs.tex", r"\defa}\defb")],
+            [
+                input_package_with(true, BodyMarker::not_body()),
+                defining_package("defa", definition_delta("a", "adefs")),
+                defining_package("defb", definition_delta("b", "bdefs")),
+            ],
+        );
+        let result = language.parse(r"\input{defs.tex}\a\b").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        // Exactly the stray close's diagnostic, in the attached source.
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), StrayGroupClose::IDENTIFIER);
+        // Both definitions — one from each segment — govern the includer.
+        assert_eq!(root_shapes(&result), ["Macro(input)", "Macro(a)", "Macro(b)"]);
+    }
 }
