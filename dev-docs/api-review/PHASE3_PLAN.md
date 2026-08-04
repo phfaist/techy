@@ -577,3 +577,20 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   special scrutiny ordered on the mirror-rule cluster D-plan-5/6/7 —
   literal-vs-pattern reading of "RecomposeError mirrors RestageError
   exactly" flagged as a potential escalation).
+- 2026-08-05: S8 review verdict: merge-ready after sign-off, 0 blockers;
+  gates reproduced (726/30/21/8/1/33); D-plan-6/7 FORCED (op-roster +
+  analogue-free omissions verified variant-by-variant), D-plan-1..5/8..10
+  DEFENSIBLE (1/4 near-forced; 10 record-implied — S5 report explicitly
+  delegated the malformed-terminator accounting to S8); oracle audit passed
+  (byte-equality genuine, matrices representative, public-API-only);
+  per-node doctrine verified (no span_content, no inter-node arithmetic);
+  superseded-names sweep clean; purely additive confirmed. ONE named
+  escalation for sign-off: D-plan-5 `RecomposeError::Recomposer(E)` vs the
+  frozen "mirror RestageError exactly" wording (reviewer endorses the
+  pattern reading — no record spells a literal roster; literal `Visitor`
+  would misname the failing party — but orders it presented as a conscious
+  user decision with the D-plan-6/7 roster cluster). Note-level items: the
+  VisitContext bookkeeping narrowing (depth+tree only), no closure blanket
+  on Recomposer, the specials-arm Concat-over-children refinement.
+  AWAITING USER SIGN-OFF of D-plan-1..10 before merge; no pre-sign-off
+  should-fix edits required (all three notes are record-level).
