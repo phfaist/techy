@@ -8,16 +8,16 @@ each.
 ## Progress
 
 - [x] M0 — implementation plan committed (this file)
-- [x] M1 — Math group form (core + preset): `GroupType::Math(MathGroupForm)`,
+- [ ] M1 — Math group form (core + preset): `GroupType::Math(MathGroupForm)`,
       `math_form()` sugar, `MATH_DELIMITERS` dissolved, `MathStyle`/`math_style`
       deleted
-- [x] M2 — Role traits + `LatexlikeLang` umbrella (+ preset `Event` enum,
+- [ ] M2 — Role traits + `LatexlikeLang` umbrella (+ preset `Event` enum,
       `default_token_rules::<LLL>`, generic NodeRef sugar)
-- [x] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible
+- [ ] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible
       `finalize_transition`, `resolve_state_event` hook, `cx.derive_state` /
       `with_derived_state` / `with_parsing_state`
-- [x] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity tests
-- [x] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
+- [ ] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity tests
+- [ ] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
       superseded-names, ARCHITECTURE passages, full gate run, stage summary
 
 ## Ruling inputs (digest)
