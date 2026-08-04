@@ -59,8 +59,10 @@ pub use tree::{NodeId, NodeTree, TreeTag};
 // latexlike parse-law checker's payload pins).
 #[cfg(test)]
 pub(crate) use tree::NodeData;
-// Crate-internal subtree copying, shared with `crate::extract`'s builder helpers.
-pub(crate) use copy::copy_subtree_into;
+// Crate-internal subtree copying, shared with `crate::extract`'s builder helpers,
+// and the content-parent mapping parameter of the transform driver's record
+// translation (`restage_node_with_content_mapping`).
+pub(crate) use copy::{copy_subtree_into, ContentParentMapping};
 // The parse-law test oracle: pub(crate) per [§dd-dr:tree-validation]'s amendment —
 // `validate_tree` is the one public checker; the panicking byte-accounting extras
 // are an in-crate test utility (all callers are test code, hence `cfg(test)`).

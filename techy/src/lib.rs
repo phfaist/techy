@@ -28,6 +28,8 @@
 //!   line/column analysis.
 //! - [`error`] — span-based structured diagnostics and the tolerant-parsing policy.
 //! - [`extract`] — content-extraction helpers over parsed node trees.
+//! - [`transform`] — tree→tree transformation: the streaming restage driver
+//!   ([`restage`](transform::restage) + [`RestageVisitor`](transform::RestageVisitor)).
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
 //!   [`ParseResult`](core::ParseResult)), with three satellites:
@@ -80,12 +82,13 @@ pub(crate) mod state;
 pub(crate) mod token;
 
 // The public facades. `source` and `error` are their own facades (their submodules are
-// private); `extract` and `latexlike` are ordinary public modules.
+// private); `extract`, `transform`, and `latexlike` are ordinary public modules.
 pub mod core;
 pub mod error;
 pub mod extract;
 pub mod latexlike;
 pub mod source;
+pub mod transform;
 
 // Narrative documentation: markdown pages in the workspace-level `docs/` rendered as
 // doc-only modules. `cfg(doc)` keeps them out of compiled code; rustdoc (including

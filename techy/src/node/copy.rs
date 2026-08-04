@@ -73,6 +73,29 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
         content_parents: impl Fn(NodeId) -> Option<BuildId>,
         annotation: A,
     ) -> Result<BuildId, NodeBuildError> {
+        self.restage_node_with_content_mapping(
+            node,
+            replacements,
+            |old| content_parents(old).map(ContentParentMapping::Verbatim),
+            annotation,
+        )
+    }
+
+    /// The crate-internal generalization of
+    /// [`restage_node`](NodeTreeBuilder::restage_node): the content-parent
+    /// mapping additionally chooses per parent whether the designation's
+    /// child-offset range is carried verbatim or translated through the
+    /// parent's own replacement layout ([`ContentParentMapping`]) — what the
+    /// `techy::transform` driver needs when the parent's children were
+    /// themselves restaged (dropped/multiplied) during the same pass. The
+    /// public primitive is the all-verbatim specialization.
+    pub(crate) fn restage_node_with_content_mapping<'a, AOld>(
+        &mut self,
+        node: NodeRef<'_, L, AOld>,
+        replacements: &[Vec<BuildId>],
+        content_parents: impl Fn(NodeId) -> Option<ContentParentMapping<'a>>,
+        annotation: A,
+    ) -> Result<BuildId, NodeBuildError> {
         let n_children = node.child_count();
         if replacements.len() != n_children {
             return Err(NodeBuildError::ReplacementsLengthMismatch {
@@ -126,18 +149,35 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
     }
 }
 
+/// How a [`ContentNodes::InChildrenOf`] content parent maps into the staged
+/// layout — the crate-internal parameter of
+/// [`NodeTreeBuilder::restage_node_with_content_mapping`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ContentParentMapping<'a> {
+    /// The designation's child-offset range is carried over verbatim relative
+    /// to this staged parent (re-validated at `add()`/`finish()`) — the public
+    /// [`restage_node`](NodeTreeBuilder::restage_node) contract.
+    Verbatim(BuildId),
+    /// The parent's own children were restaged per these replacement-length
+    /// prefix sums (index `i` = new child offset where old child `i`'s
+    /// replacement starts; one final entry for the new child count): the
+    /// designation's range is translated through them, so it keeps designating
+    /// the replacements of the originally designated children.
+    Translate(BuildId, &'a [u32]),
+}
+
 /// Translate one resolved region of `callable` into the staging coordinates of the
 /// replacement layout. `base` is the callable's children-block start in its own
 /// tree's layout; `prefix` holds the replacement-length prefix sums. The old offsets
 /// index `prefix` in bounds by the source tree's record invariants (its builder
 /// validated every resolved record at `add()`/`finish()`, and resolved records exist
 /// only in finished trees).
-fn restage_region<L: Lang, AOld>(
+fn restage_region<'a, L: Lang, AOld>(
     region: &ChildRegion,
     base: u32,
     callable: NodeRef<'_, L, AOld>,
     prefix: &[u32],
-    content_parents: &impl Fn(NodeId) -> Option<BuildId>,
+    content_parents: &impl Fn(NodeId) -> Option<ContentParentMapping<'a>>,
 ) -> Result<ChildRegion, NodeBuildError> {
     let children = region.children();
     let content = region.content_range();
@@ -153,16 +193,29 @@ fn restage_region<L: Lang, AOld>(
             content_start - new_children.start..content_end - new_children.start,
         )
     } else {
-        // Content inside a descendant: map the parent, carry the child offsets
-        // verbatim (re-validated against the mapped parent at add()/finish()).
+        // Content inside a descendant: map the parent; the child-offset range is
+        // carried verbatim or translated per the mapping (verbatim ranges are
+        // re-validated against the mapped parent at add()/finish()).
         let parent_node = callable.tree().node(parent);
         let parent_base = parent_node.children().range().start;
-        let new_parent = content_parents(parent)
-            .ok_or(NodeBuildError::ContentParentUnmapped { parent })?;
-        ContentNodes::InChildrenOf(
-            new_parent,
-            content.start - parent_base..content.end - parent_base,
-        )
+        let child_range = content.start - parent_base..content.end - parent_base;
+        match content_parents(parent)
+            .ok_or(NodeBuildError::ContentParentUnmapped { parent })?
+        {
+            ContentParentMapping::Verbatim(new_parent) => {
+                ContentNodes::InChildrenOf(new_parent, child_range)
+            }
+            ContentParentMapping::Translate(new_parent, parent_prefix) => {
+                // The range indexes the parent's prefix in bounds by the same
+                // record invariants (validated against the parent's child list
+                // by the source tree's builder).
+                ContentNodes::InChildrenOf(
+                    new_parent,
+                    parent_prefix[child_range.start as usize]
+                        ..parent_prefix[child_range.end as usize],
+                )
+            }
+        }
     };
     Ok(ChildRegion::new(new_children, designation))
 }

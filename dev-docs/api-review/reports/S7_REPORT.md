@@ -15,10 +15,10 @@ Baseline (must not regress): 661 lib + 30 acceptance + 8 derive-conditions +
 
 ## Progress
 
-- [ ] M1 — this plan (committed before any code work)
-- [ ] M2 — transform core: module, `Restage`, `RestageVisitor` + closure blanket,
+- [x] M1 — this plan (committed before any code work)
+- [x] M2 — transform core: module, `Restage`, `RestageVisitor` + closure blanket,
       `RestageError<E>`, driver (`restage` entry, Descend/Emit, replacement map,
-      `ContentParentDropped`), basic tests
+      `ContentParentDropped`), basic tests (9 tests; 670 lib green)
 - [ ] M3 — region ops + bundles (`RestagedArgument`/`RestagedSlot`,
       `restage_subtree`/`restage_children`/`restage_argument[_named]`/`restage_slot`/
       `restage_invocation`/`builder()`), argument-swap acceptance test
@@ -331,6 +331,47 @@ tests at minimum; full gates at M6).
 - **D-plan-6** (realization, record silent): `KeyVals::get_combined_with`
   builds an annotation-free (`A = ()`) result tree; a callback parameter stays
   additive later (it is not one of the four ruled producers).
+- **D-plan-7** (M2; realization the paradigm strip pass forces): the driver
+  **translates** `InChildrenOf` content ranges through the content parent's own
+  children replacements when the parent was driver-restaged (`Descend`), so an
+  interior drop/multiplication inside a `{…}` wrapper keeps the enclosing
+  callable's record meaning "the replacements of the designated children" —
+  without this, dropping any node inside a group argument breaks the record
+  (`ContentOutOfBounds`), killing the one-line strip pass the rulings protect.
+  Realized crate-internally as
+  `NodeTreeBuilder::restage_node_with_content_mapping` +
+  `ContentParentMapping { Verbatim, Translate }` (node/copy.rs) so the ONE
+  region arithmetic is shared; the *public* level-0 `restage_node` keeps its
+  ruled verbatim-carry contract unchanged (it is the all-`Verbatim`
+  specialization). Ranges into single-node `Emit` takeovers stay verbatim
+  (the visitor chose the replacement's shape; re-validated at staging).
 
-(Further entries appended as implementation forces them; exact final names of
-D-plan-1's variants recorded at M2/M3.)
+(Further entries appended as implementation forces them.)
+
+### M2 realization notes
+
+- `RestageError` variant roster as planned (D-plan-1): `Build`,
+  `ContentParentDropped { callable, parent, replaced_by: Option<usize> }`,
+  `Visitor`, `UnknownArgumentName { node, name }`,
+  `ArgumentIndexOutOfRange { node, index, count }`,
+  `SlotIndexOutOfRange { node, index, count }`, `NotACallable { node }`,
+  `ArgumentAbsent { node, index }`, `RootNotSingular { count }` (the last five
+  land with their ops in M3/M4). Derives `Debug, Clone, PartialEq, Eq`
+  (conditional on E), `Display where E: Display`,
+  `Error where E: Error + 'static`.
+- `RestageContext` carries no borrow of the input tree; `'t`/`A` are anchored
+  via `PhantomData<&'t NodeTree<L, A>>` (ops accept nodes from any tree, so a
+  stored borrow would be misleading).
+- The replacement map (`Replaced { Restaged { id, prefix }, One, Count }`)
+  records every driven node; `Descend` entries carry the replacement-length
+  prefix sums (the D-plan-7 translation table).
+- **Closure-blanket inference finding** (the recorded T5 flag): the
+  `restage(&tree, &mut |node, cx| …)` spelling works when the closure's two
+  parameter *types* are annotated (`|node: NodeRef<'_, Latexlike>, cx: &mut
+  RestageContext<'_, Latexlike, (), B>|`) — the elided lifetimes are accepted
+  as higher-ranked. Fully unannotated closures do not infer (no expected-type
+  propagation through a generic `V`), and a closure's `E` needs one annotated
+  `Ok::<_, E>`/turbofish when only inferable from context. Judged tolerable
+  (annotations, not restructuring); fn items need nothing. The fixed-error
+  fallback is NOT triggered — flagged here per the ruling instead of
+  re-sessioning.
