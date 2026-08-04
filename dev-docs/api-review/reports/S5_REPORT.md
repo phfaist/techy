@@ -21,9 +21,13 @@ milestone, Progress updated each milestone.
       `environment_form`; `SlotExt<LLL>: BodySlotExt` bound-where-used on the
       composition + BeginSpec's CallableSpec impl; `EnvironmentInvocation` spelling
       fields; verbatim literal composed from them. 608 lib tests green,
-      0 warnings. REMAINING FROM M2's test plan: a foreign-LLL *environment*
-      smoke test (extend the existing `Flavored` test in latexlike/mod.rs with an
-      environment + verbatim parse) — successor task.
+      0 warnings. M2 addendum (successor 1): foreign-LLL environment smoke test
+      landed — `Flavored` hoisted to the tests-module level (shared fixture),
+      sibling test `a_foreign_family_member_parses_environments_and_verbatim`
+      registers `BeginSpec::<Flavored>`/`EndSpec::<Flavored>` + itemize/verbatim
+      specs and asserts begin/end payload facts (write_begin/write_end round
+      trips, verbatim std end facts) + `body()` through the `()` slot ext.
+      609 lib tests, 0 warnings.
 - [ ] M3 — `MacroSpec<LLL>` + `argument_specs<LLL>` + paragraph-break
       name-as-written / canonical spec
 - [ ] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep

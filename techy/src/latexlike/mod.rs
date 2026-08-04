@@ -1004,46 +1004,49 @@ mod tests {
         assert!(finalize_error.message().contains("ExitMathContext"));
     }
 
+    /// A foreign Lang adopting the preset vocabularies: the shared fixture of the
+    /// family-membership tests below (zero role code — the `()` exts, the preset
+    /// enums, `LatexlikeDriver<Flavored>`, and the family's payload enum over its
+    /// own environment record).
+    #[derive(Debug, Clone, Copy)]
+    struct Flavored;
+    impl Lang for Flavored {
+        type GroupTypeId = GroupType;
+        type CallableTypeId = CallableType;
+        type ModeId = Mode;
+        type StateExt = ();
+        type Event = Event;
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = InvocationSyntax<StdEnvironmentSyntax<Flavored>>;
+        type Driver = LatexlikeDriver<Flavored>;
+
+        fn initial_state_data() -> StateData<Self> {
+            StateData {
+                rules: default_token_rules(),
+                scopes: ScopeStack::new(),
+                mode: Mode::Text,
+                ext: (),
+            }
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &Arc<ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+    impl super::LatexlikeLang for Flavored {}
+
     #[test]
     fn the_generic_driver_serves_a_foreign_family_member() {
         // A foreign Lang adopting the preset vocabularies joins the family with
         // zero role code and reuses LatexlikeDriver<LLL>, default_token_rules,
-        // the pillars, and the NodeRef sugar (MacroSpec/EnvironmentSpec stay
-        // Latexlike-monomorphic until the invocation-syntax stage — the generic
-        // StdCallableSpec carries the \text recipe here).
+        // the pillars, and the NodeRef sugar (the generic StdCallableSpec carries
+        // the \text recipe here).
         use crate::spec::StdCallableSpec;
-
-        #[derive(Debug, Clone, Copy)]
-        struct Flavored;
-        impl Lang for Flavored {
-            type GroupTypeId = GroupType;
-            type CallableTypeId = CallableType;
-            type ModeId = Mode;
-            type StateExt = ();
-            type Event = Event;
-            type SessionExt = ();
-            type SourceOrigin = Option<String>;
-            type NodeExts = ();
-            type InvocationSyntax = InvocationSyntax<StdEnvironmentSyntax<Flavored>>;
-            type Driver = LatexlikeDriver<Flavored>;
-
-            fn initial_state_data() -> StateData<Self> {
-                StateData {
-                    rules: default_token_rules(),
-                    scopes: ScopeStack::new(),
-                    mode: Mode::Text,
-                    ext: (),
-                }
-            }
-            fn make_node_ext(
-                _kind: &crate::node::NodeKind<Self>,
-                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
-                _state: &Arc<ParsingState<Self>>,
-                _children: crate::node::StagedChildren<'_, Self>,
-            ) {
-            }
-        }
-        impl super::LatexlikeLang for Flavored {}
 
         let text_spec: StdCallableSpec<Flavored> = StdCallableSpec::new([
             ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
@@ -1070,6 +1073,79 @@ mod tests {
         let text = math.child(1).unwrap();
         let argument = text.argument_content_nodes(0).unwrap();
         assert_eq!(argument.get(0).unwrap().parsing_state().mode(), Mode::Text);
+    }
+
+    #[test]
+    fn a_foreign_family_member_parses_environments_and_verbatim() {
+        // The environments machinery over `LLL`: `BeginSpec`/`EndSpec` registered
+        // for the foreign member dispatch the composition; the payload records
+        // begin/end facts in the member's own record type
+        // (`StdEnvironmentSyntax<Flavored>`); a verbatim behavior reads the body
+        // raw and records standard end facts from its literal terminator. The
+        // body slot resolves through the `()` slot ext (`is_body()` is true —
+        // slot 0 degenerates to the body).
+        let mut package: Package<Flavored> = Package::new("defs");
+        package.insert(
+            CallableType::Macro,
+            environments::BEGIN_COMMAND_NAME,
+            Arc::new(BeginSpec::<Flavored>::new()),
+        );
+        package.insert(
+            CallableType::Macro,
+            environments::END_COMMAND_NAME,
+            Arc::new(EndSpec::<Flavored>::new()),
+        );
+        package.insert(
+            CallableType::Environment,
+            "itemize",
+            EnvironmentSpec::<Flavored>::new(vec![]),
+        );
+        package.insert(
+            CallableType::Environment,
+            "verbatim",
+            EnvironmentSpec::from_behavior(Arc::new(VerbatimBehavior::<Flavored>::default())),
+        );
+        let language: Language<Flavored> = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
+
+        // The tokenized composition: begin/end facts per side, in the foreign
+        // member's record.
+        let content = "\\begin {itemize} a \\end{itemize}";
+        let result = language.parse(content).unwrap();
+        check_tree_invariants(&result.tree);
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.environment_name(), Some("itemize"));
+        let body: Vec<_> = env.body().expect("the body slot").iter().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some(" a "));
+        let InvocationSyntax::Environment(syntax) = env.invocation_syntax().unwrap()
+        else {
+            panic!("expected the Environment arm");
+        };
+        assert_eq!(syntax.begin.escape_char, '\\');
+        assert_eq!(syntax.begin.post_space.resolve(content), " ");
+        assert_eq!(syntax.write_begin("itemize", content), "\\begin {itemize}");
+        assert_eq!(syntax.write_end("itemize", content), "\\end{itemize}");
+
+        // The verbatim takeover body: raw content (comment/escape chars inert),
+        // standard end facts synthesized from the literal terminator.
+        let content = "\\begin{verbatim}\na % b \\x{\n\\end{verbatim}";
+        let result = language.parse(content).unwrap();
+        check_tree_invariants(&result.tree);
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.environment_name(), Some("verbatim"));
+        let body: Vec<_> = env.body().expect("the body slot").iter().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
+        let InvocationSyntax::Environment(syntax) = env.invocation_syntax().unwrap()
+        else {
+            panic!("expected the Environment arm");
+        };
+        let end = syntax.end.as_ref().expect("the literal terminator was consumed");
+        assert!(end.command_word.is_owned());
+        assert_eq!(syntax.write_end("verbatim", content), "\\end{verbatim}");
     }
 
     #[test]
