@@ -463,3 +463,109 @@ Code portion (techy/src): 11 files (2 new — constructs/attached_source.rs,
 latexlike/input.rs), +2240/−129. Records/docs: DESIGN_RATIONALE.md (7 entries
 touched), ARCHITECTURE.md (4 passages), CLAUDE.md (source facade line),
 docs/ guide (2 pages), this report.
+
+## M7 — the two S6 design-revision rulings (user, 2026-08-04)
+
+Governing input: the PHASE3_PLAN stage-log entry "S6 DESIGN-REVISION RULINGS"
+(2026-08-04). Ruling A supersedes D-plan-8 (the preset's Attached-body pairing);
+Ruling B resolves D-plan-9 as a rulings amendment (`persist_state` via merged
+after-effect deltas, amending T4-B2's bare `Vec<BuildId>` door return).
+
+### Plan
+
+**M7-a — core mechanics (Ruling B, engine half):**
+
+1. `ParsingStateDelta::merge_from(&mut self, later)` (crate-private, mirroring
+   the merge shape `lower_state_events` already open-codes): rules via
+   `TokenRulesOverrides::merge_from` (later's `Some` fields win), `scope_ops`
+   concatenated in application order, `mode`/`ext` last-writer-wins, `events`
+   concatenated. Plus an emptiness probe for the `Option`-`None` spelling.
+2. `ParseContext` capture seam: a crate-private sibling of `derive_state`
+   (`derive_state_recording(delta, record: &mut Option<ParsingStateDelta<L>>)`)
+   that lowers events exactly as `derive_state` does, commits the derivation,
+   and — only when the transition commits — merges the **effective, as-applied
+   delta** into `record`. `derive_state` keeps its public shape and shares the
+   commit path.
+3. `NodesOutcome<L>` gains `after_effects: Option<ParsingStateDelta<L>>` — the
+   merged record of the sibling after-effect deltas the run applied (`None` =
+   none were). `NodesParser` accumulates via the capture seam in
+   `dispatch_invocation`, drains the field at every return (the re-invocation
+   contract), and the "no current consumer of a merged delta" rustdoc note is
+   rewritten as consumed.
+4. The door returns an outcome bundle: `pub struct AttachedSourceOutcome<L>
+   { nodes: Vec<BuildId>, after_effects: Option<ParsingStateDelta<L>> }` in
+   `constructs/attached_source.rs`, merged across resumed runs;
+   `attach_source_reference` returns `Option<AttachedSourceOutcome<L>>`.
+   Exports through `techy::core::constructs`. D-plan-14's "discarded" note
+   becomes "exported on the bundle; forwarding is the caller's choice".
+5. Tests: door-level `after_effects` is `None` for a no-after-effect included
+   run (persist test e); engine literal `NodesOutcome` constructions updated.
+
+**M7-b — preset (Ruling A + Ruling B, spec half):**
+
+6. `input_macro_spec::<LLL>(persist_state: bool, attached_slot_ext:
+   SlotExt<LLL>) -> InputMacroSpec<LLL>` — both parameters mandatory, no
+   defaults. The spec stores the ext value (its `Clone`/`Debug`/`Send`/`Sync`
+   come from the `NodeExtTypes::SlotExt` bounds) and clones it per invocation
+   into the `ParsedSlot`; the `SlotExt<LLL>: BodySlotExt` bounds drop
+   (`make_body` is no longer called). Shipped registrations in tests/doctests
+   pass `BodyMarker::not_body()`.
+7. `persist_state == true`: the invocation parser returns the bundle's merged
+   delta as its own after-effect through the existing sibling channel;
+   `false`: returns `None` (today's transparent behavior). Rustdoc "# State
+   handling" rewritten (transparent-vs-persisting choice, the
+   preamble-defines-macros paradigm case, the no-caching interaction — T5-G's
+   rationale STRONGER: the shipped spec itself can now feed state back).
+8. Tests: shipped registration ⇒ `body()` is `None`, retrieval via the slot
+   named `"attached"` (`slot_content_nodes_named`); one framework-choice test
+   (body-marked ext ⇒ findable Attached-body slot — the T5 findability
+   clause); persist tests (a) paradigm definition-then-use, (b) `false` leaves
+   the includer untouched, (c) nested composition to the primary, (d) merge
+   order (later field override wins; scope pushes in order), all driven by
+   minimal test specs returning after-effect deltas (the engine
+   `AfterEffectSpec` pattern; no shipped construct produces one).
+
+**M7-c — records + gates:** DR applied notes ([§dd-dr:input-wiring] amendment
+note "user-ruled 2026-08-04: outcome bundle + persist_state";
+[§dd-dr:input-attachment]; the body-pairing sentences), ARCHITECTURE
+attached-source passage, D-plan-8 marked SUPERSEDED-BY-RULING, D-plan-9/14
+updated, new D-plans below, M7 closure tables, full gates.
+
+### Escalation check (Ruling B's composition clause)
+
+Per-component sequential composition under the ruled semantics: rules
+overrides — exact (each `Some` field wholesale-replaces, so last-writer-wins
+reproduces sequential application); scope ops — exact (concatenation in
+application order); `mode`/`ext` — last-writer-wins as ruled (`ext` is
+whole-value replacement; Latexlike's `finalize_transition` is not customized,
+so the single-transition replay is exact for the shipped preset); events —
+context-dependent events are lowered into field patches *before* the record is
+taken (the capture point is the effective delta), so the record is event-free
+in every shipped configuration. No component fails to compose — no escalation.
+The one extension-case nuance (context-free events of custom Langs) is
+D-plan-17 below, resolved toward exactness, not approximation.
+
+### New deviations / delegated decisions (M7)
+
+- **D-plan-15** (delegated: the bundle name): `AttachedSourceOutcome<L>`, the
+  `parse_attached_source`/`NodesOutcome` sibling vocabulary; fields `nodes` +
+  `after_effects`. The delta field is named **`after_effects`** on both the
+  bundle and `NodesOutcome` — `state_delta` was rejected because it would sit
+  beside `NodesOutcome::state` and read as "the entry→state diff", which the
+  merged record deliberately is not (deltas, not diffing).
+- **D-plan-16** (delegated: parameter naming/order):
+  `input_macro_spec(persist_state: bool, attached_slot_ext: SlotExt<LLL>)` —
+  the ruled `persist_state` name first (the ruling names it), the ext
+  parameter named for the slot it lands on (the `"attached"` slot's ext).
+- **D-plan-17** (realization: the record's exact capture semantics): the
+  record accumulates the **effective delta as applied** — post event-lowering,
+  merged only when the transition commits. Context-free events that survive
+  lowering (none exist in any shipped Lang) are recorded concatenated in
+  application order rather than dropped: by the `Lang::Event` contract they
+  are position-independent ("consumed wherever the delta is applied"), so
+  recording them preserves exact composition where dropping them would
+  approximate — the ruling's "event-free record" premise holds verbatim for
+  every shipped configuration. Failing scope ops stay in the record (the
+  `DeriveError::delta` "as applied" notion; ScopeOpError carries no op index
+  to strip by): a persisted replay may re-attempt and re-diagnose them at the
+  includer — documented, and inherent to the ruled merged-delta mechanism.
