@@ -524,7 +524,10 @@ The [`extract`](crate::extract) helpers answer the everyday
 "give me the *text*" questions. `content_as_chars` flattens chars and groups (and
 fails honestly on anything that is not text); `split_at_chars` splits a node list at
 a separator with grouped content protected; `parse_keyval` reads
-`key=value,…` content:
+`key=value,…` content. The splitting helpers build a new backing tree and mint its
+per-node annotations through a callback — the bare names take the callback; the
+`_drop_annotations` shorthands used below produce plain `()`-annotated trees
+(see [`extract`](crate::extract)'s module docs):
 
 ```rust
 use techy::core::{Language, ParsingState};
@@ -551,7 +554,7 @@ let list = node.argument_content_nodes(0).unwrap();
 
 assert_eq!(extract::content_as_chars(list).unwrap(), "arrows,shapes.geometric,calc");
 
-let split = extract::split_at_chars(list, ",").unwrap();
+let split = extract::split_at_chars_drop_annotations(list, ",").unwrap();
 let libraries: Vec<&str> =
     split.segments().map(|segment| segment.source_text().unwrap()).collect();
 assert_eq!(libraries, ["arrows", "shapes.geometric", "calc"]);
@@ -580,7 +583,7 @@ let result = language
     .parse(r"\includegraphics[width=5cm,label={fig,main}]{fig.pdf}")
     .unwrap();
 let node = result.tree.root().child(0).unwrap();
-let keyvals = extract::parse_keyval(node.argument_content_nodes(0).unwrap()).unwrap();
+let keyvals = extract::parse_keyval_drop_annotations(node.argument_content_nodes(0).unwrap()).unwrap();
 
 assert_eq!(keyvals.len(), 2);
 let width = keyvals.get("width").unwrap();

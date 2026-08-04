@@ -229,10 +229,10 @@ fn restage_region<'a, L: Lang, AOld>(
 /// `annotate` supplies each copy's annotation from the node it was copied from
 /// (the extract producers route their annotation-mint callback through here;
 /// `&mut |_| ()` for annotation-free trees).
-pub(crate) fn copy_subtree_into<L: Lang, AOld, B>(
+pub(crate) fn copy_subtree_into<'t, L: Lang, AOld, B>(
     builder: &mut NodeTreeBuilder<L, B>,
-    node: NodeRef<'_, L, AOld>,
-    annotate: &mut impl FnMut(NodeRef<'_, L, AOld>) -> B,
+    node: NodeRef<'t, L, AOld>,
+    annotate: &mut impl FnMut(NodeRef<'t, L, AOld>) -> B,
 ) -> Result<BuildId, NodeBuildError> {
     // Old NodeId → new BuildId, for `InChildrenOf` content parents (descendants of
     // the callable, staged before it by the bottom-up order).
@@ -240,10 +240,10 @@ pub(crate) fn copy_subtree_into<L: Lang, AOld, B>(
     copy_node(builder, node, annotate, &mut ids)
 }
 
-fn copy_node<L: Lang, AOld, B>(
+fn copy_node<'t, L: Lang, AOld, B>(
     builder: &mut NodeTreeBuilder<L, B>,
-    node: NodeRef<'_, L, AOld>,
-    annotate: &mut impl FnMut(NodeRef<'_, L, AOld>) -> B,
+    node: NodeRef<'t, L, AOld>,
+    annotate: &mut impl FnMut(NodeRef<'t, L, AOld>) -> B,
     ids: &mut HashMap<NodeId, BuildId>,
 ) -> Result<BuildId, NodeBuildError> {
     let mut replacements = Vec::with_capacity(node.child_count());

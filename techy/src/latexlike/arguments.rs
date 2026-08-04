@@ -738,7 +738,7 @@ mod tests {
         assert!(result.tree.root().child(1).unwrap().is_group());
 
         // The extraction helper reads the run by marker.
-        let fields = crate::extract::split_embellishments(
+        let fields = crate::extract::split_embellishments_drop_annotations(
             m.argument_content_nodes(0).unwrap(),
         )
         .unwrap();
@@ -767,7 +767,7 @@ mod tests {
         let result = parse_ok("e{^_}", r"\m_{b}^{a}");
         let m = macro_node(&result);
         let fields =
-            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments_drop_annotations(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         let keys: Vec<_> = fields.iter().map(|entry| entry.key().to_string()).collect();
         assert_eq!(keys, ["_", "^"]);
@@ -789,7 +789,7 @@ mod tests {
         let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
         assert!(region.iter().any(|node| node.comment().is_some()));
         let fields =
-            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments_drop_annotations(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         assert_eq!(fields.len(), 2);
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("!"));
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(wrapper.child(0).unwrap().chars(), Some(" "));
         // …and the extraction values stay noise-free regardless.
         let fields =
-            crate::extract::split_embellishments(m.argument_content_nodes(0).unwrap())
+            crate::extract::split_embellishments_drop_annotations(m.argument_content_nodes(0).unwrap())
                 .unwrap();
         let sup = fields.get("^").unwrap();
         assert_eq!(sup.value().unwrap().len(), 1);

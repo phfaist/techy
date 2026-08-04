@@ -279,7 +279,7 @@ mod tests {
     use super::*;
     use crate::engine::Language;
     use crate::latexlike::{CallableType, Latexlike, MacroSpec};
-    use crate::extract::{content_as_chars, split_embellishments};
+    use crate::extract::{content_as_chars, split_embellishments_drop_annotations};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use crate::state::ParsingState;
@@ -317,7 +317,7 @@ mod tests {
     }
 
     fn keys(m: NodeRef<'_, Latexlike>) -> Vec<alloc::string::String> {
-        split_embellishments(m.argument_content_nodes(0).expect("provided"))
+        split_embellishments_drop_annotations(m.argument_content_nodes(0).expect("provided"))
             .unwrap()
             .iter()
             .map(|entry| entry.key().to_string())
@@ -329,7 +329,7 @@ mod tests {
         let result = parse(&["a", "ab"], r"\m ab{x}a{y}!");
         let m = result.tree.root().child(0).unwrap();
         assert_eq!(keys(m), ["ab", "a"]);
-        let fields = split_embellishments(m.argument_content_nodes(0).unwrap()).unwrap();
+        let fields = split_embellishments_drop_annotations(m.argument_content_nodes(0).unwrap()).unwrap();
         assert_eq!(
             content_as_chars(fields.get("ab").unwrap().value_content().unwrap()).unwrap(),
             "x"
@@ -349,7 +349,7 @@ mod tests {
         let result = parse(&["a", "abc"], r"\m ab{x}");
         let m = result.tree.root().child(0).unwrap();
         assert_eq!(keys(m), ["a"]);
-        let fields = split_embellishments(m.argument_content_nodes(0).unwrap()).unwrap();
+        let fields = split_embellishments_drop_annotations(m.argument_content_nodes(0).unwrap()).unwrap();
         assert_eq!(
             content_as_chars(fields.get("a").unwrap().value().unwrap()).unwrap(),
             "b"

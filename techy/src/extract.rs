@@ -8,7 +8,7 @@
 //! - **Readers** take any node sequence (`impl IntoIterator<Item = NodeRef>`):
 //!   [`content_as_chars`].
 //! - **Builders** take a [`NodeSlice`] and return an owned result holding a new
-//!   [`NodeTree`]: [`split_at_chars`] (→ [`Split`]), [`parse_keyval`], and the
+//!   [`NodeTree`]: [`split_at_chars`] (→ [`SplitAtChars`]), [`parse_keyval`], and the
 //!   argument-run readers [`split_embellishments`] / [`split_tack_on_fields`]
 //!   (→ [`KeyVals`]). They need the slice's tree anchor (parsing state, source) even
 //!   when the slice is empty, which a bare iterator cannot provide.
@@ -31,6 +31,33 @@
 //! the all-trees law ([`validate_tree`](crate::core::node::validate_tree)) but not the
 //! parse-tree byte accounting.
 //!
+//! # Producers mint output annotations
+//!
+//! The producers accept input with **any** annotation type and mint the output
+//! tree's annotations through a per-part callback — the consumer-side mirror of
+//! `Lang::make_node_ext` (consumer-owned data ⇒ consumer callback). Each of the
+//! four producers ships three spellings, the **general form owning the bare
+//! name**:
+//!
+//! - [`split_at_chars(nodes, sep, f)`](split_at_chars) — `f` is called once per
+//!   staged output node with an opaque part context ([`SplitAtCharsPart`] /
+//!   [`KeyValsPart`]) answering what the callback cannot recover itself: the
+//!   [`original()`](SplitAtCharsPart::original) input node this output node
+//!   derives from (`None` exactly for the synthesized `List` wrappers and the
+//!   root), cut-piece facts ([`is_partial()`](SplitAtCharsPart::is_partial) /
+//!   [`partial_text()`](SplitAtCharsPart::partial_text)), and the
+//!   segment/entry index;
+//! - [`split_at_chars_drop_annotations(nodes, sep)`](split_at_chars_drop_annotations)
+//!   — the `B = ()` shorthand;
+//! - [`split_at_chars_keep_annotations(nodes, sep)`](split_at_chars_keep_annotations)
+//!   — `A → A` clone-through (`A: Clone + Default`, bound only here; synthesized
+//!   nodes get `A::default()`).
+//!
+//! Same triple for [`parse_keyval`], [`split_embellishments`], and
+//! [`split_tack_on_fields`]. Boundary: the callback **mints annotations only** —
+//! vetoing or modifying nodes is the job of
+//! [`techy::transform`](crate::transform)'s restage pass.
+//!
 //! ```
 //! use techy::core::{Language, ParsingState};
 //! use techy::error::Recovery;
@@ -43,7 +70,8 @@
 //! );
 //! let result = language.parse("alpha,beta{x,y},gamma").unwrap();
 //!
-//! let split = extract::split_at_chars(result.tree.root().children(), ",").unwrap();
+//! let split =
+//!     extract::split_at_chars_drop_annotations(result.tree.root().children(), ",").unwrap();
 //! assert_eq!(split.len(), 3);
 //! assert_eq!(split.segment(0).unwrap().source_text(), Some("alpha"));
 //! // Grouped content protects its interior — and segments are ordinary node lists,
@@ -134,25 +162,25 @@ impl core::error::Error for ExtractError {
 /// chars node — a byte sub-range of a chars node's logical content. Internal: the
 /// public currency is trees and [`NodeSlice`]s (7.8 decision — no second public
 /// node-list type).
-struct Piece<'t, L: Lang> {
-    node: NodeRef<'t, L>,
+struct Piece<'t, L: Lang, A> {
+    node: NodeRef<'t, L, A>,
     /// `Some(sub)` = the sub-range `sub` of the node's chars content; `None` = whole
     /// node. Only ever `Some` for `Chars` nodes.
     part: Option<Range<usize>>,
 }
 
-impl<L: Lang> Clone for Piece<'_, L> {
+impl<L: Lang, A> Clone for Piece<'_, L, A> {
     fn clone(&self) -> Self {
         Piece { node: self.node, part: self.part.clone() }
     }
 }
 
-fn whole<L: Lang>(node: NodeRef<'_, L>) -> Piece<'_, L> {
+fn whole<L: Lang, A>(node: NodeRef<'_, L, A>) -> Piece<'_, L, A> {
     Piece { node, part: None }
 }
 
 /// The piece's chars text, if it is a chars piece (whole chars node or partial).
-fn piece_text<'t, L: Lang>(piece: &Piece<'t, L>) -> Option<&'t str> {
+fn piece_text<'t, L: Lang, A>(piece: &Piece<'t, L, A>) -> Option<&'t str> {
     let text = piece.node.chars()?;
     Some(match &piece.part {
         None => text,
@@ -165,7 +193,7 @@ fn piece_text<'t, L: Lang>(piece: &Piece<'t, L>) -> Option<&'t str> {
 /// The piece's provenance span: the node's span, narrowed to the sub-range for a
 /// partial of span-backed content (exact); the whole node's span for a partial of
 /// owned content (best available provenance — module docs).
-fn piece_span<L: Lang>(piece: &Piece<'_, L>) -> SourceSpan<L::SourceOrigin> {
+fn piece_span<L: Lang, A>(piece: &Piece<'_, L, A>) -> SourceSpan<L::SourceOrigin> {
     if let Some(sub) = &piece.part {
         if let NodeKind::Chars { content: TextContent::Spanned(span), .. } = piece.node.kind() {
             return SourceSpan::new(
@@ -187,8 +215,8 @@ fn piece_span<L: Lang>(piece: &Piece<'_, L>) -> SourceSpan<L::SourceOrigin> {
 /// `\label{my-label}` or `\href{https://…}{…}`, including nested-group cases like
 /// `\item[{*}]`. Zero-copy (`Cow::Borrowed`) when the flattened text is a single
 /// contiguous piece — the common single-chars-node argument.
-pub fn content_as_chars<'t, L: Lang>(
-    nodes: impl IntoIterator<Item = NodeRef<'t, L>>,
+pub fn content_as_chars<'t, L: Lang, A: 't>(
+    nodes: impl IntoIterator<Item = NodeRef<'t, L, A>>,
 ) -> Result<Cow<'t, str>, ExtractError> {
     let mut acc = Acc::Empty;
     for node in nodes {
@@ -198,7 +226,9 @@ pub fn content_as_chars<'t, L: Lang>(
 }
 
 /// `content_as_chars` over pieces (keyval keys).
-fn pieces_as_chars<'t, L: Lang>(pieces: &[Piece<'t, L>]) -> Result<Cow<'t, str>, ExtractError> {
+fn pieces_as_chars<'t, L: Lang, A>(
+    pieces: &[Piece<'t, L, A>],
+) -> Result<Cow<'t, str>, ExtractError> {
     let mut acc = Acc::Empty;
     for piece in pieces {
         collect_chars(piece.node, piece.part.clone(), &mut acc)?;
@@ -206,8 +236,8 @@ fn pieces_as_chars<'t, L: Lang>(pieces: &[Piece<'t, L>]) -> Result<Cow<'t, str>,
     Ok(acc.finish())
 }
 
-fn collect_chars<'t, L: Lang>(
-    node: NodeRef<'t, L>,
+fn collect_chars<'t, L: Lang, A>(
+    node: NodeRef<'t, L, A>,
     part: Option<Range<usize>>,
     acc: &mut Acc<'t>,
 ) -> Result<(), ExtractError> {
@@ -267,19 +297,19 @@ impl<'t> Acc<'t> {
 /// (groups, callables, comments) are never split and protect their interior —
 /// pylatexenc's `split_at_chars` semantics. `max_split` caps the number of cuts;
 /// `keep_empty` keeps empty segments (needed to tell `x=` from `x` in keyval).
-fn split_pieces<'t, L: Lang>(
-    input: impl IntoIterator<Item = Piece<'t, L>>,
+fn split_pieces<'t, L: Lang, A>(
+    input: impl IntoIterator<Item = Piece<'t, L, A>>,
     sep: &str,
     max_split: Option<usize>,
     keep_empty: bool,
-) -> Vec<Vec<Piece<'t, L>>> {
-    let mut segments: Vec<Vec<Piece<'t, L>>> = Vec::new();
-    let mut current: Vec<Piece<'t, L>> = Vec::new();
+) -> Vec<Vec<Piece<'t, L, A>>> {
+    let mut segments: Vec<Vec<Piece<'t, L, A>>> = Vec::new();
+    let mut current: Vec<Piece<'t, L, A>> = Vec::new();
     let mut splits = 0usize;
 
-    fn flush<'t, L: Lang>(
-        current: &mut Vec<Piece<'t, L>>,
-        segments: &mut Vec<Vec<Piece<'t, L>>>,
+    fn flush<'t, L: Lang, A>(
+        current: &mut Vec<Piece<'t, L, A>>,
+        segments: &mut Vec<Vec<Piece<'t, L, A>>>,
         keep_empty: bool,
     ) {
         if keep_empty || !current.is_empty() {
@@ -320,8 +350,8 @@ fn split_pieces<'t, L: Lang>(
 /// The anchor a builder helper synthesizes structure from: the input slice's covering
 /// span and its first node's state — or, for an empty slice, an empty span at the
 /// slice's tree root and the root's state.
-fn anchor<L: Lang>(
-    slice: &NodeSlice<'_, L>,
+fn anchor<L: Lang, A>(
+    slice: &NodeSlice<'_, L, A>,
 ) -> (SourceSpan<L::SourceOrigin>, Arc<ParsingState<L>>) {
     match slice.first() {
         Some(first) => (
@@ -352,12 +382,126 @@ fn covering<O: crate::source::SourceOrigin>(
     }
 }
 
-fn stage_piece<L: Lang>(
-    builder: &mut NodeTreeBuilder<L>,
-    piece: &Piece<'_, L>,
+// --- part contexts (the annotation-mint callback's facts) -------------------------------
+
+/// The shared facts behind the per-producer part contexts (internal currency;
+/// the public wrappers stay opaque per-op types).
+struct PartFacts<'t, L: Lang, A> {
+    /// The input node this output node derives from; `None` for synthesized
+    /// nodes (segment/value `List` wrappers and the root).
+    original: Option<NodeRef<'t, L, A>>,
+    /// The cut piece's text, when the output node is a boundary partial of a
+    /// chars node.
+    partial: Option<&'t str>,
+    /// The segment (`split_at_chars`) or entry (keyval-shaped producers) the
+    /// output node belongs to; `None` for the root.
+    index: Option<usize>,
+}
+
+/// What [`split_at_chars`]'s annotation callback is told about one staged
+/// output node — only what the callback cannot recover itself. Opaque and
+/// accessor-based; one value per staged node (copies, boundary partials, and
+/// the synthesized segment `List`s and root).
+pub struct SplitAtCharsPart<'t, L: Lang, A = ()> {
+    facts: PartFacts<'t, L, A>,
+}
+
+impl<'t, L: Lang, A> SplitAtCharsPart<'t, L, A> {
+    /// The input node this output node derives from — a copied node's source,
+    /// or the chars node a partial was cut out of. `None` exactly for the
+    /// synthesized nodes: the per-segment `List` wrappers and the root `List`.
+    pub fn original(&self) -> Option<NodeRef<'t, L, A>> {
+        self.facts.original
+    }
+
+    /// Whether the output node is a boundary **partial** — a fresh chars node
+    /// cut out of [`original()`](SplitAtCharsPart::original) by a separator
+    /// occurrence (partials are cut, not copied).
+    pub fn is_partial(&self) -> bool {
+        self.facts.partial.is_some()
+    }
+
+    /// The partial's text ([`is_partial()`](SplitAtCharsPart::is_partial)
+    /// distinguishes `None` = not a partial).
+    pub fn partial_text(&self) -> Option<&'t str> {
+        self.facts.partial
+    }
+
+    /// Which segment the output node belongs to (source order); `None` exactly
+    /// for the root `List`.
+    pub fn segment_index(&self) -> Option<usize> {
+        self.facts.index
+    }
+}
+
+impl<L: Lang, A> fmt::Debug for SplitAtCharsPart<'_, L, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SplitAtCharsPart")
+            .field("original", &self.facts.original.map(|node| node.id()))
+            .field("partial", &self.facts.partial)
+            .field("segment_index", &self.facts.index)
+            .finish()
+    }
+}
+
+/// What the annotation callbacks of the [`KeyVals`]-producing helpers
+/// ([`parse_keyval`], [`split_embellishments`], [`split_tack_on_fields`]) are
+/// told about one staged output node — the [`SplitAtCharsPart`] facts with the
+/// entry index as the discriminant (keys are plain strings, not nodes, so no
+/// key-side parts arise).
+pub struct KeyValsPart<'t, L: Lang, A = ()> {
+    facts: PartFacts<'t, L, A>,
+}
+
+impl<'t, L: Lang, A> KeyValsPart<'t, L, A> {
+    /// The input node this output node derives from; `None` exactly for the
+    /// synthesized nodes: the per-value `List` wrappers and the root `List`.
+    pub fn original(&self) -> Option<NodeRef<'t, L, A>> {
+        self.facts.original
+    }
+
+    /// Whether the output node is a boundary partial (cut at a `,`/`=` by
+    /// [`parse_keyval`]; the run readers never cut).
+    pub fn is_partial(&self) -> bool {
+        self.facts.partial.is_some()
+    }
+
+    /// The partial's text (`None` = not a partial).
+    pub fn partial_text(&self) -> Option<&'t str> {
+        self.facts.partial
+    }
+
+    /// Which entry (source order, duplicates counted) the output node belongs
+    /// to; `None` exactly for the root `List`.
+    pub fn entry_index(&self) -> Option<usize> {
+        self.facts.index
+    }
+}
+
+impl<L: Lang, A> fmt::Debug for KeyValsPart<'_, L, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyValsPart")
+            .field("original", &self.facts.original.map(|node| node.id()))
+            .field("partial", &self.facts.partial)
+            .field("entry_index", &self.facts.index)
+            .finish()
+    }
+}
+
+/// The producers' internal mint shape: facts in, annotation out (the public
+/// callbacks are adapted onto this via the per-op wrapper types).
+type Mint<'m, 't, L, A, B> = &'m mut dyn FnMut(PartFacts<'t, L, A>) -> B;
+
+fn stage_piece<'t, L: Lang, A, B>(
+    builder: &mut NodeTreeBuilder<L, B>,
+    piece: &Piece<'t, L, A>,
+    index: Option<usize>,
+    mint: Mint<'_, 't, L, A, B>,
 ) -> Result<BuildId, NodeBuildError> {
     let Some(sub) = &piece.part else {
-        return copy_subtree_into(builder, piece.node, &mut |_| ());
+        return copy_subtree_into(builder, piece.node, &mut |original| {
+            mint(PartFacts { original: Some(original), partial: None, index })
+        });
     };
     let NodeKind::Chars { content, .. } = piece.node.kind() else {
         unreachable!("parts are only minted for Chars nodes (split_pieces)")
@@ -382,23 +526,28 @@ fn stage_piece<L: Lang>(
     };
     // Boundary partials are fresh nodes: their ext is minted properly via
     // `make_node_ext` (the explicit transform-side recipe; copies keep their exts).
+    let partial = piece_text(piece).expect("chars kind resolves text");
+    let annotation =
+        mint(PartFacts { original: Some(piece.node), partial: Some(partial), index });
     let kind = NodeKind::chars(content);
     let state = piece.node.parsing_state().clone();
     let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
-    builder.add(kind, span, state, Vec::new(), ext, ())
+    builder.add(kind, span, state, Vec::new(), ext, annotation)
 }
 
 /// Stage one segment as a `List` node over its pieces. Empty segments (keyval's
 /// explicitly-empty values) anchor at the fallback span/state.
-fn stage_segment_list<L: Lang>(
-    builder: &mut NodeTreeBuilder<L>,
-    pieces: &[Piece<'_, L>],
+fn stage_segment_list<'t, L: Lang, A, B>(
+    builder: &mut NodeTreeBuilder<L, B>,
+    pieces: &[Piece<'t, L, A>],
     fallback_span: &SourceSpan<L::SourceOrigin>,
     fallback_state: &Arc<ParsingState<L>>,
+    index: usize,
+    mint: Mint<'_, 't, L, A, B>,
 ) -> Result<BuildId, NodeBuildError> {
     let mut children = Vec::with_capacity(pieces.len());
     for piece in pieces {
-        children.push(stage_piece(builder, piece)?);
+        children.push(stage_piece(builder, piece, Some(index), mint)?);
     }
     let (span, state) = match (pieces.first(), pieces.last()) {
         (Some(first), Some(last)) => (
@@ -407,10 +556,12 @@ fn stage_segment_list<L: Lang>(
         ),
         _ => (fallback_span.clone(), fallback_state.clone()),
     };
-    // Synthesized `List` wrappers are fresh nodes too: mint via `make_node_ext`.
+    // Synthesized `List` wrappers are fresh nodes too: mint via `make_node_ext`;
+    // their annotation comes from the callback with no original node.
+    let annotation = mint(PartFacts { original: None, partial: None, index: Some(index) });
     let kind = NodeKind::list();
     let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children));
-    builder.add(kind, span, state, children, ext, ())
+    builder.add(kind, span, state, children, ext, annotation)
 }
 
 // --- split_at_chars ---------------------------------------------------------------------
@@ -423,16 +574,50 @@ fn stage_segment_list<L: Lang>(
 /// segments (adjacent, leading, or trailing separators) are dropped, matching
 /// pylatexenc's default.
 ///
-/// The segments live in one new tree owned by the returned [`Split`] (module docs:
-/// copies + fresh boundary partials with exact sub-spans); access them as
-/// [`NodeSlice`]s via [`Split::segment`]/[`Split::segments`].
+/// The segments live in one new tree owned by the returned [`SplitAtChars`] (module
+/// docs: copies + fresh boundary partials with exact sub-spans); access them as
+/// [`NodeSlice`]s via [`SplitAtChars::segment`]/[`SplitAtChars::segments`].
+///
+/// `annotate` mints every output node's annotation from its
+/// [`SplitAtCharsPart`] facts (module docs; annotation minting only — node
+/// edits are [`techy::transform`](crate::transform)'s job). The input may carry
+/// any annotation type; the shorthands are
+/// [`split_at_chars_drop_annotations`] (`B = ()`) and
+/// [`split_at_chars_keep_annotations`] (`A → A` clone-through).
+///
+/// ```
+/// use techy::core::{Language, ParsingState};
+/// use techy::core::node::NodeId;
+/// use techy::error::Recovery;
+/// use techy::extract;
+/// use techy::latexlike::{Latexlike, LatexlikeDriver};
+///
+/// let language: Language<Latexlike> = Language::new(
+///     LatexlikeDriver::new(Recovery::Strict),
+///     ParsingState::lang_initial(),
+/// );
+/// let tree = language.parse("ab,c").unwrap().tree;
+///
+/// // Mint each output node's annotation: the original node's id, if any.
+/// let split = extract::split_at_chars(tree.root().children(), ",", |part| {
+///     part.original().map(|node| node.id())
+/// })
+/// .unwrap();
+/// let ab = split.segment(0).unwrap().first().unwrap();
+/// // The partial "ab" was cut out of the input's one chars node:
+/// assert_eq!(*ab.annotation(), Some(tree.root().child(0).unwrap().id()));
+/// // Synthesized wrappers derive from no input node:
+/// assert_eq!(*split.tree().root().annotation(), None::<NodeId>);
+/// ```
 ///
 /// Errors: [`ExtractError::EmptySeparator`] for an empty `sep`;
 /// [`ExtractError::Build`] if result-tree construction fails.
-pub fn split_at_chars<L: Lang>(
-    nodes: NodeSlice<'_, L>,
+pub fn split_at_chars<'t, L: Lang, A, B>(
+    nodes: NodeSlice<'t, L, A>,
     sep: &str,
-) -> Result<Split<L>, ExtractError> {
+    mut annotate: impl FnMut(&SplitAtCharsPart<'t, L, A>) -> B,
+) -> Result<SplitAtChars<L, B>, ExtractError> {
+    let mut mint = |facts: PartFacts<'t, L, A>| annotate(&SplitAtCharsPart { facts });
     if sep.is_empty() {
         return Err(ExtractError::EmptySeparator);
     }
@@ -441,27 +626,60 @@ pub fn split_at_chars<L: Lang>(
 
     let mut builder = NodeTreeBuilder::new();
     let mut lists = Vec::with_capacity(segments.len());
-    for segment in &segments {
-        lists.push(stage_segment_list(&mut builder, segment, &anchor_span, &anchor_state)?);
+    for (i, segment) in segments.iter().enumerate() {
+        lists.push(stage_segment_list(
+            &mut builder,
+            segment,
+            &anchor_span,
+            &anchor_state,
+            i,
+            &mut mint,
+        )?);
     }
     let span = match (segments.first().and_then(|s| s.first()), segments.last().and_then(|s| s.last()))
     {
         (Some(first), Some(last)) => covering(&piece_span(first), &piece_span(last)),
         _ => anchor_span,
     };
+    let annotation = mint(PartFacts { original: None, partial: None, index: None });
     let kind = NodeKind::list();
     let ext = L::make_node_ext(&kind, &span, &anchor_state, builder.staged_children(&lists));
-    let root = builder.add(kind, span, anchor_state, lists, ext, ())?;
-    Ok(Split { tree: builder.finish(root)? })
+    let root = builder.add(kind, span, anchor_state, lists, ext, annotation)?;
+    Ok(SplitAtChars { tree: builder.finish(root)? })
+}
+
+/// [`split_at_chars`] with unit output annotations (`B = ()`).
+pub fn split_at_chars_drop_annotations<L: Lang, A>(
+    nodes: NodeSlice<'_, L, A>,
+    sep: &str,
+) -> Result<SplitAtChars<L>, ExtractError> {
+    split_at_chars(nodes, sep, |_| ())
+}
+
+/// [`split_at_chars`] cloning annotations through: every copy and partial keeps
+/// its [`original()`](SplitAtCharsPart::original) node's annotation; synthesized
+/// nodes get `A::default()`. (The `Clone + Default` demand lives only here —
+/// the general form has no annotation bounds.)
+pub fn split_at_chars_keep_annotations<L: Lang, A: Clone + Default>(
+    nodes: NodeSlice<'_, L, A>,
+    sep: &str,
+) -> Result<SplitAtChars<L, A>, ExtractError> {
+    split_at_chars(nodes, sep, keep_annotation)
+}
+
+/// The `_keep_annotations` mint: clone through, default for synthesized nodes.
+fn keep_annotation<'t, L: Lang, A: Clone + Default>(part: &SplitAtCharsPart<'t, L, A>) -> A {
+    part.original().map(|node| node.annotation().clone()).unwrap_or_default()
 }
 
 /// The result of [`split_at_chars`]: the split segments, backed by one owned
-/// [`NodeTree`] (root `List`, one `List` child per segment).
-pub struct Split<L: Lang> {
-    tree: NodeTree<L>,
+/// [`NodeTree`] (root `List`, one `List` child per segment; annotations `B`
+/// minted by the producer's callback).
+pub struct SplitAtChars<L: Lang, B = ()> {
+    tree: NodeTree<L, B>,
 }
 
-impl<L: Lang> Split<L> {
+impl<L: Lang, B> SplitAtChars<L, B> {
     /// The number of segments.
     pub fn len(&self) -> usize {
         self.tree.root().child_count()
@@ -473,30 +691,30 @@ impl<L: Lang> Split<L> {
     }
 
     /// Segment `i`'s nodes.
-    pub fn segment(&self, i: usize) -> Option<NodeSlice<'_, L>> {
+    pub fn segment(&self, i: usize) -> Option<NodeSlice<'_, L, B>> {
         Some(self.tree.root().child(i)?.children())
     }
 
     /// The segments, in source order.
-    pub fn segments(&self) -> impl Iterator<Item = NodeSlice<'_, L>> {
+    pub fn segments(&self) -> impl Iterator<Item = NodeSlice<'_, L, B>> {
         self.tree.root().children().iter().map(|list| list.children())
     }
 
     /// The backing tree: root `List` with one `List` child per segment. A derived
     /// view-tree — sibling spans do not tile (separators are omitted; module docs).
-    pub fn tree(&self) -> &NodeTree<L> {
+    pub fn tree(&self) -> &NodeTree<L, B> {
         &self.tree
     }
 
     /// Consume into the backing tree.
-    pub fn into_tree(self) -> NodeTree<L> {
+    pub fn into_tree(self) -> NodeTree<L, B> {
         self.tree
     }
 }
 
-impl<L: Lang> fmt::Debug for Split<L> {
+impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Split").field("segments", &self.len()).finish()
+        f.debug_struct("SplitAtChars").field("segments", &self.len()).finish()
     }
 }
 
@@ -518,7 +736,15 @@ impl<L: Lang> fmt::Debug for Split<L> {
 ///
 /// Errors: [`ExtractError::NonCharsContent`] when a key does not flatten to characters;
 /// [`ExtractError::Build`] if result-tree construction fails.
-pub fn parse_keyval<L: Lang>(nodes: NodeSlice<'_, L>) -> Result<KeyVals<L>, ExtractError> {
+///
+/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
+/// facts (module docs); the shorthands are [`parse_keyval_drop_annotations`]
+/// and [`parse_keyval_keep_annotations`].
+pub fn parse_keyval<'t, L: Lang, A, B>(
+    nodes: NodeSlice<'t, L, A>,
+    mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,
+) -> Result<KeyVals<L, B>, ExtractError> {
+    let mut mint = |facts: PartFacts<'t, L, A>| annotate(&KeyValsPart { facts });
     let (anchor_span, anchor_state) = anchor(&nodes);
     let comma_parts = split_pieces(nodes.iter().map(whole), ",", None, false);
 
@@ -537,6 +763,8 @@ pub fn parse_keyval<L: Lang>(nodes: NodeSlice<'_, L>) -> Result<KeyVals<L>, Extr
                     &pieces,
                     &anchor_span,
                     &anchor_state,
+                    entries.len(),
+                    &mut mint,
                 )?);
                 Some(value_lists.len() - 1)
             }
@@ -545,23 +773,46 @@ pub fn parse_keyval<L: Lang>(nodes: NodeSlice<'_, L>) -> Result<KeyVals<L>, Extr
         entries.push((key.trim().into(), value));
     }
 
-    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
+}
+
+/// [`parse_keyval`] with unit output annotations (`B = ()`).
+pub fn parse_keyval_drop_annotations<L: Lang, A>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L>, ExtractError> {
+    parse_keyval(nodes, |_| ())
+}
+
+/// [`parse_keyval`] cloning annotations through (`A: Clone + Default`,
+/// bound only here): copies and partials keep their original node's annotation,
+/// synthesized nodes get `A::default()`.
+pub fn parse_keyval_keep_annotations<L: Lang, A: Clone + Default>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L, A>, ExtractError> {
+    parse_keyval(nodes, keep_keyval_annotation)
+}
+
+/// The keyval-family `_keep_annotations` mint.
+fn keep_keyval_annotation<'t, L: Lang, A: Clone + Default>(part: &KeyValsPart<'t, L, A>) -> A {
+    part.original().map(|node| node.annotation().clone()).unwrap_or_default()
 }
 
 /// Assemble a [`KeyVals`] from staged value lists and a `(key, value-list index)`
 /// table — the shared tail of [`parse_keyval`], [`split_embellishments`], and
 /// [`split_tack_on_fields`].
-fn finish_keyvals<L: Lang>(
-    mut builder: NodeTreeBuilder<L>,
+fn finish_keyvals<'t, L: Lang, A, B>(
+    mut builder: NodeTreeBuilder<L, B>,
     value_lists: Vec<BuildId>,
     entries: Vec<(Box<str>, Option<usize>)>,
     anchor_span: SourceSpan<L::SourceOrigin>,
     anchor_state: Arc<ParsingState<L>>,
-) -> Result<KeyVals<L>, ExtractError> {
+    mint: Mint<'_, 't, L, A, B>,
+) -> Result<KeyVals<L, B>, ExtractError> {
+    let annotation = mint(PartFacts { original: None, partial: None, index: None });
     let kind = NodeKind::list();
     let ext =
         L::make_node_ext(&kind, &anchor_span, &anchor_state, builder.staged_children(&value_lists));
-    let root = builder.add(kind, anchor_span, anchor_state, value_lists, ext, ())?;
+    let root = builder.add(kind, anchor_span, anchor_state, value_lists, ext, annotation)?;
     let tree = builder.finish(root)?;
     // The root's children are the staged value lists, in staging order.
     let value_ids: Vec<NodeId> = tree.root().children().iter().map(|list| list.id()).collect();
@@ -576,7 +827,7 @@ fn finish_keyvals<L: Lang>(
 
 /// Whether `node` is skippable run noise — a comment, or a whitespace-only chars node
 /// (the staged form of pre-entry whitespace in argument regions).
-fn is_run_noise<L: Lang>(node: &NodeRef<'_, L>) -> bool {
+fn is_run_noise<L: Lang, A>(node: &NodeRef<'_, L, A>) -> bool {
     match node.kind() {
         NodeKind::Comment { .. } => true,
         NodeKind::Chars { .. } => node
@@ -600,9 +851,15 @@ fn is_run_noise<L: Lang>(node: &NodeRef<'_, L>) -> bool {
 /// order, [`get`](KeyVals::get) = last occurrence, and
 /// [`value_content`](KeyValEntry::value_content) unwraps the usual lone `{…}` value
 /// group (`^{ab}` → the `ab` content).
-pub fn split_embellishments<L: Lang>(
-    nodes: NodeSlice<'_, L>,
-) -> Result<KeyVals<L>, ExtractError> {
+/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
+/// facts (module docs); the shorthands are
+/// [`split_embellishments_drop_annotations`] and
+/// [`split_embellishments_keep_annotations`].
+pub fn split_embellishments<'t, L: Lang, A, B>(
+    nodes: NodeSlice<'t, L, A>,
+    mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,
+) -> Result<KeyVals<L, B>, ExtractError> {
+    let mut mint = |facts: PartFacts<'t, L, A>| annotate(&KeyValsPart { facts });
     let (anchor_span, anchor_state) = anchor(&nodes);
     let mut builder = NodeTreeBuilder::new();
     let mut value_lists: Vec<BuildId> = Vec::new();
@@ -614,16 +871,38 @@ pub fn split_embellishments<L: Lang>(
         let Some((marker, _close)) = node.group_delimiters() else {
             return Err(ExtractError::UnexpectedContent { node: node.id() });
         };
-        let pieces: Vec<Piece<'_, L>> = node
+        let pieces: Vec<Piece<'_, L, A>> = node
             .children()
             .iter()
             .filter(|child| !is_run_noise(child))
             .map(whole)
             .collect();
-        value_lists.push(stage_segment_list(&mut builder, &pieces, &anchor_span, &anchor_state)?);
+        value_lists.push(stage_segment_list(
+            &mut builder,
+            &pieces,
+            &anchor_span,
+            &anchor_state,
+            entries.len(),
+            &mut mint,
+        )?);
         entries.push((Box::from(marker), Some(value_lists.len() - 1)));
     }
-    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
+}
+
+/// [`split_embellishments`] with unit output annotations (`B = ()`).
+pub fn split_embellishments_drop_annotations<L: Lang, A>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L>, ExtractError> {
+    split_embellishments(nodes, |_| ())
+}
+
+/// [`split_embellishments`] cloning annotations through (`A: Clone + Default`,
+/// bound only here).
+pub fn split_embellishments_keep_annotations<L: Lang, A: Clone + Default>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L, A>, ExtractError> {
+    split_embellishments(nodes, keep_keyval_annotation)
 }
 
 /// Read a tack-on fields argument's content run
@@ -643,9 +922,15 @@ pub fn split_embellishments<L: Lang>(
 /// nodes ([`NodeRef::argument_content_nodes`]). Duplicate fields (repeatable `\label`s)
 /// are preserved in order; [`get`](KeyVals::get) answers with the last,
 /// [`get_combined_with`](KeyVals::get_combined_with) collects them all.
-pub fn split_tack_on_fields<L: Lang>(
-    nodes: NodeSlice<'_, L>,
-) -> Result<KeyVals<L>, ExtractError> {
+/// `annotate` mints every output node's annotation from its [`KeyValsPart`]
+/// facts (module docs); the shorthands are
+/// [`split_tack_on_fields_drop_annotations`] and
+/// [`split_tack_on_fields_keep_annotations`].
+pub fn split_tack_on_fields<'t, L: Lang, A, B>(
+    nodes: NodeSlice<'t, L, A>,
+    mut annotate: impl FnMut(&KeyValsPart<'t, L, A>) -> B,
+) -> Result<KeyVals<L, B>, ExtractError> {
+    let mut mint = |facts: PartFacts<'t, L, A>| annotate(&KeyValsPart { facts });
     let (anchor_span, anchor_state) = anchor(&nodes);
     let mut builder = NodeTreeBuilder::new();
     let mut value_lists: Vec<BuildId> = Vec::new();
@@ -657,7 +942,7 @@ pub fn split_tack_on_fields<L: Lang>(
         let (Some(name), Some(arguments)) = (node.name(), node.arguments()) else {
             return Err(ExtractError::UnexpectedContent { node: node.id() });
         };
-        let mut pieces: Option<Vec<Piece<'_, L>>> = None;
+        let mut pieces: Option<Vec<Piece<'_, L, A>>> = None;
         for i in 0..arguments.len() {
             if let Some(content) = node.argument_content_nodes(i) {
                 pieces.get_or_insert_with(Vec::new).extend(content.iter().map(whole));
@@ -670,6 +955,8 @@ pub fn split_tack_on_fields<L: Lang>(
                     &pieces,
                     &anchor_span,
                     &anchor_state,
+                    entries.len(),
+                    &mut mint,
                 )?);
                 Some(value_lists.len() - 1)
             }
@@ -677,7 +964,22 @@ pub fn split_tack_on_fields<L: Lang>(
         };
         entries.push((Box::from(name), value));
     }
-    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state)
+    finish_keyvals(builder, value_lists, entries, anchor_span, anchor_state, &mut mint)
+}
+
+/// [`split_tack_on_fields`] with unit output annotations (`B = ()`).
+pub fn split_tack_on_fields_drop_annotations<L: Lang, A>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L>, ExtractError> {
+    split_tack_on_fields(nodes, |_| ())
+}
+
+/// [`split_tack_on_fields`] cloning annotations through (`A: Clone + Default`,
+/// bound only here).
+pub fn split_tack_on_fields_keep_annotations<L: Lang, A: Clone + Default>(
+    nodes: NodeSlice<'_, L, A>,
+) -> Result<KeyVals<L, A>, ExtractError> {
+    split_tack_on_fields(nodes, keep_keyval_annotation)
 }
 
 struct KeyValEntryData {
@@ -688,14 +990,15 @@ struct KeyValEntryData {
 
 /// The result of [`parse_keyval`]: the entries **in source order, duplicates
 /// preserved**, with dict-style by-name access ([`get`](KeyVals::get), last occurrence
-/// wins) — values are backed by one owned [`NodeTree`]. Lookup scans the entries
+/// wins) — values are backed by one owned [`NodeTree`] (annotations `B` minted by
+/// the producer's callback). Lookup scans the entries
 /// (keyval lists are small; the `ParsedArguments` no-name-map precedent).
-pub struct KeyVals<L: Lang> {
-    tree: NodeTree<L>,
+pub struct KeyVals<L: Lang, B = ()> {
+    tree: NodeTree<L, B>,
     entries: Vec<KeyValEntryData>,
 }
 
-impl<L: Lang> KeyVals<L> {
+impl<L: Lang, B> KeyVals<L, B> {
     /// The number of entries (duplicates included).
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -707,18 +1010,18 @@ impl<L: Lang> KeyVals<L> {
     }
 
     /// Entry `i`, in source order.
-    pub fn keyval(&self, i: usize) -> Option<KeyValEntry<'_, L>> {
+    pub fn keyval(&self, i: usize) -> Option<KeyValEntry<'_, L, B>> {
         self.entries.get(i).map(|entry| self.view(entry))
     }
 
     /// The **last** entry named `key` — the effective value under LaTeX keyval override
     /// semantics. Earlier occurrences remain reachable through [`iter`](KeyVals::iter).
-    pub fn get(&self, key: &str) -> Option<KeyValEntry<'_, L>> {
+    pub fn get(&self, key: &str) -> Option<KeyValEntry<'_, L, B>> {
         self.entries.iter().rev().find(|entry| &*entry.key == key).map(|entry| self.view(entry))
     }
 
     /// The entries, in source order (duplicates included).
-    pub fn iter(&self) -> impl Iterator<Item = KeyValEntry<'_, L>> {
+    pub fn iter(&self) -> impl Iterator<Item = KeyValEntry<'_, L, B>> {
         self.entries.iter().map(|entry| self.view(entry))
     }
 
@@ -727,13 +1030,15 @@ impl<L: Lang> KeyVals<L> {
     /// consecutive values — "collect the values" for cumulative keys. Occurrences
     /// without a value contribute nothing; an empty `sep` omits the separator nodes.
     /// `Ok(None)` when no entry at all is named `key`. The returned tree's root `List`
-    /// holds the combined run — read it with `tree.root().children()`.
+    /// holds the combined run — read it with `tree.root().children()`. The combined
+    /// tree is annotation-free (`()`): this is a reader convenience, not one of the
+    /// annotation-minting producers.
     pub fn get_combined_with(
         &self,
         key: &str,
         sep: &str,
     ) -> Result<Option<NodeTree<L>>, ExtractError> {
-        let values: Vec<NodeSlice<'_, L>> = self
+        let values: Vec<NodeSlice<'_, L, B>> = self
             .entries
             .iter()
             .filter(|entry| &*entry.key == key)
@@ -775,16 +1080,16 @@ impl<L: Lang> KeyVals<L> {
 
     /// The backing tree: root `List` with one `List` child per value-bearing entry. A
     /// derived view-tree (module docs).
-    pub fn tree(&self) -> &NodeTree<L> {
+    pub fn tree(&self) -> &NodeTree<L, B> {
         &self.tree
     }
 
     /// Consume into the backing tree. The entry table is dropped — extract keys first.
-    pub fn into_tree(self) -> NodeTree<L> {
+    pub fn into_tree(self) -> NodeTree<L, B> {
         self.tree
     }
 
-    fn view<'k>(&'k self, entry: &'k KeyValEntryData) -> KeyValEntry<'k, L> {
+    fn view<'k>(&'k self, entry: &'k KeyValEntryData) -> KeyValEntry<'k, L, B> {
         KeyValEntry {
             key: &entry.key,
             value: entry.value.map(|id| self.tree.node(id).children()),
@@ -792,7 +1097,7 @@ impl<L: Lang> KeyVals<L> {
     }
 }
 
-impl<L: Lang> fmt::Debug for KeyVals<L> {
+impl<L: Lang, B> fmt::Debug for KeyVals<L, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut map = f.debug_map();
         for entry in &self.entries {
@@ -803,12 +1108,12 @@ impl<L: Lang> fmt::Debug for KeyVals<L> {
 }
 
 /// One [`KeyVals`] entry, viewed: the trimmed key and the raw value nodes.
-pub struct KeyValEntry<'k, L: Lang> {
+pub struct KeyValEntry<'k, L: Lang, B = ()> {
     key: &'k str,
-    value: Option<NodeSlice<'k, L>>,
+    value: Option<NodeSlice<'k, L, B>>,
 }
 
-impl<'k, L: Lang> KeyValEntry<'k, L> {
+impl<'k, L: Lang, B> KeyValEntry<'k, L, B> {
     /// The key (whitespace-trimmed; see [`parse_keyval`]).
     pub fn key(&self) -> &'k str {
         self.key
@@ -816,7 +1121,7 @@ impl<'k, L: Lang> KeyValEntry<'k, L> {
 
     /// The raw value nodes: `None` = the key came without `=`; an empty slice = `key=`
     /// with an explicitly empty value.
-    pub fn value(&self) -> Option<NodeSlice<'k, L>> {
+    pub fn value(&self) -> Option<NodeSlice<'k, L, B>> {
         self.value
     }
 
@@ -824,7 +1129,7 @@ impl<'k, L: Lang> KeyValEntry<'k, L> {
     /// exactly one group node (`legend={a,b}`), its contents; otherwise the raw value.
     /// This is pylatexenc's `extract_value_group_contents=True` as an accessor instead
     /// of a parse-time knob — [`value`](KeyValEntry::value) always keeps the raw shape.
-    pub fn value_content(&self) -> Option<NodeSlice<'k, L>> {
+    pub fn value_content(&self) -> Option<NodeSlice<'k, L, B>> {
         let value = self.value?;
         if value.len() == 1 {
             let node = value.first().expect("len 1");
@@ -836,15 +1141,15 @@ impl<'k, L: Lang> KeyValEntry<'k, L> {
     }
 }
 
-impl<L: Lang> Clone for KeyValEntry<'_, L> {
+impl<L: Lang, B> Clone for KeyValEntry<'_, L, B> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<L: Lang> Copy for KeyValEntry<'_, L> {}
+impl<L: Lang, B> Copy for KeyValEntry<'_, L, B> {}
 
-impl<L: Lang> fmt::Debug for KeyValEntry<'_, L> {
+impl<L: Lang, B> fmt::Debug for KeyValEntry<'_, L, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeyValEntry")
             .field("key", &self.key)
@@ -922,7 +1227,7 @@ mod tests {
     fn split_at_chars_groups_protect_their_interior() {
         // pylatexenc's own docstring example (`\cite`-style argument content).
         let tree = parse("key1,key2,my{special,key},keyN");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert_eq!(split.len(), 4);
         assert_eq!(texts(split.segment(0).unwrap()), ["key1"]);
         assert_eq!(texts(split.segment(1).unwrap()), ["key2"]);
@@ -939,7 +1244,7 @@ mod tests {
     #[test]
     fn split_segments_carry_exact_spans() {
         let tree = parse("key1,my{a,b}tail");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert_eq!(split.len(), 2);
         // Boundary partials are span-backed sub-spans into the *same* source.
         let seg0 = split.segment(0).unwrap();
@@ -957,19 +1262,19 @@ mod tests {
     #[test]
     fn split_at_chars_drops_empty_segments() {
         let tree = parse("a,,b");
-        assert_eq!(split_at_chars(tree.root().children(), ",").unwrap().len(), 2);
+        assert_eq!(split_at_chars_drop_annotations(tree.root().children(), ",").unwrap().len(), 2);
         let tree = parse(",a,");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert_eq!(split.len(), 1);
         assert_eq!(texts(split.segment(0).unwrap()), ["a"]);
         let tree = parse(",,");
-        assert!(split_at_chars(tree.root().children(), ",").unwrap().is_empty());
+        assert!(split_at_chars_drop_annotations(tree.root().children(), ",").unwrap().is_empty());
     }
 
     #[test]
     fn split_at_chars_multi_char_separator_and_errors() {
         let tree = parse("a::b::c");
-        let split = split_at_chars(tree.root().children(), "::").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), "::").unwrap();
         assert_eq!(split.len(), 3);
         assert_eq!(
             split.segments().map(|s| s.source_text().unwrap().to_string()).collect::<Vec<_>>(),
@@ -977,7 +1282,7 @@ mod tests {
         );
 
         assert_eq!(
-            split_at_chars(tree.root().children(), "").unwrap_err(),
+            split_at_chars_drop_annotations(tree.root().children(), "").unwrap_err(),
             ExtractError::EmptySeparator
         );
     }
@@ -985,13 +1290,13 @@ mod tests {
     #[test]
     fn split_of_empty_or_separator_free_input() {
         let tree = parse("");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert!(split.is_empty());
         assert!(split.segment(0).is_none());
 
         // No separator at all: one segment, the whole run.
         let tree = parse("a{b}c");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert_eq!(split.len(), 1);
         assert_eq!(split.segment(0).unwrap().source_text(), Some("a{b}c"));
     }
@@ -1000,8 +1305,8 @@ mod tests {
     fn split_segments_are_ordinary_node_lists() {
         // The 7.8 uniformity goal: a segment feeds every other helper.
         let tree = parse("a=1,b={x,y}");
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
-        let resplit = split_at_chars(split.segment(0).unwrap(), "=").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
+        let resplit = split_at_chars_drop_annotations(split.segment(0).unwrap(), "=").unwrap();
         assert_eq!(resplit.len(), 2);
         assert_eq!(content_as_chars(resplit.segment(1).unwrap()).unwrap(), "1");
         // Document-order traversal works on the derived tree too.
@@ -1016,7 +1321,7 @@ mod tests {
         // Materialized trees have owned chars content: no byte mapping to subdivide, so
         // a boundary partial keeps the whole original node's span (documented).
         let tree = parse("ab,cd").materialize();
-        let split = split_at_chars(tree.root().children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(tree.root().children(), ",").unwrap();
         assert_eq!(split.len(), 2);
         let seg0 = split.segment(0).unwrap();
         assert_eq!(seg0.first().unwrap().chars(), Some("ab"));
@@ -1028,7 +1333,7 @@ mod tests {
     #[test]
     fn parse_keyval_entries_in_source_order() {
         let tree = parse("width=2cm,legend={a,b},draft,label=");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         assert_eq!(keyvals.len(), 4);
 
         let width = keyvals.keyval(0).unwrap();
@@ -1053,21 +1358,21 @@ mod tests {
     #[test]
     fn parse_keyval_trims_keys_and_flattens_grouped_keys() {
         let tree = parse(" spaced key = v ,{grouped}=w");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         assert_eq!(keyvals.keyval(0).unwrap().key(), "spaced key");
         // Values stay raw — leading whitespace node included.
         assert_eq!(content_as_chars(keyvals.keyval(0).unwrap().value().unwrap()).unwrap(), " v ");
         assert_eq!(keyvals.keyval(1).unwrap().key(), "grouped");
         // Only the *first* top-level `=` splits: later ones stay in the value.
         let tree = parse("a=b=c");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         assert_eq!(content_as_chars(keyvals.get("a").unwrap().value().unwrap()).unwrap(), "b=c");
     }
 
     #[test]
     fn parse_keyval_duplicates_last_wins_via_get() {
         let tree = parse("a=1,b=9,a=2");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         assert_eq!(keyvals.len(), 3); // duplicates preserved
         assert_eq!(content_as_chars(keyvals.get("a").unwrap().value().unwrap()).unwrap(), "2");
         assert_eq!(content_as_chars(keyvals.keyval(0).unwrap().value().unwrap()).unwrap(), "1");
@@ -1079,7 +1384,7 @@ mod tests {
     fn parse_keyval_rejects_non_chars_keys() {
         let tree = parse("a--b=1");
         assert!(matches!(
-            parse_keyval(tree.root().children()),
+            parse_keyval_drop_annotations(tree.root().children()),
             Err(ExtractError::NonCharsContent { .. })
         ));
     }
@@ -1087,7 +1392,7 @@ mod tests {
     #[test]
     fn get_combined_with_joins_all_occurrences() {
         let tree = parse("a=1,b=x,a={2,3}");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         let combined = keyvals.get_combined_with("a", ";").unwrap().unwrap();
         let run = combined.root().children();
         assert_eq!(run.len(), 3);
@@ -1102,11 +1407,11 @@ mod tests {
         // separator nodes.
         assert!(keyvals.get_combined_with("zzz", ";").unwrap().is_none());
         let tree = parse("a,a=1");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         let combined = keyvals.get_combined_with("a", ";").unwrap().unwrap();
         assert_eq!(combined.root().children().len(), 1);
         let tree = parse("a=1,a=2");
-        let keyvals = parse_keyval(tree.root().children()).unwrap();
+        let keyvals = parse_keyval_drop_annotations(tree.root().children()).unwrap();
         let combined = keyvals.get_combined_with("a", "").unwrap().unwrap();
         assert_eq!(texts(combined.root().children()), ["1", "2"]);
     }
@@ -1120,21 +1425,194 @@ mod tests {
         // Plain content is neither noise nor an entry of the expected shape.
         let tree = parse("a{b}");
         assert!(matches!(
-            split_embellishments(tree.root().children()),
+            split_embellishments_drop_annotations(tree.root().children()),
             Err(ExtractError::UnexpectedContent { .. })
         ));
         assert!(matches!(
-            split_tack_on_fields(tree.root().children()),
+            split_tack_on_fields_drop_annotations(tree.root().children()),
             Err(ExtractError::UnexpectedContent { .. })
         ));
 
         // Empty input and pure noise (whitespace, comments) read as no entries.
         let tree = parse("");
-        assert!(split_embellishments(tree.root().children()).unwrap().is_empty());
-        assert!(split_tack_on_fields(tree.root().children()).unwrap().is_empty());
+        assert!(split_embellishments_drop_annotations(tree.root().children()).unwrap().is_empty());
+        assert!(split_tack_on_fields_drop_annotations(tree.root().children()).unwrap().is_empty());
         let tree = parse(" %c\n ");
-        assert!(split_embellishments(tree.root().children()).unwrap().is_empty());
-        assert!(split_tack_on_fields(tree.root().children()).unwrap().is_empty());
+        assert!(split_embellishments_drop_annotations(tree.root().children()).unwrap().is_empty());
+        assert!(split_tack_on_fields_drop_annotations(tree.root().children()).unwrap().is_empty());
+    }
+
+    // --- annotation minting (the producer triples) --------------------------------------
+
+    #[test]
+    fn split_at_chars_general_form_mints_from_part_facts() {
+        // "ab,{c}d": segment 0 = partial "ab"; segment 1 = copied group + partial "d".
+        let tree = parse("ab,{c}d");
+        let chars_id = tree.root().child(0).unwrap().id();
+        let group_id = tree.root().child(1).unwrap().id();
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct Mint {
+            original: Option<crate::node::NodeId>,
+            partial: Option<String>,
+            segment: Option<usize>,
+        }
+        let split = split_at_chars(tree.root().children(), ",", |part| Mint {
+            original: part.original().map(|node| node.id()),
+            partial: part.partial_text().map(String::from),
+            segment: part.segment_index(),
+        })
+        .unwrap();
+
+        // The root and the segment wrappers are synthesized: no original.
+        let root = split.tree().root();
+        assert_eq!(
+            *root.annotation(),
+            Mint { original: None, partial: None, segment: None }
+        );
+        assert_eq!(
+            *root.child(0).unwrap().annotation(),
+            Mint { original: None, partial: None, segment: Some(0) }
+        );
+
+        // Segment 0: the partial "ab", cut out of the input's first chars node.
+        let ab = split.segment(0).unwrap().first().unwrap();
+        assert_eq!(
+            *ab.annotation(),
+            Mint {
+                original: Some(chars_id),
+                partial: Some("ab".into()),
+                segment: Some(0)
+            }
+        );
+
+        // Segment 1: the copied group derives from the input group (not a
+        // partial), its child from the inner chars node; then the partial "d".
+        let seg1 = split.segment(1).unwrap();
+        let group = seg1.get(0).unwrap();
+        assert_eq!(
+            *group.annotation(),
+            Mint { original: Some(group_id), partial: None, segment: Some(1) }
+        );
+        assert!(group.annotation().partial.is_none());
+        let inner = group.child(0).unwrap();
+        assert_eq!(
+            inner.annotation().original,
+            Some(tree.root().child(1).unwrap().child(0).unwrap().id())
+        );
+        // "d" is its own chars node (runs break at the group): a whole copy,
+        // not a partial.
+        let d = seg1.get(1).unwrap();
+        assert_eq!(d.annotation().partial, None);
+        assert_eq!(d.annotation().original, Some(tree.root().child(2).unwrap().id()));
+    }
+
+    #[test]
+    fn split_at_chars_keep_annotations_clones_through() {
+        // Annotate the input first (A = u32: the node's own index), then split:
+        // copies and partials keep their original's annotation, synthesized
+        // wrappers get the default.
+        let tree = parse("x,{y}").annotate(|node| node.id().index() as u32 + 100);
+        let split = split_at_chars_keep_annotations(tree.root().children(), ",").unwrap();
+
+        let x = split.segment(0).unwrap().first().unwrap();
+        assert_eq!(*x.annotation(), *tree.root().child(0).unwrap().annotation());
+        let group = split.segment(1).unwrap().first().unwrap();
+        assert_eq!(*group.annotation(), *tree.root().child(1).unwrap().annotation());
+        // Synthesized wrapper/root: A::default().
+        assert_eq!(*split.tree().root().annotation(), 0);
+        assert_eq!(*split.tree().root().child(0).unwrap().annotation(), 0);
+    }
+
+    #[test]
+    fn producers_accept_any_input_annotation_type() {
+        // Input genericity (T5-A8 rider): an annotated tree splits and re-splits.
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct Stage(&'static str);
+
+        let tree = parse("a=1,b={x,y}").annotate(|_| Stage("analysis"));
+        let keyvals = parse_keyval(tree.root().children(), |part| {
+            (part.entry_index(), part.original().is_some())
+        })
+        .unwrap();
+        assert_eq!(keyvals.len(), 2);
+        // Entry 0's value nodes carry entry index 0; the value-list wrapper is
+        // synthesized (original = false).
+        let value = keyvals.keyval(0).unwrap().value().unwrap();
+        assert_eq!(*value.first().unwrap().annotation(), (Some(0), true));
+        let wrapper = value.first().unwrap().parent().unwrap();
+        assert_eq!(*wrapper.annotation(), (Some(0), false));
+        // Entry 1's grouped value carries entry index 1.
+        let value1 = keyvals.get("b").unwrap().value().unwrap();
+        assert_eq!(value1.first().unwrap().annotation().0, Some(1));
+
+        // And the output composes into the next producer with its own A.
+        let resplit =
+            split_at_chars(value1.first().unwrap().children(), ",", |part| {
+                part.original().map(|n| *n.annotation())
+            })
+            .unwrap();
+        assert_eq!(resplit.len(), 2);
+        assert_eq!(
+            *resplit.segment(0).unwrap().first().unwrap().annotation(),
+            Some((Some(1), true))
+        );
+    }
+
+    #[test]
+    fn keyval_partials_report_their_cut_text() {
+        // parse_keyval cuts at `,` and `=`: the "a" key side is flattened (no
+        // node), but the value partials mint with their cut text.
+        let tree = parse("k=start,rest");
+        let keyvals = parse_keyval(tree.root().children(), |part| {
+            (part.is_partial(), part.partial_text().map(String::from))
+        })
+        .unwrap();
+        let value = keyvals.get("k").unwrap().value().unwrap();
+        assert_eq!(
+            *value.first().unwrap().annotation(),
+            (true, Some("start".to_string()))
+        );
+    }
+
+    #[test]
+    fn run_reader_triples_mint_annotations() {
+        // split_embellishments: groups read as entries (marker = the opening
+        // delimiter); their content copies mint with the entry index.
+        let tree = parse("{p}{q}");
+        let fields = split_embellishments(tree.root().children(), |part| {
+            (part.entry_index(), part.original().is_some())
+        })
+        .unwrap();
+        assert_eq!(fields.len(), 2);
+        let q = fields.keyval(1).unwrap().value().unwrap();
+        assert_eq!(*q.first().unwrap().annotation(), (Some(1), true));
+        assert_eq!(*fields.tree().root().annotation(), (None, false));
+
+        let kept = split_embellishments_keep_annotations(
+            parse("{p}").annotate(|_| 7u32).root().children(),
+        )
+        .unwrap();
+        assert_eq!(*kept.keyval(0).unwrap().value().unwrap().first().unwrap().annotation(), 7);
+
+        // split_tack_on_fields: a zero-argument field records an entry with no
+        // value; only the root is synthesized.
+        let tree = parse(" -- ");
+        let mut calls = 0usize;
+        let fields = split_tack_on_fields(tree.root().children(), |part| {
+            calls += 1;
+            part.entry_index()
+        })
+        .unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.keyval(0).unwrap().key(), "--");
+        assert!(fields.keyval(0).unwrap().value().is_none());
+        assert_eq!(calls, 1); // the root only
+        assert_eq!(*fields.tree().root().annotation(), None);
+        let kept =
+            split_tack_on_fields_keep_annotations(tree.annotate(|_| 3u8).root().children())
+                .unwrap();
+        assert_eq!(*kept.tree().root().annotation(), 0); // synthesized root: default
     }
 
     #[test]
@@ -1143,7 +1621,7 @@ mod tests {
         // split and flattened — here via the environment name-group stand-in `{…}`.
         let tree = parse("{k1,k2{x,y},k3}");
         let group = tree.root().child(0).unwrap();
-        let split = split_at_chars(group.children(), ",").unwrap();
+        let split = split_at_chars_drop_annotations(group.children(), ",").unwrap();
         assert_eq!(split.len(), 3);
         let keys: Vec<_> = split
             .segments()

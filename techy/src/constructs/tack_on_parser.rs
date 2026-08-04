@@ -258,7 +258,7 @@ mod tests {
     use crate::latexlike::{
         argument_specs, CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
     };
-    use crate::extract::{content_as_chars, split_tack_on_fields};
+    use crate::extract::{content_as_chars, split_tack_on_fields_drop_annotations};
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use crate::state::ParsingState;
@@ -368,7 +368,7 @@ mod tests {
         let content: Vec<_> = section.argument_content_nodes(1).unwrap().iter().collect();
         assert_eq!(content.len(), 2);
 
-        let fields = split_tack_on_fields(section.argument_content_nodes(1).unwrap()).unwrap();
+        let fields = split_tack_on_fields_drop_annotations(section.argument_content_nodes(1).unwrap()).unwrap();
         assert_eq!(fields.len(), 2);
         let keys: Vec<_> = fields.iter().map(|entry| entry.key().to_string()).collect();
         assert_eq!(keys, ["label", "label"]);
@@ -418,7 +418,7 @@ mod tests {
         let section = section_node(&result);
         let region: Vec<_> = section.argument_nodes(1).unwrap().iter().collect();
         assert!(region.iter().any(|node| node.comment().is_some()));
-        let fields = split_tack_on_fields(section.argument_content_nodes(1).unwrap()).unwrap();
+        let fields = split_tack_on_fields_drop_annotations(section.argument_content_nodes(1).unwrap()).unwrap();
         assert_eq!(
             content_as_chars(fields.get("label").unwrap().value().unwrap()).unwrap(),
             "x"
@@ -442,7 +442,7 @@ mod tests {
             .with_field("nonumber", Arc::new(MacroSpec::new(vec![])));
         let result = parse_ok(tack_on, r"\section{A}\nonumber\label{x}");
         let section = section_node(&result);
-        let fields = split_tack_on_fields(section.argument_content_nodes(1).unwrap()).unwrap();
+        let fields = split_tack_on_fields_drop_annotations(section.argument_content_nodes(1).unwrap()).unwrap();
         assert_eq!(fields.len(), 2);
         assert!(fields.get("nonumber").unwrap().value().is_none());
         assert_eq!(

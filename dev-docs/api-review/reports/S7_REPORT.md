@@ -25,8 +25,9 @@ Baseline (must not regress): 661 lib + 30 acceptance + 8 derive-conditions +
       (7 more tests; 677 lib green)
 - [x] M4 — content-swap helpers (`restage_argument_with_content`/
       `restage_slot_with_content`) + tests (5 more tests; 682 lib green)
-- [ ] M5 — extract annotation minting: generalized copy machinery, the four
+- [x] M5 — extract annotation minting: generalized copy machinery, the four
       producer triples, part contexts, input genericity, caller updates, tests
+      (5 more tests; 687 lib + 30 doctests green)
 - [ ] M6 — docs + records + gates (rustdoc pass, DR status lines, ARCHITECTURE,
       CLAUDE.md, lib.rs, guide pages; superseded sweep; full gate run; closure)
 
@@ -426,3 +427,41 @@ tests at minimum; full gates at M6).
 - Test-relevant parse fact: whitespace after the command word is the macro's
   `post_space` payload (S5), NOT region noise — inter-argument whitespace is
   the region-noise case the wrapper/noise tests pin (`\a{1} {2}`).
+
+### M5 realization notes
+
+- Producer signatures land per the plan (§ B): the general forms take
+  `impl FnMut(&SplitAtCharsPart<'t, L, A>) -> B` /
+  `impl FnMut(&KeyValsPart<'t, L, A>) -> B`; the callback fires once per staged
+  output node (copies via the generalized `copy_subtree_into` mint route,
+  boundary partials, synthesized wrappers/roots). Unlike the restage visitor's
+  generic-`V` seam, the `impl FnMut` parameter gives closures full
+  expected-type inference — no annotations needed at call sites (the fn
+  doctest shows the bare `|part| …` spelling).
+- Part contexts: `SplitAtCharsPart<'t, L, A = ()>` / `KeyValsPart<'t, L, A = ()>`
+  (D-plan-5 names), opaque wrappers over one internal `PartFacts` currency;
+  the internal mint plumbing is `&mut dyn FnMut(PartFacts…) -> B` to keep the
+  shared helpers' signatures small. `is_partial()` answers via
+  `partial_text().is_some()`; the `_keep_annotations` mints are shared free
+  fns (`keep_annotation`/`keep_keyval_annotation`).
+- `Split` → `SplitAtChars<L, B = ()>`; `KeyVals<L, B = ()>` + `KeyValEntry<'k,
+  L, B = ()>` (the entry view rides the rename; segment/value accessors return
+  `NodeSlice<'_, L, B>`).
+- Entry-index semantics: the index counts *entries* (source order, duplicates
+  included), not value lists — an entry without a value consumes an index with
+  no minted nodes (pinned by the tack-on smoke test).
+- `content_as_chars` + the internal piece machinery generalized over the input
+  annotation type (`A: 't` bound where the compiler demands it);
+  `copy_subtree_into` gained the named input-tree lifetime its stored-`NodeRef`
+  callbacks need.
+- Call-site sweep: constructs/{embellishments,tack_on}_parser.rs tests,
+  latexlike/arguments.rs tests, extract's own tests/doctests, and
+  docs/learn-by-example.md moved to `_drop_annotations` (semantics unchanged);
+  the guide's prose notes the callback-taking bare names.
+- Annotation-flow coverage: the general mint pinned end-to-end on
+  split_at_chars (originals, partial text, segment indices, synthesized-node
+  `None`s) and parse_keyval (entry indices, cut text, input genericity +
+  producer composition); embellishments general+keep; tack-on general+keep
+  smoke (its value path shares `stage_segment_list`/`finish_keyvals` with
+  keyval, and its `_drop` form runs the pre-existing positive-path tests in
+  constructs/tack_on_parser.rs).
