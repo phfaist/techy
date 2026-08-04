@@ -71,16 +71,19 @@ use crate::node::{
     BodySlotExt, BuildId, CallableData, ChildRegion, NodeKind, ParsedArguments,
     ParsedSlot, ParsedSlots, SlotRole,
 };
+use core::marker::PhantomData;
+
 use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
-use super::invocation_syntax::{
-    EnvironmentSideSyntax, EnvironmentSyntax, InvocationSyntax, StdEnvironmentSyntax,
+use super::invocation_syntax::{EnvironmentSideSyntax, EnvironmentSyntax};
+use super::lang::{
+    LatexlikeCallableType, LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang,
 };
 use super::spec::frame_title;
-use super::{CallableType, GroupType, Latexlike};
+use super::Latexlike;
 
 /// The command name that introduces every environment (`\begin`), under which
 /// [`BeginSpec`] is registered in the [`base_package`](super::base_package).
@@ -164,6 +167,14 @@ pub struct EnvironmentInvocation<'p> {
     pub name: &'p str,
     /// The name's span (the name group's interior).
     pub name_span: Span,
+    /// The begin trigger's escape character as written — the canonical escape a
+    /// takeover body composes its terminator spelling from
+    /// ([`VerbatimBehavior`]'s literal `\end{name}`).
+    pub escape_char: char,
+    /// The begin name group's open delimiter as written (off the matched rule).
+    pub name_group_open: &'p str,
+    /// The begin name group's close delimiter as written.
+    pub name_group_close: &'p str,
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the funnel's inner
@@ -172,11 +183,11 @@ pub struct EnvironmentInvocation<'p> {
 /// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
 /// `make_body_parsing_state_delta`), with the declarative standard implementation
 /// behind [`EnvironmentSpec::new`].
-pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
+pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>: fmt::Debug + Send + Sync {
     /// The declarative argument structure of the environment, in invocation order —
     /// parsed right after the `\begin{name}` scaffolding, before the body. Default:
     /// no arguments.
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &[]
     }
 
@@ -187,7 +198,7 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
     fn body_state_delta(
         &self,
         invocation: EnvironmentInvocation<'_>,
-    ) -> Option<ParsingStateDelta<Latexlike>> {
+    ) -> Option<ParsingStateDelta<LLL>> {
         let _ = invocation;
         None
     }
@@ -197,11 +208,12 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
     /// content up to and including the rigid `\end{name}` terminator, staged as one
     /// body `List`. Override for takeover bodies ([`VerbatimBehavior`]'s raw read);
     /// the returned parser must produce an [`EnvironmentBody`] and no pass-through
-    /// delta.
+    /// delta (its reported [terminator facts](EnvironmentBody::terminator) feed the
+    /// invocation-syntax recording).
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
+    ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
         default_body_parser(invocation)
     }
 }
@@ -209,15 +221,15 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
 /// The default body of [`EnvironmentBehavior::make_body_parser`], shared with the
 /// composition's non-[`EnvironmentSpec`] fallback: the core [`EnvironmentBodyParser`]
 /// over the preset's terminator shape.
-fn default_body_parser<'p>(
+fn default_body_parser<'p, LLL: LatexlikeLang>(
     invocation: EnvironmentInvocation<'p>,
-) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
+) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
     Box::new(
         EnvironmentBodyParser::new(
             invocation.trigger_span,
             invocation.name,
             END_COMMAND_NAME,
-            GroupType::Content,
+            LLL::GroupTypeId::content_group(),
         )
         .with_invocation_name_span(invocation.name_span),
     )
@@ -225,14 +237,21 @@ fn default_body_parser<'p>(
 
 /// The declarative standard [`EnvironmentBehavior`] behind [`EnvironmentSpec::new`]:
 /// arguments as plain data, body handling per the trait defaults.
-#[derive(Debug, Default)]
-struct StdEnvironmentBehavior {
-    arguments: Vec<Arc<ArgumentSpec<Latexlike>>>,
+struct StdEnvironmentBehavior<LLL: LatexlikeLang> {
+    arguments: Vec<Arc<ArgumentSpec<LLL>>>,
 }
 
-impl EnvironmentBehavior for StdEnvironmentBehavior {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for StdEnvironmentBehavior<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
+    }
+}
+
+impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StdEnvironmentBehavior")
+            .field("arguments", &self.arguments)
+            .finish()
     }
 }
 
@@ -279,66 +298,95 @@ impl EnvironmentBehavior for StdEnvironmentBehavior {
 /// assert_eq!(body.len(), 1);
 /// assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
 /// ```
-#[derive(Debug, Default)]
-pub struct VerbatimBehavior {
-    arguments: Vec<Arc<ArgumentSpec<Latexlike>>>,
+pub struct VerbatimBehavior<LLL: LatexlikeLang = Latexlike> {
+    arguments: Vec<Arc<ArgumentSpec<LLL>>>,
 }
 
-impl VerbatimBehavior {
+impl<LLL: LatexlikeLang> VerbatimBehavior<LLL> {
     /// A verbatim-body environment with the given (ordinarily parsed) argument
     /// structure ahead of the raw body.
-    pub fn new(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> VerbatimBehavior {
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> VerbatimBehavior<LLL> {
         VerbatimBehavior { arguments }
     }
 }
 
-impl EnvironmentBehavior for VerbatimBehavior {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for VerbatimBehavior<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
     }
 
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
+    ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
+        // The literal terminator, composed from the invocation's own spellings
+        // (the begin trigger's escape char and the begin name group's
+        // delimiters) — the same bytes the standard end facts are recorded from.
         Box::new(
             VerbatimBodyParser::new(
                 invocation.trigger_span,
                 invocation.name,
-                format!("\\{}{{{}}}", END_COMMAND_NAME, invocation.name),
-                GroupType::Verbatim,
+                format!(
+                    "{}{}{}{}{}",
+                    invocation.escape_char,
+                    END_COMMAND_NAME,
+                    invocation.name_group_open,
+                    invocation.name,
+                    invocation.name_group_close,
+                ),
+                LLL::GroupTypeId::verbatim_group(),
             )
             .with_invocation_name_span(invocation.name_span),
         )
     }
 }
 
+impl<LLL: LatexlikeLang> Default for VerbatimBehavior<LLL> {
+    fn default() -> Self {
+        VerbatimBehavior { arguments: Vec::new() }
+    }
+}
+
+impl<LLL: LatexlikeLang> fmt::Debug for VerbatimBehavior<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerbatimBehavior").field("arguments", &self.arguments).finish()
+    }
+}
+
 /// [`EnvironmentSpec::with_body_delta`]'s adapter: reports the given body state
 /// delta — overriding whatever the wrapped behavior computes — and delegates
 /// everything else.
-#[derive(Debug)]
-struct BodyDeltaOverride {
-    inner: Arc<dyn EnvironmentBehavior>,
-    delta: ParsingStateDelta<Latexlike>,
+struct BodyDeltaOverride<LLL: LatexlikeLang> {
+    inner: Arc<dyn EnvironmentBehavior<LLL>>,
+    delta: ParsingStateDelta<LLL>,
 }
 
-impl EnvironmentBehavior for BodyDeltaOverride {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for BodyDeltaOverride<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         self.inner.arguments()
     }
 
     fn body_state_delta(
         &self,
         _invocation: EnvironmentInvocation<'_>,
-    ) -> Option<ParsingStateDelta<Latexlike>> {
+    ) -> Option<ParsingStateDelta<LLL>> {
         Some(self.delta.clone())
     }
 
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
+    ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
         self.inner.make_body_parser(invocation)
+    }
+}
+
+impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BodyDeltaOverride")
+            .field("inner", &self.inner)
+            .field("delta", &self.delta)
+            .finish()
     }
 }
 
@@ -354,46 +402,57 @@ impl EnvironmentBehavior for BodyDeltaOverride {
 /// parse, which reads the arguments and no body). A generic non-`EnvironmentSpec`
 /// [`CallableSpec`] under [`CallableType::Environment`] is legitimate too: its
 /// declared arguments parse and the body takes the default handling.
-#[derive(Debug, Clone)]
-pub struct EnvironmentSpec {
-    behavior: Arc<dyn EnvironmentBehavior>,
+pub struct EnvironmentSpec<LLL: LatexlikeLang = Latexlike> {
+    behavior: Arc<dyn EnvironmentBehavior<LLL>>,
 }
 
-impl EnvironmentSpec {
+impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     /// A declarative environment with the given argument structure and the default
     /// body handling.
-    pub fn new(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> EnvironmentSpec {
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> EnvironmentSpec<LLL> {
         EnvironmentSpec::from_behavior(Arc::new(StdEnvironmentBehavior { arguments }))
     }
 
     /// An environment driven by a custom [`EnvironmentBehavior`] — the funnel's
     /// registration entry for behavior-shaped customization (verbatim-like bodies).
-    pub fn from_behavior(behavior: Arc<dyn EnvironmentBehavior>) -> EnvironmentSpec {
+    pub fn from_behavior(behavior: Arc<dyn EnvironmentBehavior<LLL>>) -> EnvironmentSpec<LLL> {
         EnvironmentSpec { behavior }
     }
 
     /// Set the body's parsing-state delta (`equation` entering
     /// [`Mode::Math`](super::Mode), a listing disabling comment tokenization),
     /// overriding whatever the current behavior computes.
-    pub fn with_body_delta(self, delta: ParsingStateDelta<Latexlike>) -> EnvironmentSpec {
+    pub fn with_body_delta(self, delta: ParsingStateDelta<LLL>) -> EnvironmentSpec<LLL> {
         EnvironmentSpec {
             behavior: Arc::new(BodyDeltaOverride { inner: self.behavior, delta }),
         }
     }
 
     /// The behavior driving this environment's parse.
-    pub fn behavior(&self) -> &dyn EnvironmentBehavior {
+    pub fn behavior(&self) -> &dyn EnvironmentBehavior<LLL> {
         &*self.behavior
     }
 }
 
-impl CallableSpec<Latexlike> for EnvironmentSpec {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for EnvironmentSpec<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         self.behavior.arguments()
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
         frame_title("environment", role, name)
+    }
+}
+
+impl<LLL: LatexlikeLang> Clone for EnvironmentSpec<LLL> {
+    fn clone(&self) -> Self {
+        EnvironmentSpec { behavior: Arc::clone(&self.behavior) }
+    }
+}
+
+impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnvironmentSpec").field("behavior", &self.behavior).finish()
     }
 }
 
@@ -403,10 +462,25 @@ impl CallableSpec<Latexlike> for EnvironmentSpec {
 /// ordinary [`Macro`](CallableType::Macro) entry of the
 /// [`base_package`](super::base_package) (shadowable and unloadable like any
 /// definition). Its parser is the preset's environment composition (module docs).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BeginSpec;
+pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
+    lang: PhantomData<fn() -> LLL>,
+}
 
-impl CallableSpec<Latexlike> for BeginSpec {
+impl<LLL: LatexlikeLang> BeginSpec<LLL> {
+    /// The `\begin` dispatcher spec.
+    pub fn new() -> BeginSpec<LLL> {
+        BeginSpec { lang: PhantomData }
+    }
+}
+
+// The `SlotExt: BodySlotExt` clause is the body-marking contract: the composition
+// mints the environment's body slot ext through the generic `BodySlotExt`
+// mechanism, so `\begin` is registrable exactly for family members whose slot ext
+// implements it (`()` and the preset's `BodyMarker` both do).
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for BeginSpec<LLL>
+where
+    crate::node::SlotExt<LLL>: BodySlotExt,
+{
     /// `\begin` declares nothing but reads an entire environment: bare use as a
     /// single-token expression argument is diagnosed, not dispatched — a deliberate,
     /// documented divergence from pylatexenc, which dispatches the environment as the
@@ -417,8 +491,8 @@ impl CallableSpec<Latexlike> for BeginSpec {
 
     fn make_invocation_parser<'a, 's>(
         &'a self,
-        invocation: Invocation<'a, 's, Latexlike>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
+        invocation: Invocation<'a, 's, LLL>,
+    ) -> Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
     where
         's: 'a,
     {
@@ -432,15 +506,43 @@ impl CallableSpec<Latexlike> for BeginSpec {
     }
 }
 
+impl<LLL: LatexlikeLang> Default for BeginSpec<LLL> {
+    fn default() -> Self {
+        BeginSpec::new()
+    }
+}
+
+impl<LLL: LatexlikeLang> Clone for BeginSpec<LLL> {
+    fn clone(&self) -> Self {
+        BeginSpec::new()
+    }
+}
+
+impl<LLL: LatexlikeLang> Copy for BeginSpec<LLL> {}
+
+impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BeginSpec").finish()
+    }
+}
+
 /// The orphan-`\end` spec: a resolved `\end` never belongs to an environment (the
 /// body parser consumes well-formed terminators before command resolution), so its
 /// parser diagnoses [`OrphanEnd`] and recovers. An ordinary
 /// [`Macro`](CallableType::Macro) entry of the [`base_package`](super::base_package),
 /// alongside [`BeginSpec`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EndSpec;
+pub struct EndSpec<LLL: LatexlikeLang = Latexlike> {
+    lang: PhantomData<fn() -> LLL>,
+}
 
-impl CallableSpec<Latexlike> for EndSpec {
+impl<LLL: LatexlikeLang> EndSpec<LLL> {
+    /// The orphan-`\end` diagnoser spec.
+    pub fn new() -> EndSpec<LLL> {
+        EndSpec { lang: PhantomData }
+    }
+}
+
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for EndSpec<LLL> {
     /// Like `\begin`: declares nothing, reads material (its name group) — bare
     /// expression use is diagnosed.
     fn requires_content(&self) -> bool {
@@ -449,8 +551,8 @@ impl CallableSpec<Latexlike> for EndSpec {
 
     fn make_invocation_parser<'a, 's>(
         &'a self,
-        invocation: Invocation<'a, 's, Latexlike>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
+        invocation: Invocation<'a, 's, LLL>,
+    ) -> Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
     where
         's: 'a,
     {
@@ -462,21 +564,51 @@ impl CallableSpec<Latexlike> for EndSpec {
     }
 }
 
+impl<LLL: LatexlikeLang> Default for EndSpec<LLL> {
+    fn default() -> Self {
+        EndSpec::new()
+    }
+}
+
+impl<LLL: LatexlikeLang> Clone for EndSpec<LLL> {
+    fn clone(&self) -> Self {
+        EndSpec::new()
+    }
+}
+
+impl<LLL: LatexlikeLang> Copy for EndSpec<LLL> {}
+
+impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EndSpec").finish()
+    }
+}
+
 /// The environment composition (a tier-2 temporary, [`BeginSpec`]'s parser):
 /// scaffolding, resolution, arguments, body, node assembly — minimal scanning code of
 /// its own, assembled from the public core building blocks (module docs).
-struct EnvironmentInvocationParser<'a, 's> {
-    invocation: Invocation<'a, 's, Latexlike>,
+struct EnvironmentInvocationParser<'a, 's, LLL: LatexlikeLang> {
+    invocation: Invocation<'a, 's, LLL>,
 }
 
-impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
+impl<LLL: LatexlikeLang> ConstructParser<LLL> for EnvironmentInvocationParser<'_, '_, LLL>
+where
+    crate::node::SlotExt<LLL>: BodySlotExt,
+{
     type Output = BuildId;
 
     fn parse(
         &mut self,
-        cx: &mut ParseContext<'_, '_, Latexlike>,
-    ) -> ConstructParserResult<Latexlike, (BuildId, Option<ParsingStateDelta<Latexlike>>)>
+        cx: &mut ParseContext<'_, '_, LLL>,
+    ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)>
     {
+        // The language's environment-side record ([`LatexlikeInvocationSyntax::Env`])
+        // owns the begin/end syntax; the composition owns resolution, arguments,
+        // and node assembly.
+        type Env<LLL> =
+            <<LLL as crate::state::Lang>::InvocationSyntax as LatexlikeInvocationSyntax<
+                LLL,
+            >>::Env;
         let trigger = self.invocation.token;
 
         // Begin-side scaffolding scan, delegated to the environment-syntax record
@@ -484,8 +616,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         // immediately next token; the begin-side spelling facts (escape char,
         // command word, post-space, name-group rule) are recorded on the
         // accumulator, no longer normalized away.
-        let Some((name_group, mut env_syntax)) =
-            StdEnvironmentSyntax::parse_begin(cx, trigger)?
+        let Some((name_group, mut env_syntax)) = Env::<LLL>::parse_begin(cx, trigger)?
         else {
             cx.recover(MalformedBegin, SourceSpan::new(&cx.source, trigger.span))?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
@@ -505,13 +636,17 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         // Resolve the environment's spec by name through the scope stack. A provider
         // failure is an operational error, not a source condition — abort via the
         // implementation-error path.
-        let query = CallableQuery::new(CallableType::Environment, name, CallableSyntax::Other);
+        let query = CallableQuery::new(
+            LLL::CallableTypeId::environment_callable(),
+            name,
+            CallableSyntax::Other,
+        );
         let resolved = cx
             .state
             .scopes()
             .retrieve_spec(&query, &cx.state)
             .map_err(|error| cx.implementation_error(error, name_group.name_span))?;
-        let spec: Arc<dyn CallableSpec<Latexlike>> = match resolved {
+        let spec: Arc<dyn CallableSpec<LLL>> = match resolved {
             Some(spec) => spec,
             None => {
                 cx.recover(
@@ -520,7 +655,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
                 )?;
                 // Tolerant fallback: an argument-less body-only environment, so the
                 // body still parses to its terminator.
-                Arc::new(EnvironmentSpec::new(vec![]))
+                Arc::new(EnvironmentSpec::<LLL>::new(vec![]))
             }
         };
 
@@ -532,13 +667,24 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         // The environment's behavior, through the funnel downcast. A
         // non-`EnvironmentSpec` registration has no behavior to offer and gets the
         // default body handling.
-        let behavior: Option<&dyn EnvironmentBehavior> = (&*spec as &dyn core::any::Any)
-            .downcast_ref::<EnvironmentSpec>()
+        let behavior: Option<&dyn EnvironmentBehavior<LLL>> = (&*spec
+            as &dyn core::any::Any)
+            .downcast_ref::<EnvironmentSpec<LLL>>()
             .map(|environment_spec| environment_spec.behavior());
+        // The invocation facts handed to the behavior hooks, spelling pieces
+        // included (a takeover body composes its terminator from them). The rule
+        // `Arc` clone pins the delimiter strings for the borrow.
+        let name_group_rule = Arc::clone(&name_group.rule);
         let env_invocation = EnvironmentInvocation {
             trigger_span: trigger.span,
             name,
             name_span: name_group.name_span,
+            escape_char: match &trigger.kind {
+                crate::token::TokenKind::Command { escape_char, .. } => *escape_char,
+                _ => '\u{0}',
+            },
+            name_group_open: &name_group_rule.open,
+            name_group_close: &name_group_rule.close,
         };
 
         // The body: parsed under the behavior's state delta stacked on the
@@ -598,7 +744,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
 
         let data = CallableData {
             // The environment's own identity — not the `\begin` macro's.
-            callable_type: CallableType::Environment,
+            callable_type: LLL::CallableTypeId::environment_callable(),
             name: name.into(),
             spec,
             arguments: ParsedArguments::from(arguments),
@@ -607,7 +753,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
             // the Lang-owned invocation-syntax payload (whitespace after the
             // begin/end commands is a recorded fact now, not a normalized-away
             // gap; whitespace after `\end{…}` stays sibling content).
-            invocation_syntax: InvocationSyntax::Environment(env_syntax),
+            invocation_syntax: LLL::InvocationSyntax::environment_form(env_syntax),
         };
         let id = cx.stage_node(
                 NodeKind::callable(data),
@@ -624,21 +770,22 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
 
 /// The orphan-`\end` recovery parser ([`EndSpec`]'s): read the name group when
 /// present, diagnose [`OrphanEnd`], stage the consumed extent as a `Chars` node.
-struct OrphanEndParser<'a, 's> {
-    invocation: Invocation<'a, 's, Latexlike>,
+struct OrphanEndParser<'a, 's, LLL: LatexlikeLang> {
+    invocation: Invocation<'a, 's, LLL>,
 }
 
-impl ConstructParser<Latexlike> for OrphanEndParser<'_, '_> {
+impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
     type Output = BuildId;
 
     fn parse(
         &mut self,
-        cx: &mut ParseContext<'_, '_, Latexlike>,
-    ) -> ConstructParserResult<Latexlike, (BuildId, Option<ParsingStateDelta<Latexlike>>)>
+        cx: &mut ParseContext<'_, '_, LLL>,
+    ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)>
     {
         let trigger = self.invocation.token;
         let source = Arc::clone(&cx.source);
-        let (name, end) = match read_rigid_name_group(cx, GroupType::Content)? {
+        let (name, end) =
+            match read_rigid_name_group(cx, LLL::GroupTypeId::content_group())? {
             Some(group) => (
                 Some(String::from(&source.content()[group.name_span.range()])),
                 group.end,
@@ -662,7 +809,7 @@ impl ConstructParser<Latexlike> for OrphanEndParser<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::root_shapes;
-    use super::super::{LatexlikeDriver, MacroSpec, Mode};
+    use super::super::{CallableType, GroupType, LatexlikeDriver, MacroSpec, Mode};
     use super::*;
     use crate::constructs::{
         ExpressionParser, GroupArgumentParser, OptionalGroupArgumentParser,
@@ -1180,13 +1327,16 @@ mod tests {
             trigger_span: Span::empty(0),
             name: "probe",
             name_span: Span::empty(0),
+            escape_char: '\\',
+            name_group_open: "{",
+            name_group_close: "}",
         }
     }
 
     #[test]
     fn with_body_delta_overrides_any_behavior() {
         // On the declarative standard behavior…
-        let spec = EnvironmentSpec::new(vec![]);
+        let spec = EnvironmentSpec::<Latexlike>::new(vec![]);
         assert!(spec.behavior().body_state_delta(probe_invocation()).is_none());
         let spec = spec.with_body_delta(ParsingStateDelta::new().mode(Mode::Math));
         let delta = spec.behavior().body_state_delta(probe_invocation()).unwrap();

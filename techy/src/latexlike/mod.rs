@@ -479,8 +479,16 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// `\begin`/`\end`), or shadow single entries by pushing a provider above it.
 pub fn base_package() -> Package<Latexlike> {
     let mut package = Package::new("base");
-    package.insert(CallableType::Macro, environments::BEGIN_COMMAND_NAME, Arc::new(BeginSpec));
-    package.insert(CallableType::Macro, environments::END_COMMAND_NAME, Arc::new(EndSpec));
+    package.insert(
+        CallableType::Macro,
+        environments::BEGIN_COMMAND_NAME,
+        Arc::new(BeginSpec::<Latexlike>::new()),
+    );
+    package.insert(
+        CallableType::Macro,
+        environments::END_COMMAND_NAME,
+        Arc::new(EndSpec::<Latexlike>::new()),
+    );
     let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(SpecialsSpec::default());
     // Alignment `&` and non-breaking space `~` occur in text and math alike.
     // ### PhF -- We should not include & here
