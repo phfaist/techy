@@ -540,3 +540,14 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   need parameter-type annotations). Whole-stage independent review launched
   (full diff 29db6da..HEAD; special scrutiny ordered on D-plan-1 error-roster
   extras as the S8 anchor and D-plan-7 content-range translation arithmetic).
+- 2026-08-05: S7 review verdict: merge-ready after sign-off, 0 blockers;
+  D-plan-1/3/7 FORCED (panic-policy + no-Default-annotation + strip-pass
+  arguments reproduced; D-plan-7 prefix-sum translation arithmetic verified
+  independently, public level-0 `restage_node` contract untouched),
+  D-plan-4 FORCED in channel/DEFENSIBLE in shape, D-plan-2/5/6 DEFENSIBLE;
+  no rulings tensions found (translation-vs-A3, annotation-arity-vs-ruled-
+  spelling, and get_combined_with-vs-fifth-producer probed explicitly).
+  3 should-fixes applied by the implementer (22ad4b5: closure-inference
+  rustdoc repair; two ContentParentDropped driver-matrix tests — 689 lib
+  tests; doctest `Ann` rename). AWAITING USER SIGN-OFF of D-plan-1..7
+  before merge.
