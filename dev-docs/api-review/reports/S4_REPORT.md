@@ -11,8 +11,11 @@ each.
 - [x] M1 — Math group form (core + preset): `GroupType::Math(MathGroupForm)`,
       `math_form()` sugar, `MATH_DELIMITERS` dissolved, `MathStyle`/`math_style`
       deleted (build/tests green; grep gate clean)
-- [ ] M2 — Role traits + `LatexlikeLang` umbrella (+ preset `Event` enum,
-      `default_token_rules::<LLL>`, generic NodeRef sugar)
+- [x] M2 — Role traits + `LatexlikeLang` umbrella (+ preset `Event` enum,
+      `default_token_rules::<LLL>`, generic NodeRef sugar) — build/tests green,
+      0 warnings; note: a few rustdoc links reference M3/M4 items
+      (`resolve_state_event`, `derive_state`, `exit_math_context_delta`) and
+      resolve once those milestones land (docs gate runs at M5)
 - [ ] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible
       `finalize_transition`, `resolve_state_event` hook, `cx.derive_state` /
       `with_derived_state` / `with_parsing_state`

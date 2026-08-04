@@ -5,8 +5,13 @@
 //! or `\`); this module is where the familiar vocabulary returns — as *preset data and
 //! preset code* over the same extension surface any language uses:
 //!
-//! - [`Latexlike`] — the [`Lang`] ZST, with the preset's three closed vocabularies
-//!   [`GroupType`], [`CallableType`], and [`Mode`];
+//! - [`Latexlike`] — the [`Lang`] ZST, with the preset's closed vocabularies
+//!   [`GroupType`], [`CallableType`], [`Mode`], and [`Event`];
+//! - the **language family**: the [`LatexlikeLang`] umbrella and the per-vocabulary
+//!   role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
+//!   [`LatexlikeMode`], [`LatexlikeEvent`]) — every generic preset component takes
+//!   an `LLL: LatexlikeLang`, and a framework language with its own vocabularies or
+//!   exts joins the family instead of forking the preset;
 //! - [`LatexlikeDriver`] — the preset's [`ParseDriver`](crate::engine::ParseDriver):
 //!   recovery policy, scope-stack command resolution, and the math-mode group plug;
 //! - [`default_token_rules`] and [`base_package`] — the canonical seed data behind
@@ -52,6 +57,7 @@
 mod arguments;
 mod driver;
 mod environments;
+mod lang;
 mod node_ref;
 mod spec;
 #[cfg(test)]
@@ -62,6 +68,9 @@ pub use driver::{LatexlikeDriver, ParagraphBreakStyle};
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
+};
+pub use lang::{
+    LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang, LatexlikeMode,
 };
 pub use spec::{MacroSpec, SpecialsSpec};
 
@@ -183,6 +192,35 @@ pub enum Mode {
     Math,
 }
 
+/// The preset's semantic transition events ([`Lang::Event`]).
+///
+/// Events split into **two classes** (the contract on
+/// [`ParsingStateDelta::events`](crate::state::ParsingStateDelta::events)):
+/// context-free events are consumed by [`Lang::finalize_transition`]; a
+/// **context-dependent** event — one whose effect depends on the enclosing-state
+/// stack — is lowered by the driver
+/// ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event))
+/// inside [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
+/// and never reaches `finalize_transition`; reaching it anyway (a bare
+/// out-of-parse [`derived()`](ParsingState::derived) call) is a loud error.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Event {
+    /// **Exit the math context** (context-dependent): restore the innermost
+    /// enclosing *non-math* context — its whole
+    /// [`TokenRules`](crate::token::TokenRules) and its mode — found on the
+    /// enclosing-state stack (else the outermost, seed context). The `\text{…}`
+    /// recipe: an [`ArgumentSpec`](crate::spec::ArgumentSpec) state delta carrying
+    /// this event makes the argument parse in the surrounding non-math context
+    /// even deep inside display math — composably with every argument shape, and
+    /// without clobbering embedder rule customizations the way a static
+    /// rules-reset would. Lowered via
+    /// [`exit_math_context_delta`](exit_math_context_delta); deliberately **not**
+    /// "restore text mode": the target is whatever the enclosing context is, never
+    /// a conjured mode value.
+    ExitMathContext,
+}
+
 // The preset's vocabularies are statically listable (Phase 7.8): generic tooling
 // enumerates them (e.g. `ScopeStack::iter_symbols` once per `CallableType::ALL` entry).
 // The enums are `#[non_exhaustive]`, so adding a variant means extending `ALL` in the
@@ -259,7 +297,7 @@ impl Lang for Latexlike {
     type CallableTypeId = CallableType;
     type ModeId = Mode;
     type StateExt = ();
-    type Event = ();
+    type Event = Event;
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = LatexlikeNodeExts;
@@ -310,6 +348,11 @@ impl Lang for Latexlike {
     }
 }
 
+/// [`Latexlike`] opts into its own language family with zero code: its
+/// vocabularies are the preset enums (which implement the role traits), and every
+/// [`LatexlikeLang`] behavior default is exactly the preset behavior.
+impl LatexlikeLang for Latexlike {}
+
 /// The preset's canonical [`TokenRules`]: `\` + letters commands (single non-letter
 /// characters form single-character commands like `\&` by the tokenizer's standard
 /// rule), `{…}` content groups, the four math delimiter pairs (`$…$`, `$$…$$`,
@@ -335,18 +378,20 @@ impl Lang for Latexlike {
 /// `$$…$$`/`\[…\]` are [`Display`](MathGroupForm::Display) — read back from parsed
 /// nodes via [`NodeRef::math_form`](crate::node::NodeRef::math_form), with no
 /// delimiter table anywhere.
-pub fn default_token_rules() -> TokenRules<Latexlike> {
-    fn group(group_type: GroupType, open: &str, close: &str) -> Arc<GroupRule<Latexlike>> {
-        Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
-    }
-
-    let groups = vec![
-        group(GroupType::Content, "{", "}"),
-        group(GroupType::Math(MathGroupForm::Inline), "$", "$"),
-        group(GroupType::Math(MathGroupForm::Display), "$$", "$$"),
-        group(GroupType::Math(MathGroupForm::Inline), r"\(", r"\)"),
-        group(GroupType::Math(MathGroupForm::Display), r"\[", r"\]"),
-    ];
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]): the group classes
+/// come from the language's own vocabulary through its role-trait constructors
+/// ([`content_group`](LatexlikeGroupType::content_group)) and its
+/// [`math_group_rules`](LatexlikeLang::math_group_rules) behavior default — a
+/// family member adopts or overrides the delimiter table without forking this
+/// function.
+pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
+    let mut groups = vec![Arc::new(GroupRule {
+        group_type: LLL::GroupTypeId::content_group(),
+        open: "{".into(),
+        close: "}".into(),
+    })];
+    groups.extend(LLL::math_group_rules());
 
     TokenRules {
         enable_whitespace: true,

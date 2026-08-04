@@ -1,36 +1,40 @@
 //! `NodeRef` accessor sugar for latexlike trees.
 //!
-//! These are **inherent methods** on `NodeRef<'_, Latexlike>` — the preset shares the
+//! These are **inherent methods** on `NodeRef` for any language of the latexlike
+//! family (`LLL: LatexlikeLang`, annotated trees included) — the preset shares the
 //! crate with `node`, so consumers need no extra import (decided at the 7.5
-//! checkpoint; an out-of-crate language attaches its sugar through an extension trait
-//! instead). The fuller extraction/view API lives with the node-tree helpers; this is
-//! the minimal preset-vocabulary layer.
+//! checkpoint), and the accessors read the vocabulary through the role traits, so a
+//! family member with its own enums gets the same sugar. The fuller
+//! extraction/view API lives with the node-tree helpers; this is the minimal
+//! preset-vocabulary layer.
 
 use crate::node::NodeRef;
 
-use super::{CallableType, GroupType, Latexlike, MathGroupForm};
+use super::{LatexlikeCallableType, LatexlikeGroupType, LatexlikeLang, MathGroupForm};
 
-/// Latexlike accessor sugar (preset vocabulary over the generic accessors).
-impl<'t> NodeRef<'t, Latexlike> {
-    /// Whether this node is a math group ([`GroupType::Math`], any form).
+/// Latexlike accessor sugar (preset vocabulary over the generic accessors), for
+/// every language of the latexlike family.
+impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
+    /// Whether this node is a math group (a group class answering
+    /// [`is_math`](LatexlikeGroupType::is_math), any form).
     pub fn is_math_group(&self) -> bool {
-        matches!(self.group_type(), Some(GroupType::Math(_)))
+        self.group_type().is_some_and(|group_type| group_type.is_math())
     }
 
     /// A math group's [`MathGroupForm`] — the typed class payload the delimiter rule
-    /// declared at registration ([`GroupType::Math`]): no delimiter table, no string
+    /// declared at registration
+    /// ([`GroupType::Math`](super::GroupType::Math)): no delimiter table, no string
     /// matching, no state lookup, correct for embedder-registered and
-    /// mid-parse-minted delimiters alike. `None` for non-math nodes.
+    /// mid-parse-minted delimiters alike. `None` for non-math nodes (and for
+    /// math-like classes without a presentation form — the
+    /// [`is_math`/`math_form` split](LatexlikeGroupType)).
     pub fn math_form(&self) -> Option<MathGroupForm> {
-        match self.group_type() {
-            Some(GroupType::Math(form)) => Some(form),
-            _ => None,
-        }
+        self.group_type()?.math_form()
     }
 
     /// The macro name, when this node is a macro invocation (`\emph` → `"emph"`).
     pub fn macro_name(&self) -> Option<&'t str> {
-        if self.callable_type() == Some(CallableType::Macro) {
+        if self.callable_type().is_some_and(|callable_type| callable_type.is_macro()) {
             self.name()
         } else {
             None
@@ -40,7 +44,10 @@ impl<'t> NodeRef<'t, Latexlike> {
     /// The environment name, when this node is an environment invocation
     /// (`\begin{itemize}…` → `"itemize"`).
     pub fn environment_name(&self) -> Option<&'t str> {
-        if self.callable_type() == Some(CallableType::Environment) {
+        if self
+            .callable_type()
+            .is_some_and(|callable_type| callable_type.is_environment())
+        {
             self.name()
         } else {
             None
@@ -49,7 +56,7 @@ impl<'t> NodeRef<'t, Latexlike> {
 
     /// The specials spelling, when this node is a specials invocation (`~`, `---`).
     pub fn specials_name(&self) -> Option<&'t str> {
-        if self.callable_type() == Some(CallableType::Specials) {
+        if self.callable_type().is_some_and(|callable_type| callable_type.is_specials()) {
             self.name()
         } else {
             None
@@ -61,6 +68,7 @@ impl<'t> NodeRef<'t, Latexlike> {
 mod tests {
     use super::*;
     use super::super::test_support::{macro_package, with_package};
+    use super::super::{GroupType, Latexlike};
     use crate::engine::Language;
     use crate::error::Recovery;
     use alloc::vec::Vec;
