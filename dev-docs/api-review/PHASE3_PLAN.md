@@ -25,6 +25,17 @@ holds the stage breakdown, per-stage inputs, and acceptance gates.
   points (escalating ambiguities to the user), and merges.
 - Each stage updates the rustdoc it touches AND the passages of ARCHITECTURE.md /
   CLAUDE.md / docs/ guide pages it invalidates (labels immutable; content current).
+- **Interruption resilience (2026-08-03, after two session-limit kills)**: implementer
+  agents write + commit their full implementation plan into the stage report FIRST,
+  before any code work, then commit at every coherent milestone — an interrupted run
+  loses at most one milestone. A limit-killed agent is RESUMED (same agent, transcript
+  context intact) once the limit resets — never relaunched from scratch.
+- **Oversized stages are relayed, not carried (2026-08-03, user-prompted)**: when an
+  implementer's context balloons (≈400k+), it finishes its current milestone, commits
+  handoff notes, and stops; the remaining milestones go to fresh successor agents
+  working SEQUENTIALLY in the same worktree/branch off the committed plan (parallel
+  agents rejected for intra-stage work: the milestones share files). One independent
+  review still covers the whole stage diff at the end.
 - Authoritative inputs per stage: the DESIGN_RATIONALE entries + the frozen rulings
   files cited. INVENTORY.md is the public-item roster (Tier-C rulings override).
   On ANY ambiguity or contradiction between records: stop and surface to the user —
@@ -92,7 +103,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   seed); `StdParseDriver::new(Recovery::Strict, ())` test spelling; call-site sweep
   complete.
 
-### S3 — Node core: identity, annotations, ext minting, roles, navigation  [status: pending]
+### S3 — Node core: identity, annotations, ext minting, roles, navigation  [status: DONE — merged 2026-08-04]
 
 - Tree tags always-on: `TreeTag(u32)` in `NodeId` `Eq`/`Ord`/`Hash`; foreign-id
   rejection. [§dd-dr:tree-tags].
@@ -288,3 +299,36 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   D4 `IntoCallableSpec` delegated-name accepted; D5/D6 not deviations.
   Should-fix ([§dd-dr:resolver-contract] smalls line) applied. Reports:
   reports/S2_REPORT.md. Merged into api-review.
+- 2026-08-03: S3 launched (worktree branch `phase3-s3-node-core`). Implementer
+  killed by session limit after ingest; resumed after reset (plan-first commit
+  discipline added). At ~450k tokens (user-prompted), converted to a relay:
+  milestones A (tree tags + annotations) + B (ext minting) landed green by the
+  original agent (4 commits incl. plan + handoff notes); milestones C1–I to fresh
+  sequential successors in the same worktree. Attached byte-tiling flag resolved
+  from the records: exclusion belongs to the parse-law side (S6 rider);
+  `validate_tree` does no byte accounting (T5 §F2/F5).
+- 2026-08-03: S3 successor 1 launched (milestones C1 slot roles + C2 constructor
+  reshapes).
+- 2026-08-03: S3 C1+C2 landed green (commits 52a4d94/2ceafcb/d812c74). Deviation
+  **D-C1** queued for user sign-off at stage end: `ParsedArgument` ext =
+  `Option<ArgumentExt<L>>` (`Some` ⟺ provided), `absent(spec)` ext-free —
+  compiler-forced (universal absent-construction sites cannot mint) and mirrors
+  the ruled `RestagedArgument::absent(spec)`. Delegated decisions queued with it:
+  record arities (payload-first `new(region, name, role, ext)` family),
+  `impl BodySlotExt for ()` (is_body = true; body() degenerates to slot 0 on
+  no-ext langs). Successor 2 launched (D level-0 restage_node + E navigation +
+  F slice contracts).
+- 2026-08-03: S3 D+E+F landed green (commits 340e9f8/34c85f7/5ed9524/c74efcf).
+  "honest cost" idiom question supervisor-resolved: T5-F1 ban is scoped to the
+  slice contracts (targets the session-coined term), pre-existing ordinary-English
+  uses stay. Successor 3 launched (G validate_tree + wrapper, H display_tree +
+  as_str, I docs + stage closure + full gate run).
+- 2026-08-04: S3 implementation COMPLETE (successor 3 resumed after a second
+  limit kill, no work lost; commits 2e54bc8/59cef95/ba60299). 14 commits total,
+  ~44 files, +5000/−1250, 542→576 lib tests, all gates green. Whole-stage
+  independent review launched (full diff + consolidated deviation list).
+- 2026-08-04: S3 review verdict: merge-ready after sign-off, 0 blockers, 1
+  should-fix (unused test import — applied, 8f11869); restage translation
+  arithmetically verified; D-C1 compiler chains reproduced; both
+  supervisor-resolved readings CONFIRMED; relay seams coherent. **User confirmed
+  D-C1 + all delegated decisions 2026-08-04.** Merged into api-review.
