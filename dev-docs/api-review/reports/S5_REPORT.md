@@ -12,9 +12,18 @@ milestone, Progress updated each milestone.
       umbrella bounds, and the `StdEnvironmentSyntax` recording all landed here —
       the sugar/tests need them; the begin scan already delegates to
       `parse_begin` on the concrete record). 608 lib tests (+11), 0 warnings.
-- [ ] M2 — Environments machinery over `LLL`
-      (EnvironmentBehavior/EnvironmentSpec/VerbatimBehavior/BeginSpec/EndSpec/
-      EnvironmentInvocationParser generic; environment_form via the role trait)
+- [x] M2 — Environments machinery over `LLL` (commit b8233a4):
+      `EnvironmentBehavior<LLL = Latexlike>` (defaulted trait param),
+      `EnvironmentSpec<LLL>`, `VerbatimBehavior<LLL>`, `BeginSpec<LLL>`/`EndSpec<LLL>`
+      (PhantomData ZSTs + `new()`), `EnvironmentInvocationParser<LLL>`/
+      `OrphanEndParser<LLL>`; begin scan via the family's Env
+      (`LatexlikeInvocationSyntax::Env::parse_begin`); payload staged via
+      `environment_form`; `SlotExt<LLL>: BodySlotExt` bound-where-used on the
+      composition + BeginSpec's CallableSpec impl; `EnvironmentInvocation` spelling
+      fields; verbatim literal composed from them. 608 lib tests green,
+      0 warnings. REMAINING FROM M2's test plan: a foreign-LLL *environment*
+      smoke test (extend the existing `Flavored` test in latexlike/mod.rs with an
+      environment + verbatim parse) — successor task.
 - [ ] M3 — `MacroSpec<LLL>` + `argument_specs<LLL>` + paragraph-break
       name-as-written / canonical spec
 - [ ] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep
@@ -357,6 +366,131 @@ commits, churn).
   tolerant oracle matrix (S8) must exclude or special-case it, or a partial
   end-side record must be added then.
 
-## Handoff notes
+## Handoff notes (relay — written at the supervisor's ~600k-token cutoff)
 
-(if interrupted, fill in: state, remaining milestones, gotchas)
+**State**: M0–M2 complete and committed (6433232 plan, 28e9574 M1, b8233a4 M2);
+working tree clean; `cargo build` / `cargo build --tests` 0 warnings;
+`cargo test` all green (608 lib + 30 acceptance + 8 derive-conditions + 1 derive
++ 27 doctests). No half-done files. `rm -rf target/doc && cargo docs` has NOT
+been run yet in this stage — expect intra-doc-link fallout in the new rustdoc
+(check `crate::latexlike::...` links written from core modules, e.g. in
+state/lang.rs and node/kind.rs, and `ParagraphBreakSpec` links written in
+latexlike/invocation_syntax.rs BEFORE that type exists — it lands in M3; the
+enum doc in invocation_syntax.rs references `super::ParagraphBreakSpec`
+already, so M3 must land before the docs gate passes, or the link must be
+temporarily de-linked if M3 is reordered).
+
+**What the successor continues with** (original plan sections below still stand;
+follow the realization choices already made):
+
+- **M2 addendum (small)**: foreign-LLL environment smoke test — extend the
+  `the_generic_driver_serves_a_foreign_family_member` test (latexlike/mod.rs)
+  or add a sibling: `Flavored` (whose `InvocationSyntax =
+  InvocationSyntax<StdEnvironmentSyntax<Flavored>>`) parses
+  `\begin{itemize}…\end{itemize}` and a verbatim environment; requires
+  registering `BeginSpec::<Flavored>::new()`/`EndSpec::<Flavored>::new()` in a
+  package (Flavored's initial_state_data has an empty scope stack — push a
+  package with begin/end + the env specs) and asserting begin/end payload facts
+  + `body()` (works: `Flavored`'s SlotExt is `()`, which implements
+  BodySlotExt with `is_body() == true` — slot 0 degenerates to the body,
+  the S3-D ruling).
+- **M3 — MacroSpec<LLL> + argument_specs<LLL> + paragraph-break fix** (plan
+  below). Concrete choices already fixed: `MacroSpec<LLL: LatexlikeLang =
+  Latexlike>` mirrors SpecialsSpec (pub `arguments` field, `new()`, manual
+  Debug/Clone/Default); `argument_specs`/`argument_specs_from_str`/word codes
+  generalize via role-trait constructors (`content_group()`,
+  `verbatim_group()` for the `v` codes; the minted optional-group rules keep
+  their spellings). Paragraph-break fix: new `ParagraphBreakSpec` ZST
+  (NON-generic; `impl<LLL: LatexlikeLang> CallableSpec<LLL> for
+  ParagraphBreakSpec`; home: latexlike/driver.rs beside ParagraphBreakStyle;
+  frame title "specials ‘…’"; requires_content false), minted per break
+  (`Arc::new(ParagraphBreakSpec)` — identity is TYPE identity via downcast,
+  D-plan-8); `ParseDriver::make_paragraph_break_node` gains a
+  `source_content: &str` parameter (D-plan-7 — update: engine/driver.rs trait
+  + default, the nodes_parser call site `cx.driver.make_paragraph_break_node(
+  &cx.state, &token)` → pass `cx.source.content()` (note: compute before the
+  call — cx borrow choreography is fine, `source` is a field), the latexlike
+  pillar + LatexlikeDriver impl, and the test driver override in
+  nodes_parser tests (~line 1510)); the pillar's Specials arm then uses
+  `name: &source_content[token.span.range()]` for BOTH the synthetic
+  Invocation's name and the node name (name-as-written), keeps the
+  from_invocation consultation, and swaps `SpecialsSpec::default()` →
+  `ParagraphBreakSpec`. Update ParagraphBreakStyle::Specials rustdoc (the
+  canonical-"\n\n" sentences are SUPERSEDED — name = the actual run; identify
+  by spec downcast; also fix the driver.rs test asserting `"\n\n"`) and the
+  latexlike/driver.rs paragraph_break_pillar test. Extract helpers
+  (content_as_chars) key on node kind, unaffected.
+- **M4 — parse-law payload checks + FLM probe** (plan below). The stub to fill:
+  `check_invocation_syntax_payload` in node/invariants.rs (cfg(test); already
+  called from the callable arm). Realization: downcast
+  `(&callable.invocation_syntax as &dyn core::any::Any)` to
+  `crate::latexlike::InvocationSyntax` (the default-Env Latexlike type) — on
+  hit: Macro arm → if post_space is `Spanned`, assert it ends at the first
+  child's span start (or the node's span end when childless) and starts ≥ span
+  start (the old invariant-3 positional pin); Specials arm → assert
+  `source[span.start .. span.start + name.len()] == name` (name-as-written
+  prefix pin; for the Specials paragraph-break style name == the whole span);
+  Environment arm → assert `write_begin(name, source_content)` is a byte
+  prefix of the node's span slice, and when the end side is Some, that
+  `write_end(name, source_content)` is its byte suffix. `()` payloads and
+  foreign types: skip. This is D-plan-12 (strata tension: cfg(test)-only
+  core→latexlike reference — flagged for review). FLM probe: adapt
+  dev-docs/api-review/walkthroughs/framework/flm_projected.rs — add
+  `type InvocationSyntax = latexlike::InvocationSyntax<StdEnvironmentSyntax<Flm>>;`
+  to the Lang impl, fix the S4 drift (`StateStackView` → `ParsingStateStack`,
+  the resolve_state_event signature note, the [T5?] markers for
+  LatexlikeEvent are now ruled/landed), note `FromInvocation` is satisfied via
+  the latexlike enum impl; record every probe edit in this report.
+- **M5 — docs + closure** (plan below). Additional to the plan: the
+  `cargo docs` link fallout above; rustdoc sweep must include
+  invocation_parser.rs module docs (already reworded), builder.rs `add` docs
+  if they name post_space, token/token.rs cross-refs, StdInvocationParser
+  contract docs; grep sweep MUST cover the superseded names listed in the plan
+  (`CallSyntax`, core `post_space` field spelling `pub post_space` on
+  CallableData, canonical-`"\n\n"`, `CallableNodeInvocationSyntax`,
+  `new_for_invocation`) — note `post_space` as a *field of the latexlike
+  payload* and comment/token vocabulary is sanctioned; only the core
+  CallableData field name is superseded.
+
+**Gotchas encountered (do not re-derive)**:
+
+- The FromInvocation bound spread is exactly as recorded in D-plan-2; its full
+  landed roster (grep `FromInvocation<L>` / `FromInvocation<LLL>`):
+  CallableSpec::make_invocation_parser + ParseDriver::{make_invocation_parser,
+  make_nodes_parser, make_group_parser} (method where clauses);
+  NodesParser::dispatch_invocation (method) + its ConstructParser impl;
+  GroupParser/EnvironmentBodyParser ConstructParser impls (+ the
+  EnvironmentBodyParser inherent impl block holding parse_body);
+  ParseContext::{stage_invocation, parse_nodes, parse_group};
+  Language::{parse, parse_source}; parse_expression_node +
+  dispatch_expression_invocation (free fns); ArgumentParser impls for
+  Expression/Group/OptionalGroup/CharsGroup/Embellishments/TackOn (beside
+  their ArgumentExt: Default clause); nodes_parser test harness fns
+  (try_run/try_run_with/run_both/run_both_with).
+- Derives on L-generic types spuriously demand `L: Clone`/`L: Debug` — every
+  new L-generic record got manual Clone/Debug impls (NameGroup,
+  EnvironmentTerminatorFacts, EnvironmentBody, EnvironmentSideSyntax,
+  StdEnvironmentSyntax, EnvironmentSpec, BeginSpec, EndSpec,
+  StdEnvironmentBehavior, VerbatimBehavior, BodyDeltaOverride).
+- The `Env` alias inside EnvironmentInvocationParser::parse is a local
+  `type Env<LLL> = <<LLL as Lang>::InvocationSyntax as
+  LatexlikeInvocationSyntax<LLL>>::Env;` — keep it, the spelled-out form is
+  unreadable.
+- environments.rs borrow choreography: `let name_group_rule =
+  Arc::clone(&name_group.rule);` is pinned BEFORE building
+  EnvironmentInvocation (its `name_group_open/close` borrow from that local);
+  the body parser is dropped before `parse_end` runs.
+- Core tests that asserted `NodeRef::post_space()` on ()-payload test langs had
+  those assertions REMOVED (the fact is no longer recorded there); the
+  latexlike payload tests in latexlike/invocation_syntax.rs cover the facts.
+  Do not resurrect them.
+- The sandbox refuses compound shell commands with here-docs piping into
+  python in some shapes — write scripts into the scratchpad dir and run
+  `python3 <script>` instead.
+
+**Where the new tests live**: latexlike/invocation_syntax.rs `mod tests` —
+macro escape/post-space recording (incl. `@` escape), specials unit arm +
+name-as-written, environment begin/end facts + write_begin/write_end
+round-trips, verbatim std end facts, unterminated/mismatch end-side-empty,
+materialize-through, fifth-role-trait coherence, stage_invocation end-rule
+tests (std rule + `end_pos: Some` via a rest-of-line takeover spec).
