@@ -14,9 +14,13 @@ A [`Source`](crate::source::Source) owns the content being parsed and is shared
 as `Arc<Source>`. A [`Span`](crate::source::Span) is a plain byte range into
 that content; a [`SourceSpan`](crate::source::SourceSpan) pairs the range with
 its source so it remains meaningful after the parse. Line/column positions are
-a lazy display concern ([`LineIndex`](crate::source::LineIndex)), never parsing
-inputs. Content lookup for `\input`-like constructs is delegated to the
-embedder through [`SourceResolver`](crate::source::SourceResolver).
+a lazy display concern ([`LineIndex`](crate::source::LineIndex); the
+consumer-held [`LineIndexCache`](crate::source::LineIndexCache) is its
+persistent, per-source form), never parsing inputs. Content lookup for
+`\input`-like constructs is delegated to the embedder through
+[`SourceResolver`](crate::source::SourceResolver); resolved content parses into
+the same tree at the inclusion point, so trees spanning several sources are
+first-class.
 
 ## Tokens and token rules
 

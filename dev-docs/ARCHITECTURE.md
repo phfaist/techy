@@ -182,9 +182,17 @@ tokenization. `TextContent` (span-backed or owned logical text) is likewise S0.
   the sealed `IntoSourceResolver` conversion), and an unconfigured driver resolves
   nothing (`None` — no zero-sized placeholder type). Resolvers return *content* (the
   caller mints the `Source`), are `Send + Sync`, and recursion/cycle policy belongs to
-  the embedder ([§dd-dr:resolver-contract]).
-- **Line/column is lazy and display-only** (`LineIndex`): the parser works purely in
-  byte offsets.
+  the embedder ([§dd-dr:resolver-contract]) — with `Source::including_sources()` and
+  the canned, origin-keyed `check_include_chain` as the one-line policy tools
+  ([§dd-dr:include-chain-helpers]). `ResolveError` is `Clone` like every techy error
+  type; its out-of-crate cause sits behind an `Arc`.
+- **Line/column is lazy and display-only**: the parser works purely in byte offsets.
+  Who computes and caches is layered ([§dd-dr:line-col-ownership]): the borrowing
+  `LineIndex` view answers transient queries (`line_col`, `line_of`,
+  `line_col_span`); persistence belongs to whoever holds a `LineIndexCache` (one
+  owned line-starts table per source, keyed by `Arc` identity — entries never
+  invalidate); and the rendering entry points accept any `LineColProvider` through
+  their `_with` variants (the no-argument forms are transient-cache shorthand).
 - **`Span` has private fields**; every mutator preserves `start <= end` (the monotone
   `extend_to`, the order-agnostic `cover`).
 - The origin type is generic without `Lang` (`Source<O: SourceOrigin = Option<String>>`);
@@ -454,13 +462,16 @@ in-crate test utility ([§dd-dr:tree-validation]).
   all-trees-law checker is `core::node::validate_tree` ([§dd-dr:tree-validation]);
   and the level-0 cross-tree `restage_node` primitive is in
   ([§dd-dr:restage-ops] — its visitor/ops/bundles surface still pending).
+  **Applied in Phase 3 S6**: `\input` content attaches as an `Attached` slot of a
+  same-builder sub-parse, making multi-source parse trees first-class
+  ([§dd-dr:input-attachment], [§dd-dr:input-wiring]) — the parse-law oracle scopes
+  its byte accounting per source through the slot roles (`Attached` regions carry
+  their own accounting, `Hidden` regions none).
   **Still ruled, not yet applied**: transformation (`techy::transform`, the
   streaming restage driver — [§dd-dr:restage]; visitor trait, generic errors,
   constructible bundles, no-silent-repair edit policy [§dd-dr:restage-ops]) and
   recomposition (`techy::recompose`, [§dd-dr:recompose]) join as top-level
-  modules; `\input` content attaches as an `Attached` slot of a same-builder
-  sub-parse, making multi-source parse trees first-class
-  ([§dd-dr:input-attachment]); the extract producers mint output annotations
+  modules; the extract producers mint output annotations
   through a general callback with suffixed shorthands
   ([§dd-dr:extract-annotations]); recomposition is bound to the per-node doctrine
   (spans are provenance — no inter-node span arithmetic; [§dd-dr:recompose]
@@ -543,6 +554,17 @@ returns (nodes, StopCause) — the caller interprets the ending.
   `cx.with_derived_state(&delta, f)` composes derivation and scoping);
   `cx.probe_token(&state)` is the public probe protocol ([§dd-dr:parse-scoped],
   [§dd-dr:enclosing-state-stack]).
+- **Attached-source parsing** ([§dd-dr:input-wiring]): the
+  `cx.parse_attached_source(source, state, parser)` door sub-parses an included
+  source into the *same* session/builder over a fresh inner reader — the
+  caller-supplied nodes-run parser drives it, stray closes recover locally (an
+  included file's stray `}` never unwinds the includer), and a traceback frame
+  anchors conditions at the inclusion site. Beside it,
+  `cx.attach_source_reference(reference, at, state, parser)` is the single
+  resolve-diagnose-attach raising site of the two `core.sources.*` conditions
+  (`NoSourceResolver`, `UnresolvableSourceReference`); the door returns content
+  nodes only — slot assembly stays the invocation parser's job (the preset's
+  opt-in `input_macro_spec` stages them as the `Attached` body slot).
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
@@ -630,7 +652,9 @@ spelling as recorded `CallableData` payload, replacing the core `post_space`
 field, minted at the standard sites via the opt-in `FromInvocation` constructor
 — and the committed `stage_invocation` shorthand with its ruled end-position
 rule ([§dd-dr:invocation-syntax], [§dd-dr:takeover-staging-sugar] items 2–3,
-S5; `disable_all` and the collection constructors remain pending their stage).
+S5; `disable_all` and the collection constructors remain pending their stage);
+the `parse_attached_source` door and the `attach_source_reference` bundle with
+their `core.sources.*` conditions, completing [§dd-dr:input-wiring] (S6).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 
@@ -657,8 +681,9 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   advance the reader — violations abort even in tolerant mode,
   [§dd-dr:resume-pos-contract]); the session's `Recovery` policy decides record-and-
   continue versus abort. Diagnostics accumulate on the session, capped with counted
-  suppression, and render collections through shared line indices
-  ([§dd-dr:diagnostics-retention]).
+  suppression, and render collections through one shared `LineIndexCache`
+  ([§dd-dr:diagnostics-retention]) — every rendering entry point also has a `_with`
+  variant taking a caller-held `LineColProvider` ([§dd-dr:line-col-ownership]).
 - **Detection-site recovery; `Err` means abort** ([§dd-dr:err-means-abort]): each
   condition defines its recovery where it is detected (markup-in-a-`Chars`-node is the
   standard tolerant artifact, always with a diagnostic); abnormal sub-parse endings are

@@ -393,11 +393,17 @@ out-of-crate information sits behind the `Arc`**; `Error::source()` downcasting 
 unaffected, `with_cause` wraps with `Arc::new`. (2) "No core recursion checking"
 SURVIVES the engine now recursing on its own stack ([§dd-dr:input-wiring]) —
 reaffirmed for `.dtx`-style legitimate self-inclusion; the embedder's policy tools
-are [§dd-dr:include-chain-helpers].)*
+are [§dd-dr:include-chain-helpers]. Amendment applied — Phase 3 S6.)*
 
 #### Include-chain tools: `including_sources` + `check_include_chain`; recursion stays embedder policy [§dd-dr:include-chain-helpers]
 
-Status: DECIDED (user, API-review T4 session).
+Status: DECIDED (user, API-review T4 session; applied — Phase 3 S6. Application
+notes: `check_include_chain` lives beside the resolver machinery it serves —
+public path `techy::source` as ruled; the minted `ResolveError`'s `reference` is
+the offending chain source's origin label when present, else empty, since `K` is
+not `Display`-bounded; the core-level no-recursion-checking stance is pinned by a
+self-inclusion test on the door, and the resolver-side policy by a
+`check_include_chain`-using resolver test on the preset spec).
 
 Recursion/cycle control for `\input`-style inclusion stays OUT of core — reaffirmed
 against the new fact that the engine now recurses on its own stack
@@ -440,7 +446,17 @@ reference-keyed variant could then be added beside, not instead).
 
 #### Line/col ownership: consumer-held `LineIndexCache` + the `LineColProvider` seam [§dd-dr:line-col-ownership]
 
-Status: DECIDED (user, API-review T4 session).
+Status: DECIDED (user, API-review T4 session; applied — Phase 3 S6. Application
+notes: the `_with` variants are `Diagnostic::render_with`,
+`ParseError::render_with`, `Diagnostics::render_all_with`,
+`format_position_with`, `format_traceback_with` (provider parameter last); the
+renderer's internal borrowing per-call cache was *replaced by* a transient
+`LineIndexCache` — one mechanism, and the blocked-dep-free note on a
+`Source`-owned cache moved to the line-index module docs; `LineIndexCache` keeps
+a `set_max_scan_len` knob (the bound stays adjustable, mirroring `LineIndex`,
+with re-admission under a raised cap); `line_of`'s range excludes the `\n`
+terminator, and an offset on the terminator (or at end of content) belongs to
+the line it ends).
 
 Who computes and caches line/column stays LAYERED, never the `Source`: the parse
 computes nothing ([§dd-dr:lazy-line-col] holds); the diagnostics renderer keeps its
@@ -3099,8 +3115,13 @@ answer is the three-channel discipline, not context growth.
 Status: DECIDED (user, API-review P4 session; amends
 [§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
 applied — Phase 3 S3 (record + roles + `BodySlotExt` + the preset's `BodyMarker`
-claim); the parse-law checker's `Attached` byte-accounting scoping rides S6, the
-`LLL` genericization S4).
+claim), the `LLL` genericization S4, and the parse-law checker's byte-accounting
+scoping S6: children in an `Attached` slot's region are excluded from the
+including callable's children-in-source/contiguity checks and carry their own
+per-source accounting (one source per attached region, contiguous within it),
+while `Hidden`-region children carry no byte accounting at all — declaration
+replaces source-change inference, so the remaining children must be contiguous
+across the excluded regions).
 
 `ParsedSlot` gains `role: SlotRole { Content, Attached, Hidden }` (default
 `Content`). `Content` = constitutive — the node's meaning is incomplete without it
@@ -3153,7 +3174,11 @@ role-sensitive site is made concrete: `Concat`'s default scope is plain children
 #### `\input` attachment: same-builder sub-parse; multi-source trees are first-class [§dd-dr:input-attachment]
 
 Status: DECIDED (user, API-review P4 session — direction and tree-level
-consequences; engine wiring designed in the 2b T4 session, friction F8).
+consequences; engine wiring designed in the 2b T4 session, friction F8; applied
+— Phase 3 S6 via [§dd-dr:input-wiring]: the same-builder sub-parse door, the
+`Attached`-slot staging in the preset's `input_macro_spec`, and the parse-law
+checker's per-source byte-accounting scoping all landed; multi-source
+reconstruction pinned by the I-18 acceptance tests).
 
 The anticipated `\input` implementation: the callable's spec parser resolves the
 reference and **sub-parses the resolved source into the same builder**, staged as an
@@ -4515,6 +4540,19 @@ field + `with_source_resolver` builder, and `Language`'s resolver surface leavin
 The door (`parse_attached_source`), the `attach_source_reference` bundle, the two
 failure conditions, and the preset `input_macro_spec` are stage S6.)*
 
+*(Fully applied — Phase 3 S6. Application notes: the door's parser parameter is
+`&mut P where P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` — the
+ruled `Vec<BuildId>` return plus the ruled local stray-close recovery require the
+nodes-run outcome vocabulary; the bundle is a `ParseContext` **method** (the
+T4-1c "on the `ParseContext` surface" home), returning `Option<Vec<BuildId>>`
+(`None` = diagnosed-and-recovered, nothing attached); `NoSourceResolver` carries
+the `reference`; the preset spec type is the public `InputMacroSpec<LLL>` (the
+`MacroSpec` pattern), its attached slot named `"attached"` with the ext minted
+via `BodySlotExt::make_body()` — the slot is the node's body on the ext axis,
+`Attached` on the role axis — and the shipped spec is state-transparent (the
+included content's after-effects do not continue into the includer;
+state-propagating `\input` is custom-composition work).)*
+
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
 Status: DECIDED (user; four API-shape decisions on the long-deferred runtime bundle —
@@ -5092,7 +5130,9 @@ need — promote the cache if one appears).
 
 Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate was
 ruled in the API-review T4 session and is applied — Phase 3 S1; the slate's NEW
-`core.sources.*` conditions land with the Phase 3 `\input`-wiring stage, S6).
+`core.sources.*` conditions landed with the Phase 3 `\input`-wiring stage, S6 —
+`core.sources.no-resolver` / `core.sources.unresolvable-reference`, with
+identifier-asserting tests beside the condition types).
 
 `IDENTIFIER` strings are semver-stable under the same rubric and soft freeze as public
 paths ([§dd-dr:stability-rubric]) — they are wire/config material (match tables,

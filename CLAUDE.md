@@ -16,7 +16,7 @@ token → constructs → node (AST)
 exclusively via facades, exactly one canonical public path per item; internal src
 modules are `pub(crate)` and invisible to public paths:
 
-- **techy::source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, TextContent, SourceResolver)
+- **techy::source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, LineIndexCache, TextContent, SourceResolver, the include-chain helpers)
 - **techy::error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery; the DiagnosticInfo/ToDiagnosticValue derives)
 - **techy::extract**: Extraction helpers over parsed trees (Split, KeyVals, free fns)
 - **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), tokens (Token, TokenKind, TokenRules, TokenReader, StdTokenReader), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)

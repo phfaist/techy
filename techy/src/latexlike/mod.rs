@@ -26,6 +26,9 @@
 //!   [`argument_specs_from_str`]) and the verbatim wiring —
 //!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
 //!   `\verb`-style delimited verbatim arguments;
+//! - the **opt-in** `\input` spec ([`input_macro_spec`], never preloaded):
+//!   resolve-and-attach inclusion — the referenced source parses at the invocation
+//!   point into the same tree, as the callable's `Attached` body slot;
 //! - `NodeRef` accessor sugar for latexlike trees
 //!   ([`math_form`](crate::node::NodeRef::math_form),
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on

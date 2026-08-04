@@ -21,10 +21,14 @@
 //! - [`SourceResolver`] is the pluggable content-lookup extension point (`\input`-like
 //!   references), configured on a parse driver through the sealed
 //!   [`IntoSourceResolver`] conversion; an unconfigured driver resolves nothing.
+//!   Recursion/cycle policy stays the embedder's — [`Source::including_sources`]
+//!   and [`check_include_chain`] are the ready-made policy tools.
 //! - [`TextContent`] is logical textual content — span-backed when it came from parsing,
 //!   owned when synthesized or normalized. Node payloads carry it.
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
-//!   purely in byte offsets.
+//!   purely in byte offsets. [`LineIndexCache`] is its persistent, per-source
+//!   consumer-held form, and [`LineColProvider`] the seam the rendering entry
+//!   points accept.
 //!
 //! # Cycle-prevention invariant
 //!

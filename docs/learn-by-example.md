@@ -13,7 +13,8 @@ mentioned, that suite pins the parity claim.
 ## Your first parse
 
 A [`Language`](crate::core::Language) bundles everything that outlives one parse:
-the seed parsing state, the parse driver, the source resolver. Define it once, parse
+the seed parsing state and the parse driver (which carries the optional source
+resolver for `\input`-like lookups). Define it once, parse
 many documents. The [`Latexlike`](crate::latexlike::Latexlike) defaults give you the
 canonical tokenization (`\` commands, `{…}` groups, `$…$` math, `%` comments) and the
 `"base"` package (`\begin`/`\end` dispatch plus the standard specials):

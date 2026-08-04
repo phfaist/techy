@@ -18,7 +18,7 @@ F; T5_RULINGS § G + I-18; S5_REPORT signature tables (the surface built on).
 - [x] M4 — preset `input_macro_spec` + multi-source acceptance (I-18)
 - [x] M5 — line/col ownership (`line_of`, `line_col_span`, `LineIndexCache`,
       `LineColProvider`, `_with` variants, scan-len raise)
-- [ ] M6 — docs + records + closure (full gate run)
+- [x] M6 — docs + records + closure (full gate run)
 
 ## Design synthesis (records → today's code)
 
@@ -349,3 +349,117 @@ cache entries compute from one line-starts search body.
   terminator (`\n`); the offset may equal the range end (a position on the
   newline itself, or end-of-content). First/last/empty-source boundaries
   pinned by tests.
+- **D-plan-13** (realization): the `\input` spec's one argument is **named**
+  `"reference"` (the named-first constructor doctrine; self-describing record —
+  `argument_content_nodes_named("reference")` reads the reference back). Its
+  parser is the standard `{` shape (`GroupArgumentParser::new(content_group)`,
+  expression fallback on — `\input a` takes the one-expression reference `a`,
+  the pylatexenc `'{'`-code convention).
+- **D-plan-14** (realization): the door discards the sub-parse's pass-through
+  state delta (nowhere to apply it — the door returns nodes; documented on the
+  door together with the state-transparency consequence, D-plan-9).
+
+## Consolidated stage summary (M6 closure)
+
+### Outcome
+
+All six milestones landed in one run, gates green throughout. The `\input`
+engine wiring is complete ([§dd-dr:input-wiring] fully applied): the
+`parse_attached_source` door sub-parses a resolved source into the running
+session over a fresh inner reader with local stray-close recovery and an
+"attached source" traceback frame; `attach_source_reference` beside it is the
+single resolve-diagnose-attach raising site of the two new `core.sources.*`
+conditions; `ResolveError` is `Clone` again (Arc-backed cause; the uniform-Clone
+principle recorded in rustdoc); the include-chain policy tools
+(`Source::including_sources`, origin-keyed `check_include_chain` incl. the
+primary, distinct cycle/depth messages) landed in `techy::source` with core
+recursion checking still absent (self-inclusion pinned legal); the preset ships
+the opt-in, never-preloaded `input_macro_spec::<LLL>()` whose brief-form
+composition stages the resolved content as the `Attached` body slot; the
+parse-law checker scopes byte accounting per source through the slot roles; and
+the line/col ownership design landed (`line_of`, `line_col_span`,
+`LineIndexCache`, `LineColProvider`, `_with` render variants, scan cap
+500 000).
+
+### Signature table (new/changed public surface)
+
+| Item | Signature / shape |
+|---|---|
+| `ParseContext::parse_attached_source` | `(&mut self, source: Arc<Source<L::SourceOrigin>>, state: Arc<ParsingState<L>>, parser: &mut P) -> ConstructParserResult<L, Vec<BuildId>>` where `P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` (D-plan-1); fresh inner reader/context, same session/builder; local stray-close recovery (diagnose + consume + chars + re-invoke); `TokenCondition`/`NodeCondition` stops end the run (D-plan-3); traceback frame `Static("attached source")` at `triggered_at` (D-plan-2); pass-through delta discarded (D-plan-14) |
+| `ParseContext::attach_source_reference` | `(&mut self, reference: &str, at: &SourceSpan<L::SourceOrigin>, state, parser) -> ConstructParserResult<L, Option<Vec<BuildId>>>` — method home (D-plan-4); `None` = diagnosed-and-recovered |
+| `constructs::NoSourceResolver` | condition `{ reference: String }`, id `core.sources.no-resolver` (D-plan-5); derive-based, `PartialEq`/`Eq` |
+| `constructs::UnresolvableSourceReference` | condition `{ reference: String, error: ResolveError }`, id `core.sources.unresolvable-reference`; message = the `ResolveError` rendering; no `PartialEq` (the error isn't) |
+| `error::ToDiagnosticValue for ResolveError` | projection map `reference`/`message`/`cause-chain` (the `Error::source()` chain rendered; impl lives in error.rs — stratum direction) |
+| `source::ResolveError` | `Clone`; `cause: Option<Arc<dyn Error + Send + Sync>>`; `with_cause` wraps with `Arc::new`; uniform-Clone principle in rustdoc |
+| `Source::including_sources` | `(&self) -> IncludingSources<'_, O>` iterator over `&Source<O>`, self → primary |
+| `source::check_include_chain` | `<O: SourceOrigin, K: PartialEq>(target_key: &K, triggered_at: &SourceSpan<O>, origin_key: impl Fn(&O) -> Option<K>, max_depth: Option<usize>) -> Result<(), ResolveError>` — origin-keyed incl. primary; `None` keys skipped; distinct cycle/depth messages; error reference = origin label or empty (D-plan-6) |
+| `latexlike::InputMacroSpec<LLL = Latexlike>` | public spec type (D-plan-7); `CallableSpec` under bounds-where-used `ArgumentExt<LLL>: Default + SlotExt<LLL>: BodySlotExt`; one mandatory `{…}` argument named `"reference"` (D-plan-13) |
+| `latexlike::input_macro_spec` | `<LLL: LatexlikeLang>() -> InputMacroSpec<LLL> where ArgumentExt<LLL>: Default` — never preloaded; no-caching discussion in rustdoc (T5 §G digest); state-transparent (D-plan-9) |
+| `\input` staged shape | callable span = invocation in the includer (`stage_invocation(.., Some(end))`); slot `"attached"`, `SlotRole::Attached`, ext `BodySlotExt::make_body()` (D-plan-8); slot present iff a source was attached (empty file ⇒ empty slot) |
+| parse-law checker | callable byte accounting partitioned by slot role: parent-source sequence contiguous across excluded regions; `Attached` regions own per-source accounting; `Hidden` regions none (D-plan-10) |
+| `LineIndex::line_of` | `(&mut self, offset) -> Option<(usize, Range<usize>)>` — line number + terminator-free range (D-plan-12) |
+| `LineIndex::line_col_span` | `(&mut self, impl Into<Range<usize>>) -> Option<((usize,usize),(usize,usize))>` — both ends or `None` |
+| `source::LineIndexCache<O = Option<String>>` | persistent per-source cache (Arc-identity keyed, owned line-starts tables); mirrors `line_col`/`line_of`/`line_col_span` with `source` first; `new`/`Default`/`set_max_scan_len` (D-plan-11) |
+| `source::LineColProvider<O = Option<String>>` | trait: `line_col(&mut self, source: &Arc<Source<O>>, offset) -> Option<(usize, usize)>`; implemented by `LineIndexCache` |
+| render `_with` variants | `Diagnostic::render_with`, `ParseError::render_with`, `Diagnostics::render_all_with`, `format_position_with`, `format_traceback_with` — `&mut impl LineColProvider<O>` last; no-arg forms = transient-cache shorthand; internal `SourceIndexCache` replaced by `LineIndexCache` |
+| `DEFAULT_MAX_SCAN_LEN` | 100 000 → 500 000 (private const; docs updated, silent-`None` warnings kept) |
+
+### Acceptance-test outcomes
+
+- **Multi-source reconstruction (T5 I-18)**: `latexlike::input` tests — per-source
+  slices/spans (invocation span in the includer, body slice single-source in the
+  attached source, root children rebuild the includer's bytes, body rebuilds the
+  attached bytes), `Attached` slot shape (name/role/body marker), S5 payload-pin
+  oracle (`check_latexlike_tree_invariants`) green on every multi-source tree,
+  nested inclusion with walkable chains, empty-file slot, expression-fallback
+  reference. PASS.
+- **Include-chain policy**: self-include legal at the core level
+  (`core_performs_no_recursion_checking_self_inclusion_is_legal`);
+  `check_include_chain` unit tests (cycle incl. primary participation, depth
+  overflow with distinct message, `None`-key skip); the resolver-side policy
+  recipe test (`a_policy_resolver_turns_self_inclusion_into_a_diagnosed_cycle`).
+  PASS.
+- **Line/col**: fresh-vs-cached agreement at every offset, per-source isolation
+  by Arc identity (distinct offset conventions), `line_of` boundaries
+  (first/last line, trailing newline, empty source, end-of-content), scan-cap
+  re-admission, `_with`-vs-shorthand render parity across repeated renders,
+  fallback message beyond the raised cap. PASS.
+- **Stray-close recovery**: engine-level (`a_stray_close_in_the_attached_source_
+  recovers_locally` — tolerant continues, strict aborts, frame recorded) and
+  preset-level (`a_stray_close_in_the_included_file_never_unwinds_the_includer`
+  — the enclosing group closes at its own delimiter). PASS.
+
+### Gate results (final full run)
+
+- `cargo build` and `cargo build --tests`: 0 warnings, 0 errors.
+- `cargo test`: 654 lib + 30 acceptance + 8 derive-conditions + 1 derive +
+  28 doctests — all green (2 ignored doctests pre-existing; 614 → 654 lib,
+  27 → 28 doctests: the `input_macro_spec` example).
+- `rm -rf target/doc && cargo docs`: clean — no missing_docs, no broken links.
+- Superseded-names sweep: clean — no `cx.parse_source` (the door is
+  `parse_attached_source`), no `Language::resolve_source`/`with_resolver`
+  shapes, no `techy::helpers`, no `LineIndexCacheProvider`, no
+  `SourceIndexCache` residue, no `line_range(line_no)`, no `ancestors()`.
+- Behavior changes only where ruled: the parse-law checker scoping (T5-F5
+  rider), the scan-cap raise (T4-F6), the render internals (mechanism swap —
+  output pinned byte-identical by the parity test).
+
+### Commits
+
+- 1e0197c P3-S6: implementation plan
+- f5aab12 P3-S6 M1: ResolveError Clone (Arc cause) + including_sources +
+  check_include_chain
+- 14d36f9 P3-S6 M2: parse_attached_source door + attach_source_reference bundle
+  + the two core.sources conditions
+- ac08a03 P3-S6 M3: parse-law checker per-source byte accounting via slot roles
+- 4e81e2f P3-S6 M4: latexlike input_macro_spec + multi-source I-18 acceptance
+- 7571862 P3-S6 M5: line/col ownership package
+- (+ this commit) P3-S6 M6: docs + records + closure
+
+### Churn
+
+Whole stage (4113aa8..HEAD, this commit included): 17 files, +2796/−150.
+Code portion (techy/src): 11 files (2 new — constructs/attached_source.rs,
+latexlike/input.rs), +2240/−129. Records/docs: DESIGN_RATIONALE.md (7 entries
+touched), ARCHITECTURE.md (4 passages), CLAUDE.md (source facade line),
+docs/ guide (2 pages), this report.
