@@ -189,14 +189,17 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
         rule: &Arc<GroupRule<Latexlike>>,
     ) -> Option<ParsingStateDelta<Latexlike>> {
         match rule.group_type {
-            GroupType::Math => {
+            // Form-blind on purpose: inline and display math parse identically — the
+            // payload never forks the wiring (the payload-admission rule,
+            // `MathGroupForm`).
+            GroupType::Math(_) => {
                 let rules = base.rules();
                 // Drop the math openers; keep everything else (content groups, temporary
                 // groups, commands, …) exactly as the outer state has it.
                 let groups: Vec<Arc<GroupRule<Latexlike>>> = rules
                     .groups
                     .iter()
-                    .filter(|group_rule| group_rule.group_type != GroupType::Math)
+                    .filter(|group_rule| !matches!(group_rule.group_type, GroupType::Math(_)))
                     .cloned()
                     .collect();
                 // Merge `$` into the *current* forbidden chars (at the transition), not a
@@ -224,6 +227,7 @@ impl ParseDriver<Latexlike> for LatexlikeDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::latexlike::MathGroupForm;
 
     #[test]
     fn the_recovery_knob_is_explicit() {
@@ -263,7 +267,7 @@ mod tests {
         let state = ParsingState::<Latexlike>::lang_initial();
 
         let math = Arc::new(GroupRule {
-            group_type: GroupType::Math,
+            group_type: GroupType::Math(MathGroupForm::Inline),
             open: "$".into(),
             close: "$".into(),
         });

@@ -21,9 +21,10 @@
 //!   [`argument_specs_from_str`]) and the verbatim wiring —
 //!   [`VerbatimBehavior`] for `verbatim`-style environment bodies, the `v` codes for
 //!   `\verb`-style delimited verbatim arguments;
-//! - `NodeRef` accessor sugar for latexlike trees ([`MathStyle`],
+//! - `NodeRef` accessor sugar for latexlike trees
+//!   ([`math_form`](crate::node::NodeRef::math_form),
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
-//!   `NodeRef<'_, Latexlike>`.
+//!   latexlike-shaped `NodeRef`s.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -62,7 +63,6 @@ pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
-pub use node_ref::MathStyle;
 pub use spec::{MacroSpec, SpecialsSpec};
 
 use alloc::string::String;
@@ -79,14 +79,49 @@ use crate::token::{
     TriggerChars, WhitespaceRules,
 };
 
+/// The form in which a math group appears: inline or display — the typed class
+/// payload of [`GroupType::Math`], declared by the rule author at
+/// [`GroupRule`](crate::token::GroupRule) registration and read back off the node via
+/// [`NodeRef::math_form`](crate::node::NodeRef::math_form) (no table, no string
+/// matching, no state lookup — correct for embedder-registered and mid-parse-minted
+/// delimiters alike).
+///
+/// The name is *form*, deliberately not "style": typesetting **style** (fonts, script
+/// level, `\displaystyle`) is orthogonal — `$\displaystyle …$` renders display-*style*
+/// math inside an inline-*form* group. The type names how the math group appears in
+/// the source, not how its content is typeset.
+///
+/// **Exhaustive on purpose** (no `#[non_exhaustive]`): renderers match on the form
+/// constantly, and a wildcard arm on every consumer would be a permanent tax against
+/// a third form nobody can name. Adding one is a conscious breaking change.
+///
+/// # The payload-admission rule
+///
+/// Class payloads are not a dumping ground. A payload on a
+/// [`GroupType`] class is admissible only when it is (a) **parse-behavior-invariant**
+/// — parse wiring keeps a single arm (`Math(_)` matches once; interior delta,
+/// visibility, and forbidden-char logic are form-blind); (b) **semantically
+/// universal** for downstream consumers of the class; and (c) **declared at rule
+/// registration**, never derived from delimiter spellings. Inline/display passes all
+/// three; a hypothetical `Content(BraceKind)` fails (b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MathGroupForm {
+    /// `$…$` / `\(…\)` — inline math.
+    Inline,
+    /// `$$…$$` / `\[…\]` — display math.
+    Display,
+}
+
 /// The preset's group classes ([`Lang::GroupTypeId`]).
 ///
 /// Classes classify **parse behavior**, not delimiter spellings: several delimiter
 /// pairs share one class, and the node's [`GroupData`](crate::node::GroupData) records
-/// the delimiters as written. There is deliberately a *single* math class (decided at
-/// the 7.5 checkpoint): inline and display math parse identically — same interior
-/// [`Mode::Math`], same definition visibility — so inline/display is a delimiter fact,
-/// exposed by [`NodeRef::math_style`](crate::node::NodeRef::math_style), not a class.
+/// the delimiters as written. There is deliberately a *single* math class: inline and
+/// display math parse identically — same interior [`Mode::Math`], same definition
+/// visibility — so parse wiring stays single-armed (`Math(_)`), while the
+/// inline/display **form** rides as typed class payload ([`MathGroupForm`]), declared
+/// at rule registration and exposed by
+/// [`NodeRef::math_form`](crate::node::NodeRef::math_form).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GroupType {
@@ -97,8 +132,9 @@ pub enum GroupType {
     /// A math group (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`): the interior parses in
     /// [`Mode::Math`] (the driver's
     /// [`group_interior_delta`](crate::engine::ParseDriver::group_interior_delta)
-    /// plug).
-    Math,
+    /// plug — form-blind: a single `Math(_)` wiring arm). The payload records the
+    /// group's [`MathGroupForm`], declared where the delimiter rule is registered.
+    Math(MathGroupForm),
     /// A verbatim region's group: the `\verb|…|` shape staged by the `v`
     /// argument codes ([`argument_specs`]), and the class of the terminator rules
     /// verbatim readers mint. The interior is **raw text** — it is read under a
@@ -135,8 +171,8 @@ pub enum CallableType {
 /// truth for "am I in math" (no `StateExt` flag): math groups *initiate* the change
 /// through the driver's descent-delta plug, and definition visibility keys on it
 /// ([`Package::set_visible_modes`]). Inline vs. display math is deliberately **not** a
-/// mode (nor a group class): it changes nothing about how the interior parses — see
-/// [`MathStyle`] for the presentation-side accessor.
+/// mode (nor its own group class): it changes nothing about how the interior parses —
+/// the form is class payload, [`MathGroupForm`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Mode {
@@ -153,8 +189,12 @@ pub enum Mode {
 // same change (the `ClosedVocabulary` contract).
 
 impl ClosedVocabulary for GroupType {
-    const ALL: &'static [GroupType] =
-        &[GroupType::Content, GroupType::Math, GroupType::Verbatim];
+    const ALL: &'static [GroupType] = &[
+        GroupType::Content,
+        GroupType::Math(MathGroupForm::Inline),
+        GroupType::Math(MathGroupForm::Display),
+        GroupType::Verbatim,
+    ];
 }
 
 impl ClosedVocabulary for CallableType {
@@ -290,19 +330,23 @@ impl Lang for Latexlike {
 /// `\emph` becomes a content char rather than being swallowed as post-macro space
 /// (decided for determinism and a fixed char-set model).
 ///
-/// The four math delimiter pairs come from the shared `MATH_DELIMITERS` table (the
-/// single source of truth also read by [`NodeRef::math_style`](crate::node::NodeRef::math_style)).
+/// Each math rule declares its [`MathGroupForm`] as class payload
+/// ([`GroupType::Math`]): `$…$`/`\(…\)` are [`Inline`](MathGroupForm::Inline),
+/// `$$…$$`/`\[…\]` are [`Display`](MathGroupForm::Display) — read back from parsed
+/// nodes via [`NodeRef::math_form`](crate::node::NodeRef::math_form), with no
+/// delimiter table anywhere.
 pub fn default_token_rules() -> TokenRules<Latexlike> {
     fn group(group_type: GroupType, open: &str, close: &str) -> Arc<GroupRule<Latexlike>> {
         Arc::new(GroupRule { group_type, open: open.into(), close: close.into() })
     }
 
-    let mut groups = vec![group(GroupType::Content, "{", "}")];
-    groups.extend(
-        node_ref::MATH_DELIMITERS
-            .iter()
-            .map(|&(open, close, _style)| group(GroupType::Math, open, close)),
-    );
+    let groups = vec![
+        group(GroupType::Content, "{", "}"),
+        group(GroupType::Math(MathGroupForm::Inline), "$", "$"),
+        group(GroupType::Math(MathGroupForm::Display), "$$", "$$"),
+        group(GroupType::Math(MathGroupForm::Inline), r"\(", r"\)"),
+        group(GroupType::Math(MathGroupForm::Display), r"\[", r"\]"),
+    ];
 
     TokenRules {
         enable_whitespace: true,
@@ -477,7 +521,7 @@ mod tests {
         check_tree_invariants(&result.tree);
         assert_eq!(
             root_shapes(&result),
-            ["chars(a )", "group(Math $ $)", "chars( b)"]
+            ["chars(a )", "group(Math(Inline) $ $)", "chars( b)"]
         );
 
         let math = result.tree.root().child(1).unwrap();
@@ -510,7 +554,7 @@ mod tests {
         check_tree_invariants(&result.tree);
         assert_eq!(
             root_shapes(&result),
-            ["group(Math $ $)", "group(Math $ $)"]
+            ["group(Math(Inline) $ $)", "group(Math(Inline) $ $)"]
         );
         let first = result.tree.root().child(0).unwrap();
         let second = result.tree.root().child(1).unwrap();
@@ -529,7 +573,7 @@ mod tests {
         check_tree_invariants(&result.tree);
         // One display group at the root — it closes on the trailing `$$`, never leaving
         // an unclosed nested inline group.
-        assert_eq!(root_shapes(&result), ["group(Math $$ $$)"]);
+        assert_eq!(root_shapes(&result), ["group(Math(Display) $$ $$)"]);
         let display = result.tree.root().child(0).unwrap();
         let interior: String = display.children().iter().filter_map(|child| child.chars()).collect();
         assert_eq!(interior, "a$b");
@@ -539,9 +583,9 @@ mod tests {
 
     #[test]
     fn display_math_delimiters() {
-        assert_eq!(parse_shapes("$$ab$$"), ["group(Math $$ $$)"]);
-        assert_eq!(parse_shapes(r"\[x\]"), [r"group(Math \[ \])"]);
-        assert_eq!(parse_shapes(r"\(x\)"), [r"group(Math \( \))"]);
+        assert_eq!(parse_shapes("$$ab$$"), ["group(Math(Display) $$ $$)"]);
+        assert_eq!(parse_shapes(r"\[x\]"), [r"group(Math(Display) \[ \])"]);
+        assert_eq!(parse_shapes(r"\(x\)"), [r"group(Math(Inline) \( \))"]);
     }
 
     // --- scope stack: commands, visibility, specials ----------------------------------
@@ -646,7 +690,7 @@ mod tests {
         let result = strict().parse("$a~b---c$").unwrap();
         check_tree_invariants(&result.tree);
         let math = result.tree.root().child(0).unwrap();
-        assert_eq!(math.group_type(), Some(GroupType::Math));
+        assert!(matches!(math.group_type(), Some(GroupType::Math(_))));
         let interior: Vec<String> =
             math.children().iter().map(|node| node.summary()).collect();
         assert_eq!(interior, ["chars(a)", "Specials(~)", "chars(b---c)"]);

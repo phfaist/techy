@@ -168,13 +168,15 @@ Math is not a core concept — it is preset data. The default rules declare `$�
 `$$…$$`, `\(…\)`, and `\[…\]` as delimiter pairs of the single
 [`GroupType::Math`](crate::latexlike::GroupType) class, and the driver's descent
 delta parses their interiors in [`Mode::Math`](crate::latexlike::Mode). Inline vs.
-display is a *delimiter* fact, read back by
-[`math_style`](crate::core::node::NodeRef::math_style):
+display is the group's [`MathGroupForm`](crate::latexlike::MathGroupForm) — typed
+class payload each delimiter rule declares at registration, read back by
+[`math_form`](crate::core::node::NodeRef::math_form) (no delimiter table; a custom
+registered pair carries its declared form like the built-ins):
 
 ```rust
 use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
-use techy::latexlike::{Latexlike, LatexlikeDriver, MathStyle, Mode};
+use techy::latexlike::{Latexlike, LatexlikeDriver, MathGroupForm, Mode};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
@@ -184,14 +186,14 @@ let result = language.parse(r"a $x+y$ b \[z\]").unwrap();
 
 let inline = result.tree.root().child(1).unwrap();
 assert!(inline.is_math_group());
-assert_eq!(inline.math_style(), Some(MathStyle::Inline));
+assert_eq!(inline.math_form(), Some(MathGroupForm::Inline));
 // The interior was parsed in math mode; the node itself sits in the surrounding
 // text-mode content. Every node records the state it was parsed under.
 assert_eq!(inline.child(0).unwrap().parsing_state().mode(), Mode::Math);
 assert_eq!(inline.parsing_state().mode(), Mode::Text);
 
 let display = result.tree.root().child(3).unwrap();
-assert_eq!(display.math_style(), Some(MathStyle::Display));
+assert_eq!(display.math_form(), Some(MathGroupForm::Display));
 assert_eq!(display.group_delimiters(), Some((r"\[", r"\]")));
 ```
 
@@ -210,7 +212,7 @@ let language: Language<Latexlike> = Language::new(
 let result = language.parse("$a$$b$").unwrap();
 let shapes: Vec<String> =
     result.tree.root().children().iter().map(|node| node.summary()).collect();
-assert_eq!(shapes, ["group(Math $ $)", "group(Math $ $)"]);
+assert_eq!(shapes, ["group(Math(Inline) $ $)", "group(Math(Inline) $ $)"]);
 ```
 
 A macro like `\text{…}` must parse its argument back in *text* mode even inside

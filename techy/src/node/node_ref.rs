@@ -111,7 +111,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         &self.data().parsing_state
     }
 
-    /// A compact one-line description of the node — `chars(ab )`, `group(Math $ $)`,
+    /// A compact one-line description of the node — `chars(ab )`, `group(Math(Inline) $ $)`,
     /// `Macro(emph)`, `comment( note)`, `list(3)` — the assertion/logging companion
     /// to the verbose `Debug` rendering (promoted from the preset's test support). Groups print their class (`?` when classless) and recorded
     /// delimiters; callables print their invocation form (`Debug`) and spelling;

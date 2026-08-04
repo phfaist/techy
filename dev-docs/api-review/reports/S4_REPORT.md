@@ -8,9 +8,9 @@ each.
 ## Progress
 
 - [x] M0 — implementation plan committed (this file)
-- [ ] M1 — Math group form (core + preset): `GroupType::Math(MathGroupForm)`,
+- [x] M1 — Math group form (core + preset): `GroupType::Math(MathGroupForm)`,
       `math_form()` sugar, `MATH_DELIMITERS` dissolved, `MathStyle`/`math_style`
-      deleted
+      deleted (build/tests green; grep gate clean)
 - [ ] M2 — Role traits + `LatexlikeLang` umbrella (+ preset `Event` enum,
       `default_token_rules::<LLL>`, generic NodeRef sugar)
 - [ ] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible

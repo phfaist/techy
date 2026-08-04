@@ -8,54 +8,24 @@
 
 use crate::node::NodeRef;
 
-use super::{CallableType, GroupType, Latexlike};
-
-/// Inline vs. display presentation of a math group — a *delimiter* fact, not a group
-/// class ([`GroupType::Math`] is a single class; 7.5 checkpoint): read from the
-/// node's recorded opening delimiter by [`NodeRef::math_style`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MathStyle {
-    /// `$…$` / `\(…\)` — inline math.
-    Inline,
-    /// `$$…$$` / `\[…\]` — display math.
-    Display,
-}
-
-/// The preset's math-delimiter pairs `(open, close, style)` — the single source of
-/// truth shared by [`default_token_rules`](super::default_token_rules), which builds
-/// the [`Math`](GroupType::Math) group rules from `(open, close)`, and
-/// [`math_style`](NodeRef::math_style), which reads the style back off a node's
-/// recorded opening delimiter. Keeping both readers on one table removes the drift
-/// risk of two hand-maintained delimiter lists. Embedder-registered math delimiters
-/// are not listed here, so `math_style` answers `None` for them.
-pub(super) const MATH_DELIMITERS: [(&str, &str, MathStyle); 4] = [
-    ("$", "$", MathStyle::Inline),
-    ("$$", "$$", MathStyle::Display),
-    (r"\(", r"\)", MathStyle::Inline),
-    (r"\[", r"\]", MathStyle::Display),
-];
+use super::{CallableType, GroupType, Latexlike, MathGroupForm};
 
 /// Latexlike accessor sugar (preset vocabulary over the generic accessors).
 impl<'t> NodeRef<'t, Latexlike> {
-    /// Whether this node is a math group ([`GroupType::Math`]).
+    /// Whether this node is a math group ([`GroupType::Math`], any form).
     pub fn is_math_group(&self) -> bool {
-        self.group_type() == Some(GroupType::Math)
+        matches!(self.group_type(), Some(GroupType::Math(_)))
     }
 
-    /// A math group's presentation style, read from its recorded opening delimiter:
-    /// `$`/`\(` are [`Inline`](MathStyle::Inline), `$$`/`\[` are
-    /// [`Display`](MathStyle::Display). `None` for non-math nodes — and for math
-    /// groups over embedder-registered delimiters this table does not know (read
-    /// [`group_delimiters`](NodeRef::group_delimiters) directly there).
-    pub fn math_style(&self) -> Option<MathStyle> {
-        if !self.is_math_group() {
-            return None;
+    /// A math group's [`MathGroupForm`] — the typed class payload the delimiter rule
+    /// declared at registration ([`GroupType::Math`]): no delimiter table, no string
+    /// matching, no state lookup, correct for embedder-registered and
+    /// mid-parse-minted delimiters alike. `None` for non-math nodes.
+    pub fn math_form(&self) -> Option<MathGroupForm> {
+        match self.group_type() {
+            Some(GroupType::Math(form)) => Some(form),
+            _ => None,
         }
-        let (open, _close) = self.group_delimiters()?;
-        MATH_DELIMITERS
-            .iter()
-            .find(|(delim_open, _, _)| *delim_open == open)
-            .map(|&(_, _, style)| style)
     }
 
     /// The macro name, when this node is a macro invocation (`\emph` → `"emph"`).
@@ -101,21 +71,21 @@ mod tests {
     }
 
     #[test]
-    fn math_style_reads_the_recorded_delimiters() {
+    fn math_form_reads_the_declared_class_payload() {
         let result = language().parse(r"$a$ $$b$$ \(c\) \[d\] {e} f").unwrap();
         let root = result.tree.root();
-        let styles: Vec<Option<MathStyle>> =
-            root.children().iter().map(|child| child.math_style()).collect();
+        let forms: Vec<Option<MathGroupForm>> =
+            root.children().iter().map(|child| child.math_form()).collect();
         assert_eq!(
-            styles,
+            forms,
             [
-                Some(MathStyle::Inline),
+                Some(MathGroupForm::Inline),
                 None, // whitespace chars
-                Some(MathStyle::Display),
+                Some(MathGroupForm::Display),
                 None,
-                Some(MathStyle::Inline),
+                Some(MathGroupForm::Inline),
                 None,
-                Some(MathStyle::Display),
+                Some(MathGroupForm::Display),
                 None,
                 None, // {e}: a content group is not math
                 None, // chars
@@ -123,6 +93,38 @@ mod tests {
         );
         assert!(root.child(0).unwrap().is_math_group());
         assert!(!root.child(8).unwrap().is_math_group());
+    }
+
+    #[test]
+    fn math_form_answers_for_custom_registered_delimiters() {
+        // The decisive math-form property: the form is declared at rule
+        // registration, so an embedder-registered delimiter pair answers without any
+        // preset table (the superseded delimiter-table sugar answered `None` here).
+        use crate::latexlike::{default_token_rules, LatexlikeDriver};
+        use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+        use crate::token::GroupRule;
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+
+        let mut groups: Vec<Arc<GroupRule<Latexlike>>> = default_token_rules().groups;
+        groups.push(Arc::new(GroupRule {
+            group_type: GroupType::Math(MathGroupForm::Display),
+            open: "«".into(),
+            close: "»".into(),
+        }));
+        let seed = ParsingState::<Latexlike>::lang_initial()
+            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+                groups: Some(groups),
+                ..TokenRulesOverrides::default()
+            }))
+            .unwrap();
+        let language = Language::new(LatexlikeDriver::new(Recovery::Strict), seed);
+
+        let result = language.parse("a «x» b").unwrap();
+        let math = result.tree.root().child(1).unwrap();
+        assert!(math.is_math_group());
+        assert_eq!(math.math_form(), Some(MathGroupForm::Display));
+        assert_eq!(math.group_delimiters(), Some(("«", "»")));
     }
 
     #[test]
@@ -143,6 +145,6 @@ mod tests {
         let chars = root.child(2).unwrap();
         assert_eq!(chars.macro_name(), None);
         assert_eq!(chars.specials_name(), None);
-        assert_eq!(chars.math_style(), None);
+        assert_eq!(chars.math_form(), None);
     }
 }

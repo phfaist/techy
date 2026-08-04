@@ -548,7 +548,7 @@ mod comments {
 
 mod math_modes {
     use super::support::*;
-    use techy::latexlike::{MathStyle, Mode};
+    use techy::latexlike::{MathGroupForm, Mode};
 
     const MATHMODES_TEXT: &str = "\nHere is an inline expression like $\\vec{x} + \\hat p$ and a display equation $$\n   ax + b = y\n$$ and another, with a subtle inner math mode:\n\\[ cx^2+z=-d\\quad\\text{if $x<0$} \\]\nAnd a final inline math mode \\(\\mbox{Prob}(\\mbox{some event if \\(x>0\\)})=1\\).\n";
 
@@ -559,8 +559,8 @@ mod math_modes {
         let p = MATHMODES_TEXT.find('$').unwrap();
 
         let math = result.tree.root().child(1).unwrap();
-        assert_eq!(outline([math]), [format!("{}..{} group(Math $ $)", p, p + 18)]);
-        assert_eq!(math.math_style(), Some(MathStyle::Inline));
+        assert_eq!(outline([math]), [format!("{}..{} group(Math(Inline) $ $)", p, p + 18)]);
+        assert_eq!(math.math_form(), Some(MathGroupForm::Inline));
         assert_eq!(
             outline(math.children()),
             [
@@ -591,8 +591,8 @@ mod math_modes {
         let p = MATHMODES_TEXT.find("$$").unwrap();
 
         let math = result.tree.root().child(3).unwrap();
-        assert_eq!(outline([math]), [format!("{}..{} group(Math $$ $$)", p, p + 19)]);
-        assert_eq!(math.math_style(), Some(MathStyle::Display));
+        assert_eq!(outline([math]), [format!("{}..{} group(Math(Display) $$ $$)", p, p + 19)]);
+        assert_eq!(math.math_form(), Some(MathGroupForm::Display));
         assert_eq!(
             outline(math.children()),
             [format!("{}..{} chars(\n   ax + b = y\n)", p + 2, p + 17)]
@@ -608,8 +608,8 @@ mod math_modes {
         let p = MATHMODES_TEXT.find("\\[").unwrap();
 
         let math = result.tree.root().child(5).unwrap();
-        assert_eq!(outline([math]), [format!("{}..{} group(Math \\[ \\])", p, p + 35)]);
-        assert_eq!(math.math_style(), Some(MathStyle::Display));
+        assert_eq!(outline([math]), [format!("{}..{} group(Math(Display) \\[ \\])", p, p + 35)]);
+        assert_eq!(math.math_form(), Some(MathGroupForm::Display));
         assert_eq!(
             outline(math.children()),
             [
@@ -631,14 +631,14 @@ mod math_modes {
             outline(text_arg),
             [
                 format!("{}..{} chars(if )", p + 23, p + 26),
-                format!("{}..{} group(Math $ $)", p + 26, p + 31),
+                format!("{}..{} group(Math(Inline) $ $)", p + 26, p + 31),
             ]
         );
         assert_eq!(text_arg.get(0).unwrap().parsing_state().mode(), Mode::Text);
 
         // …and the nested `$…$` interior is math again (ps3.in_math_mode is True).
         let nested = text_arg.get(1).unwrap();
-        assert_eq!(nested.math_style(), Some(MathStyle::Inline));
+        assert_eq!(nested.math_form(), Some(MathGroupForm::Inline));
         let nested_chars = nested.child(0).unwrap();
         assert_eq!(nested_chars.chars(), Some("x<0"));
         assert_eq!(nested_chars.parsing_state().mode(), Mode::Math);
@@ -652,8 +652,8 @@ mod math_modes {
         let p = MATHMODES_TEXT.find("\\(").unwrap();
 
         let math = result.tree.root().child(7).unwrap();
-        assert_eq!(outline([math]), [format!("{}..{} group(Math \\( \\))", p, p + 47)]);
-        assert_eq!(math.math_style(), Some(MathStyle::Inline));
+        assert_eq!(outline([math]), [format!("{}..{} group(Math(Inline) \\( \\))", p, p + 47)]);
+        assert_eq!(math.math_form(), Some(MathGroupForm::Inline));
         assert_eq!(
             outline(math.children()),
             [
@@ -677,7 +677,7 @@ mod math_modes {
         assert_eq!(mbox2_content.get(0).unwrap().chars(), Some("some event if "));
         assert_eq!(mbox2_content.get(0).unwrap().parsing_state().mode(), Mode::Text);
         let nested = mbox2_content.get(1).unwrap();
-        assert_eq!(nested.math_style(), Some(MathStyle::Inline));
+        assert_eq!(nested.math_form(), Some(MathGroupForm::Inline));
         assert_eq!(nested.group_delimiters(), Some(("\\(", "\\)")));
         assert_eq!(nested.child(0).unwrap().chars(), Some("x>0"));
         assert_eq!(nested.child(0).unwrap().parsing_state().mode(), Mode::Math);
@@ -696,27 +696,27 @@ mod math_modes {
             outline(result.tree.root().children()),
             [
                 "0..1 chars(x)",
-                "1..10 group(Math $ $)",
-                "10..19 group(Math $ $)",
-                "19..38 group(Math $$ $$)",
+                "1..10 group(Math(Inline) $ $)",
+                "10..19 group(Math(Inline) $ $)",
+                "19..38 group(Math(Display) $$ $$)",
             ]
         );
 
         let first = result.tree.root().child(1).unwrap();
         assert_eq!(outline(first.children()), ["2..9 Macro(dagger)"]);
-        assert_eq!(first.math_style(), Some(MathStyle::Inline));
+        assert_eq!(first.math_form(), Some(MathGroupForm::Inline));
         let second = result.tree.root().child(2).unwrap();
         assert_eq!(outline(second.children()), ["11..18 Macro(dagger)"]);
 
         let display = result.tree.root().child(3).unwrap();
-        assert_eq!(display.math_style(), Some(MathStyle::Display));
+        assert_eq!(display.math_form(), Some(MathGroupForm::Display));
         assert_eq!(
             outline(display.children()),
             ["21..24 chars(A=B)", "24..36 Macro(mbox)"]
         );
         let mbox = display.child(1).unwrap();
         let inner = mbox.argument_content_nodes(0).unwrap().get(0).unwrap();
-        assert_eq!(outline([inner]), ["30..35 group(Math $ $)"]);
+        assert_eq!(outline([inner]), ["30..35 group(Math(Inline) $ $)"]);
         assert_eq!(inner.child(0).unwrap().chars(), Some("b=a"));
     }
 }

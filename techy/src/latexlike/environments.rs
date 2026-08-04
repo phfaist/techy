@@ -865,7 +865,7 @@ mod tests {
         // A math group inside a body, and an environment inside a math group.
         let math_in_body = parse_ok("\\begin{itemize}$x$\\end{itemize}");
         let env = math_in_body.tree.root().child(0).unwrap();
-        assert_eq!(body_shapes(env), ["group(Math $ $)"]);
+        assert_eq!(body_shapes(env), ["group(Math(Inline) $ $)"]);
 
         let env_in_math = parse_ok("$\\begin{itemize}x\\end{itemize}$");
         let math = env_in_math.tree.root().child(0).unwrap();
