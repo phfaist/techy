@@ -142,7 +142,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   lines). [§dd-dr:display-tree]. `NodeKind::as_str()` (T1T2 §E5).
 - Acceptance: navigation/validator/annotation tests; no old ext API anywhere.
 
-### S4 — Preset generalization + state-stack events  [status: IN PROGRESS 2026-08-04]
+### S4 — Preset generalization + state-stack events  [status: DONE — merged 2026-08-04]
 
 - P3: per-vocabulary role traits (callable accessors `macro_callable()`/
   `environment_callable()`/`specials_callable()` + `is_*`; mode trimmed to
