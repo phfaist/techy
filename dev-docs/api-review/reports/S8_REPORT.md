@@ -36,7 +36,8 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
       (7 tests; 715 lib green, 0 warnings)
 - [x] M5 — preset SourceRecomposer + source_recomposer() + preset tests
       (11 tests; 726 lib green, 0 warnings)
-- [ ] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices)
+- [x] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices;
+      21 tests in tests/recompose_oracle.rs, all green on the first run)
 - [ ] M7 — records + docs + gates + closure
 
 ## Design synthesis (records → code)
@@ -574,3 +575,41 @@ tests at minimum; full gates at M7).
   `include_attached()` wrapper reemits the included bytes in place).
 - Every strict fixture also runs `check_latexlike_tree_invariants` (the S5
   payload-pin oracle) before reemission.
+
+### M6 realization notes
+
+- `techy/tests/recompose_oracle.rs` shipped, **public-API-only** (imports
+  only `techy::{core, error, latexlike, recompose, source}`), 21 tests, all
+  green on the first run against the recordings the earlier stages landed —
+  the payload-completeness certification the R15 ruling ordered.
+- Strict matrix (10 tests): macros (post-space variants, pre/post text), a
+  second `@` escape character (public `TokenRulesOverrides` route), argument
+  shapes (`\frac 1 2` single-token, optional provided/absent, inter-argument
+  noise, star marker provided/absent), environments (std, recorded
+  `\begin {itemize}` spacing, nested, declared environment argument
+  provided/absent), verbatim (env body + `\verb|…|` + `\verb+{x}+`),
+  specials/ligatures, paragraph breaks in BOTH driver styles, groups + math
+  (all four delimiter pairs), comments (newline+indentation post-space,
+  end-of-input, leading), and a kitchen-sink document combining everything.
+- Tolerant matrix (8 tests): reemit == input holds byte-exactly for the
+  unterminated environment, terminator mismatch
+  (`\begin{A}x\begin{B}y\end{A}`), unclosed groups (incl. nested), stray
+  close, orphan `\end`, forbidden `$` inside display math, and the unknown
+  macro — every one of those recoveries keeps its consumed bytes recorded.
+  **The malformed-terminator pin** (D-plan-10): `\begin{A}x\end y` reemits
+  `\begin{A}xy` — the consumed-alone `\end ` spelling (command + its
+  syntactic post-space, per the recovery contract in
+  environment_parser.rs) is exactly the elided complement; excluded from
+  the equality matrix and pinned with the S5-flag citation.
+- Multi-source matrix (3 tests): root reemit == the includer's bytes
+  (`Attached` skipped by the default scope; `\input{…}` reemits as
+  spelled); nested two-tier inclusion where each attached body reemits its
+  own source's bytes exactly (grabbed via
+  `recompose_slot_content_named(…, "attached", …)` with **reentrant
+  self-passing** — the grabber re-enters itself, so the nested `\input` is
+  grabbed during the outer grab's sub-fold, innermost first — using the
+  boxed self-referential error conversion, the transform suite's
+  documented `OpError` pattern, which works unchanged for
+  `RecomposeError`); empty included file (slot present, empty piece).
+- Doctest delta: +3 (the visit module example, the recompose module
+  example, the `ConcatPieces` example).
