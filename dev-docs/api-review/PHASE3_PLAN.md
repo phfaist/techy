@@ -531,3 +531,12 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   rulings-revision escalation rule in the brief; scope = §S7 + the A8
   input-genericity rider + the S8 name-anchor note on [§dd-dr:restage-ops],
   since RecomposeError/RecomposeContext must mirror S7's names exactly).
+- 2026-08-05: S7 implemented in one run (6 commits through 43d6993; one
+  watchdog-stall resume, no work lost; 687 lib tests, was 661; 30 doctests,
+  was 28; gates green; argument-swap acceptance + four extract triples +
+  input genericity landed). 7 deviations queued (D-plan-1..7); no
+  escalations — implementer reports no rulings tensions; closure-blanket
+  inference workable (fixed-error fallback NOT triggered, inline closures
+  need parameter-type annotations). Whole-stage independent review launched
+  (full diff 29db6da..HEAD; special scrutiny ordered on D-plan-1 error-roster
+  extras as the S8 anchor and D-plan-7 content-range translation arithmetic).
