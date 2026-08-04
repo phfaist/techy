@@ -26,8 +26,8 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
 ## Progress
 
 - [x] M1 — this plan (committed before any code work)
-- [ ] M2 — `techy::visit`: walk + NodeVisitor + VisitFlow + VisitContext +
-      scoped-children kernel + tests
+- [x] M2 — `techy::visit`: walk + NodeVisitor + VisitFlow + VisitContext +
+      scoped-children kernel + tests (9 tests; 698 lib green, 0 warnings)
 - [ ] M3 — `techy::recompose` core: ComposePiece, Recompose/ConcatPieces,
       Recomposer, RecomposeError, driver + instruction lowering,
       core_source_instruction + machinery tests
@@ -442,3 +442,27 @@ tests at minimum; full gates at M7).
   record now would be a new recording decision no ruling ordered.
 
 (Further entries appended as implementation forces them.)
+
+### M2 realization notes
+
+- Shipped per plan (`techy/src/visit.rs`): `VisitFlow`, `NodeVisitor`
+  (infallible `enter` + defaulted `exit`, both `(node, &VisitContext)`), the
+  enter-only closure blanket, `VisitContext { tree, depth }` (accessors only),
+  `walk(node, visitor)` (recursive driver over `ControlFlow`, mirroring the
+  restage driver's recursion style), and the
+  `pub(crate) scoped_children(node, include_attached, include_hidden)` kernel.
+- Kernel realization: excluded slot regions collected as global `Range<u32>`s
+  once per node (only when a flag is off AND the node is a callable — the
+  non-callable/role-blind paths collect nothing); the child iterator filters
+  global indices against them. Regions are contiguous runs of the callable's
+  children, slots are few — the linear check is fine.
+- The visit module docs reference `crate::recompose` (the three-channel
+  passage and the role-asymmetry contrast); those links resolve when M3 lands
+  — the docs gate runs at M7, build/tests are green throughout.
+- Tests (9): preorder + enter/exit pairing + depths (event-log visitor),
+  SkipChildren (no child events, exit still fires), Stop (immediate, no
+  further events incl. pending ancestor exits), subtree walk from a mid node
+  (depth restarts at 0), closure-blanket smoke (annotated params per the S7
+  inference finding), role-blind walk over a Content+Attached+Hidden
+  hand-staged fixture (the transform suite's fixture shape), kernel scope unit
+  tests (default skip both; each widening flag; non-callable fast path).
