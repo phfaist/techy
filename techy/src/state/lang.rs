@@ -12,7 +12,7 @@ use core::hash::Hash;
 
 use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{NodeExt, NodeKind, StagedChildren};
-use crate::source::{SourceOrigin, SourceSpan};
+use crate::source::{Source, SourceOrigin, SourceSpan};
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
@@ -70,11 +70,12 @@ impl NodeExtTypes for () {
     type SlotExt = ();
 }
 
-/// The data contract on a language's invocation-syntax payload type
+/// The contract on a language's invocation-syntax payload type
 /// ([`Lang::InvocationSyntax`]): the recorded **trigger-spelling facts** of one
 /// callable invocation — what was written to invoke it (escape character,
 /// syntactic post-space, environment scaffolding), in the language's own logical
-/// canonical form.
+/// canonical form. `L`-parameterized like [`ParseDriver<L>`]: the payload's
+/// source-facing method speaks the language's own source-origin type.
 ///
 /// The payload is a **parse-level-syntax channel**, distinct from the node ext
 /// (preset-logic data, [`NodeExtTypes`]): it is stored as the
@@ -86,27 +87,30 @@ impl NodeExtTypes for () {
 /// language's callables, by design.
 ///
 /// Like [`NodeExtTypes`], this trait lives beside [`Lang`]: its *meaning* is a
-/// node concern, but it is a constituent of the compile-time bundle.
+/// node concern, but it is a constituent of the compile-time bundle. The
+/// latexlike preset's payload type is the *data* enum
+/// [`latexlike::InvocationSyntaxData`](crate::latexlike::InvocationSyntaxData).
 ///
 /// Construction is a separate, opt-in contract
 /// ([`FromInvocation`](crate::constructs::FromInvocation)) consulted by the
 /// standard staging sites; a language whose payload cannot be built from an
 /// [`Invocation`](crate::constructs::Invocation) alone stages its callables
 /// through custom parsers instead.
-pub trait InvocationSyntaxData: Clone + fmt::Debug + Send + Sync + 'static {
+pub trait InvocationSyntax<L: Lang>: Clone + fmt::Debug + Send + Sync + 'static {
     /// A copy with every span-backed field resolved to owned text against
-    /// `source_content` — the content of the carrying node's own source (the
-    /// `Spanned` invariant). Called by
+    /// `source` — the carrying node's **own** source (the `Spanned` invariant;
+    /// a multi-source tree materializes each node against the source its span
+    /// lives in). Called by
     /// [`NodeTree::materialize`](crate::node::NodeTree::materialize) alongside
     /// the structural payload's own materialization. Source-independent fields
     /// (rule `Arc`s, plain chars) pass through unchanged.
     #[must_use]
-    fn materialized(&self, source_content: &str) -> Self;
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> Self;
 }
 
 /// The no-record payload: nothing was recorded, nothing to materialize.
-impl InvocationSyntaxData for () {
-    fn materialized(&self, _source_content: &str) {}
+impl<L: Lang> InvocationSyntax<L> for () {
+    fn materialized(&self, _source: &Source<L::SourceOrigin>) {}
 }
 
 /// The compile-time type bundle of a language definition. Every core type takes one
@@ -222,11 +226,12 @@ pub trait Lang: Sized + 'static {
     type NodeExts: NodeExtTypes;
 
     /// The language's recorded **invocation-syntax payload**
-    /// ([`InvocationSyntaxData`]): the trigger-spelling facts stored per callable
-    /// invocation on
+    /// (the [`InvocationSyntax`] bound trait): the trigger-spelling facts stored
+    /// per callable invocation on
     /// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax).
     /// `()` records nothing; the latexlike preset records its macro / environment /
-    /// specials forms ([`latexlike::InvocationSyntax`](crate::latexlike::InvocationSyntax)).
+    /// specials forms
+    /// ([`latexlike::InvocationSyntaxData`](crate::latexlike::InvocationSyntaxData)).
     ///
     /// Minted by the invocation parser that stages the node — the standard sites
     /// construct it via the opt-in
@@ -234,7 +239,7 @@ pub trait Lang: Sized + 'static {
     /// parsers staging through
     /// [`stage_node`](crate::constructs::ParseContext::stage_node) supply the
     /// value themselves.
-    type InvocationSyntax: InvocationSyntaxData;
+    type InvocationSyntax: InvocationSyntax<Self>;
 
     /// The language's [`ParseDriver`] type — the **instance** face of parse-time
     /// behavior: recovery policy, command

@@ -350,7 +350,8 @@ mod tests {
     use super::*;
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
-    use crate::node::{check_tree_invariants, NodeRef};
+    use crate::latexlike::check_latexlike_tree_invariants;
+    use crate::node::NodeRef;
     use crate::scopes::Package;
     use crate::state::ParsingState;
     use alloc::format;
@@ -540,7 +541,7 @@ mod tests {
 
     fn parse_ok(codes: &str, input: &str) -> ParseResult<Latexlike> {
         let result = language(Recovery::Strict, codes).parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(
             result.diagnostics.is_empty(),
             "unexpected diagnostics: {:?}",
@@ -658,7 +659,7 @@ mod tests {
         assert!(err.to_string().contains("missing mandatory argument"), "{err}");
 
         let result = language(Recovery::Tolerant, "r()").parse(r"\m x").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(result.diagnostics.len(), 1);
         let m = macro_node(&result);
         assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());

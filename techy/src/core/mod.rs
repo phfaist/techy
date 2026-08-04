@@ -44,7 +44,7 @@ pub use crate::engine::{
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
-    ClosedVocabulary, DeriveError, FinalizeError, InvocationSyntaxData, Lang,
+    ClosedVocabulary, DeriveError, FinalizeError, InvocationSyntax, Lang,
     NodeExtTypes, ParsingState, ParsingStateDelta, ParsingStateStack, StateData,
     TokenRulesOverrides, TrivialLang,
 };

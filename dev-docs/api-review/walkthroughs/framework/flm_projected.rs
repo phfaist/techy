@@ -123,16 +123,21 @@ impl Lang for Flm {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = FlmExts;
-    /// [IS] LANDED (S5): the family payload enum over FLM's own environment-syntax
-    /// record type (`Env = StdEnvironmentSyntax<Flm>`; the enum has no `L` param —
-    /// family members name their Env explicitly, S5 D-plan-4). This one line
+    /// [IS] LANDED (S5, revised M6): the family payload *data* enum over FLM's own
+    /// environment-syntax record type (`Env = StdEnvironmentSyntax<Flm>`; the enum
+    /// has no `L` param — family members name their Env explicitly, S5 D-plan-4).
+    /// The M6 design revision swapped the names: the core bound trait is
+    /// `InvocationSyntax<L>` (L-parameterized, `ParseDriver<L>` precedent), the
+    /// latexlike payload enum is `InvocationSyntaxData<Env>`. This one line
     /// satisfies the umbrella's `LatexlikeInvocationSyntax<Flm> + FromInvocation<Flm>`
     /// bound (D-plan-9): `FromInvocation` comes with the enum's standard-site
     /// constructor impl, so FLM drives the std engine (`Language::parse`'s
     /// bound-where-used, D-plan-2) with zero payload code — macro escape/post-space
     /// and specials name-as-written recorded for free; the environment arm is staged
-    /// by the (now `LLL`-generic) begin composition.
-    type InvocationSyntax = latexlike::InvocationSyntax<latexlike::StdEnvironmentSyntax<Flm>>;
+    /// by the (now `LLL`-generic) begin composition, which builds the record via
+    /// `EnvironmentSyntax::from_parsed(begin, terminator)` at staging time.
+    type InvocationSyntax =
+        latexlike::InvocationSyntaxData<latexlike::StdEnvironmentSyntax<Flm>>;
     type Driver = FlmDriver; // custom (one extra hook) — LatexlikeDriver<Flm> works for wholesale
 
     /// One line instead of the old probe's 13-field TokenRules literal:

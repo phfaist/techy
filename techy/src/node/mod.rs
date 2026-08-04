@@ -53,8 +53,12 @@ pub use node_ref::{Descendants, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
 pub use tree::{NodeId, NodeTree, TreeTag};
 
-// `NodeData` is deliberately NOT re-exported ([§dd-dr:public-visibility-sweep] Theme C):
-// it is crate-internal — zero public signatures use it; `NodeRef` is the read API.
+// `NodeData` is deliberately NOT re-exported publicly ([§dd-dr:public-visibility-sweep]
+// Theme C): it is crate-internal — zero public signatures use it; `NodeRef` is the
+// read API. The crate-internal alias below serves in-crate checkers only (the
+// latexlike parse-law checker's payload pins).
+#[cfg(test)]
+pub(crate) use tree::NodeData;
 // Crate-internal subtree copying, shared with `crate::extract`'s builder helpers.
 pub(crate) use copy::copy_subtree_into;
 // The parse-law test oracle: pub(crate) per [§dd-dr:tree-validation]'s amendment —

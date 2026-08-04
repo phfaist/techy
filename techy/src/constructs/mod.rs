@@ -767,8 +767,8 @@ impl<L: Lang> fmt::Debug for Invocation<'_, '_, L> {
 }
 
 /// Opt-in constructor contract on a language's invocation-syntax payload
-/// ([`Lang::InvocationSyntax`], bounded by
-/// [`InvocationSyntaxData`](crate::state::InvocationSyntaxData)): build the
+/// ([`Lang::InvocationSyntax`], bounded by the core
+/// [`InvocationSyntax`](crate::state::InvocationSyntax) trait): build the
 /// recorded trigger-spelling facts from one resolved [`Invocation`].
 ///
 /// Consulted by the **standard staging sites** —

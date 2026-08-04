@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     use crate::constructs::GroupArgumentParser;
     use crate::engine::Language;
-    use crate::node::check_tree_invariants;
+    use crate::latexlike::check_latexlike_tree_invariants;
     use crate::scopes::Package;
     use crate::state::ParsingState;
     use crate::latexlike::LatexlikeDriver;
@@ -204,7 +204,7 @@ mod tests {
         );
 
         let result = language.parse(r"\emph{x} y").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(result.diagnostics.is_empty());
         let emph = result.tree.root().child(0).unwrap();
         assert_eq!(emph.macro_name(), Some("emph"));

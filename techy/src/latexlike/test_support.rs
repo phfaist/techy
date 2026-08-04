@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use crate::engine::{Language, ParseResult};
 use crate::error::Recovery;
-use crate::node::check_tree_invariants;
+use crate::latexlike::check_latexlike_tree_invariants;
 use crate::scopes::Package;
 use crate::spec::StdCallableSpec;
 use crate::state::ParsingState;
@@ -48,7 +48,7 @@ pub(super) fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
 /// root child summaries.
 pub(super) fn parse_shapes(input: &str) -> Vec<String> {
     let result = strict().parse(input).unwrap();
-    check_tree_invariants(&result.tree);
+    check_latexlike_tree_invariants(&result.tree);
     assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);
     root_shapes(&result)
 }

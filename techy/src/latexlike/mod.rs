@@ -57,6 +57,8 @@
 mod arguments;
 mod driver;
 mod environments;
+#[cfg(test)]
+mod invariants;
 mod invocation_syntax;
 mod lang;
 mod node_ref;
@@ -74,13 +76,20 @@ pub use environments::{
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
 pub use invocation_syntax::{
-    EnvironmentSideSyntax, EnvironmentSyntax, InvocationSyntax, StdEnvironmentSyntax,
+    EnvironmentSyntax, InvocationSyntaxData, StdEnvironmentSideSyntax,
+    StdEnvironmentSyntax,
 };
 pub use lang::{
     LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeInvocationSyntax,
     LatexlikeLang, LatexlikeMode,
 };
 pub use spec::{MacroSpec, SpecialsSpec};
+
+// The latexlike parse-law oracle (core parse law + the payload pins) — the
+// preset-side sibling of core's `check_tree_invariants` mechanism (in-crate test
+// utility, never public; D-plan-12 Option B).
+#[cfg(test)]
+pub(crate) use invariants::check_latexlike_tree_invariants;
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -312,7 +321,7 @@ impl Lang for Latexlike {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = LatexlikeNodeExts;
-    type InvocationSyntax = InvocationSyntax;
+    type InvocationSyntax = InvocationSyntaxData;
     type Driver = LatexlikeDriver;
 
     /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding
@@ -519,7 +528,7 @@ mod tests {
     use super::test_support::{macro_package, parse_shapes, root_shapes, strict, tolerant};
     use crate::engine::Language;
     use crate::error::Severity;
-    use crate::node::check_tree_invariants;
+    use super::check_latexlike_tree_invariants;
     use crate::scopes::ScopeOp;
     use crate::state::ParsingStateDelta;
 
@@ -592,7 +601,7 @@ mod tests {
             ParsingState::lang_initial(),
         );
         let result = language.parse("a\n\nb").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(root_shapes(&result), ["chars(a)", "Specials(\n\n)", "chars(b)"]);
         let break_node = result.tree.root().child(1).unwrap();
         assert_eq!(break_node.specials_name(), Some("\n\n"));
@@ -602,7 +611,7 @@ mod tests {
         // superseded); the span covers the same run. Identification is by spec
         // identity — the canonical ParagraphBreakSpec, recognized by downcast.
         let result = language.parse("a\n \t\nb").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let break_node = result.tree.root().child(1).unwrap();
         assert_eq!(break_node.specials_name(), Some("\n \t\n"));
         assert_eq!(break_node.span().content(), "\n \t\n");
@@ -617,7 +626,7 @@ mod tests {
     #[test]
     fn math_group_interiors_parse_in_math_mode() {
         let result = strict().parse("a $x+y$ b").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(
             root_shapes(&result),
             ["chars(a )", "group(Math(Inline) $ $)", "chars( b)"]
@@ -650,7 +659,7 @@ mod tests {
         // `$a$$b$` is two inline groups (the expected-close disambiguation), not a
         // display group — pylatexenc parity.
         let result = strict().parse("$a$$b$").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(
             root_shapes(&result),
             ["group(Math(Inline) $ $)", "group(Math(Inline) $ $)"]
@@ -669,7 +678,7 @@ mod tests {
         assert!(strict().parse("$$a$b$$").is_err());
 
         let result = tolerant().parse("$$a$b$$").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         // One display group at the root — it closes on the trailing `$$`, never leaving
         // an unclosed nested inline group.
         assert_eq!(root_shapes(&result), ["group(Math(Display) $$ $$)"]);
@@ -700,7 +709,7 @@ mod tests {
     fn commands_resolve_through_the_scope_stack() {
         let language = with_alpha(crate::error::Recovery::Strict, false);
         let result = language.parse(r"\alpha x").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(root_shapes(&result), ["Macro(alpha)", "chars(x)"]);
     }
 
@@ -797,7 +806,7 @@ mod tests {
         // Inside math the text-only typography ligatures stay plain chars, while the
         // universal specials `~`/`&` still fire (7.5 review — per-entry mode visibility).
         let result = strict().parse("$a~b---c$").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let math = result.tree.root().child(0).unwrap();
         assert!(matches!(math.group_type(), Some(GroupType::Math(_))));
         let interior: Vec<String> =
@@ -840,7 +849,7 @@ mod tests {
         let language = test_support::with_package(crate::error::Recovery::Strict, package);
 
         let result = language.parse(r"\[ x \text{if $y<0$} \]").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let math = result.tree.root().child(0).unwrap();
         let text = math.child(1).unwrap();
         assert_eq!(text.macro_name(), Some("text"));
@@ -896,7 +905,7 @@ mod tests {
         let language = test_support::with_package(crate::error::Recovery::Strict, package);
 
         let result = language.parse(r"\wrap{$a\text{«q»}b$}").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let wrap = result.tree.root().child(0).unwrap();
         let math = wrap.argument_content_nodes(0).unwrap().get(0).unwrap();
         assert!(math.is_math_group());
@@ -965,7 +974,7 @@ mod tests {
             Language::new(LatexlikeDriver::new(crate::error::Recovery::Strict), seed);
 
         let result = language.parse(r"\wrap«$$a\text{y}b$$»").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 
         // The trailing `»` closed the wrap argument: the region node is the
@@ -1035,7 +1044,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
-        type InvocationSyntax = InvocationSyntax<StdEnvironmentSyntax<Flavored>>;
+        type InvocationSyntax = InvocationSyntaxData<StdEnvironmentSyntax<Flavored>>;
         type Driver = LatexlikeDriver<Flavored>;
 
         fn initial_state_data() -> StateData<Self> {
@@ -1076,7 +1085,7 @@ mod tests {
             ParsingState::lang_initial_with_packages([package]),
         );
         let result = language.parse(r"a $x\text{ b }y$ c").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
 
         let math = result.tree.root().child(1).unwrap();
         // The generic NodeRef sugar works on the foreign tree…
@@ -1130,38 +1139,42 @@ mod tests {
         // member's record.
         let content = "\\begin {itemize} a \\end{itemize}";
         let result = language.parse(content).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("itemize"));
         let body: Vec<_> = env.body().expect("the body slot").iter().collect();
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some(" a "));
-        let InvocationSyntax::Environment(syntax) = env.invocation_syntax().unwrap()
+        let InvocationSyntaxData::Environment(syntax) = env.invocation_syntax().unwrap()
         else {
             panic!("expected the Environment arm");
         };
+        let source = crate::source::Source::new(content);
         assert_eq!(syntax.begin.escape_char, '\\');
-        assert_eq!(syntax.begin.post_space.resolve(content), " ");
-        assert_eq!(syntax.write_begin("itemize", content), "\\begin {itemize}");
-        assert_eq!(syntax.write_end("itemize", content), "\\end{itemize}");
+        assert_eq!(syntax.begin.post_space.resolve(&source), " ");
+        assert_eq!(syntax.write_begin("itemize", &source), "\\begin {itemize}");
+        assert_eq!(syntax.write_end("itemize", &source), "\\end{itemize}");
 
         // The verbatim takeover body: raw content (comment/escape chars inert),
         // standard end facts synthesized from the literal terminator.
         let content = "\\begin{verbatim}\na % b \\x{\n\\end{verbatim}";
         let result = language.parse(content).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("verbatim"));
         let body: Vec<_> = env.body().expect("the body slot").iter().collect();
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
-        let InvocationSyntax::Environment(syntax) = env.invocation_syntax().unwrap()
+        let InvocationSyntaxData::Environment(syntax) = env.invocation_syntax().unwrap()
         else {
             panic!("expected the Environment arm");
         };
         let end = syntax.end.as_ref().expect("the literal terminator was consumed");
         assert!(end.command_word.is_owned());
-        assert_eq!(syntax.write_end("verbatim", content), "\\end{verbatim}");
+        assert_eq!(
+            syntax.write_end("verbatim", &crate::source::Source::new(content)),
+            "\\end{verbatim}"
+        );
     }
 
     #[test]
@@ -1187,7 +1200,7 @@ mod tests {
         );
 
         let result = language.parse("\\emph{x} \\verb|a%\\y{|!").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let emph = result.tree.root().child(0).unwrap();
         assert_eq!(emph.macro_name(), Some("emph"));
         assert!(emph.arguments().unwrap().get(0).unwrap().is_provided());

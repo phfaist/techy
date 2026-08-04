@@ -58,7 +58,7 @@ pub enum ParagraphBreakStyle {
     /// pylatexenc-modern's paragraph-break shape. The node's *name* is the **actual
     /// whitespace run as written** (`"\n \t\n"` stays `"\n \t\n"`) — the specials
     /// name-as-written rule of the invocation-syntax payload
-    /// ([`InvocationSyntax::Specials`](super::InvocationSyntax::Specials)); the
+    /// ([`InvocationSyntaxData::Specials`](super::InvocationSyntaxData::Specials)); the
     /// node's *span* covers the same run. Identify paragraph-break nodes by **spec
     /// identity** — the stamped spec is the canonical [`ParagraphBreakSpec`],
     /// recognized by `Any`-downcast — never by a name spelling. The token level is

@@ -3,6 +3,8 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 
+use super::origin::SourceOrigin;
+use super::source::Source;
 use super::span::Span;
 
 /// Logical textual content of a node payload — the *content* is first-class; a span is
@@ -36,26 +38,30 @@ impl TextContent {
         TextContent::Owned(Box::from(""))
     }
 
-    /// The logical text, resolving a [`Spanned`](TextContent::Spanned) value against the
-    /// content of the source it refers into.
+    /// The logical text, resolving a [`Spanned`](TextContent::Spanned) value against
+    /// `source` — the source the span refers into (the carrying node's **own**
+    /// source, per the `Spanned` invariant: in a multi-source tree each node's
+    /// payload resolves against its own span's source, never an ambient one).
     ///
     /// # Panics
     ///
-    /// Panics if a `Spanned` range is out of bounds for `source_content` or not on `char`
-    /// boundaries (same contract as `&source_content[range]`) — a broken invariant, not a
-    /// recoverable condition.
-    pub fn resolve<'a>(&'a self, source_content: &'a str) -> &'a str {
+    /// Panics if a `Spanned` range is out of bounds for `source`'s content or not on
+    /// `char` boundaries (same contract as `&content[range]`) — a broken invariant,
+    /// not a recoverable condition.
+    pub fn resolve<'a, O: SourceOrigin>(&'a self, source: &'a Source<O>) -> &'a str {
         match self {
-            TextContent::Spanned(span) => span.slice(source_content),
+            TextContent::Spanned(span) => span.slice(source.content()),
             TextContent::Owned(text) => text,
         }
     }
 
     /// An always-[`Owned`](TextContent::Owned) copy with the same logical text
-    /// (see [`resolve`](TextContent::resolve) for the `source_content` contract).
-    pub fn materialized(&self, source_content: &str) -> TextContent {
+    /// (see [`resolve`](TextContent::resolve) for the `source` contract).
+    pub fn materialized<O: SourceOrigin>(&self, source: &Source<O>) -> TextContent {
         match self {
-            TextContent::Spanned(span) => TextContent::Owned(Box::from(span.slice(source_content))),
+            TextContent::Spanned(span) => {
+                TextContent::Owned(Box::from(span.slice(source.content())))
+            }
             TextContent::Owned(text) => TextContent::Owned(text.clone()),
         }
     }
@@ -88,37 +94,41 @@ impl From<String> for TextContent {
 mod tests {
     use super::*;
 
+    fn source(content: &str) -> Source {
+        Source::new(content)
+    }
+
     #[test]
     fn spanned_resolution() {
-        let content = "hello world";
+        let src = source("hello world");
         let tc = TextContent::from(Span::new(6, 11));
         assert!(!tc.is_owned());
-        assert_eq!(tc.resolve(content), "world");
+        assert_eq!(tc.resolve(&src), "world");
     }
 
     #[test]
     fn owned_resolution_ignores_source() {
         let tc = TextContent::from("synthesized");
         assert!(tc.is_owned());
-        assert_eq!(tc.resolve("unrelated"), "synthesized");
+        assert_eq!(tc.resolve(&source("unrelated")), "synthesized");
     }
 
     #[test]
     fn materialized_preserves_logical_text() {
-        let content = "hello world";
+        let empty = source("");
         let spanned = TextContent::from(Span::new(0, 5));
-        let owned = spanned.materialized(content);
+        let owned = spanned.materialized(&source("hello world"));
         assert!(owned.is_owned());
-        assert_eq!(owned.resolve(""), "hello");
+        assert_eq!(owned.resolve(&empty), "hello");
 
-        let already_owned = TextContent::from(String::from("abc")).materialized("");
-        assert_eq!(already_owned.resolve(""), "abc");
+        let already_owned = TextContent::from(String::from("abc")).materialized(&empty);
+        assert_eq!(already_owned.resolve(&empty), "abc");
     }
 
     #[test]
     fn empty_is_owned_empty() {
         let tc = TextContent::empty();
         assert!(tc.is_owned());
-        assert_eq!(tc.resolve(""), "");
+        assert_eq!(tc.resolve(&source("")), "");
     }
 }

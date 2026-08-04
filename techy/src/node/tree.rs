@@ -373,9 +373,11 @@ impl<L: Lang, A> NodeTree<L, A> {
             .nodes
             .iter()
             .map(|data| {
-                let source_content = data.span.source().content();
+                // Each node materializes against its OWN source (the `Spanned`
+                // invariant) — a multi-source tree never resolves payloads
+                // against an ambient single source.
                 NodeData {
-                    kind: data.kind.materialized(source_content),
+                    kind: data.kind.materialized(data.span.source()),
                     ext: data.ext.clone(),
                     span: data.span.clone(),
                     parsing_state: Arc::clone(&data.parsing_state),

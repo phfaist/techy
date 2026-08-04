@@ -521,13 +521,14 @@ impl core::error::Error for TreeViolation {}
 ///    no double counting. A `List`'s interior is its whole span; a `Group`'s interior
 ///    is its span minus the delimiters.
 /// 2. **Callable children-block contiguity.** A `Callable`'s children block is
-///    span-contiguous and lies inside the node's span; a `Spanned` post-space —
-///    exactly the trigger token's own syntactic post-space — ends where the first
-///    child begins, or ends the node's span when there are no children.
+///    span-contiguous and lies inside the node's span.
 /// 3. **Positional payload pins.** Where a `Spanned` payload has a pinned position
 ///    (chars content = the node's span; comment start/content/post-space partition
-///    the node's span; group delimiters are prefix/suffix; callable post-space is a
-///    suffix), the exact position is checked.
+///    the node's span; group delimiters are prefix/suffix), the exact position is
+///    checked. The **invocation-syntax payload is deliberately not read here**:
+///    it is Lang-owned opaque data to core — the latexlike preset layers its
+///    payload pins in its own checker (`check_latexlike_tree_invariants`, the
+///    D-plan-12 Option B split).
 /// 4. **Children share the parent's source** (byte comparisons presuppose it).
 #[cfg(test)]
 pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
@@ -536,123 +537,6 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
     }
     for (i, data) in tree.nodes().iter().enumerate() {
         check_parse_law_node(tree, i, data);
-    }
-}
-
-/// The invocation-syntax payload pins of the parse law (the callable arm of
-/// [`check_tree_invariants`]): reads the payloads techy itself ships — `()`
-/// (nothing to check) and the latexlike enum — via `Any` downcast, and checks
-/// their recorded spellings against the node's bytes. Foreign payload types are
-/// their language's own recording discipline and are skipped ([§dd-dr:invocation-syntax];
-/// the cfg(test)-only core→latexlike reference is the flagged D-plan-12 strata
-/// tension — the single-oracle property wins).
-///
-/// The pins, per arm of the default-Env latexlike enum:
-///
-/// - **Macro** — the spelling fact: the node's bytes begin with the recorded
-///   escape character followed by the name as written; a `Spanned` post-space
-///   starts right after that spelling and ends where the first child begins — or
-///   at most at the span's end for a childless callable (`==` cannot be pinned
-///   there: a takeover's `stage_invocation(.., end_pos: Some)` legitimately
-///   claims consumed extent past the trigger, T5-B).
-/// - **Specials** — name-as-written: the name is a byte prefix of the node's
-///   span (for paragraph-break `Specials` nodes the name is the whole span).
-/// - **Environment** — `write_begin` is a byte prefix of the node's span slice;
-///   when the end side is recorded, `write_end` is its byte suffix (the accuracy
-///   doctrine made mechanical: what the record reemits is what was parsed).
-#[cfg(test)]
-fn check_invocation_syntax_payload<L: Lang, A>(
-    tree: &NodeTree<L, A>,
-    i: usize,
-    data: &NodeData<L>,
-    callable: &super::kind::CallableData<L>,
-) {
-    use crate::latexlike::{EnvironmentSyntax, InvocationSyntax};
-
-    let Some(payload) = (&callable.invocation_syntax as &dyn core::any::Any)
-        .downcast_ref::<InvocationSyntax>()
-    else {
-        return;
-    };
-    let span = data.span.range();
-    let source_content = data.span.source().content();
-    let name: &str = &callable.name;
-    match payload {
-        InvocationSyntax::Macro { escape_char, post_space } => {
-            let mut spelling = alloc::string::String::new();
-            spelling.push(*escape_char);
-            spelling.push_str(name);
-            assert!(
-                source_content.get(span.start..span.start + spelling.len())
-                    == Some(spelling.as_str()),
-                "node {}: macro spelling {:?} is not the byte prefix of the node's \
-                 span {:?}",
-                i,
-                spelling,
-                span
-            );
-            if let TextContent::Spanned(s) = post_space {
-                assert!(
-                    s.start() == span.start + spelling.len(),
-                    "node {}: spanned post-space {:?} does not follow the macro \
-                     spelling (span {:?})",
-                    i,
-                    s,
-                    span
-                );
-                match tree.nodes_in(data.children.clone()).next() {
-                    Some(first) => assert!(
-                        s.end() == first.span().start(),
-                        "node {}: spanned post-space {:?} does not end at the first \
-                         child (starting at {})",
-                        i,
-                        s,
-                        first.span().start()
-                    ),
-                    None => assert!(
-                        s.end() <= span.end,
-                        "node {}: spanned post-space {:?} escapes the childless \
-                         callable's span {:?}",
-                        i,
-                        s,
-                        span
-                    ),
-                }
-            }
-        }
-        InvocationSyntax::Specials => {
-            assert!(
-                source_content.get(span.start..span.start + name.len()) == Some(name),
-                "node {}: specials name {:?} is not the byte prefix of the node's \
-                 span {:?} (name-as-written)",
-                i,
-                name,
-                span
-            );
-        }
-        InvocationSyntax::Environment(env) => {
-            let node_bytes = &source_content[span.clone()];
-            let begin = env.write_begin(name, source_content);
-            assert!(
-                node_bytes.starts_with(begin.as_str()),
-                "node {}: recorded begin spelling {:?} is not the byte prefix of the \
-                 node's span {:?}",
-                i,
-                begin,
-                span
-            );
-            if env.end.is_some() {
-                let end = env.write_end(name, source_content);
-                assert!(
-                    node_bytes.ends_with(end.as_str()),
-                    "node {}: recorded end spelling {:?} is not the byte suffix of \
-                     the node's span {:?}",
-                    i,
-                    end,
-                    span
-                );
-            }
-        }
     }
 }
 
@@ -666,10 +550,10 @@ fn check_invocation_syntax_payload<L: Lang, A>(
 #[cfg(test)]
 fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &NodeData<L>) {
     let span = data.span.range();
-    let source_content = data.span.source().content();
+    let source = data.span.source();
 
     // Resolved length of a payload (what interior arithmetic is based on).
-    let text_len = |text: &TextContent| text.resolve(source_content).len();
+    let text_len = |text: &TextContent| text.resolve(source).len();
 
     // The children of a node must live in its source for byte comparisons to mean
     // anything; check it wherever children exist.
@@ -769,13 +653,13 @@ fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &Node
             check_interior_partition(tree, i, data, span.start + open_len..span.end - close_len);
         }
 
-        NodeKind::Callable(callable) => {
+        NodeKind::Callable(_) => {
             // The trigger-spelling facts live in the Lang-owned invocation-syntax
-            // payload now (invariant 3 as amended): the byte accounting for the
-            // shipped payloads — the latexlike Macro post-space positional pin,
-            // the Specials name-as-written prefix, the environment begin/end
-            // scaffolding — is checked by `check_invocation_syntax_payload`.
-            check_invocation_syntax_payload(tree, i, data, callable);
+            // payload (invariant 3 as amended) — opaque to core, so no payload
+            // byte accounting happens here: the latexlike preset pins its
+            // recorded spellings (macro spelling + post-space, specials
+            // name-as-written, environment begin/end scaffolding) in its own
+            // checker, `check_latexlike_tree_invariants` (D-plan-12 Option B).
             assert_children_in_source();
 
             // Children-block span-contiguity, inside the node's span.
@@ -1173,134 +1057,5 @@ mod tests {
             0..0
         )]);
         check_tree_invariants(&tree);
-    }
-
-    // --- the invocation-syntax payload pins (the latexlike shapes, D-plan-12) ----------
-    //
-    // The positive direction is exercised by every latexlike parse in the crate
-    // (check_tree_invariants runs on them all); these discriminate the pins by
-    // hand-building trees whose recorded payloads diverge from the bytes.
-
-    mod payload_pins {
-        use super::*;
-        use crate::latexlike::{
-            CallableType, EnvironmentSideSyntax, InvocationSyntax, Latexlike, MacroSpec,
-            SpecialsSpec, StdEnvironmentSyntax,
-        };
-        use crate::node::{BuildId, NodeTree};
-        use crate::token::GroupRule;
-        use alloc::string::String;
-        use alloc::vec::Vec;
-
-        fn latexlike_state() -> Arc<ParsingState<Latexlike>> {
-            Arc::new(ParsingState::lang_initial())
-        }
-
-        /// A root `List` over `span` holding one callable node of the same span,
-        /// carrying the given payload.
-        fn callable_tree(
-            content: &str,
-            span: core::ops::Range<usize>,
-            callable: CallableData<Latexlike>,
-        ) -> NodeTree<Latexlike> {
-            let source: Arc<Source> = Arc::new(Source::new(content));
-            let st = latexlike_state();
-            let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
-            let node = builder.add(
-                NodeKind::callable(callable),
-                SourceSpan::new(&source, span.clone()),
-                Arc::clone(&st),
-                Vec::<BuildId>::new(), (), (),
-            ).unwrap();
-            let root = builder.add(
-                NodeKind::list(),
-                SourceSpan::new(&source, span),
-                Arc::clone(&st),
-                alloc::vec![node], (), (),
-            ).unwrap();
-            builder.finish(root).unwrap()
-        }
-
-        #[test]
-        #[should_panic(expected = "does not follow the macro spelling")]
-        fn rejects_a_macro_post_space_off_the_trigger_spelling() {
-            // `\emph x`: the spelling pin puts the post-space at 5..; a recorded
-            // 4..6 contradicts the trigger's own extent.
-            let tree = callable_tree("\\emph x", 0..7, CallableData {
-                callable_type: CallableType::Macro,
-                name: "emph".into(),
-                spec: Arc::new(MacroSpec::default()),
-                arguments: ParsedArguments::empty(),
-                slots: ParsedSlots::empty(),
-                invocation_syntax: InvocationSyntax::Macro {
-                    escape_char: '\\',
-                    post_space: TextContent::Spanned(Span::new(4, 6)),
-                },
-            });
-            check_tree_invariants(&tree);
-        }
-
-        #[test]
-        #[should_panic(expected = "macro spelling")]
-        fn rejects_a_macro_escape_char_not_in_the_bytes() {
-            // The bytes spell `\emph`; the payload claims the `@` escape fired.
-            let tree = callable_tree("\\emph x", 0..7, CallableData {
-                callable_type: CallableType::Macro,
-                name: "emph".into(),
-                spec: Arc::new(MacroSpec::default()),
-                arguments: ParsedArguments::empty(),
-                slots: ParsedSlots::empty(),
-                invocation_syntax: InvocationSyntax::Macro {
-                    escape_char: '@',
-                    post_space: TextContent::Spanned(Span::new(5, 6)),
-                },
-            });
-            check_tree_invariants(&tree);
-        }
-
-        #[test]
-        #[should_panic(expected = "name-as-written")]
-        fn rejects_a_specials_name_that_is_not_the_spelling() {
-            // The bytes spell `---`; a canonical-key name (`~`) violates
-            // name-as-written.
-            let tree = callable_tree("a---b", 1..4, CallableData {
-                callable_type: CallableType::Specials,
-                name: "~".into(),
-                spec: Arc::new(SpecialsSpec::<Latexlike>::default()),
-                arguments: ParsedArguments::empty(),
-                slots: ParsedSlots::empty(),
-                invocation_syntax: InvocationSyntax::Specials,
-            });
-            check_tree_invariants(&tree);
-        }
-
-        #[test]
-        #[should_panic(expected = "begin spelling")]
-        fn rejects_an_environment_record_diverging_from_the_bytes() {
-            // A begin side whose write_begin (`\begin{itemize}`) is nowhere in the
-            // node's bytes.
-            let begin = EnvironmentSideSyntax::<Latexlike> {
-                escape_char: '\\',
-                command_word: TextContent::from(String::from("begin")),
-                post_space: TextContent::empty(),
-                name_group_rule: Arc::new(GroupRule {
-                    group_type: crate::latexlike::GroupType::Content,
-                    open: "{".into(),
-                    close: "}".into(),
-                }),
-            };
-            let tree = callable_tree("xitemizey", 0..9, CallableData {
-                callable_type: CallableType::Environment,
-                name: "itemize".into(),
-                spec: Arc::new(SpecialsSpec::<Latexlike>::default()),
-                arguments: ParsedArguments::empty(),
-                slots: ParsedSlots::empty(),
-                invocation_syntax: InvocationSyntax::Environment(StdEnvironmentSyntax {
-                    begin,
-                    end: None,
-                }),
-            });
-            check_tree_invariants(&tree);
-        }
     }
 }

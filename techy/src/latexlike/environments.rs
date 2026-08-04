@@ -78,7 +78,7 @@ use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
-use super::invocation_syntax::{EnvironmentSideSyntax, EnvironmentSyntax};
+use super::invocation_syntax::{EnvironmentSyntax, StdEnvironmentSideSyntax};
 use super::lang::{
     LatexlikeCallableType, LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang,
 };
@@ -716,7 +716,7 @@ where
                 command_word,
                 post_space,
                 name_group,
-            }) => env_syntax.parse_end(EnvironmentSideSyntax {
+            }) => env_syntax.parse_end(StdEnvironmentSideSyntax {
                 escape_char: *escape_char,
                 command_word: TextContent::Spanned(*command_word),
                 post_space: TextContent::Spanned(*post_space),
@@ -816,7 +816,8 @@ mod tests {
     };
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
-    use crate::node::{check_tree_invariants, NodeRef};
+    use crate::latexlike::check_latexlike_tree_invariants;
+    use crate::node::NodeRef;
     use crate::scopes::{Package, ScopeOp};
     use crate::state::{ParsingState, TokenRulesOverrides};
     use crate::token::GroupRule;
@@ -909,7 +910,7 @@ mod tests {
     /// Strict parse expected clean: invariants checked, no diagnostics.
     fn parse_ok(input: &str) -> ParseResult<Latexlike> {
         let result = strict().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(
             result.diagnostics.is_empty(),
             "unexpected diagnostics: {:?}",
@@ -921,7 +922,7 @@ mod tests {
     /// Tolerant parse: invariants checked, diagnostics left to the caller.
     fn parse_tolerant(input: &str) -> ParseResult<Latexlike> {
         let result = tolerant().parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         result
     }
 
@@ -1099,7 +1100,7 @@ mod tests {
         let math = with_math_envs(Recovery::Strict)
             .parse("$\\begin{aligned}x\\end{aligned}$")
             .unwrap();
-        check_tree_invariants(&math.tree);
+        check_latexlike_tree_invariants(&math.tree);
         assert!(math.diagnostics.is_empty());
 
         let text = with_math_envs(Recovery::Tolerant)
@@ -1120,7 +1121,7 @@ mod tests {
             ParsingState::lang_initial(),
         );
         let result = language.parse("\\begin{itemize}x\\end{itemize}").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert_eq!(messages(&result), ["unknown environment ‘itemize’"]);
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("itemize"));
@@ -1209,7 +1210,7 @@ mod tests {
         // a chars node (7.9, superseding 7.4's byte-dropping quirk), so the partition
         // invariant holds across the unwind.
         let result = tolerant().parse("\\begin{itemize}a}b").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         let all = messages(&result);
         assert_eq!(all.len(), 2, "{all:?}");
         assert!(all[0].contains("missing terminator of environment ‘itemize’"), "{}", all[0]);
@@ -1389,7 +1390,7 @@ mod tests {
             ParsingState::lang_initial_with_packages([package]),
         );
         let result = language.parse("\\begin{gen}{a}x\\end{gen}").unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(result.diagnostics.is_empty());
         let env = result.tree.root().child(0).unwrap();
         assert_eq!(env.environment_name(), Some("gen"));

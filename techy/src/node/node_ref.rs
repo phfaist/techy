@@ -5,7 +5,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::source::SourceSpan;
+use crate::source::{Source, SourceSpan};
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState};
 
@@ -138,10 +138,9 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         }
     }
 
-    /// The content of this node's own source (what `TextContent::Spanned` resolves
-    /// against).
-    pub(crate) fn source_content(&self) -> &'t str {
-        self.data().span.source().content()
+    /// This node's own source (what `TextContent::Spanned` resolves against).
+    pub(crate) fn source(&self) -> &'t Source<L::SourceOrigin> {
+        self.data().span.source()
     }
 
     // --- children ---------------------------------------------------------------------
@@ -206,7 +205,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// A `Chars` node's logical text.
     pub fn chars(&self) -> Option<&'t str> {
         match self.kind() {
-            NodeKind::Chars { content, .. } => Some(content.resolve(self.source_content())),
+            NodeKind::Chars { content, .. } => Some(content.resolve(self.source())),
             _ => None,
         }
     }
@@ -214,7 +213,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// A `Comment` node's logical text (sans delimiter and newline).
     pub fn comment(&self) -> Option<&'t str> {
         match self.kind() {
-            NodeKind::Comment { content, .. } => Some(content.resolve(self.source_content())),
+            NodeKind::Comment { content, .. } => Some(content.resolve(self.source())),
             _ => None,
         }
     }
@@ -223,7 +222,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// comment syntax fired).
     pub fn comment_start(&self) -> Option<&'t str> {
         match self.kind() {
-            NodeKind::Comment { start, .. } => Some(start.resolve(self.source_content())),
+            NodeKind::Comment { start, .. } => Some(start.resolve(self.source())),
             _ => None,
         }
     }
@@ -233,7 +232,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     pub fn comment_post_space(&self) -> Option<&'t str> {
         match self.kind() {
             NodeKind::Comment { post_space, .. } => {
-                Some(post_space.resolve(self.source_content()))
+                Some(post_space.resolve(self.source()))
             }
             _ => None,
         }
@@ -257,7 +256,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// A `Group` node's delimiters, as logical text.
     pub fn group_delimiters(&self) -> Option<(&'t str, &'t str)> {
         self.group().map(|data| {
-            (data.open.resolve(self.source_content()), data.close.resolve(self.source_content()))
+            (data.open.resolve(self.source()), data.close.resolve(self.source()))
         })
     }
 

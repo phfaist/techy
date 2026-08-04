@@ -1,9 +1,9 @@
 //! The preset's invocation-syntax payload ([`Lang::InvocationSyntax`]): the
-//! [`InvocationSyntax`] enum recording how a callable was invoked — macro-formed,
-//! environment-formed, or specials-formed — plus the environment-side machinery:
-//! the [`EnvironmentSyntax`] scanning/recording contract and its standard
-//! implementation [`StdEnvironmentSyntax`] over the per-side record
-//! [`EnvironmentSideSyntax`].
+//! [`InvocationSyntaxData`] enum recording how a callable was invoked —
+//! macro-formed, environment-formed, or specials-formed — plus the
+//! environment-side machinery: the [`EnvironmentSyntax`] record contract and its
+//! standard implementation [`StdEnvironmentSyntax`] over the per-side record
+//! [`StdEnvironmentSideSyntax`].
 //!
 //! The payload is what makes the preset's **recomposition accuracy** a recorded
 //! fact rather than a reconstruction: a macro records its escape character and the
@@ -22,17 +22,19 @@ use crate::constructs::{
     read_rigid_name_group, ConstructParserResult, FromInvocation, Invocation, NameGroup,
     ParseContext,
 };
-use crate::source::{Span, TextContent};
-use crate::state::{InvocationSyntaxData, Lang};
+use crate::source::{Source, Span, TextContent};
+use crate::state::{InvocationSyntax, Lang};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::lang::{LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
 
 /// The latexlike invocation-syntax payload ([`Lang::InvocationSyntax`]): the
-/// trigger-spelling facts of one callable invocation, by invocation form.
+/// recorded trigger-spelling facts (the *data*, hence the name — the
+/// `CallableData`/`NodeData` family) of one callable invocation, by invocation
+/// form.
 ///
-/// - [`Macro`](InvocationSyntax::Macro) — a command-triggered invocation: the
+/// - [`Macro`](InvocationSyntaxData::Macro) — a command-triggered invocation: the
 ///   escape character as written and the trigger token's own **syntactic
 ///   post-space** (the name-terminating whitespace of a multi-character command,
 ///   pylatexenc's `macro_post_space`; nothing beyond the token's own post-space is
@@ -40,11 +42,11 @@ use super::Latexlike;
 ///   argument is ordinary sibling/region content, as in TeX). A `Spanned`
 ///   post-space is a sub-range of the node's span: trailing for zero-argument
 ///   callables, between the name and the first argument region otherwise.
-/// - [`Environment`](InvocationSyntax::Environment) — an environment-shaped
+/// - [`Environment`](InvocationSyntaxData::Environment) — an environment-shaped
 ///   invocation: the begin/end scaffolding facts, in the `Env` record (default
 ///   [`StdEnvironmentSyntax`]).
-/// - [`Specials`](InvocationSyntax::Specials) — a specials-formed invocation: a
-///   **unit variant**, deliberately. The node's
+/// - [`Specials`](InvocationSyntaxData::Specials) — a specials-formed invocation:
+///   a **unit variant**, deliberately. The node's
 ///   [`name`](crate::node::CallableData::name) is the invocation spelling **as
 ///   written**, matching the macro rule (`\foo` and `\fooooo` both record the name
 ///   as written even when spec-resolved by prefix) — paragraph-break `Specials`
@@ -56,13 +58,15 @@ use super::Latexlike;
 /// The `Env` parameter is the single customization entry for environment-syntax
 /// recording: a language family member picks its record type by choosing its
 /// [`Lang::InvocationSyntax`] (e.g.
-/// `InvocationSyntax<StdEnvironmentSyntax<Flm>>`); the default anchors at the
-/// preset lang ([`Latexlike`]). A same-record/different-tolerance variant is a
-/// newtype over [`StdEnvironmentSyntax`].
+/// `InvocationSyntaxData<StdEnvironmentSyntax<Flm>>`); the default anchors at the
+/// preset lang ([`Latexlike`]). Scanning **tolerance** is a *parser* concern, not
+/// a record concern: a family member wanting looser begin/end syntax swaps the
+/// invocation/body parser through the behavior door — the record only records
+/// what its parser consumed.
 ///
 /// [`Lang::InvocationSyntax`]: crate::state::Lang::InvocationSyntax
 #[derive(Clone, Debug)]
-pub enum InvocationSyntax<Env = StdEnvironmentSyntax<Latexlike>> {
+pub enum InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>> {
     /// A command-triggered (macro-formed) invocation's spelling facts.
     Macro {
         /// The escape character as written (`\` in `\frac`; a language with
@@ -80,62 +84,66 @@ pub enum InvocationSyntax<Env = StdEnvironmentSyntax<Latexlike>> {
     Specials,
 }
 
-impl<Env: InvocationSyntaxData> InvocationSyntaxData for InvocationSyntax<Env> {
-    fn materialized(&self, source_content: &str) -> Self {
+impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntaxData<Env> {
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> Self {
         match self {
-            InvocationSyntax::Macro { escape_char, post_space } => InvocationSyntax::Macro {
-                escape_char: *escape_char,
-                post_space: post_space.materialized(source_content),
-            },
-            InvocationSyntax::Environment(env) => {
-                InvocationSyntax::Environment(env.materialized(source_content))
+            InvocationSyntaxData::Macro { escape_char, post_space } => {
+                InvocationSyntaxData::Macro {
+                    escape_char: *escape_char,
+                    post_space: post_space.materialized(source),
+                }
             }
-            InvocationSyntax::Specials => InvocationSyntax::Specials,
+            InvocationSyntaxData::Environment(env) => {
+                InvocationSyntaxData::Environment(env.materialized(source))
+            }
+            InvocationSyntaxData::Specials => InvocationSyntaxData::Specials,
         }
     }
 }
 
 /// The standard-site constructor ([`FromInvocation`]): a
 /// [`Command`](TokenKind::Command) trigger records its
-/// [`Macro`](InvocationSyntax::Macro) facts straight off the token; every other
-/// trigger (a specials token, a paragraph-break token at the preset's specials
-/// site) records [`Specials`](InvocationSyntax::Specials). The
-/// [`Environment`](InvocationSyntax::Environment) arm is never minted here —
+/// [`Macro`](InvocationSyntaxData::Macro) facts straight off the token; every
+/// other trigger (a specials token, a paragraph-break token at the preset's
+/// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
+/// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
 /// environment-shaped composition stages through the canonical
 /// [`stage_node`](crate::constructs::ParseContext::stage_node) door with
 /// [`environment_form`](LatexlikeInvocationSyntax::environment_form).
-impl<L: Lang, Env> FromInvocation<L> for InvocationSyntax<Env> {
+impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
     fn from_invocation(invocation: &Invocation<'_, '_, L>) -> Self {
         match &invocation.token.kind {
-            TokenKind::Command { escape_char, post_space, .. } => InvocationSyntax::Macro {
-                escape_char: *escape_char,
-                post_space: TextContent::Spanned(*post_space),
-            },
-            _ => InvocationSyntax::Specials,
+            TokenKind::Command { escape_char, post_space, .. } => {
+                InvocationSyntaxData::Macro {
+                    escape_char: *escape_char,
+                    post_space: TextContent::Spanned(*post_space),
+                }
+            }
+            _ => InvocationSyntaxData::Specials,
         }
     }
 }
 
 impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<LLL>
-    for InvocationSyntax<Env>
+    for InvocationSyntaxData<Env>
 {
     type Env = Env;
 
     fn macro_form(escape_char: char, post_space: TextContent) -> Self {
-        InvocationSyntax::Macro { escape_char, post_space }
+        InvocationSyntaxData::Macro { escape_char, post_space }
     }
 
     fn environment_form(env: Env) -> Self {
-        InvocationSyntax::Environment(env)
+        InvocationSyntaxData::Environment(env)
     }
 
     fn specials_form() -> Self {
-        InvocationSyntax::Specials
+        InvocationSyntaxData::Specials
     }
 
     fn macro_syntax(&self) -> Option<(char, &TextContent)> {
         match self {
-            InvocationSyntax::Macro { escape_char, post_space } => {
+            InvocationSyntaxData::Macro { escape_char, post_space } => {
                 Some((*escape_char, post_space))
             }
             _ => None,
@@ -144,17 +152,18 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
 
     fn environment_syntax(&self) -> Option<&Env> {
         match self {
-            InvocationSyntax::Environment(env) => Some(env),
+            InvocationSyntaxData::Environment(env) => Some(env),
             _ => None,
         }
     }
 
     fn is_specials(&self) -> bool {
-        matches!(self, InvocationSyntax::Specials)
+        matches!(self, InvocationSyntaxData::Specials)
     }
 }
 
-/// One side of an environment's recorded scaffolding — the spelling facts of a
+/// One side of the **standard** environment record's scaffolding
+/// ([`StdEnvironmentSyntax`]'s component type) — the spelling facts of a
 /// `\begin{name}`-shaped or `\end{name}`-shaped command-plus-name-group, as
 /// written:
 ///
@@ -168,7 +177,7 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
 /// recording would lose. The rule `Arc` is source-independent, hence exempt from
 /// materialization. The environment's *name* is not here — it is the node's
 /// [`name`](crate::node::CallableData::name).
-pub struct EnvironmentSideSyntax<L: Lang> {
+pub struct StdEnvironmentSideSyntax<L: Lang> {
     /// The escape character as written.
     pub escape_char: char,
     /// The command word as written (`begin`, `end`), sans escape character.
@@ -181,36 +190,37 @@ pub struct EnvironmentSideSyntax<L: Lang> {
     pub name_group_rule: Arc<GroupRule<L>>,
 }
 
-impl<L: Lang> EnvironmentSideSyntax<L> {
+impl<L: Lang> StdEnvironmentSideSyntax<L> {
     /// Resolve this side's spelling around `name` (the environment name as
     /// written): escape char + command word + post-space + open delimiter + name +
-    /// close delimiter. `source_content` resolves the span-backed fields.
-    fn write(&self, name: &str, source_content: &str) -> String {
+    /// close delimiter. `source` resolves the span-backed fields (the carrying
+    /// node's own source).
+    fn write(&self, name: &str, source: &Source<L::SourceOrigin>) -> String {
         format!(
             "{}{}{}{}{}{}",
             self.escape_char,
-            self.command_word.resolve(source_content),
-            self.post_space.resolve(source_content),
+            self.command_word.resolve(source),
+            self.post_space.resolve(source),
             self.name_group_rule.open,
             name,
             self.name_group_rule.close,
         )
     }
 
-    fn materialized(&self, source_content: &str) -> EnvironmentSideSyntax<L> {
-        EnvironmentSideSyntax {
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> StdEnvironmentSideSyntax<L> {
+        StdEnvironmentSideSyntax {
             escape_char: self.escape_char,
-            command_word: self.command_word.materialized(source_content),
-            post_space: self.post_space.materialized(source_content),
+            command_word: self.command_word.materialized(source),
+            post_space: self.post_space.materialized(source),
             // Source-independent — exempt from materialization.
             name_group_rule: Arc::clone(&self.name_group_rule),
         }
     }
 }
 
-impl<L: Lang> Clone for EnvironmentSideSyntax<L> {
+impl<L: Lang> Clone for StdEnvironmentSideSyntax<L> {
     fn clone(&self) -> Self {
-        EnvironmentSideSyntax {
+        StdEnvironmentSideSyntax {
             escape_char: self.escape_char,
             command_word: self.command_word.clone(),
             post_space: self.post_space.clone(),
@@ -219,9 +229,9 @@ impl<L: Lang> Clone for EnvironmentSideSyntax<L> {
     }
 }
 
-impl<L: Lang> fmt::Debug for EnvironmentSideSyntax<L> {
+impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EnvironmentSideSyntax")
+        f.debug_struct("StdEnvironmentSideSyntax")
             .field("escape_char", &self.escape_char)
             .field("command_word", &self.command_word)
             .field("post_space", &self.post_space)
@@ -231,7 +241,7 @@ impl<L: Lang> fmt::Debug for EnvironmentSideSyntax<L> {
 }
 
 /// The environment-syntax contract of an `Env` payload type (the
-/// [`Environment`](InvocationSyntax::Environment) arm): **scanning and payload
+/// [`Environment`](InvocationSyntaxData::Environment) arm): **scanning and payload
 /// construction, consolidated** in the accumulator shape — [`parse_begin`] scans
 /// the begin-side scaffolding and returns the accumulator with the begin side
 /// filled and the end side empty; [`parse_end`] fills the end side from the facts
@@ -241,8 +251,9 @@ impl<L: Lang> fmt::Debug for EnvironmentSideSyntax<L> {
 /// literal: what `parse_begin`/`parse_end` record is exactly what the writers
 /// emit.
 ///
-/// The data bounds and materialization come from the [`InvocationSyntaxData`]
-/// supertrait (the name-group rule `Arc` is source-independent and exempt).
+/// The data bounds and materialization come from the core
+/// [`InvocationSyntax`] supertrait (the name-group rule `Arc` is
+/// source-independent and exempt).
 ///
 /// # The verbatim caveat
 ///
@@ -256,7 +267,7 @@ impl<L: Lang> fmt::Debug for EnvironmentSideSyntax<L> {
 /// [`write_begin`]: EnvironmentSyntax::write_begin
 /// [`write_end`]: EnvironmentSyntax::write_end
 /// [`record_std_end_facts`]: EnvironmentSyntax::record_std_end_facts
-pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntaxData {
+pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// The begin-side scan, entered at the reader position right past the consumed
     /// begin trigger (`trigger`): read the environment's name scaffolding per this
     /// type's syntax — the standard record reads the **rigid** name group
@@ -273,7 +284,7 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntaxData {
     /// Fill the end side from the tokenized terminator facts the body parser
     /// reported back
     /// ([`EnvironmentTerminatorFacts::Scanned`](crate::constructs::EnvironmentTerminatorFacts)).
-    fn parse_end(&mut self, end: EnvironmentSideSyntax<L>);
+    fn parse_end(&mut self, end: StdEnvironmentSideSyntax<L>);
 
     /// The **one std-facts method** — the verbatim path (see the trait docs):
     /// record a standard-shaped end side synthesized from the begin side's facts
@@ -282,35 +293,39 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntaxData {
     fn record_std_end_facts(&mut self, command_word: &str);
 
     /// The begin-side spelling as recorded, resolved around `name` (the
-    /// environment's name as written); `source_content` resolves span-backed
-    /// fields. What a source recomposer emits for the begin scaffolding.
-    fn write_begin(&self, name: &str, source_content: &str) -> String;
+    /// environment's name as written); `source` (the carrying node's own source)
+    /// resolves span-backed fields. What a source recomposer emits for the begin
+    /// scaffolding.
+    fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 
     /// The end-side spelling as recorded — the empty string when the end side is
     /// empty (the body closed without consuming a terminator: reemitting nothing
     /// reproduces the recovered input).
-    fn write_end(&self, name: &str, source_content: &str) -> String;
+    fn write_end(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 }
 
 /// The standard environment-syntax record: strict rigid scanning (the begin
 /// composition's canonical shape), per-side facts in
-/// [`EnvironmentSideSyntax`] — begin always present, end filled by
+/// [`StdEnvironmentSideSyntax`] — begin always present, end filled by
 /// [`parse_end`](EnvironmentSyntax::parse_end) /
 /// [`record_std_end_facts`](EnvironmentSyntax::record_std_end_facts) (or left
 /// empty on the recovery paths: mismatch, malformed terminator, end of input).
 pub struct StdEnvironmentSyntax<L: Lang> {
     /// The `\begin{name}` side's facts.
-    pub begin: EnvironmentSideSyntax<L>,
+    pub begin: StdEnvironmentSideSyntax<L>,
     /// The `\end{name}` side's facts; `None` until the terminator is consumed —
     /// and permanently for a body that closed without one.
-    pub end: Option<EnvironmentSideSyntax<L>>,
+    pub end: Option<StdEnvironmentSideSyntax<L>>,
 }
 
-impl<L: Lang> InvocationSyntaxData for StdEnvironmentSyntax<L> {
-    fn materialized(&self, source_content: &str) -> Self {
+// Diagonal deliberately (not for all `(L, L2)` pairs): a lang's environment
+// record materializes against that lang's own source-origin type; a broader impl
+// would only sanction cross-lang payload reuse.
+impl<L: Lang> InvocationSyntax<L> for StdEnvironmentSyntax<L> {
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> Self {
         StdEnvironmentSyntax {
-            begin: self.begin.materialized(source_content),
-            end: self.end.as_ref().map(|end| end.materialized(source_content)),
+            begin: self.begin.materialized(source),
+            end: self.end.as_ref().map(|end| end.materialized(source)),
         }
     }
 }
@@ -334,7 +349,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
             // trigger (custom composition) records a degenerate empty spelling.
             _ => ('\u{0}', Span::empty(trigger.span.end())),
         };
-        let begin = EnvironmentSideSyntax {
+        let begin = StdEnvironmentSideSyntax {
             escape_char,
             command_word: TextContent::Spanned(Span::new(
                 trigger.span.start() + escape_char.len_utf8(),
@@ -347,7 +362,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
         Ok(Some((name_group, syntax)))
     }
 
-    fn parse_end(&mut self, end: EnvironmentSideSyntax<L>) {
+    fn parse_end(&mut self, end: StdEnvironmentSideSyntax<L>) {
         self.end = Some(end);
     }
 
@@ -355,7 +370,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
     /// rule, owned `command_word`, empty post-space — exactly the spelling the
     /// verbatim path's literal terminator was composed from.
     fn record_std_end_facts(&mut self, command_word: &str) {
-        self.end = Some(EnvironmentSideSyntax {
+        self.end = Some(StdEnvironmentSideSyntax {
             escape_char: self.begin.escape_char,
             command_word: TextContent::from(String::from(command_word)),
             post_space: TextContent::empty(),
@@ -363,13 +378,13 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
         });
     }
 
-    fn write_begin(&self, name: &str, source_content: &str) -> String {
-        self.begin.write(name, source_content)
+    fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String {
+        self.begin.write(name, source)
     }
 
-    fn write_end(&self, name: &str, source_content: &str) -> String {
+    fn write_end(&self, name: &str, source: &Source<L::SourceOrigin>) -> String {
         match &self.end {
-            Some(end) => end.write(name, source_content),
+            Some(end) => end.write(name, source),
             None => String::new(),
         }
     }
@@ -407,8 +422,9 @@ mod tests {
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
     use crate::node::{
-        check_tree_invariants, BuildId, NodeRef, ParsedArguments, ParsedSlots,
+        BuildId, NodeRef, ParsedArguments, ParsedSlots,
     };
+    use crate::latexlike::check_latexlike_tree_invariants;
     use crate::scopes::Package;
     use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
     use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
@@ -416,7 +432,7 @@ mod tests {
 
     fn parse_ok(language: &Language<Latexlike>, input: &str) -> ParseResult<Latexlike> {
         let result = language.parse(input).unwrap();
-        check_tree_invariants(&result.tree);
+        check_latexlike_tree_invariants(&result.tree);
         assert!(
             result.diagnostics.is_empty(),
             "unexpected diagnostics: {:?}",
@@ -425,8 +441,14 @@ mod tests {
         result
     }
 
-    fn payload<'t>(node: NodeRef<'t, Latexlike>) -> &'t InvocationSyntax {
+    fn payload<'t>(node: NodeRef<'t, Latexlike>) -> &'t InvocationSyntaxData {
         node.invocation_syntax().expect("a callable node")
+    }
+
+    /// A resolution source over `content` (equal content, so span-backed payload
+    /// fields resolve identically to the parse's own source).
+    fn src(content: &str) -> Source {
+        Source::new(content)
     }
 
     // --- the macro arm -----------------------------------------------------------------
@@ -439,9 +461,9 @@ mod tests {
         let result = parse_ok(&language, "\\emph  x");
         let emph = result.tree.root().child(0).unwrap();
         match payload(emph) {
-            InvocationSyntax::Macro { escape_char, post_space } => {
+            InvocationSyntaxData::Macro { escape_char, post_space } => {
                 assert_eq!(*escape_char, '\\');
-                assert_eq!(post_space.resolve("\\emph  x"), "  ");
+                assert_eq!(post_space.resolve(&src("\\emph  x")), "  ");
             }
             other => panic!("expected the Macro arm, got {other:?}"),
         }
@@ -477,9 +499,9 @@ mod tests {
         let result = parse_ok(&language, "@emph x");
         let emph = result.tree.root().child(0).unwrap();
         match payload(emph) {
-            InvocationSyntax::Macro { escape_char, post_space } => {
+            InvocationSyntaxData::Macro { escape_char, post_space } => {
                 assert_eq!(*escape_char, '@');
-                assert_eq!(post_space.resolve("@emph x"), " ");
+                assert_eq!(post_space.resolve(&src("@emph x")), " ");
             }
             other => panic!("expected the Macro arm, got {other:?}"),
         }
@@ -492,13 +514,13 @@ mod tests {
         let language = with_package(Recovery::Strict, macro_package("t", "emph", None));
         let result = parse_ok(&language, "a---b ~ c");
         let ligature = result.tree.root().child(1).unwrap();
-        assert!(matches!(payload(ligature), InvocationSyntax::Specials));
+        assert!(matches!(payload(ligature), InvocationSyntaxData::Specials));
         // Option 1: the name IS the invocation spelling as written.
         assert_eq!(ligature.specials_name(), Some("---"));
         assert_eq!(ligature.post_space(), Some(""));
 
         let tilde = result.tree.root().child(3).unwrap();
-        assert!(matches!(payload(tilde), InvocationSyntax::Specials));
+        assert!(matches!(payload(tilde), InvocationSyntaxData::Specials));
         assert_eq!(tilde.specials_name(), Some("~"));
     }
 
@@ -519,7 +541,7 @@ mod tests {
 
     fn env_payload<'t>(node: NodeRef<'t, Latexlike>) -> &'t StdEnvironmentSyntax<Latexlike> {
         match payload(node) {
-            InvocationSyntax::Environment(env) => env,
+            InvocationSyntaxData::Environment(env) => env,
             other => panic!("expected the Environment arm, got {other:?}"),
         }
     }
@@ -535,20 +557,21 @@ mod tests {
         // Begin side: escape char, command word, the *recorded* (no longer
         // normalized-away) post-space, and the name-group rule's exact bytes.
         assert_eq!(syntax.begin.escape_char, '\\');
-        assert_eq!(syntax.begin.command_word.resolve(content), "begin");
-        assert_eq!(syntax.begin.post_space.resolve(content), " ");
+        let source = src(content);
+        assert_eq!(syntax.begin.command_word.resolve(&source), "begin");
+        assert_eq!(syntax.begin.post_space.resolve(&source), " ");
         assert_eq!(&*syntax.begin.name_group_rule.open, "{");
         assert_eq!(&*syntax.begin.name_group_rule.close, "}");
 
         // End side: filled from the terminator the body parser consumed.
         let end = syntax.end.as_ref().expect("a consumed terminator");
         assert_eq!(end.escape_char, '\\');
-        assert_eq!(end.command_word.resolve(content), "end");
-        assert_eq!(end.post_space.resolve(content), "");
+        assert_eq!(end.command_word.resolve(&source), "end");
+        assert_eq!(end.post_space.resolve(&source), "");
 
         // The spelling writers reemit both sides exactly.
-        assert_eq!(syntax.write_begin("itemize", content), "\\begin {itemize}");
-        assert_eq!(syntax.write_end("itemize", content), "\\end{itemize}");
+        assert_eq!(syntax.write_begin("itemize", &source), "\\begin {itemize}");
+        assert_eq!(syntax.write_end("itemize", &source), "\\end{itemize}");
 
         // The sugar: environment-formed callables answer empty post-space.
         assert_eq!(env.post_space(), Some(""));
@@ -567,10 +590,11 @@ mod tests {
         // command word, empty post-space).
         let end = syntax.end.as_ref().expect("the literal terminator was consumed");
         assert_eq!(end.escape_char, '\\');
-        assert_eq!(end.command_word.resolve(content), "end");
+        let source = src(content);
+        assert_eq!(end.command_word.resolve(&source), "end");
         assert!(end.command_word.is_owned());
-        assert_eq!(end.post_space.resolve(content), "");
-        assert_eq!(syntax.write_end("verbatim", content), "\\end{verbatim}");
+        assert_eq!(end.post_space.resolve(&source), "");
+        assert_eq!(syntax.write_end("verbatim", &source), "\\end{verbatim}");
     }
 
     #[test]
@@ -582,7 +606,7 @@ mod tests {
         let env = result.tree.root().child(0).unwrap();
         let syntax = env_payload(env);
         assert!(syntax.end.is_none());
-        assert_eq!(syntax.write_end("itemize", "\\begin{itemize}x"), "");
+        assert_eq!(syntax.write_end("itemize", &src("\\begin{itemize}x")), "");
 
         // A name mismatch unwinds B without consuming `\end{A}`: B's end side is
         // empty, while A found and recorded its own terminator.
@@ -609,14 +633,15 @@ mod tests {
         let syntax = env_payload(env);
         assert!(syntax.begin.command_word.is_owned());
         assert!(syntax.begin.post_space.is_owned());
-        assert_eq!(syntax.begin.command_word.resolve(""), "begin");
-        assert_eq!(syntax.begin.post_space.resolve(""), " ");
+        let empty = src("");
+        assert_eq!(syntax.begin.command_word.resolve(&empty), "begin");
+        assert_eq!(syntax.begin.post_space.resolve(&empty), " ");
         let end = syntax.end.as_ref().unwrap();
         assert!(end.command_word.is_owned());
         // The writers now resolve with no source at all (source-independent
         // byte-faithful reconstruction).
-        assert_eq!(syntax.write_begin("itemize", ""), "\\begin {itemize}");
-        assert_eq!(syntax.write_end("itemize", ""), "\\end{itemize}");
+        assert_eq!(syntax.write_begin("itemize", &empty), "\\begin {itemize}");
+        assert_eq!(syntax.write_end("itemize", &empty), "\\end{itemize}");
 
         // The macro arm likewise.
         let language = with_package(Recovery::Strict, macro_package("t", "emph", None));
@@ -624,9 +649,9 @@ mod tests {
         let owned = result.tree.materialize();
         let emph = owned.root().child(0).unwrap();
         match payload(emph) {
-            InvocationSyntax::Macro { post_space, .. } => {
+            InvocationSyntaxData::Macro { post_space, .. } => {
                 assert!(post_space.is_owned());
-                assert_eq!(post_space.resolve(""), "  ");
+                assert_eq!(post_space.resolve(&src("")), "  ");
             }
             other => panic!("expected the Macro arm, got {other:?}"),
         }
@@ -637,13 +662,13 @@ mod tests {
 
     #[test]
     fn the_enum_satisfies_the_fifth_role_trait_coherence_contracts() {
-        type Syntax = InvocationSyntax;
+        type Syntax = InvocationSyntaxData;
         let macro_form: Syntax =
             LatexlikeInvocationSyntax::<Latexlike>::macro_form('\\', TextContent::from(" ".to_string()));
         let (escape_char, post_space) =
             LatexlikeInvocationSyntax::<Latexlike>::macro_syntax(&macro_form).unwrap();
         assert_eq!(escape_char, '\\');
-        assert_eq!(post_space.resolve(""), " ");
+        assert_eq!(post_space.resolve(&src("")), " ");
         assert!(!LatexlikeInvocationSyntax::<Latexlike>::is_specials(&macro_form));
 
         let specials: Syntax = LatexlikeInvocationSyntax::<Latexlike>::specials_form();
@@ -745,7 +770,7 @@ mod tests {
         // The payload still transcribed from the bundle.
         assert!(matches!(
             payload(title),
-            InvocationSyntax::Macro { escape_char: '\\', .. }
+            InvocationSyntaxData::Macro { escape_char: '\\', .. }
         ));
         let after = result.tree.root().child(1).unwrap();
         assert_eq!(after.chars(), Some("\nrest"));
@@ -755,12 +780,17 @@ mod tests {
 
     #[test]
     fn the_unit_payload_records_nothing_and_satisfies_both_traits() {
-        use crate::state::InvocationSyntaxData;
         // materialized: the identity. (from_invocation for `()` is exercised by
         // every TrivialLang parse across the core suites.)
         #[allow(clippy::unit_cmp)]
         {
-            assert_eq!(InvocationSyntaxData::materialized(&(), "abc"), ());
+            assert_eq!(
+                crate::state::InvocationSyntax::<Latexlike>::materialized(
+                    &(),
+                    &Source::new("abc")
+                ),
+                ()
+            );
         }
     }
 

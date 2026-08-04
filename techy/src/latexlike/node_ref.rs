@@ -80,7 +80,7 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
     pub fn post_space(&self) -> Option<&'t str> {
         let syntax = self.invocation_syntax()?;
         Some(match syntax.macro_syntax() {
-            Some((_escape_char, post_space)) => post_space.resolve(self.source_content()),
+            Some((_escape_char, post_space)) => post_space.resolve(self.source()),
             None => "",
         })
     }

@@ -825,7 +825,8 @@ mod tests {
                 // Span-backed over the full token span (newlines included), per the
                 // whitespace-as-chars invariant ([§dd-dr:nodes]).
                 assert!(!content.is_owned());
-                assert_eq!(content.resolve("x  \n\nz"), "\n\n");
+                let source: crate::source::Source = crate::source::Source::new("x  \n\nz");
+                assert_eq!(content.resolve(&source), "\n\n");
             }
             other => panic!("expected a Chars kind, got {:?}", other),
         }

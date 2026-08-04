@@ -188,8 +188,8 @@ pub trait LatexlikeEvent {
 /// environment-side record ([`EnvironmentSyntax`]) — the single customization
 /// entry for environment-syntax recording: a language picks its record by picking
 /// its payload type (the preset enum
-/// [`InvocationSyntax<Env>`](super::InvocationSyntax) implements this trait for
-/// any `Env`).
+/// [`InvocationSyntaxData<Env>`](super::InvocationSyntaxData) implements this
+/// trait for any `Env`).
 ///
 /// # Coherence contracts
 ///

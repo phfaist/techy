@@ -5,9 +5,9 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::source::TextContent;
+use crate::source::{Source, TextContent};
 use crate::spec::CallableSpec;
-use crate::state::{InvocationSyntaxData, Lang};
+use crate::state::{InvocationSyntax, Lang};
 
 use super::arguments::{ParsedArguments, ParsedSlots};
 
@@ -114,23 +114,23 @@ impl<L: Lang> NodeKind<L> {
         }
     }
 
-    /// A copy with every [`TextContent`] owned; `source_content` is the content of the
-    /// carrying node's own source (the `Spanned` invariant).
-    pub(crate) fn materialized(&self, source_content: &str) -> NodeKind<L> {
+    /// A copy with every [`TextContent`] owned; `source` is the carrying node's
+    /// own source (the `Spanned` invariant).
+    pub(crate) fn materialized(&self, source: &Source<L::SourceOrigin>) -> NodeKind<L> {
         match self {
             NodeKind::Chars { content } => NodeKind::Chars {
-                content: content.materialized(source_content),
+                content: content.materialized(source),
             },
             NodeKind::Group(data) => {
-                NodeKind::Group(Box::new(data.materialized(source_content)))
+                NodeKind::Group(Box::new(data.materialized(source)))
             }
             NodeKind::Callable(data) => {
-                NodeKind::Callable(Box::new(data.materialized(source_content)))
+                NodeKind::Callable(Box::new(data.materialized(source)))
             }
             NodeKind::Comment { content, start, post_space } => NodeKind::Comment {
-                content: content.materialized(source_content),
-                start: start.materialized(source_content),
-                post_space: post_space.materialized(source_content),
+                content: content.materialized(source),
+                start: start.materialized(source),
+                post_space: post_space.materialized(source),
             },
             NodeKind::List => NodeKind::List,
         }
@@ -183,11 +183,11 @@ impl<L: Lang> GroupData<L> {
         GroupData { group_type: None, open: open.into(), close: close.into() }
     }
 
-    fn materialized(&self, source_content: &str) -> GroupData<L> {
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> GroupData<L> {
         GroupData {
             group_type: self.group_type,
-            open: self.open.materialized(source_content),
-            close: self.close.materialized(source_content),
+            open: self.open.materialized(source),
+            close: self.close.materialized(source),
         }
     }
 }
@@ -230,21 +230,21 @@ pub struct CallableData<L: Lang> {
     /// name-terminating whitespace of a multi-character command (pylatexenc's
     /// `macro_post_space`), a sub-range of the node's span lying *outside* the
     /// argument/slot region tiling — in its
-    /// [`Macro`](crate::latexlike::InvocationSyntax::Macro) arm, and the
+    /// [`Macro`](crate::latexlike::InvocationSyntaxData::Macro) arm, and the
     /// begin/end scaffolding facts of environment-shaped callables in its
-    /// [`Environment`](crate::latexlike::InvocationSyntax::Environment) arm.
+    /// [`Environment`](crate::latexlike::InvocationSyntaxData::Environment) arm.
     pub invocation_syntax: L::InvocationSyntax,
 }
 
 impl<L: Lang> CallableData<L> {
-    fn materialized(&self, source_content: &str) -> CallableData<L> {
+    fn materialized(&self, source: &Source<L::SourceOrigin>) -> CallableData<L> {
         CallableData {
             callable_type: self.callable_type,
             name: self.name.clone(),
             spec: Arc::clone(&self.spec),
             arguments: self.arguments.clone(),
             slots: self.slots.clone(),
-            invocation_syntax: self.invocation_syntax.materialized(source_content),
+            invocation_syntax: self.invocation_syntax.materialized(source),
         }
     }
 }
