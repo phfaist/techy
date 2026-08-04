@@ -493,3 +493,11 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   delta through the existing sibling channel. Escalation reserved if any
   delta component fails sequential composition. M7 launched on the stage
   branch (fresh successor, same worktree).
+- 2026-08-04: S6 M7 landed (4 commits through c8da042; two API-connection-drop
+  resumes, no work lost; 660 lib tests, +6; gates green; all five
+  persist-state scenarios pass; composition clause checked per delta
+  component — no escalation). D-plan-8 SUPERSEDED / D-plan-9 resolved /
+  D-plan-14 narrowed; new D-plan-15 (`AttachedSourceOutcome`/`after_effects`
+  naming), D-plan-16 (param order), D-plan-17 (effective as-applied record
+  semantics). Delta review launched (3d49e72..c8da042; choke-point integrity
+  of `derive_state_recording` ordered as special scrutiny).
