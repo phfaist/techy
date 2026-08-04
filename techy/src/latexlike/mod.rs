@@ -57,6 +57,7 @@
 mod arguments;
 mod driver;
 mod environments;
+mod input;
 #[cfg(test)]
 mod invariants;
 mod invocation_syntax;
@@ -75,6 +76,7 @@ pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
+pub use input::{input_macro_spec, InputMacroSpec};
 pub use invocation_syntax::{
     EnvironmentSyntax, InvocationSyntaxData, StdEnvironmentSideSyntax,
     StdEnvironmentSyntax,
