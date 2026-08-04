@@ -461,3 +461,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   defensible) **and authorized the merge 2026-08-04.** Merged into
   api-review (14 stage commits; 614 lib + 30 acceptance + 8 + 1 + 27 doc
   tests; full gate table in S5_REPORT.md). S5 COMPLETE.
+- 2026-08-04: S6 launched (worktree branch `phase3-s6-input-wiring` off
+  api-review 4113aa8; relay discipline + the rulings-revision escalation rule
+  in the brief; scope = §S6 + the S3-era Attached parse-law rider (TODO(S6)
+  in node/invariants.rs, respecting the S5 core/preset checker split) + wire
+  identifiers per the frozen slate).
