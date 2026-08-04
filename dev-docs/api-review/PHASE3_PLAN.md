@@ -473,3 +473,23 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   closest call (D-plan-9, shipped \input state-transparency vs T5-G) queued
   as record-determined. Whole-stage independent review launched (full diff
   4113aa8..2906060; special scrutiny ordered on D-plan-8/9/10).
+- 2026-08-04: S6 review verdict: merge-ready after sign-off, 0 blockers; all
+  D-plan-1..14 FORCED/DEFENSIBLE; D-plan-10 verified squarely ruled; 2
+  trivial should-fixes applied pre-sign-off (3d49e72). Reviewer ordered
+  D-plan-9 foregrounded at sign-off.
+- 2026-08-04 (user): **S6 DESIGN-REVISION RULINGS** (interactive, from the
+  sign-off questions): (1) **D-plan-8 REVERSED** — the shipped `\input` must
+  NOT overload the preset's body marker: `input_macro_spec` takes the
+  attached-slot ext as a constructor argument (embedder-supplied value,
+  cloned per invocation — `SlotExt: Clone` bound verified); shipped
+  Latexlike registration passes the not-body marker; retrieval by slot name
+  `"attached"`; the T5 Attached-body findability clause stands for
+  frameworks that choose the pairing. (2) **D-plan-9 RESOLVED as a rulings
+  amendment** — `persist_state: bool` (mandatory) on `input_macro_spec`;
+  the content loop accumulates its applied after-effect deltas into a
+  merged delta (the "no current consumer" hook now consumed); the inclusion
+  entry point returns an outcome bundle (nodes + merged delta), amending
+  T4-B2's bare `Vec<BuildId>`; `persist_state: true` forwards the merged
+  delta through the existing sibling channel. Escalation reserved if any
+  delta component fails sequential composition. M7 launched on the stage
+  branch (fresh successor, same worktree).
