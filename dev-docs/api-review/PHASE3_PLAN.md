@@ -466,3 +466,10 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   in the brief; scope = §S6 + the S3-era Attached parse-law rider (TODO(S6)
   in node/invariants.rs, respecting the S5 core/preset checker split) + wire
   identifiers per the frozen slate).
+- 2026-08-04: S6 implemented in one run (7 commits through 2906060; 654 lib
+  tests, was 614; gates green; all stage acceptance suites pass — I-18
+  multi-source, include-chain policy, line/col cache, stray-close locality).
+  14 deviations queued (D-plan-1..14); no escalations — the implementer's
+  closest call (D-plan-9, shipped \input state-transparency vs T5-G) queued
+  as record-determined. Whole-stage independent review launched (full diff
+  4113aa8..2906060; special scrutiny ordered on D-plan-8/9/10).
