@@ -19,8 +19,8 @@
 
 pub use crate::constructs::{
     parse_declared_arguments, read_rigid_name_group, scan_argument_noise, stage_pre_space,
-    verbatim_state_delta, ArgumentNoise, CharsGroupArgumentParser, ChildStateSpec,
-    CommandResolutionFailed, ConstructParser, ConstructParserResult,
+    verbatim_state_delta, ArgumentNoise, AttachedSourceOutcome, CharsGroupArgumentParser,
+    ChildStateSpec, CommandResolutionFailed, ConstructParser, ConstructParserResult,
     EmbellishmentsArgumentParser, EnvironmentBeginSyntaxData, EnvironmentBody,
     EnvironmentBodyParser, EnvironmentTerminatorMismatch, EnvironmentTerminatorSyntaxData,
     ExpectedExpressionArgument, ExpectedVerbatimDelimiter,

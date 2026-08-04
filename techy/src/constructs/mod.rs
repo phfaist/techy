@@ -52,7 +52,7 @@ pub use argument_parsers::{
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };
-pub use attached_source::{NoSourceResolver, UnresolvableSourceReference};
+pub use attached_source::{AttachedSourceOutcome, NoSourceResolver, UnresolvableSourceReference};
 pub use chars_group_parser::CharsGroupArgumentParser;
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use embellishments_parser::EmbellishmentsArgumentParser;
@@ -407,9 +407,60 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             effective = self.lower_state_events(delta);
             &effective
         };
-        match self.session.derived_state(self.driver, &base, delta) {
+        self.commit_derivation(&base, delta)
+    }
+
+    /// [`derive_state`](ParseContext::derive_state) with the **effective, as-applied
+    /// delta recorded**: after the transition commits (cleanly or through the
+    /// tolerant ops-skipped recovery), the delta actually handed to the derivation —
+    /// context-dependent events already lowered into their override patches — is
+    /// merged into `record` ([`ParsingStateDelta::merge_from`]: later field
+    /// overrides win, scope ops and events concatenate in application order). The
+    /// capture seam of the merged after-effect record
+    /// ([`NodesOutcome::after_effects`]).
+    ///
+    /// Recording the *effective* delta is load-bearing: context-dependent events
+    /// are positional (they mean something only at this context's position), so a
+    /// record replayed elsewhere must carry their lowered patches, never the raw
+    /// events. Context-free events that survive lowering are recorded as-is — by
+    /// the [`Lang::Event`](crate::state::Lang::Event) contract they are consumed
+    /// wherever the delta is applied, so they replay exactly. On the tolerant
+    /// ops-skipped path the record keeps the delta **as applied** (the
+    /// [`DeriveError::delta`](crate::state::DeriveError::delta) notion), failing
+    /// ops included: a replay elsewhere re-attempts them and may re-diagnose.
+    pub(crate) fn derive_state_recording(
+        &mut self,
+        delta: &ParsingStateDelta<L>,
+        record: &mut Option<ParsingStateDelta<L>>,
+    ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
+        let base = Arc::clone(&self.state);
+        let effective;
+        let applied = if delta.events.is_empty() {
+            delta
+        } else {
+            effective = self.lower_state_events(delta);
+            &effective
+        };
+        let new = self.commit_derivation(&base, applied)?;
+        match record {
+            Some(record) => record.merge_from(applied.clone()),
+            None => *record = Some(applied.clone()),
+        }
+        Ok(new)
+    }
+
+    /// The shared commit tail of the derivation seams: run the session-mediated
+    /// derivation (so the transition reaches
+    /// [`ParseDriver::observe_transition`]) and route failures through
+    /// [`recover_derive_failure`](ParseContext::recover_derive_failure).
+    fn commit_derivation(
+        &mut self,
+        base: &Arc<ParsingState<L>>,
+        applied: &ParsingStateDelta<L>,
+    ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
+        match self.session.derived_state(self.driver, base, applied) {
             Ok(new) => Ok(new),
-            Err(failure) => self.recover_derive_failure(&base, failure),
+            Err(failure) => self.recover_derive_failure(base, failure),
         }
     }
 

@@ -7,9 +7,12 @@
 //! included content must parse under the parsing state *at the inclusion point*,
 //! which the running session has naturally — and the staged nodes join the same
 //! builder, so a multi-source tree is one tree (`BuildId`s are session-global).
-//! Slot assembly stays the calling invocation parser's job: the door returns
-//! content nodes, and the caller stages them (for `\input`, as an
-//! [`Attached`](crate::node::SlotRole::Attached) slot of its callable node).
+//! Slot assembly stays the calling invocation parser's job: the door returns an
+//! [`AttachedSourceOutcome`] — content nodes plus the included run's merged
+//! after-effect record — and the caller stages the nodes (for `\input`, as an
+//! [`Attached`](crate::node::SlotRole::Attached) slot of its callable node) and
+//! decides whether the record continues past the inclusion (the
+//! persist-vs-transparent choice).
 //!
 //! Recursion control is deliberately **not** here: the core never interprets
 //! reference strings, and legitimate self-inclusion exists (`.dtx`-style
@@ -22,17 +25,57 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use core::fmt;
+
 use crate::engine::{Frame, FrameTitle};
 use crate::error::DiagnosticInfo;
 use crate::node::{BuildId, NodeKind};
 use crate::source::{resolve_source_reference, ResolveError, Source, SourceSpan};
-use crate::state::{Lang, ParsingState};
+use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::StdTokenReader;
 
 use super::{
     ConstructParser, ConstructParserResult, NodesOutcome, ParseContext, StopCause,
     StrayGroupClose,
 };
+
+/// What [`ParseContext::parse_attached_source`] produces: the staged content nodes of
+/// the included run, plus the run's merged after-effect record.
+pub struct AttachedSourceOutcome<L: Lang> {
+    /// The staged content nodes, in source order — no wrapper `List`, no slot record:
+    /// slot assembly stays the calling invocation parser's job.
+    pub nodes: Vec<BuildId>,
+    /// The sibling after-effect deltas the included run applied, merged into one
+    /// replayable delta in application order
+    /// ([`NodesOutcome::after_effects`] semantics, merged across resumed runs);
+    /// `None` = the run applied none. Whether the included content's state effects
+    /// continue past the inclusion is the **caller's choice**: an `\input`-style
+    /// spec that persists them returns this delta as its own after-effect through
+    /// the ordinary sibling channel (the preset's
+    /// `input_macro_spec(persist_state: true, …)`); a state-transparent spec drops
+    /// it.
+    pub after_effects: Option<ParsingStateDelta<L>>,
+}
+
+// Manual impls: derives would demand `L: Debug`/`L: Clone` (the `NodesOutcome`
+// pattern).
+impl<L: Lang> fmt::Debug for AttachedSourceOutcome<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AttachedSourceOutcome")
+            .field("nodes", &self.nodes)
+            .field("after_effects", &self.after_effects)
+            .finish()
+    }
+}
+
+impl<L: Lang> Clone for AttachedSourceOutcome<L> {
+    fn clone(&self) -> Self {
+        AttachedSourceOutcome {
+            nodes: self.nodes.clone(),
+            after_effects: self.after_effects.clone(),
+        }
+    }
+}
 
 impl<L: Lang> ParseContext<'_, '_, L> {
     /// Parse `source` as **attached content** of the construct being parsed — the
@@ -54,11 +97,14 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// [`NodesParser`](super::NodesParser) does — its working state drains at every
     /// return).
     ///
-    /// Returns the staged **content nodes only** — no wrapper `List`, no slot
-    /// record: slot assembly stays the invocation parser's job (the one staging
-    /// door, [`stage_node`](ParseContext::stage_node), holds). The whole sub-parse
-    /// runs under a traceback [`Frame`] (`attached source`, anchored at the
-    /// source's [`triggered_at`](crate::source::SourceProvenance::triggered_at)
+    /// Returns an [`AttachedSourceOutcome`]: the staged **content nodes only** — no
+    /// wrapper `List`, no slot record: slot assembly stays the invocation parser's
+    /// job (the one staging door, [`stage_node`](ParseContext::stage_node), holds) —
+    /// plus the included run's merged after-effect record
+    /// ([`AttachedSourceOutcome::after_effects`]), which the caller forwards or
+    /// drops (the persist-vs-transparent choice of `\input`-style specs). The whole
+    /// sub-parse runs under a traceback [`Frame`] (`attached source`, anchored at
+    /// the source's [`triggered_at`](crate::source::SourceProvenance::triggered_at)
     /// when it has one), so conditions inside the attached content point back at
     /// the inclusion.
     ///
@@ -75,15 +121,15 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// conditions ends the sub-parse normally — unlike the root loop, the door
     /// does not know the caller's stop spec, so a token/node-condition stop means
     /// "this run is complete" (content past it stays unparsed, the caller's
-    /// choice). Any pass-through state delta of the sub-parse is discarded: the
-    /// door returns nodes, and the attached content's internal after-effects do
-    /// not continue into the including document.
+    /// choice). The sub-parse's pass-through state delta channel is discarded
+    /// (the standard nodes parser returns `None` there by convention); the run's
+    /// **applied** after-effects travel as the outcome's merged record instead.
     pub fn parse_attached_source<P>(
         &mut self,
         source: Arc<Source<L::SourceOrigin>>,
         state: Arc<ParsingState<L>>,
         parser: &mut P,
-    ) -> ConstructParserResult<L, Vec<BuildId>>
+    ) -> ConstructParserResult<L, AttachedSourceOutcome<L>>
     where
         P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized,
     {
@@ -114,10 +160,19 @@ impl<L: Lang> ParseContext<'_, '_, L> {
 
         inner.with_frame(frame, |cx| {
             let mut nodes: Vec<BuildId> = Vec::new();
+            let mut after_effects: Option<ParsingStateDelta<L>> = None;
             loop {
                 let (outcome, _delta) =
                     cx.parse_scoped(Arc::clone(&cx.state), &mut *parser)?;
                 nodes.extend(outcome.nodes);
+                // Merge each resumed run's after-effect record into one bundle
+                // record (application order — later runs are sequentially later).
+                if let Some(run_effects) = outcome.after_effects {
+                    match &mut after_effects {
+                        Some(merged) => merged.merge_from(run_effects),
+                        None => after_effects = Some(run_effects),
+                    }
+                }
                 // Thread the segment's exit state (the root-loop discipline):
                 // resume and diagnosis run under the state the run reached.
                 cx.state = outcome.state;
@@ -147,7 +202,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
                     StopCause::TokenCondition { .. } | StopCause::NodeCondition => break,
                 }
             }
-            Ok(nodes)
+            Ok(AttachedSourceOutcome { nodes, after_effects })
         })
     }
 
@@ -173,17 +228,18 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     ///
     /// On success, delegates to
     /// [`parse_attached_source`](ParseContext::parse_attached_source) (whose
-    /// parser/state/recovery contracts apply) and returns `Ok(Some(nodes))`.
-    /// Resolution itself stays outside the door — the composition is accessor →
-    /// [`resolve_source_reference`] → door, so a caching framework can substitute
-    /// either half by composing the pieces itself.
+    /// parser/state/recovery contracts apply) and returns `Ok(Some(outcome))` —
+    /// the staged nodes plus the included run's merged after-effect record
+    /// ([`AttachedSourceOutcome`]). Resolution itself stays outside the door — the
+    /// composition is accessor → [`resolve_source_reference`] → door, so a caching
+    /// framework can substitute either half by composing the pieces itself.
     pub fn attach_source_reference<P>(
         &mut self,
         reference: &str,
         at: &SourceSpan<L::SourceOrigin>,
         state: Arc<ParsingState<L>>,
         parser: &mut P,
-    ) -> ConstructParserResult<L, Option<Vec<BuildId>>>
+    ) -> ConstructParserResult<L, Option<AttachedSourceOutcome<L>>>
     where
         P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized,
     {
@@ -371,13 +427,14 @@ mod tests {
                 Arc::new(Source::resolved("hello {world}", "chapter.tex", trigger));
             let mut parser = nodes_parser(cx.driver);
             let outer_pos_before = cx.tokens.pos();
-            let nodes = cx
+            let outcome = cx
                 .parse_attached_source(
                     Arc::clone(&attached),
                     Arc::clone(&cx.state),
                     &mut *parser,
                 )
                 .unwrap();
+            let nodes = outcome.nodes;
             // The outer reader did not move: the sub-parse ran a fresh inner one.
             assert_eq!(cx.tokens.pos(), outer_pos_before);
             // Content nodes only, staged into the *same* builder, with spans in
@@ -406,7 +463,8 @@ mod tests {
             let mut parser = nodes_parser(cx.driver);
             let nodes = cx
                 .parse_attached_source(attached, Arc::clone(&cx.state), &mut *parser)
-                .unwrap();
+                .unwrap()
+                .nodes;
             let staged = cx.staged_nodes();
             let texts: Vec<String> = nodes
                 .iter()
@@ -454,10 +512,10 @@ mod tests {
                     .with_origin(Some("self.tex".into())),
             );
             let mut parser = nodes_parser(cx.driver);
-            let nodes = cx
+            let outcome = cx
                 .parse_attached_source(second, Arc::clone(&cx.state), &mut *parser)
                 .unwrap();
-            assert_eq!(nodes.len(), 1);
+            assert_eq!(outcome.nodes.len(), 1);
         });
         assert!(session.diagnostics.is_empty());
     }
@@ -476,7 +534,7 @@ mod tests {
                 &mut *parser,
             )
         });
-        assert_eq!(result.unwrap(), None);
+        assert!(result.unwrap().is_none());
         assert_eq!(session.diagnostics.len(), 1);
         let diagnostic = session.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), NoSourceResolver::IDENTIFIER);
@@ -518,7 +576,7 @@ mod tests {
                 &mut *parser,
             )
         });
-        assert_eq!(result.unwrap(), None);
+        assert!(result.unwrap().is_none());
         assert_eq!(session.diagnostics.len(), 1);
         let diagnostic = session.diagnostics.iter().next().unwrap();
         assert_eq!(
@@ -553,7 +611,8 @@ mod tests {
                     &mut *parser,
                 )
                 .unwrap()
-                .expect("resolved and attached");
+                .expect("resolved and attached")
+                .nodes;
             assert_eq!(nodes.len(), 2);
             let staged = cx.staged_nodes();
             let attached_source =
@@ -642,7 +701,27 @@ mod tests {
         let attached = cx
             .attach_source_reference("a.tex", &at, Arc::clone(&cx.state), &mut *parser)
             .unwrap();
-        assert_eq!(attached, None);
+        assert!(attached.is_none());
         assert_eq!(session.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn a_run_without_after_effects_bundles_none() {
+        // Persist test (e): an included run whose constructs apply no after-effect
+        // deltas exports `after_effects: None` — the ruled `Option` spelling, so a
+        // persisting caller forwards nothing rather than an empty delta.
+        let driver = driver(Recovery::Strict);
+        let ((), session) = with_context(&driver, r"\input{plain.tex}", |cx| {
+            let trigger = SourceSpan::entire(&cx.source);
+            let attached: Arc<Source> =
+                Arc::new(Source::resolved("plain {content}", "plain.tex", trigger));
+            let mut parser = nodes_parser(cx.driver);
+            let outcome = cx
+                .parse_attached_source(attached, Arc::clone(&cx.state), &mut *parser)
+                .unwrap();
+            assert_eq!(outcome.nodes.len(), 2);
+            assert!(outcome.after_effects.is_none());
+        });
+        assert!(session.diagnostics.is_empty());
     }
 }

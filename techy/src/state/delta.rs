@@ -242,6 +242,40 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
+    /// Whether this delta changes nothing: no rules overrides, no scope ops, no
+    /// mode/ext override, no events. Internal — the merged after-effect record
+    /// ([`NodesOutcome::after_effects`](crate::constructs::NodesOutcome::after_effects))
+    /// spells "no after-effects" as `None`, never as an empty delta.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rules == TokenRulesOverrides::default()
+            && self.scope_ops.is_empty()
+            && self.mode.is_none()
+            && self.ext.is_none()
+            && self.events.is_empty()
+    }
+
+    /// Merge `later` into `self` as a **sequentially later** delta — the composition
+    /// used by the merged after-effect record
+    /// ([`NodesOutcome::after_effects`](crate::constructs::NodesOutcome::after_effects)):
+    /// applying `self` then `later` to a base is reproduced by applying the merged
+    /// value once. Rules overrides: `later`'s `Some` fields win
+    /// ([`TokenRulesOverrides`] fields replace wholesale, so last-writer-wins is
+    /// exact); scope ops concatenate in application order; `mode`/`ext`
+    /// last-writer-wins; events concatenate in application order (an event's
+    /// position among the ops does not matter — events are consumed by the
+    /// transition as a whole, [`Lang::finalize_transition`]).
+    pub(crate) fn merge_from(&mut self, later: ParsingStateDelta<L>) {
+        self.rules.merge_from(later.rules);
+        self.scope_ops.extend(later.scope_ops);
+        if later.mode.is_some() {
+            self.mode = later.mode;
+        }
+        if later.ext.is_some() {
+            self.ext = later.ext;
+        }
+        self.events.extend(later.events);
+    }
+
     /// Apply overrides (rules + scope ops + mode + ext) to `data`. Internal, pre-freeze:
     /// called only from `derived()`, before `finalize_transition` runs. Scope-op
     /// failures are collected (the failing op is skipped, the rest still apply) and

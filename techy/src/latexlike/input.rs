@@ -5,19 +5,29 @@
 //! **Never preloaded**: the spec is not part of [`base_package`](super::base_package)
 //! — an always-on `\input` under a resolver-less driver would just diagnose every
 //! use. Embedders that want it insert it into their own package, under their own
-//! macro callable type and any command name:
+//! macro callable type and any command name — choosing **consciously**, through the
+//! two mandatory constructor parameters, whether included state changes persist
+//! past the `\input` (`persist_state`) and what slot-ext value the attached slot
+//! carries (for the preset, [`BodyMarker::not_body`](super::BodyMarker::not_body)
+//! unless the framework wants the attached content findable as the node's *body*):
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
 //! use techy::core::specs::Package;
 //! use techy::error::Recovery;
-//! use techy::latexlike::{input_macro_spec, CallableType, Latexlike, LatexlikeDriver};
+//! use techy::latexlike::{
+//!     input_macro_spec, BodyMarker, CallableType, Latexlike, LatexlikeDriver,
+//! };
 //! use techy::source::MapResolver;
 //!
 //! let mut resolver = MapResolver::new();
 //! resolver.insert("chapter.tex", "included {content}");
 //! let mut package: Package<Latexlike> = Package::new("mydefs");
-//! package.insert(CallableType::Macro, "input", input_macro_spec());
+//! package.insert(
+//!     CallableType::Macro,
+//!     "input",
+//!     input_macro_spec(false, BodyMarker::not_body()),
+//! );
 //!
 //! let language = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
@@ -25,10 +35,13 @@
 //! );
 //! let result = language.parse(r"a \input{chapter.tex} b").unwrap();
 //! let input = result.tree.root().child(1).unwrap();
-//! // The invocation's own span lives in the includer; the attached content is
-//! // the node's body, parsed out of the resolved source.
+//! // The invocation's own span lives in the includer; the attached content —
+//! // parsed out of the resolved source — is retrieved by its slot name.
 //! assert_eq!(input.span_content(), r"\input{chapter.tex}");
-//! assert_eq!(input.body().unwrap().source_text().unwrap(), "included {content}");
+//! assert_eq!(
+//!     input.slot_content_nodes_named("attached").unwrap().source_text().unwrap(),
+//!     "included {content}",
+//! );
 //! ```
 
 use alloc::string::{String, ToString};
@@ -42,7 +55,7 @@ use crate::constructs::{
     GroupArgumentParser, Invocation, ParseContext, StopSpec,
 };
 use crate::node::{
-    ArgumentExt, BodySlotExt, BuildId, ChildRegion, ContentNodes, NodeKind,
+    ArgumentExt, BuildId, ChildRegion, ContentNodes, NodeKind,
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
 };
 use crate::engine::ParseDriver;
@@ -59,15 +72,27 @@ use super::{Latexlike, LatexlikeLang};
 /// driver's [`SourceResolver`](crate::source::SourceResolver) and parses the
 /// content **at the invocation point, into the same tree** — recorded as an
 /// [`Attached`](SlotRole::Attached) slot (named `"attached"`) of the staged
-/// callable, which is also the node's body slot
-/// ([`NodeRef::body`](crate::node::NodeRef::body); body-ness is the ext axis,
-/// recorded independently of the role). Constructed by [`input_macro_spec`],
-/// **never preloaded** (see the module docs).
+/// callable. Constructed by [`input_macro_spec`], **never preloaded** (see the
+/// module docs).
 ///
 /// The node's own span is its invocation in the *includer's* source (`\input{…}`);
 /// only the attached slot's children live in the resolved source — a multi-source
 /// tree is first-class, and recomposition per source emits the invocation text,
 /// not the content.
+///
+/// # The attached slot's ext is the embedder's
+///
+/// The slot's [`SlotExt`] value is supplied at construction and cloned into every
+/// invocation's slot record — the spec does not decide what the ext means. In
+/// particular the preset's `\input` does **not** overload the environment-body
+/// marker: the recipe passes [`BodyMarker::not_body`](super::BodyMarker::not_body),
+/// so [`NodeRef::body`](crate::node::NodeRef::body) (ext-axis selection) does not
+/// select the attached content — retrieval is by slot name,
+/// [`slot_content_nodes_named("attached")`](crate::node::NodeRef::slot_content_nodes_named).
+/// A framework that *wants* the attached content to be the node's body passes a
+/// body-marked ext instead ([`BodySlotExt::make_body`](crate::node::BodySlotExt::make_body)),
+/// and `body()` finds it — the ext axis is selected alone, with no hidden
+/// role conjunction, precisely so that choice cannot become silently unfindable.
 ///
 /// # Failure conditions
 ///
@@ -78,16 +103,23 @@ use super::{Latexlike, LatexlikeLang};
 /// when the resolver fails. Tolerant parses record the condition and stage the
 /// callable *without* an attached slot; strict parses abort.
 ///
-/// # State handling — deliberately transparent
+/// # State handling — `persist_state` decides
 ///
-/// The attached content parses under the parsing state at the `\input` point
-/// (definitions in force there apply inside the included content), but its own
-/// after-effects — a `\newcommand`-style definition made *inside* the included
-/// file — do **not** continue into the rest of the including document: this spec
-/// returns no after-effect delta. A framework whose `\input` must propagate
-/// state (the preamble-defines-macros case) writes its own composition around
-/// [`ParseContext::parse_attached_source`], where it controls both the sub-parse
-/// and what it hands back to the caller.
+/// The attached content always parses under the parsing state at the `\input`
+/// point (definitions in force there apply inside the included content). What
+/// happens to the included content's **own** after-effects — a
+/// `\newcommand`-style definition made *inside* the included file — is the
+/// mandatory `persist_state` constructor choice:
+///
+/// - **`persist_state: false` — transparent**: the included run's after-effects
+///   end with the file; the rest of the including document is unaffected.
+/// - **`persist_state: true` — persisting**: the included run's applied
+///   after-effect deltas, merged into one record
+///   ([`AttachedSourceOutcome::after_effects`](crate::constructs::AttachedSourceOutcome::after_effects)),
+///   are returned as the `\input` invocation's own after-effect through the
+///   ordinary sibling channel — the paradigm case is a preamble file whose
+///   definitions must hold for the rest of the document. Nested inclusions
+///   compose: an inner file's persisted effects join the outer file's record.
 ///
 /// # Variants are custom-spec work
 ///
@@ -99,24 +131,49 @@ use super::{Latexlike, LatexlikeLang};
 pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure: one mandatory `{…}` argument named `"reference"`.
     arguments: Vec<Arc<ArgumentSpec<LLL>>>,
+    /// Whether the included run's merged after-effects continue past the `\input`.
+    persist_state: bool,
+    /// The ext value cloned into every invocation's attached slot.
+    attached_slot_ext: SlotExt<LLL>,
 }
 
 /// Create the preset's opt-in `\input` spec ([`InputMacroSpec`] — never
 /// preloaded; see the type and module docs).
 ///
+/// # The two mandatory choices
+///
+/// Both parameters are deliberate embedder decisions with **no defaults**:
+///
+/// - `persist_state` — whether state changes made inside the included file
+///   (after-effect deltas of its constructs) continue past the `\input` into the
+///   rest of the including document. See the type's
+///   [state-handling section](InputMacroSpec#state-handling--persist_state-decides).
+/// - `attached_slot_ext` — the [`SlotExt`] value recorded on the `"attached"`
+///   slot (cloned per invocation). The preset recipe passes
+///   [`BodyMarker::not_body`](super::BodyMarker::not_body); a body-marked value
+///   makes the attached content the node's
+///   [`body()`](crate::node::NodeRef::body) — the framework's choice, never the
+///   shipped default. See the type's
+///   [ext section](InputMacroSpec#the-attached-slots-ext-is-the-embedders).
+///
 /// # No input caching
 ///
 /// The included file is read **on the spot, at parse time** — deliberately: the
-/// parsing state at the `\input` point governs how the content tokenizes, and in
-/// general an `\input`-style construct may even feed state back into the
-/// including document (not this spec — see the type docs — but the general
-/// shape), so a parse-without-attachment cache is not generally sound. techy
-/// therefore neither implements nor recommends input caching; resolvers may
-/// freely cache *content* (the [`SourceResolver`](crate::source::SourceResolver)
-/// contract), which is the part that costs I/O. The guide's include chapter
-/// discusses the trade-offs, including the separate-parse-then-splice recipe
-/// that applies only when `\input` is known state-transparent.
-pub fn input_macro_spec<LLL>() -> InputMacroSpec<LLL>
+/// parsing state at the `\input` point governs how the content tokenizes, and an
+/// `\input`-style construct may feed state back into the including document —
+/// with `persist_state: true` this very spec does, which makes the rationale
+/// stronger still: a parse-without-attachment cache is unsound for any document
+/// whose included files carry definitions. techy therefore neither implements
+/// nor recommends input caching; resolvers may freely cache *content* (the
+/// [`SourceResolver`](crate::source::SourceResolver) contract), which is the
+/// part that costs I/O. The guide's include chapter discusses the trade-offs,
+/// including the separate-parse-then-splice recipe that applies only when
+/// `\input` is known state-transparent (`persist_state: false` **and** no
+/// out-of-band state coupling).
+pub fn input_macro_spec<LLL>(
+    persist_state: bool,
+    attached_slot_ext: SlotExt<LLL>,
+) -> InputMacroSpec<LLL>
 where
     LLL: LatexlikeLang,
     ArgumentExt<LLL>: Default,
@@ -126,6 +183,8 @@ where
             Arc::new(GroupArgumentParser::new(LLL::GroupTypeId::content_group())),
             "reference",
         ))],
+        persist_state,
+        attached_slot_ext,
     }
 }
 
@@ -133,7 +192,6 @@ impl<LLL> CallableSpec<LLL> for InputMacroSpec<LLL>
 where
     LLL: LatexlikeLang,
     ArgumentExt<LLL>: Default,
-    SlotExt<LLL>: BodySlotExt,
 {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
@@ -150,22 +208,35 @@ where
     where
         's: 'a,
     {
-        alloc::boxed::Box::new(InputInvocationParser { invocation })
+        alloc::boxed::Box::new(InputInvocationParser {
+            invocation,
+            persist_state: self.persist_state,
+            attached_slot_ext: &self.attached_slot_ext,
+        })
     }
 }
 
-// Manual impls: derives would demand `LLL: Debug`/`Clone` although only `Arc`s are
-// stored (the MacroSpec/SpecialsSpec pattern).
+// Manual impls: derives would demand `LLL: Debug`/`Clone` although only `Arc`s and
+// the `NodeExtTypes`-bounded ext are stored (the MacroSpec/SpecialsSpec pattern;
+// `SlotExt` is `Clone + Debug` by the `NodeExtTypes` bounds).
 
 impl<LLL: LatexlikeLang> fmt::Debug for InputMacroSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InputMacroSpec").field("arguments", &self.arguments).finish()
+        f.debug_struct("InputMacroSpec")
+            .field("arguments", &self.arguments)
+            .field("persist_state", &self.persist_state)
+            .field("attached_slot_ext", &self.attached_slot_ext)
+            .finish()
     }
 }
 
 impl<LLL: LatexlikeLang> Clone for InputMacroSpec<LLL> {
     fn clone(&self) -> Self {
-        InputMacroSpec { arguments: self.arguments.clone() }
+        InputMacroSpec {
+            arguments: self.arguments.clone(),
+            persist_state: self.persist_state,
+            attached_slot_ext: self.attached_slot_ext.clone(),
+        }
     }
 }
 
@@ -173,13 +244,14 @@ impl<LLL: LatexlikeLang> Clone for InputMacroSpec<LLL> {
 /// exist for: declared arguments → argument text → attach → `Attached` slot.
 struct InputInvocationParser<'a, 's, LLL: LatexlikeLang> {
     invocation: Invocation<'a, 's, LLL>,
+    persist_state: bool,
+    attached_slot_ext: &'a SlotExt<LLL>,
 }
 
 impl<LLL> ConstructParser<LLL> for InputInvocationParser<'_, '_, LLL>
 where
     LLL: LatexlikeLang,
     ArgumentExt<LLL>: Default,
-    SlotExt<LLL>: BodySlotExt,
 {
     type Output = BuildId;
 
@@ -229,21 +301,28 @@ where
 
         // 4. The attached content becomes the `Attached` slot — present exactly
         //    when a source was attached (an empty file attaches an empty slot;
-        //    a diagnosed resolution failure attaches none), and marked as the
-        //    node's body on the ext axis.
-        let slots = match attached {
-            Some(nodes) => {
+        //    a diagnosed resolution failure attaches none). The slot's ext is the
+        //    embedder-supplied value, cloned per invocation — this spec never
+        //    decides body-ness itself.
+        let (slots, after_effects) = match attached {
+            Some(outcome) => {
                 let offset = children.len() as u32;
-                let count = nodes.len() as u32;
-                children.extend(nodes);
-                ParsedSlots::new(vec![ParsedSlot::new(
+                let count = outcome.nodes.len() as u32;
+                children.extend(outcome.nodes);
+                let slots = ParsedSlots::new(vec![ParsedSlot::new(
                     ChildRegion::new(offset..offset + count, ContentNodes::InRegion(0..count)),
                     "attached",
                     SlotRole::Attached,
-                    BodySlotExt::make_body(),
-                )])
+                    self.attached_slot_ext.clone(),
+                )]);
+                // The persist_state choice: forward the included run's merged
+                // after-effect record as this invocation's own after-effect
+                // (the existing sibling channel), or stay transparent.
+                let after_effects =
+                    if self.persist_state { outcome.after_effects } else { None };
+                (slots, after_effects)
             }
-            None => ParsedSlots::empty(),
+            None => (ParsedSlots::empty(), None),
         };
 
         // 5. Stage. `Some(end)` pins the node's span to its invocation in the
@@ -256,7 +335,7 @@ where
             children,
             Some(end),
         )?;
-        Ok((id, None))
+        Ok((id, after_effects))
     }
 }
 
@@ -304,12 +383,17 @@ fn argument_text_span<LLL: LatexlikeLang>(
 mod tests {
     use super::super::test_support::root_shapes;
     use super::super::{
-        check_latexlike_tree_invariants, CallableType, Latexlike, LatexlikeDriver,
+        check_latexlike_tree_invariants, BodyMarker, CallableType, Latexlike,
+        LatexlikeDriver, MacroSpec,
     };
     use super::*;
-    use crate::constructs::{NoSourceResolver, UnresolvableCommand, UnresolvableSourceReference, StrayGroupClose};
+    use crate::constructs::{
+        NoSourceResolver, StdInvocationParser, StrayGroupClose, UnresolvableCommand,
+        UnresolvableSourceReference,
+    };
     use crate::engine::Language;
     use crate::error::{DiagnosticInfo, Recovery};
+    use crate::node::BodySlotExt;
     use crate::scopes::Package;
     use crate::source::{
         check_include_chain, MapResolver, ResolveError, ResolvedContent,
@@ -317,15 +401,31 @@ mod tests {
     };
     use crate::state::ParsingState;
 
+    /// The **shipped registration recipe**: `\input` state-transparent, the attached
+    /// slot carrying the preset's not-body marker (Ruling A: the preset never
+    /// overloads the environment-body marker).
     fn input_package() -> Package<Latexlike> {
+        input_package_with(false, BodyMarker::not_body())
+    }
+
+    fn input_package_with(persist_state: bool, ext: BodyMarker) -> Package<Latexlike> {
         let mut package = Package::new("inputs");
-        package.insert(CallableType::Macro, "input", input_macro_spec());
+        package.insert(CallableType::Macro, "input", input_macro_spec(persist_state, ext));
         package
     }
 
     /// A language whose driver resolves the given references (origins labeled with
-    /// the reference — the canonical-origin invariant) and defines `\input`.
+    /// the reference — the canonical-origin invariant) and defines `\input` under
+    /// the shipped registration recipe.
     fn language(recovery: Recovery, entries: &[(&str, &str)]) -> Language<Latexlike> {
+        language_with_packages(recovery, entries, [input_package()])
+    }
+
+    fn language_with_packages(
+        recovery: Recovery,
+        entries: &[(&str, &str)],
+        packages: impl IntoIterator<Item = Package<Latexlike>>,
+    ) -> Language<Latexlike> {
         let mut resolver = MapResolver::new();
         for (reference, content) in entries {
             resolver.insert(*reference, *content);
@@ -333,7 +433,7 @@ mod tests {
         Language::new(
             LatexlikeDriver::new(recovery)
                 .with_source_resolver(resolver.with_reference_as_origin()),
-            ParsingState::lang_initial_with_packages([input_package()]),
+            ParsingState::lang_initial_with_packages(packages),
         )
     }
 
@@ -346,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn input_attaches_the_resolved_content_as_the_attached_body_slot() {
+    fn input_attaches_the_resolved_content_as_the_attached_slot() {
         let language =
             language(Recovery::Strict, &[("chapter.tex", "hello {world}")]);
         let result = language.parse(r"A\input{chapter.tex}B").unwrap();
@@ -369,22 +469,27 @@ mod tests {
             Some("chapter.tex")
         );
 
-        // The attached slot: role `Attached`, named "attached", the body slot.
+        // The attached slot: role `Attached`, named "attached", carrying the
+        // embedder-supplied ext — the shipped recipe's not-body marker (Ruling A:
+        // the preset does not overload the environment-body marker), so `body()`
+        // does NOT select it and retrieval is by slot name.
         let slots = input.slots().unwrap();
         assert_eq!(slots.len(), 1);
         let slot = slots.get(0).unwrap();
         assert_eq!(slot.name(), Some("attached"));
         assert_eq!(slot.role, SlotRole::Attached);
-        assert!(slot.ext.is_body());
+        assert!(!slot.ext.is_body());
+        assert!(input.body().is_none());
 
         // Per-source facts: the attached children live in the resolved source and
-        // tile it in full — body() reads them back as one single-source slice.
-        let body = input.body().unwrap();
-        assert_eq!(body.source_text(), Some("hello {world}"));
-        let body_span = body.span().unwrap();
-        assert!(!Arc::ptr_eq(body_span.source(), input.span().source()));
-        assert_eq!(body_span.range(), 0..13);
-        match body_span.source().provenance() {
+        // tile it in full — the named slot reads them back as one single-source
+        // slice.
+        let attached = input.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(attached.source_text(), Some("hello {world}"));
+        let attached_span = attached.span().unwrap();
+        assert!(!Arc::ptr_eq(attached_span.source(), input.span().source()));
+        assert_eq!(attached_span.range(), 0..13);
+        match attached_span.source().provenance() {
             SourceProvenance::Resolved { reference, triggered_at } => {
                 assert_eq!(reference, "chapter.tex");
                 assert_eq!(triggered_at.range(), 1..20);
@@ -392,7 +497,7 @@ mod tests {
             other => panic!("expected Resolved provenance, got {:?}", other),
         }
         // The resolver labeled the origin with the reference.
-        assert_eq!(body_span.source().origin().as_deref(), Some("chapter.tex"));
+        assert_eq!(attached_span.source().origin().as_deref(), Some("chapter.tex"));
     }
 
     #[test]
@@ -406,17 +511,17 @@ mod tests {
         assert!(result.diagnostics.is_empty());
 
         let outer = result.tree.root().child(0).unwrap();
-        let outer_body = outer.body().unwrap();
-        assert_eq!(outer_body.len(), 3); // "x", \input{inner.tex}, "y"
-        let inner = outer_body.get(1).unwrap();
+        let outer_attached = outer.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(outer_attached.len(), 3); // "x", \input{inner.tex}, "y"
+        let inner = outer_attached.get(1).unwrap();
         assert_eq!(inner.name(), Some("input"));
-        let inner_body = inner.body().unwrap();
-        assert_eq!(inner_body.source_text(), Some("deep"));
+        let inner_attached = inner.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(inner_attached.source_text(), Some("deep"));
 
         // The include chain is walkable from the innermost source: inner →
         // outer → primary.
         assert_eq!(
-            inner_body.span().unwrap().source().including_sources().count(),
+            inner_attached.span().unwrap().source().including_sources().count(),
             3
         );
     }
@@ -472,7 +577,7 @@ mod tests {
         // The slot exists (the file *was* attached), with zero children.
         let slot = input.slots().unwrap().get(0).unwrap();
         assert_eq!(slot.role, SlotRole::Attached);
-        assert_eq!(input.body().unwrap().len(), 0);
+        assert_eq!(input.slot_content_nodes_named("attached").unwrap().len(), 0);
     }
 
     #[test]
@@ -498,7 +603,10 @@ mod tests {
         let input = group.child(0).unwrap();
         assert_eq!(input.name(), Some("input"));
         // The attached content carries all three pieces, `}` included.
-        assert_eq!(input.body().unwrap().source_text(), Some("a}b"));
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("a}b")
+        );
     }
 
     #[test]
@@ -568,10 +676,10 @@ mod tests {
         // The outer inclusion succeeded — one attached level, the inner `\input`
         // staged without a slot.
         let outer = result.tree.root().child(0).unwrap();
-        let outer_body = outer.body().unwrap();
-        let inner = outer_body.get(1).unwrap();
+        let outer_attached = outer.slot_content_nodes_named("attached").unwrap();
+        let inner = outer_attached.get(1).unwrap();
         assert_eq!(inner.name(), Some("input"));
-        assert!(inner.body().is_none());
+        assert!(inner.slot_content_nodes_named("attached").is_none());
     }
 
     #[test]
@@ -582,7 +690,10 @@ mod tests {
         let result = language.parse(r"\input a").unwrap();
         check_latexlike_tree_invariants(&result.tree);
         let input = result.tree.root().child(0).unwrap();
-        assert_eq!(input.body().unwrap().source_text(), Some("ok"));
+        assert_eq!(
+            input.slot_content_nodes_named("attached").unwrap().source_text(),
+            Some("ok")
+        );
     }
 
     #[test]
@@ -607,9 +718,9 @@ mod tests {
 
         // And the attached source rebuilds from its own slot's children.
         let input = root.child(1).unwrap();
-        let body = input.body().unwrap();
+        let slot_nodes = input.slot_content_nodes_named("attached").unwrap();
         let mut attached = String::new();
-        for child in body.iter() {
+        for child in slot_nodes.iter() {
             attached.push_str(child.span_content());
         }
         assert_eq!(attached, "in{ner}");

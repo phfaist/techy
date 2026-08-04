@@ -505,6 +505,7 @@ mod tests {
                         nodes: Vec::new(),
                         stop: StopCause::TokenCondition { span: Span::empty(0) },
                         state: Arc::clone(&cx.state),
+                        after_effects: None,
                     },
                     None,
                 ))

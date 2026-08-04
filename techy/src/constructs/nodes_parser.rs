@@ -15,7 +15,10 @@
 //! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
 //! factory under the policy's state. The state delta an invocation parser returns is
 //! the invocation's after-effect for subsequent siblings (`\newcommand`), applied to
-//! the loop's own state session-mediated (`cx.session.derived_state(…)`).
+//! the loop's own state session-mediated (`cx.session.derived_state(…)`); the applied
+//! deltas are also merged into one record the outcome exports
+//! ([`NodesOutcome::after_effects`]) for callers that propagate the run's state
+//! effects elsewhere.
 //!
 //! # Whitespace and span invariants
 //!
@@ -364,7 +367,8 @@ pub enum StopCause {
 }
 
 /// What a [`NodesParser`] produces: the staged sibling nodes, in source order, how the
-/// run ended, and the loop's live state at the stop.
+/// run ended, the loop's live state at the stop, and the merged record of the sibling
+/// after-effect deltas the run applied.
 pub struct NodesOutcome<L: Lang> {
     /// The staged nodes, in source order (the caller claims them as children).
     pub nodes: Vec<BuildId>,
@@ -376,6 +380,21 @@ pub struct NodesOutcome<L: Lang> {
     /// resuming under its own copy of the entry state would silently roll those
     /// after-effects back.
     pub state: Arc<ParsingState<L>>,
+    /// The sibling after-effect deltas this run applied, merged into one delta in
+    /// application order (`None` = the run applied none). Each merged component is
+    /// the **effective, as-applied** delta — context-dependent events already
+    /// lowered into their override patches at the loop's own position — so the
+    /// record is replayable against a base its producers never saw: later field
+    /// overrides win, scope ops (and any context-free events) concatenate in
+    /// application order ([`ParsingStateDelta`]'s value-not-closure design). This is
+    /// the channel for callers that must **propagate** the run's state effects
+    /// rather than resume under them — the `\input` `persist_state` composition
+    /// forwards it as the invocation's own after-effect
+    /// ([`AttachedSourceOutcome`](super::AttachedSourceOutcome)); a caller that
+    /// merely resumes at the stop position wants [`state`](NodesOutcome::state)
+    /// instead (re-deriving from the record would re-run fallible scope ops and
+    /// re-fire transition observation on a second path).
+    pub after_effects: Option<ParsingStateDelta<L>>,
 }
 
 // Manual impls: derives would demand `L: Debug`/`L: Clone`, but the state rides behind
@@ -386,6 +405,7 @@ impl<L: Lang> fmt::Debug for NodesOutcome<L> {
             .field("nodes", &self.nodes)
             .field("stop", &self.stop)
             .field("state", &self.state)
+            .field("after_effects", &self.after_effects)
             .finish()
     }
 }
@@ -396,6 +416,7 @@ impl<L: Lang> Clone for NodesOutcome<L> {
             nodes: self.nodes.clone(),
             stop: self.stop,
             state: Arc::clone(&self.state),
+            after_effects: self.after_effects.clone(),
         }
     }
 }
@@ -409,9 +430,11 @@ impl<L: Lang> Clone for NodesOutcome<L> {
 /// frame. The input parsing state is `cx.state` (the caller sets it); sibling deltas
 /// returned by invocation parsers are applied internally as the loop proceeds, and the
 /// parser itself returns `None` as its pass-through delta (the state-threading
-/// convention — no current consumer of a merged delta). The evolved state is not lost,
-/// though: the outcome exports the loop's live state at the stop
-/// ([`NodesOutcome::state`]) for callers that resume content at the stop position.
+/// convention). The applied deltas are not lost: the outcome exports the loop's live
+/// state at the stop ([`NodesOutcome::state`]) for callers that resume content at the
+/// stop position, and their merged record ([`NodesOutcome::after_effects`]) for
+/// callers that propagate the run's state effects elsewhere (the `\input`
+/// `persist_state` composition).
 pub struct NodesParser<'p, L: Lang> {
     stop: StopSpec<'p, L>,
     /// Descent-state policy for child constructs (groups and invocations); defaults to
@@ -421,6 +444,9 @@ pub struct NodesParser<'p, L: Lang> {
     /// The pending maximal chars run (invariant 1): extended by `Char` tokens and every
     /// token's pre-space, flushed when a non-`Char` construct starts.
     run: Option<Span>,
+    /// The merged record of the sibling after-effect deltas applied so far
+    /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
+    after_effects: Option<ParsingStateDelta<L>>,
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
@@ -432,6 +458,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             child_states: ChildStateSpec::inherit(),
             nodes: Vec::new(),
             run: None,
+            after_effects: None,
         }
     }
 
@@ -658,18 +685,24 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         if let Some(delta) = delta {
             // The after-effect applies to the loop's own state, not the policy base
             // (decided semantics 4, [§dd-dr:parsers-engine] — [§dd-dr:parsing-state]'s outward propagation blesses applying
-            // a delta to a base the producer never saw).
-            cx.state = cx.derive_state(&delta)?;
+            // a delta to a base the producer never saw) — and its effective,
+            // as-applied form joins the run's merged record
+            // ([`NodesOutcome::after_effects`]).
+            cx.state = cx.derive_state_recording(&delta, &mut self.after_effects)?;
         }
         Ok(self.test_node_stop(cx, id))
     }
 
-    /// Drain the collected siblings into the outcome.
+    /// Drain the collected siblings (and the merged after-effect record) into the
+    /// outcome.
     fn outcome(&mut self, state: &Arc<ParsingState<L>>, stop: StopCause) -> NodesOutcome<L> {
         NodesOutcome {
             nodes: mem::take(&mut self.nodes),
             stop,
             state: Arc::clone(state),
+            // `Some` yet empty would be a pathological construct's empty after-effect
+            // delta; the exported spelling for "no after-effects" is `None`.
+            after_effects: self.after_effects.take().filter(|delta| !delta.is_empty()),
         }
     }
 }
