@@ -33,6 +33,10 @@
 //! - [`visit`] — read-only structural traversal: [`walk`](visit::walk) +
 //!   [`NodeVisitor`](visit::NodeVisitor) with enter/exit and per-node flow
 //!   control.
+//! - [`recompose`] — tree→value recomposition: the meaning-free piece fold
+//!   ([`recompose`](recompose::recompose) + [`Recomposer`](recompose::Recomposer));
+//!   source re-emission is the preset's
+//!   [`source_recomposer`](latexlike::source_recomposer).
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
 //!   [`ParseResult`](core::ParseResult)), with three satellites:
@@ -85,12 +89,13 @@ pub(crate) mod state;
 pub(crate) mod token;
 
 // The public facades. `source` and `error` are their own facades (their submodules are
-// private); `extract`, `transform`, `visit`, and `latexlike` are ordinary public
-// modules.
+// private); `extract`, `transform`, `visit`, `recompose`, and `latexlike` are ordinary
+// public modules.
 pub mod core;
 pub mod error;
 pub mod extract;
 pub mod latexlike;
+pub mod recompose;
 pub mod source;
 pub mod transform;
 pub mod visit;

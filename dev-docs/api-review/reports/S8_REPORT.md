@@ -28,9 +28,10 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
 - [x] M1 — this plan (committed before any code work)
 - [x] M2 — `techy::visit`: walk + NodeVisitor + VisitFlow + VisitContext +
       scoped-children kernel + tests (9 tests; 698 lib green, 0 warnings)
-- [ ] M3 — `techy::recompose` core: ComposePiece, Recompose/ConcatPieces,
+- [x] M3 — `techy::recompose` core: ComposePiece, Recompose/ConcatPieces,
       Recomposer, RecomposeError, driver + instruction lowering,
-      core_source_instruction + machinery tests
+      core_source_instruction + machinery tests (10 tests; 708 lib green,
+      0 warnings)
 - [ ] M4 — RecomposeContext region ops + wrapping-contract + streaming tests
 - [ ] M5 — preset SourceRecomposer + source_recomposer() + preset tests
 - [ ] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices)
@@ -466,3 +467,38 @@ tests at minimum; full gates at M7).
   inference finding), role-blind walk over a Content+Attached+Hidden
   hand-staged fixture (the transform suite's fixture shape), kernel scope unit
   tests (default skip both; each widening flag; non-callable fast path).
+
+### M3 realization notes
+
+- Shipped per plan (`techy/src/recompose/{mod,context,tests}.rs` + lib.rs
+  wiring): `ComposePiece` (+ `String`/`()` impls), `Recompose<P, S>`,
+  `ConcatPieces<P, S>` with the chainable constructors (`children()` seed,
+  `.wrap`/`.join` over `impl Into<P>`, `.with_state`, `.include_attached`,
+  `.include_hidden`), `Recomposer<L, A>` (State/Piece/Error +
+  `recompose_node(node, &state, cx)`), `RecomposeError<E>` (the
+  D-plan-5/6/7 roster; Display/Error/conditional derives mirroring
+  `RestageError`), the `recompose(tree, state, recomposer)` entry + recursive
+  driver over the shared `scoped_children` kernel, and
+  `core_source_instruction`.
+- `ConcatPieces` fields are private with the chainable constructors as the
+  only construction surface (the ruling names constructors, never field
+  access); the driver destructures via a `pub(crate) into_parts`.
+- The derived-state choice is made once per `Concat` (children share one
+  derived state, borrowed for the whole child loop; else the parent's state
+  is inherited by reference).
+- `RecomposeContext` at this milestone is the PhantomData-anchored run marker
+  (`A = ()` default, the `VisitContext` precedent); the op roster lands in M4.
+- Tests (10): core-complete reemission (chars/group/list + comment payload
+  order), wrap+join joiner shape incl. single-child no-sep and
+  empty-children head+tail-only, derived-state threading vs inheritance,
+  default scope skips Attached+Hidden at the fold level + per-flag widening
+  (three-slot fixture, transform-suite shape), `core_source_instruction`
+  callable decline + chars answer (with the post_space-is-payload note),
+  typed error transport + Display, unit-piece fold (`Piece = ()` with
+  `&mut self` accumulation), chainable-constructor type pins.
+- Module docs carry the ruled contracts verbatim: reading contract
+  (permitted/forbidden, no span fast path, `span_content()` stays a consumer
+  affordance), the wrapping contract + targeted-replacement-as-pattern
+  (wrapper + restage→recompose pipeline), the no-sink/streaming shape, the
+  scope asymmetry, and the state model; the lib.rs module list gained
+  `visit` (M2) and `recompose` bullets.
