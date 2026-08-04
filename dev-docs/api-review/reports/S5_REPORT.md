@@ -674,3 +674,129 @@ records no end facts → tolerant oracle matrix must exclude/special-case) stand
 42 files changed, +3123/−469 (whole stage, docs included; reviewer-corrected
 count — the earlier "39 files/~2960/~430" was bookkeeping drift); code portion
 (techy/src + techy/tests): 37 files, ~2340 insertions, ~410 deletions.
+
+## M6 — USER-RULED DESIGN REVISION (2026-08-04 session; successor 2)
+
+Implements the interactively ruled revision of the S5 invocation-syntax surface
+(PHASE3_PLAN.md stage log, entry "S5 DESIGN-REVISION SESSION RULED" — the
+authoritative summary; this section is the implementation plan committed first
+per the relay discipline). Rulings R1–R9; escalation, not silent resolution, on
+any suspected inconsistency (the new rulings-revision protocol rule).
+
+### Implementation plan
+
+Commit steps (each green):
+
+1. **Plan** (this section).
+2. **R1 + R5 + R6 — name swap + `&Source` threading** (one commit; the trait's
+   `materialized` signature entangles the rename with the threading):
+   - Core bound trait `InvocationSyntaxData` → **`InvocationSyntax<L: Lang>`**
+     (state/lang.rs; bounds unchanged; method
+     `materialized(&self, source: &Source<L::SourceOrigin>) -> Self`); Lang bound
+     `type InvocationSyntax: InvocationSyntax<Self>` (legal: bound paths resolve
+     to the trait, the associated type is only nameable as
+     `Self::InvocationSyntax`); blanket `impl<L: Lang> InvocationSyntax<L> for ()`.
+     Exports: state/mod.rs + core/mod.rs.
+   - Latexlike payload enum `InvocationSyntax<Env>` → **`InvocationSyntaxData<Env>`**
+     (it IS the data holder — NodeData/CallableData family); all uses ripple:
+     the core-trait impl becomes
+     `impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntaxData<Env>`,
+     `FromInvocation`/fifth-role impls, latexlike/mod.rs exports + Latexlike's
+     `type InvocationSyntax = InvocationSyntaxData;`, Flavored tests, payload-pin
+     downcasts, doc links in node/kind.rs + state/lang.rs, FLM probe line
+     (`latexlike::InvocationSyntaxData<latexlike::StdEnvironmentSyntax<Flm>>`).
+   - `EnvironmentSideSyntax` → **`StdEnvironmentSideSyntax`** (R5; off the trait
+     surface — the std record's own component type, stays pub).
+   - `StdEnvironmentSyntax`'s core-trait impl is the **diagonal**
+     `impl<L: Lang> InvocationSyntax<L> for StdEnvironmentSyntax<L>` (D-plan-19
+     below).
+   - `TextContent::resolve`/`materialized` take `source: &Source<O>`
+     (method-generic `<O: SourceOrigin>`); internally `span.slice(source.content())`.
+     Ripple: node/kind.rs materialized chain (`NodeKind`/`GroupData`/`CallableData`
+     take `&Source<L::SourceOrigin>`), node/tree.rs `materialize` passes
+     `data.span.source()` (each node's OWN source — the multi-source-correctness
+     point), node/node_ref.rs accessors (`source_content()` helper → the span's
+     source), latexlike/node_ref.rs `post_space()`, node/invariants.rs `text_len`,
+     engine/mod.rs + latexlike tests, text_content.rs unit tests.
+   - Writers `write_begin`/`write_end` + the side record's `write`/`materialized`
+     take `&Source<L::SourceOrigin>` (amends D-plan-13's `source_content` param).
+3. **R2 + R3 + R4 + R8 — trait reduction + facts channel + composition owns
+   scanning** (one commit):
+   - constructs/environment_parser.rs: `EnvironmentTerminatorFacts` →
+     **`EnvironmentTerminatorSyntaxData`** (same variants/fields); NEW
+     **`EnvironmentBeginSyntaxData<L: Lang>`** `{ escape_char: char, command_word:
+     Span, post_space: Span, name_group: NameGroup<L> }` (manual Clone/Debug per
+     the file pattern); `EnvironmentBody.terminator` type + docs; verbatim fill
+     site + core/constructs.rs exports ripple.
+   - latexlike/invocation_syntax.rs: `EnvironmentSyntax<L: LatexlikeLang>:
+     InvocationSyntax<L>` reduced to
+     `from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator:
+     Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` + the writer PAIR
+     (S8's Concat head/tail + the checker's prefix/suffix pins need separate
+     pieces). `parse_begin`/`parse_end`/`record_std_end_facts` DIE.
+     `StdEnvironmentSyntax::from_parsed`: begin transcribed; `Some(Scanned)` →
+     end transcribed; `Some(Literal)` → std-shaped end synthesized from the begin
+     side + the `end` command word (`END_COMMAND_NAME`; absorbs the old
+     `record_std_end_facts` logic); `None` → end empty. `write_end` on an empty
+     end side returns `""` (contract + rustdoc rationale KEPT).
+   - latexlike/environments.rs `EnvironmentInvocationParser::parse`: validate the
+     trigger is `TokenKind::Command` FIRST — non-command trigger =
+     documented-contract violation → `Err(cx.implementation_error(..))`; rustdoc
+     the contract ("std environments are command-initiated; custom trigger shapes
+     need their own composition + Env type"). Composition scans the rigid name
+     group itself (`read_rigid_name_group`; `Ok(None)` → the same MalformedBegin
+     chars fallback), builds `EnvironmentBeginSyntaxData`, parses
+     arguments/body as today, constructs the payload ONCE at staging via
+     `Env::from_parsed(begin, body.terminator)`. BOTH `'\u{0}'` arms die (the
+     invocation_syntax.rs arm with `parse_begin`; the `EnvironmentInvocation.
+     escape_char` arm becomes transcription from the validated token — field
+     stays `char`).
+   - R8: `debug_assert!(passthrough.is_none(), …)` (environments.rs, after
+     `parse_scoped`) → the implementation-error path (behavior-supplied body
+     parsers are outer-layer input). Pre-existing siblings untouched (S10 rider,
+     recorded in PHASE3_PLAN §S10).
+4. **R7 — payload pins move to the preset**: delete
+   `check_invocation_syntax_payload` + the `use crate::latexlike::…` from
+   node/invariants.rs (core's callable arm goes payload-blind; the rest of the
+   parse law keeps); NEW cfg(test) module `latexlike/invariants.rs` with
+   `check_latexlike_tree_invariants` = core `check_tree_invariants` + the payload
+   pins (adapted to the renamed types + `&Source` writers), `pub(crate)` use from
+   latexlike/mod.rs — mirroring core's exact mechanism (`pub(crate)` +
+   `#[cfg(test)]`; techy/tests never reached the parse-law checker — they call
+   the public `validate_tree` — so there is nothing to preserve for tests/:
+   D-plan-18). The 4 discriminating should_panic pin tests move there. Latexlike
+   call sites (latexlike/{mod,spec,test_support,arguments,environments,
+   invocation_syntax}.rs) switch to the preset checker; core-side sites stay.
+5. **R9 — docs + records + gates**: rustdoc sweep over every touched item (trait
+   docs re-written for the reduced shape; tolerance story: "tolerance is a parser
+   concern — swap the body/invocation parser via the behavior door; the record
+   records" — replacing the same-record/different-tolerance newtype clauses);
+   DR [§dd-dr:invocation-syntax] amendment note (accumulator (b) SUPERSEDED by
+   `from_parsed` — the internal contradiction: the body parser is the terminator
+   consumer, end-side scanning delegation was illusory and shape-locking;
+   writers take `&Source`; name swap; specials-trigger error; tolerance
+   amendment; D-plan-12 → Option B); [§dd-dr:environment-scaffolding] +
+   [§dd-dr:span-invariants] applied-note touch-ups (method names; checker now
+   preset-side); [§dd-dr:recompose-machinery] checked (keeps the pair — only the
+   `&Source` param mention needed); superseded-names additions (the two OLD ROLE
+   assignments; `EnvironmentSideSyntax`; `EnvironmentTerminatorFacts`;
+   `parse_begin`/`parse_end`/`record_std_end_facts` as EnvironmentSyntax
+   methods; single-writer `recompose_environment` as rejected shape);
+   ARCHITECTURE S5 passages (payload enum name; recording-contract phrasing);
+   this report's M6 closure (signature rows, deviations, gates).
+
+### New deviations (continuing the numbering)
+
+- D-plan-18 (delegated realization): the preset parse-law checker is
+  `check_latexlike_tree_invariants` in the cfg(test)-only module
+  `latexlike/invariants.rs`, `pub(crate)`-used from latexlike/mod.rs — the exact
+  mechanism of core's `check_tree_invariants` (node/invariants.rs +
+  node/mod.rs). No tests/-facing door is added: integration tests never had
+  parse-law access (they use the public `validate_tree`, which never carried the
+  payload pins), so the minimal equivalent is the in-crate mirror.
+- D-plan-19 (delegated realization): `StdEnvironmentSyntax<L>` (and the side
+  record) satisfy the L-parameterized core trait **diagonally** —
+  `impl<L: Lang> InvocationSyntax<L> for StdEnvironmentSyntax<L>` — not for all
+  `(L, L2)` pairs: a lang's environment record materializes against that lang's
+  own source-origin type; the broader impl would sanction cross-lang payload
+  reuse with nothing to gain.
