@@ -542,11 +542,16 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
 
 /// The parse-law byte accounting for one node (see [`check_tree_invariants`];
 /// the all-trees law has already passed).
-// TODO(S6): scope this byte accounting per source via the `Attached` slot role
-// ([§dd-dr:slot-roles]): children belonging to an `Attached` slot's region live in the
-// attached source (`\input`), and must be excluded from the including callable's
-// children-in-source / contiguity checks — with their own per-source accounting —
-// once the `\input` wiring lands ([§dd-dr:input-wiring]).
+///
+/// Byte accounting is scoped **per source** via the slot roles
+/// ([`SlotRole`](super::SlotRole)): children in an `Attached` slot's region live
+/// in the attached source (`\input`) and are excluded from the including
+/// callable's children-in-source/contiguity checks — with their own per-source
+/// accounting (one source per attached region, span-contiguous within it) —
+/// while children in a `Hidden` slot's region carry **no** byte accounting at
+/// all (the ruled `Hidden` semantics). Declaration replaces source-change
+/// inference: the excluded regions are invisible to the parent's accounting,
+/// so the remaining children must be contiguous across them.
 #[cfg(test)]
 fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &NodeData<L>) {
     let span = data.span.range();
@@ -653,18 +658,51 @@ fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &Node
             check_interior_partition(tree, i, data, span.start + open_len..span.end - close_len);
         }
 
-        NodeKind::Callable(_) => {
+        NodeKind::Callable(callable) => {
             // The trigger-spelling facts live in the Lang-owned invocation-syntax
             // payload (invariant 3 as amended) — opaque to core, so no payload
             // byte accounting happens here: the latexlike preset pins its
             // recorded spellings (macro spelling + post-space, specials
             // name-as-written, environment begin/end scaffolding) in its own
             // checker, `check_latexlike_tree_invariants` (D-plan-12 Option B).
-            assert_children_in_source();
 
-            // Children-block span-contiguity, inside the node's span.
+            // Partition the children block by slot role (see the fn docs):
+            // `Attached` regions get their own per-source accounting below,
+            // `Hidden` regions get none, the rest is the parent's accounting.
+            use super::SlotRole;
+            let attached_regions: Vec<Range<u32>> = callable
+                .slots
+                .iter()
+                .filter(|slot| slot.role == SlotRole::Attached)
+                .map(|slot| slot.region.children())
+                .collect();
+            let hidden_regions: Vec<Range<u32>> = callable
+                .slots
+                .iter()
+                .filter(|slot| slot.role == SlotRole::Hidden)
+                .map(|slot| slot.region.children())
+                .collect();
+            let excluded = |index: u32| {
+                attached_regions
+                    .iter()
+                    .chain(hidden_regions.iter())
+                    .any(|region| region.contains(&index))
+            };
+
+            // The parent-source sequence (arguments + `Content` slots):
+            // children share the parent's source, lie inside the node's span,
+            // and are span-contiguous *across* the excluded regions.
             let mut prev_end: Option<usize> = None;
             for child in tree.nodes_in(data.children.clone()) {
+                if excluded(child.id().index() as u32) {
+                    continue;
+                }
+                assert!(
+                    child.span().same_source(&data.span),
+                    "node {}: child {} lives in a different source",
+                    i,
+                    child.id().index()
+                );
                 let child_span = child.span().range();
                 assert!(
                     span.start <= child_span.start && child_span.end <= span.end,
@@ -686,6 +724,36 @@ fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &Node
                     );
                 }
                 prev_end = Some(child_span.end);
+            }
+
+            // Each `Attached` region's own per-source accounting: one source
+            // per region (the attached source), span-contiguous within it.
+            for region in &attached_regions {
+                let mut prev: Option<super::NodeRef<'_, L, A>> = None;
+                for child in tree.nodes_in(region.clone()) {
+                    if let Some(prev) = &prev {
+                        assert!(
+                            child.span().same_source(prev.span()),
+                            "node {}: attached region {:?} spans several sources \
+                             (children {} and {})",
+                            i,
+                            region,
+                            prev.id().index(),
+                            child.id().index()
+                        );
+                        assert!(
+                            child.span().range().start == prev.span().range().end,
+                            "node {}: attached region {:?} not span-contiguous at \
+                             child {} (previous ends at {}, next starts at {})",
+                            i,
+                            region,
+                            child.id().index(),
+                            prev.span().range().end,
+                            child.span().range().start
+                        );
+                    }
+                    prev = Some(child);
+                }
             }
         }
     }
@@ -1043,6 +1111,119 @@ mod tests {
             alloc::vec![], (), (),
         ).unwrap();
         check_tree_invariants(&builder.finish(root).unwrap());
+    }
+
+    // --- per-source byte accounting via the slot roles ([§dd-dr:slot-roles]) ----------
+
+    /// Build `\input`-shaped trees: a callable in `main` whose one slot (role
+    /// `role`) holds children with the given spans in the given sources. The
+    /// callable spans the whole 9-byte main source; the root list wraps it.
+    fn build_with_slot(
+        role: SlotRole,
+        children_spans: alloc::vec::Vec<(Arc<Source>, core::ops::Range<usize>)>,
+    ) -> NodeTree<PlainLang> {
+        let main: Arc<Source> = Arc::new(Source::new(r"\input{f}"));
+        let st = state();
+        let mut builder: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let mut children = alloc::vec::Vec::new();
+        for (source, range) in &children_spans {
+            children.push(
+                builder.add(
+                    NodeKind::chars(Span::new(range.start, range.end)),
+                    SourceSpan::new(source, range.clone()),
+                    Arc::clone(&st),
+                    alloc::vec![], (), (),
+                ).unwrap(),
+            );
+        }
+        let n = children.len() as u32;
+        let callable = CallableData {
+            callable_type: 0u32,
+            name: "input".into(),
+            spec: Arc::new(StdCallableSpec::default()) as Arc<dyn CallableSpec<PlainLang>>,
+            arguments: ParsedArguments::empty(),
+            slots: ParsedSlots::new(alloc::vec![ParsedSlot::new(
+                ChildRegion::new(0..n, ContentNodes::InRegion(0..n)),
+                "attached",
+                role,
+                (),
+            )]),
+            invocation_syntax: (),
+        };
+        let callable_id = builder.add(
+            NodeKind::callable(callable),
+            SourceSpan::entire(&main),
+            Arc::clone(&st),
+            children, (), (),
+        ).unwrap();
+        let root = builder.add(
+            NodeKind::list(),
+            SourceSpan::entire(&main),
+            Arc::clone(&st),
+            alloc::vec![callable_id], (), (),
+        ).unwrap();
+        builder.finish(root).unwrap()
+    }
+
+    #[test]
+    fn attached_slot_children_are_excluded_from_the_parents_accounting() {
+        // The `\input` shape: the slot's children live in the attached source —
+        // excluded from the includer's children-in-source/contiguity checks,
+        // with their own per-source accounting (contiguous in their source).
+        let attached: Arc<Source> = Arc::new(Source::new("ab"));
+        let tree = build_with_slot(
+            SlotRole::Attached,
+            alloc::vec![(Arc::clone(&attached), 0..1), (attached, 1..2)],
+        );
+        check_tree_invariants(&tree);
+    }
+
+    #[test]
+    #[should_panic(expected = "attached region 2..4 not span-contiguous")]
+    fn attached_region_children_must_be_contiguous_in_their_own_source() {
+        let attached: Arc<Source> = Arc::new(Source::new("abc"));
+        let tree = build_with_slot(
+            SlotRole::Attached,
+            alloc::vec![(Arc::clone(&attached), 0..1), (attached, 2..3)],
+        );
+        check_tree_invariants(&tree);
+    }
+
+    #[test]
+    #[should_panic(expected = "attached region 2..4 spans several sources")]
+    fn attached_region_children_must_share_one_source() {
+        let first: Arc<Source> = Arc::new(Source::new("ab"));
+        let second: Arc<Source> = Arc::new(Source::new("ab"));
+        let tree = build_with_slot(
+            SlotRole::Attached,
+            alloc::vec![(first, 0..1), (second, 1..2)],
+        );
+        check_tree_invariants(&tree);
+    }
+
+    #[test]
+    #[should_panic(expected = "lives in a different source")]
+    fn content_slot_children_stay_under_the_parents_accounting() {
+        // The same foreign-source children under a `Content` slot: the exclusion
+        // is *declared* by the role, never inferred from a source change.
+        let attached: Arc<Source> = Arc::new(Source::new("ab"));
+        let tree = build_with_slot(
+            SlotRole::Content,
+            alloc::vec![(Arc::clone(&attached), 0..1), (attached, 1..2)],
+        );
+        check_tree_invariants(&tree);
+    }
+
+    #[test]
+    fn hidden_slot_children_carry_no_byte_accounting_at_all() {
+        // `Hidden` = no byte accounting ([§dd-dr:slot-roles]): a different
+        // source AND a gap inside the region — no assertion fires.
+        let foreign: Arc<Source> = Arc::new(Source::new("abc"));
+        let tree = build_with_slot(
+            SlotRole::Hidden,
+            alloc::vec![(Arc::clone(&foreign), 0..1), (foreign, 2..3)],
+        );
+        check_tree_invariants(&tree);
     }
 
     #[test]
