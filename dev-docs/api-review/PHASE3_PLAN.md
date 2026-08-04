@@ -205,7 +205,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
 - Acceptance: FLM projected probe (walkthroughs/framework/flm_projected.rs)
   re-checked against the new surface; parse-law oracle passes on the strict matrix.
 
-### S6 — \input wiring + multi-source + line/col  [status: pending]
+### S6 — \input wiring + multi-source + line/col  [status: DONE — merged 2026-08-04]
 
 - Door `cx.parse_attached_source(source, state, parser)` (caller-supplied parser;
   fresh inner context; content nodes only; local stray-close recovery; traceback
@@ -322,10 +322,11 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
    `cargo test` on merged api-review; `git worktree remove <path>` +
    `git branch -d <branch>` (a "could not lock config file" warning during
    worktree removal is cosmetic).
-3. Interruptions: session-limit kills → RESUME the same agent by sending it a
-   message after the limit resets (transcript context survives; never relaunch
-   from scratch). Safety-flag kills → relaunch a FRESH agent with the same
-   brief (resuming may re-trigger the flag).
+3. Interruptions: session-limit kills, watchdog stalls, and API-connection
+   drops → RESUME the same agent by sending it a message (transcript context
+   survives; never relaunch from scratch; after repeated drops, instruct
+   smaller/more-frequent commits). Safety-flag kills → relaunch a FRESH agent
+   with the same brief (resuming may re-trigger the flag).
 4. Commit messages: `P3-S<N>: <what>` on stage branches; "API review Phase 3:
    <what>" for process-file commits on api-review; harness trailers apply.
 5. Additional Phase 3 obligations beyond the stage sections: the "Phase 3
@@ -501,3 +502,27 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   naming), D-plan-16 (param order), D-plan-17 (effective as-applied record
   semantics). Delta review launched (3d49e72..c8da042; choke-point integrity
   of `derive_state_recording` ordered as special scrutiny).
+- 2026-08-04: S6 M7 delta review verdict: all points conformant, whole-stage
+  verdict stands. Choke-point integrity CONFIRMED (shared `commit_derivation`
+  tail — strengthens the S4 one-choke-point property, no fork); merged-record
+  semantics verified exact (last-writer-wins per whole-value field; scope ops
+  in order; no shipped double-fire path); D-plan-15/16 DEFENSIBLE, D-plan-17
+  FORCED in substance; five persist tests verified discriminating. Two
+  should-fixes applied pre-sign-off by the supervisor (c691c54:
+  cross-segment after-effects merge test — 661 lib tests; failed-op replay
+  sentence on `NodesOutcome::after_effects`); third reviewer note (single
+  `finalize_transition` replay granularity for custom Langs) earmarked for
+  the Phase 4 custom-Lang chapter. **User signed off the full S6 list**
+  (D-plan-8 superseded / D-plan-9 resolved by the 2026-08-04 rulings;
+  D-plan-1..7, 10..17 forced/defensible) **and authorized the merge.**
+  Merged into api-review (13 stage commits; 661 lib + 30 acceptance + 8 + 1
+  + 28 doc tests green on the merged tree). S6 COMPLETE.
+- 2026-08-04: **SESSION HANDOVER POINT** — the supervising session's context
+  is cleared after this entry. Resume per § How to resume: S1–S6 are DONE
+  and merged; NEXT = launch **S7** per § S7 (transform: restage + extract
+  annotations). Mind the PLAN.md decision-log checklist items routed to S7
+  (A8 extract input-genericity rides the annotation application) and the S8
+  flag from S5 (malformed terminators record no end facts — tolerant oracle
+  matrix). The per-stage cycle, gates, relay discipline, rulings-revision
+  escalation rule, and merge procedure are all in § Protocol / § How to
+  resume above; stage reports live in reports/S<N>_REPORT.md.
