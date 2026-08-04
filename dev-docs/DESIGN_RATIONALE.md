@@ -2366,8 +2366,9 @@ the review completes — these entries are the durable record).
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
 
 Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 for the tree
-core and the read/annotate accessors; the extract-side annotation flow rides S7
-with [§dd-dr:extract-annotations]).
+core and the read/annotate accessors, S7 for the extract-side annotation flow
+([§dd-dr:extract-annotations]) and the transform-side single pathway
+([§dd-dr:restage])).
 
 Trees gain a second, defaulted generic parameter: the **annotation** type `A` — one
 value per node, uniform across kinds, chosen by the *consumer* per processing stage.
@@ -2417,7 +2418,12 @@ annotations through a general callback ([§dd-dr:extract-annotations]).)*
 #### Extract producers mint annotations: general callback + suffixed shorthands [§dd-dr:extract-annotations]
 
 Status: DECIDED (user, API-review T5 session; supersedes the `A = ()` extract
-clause of [§dd-dr:node-annotations]; application pending).
+clause of [§dd-dr:node-annotations]; applied — Phase 3 S7: the four producer
+triples with input genericity over the annotation type (the T5-A8 rider), the
+part contexts named `SplitAtCharsPart`/`KeyValsPart` with accessors
+`original()`/`is_partial()`/`partial_text()`/`segment_index()`/`entry_index()`
+(the delegated naming pass), and the `SplitAtChars<L, B = ()>`/`KeyVals<L, B =
+()>` result reshape).
 
 The four extract producers that build backing trees — `split_at_chars`,
 `parse_keyval`, `split_embellishments`, `split_tack_on_fields` (the tree is built
@@ -2581,7 +2587,11 @@ annotations are for, not a reason to resurrect re-running hooks.
 #### `techy::transform`: the streaming restage driver [§dd-dr:restage]
 
 Status: DECIDED (user, API-review P4 session — direction, shape, and contracts;
-exact types/naming in the 2b T5 session; application pending).
+exact types/naming in the 2b T5 session; applied — Phase 3 S7: the
+`techy::transform` module with `restage`, `RestageVisitor` + closure blanket,
+`Restage::{Descend, Emit}`, `RestageContext` with the region ops and raw
+`builder()`, and the documented read-frozen/write-staged, single-pathway,
+and origin-by-convention contracts).
 
 Tree→tree transformation is a **streaming restage**: an in-crate top-level module
 `techy::transform` whose driver walks the frozen input tree with a user callback
@@ -2671,8 +2681,18 @@ placement follows what it checks, not its commonest client
 #### Restage op surface: visitor trait, generic errors, constructible bundles [§dd-dr:restage-ops]
 
 Status: DECIDED (user, API-review T5 session; completes [§dd-dr:restage]'s deferred
-detailing; applied — Phase 3 S3 for the level-0 `restage_node` primitive; the
-visitor/ops/bundles/error surface rides S7).
+detailing; applied — Phase 3 S3 for the level-0 `restage_node` primitive, S7 for
+the visitor/ops/bundles/error surface. S7 application specifics, queued in the
+S7 report for sign-off: `RestageError` gained op-misuse variants beyond the
+ruled three — the ruled unknown-name `Err` and the panic policy force them —
+and a `RootNotSingular` entry-point variant; the `_with_content` helpers take
+an explicit `annotation: B` argument (the single-pathway rule needs a channel
+for the verbatim-restaged wrapper/noise copies); the driver *translates*
+`InChildrenOf` content ranges through a `Descend`-restaged parent's own
+replacements — without this, an interior drop inside a `{…}` wrapper breaks
+the enclosing record and kills the one-line strip pass — while the public
+level-0 keeps its verbatim-carry contract (it is the all-verbatim
+specialization of one shared crate-internal arithmetic)).
 
 The exact types of the restage driver:
 
@@ -3115,7 +3135,8 @@ answer is the three-channel discipline, not context growth.
 Status: DECIDED (user, API-review P4 session; amends
 [§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
 applied — Phase 3 S3 (record + roles + `BodySlotExt` + the preset's `BodyMarker`
-claim), the `LLL` genericization S4, and the parse-law checker's byte-accounting
+claim), the `LLL` genericization S4, the restage driver's role-uniform descent
+S7 ([§dd-dr:restage-ops]), and the parse-law checker's byte-accounting
 scoping S6: children in an `Attached` slot's region are excluded from the
 including callable's children-in-source/contiguity checks and carry their own
 per-source accounting (one source per attached region, contiguous within it),

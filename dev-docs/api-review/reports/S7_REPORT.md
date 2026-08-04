@@ -28,7 +28,7 @@ Baseline (must not regress): 661 lib + 30 acceptance + 8 derive-conditions +
 - [x] M5 — extract annotation minting: generalized copy machinery, the four
       producer triples, part contexts, input genericity, caller updates, tests
       (5 more tests; 687 lib + 30 doctests green)
-- [ ] M6 — docs + records + gates (rustdoc pass, DR status lines, ARCHITECTURE,
+- [x] M6 — docs + records + gates (rustdoc pass, DR status lines, ARCHITECTURE,
       CLAUDE.md, lib.rs, guide pages; superseded sweep; full gate run; closure)
 
 ## Design synthesis (records → today's code)
@@ -465,3 +465,89 @@ tests at minimum; full gates at M6).
   smoke (its value path shares `stage_segment_list`/`finish_keyvals` with
   keyval, and its `_drop` form runs the pre-existing positive-path tests in
   constructs/tack_on_parser.rs).
+
+## Consolidated stage summary (M6 closure)
+
+### Outcome
+
+All §S7 scope items landed, no escalations: no rulings tension surfaced; every
+judgment call is queued as D-plan-1..7 above. The stage is COMPLETE pending
+review + user sign-off of the deviation list.
+
+### Signature table (new/changed public surface)
+
+| Item | Signature / shape |
+|---|---|
+| `transform::restage` | `restage<L, A, B, V>(tree: &NodeTree<L, A>, visitor: &mut V) -> Result<NodeTree<L, B>, RestageError<V::Error>> where L: Lang, V: RestageVisitor<L, A, B> + ?Sized` — top-down visits, bottom-up staging; root must restage to exactly one node |
+| `transform::RestageVisitor<L, A, B>` | `type Error; fn restage(&mut self, node: NodeRef<'_, L, A>, cx: &mut RestageContext<'_, L, A, B>) -> Result<Restage<B>, Self::Error>`; blanket impl for `FnMut(NodeRef<'_, L, A>, &mut RestageContext<'_, L, A, B>) -> Result<Restage<B>, E>`; no `Send`/`Sync` bounds |
+| `transform::Restage<B>` | `enum { Descend(B), Emit(Vec<BuildId>) }` (`Clone` where `B: Clone`, `Debug`) — Descend ALWAYS descends (role-uniform incl. `Attached`/`Hidden` slot children); Emit = callback-staged replacement, empty = drop, no automatic descent |
+| `transform::RestageError<E>` | `#[non_exhaustive] enum { Build(NodeBuildError), ContentParentDropped { callable: NodeId, parent: NodeId, replaced_by: Option<usize> }, Visitor(E), UnknownArgumentName { node, name: String }, ArgumentIndexOutOfRange { node, index, count }, SlotIndexOutOfRange { node, index, count }, NotACallable { node }, ArgumentAbsent { node, index }, RootNotSingular { count } }`; derives `Clone, Debug, PartialEq, Eq` (conditional on E); `Display where E: Display` (ContentParentDropped names the takeover route); `Error where E: Error + 'static` |
+| `transform::RestageContext<'t, L, A, B>` | `builder() -> &mut NodeTreeBuilder<L, B>`; `restage_subtree(node, visitor)` / `restage_children(node, visitor)` → `Result<Vec<BuildId>, RestageError<V::Error>>`; `restage_argument(node, index, visitor)` / `restage_argument_named(node, name, visitor)` → `Result<RestagedArgument<L>, …>`; `restage_slot(node, index, visitor)` → `Result<RestagedSlot<L>, …>`; `restage_invocation<E>(node, Vec<RestagedArgument<L>>, Vec<RestagedSlot<L>>, annotation: B) -> Result<BuildId, RestageError<E>>` (bundles in the order given, records retiled); `restage_argument_with_content<E>(node, index, content: Vec<BuildId>, annotation: B) where B: Clone` / `restage_slot_with_content<E>` → bundles; input nodes may come from any tree; re-driving a node is legal (map keeps the latest) |
+| `transform::RestagedArgument<L>` | `provided(spec: Arc<ArgumentSpec<L>>, nodes: Vec<BuildId>, content: ContentNodes, ext: ArgumentExt<L>)` / `absent(spec)` (ext-free, mirrors D-C1); accessors `spec()`, `is_provided()`, `nodes()`; `Debug` |
+| `transform::RestagedSlot<L>` | `new(name: impl Into<Box<str>>, role: SlotRole, nodes: Vec<BuildId>, content: ContentNodes, ext: SlotExt<L>)` / `new_unnamed(role, nodes, content, ext)`; accessors `name()`, `role()`, `nodes()`; `Debug` |
+| `extract::split_at_chars` | `<'t, L, A, B>(nodes: NodeSlice<'t, L, A>, sep: &str, annotate: impl FnMut(&SplitAtCharsPart<'t, L, A>) -> B) -> Result<SplitAtChars<L, B>, ExtractError>` + `split_at_chars_drop_annotations(nodes, sep)` (`B = ()`) + `split_at_chars_keep_annotations(nodes, sep)` (`A: Clone + Default`, bound only there) |
+| `extract::parse_keyval` / `split_embellishments` / `split_tack_on_fields` | same triples; general callbacks `impl FnMut(&KeyValsPart<'t, L, A>) -> B`; results `KeyVals<L, B>` |
+| `extract::SplitAtChars<L, B = ()>` | renamed from `Split`; segment API over the `NodeTree<L, B>` backing tree (`segment`/`segments` return `NodeSlice<'_, L, B>`) |
+| `extract::KeyVals<L, B = ()>` / `KeyValEntry<'k, L, B = ()>` | gain the annotation parameter; `get_combined_with -> Result<Option<NodeTree<L>>, ExtractError>` (annotation-free result, D-plan-6) |
+| `extract::SplitAtCharsPart<'t, L, A = ()>` / `KeyValsPart<'t, L, A = ()>` | opaque part contexts: `original() -> Option<NodeRef<'t, L, A>>` (`None` exactly for synthesized wrappers/root), `is_partial()`, `partial_text() -> Option<&'t str>`, `segment_index()` / `entry_index() -> Option<usize>` (`None` for the root); `Debug` |
+| `extract::content_as_chars` | input-generic: `<'t, L, A: 't>(nodes: impl IntoIterator<Item = NodeRef<'t, L, A>>)` |
+| crate-internal | `copy_subtree_into<'t, L, AOld, B>(builder, node: NodeRef<'t, L, AOld>, annotate: &mut impl FnMut(NodeRef<'t, L, AOld>) -> B)`; `NodeTreeBuilder::restage_node_with_content_mapping` + `ContentParentMapping { Verbatim, Translate }` (D-plan-7; public `restage_node` unchanged) |
+
+### Acceptance-test outcomes (§S7 acceptance)
+
+- **Argument-swap round-trip**: `\a{1}{2}` → `\a{2}{1}` via the reentrant trait
+  visitor (two `restage_argument` calls + one reordered `restage_invocation`);
+  content/spec/name travel together, sibling spans out of source order,
+  `validate_tree` green. PASS (`argument_swap_round_trip`).
+- **Annotation-flow**: origin convention (identity restage minting
+  `Origin { original }` per node), explicit op-argument annotations
+  (`content_swap_annotations_flow_explicitly` pins visitor-Descend, helper,
+  and caller-staged channels per node). PASS.
+- **Extract triples on all four producers**: general/drop/keep exist and are
+  exercised; part facts pinned (originals, partials + cut text, segment/entry
+  indices, synthesized `None`s, keep-through defaults); input genericity by
+  splitting annotated trees and composing producers. PASS.
+- Driver policy tests: no-silent-repair (emptied region provided-with-empty;
+  dropped content parent diagnosed with the takeover route), role-uniform
+  descent (Content/Attached/Hidden fixture), Emit-no-descent, root-not-singular,
+  visitor error transport, op-misuse Errs, duplication via `restage_subtree`,
+  unwrap via `restage_children`, hand-built bundles, deep-wrapper content swap.
+  PASS (21 transform tests total).
+
+### Gate results (final full run)
+
+- `cargo build` (and `--tests`): 0 warnings, 0 errors (workspace
+  `missing_docs = "warn"` ⇒ zero missing docs).
+- `cargo test`: **687 lib** (baseline 661 + 26) + 30 acceptance + 8
+  derive-conditions + 1 derive + **30 doctests** (baseline 28 + the transform
+  module example + the `split_at_chars` example; 2 ignored pre-existing) — all
+  green.
+- `rm -rf target/doc && cargo docs`: clean — no missing_docs, no broken
+  intra-doc links.
+- Superseded-names sweep: clean — no `Restage::Continue/Keep/Retain/Auto`, no
+  `stage_argument_like`, no `add_subtree`, no `copied_from`, no
+  `_with_annotations`, no `WithTransformedTreeNodeProvenance`, no
+  `check_transform_tree_invariants`/`validate_parse_tree`, no bare `Split`
+  result type. (The pre-existing crate-*internal* `copy_subtree_into` helper
+  name stays: it is the extract copy machinery's internal spelling from S3,
+  not public transform vocabulary — the ban targets "copy" as the public
+  transform-op vocabulary.)
+- Behavior changes only where ruled: the four extract bare names changed arity
+  (the ruled general-form flip); everything else is additive.
+
+### Commits
+
+- 3ca0912 P3-S7: implementation plan
+- 8b56c06 P3-S7 M2: transform core — Restage/RestageVisitor/RestageError + driver
+- a2afc14 P3-S7 M3: region ops + bundles + argument-swap acceptance
+- be45849 P3-S7 M4: content-swap helpers
+- a5a62de P3-S7 M5: extract annotation minting — triples, part contexts,
+  SplitAtChars rename, input genericity
+- (this commit) P3-S7 M6: docs + records + closure
+
+### Churn
+
+6 stage commits; 16 files, +3506/−196 (transform module ~2270 lines incl.
+~960 test lines; extract.rs +720/−196 spread; copy.rs refactor; records/docs:
+DESIGN_RATIONALE, ARCHITECTURE, CLAUDE.md, lib.rs, learn-by-example.md,
+S7_REPORT.md).

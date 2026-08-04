@@ -138,9 +138,9 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 
 **Public export topology (decided; applied):**
 the public API is exposed through re-export facades with one canonical path per
-item — `techy::{source, error, extract}` top-level, `techy::core` as a flat machinery
-hub with extracted satellites `core::{constructs, specs, node}`, `techy::latexlike`
-unchanged, future `techy::transform` — and internal src modules are private
+item — `techy::{source, error, extract, transform}` top-level, `techy::core` as a
+flat machinery hub with extracted satellites `core::{constructs, specs, node}`,
+`techy::latexlike` unchanged — and internal src modules are private
 (internal reorganization stops being public-breaking). The topic modules sketched
 above describe the *internal* organization only. Full decision incl. the
 specs-vs-hub author-side/run-side rule and rejected shapes:
@@ -461,19 +461,26 @@ in-crate test utility ([§dd-dr:tree-validation]).
   single-source slice contracts ([§dd-dr:tree-navigation]); the runtime
   all-trees-law checker is `core::node::validate_tree` ([§dd-dr:tree-validation]);
   and the level-0 cross-tree `restage_node` primitive is in
-  ([§dd-dr:restage-ops] — its visitor/ops/bundles surface still pending).
+  ([§dd-dr:restage-ops] — its visitor/ops/bundles surface landed in S7, below).
   **Applied in Phase 3 S6**: `\input` content attaches as an `Attached` slot of a
   same-builder sub-parse, making multi-source parse trees first-class
   ([§dd-dr:input-attachment], [§dd-dr:input-wiring]) — the parse-law oracle scopes
   its byte accounting per source through the slot roles (`Attached` regions carry
   their own accounting, `Hidden` regions none).
-  **Still ruled, not yet applied**: transformation (`techy::transform`, the
-  streaming restage driver — [§dd-dr:restage]; visitor trait, generic errors,
-  constructible bundles, no-silent-repair edit policy [§dd-dr:restage-ops]) and
-  recomposition (`techy::recompose`, [§dd-dr:recompose]) join as top-level
-  modules; the extract producers mint output annotations
-  through a general callback with suffixed shorthands
-  ([§dd-dr:extract-annotations]); recomposition is bound to the per-node doctrine
+  **Applied in Phase 3 S7**: transformation is the top-level `techy::transform` —
+  the streaming restage driver (`restage` + `RestageVisitor` with a closure
+  blanket; top-down visits, bottom-up staging; `Descend` always descends,
+  role-uniformly into `Attached`/`Hidden` slot children; read-frozen/
+  write-staged; annotations single-pathway with origin-by-convention;
+  [§dd-dr:restage]) over region-aware context ops, constructible
+  `RestagedArgument`/`RestagedSlot` bundles, generic `RestageError<E>`, the
+  no-silent-repair edit policy (`ContentParentDropped`), and narrow content-swap
+  helpers ([§dd-dr:restage-ops]); and the extract producers mint output
+  annotations through a general per-part callback with suffixed shorthands over
+  any input annotation type (`SplitAtChars`/`KeyVals` results;
+  [§dd-dr:extract-annotations]).
+  **Still ruled, not yet applied**: recomposition (`techy::recompose`,
+  [§dd-dr:recompose]) joins as a top-level module, bound to the per-node doctrine
   (spans are provenance — no inter-node span arithmetic; [§dd-dr:recompose]
   amendment). The dedicated recompose session then
   fixed the machinery: trigger spelling becomes recorded payload —

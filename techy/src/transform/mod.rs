@@ -1,6 +1,7 @@
 //! Tree→tree transformation: the **streaming restage** driver.
 //!
-//! A transformation pass walks a frozen input [`NodeTree`] **top-down** — the
+//! A transformation pass walks a frozen input
+//! [`NodeTree`](crate::core::node::NodeTree) **top-down** — the
 //! [`RestageVisitor`] decides about every node *before* its subtree is committed
 //! (a buried `\includegraphics` is seen before anything below it is staged) —
 //! while the driver stages the output **bottom-up** into a fresh
@@ -66,7 +67,7 @@
 //!
 //! Callbacks *inspect the frozen input* — the full read API and the
 //! [`techy::extract`](crate::extract) tools — and *produce* staged output; the
-//! staged side is write-only ([`BuildId`](crate::core::node::BuildId)s and
+//! staged side is write-only ([`BuildId`]s and
 //! bundles). A `Descend` parent never sees its children's results: decisions
 //! precede restaging (top-down), and whatever a callback stages it just made —
 //! facts carry in closure state or annotations. A framework that must inspect

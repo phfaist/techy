@@ -18,7 +18,8 @@ modules are `pub(crate)` and invisible to public paths:
 
 - **techy::source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, LineIndexCache, TextContent, SourceResolver, the include-chain helpers)
 - **techy::error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery; the DiagnosticInfo/ToDiagnosticValue derives)
-- **techy::extract**: Extraction helpers over parsed trees (Split, KeyVals, free fns)
+- **techy::extract**: Extraction helpers over parsed trees (SplitAtChars, KeyVals, free fns; the producers mint output annotations via per-part callbacks)
+- **techy::transform**: Tree→tree transformation — the streaming restage driver (restage, RestageVisitor, Restage, RestageContext + region ops, RestagedArgument/RestagedSlot, RestageError)
 - **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), tokens (Token, TokenKind, TokenRules, TokenReader, StdTokenReader), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)
 - **techy::core::specs**: Defining callables (CallableSpec, StdCallableSpec, ArgumentSpec; SpecsProvider, Package, Scope, ScopeStack; the command-resolution family)
 - **techy::core::constructs**: Construct parsers (ConstructParser trait + standard parsers, ArgumentParser, their diagnostic conditions)

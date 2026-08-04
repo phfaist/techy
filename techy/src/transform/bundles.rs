@@ -23,7 +23,7 @@ use crate::spec::ArgumentSpec;
 use crate::state::Lang;
 
 /// One restaged argument of a callable: the spec it stays recorded against,
-/// and — when provided — its restaged region (see the [module docs](self)).
+/// and — when provided — its restaged region (see the [module docs](super)).
 ///
 /// Presence transfers the parser semantics: **absent ≠ empty**. A provided
 /// argument with no nodes is an emptied region
@@ -105,7 +105,7 @@ impl<L: Lang> fmt::Debug for RestagedArgument<L> {
 
 /// One restaged slot of a callable: name, [`SlotRole`], the staged region
 /// nodes, the content designation in bundle-relative staging coordinates, and
-/// the slot ext (see the [module docs](self)). Slots always have a region —
+/// the slot ext (see the [module docs](super)). Slots always have a region —
 /// possibly with empty content — so there is no absent form.
 pub struct RestagedSlot<L: Lang> {
     pub(super) name: Option<Box<str>>,
