@@ -13,7 +13,7 @@ F; T5_RULINGS § G + I-18; S5_REPORT signature tables (the surface built on).
 
 - [x] Plan committed (this file)
 - [x] M1 — `ResolveError` Clone + include-chain helpers
-- [ ] M2 — the door + the bundle + the two conditions
+- [x] M2 — the door + the bundle + the two conditions
 - [ ] M3 — parse-law checker `Attached`-scoping
 - [ ] M4 — preset `input_macro_spec` + multi-source acceptance (I-18)
 - [ ] M5 — line/col ownership (`line_of`, `line_col_span`, `LineIndexCache`,

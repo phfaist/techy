@@ -36,6 +36,7 @@
 //! as data ([`StopCause`]) — nobody continues past an `Err`.
 
 mod argument_parsers;
+mod attached_source;
 mod chars_group_parser;
 mod child_state;
 mod embellishments_parser;
@@ -51,6 +52,7 @@ pub use argument_parsers::{
     ExpressionParser, GroupArgumentParser, MarkerArgumentParser, MissingMandatoryArgument,
     OptionalGroupArgumentParser,
 };
+pub use attached_source::{NoSourceResolver, UnresolvableSourceReference};
 pub use chars_group_parser::CharsGroupArgumentParser;
 pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use embellishments_parser::EmbellishmentsArgumentParser;

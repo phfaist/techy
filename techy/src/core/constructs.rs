@@ -28,11 +28,13 @@ pub use crate::constructs::{
     GroupArgumentParser, GroupChildState, GroupParser, ImplementationError, Invocation,
     InvocationChildState,
     MalformedEnvironmentTerminator, MarkerArgumentParser, MissingEnvironmentTerminator,
-    MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NodesOutcome, NodesParser,
+    MissingMandatoryArgument, MissingTerminatorFound, NameGroup, NoSourceResolver,
+    NodesOutcome, NodesParser,
     OptionalGroupArgumentParser, ParseContext, RepeatedTackOnField, ScopeOpFailed,
     StdInvocationParser, StopCause, StopSpec, StrayGroupClose, TackOnFieldsArgumentParser,
     TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
-    UnresolvableCommand, UnterminatedVerbatim, UnusableRecoveryToken,
-    UnusableRecoveryTokenKind, VerbatimArgumentParser, VerbatimBodyParser,
+    UnresolvableCommand, UnresolvableSourceReference, UnterminatedVerbatim,
+    UnusableRecoveryToken, UnusableRecoveryTokenKind, VerbatimArgumentParser,
+    VerbatimBodyParser,
 };
 pub use crate::spec::{ArgumentParser, ParsedArgumentNodes};

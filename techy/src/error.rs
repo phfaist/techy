@@ -262,6 +262,29 @@ impl ToDiagnosticValue for DiagnosticValue {
     }
 }
 
+/// A [`ResolveError`](crate::source::ResolveError) projects as a map of its
+/// `reference`, its `message`, and the rendered `cause-chain` (each
+/// [`Error::source`](core::error::Error::source) hop's `Display`, outermost
+/// first) — the serialization face of the
+/// [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
+/// condition's payload. The impl lives here, not in the source stratum: the error
+/// module may reach down to source types, never the reverse (stratum layering).
+impl ToDiagnosticValue for crate::source::ResolveError {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        let mut chain: Vec<DiagnosticValue> = Vec::new();
+        let mut cause = core::error::Error::source(self);
+        while let Some(error) = cause {
+            chain.push(DiagnosticValue::Str(error.to_string()));
+            cause = error.source();
+        }
+        DiagnosticValue::Map(alloc::vec![
+            ("reference".to_string(), DiagnosticValue::Str(self.reference().to_string())),
+            ("message".to_string(), DiagnosticValue::Str(self.message().to_string())),
+            ("cause-chain".to_string(), DiagnosticValue::List(chain)),
+        ])
+    }
+}
+
 /// One frame of a parse traceback snapshot: a rendered title (`group ‘{’`,
 /// `argument #1 of ‘\frac’`) and the source location the parse descended at.
 ///
