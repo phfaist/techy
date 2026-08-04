@@ -561,3 +561,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   S7 anchor (RecomposeError variants + RecomposeContext helper roster mirror
   the shipped RestageError/RestageContext exactly, incl. the op-misuse
   variant group — [§dd-dr:restage-ops] amendment).
+- 2026-08-05: S8 launched (worktree branch `phase3-s8-visit-recompose` off
+  api-review 6e4516c; relay discipline + rulings-revision escalation rule in
+  the brief; scope = §S8 + the S5 malformed-terminator flag for the tolerant
+  oracle matrix + the S7 RestageError/RestageContext mirror anchor + the
+  S5-report shipped invocation-syntax shape as the substrate record).
