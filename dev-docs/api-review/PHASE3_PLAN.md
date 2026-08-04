@@ -40,6 +40,13 @@ holds the stage breakdown, per-stage inputs, and acceptance gates.
   files cited. INVENTORY.md is the public-item roster (Tier-C rulings override).
   On ANY ambiguity or contradiction between records: stop and surface to the user —
   no silent design decisions (CLAUDE.md rule 1).
+- **Rulings-revision rule (user, 2026-08-04, after the S5 EnvironmentSyntax
+  finding)**: *rulings themselves may be revisited* — if, during implementation,
+  you suspect an inconsistency between rulings and/or design policies, or you
+  believe a rulings-strictly-compliant implementation would not achieve the
+  user's primary intent, ESCALATE TO THE USER. Do not resolve-and-queue such
+  cases as ordinary deviations: a deviation entry is for under-determined
+  details, not for tensions in the ruled design itself.
 
 ## Stages
 
@@ -278,6 +285,11 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
 ### S10 — Hardening, guards, audit  [status: pending]
 
 - C2 residue assertion (Lang ≤ ~30 + driver ≤ ~12 lines acceptance check).
+- Panic-policy sweep (S5 design-revision rider): `debug_assert!` guards on
+  outer-layer input (custom-reader re-peek guards in
+  constructs/environment_parser.rs, spec-author emptiness guards in
+  constructs/argument_parsers.rs, and any siblings found by grep) → `Err`
+  implementation-error paths per [§dd-dr:panic-policy].
 - `missing_docs` → deny (workspace lint); full clean `cargo docs`.
 - cargo-semver-checks baseline established (freeze onset per
   [§dd-dr:stability-rubric]).
@@ -413,3 +425,29 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   end-side facts (tolerant oracle matrix must account). Whole-stage
   independent review launched (full diff 60dfd2b..b56bf0c + D-plan-1..17
   verdict table).
+- 2026-08-04: S5 review verdict: merge-ready after sign-off, 0 blockers; all
+  D-plan-1..17 FORCED/DEFENSIBLE; 2 should-fixes applied pre-sign-off
+  (negative spec-identity pin; report churn count — 52e7449).
+- 2026-08-04 (user): **S5 DESIGN-REVISION SESSION RULED** (interactive, from
+  the sign-off questions): (1) D-plan-12 → Option B (payload pins move to a
+  preset-side checker; core stays payload-blind). (2) Name swap: core bound
+  trait → **`InvocationSyntax<L>`** (L-parameterized, `ParseDriver<L>`
+  precedent), latexlike payload enum → **`InvocationSyntaxData`**. (3)
+  **`EnvironmentSyntax` reduced** to `from_parsed(begin, terminator)` + the
+  writer pair (user's single-writer sketch adjusted: S8 Concat head/tail +
+  prefix/suffix pins need a pair) — `parse_begin`/`parse_end`/
+  `record_std_end_facts` die (the ruled accumulator shape contained an
+  internal contradiction: the body parser is the terminator consumer, so
+  end-side "delegated scanning" was illusory and shape-locked custom Envs);
+  composition owns all scanning; core gains `EnvironmentBeginSyntaxData` +
+  `EnvironmentTerminatorFacts` → `EnvironmentTerminatorSyntaxData`;
+  `EnvironmentSideSyntax` → `StdEnvironmentSideSyntax` (off the trait
+  surface); tolerance is a parser concern (DR newtype clause amended).
+  (4) Non-command begin trigger = documented-contract implementation error
+  (both `'\u{0}'` fallback arms die). (5) `&Source` threading:
+  `TextContent::resolve`/`materialized` + `InvocationSyntax::materialized` +
+  writers take `&Source` (multi-source wrong-string hazard; origin via
+  `L::SourceOrigin`). (6) S5-new `debug_assert!(passthrough…)` →
+  implementation-error path; pre-existing sibling asserts → S10 rider.
+  (7) NEW PROTOCOL RULE recorded above (rulings-revision escalation).
+  M6 launched on the stage branch (successor 2, same worktree).
