@@ -526,3 +526,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   matrix). The per-stage cycle, gates, relay discipline, rulings-revision
   escalation rule, and merge procedure are all in § Protocol / § How to
   resume above; stage reports live in reports/S<N>_REPORT.md.
+- 2026-08-04: S7 launched (fresh supervising session; worktree branch
+  `phase3-s7-transform` off api-review 29db6da; relay discipline + the
+  rulings-revision escalation rule in the brief; scope = §S7 + the A8
+  input-genericity rider + the S8 name-anchor note on [§dd-dr:restage-ops],
+  since RecomposeError/RecomposeContext must mirror S7's names exactly).
