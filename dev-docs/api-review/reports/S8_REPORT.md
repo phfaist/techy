@@ -34,7 +34,8 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
       0 warnings)
 - [x] M4 — RecomposeContext region ops + wrapping-contract + streaming tests
       (7 tests; 715 lib green, 0 warnings)
-- [ ] M5 — preset SourceRecomposer + source_recomposer() + preset tests
+- [x] M5 — preset SourceRecomposer + source_recomposer() + preset tests
+      (11 tests; 726 lib green, 0 warnings)
 - [ ] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices)
 - [ ] M7 — records + docs + gates + closure
 
@@ -534,3 +535,42 @@ tests at minimum; full gates at M7).
   matrix (`ArgumentIndexOutOfRange` with count, `SlotIndexOutOfRange`,
   `NoBodySlot` on a macro, `NotACallable` on chars), the wrapping-contract
   test, the streaming test.
+
+### M5 realization notes
+
+- Shipped per plan (`techy/src/latexlike/recompose.rs` + mod.rs exports):
+  `SourceRecomposer<LLL = Latexlike>` (PhantomData ZST, manual
+  Clone/Default/Debug per the preset pattern), `source_recomposer()`,
+  `SourceRecomposeError::IncoherentInvocationSyntax { node, callable_form,
+  payload_arm }` (D-plan-9 shape), `impl<LLL, A> Recomposer<LLL, A>`.
+- Dispatch: non-callables through `core_source_instruction` (its `None` is
+  exactly the callable case — one stated-invariant `expect`); callables by
+  the `callable_type` role predicates, reading the matching fifth-role
+  accessor; any mismatch (or a role outside the three) is the coherence
+  error with both labels.
+- One emission refinement over the plan sketch: the **specials arm emits
+  `Concat(children().wrap(name, ""))`, not a bare `Emit(name)`** — a
+  specials spec can declare arguments (`SpecialsSpec.arguments`), and those
+  argument regions are children that must reemit after the trigger spelling;
+  for the childless shapes (ligatures, `~`, paragraph breaks) this is
+  byte-identical to `Emit(name)`. Pinned by the
+  `specials_with_arguments_reemit_the_argument_regions` test. (Realization,
+  not deviation: name-as-written stays the head; nothing in the ruled
+  records addressed specials arguments.)
+- The macro arm likewise: head = escape char + name + resolved post-space,
+  argument regions follow as children; the environment arm wraps the
+  children in `write_begin`/`write_end` (the writer pair as `Concat`
+  head/tail — the S5 design-revision's stated purpose).
+- Preset tests (11): macro spelling (post-space/no/pre-post text), argument
+  shapes (`\frac 1 2` single-token, `[x]{y}` optional, absent optional,
+  inter-argument noise), environments (std + `\begin {itemize}` recorded
+  spacing + nested), verbatim (env body incl. `%`/`{` bytes + `\verb|a b|`),
+  specials + paragraph breaks (both driver styles), math (all four delimiter
+  pairs) + comments + nested groups, tolerant unterminated environment
+  (reemit == input, `write_end` empty), materialized-tree reemission
+  (source-independent), the coherence error (hand-built macro-typed node
+  with the Specials arm), specials-with-arguments, and the `\input`
+  attached-slot contract (default skip → includer bytes; an
+  `include_attached()` wrapper reemits the included bytes in place).
+- Every strict fixture also runs `check_latexlike_tree_invariants` (the S5
+  payload-pin oracle) before reemission.

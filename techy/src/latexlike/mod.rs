@@ -66,6 +66,7 @@ mod invariants;
 mod invocation_syntax;
 mod lang;
 mod node_ref;
+mod recompose;
 mod spec;
 #[cfg(test)]
 mod test_support;
@@ -88,6 +89,7 @@ pub use lang::{
     LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeInvocationSyntax,
     LatexlikeLang, LatexlikeMode,
 };
+pub use recompose::{source_recomposer, SourceRecomposeError, SourceRecomposer};
 pub use spec::{MacroSpec, SpecialsSpec};
 
 // The latexlike parse-law oracle (core parse law + the payload pins) — the
