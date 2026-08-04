@@ -19,7 +19,26 @@ use crate::scopes::Package;
 use crate::source::TextContent;
 use crate::state::{Lang, ParsingState};
 
-use super::{restage, Restage, RestageContext, RestageError};
+use super::{
+    restage, Restage, RestageContext, RestageError, RestageVisitor, RestagedArgument,
+};
+
+/// The documented reentrant-visitor error pattern: one boxed self-referential
+/// `From` impl makes every context op `?`-propagatable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpError(Box<RestageError<OpError>>);
+
+impl From<RestageError<OpError>> for OpError {
+    fn from(error: RestageError<OpError>) -> OpError {
+        OpError(Box::new(error))
+    }
+}
+
+impl core::fmt::Display for OpError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "op failed: {}", self.0)
+    }
+}
 
 /// Parse `input` with the plain latexlike preset (strict).
 fn parse(input: &str) -> NodeTree<Latexlike> {
@@ -290,10 +309,9 @@ fn emptied_region_restages_as_provided_with_empty_region() {
 
 // --- structural descent: slot roles -----------------------------------------------------
 
-#[test]
-fn descend_visits_slot_children_of_every_role() {
-    // A callable with Content, Attached, and Hidden slots (framework-style,
-    // hand-staged): the driver must visit children of all three uniformly.
+/// A hand-staged callable with Content, Attached, and Hidden slots
+/// (framework-style) — the fixture of the descent and slot-op tests.
+fn three_slot_fixture() -> NodeTree<Latexlike> {
     use crate::latexlike::{BodyMarker, InvocationSyntaxData};
     use crate::node::{
         CallableData, ChildRegion, ContentNodes, NodeTreeBuilder, ParsedArguments,
@@ -347,7 +365,13 @@ fn descend_visits_slot_children_of_every_role() {
         builder.staged_children(&children),
     );
     let root = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
-    let input = builder.finish(root).unwrap();
+    builder.finish(root).unwrap()
+}
+
+#[test]
+fn descend_visits_slot_children_of_every_role() {
+    // The driver must visit slot children of all three roles uniformly.
+    let input = three_slot_fixture();
 
     let mut seen: Vec<String> = Vec::new();
     let output = restage(
@@ -367,4 +391,308 @@ fn descend_visits_slot_children_of_every_role() {
     let slots = output.root().slots().unwrap();
     let roles: Vec<SlotRole> = slots.iter().map(|slot| slot.role).collect();
     assert_eq!(roles, [SlotRole::Content, SlotRole::Attached, SlotRole::Hidden]);
+}
+
+// --- region ops + bundles (M3) ----------------------------------------------------------
+
+/// The T5 paradigm: swap the two arguments of `\a` — two `restage_argument`
+/// calls plus one reordered `restage_invocation` (a reentrant trait visitor:
+/// the ops re-enter `self` for the region nodes).
+struct SwapArguments;
+
+impl RestageVisitor<Latexlike, (), ()> for SwapArguments {
+    type Error = OpError;
+
+    fn restage(
+        &mut self,
+        node: NodeRef<'_, Latexlike>,
+        cx: &mut RestageContext<'_, Latexlike, (), ()>,
+    ) -> Result<Restage<()>, OpError> {
+        if node.name() == Some("a") {
+            let first = cx.restage_argument(node, 0, self)?;
+            let second = cx.restage_argument_named(node, "closing", self)?;
+            let id = cx.restage_invocation(node, vec![second, first], vec![], ())?;
+            Ok(Restage::Emit(vec![id]))
+        } else {
+            Ok(Restage::Descend(()))
+        }
+    }
+}
+
+#[test]
+fn argument_swap_round_trip() {
+    let input = parse_with_macros(r"\a{1}{2}");
+    let output = restage(&input, &mut SwapArguments).unwrap();
+
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    assert_eq!(callable.name(), Some("a"));
+
+    // The records swapped wholesale — content, spans, and specs travel together.
+    let arguments = callable.arguments().unwrap();
+    assert_eq!(arguments.len(), 2);
+    assert_eq!(arguments.get(0).unwrap().name(), Some("closing"));
+    assert_eq!(arguments.get(1).unwrap().name(), None);
+    let first_content = callable.argument_content_nodes(0).unwrap();
+    assert_eq!(first_content.first().unwrap().chars(), Some("2"));
+    let second_content = callable.argument_content_nodes(1).unwrap();
+    assert_eq!(second_content.first().unwrap().chars(), Some("1"));
+
+    // Sibling spans are now out of source order — legal in transform trees.
+    let group_spans: Vec<_> = callable
+        .children()
+        .iter()
+        .map(|child| child.span().range())
+        .collect();
+    assert_eq!(group_spans, [5..8, 2..5]);
+    // The callable's own identity is carried verbatim.
+    assert_eq!(callable.span().range(), input.root().child(0).unwrap().span().range());
+}
+
+#[test]
+fn absent_arguments_transfer_presence() {
+    // \o's optional argument is not provided: the bundle is absent, and the
+    // restaged record stays absent (absent ≠ empty).
+    struct Reinvoke;
+    impl RestageVisitor<Latexlike, (), ()> for Reinvoke {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("o") {
+                let optional = cx.restage_argument(node, 0, self)?;
+                assert!(!optional.is_provided());
+                assert!(optional.nodes().is_empty());
+                let mandatory = cx.restage_argument(node, 1, self)?;
+                assert!(mandatory.is_provided());
+                let id = cx.restage_invocation(node, vec![optional, mandatory], vec![], ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse_with_macros(r"\o{x}");
+    let output = restage(&input, &mut Reinvoke).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    let arguments = callable.arguments().unwrap();
+    assert!(!arguments.get(0).unwrap().is_provided());
+    assert!(arguments.get(1).unwrap().is_provided());
+    assert_eq!(
+        callable.argument_content_nodes(1).unwrap().first().unwrap().chars(),
+        Some("x")
+    );
+}
+
+#[test]
+fn unwrapping_groups_via_restage_children() {
+    struct UnwrapGroups;
+    impl RestageVisitor<Latexlike, (), ()> for UnwrapGroups {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.is_group() {
+                Ok(Restage::Emit(cx.restage_children(node, self)?))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse("a{b{c}}d");
+    let output = restage(&input, &mut UnwrapGroups).unwrap();
+    validate_tree(&output).unwrap();
+    let texts: Vec<_> = output
+        .root()
+        .children()
+        .iter()
+        .map(|child| child.chars().unwrap().to_string())
+        .collect();
+    assert_eq!(texts, ["a", "b", "c", "d"]);
+}
+
+#[test]
+fn restage_subtree_duplicates_and_redrives() {
+    // Driving the same node twice is legal: replace "x" with a fresh restage
+    // of the group's subtree, while the group is also driven as itself.
+    struct Duplicate {
+        group: NodeId,
+    }
+    impl RestageVisitor<Latexlike, (), ()> for Duplicate {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.chars() == Some("x") {
+                let group = node.tree().node(self.group);
+                Ok(Restage::Emit(cx.restage_subtree(group, self)?))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse("x{y}");
+    let group = input.root().child(1).unwrap().id();
+    let output = restage(&input, &mut Duplicate { group }).unwrap();
+    validate_tree(&output).unwrap();
+    let root = output.root();
+    assert_eq!(root.child_count(), 2);
+    assert!(root.child(0).unwrap().is_group());
+    assert!(root.child(1).unwrap().is_group());
+    assert_eq!(root.child(0).unwrap().child(0).unwrap().chars(), Some("y"));
+    assert_eq!(root.child(1).unwrap().child(0).unwrap().chars(), Some("y"));
+    assert_ne!(root.child(0).unwrap().id(), root.child(1).unwrap().id());
+}
+
+#[test]
+fn restage_slot_carries_name_role_and_content() {
+    // Restage slot 1 (Attached) of the fixture and re-invoke with just it.
+    struct KeepAttached;
+    impl RestageVisitor<Latexlike, (), ()> for KeepAttached {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.is_callable() {
+                let slot = cx.restage_slot(node, 1, self)?;
+                assert_eq!(slot.role(), SlotRole::Attached);
+                assert_eq!(slot.name(), None);
+                let id = cx.restage_invocation(node, vec![], vec![slot], ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = three_slot_fixture();
+    let output = restage(&input, &mut KeepAttached).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root();
+    assert!(callable.arguments().unwrap().is_empty());
+    let slots = callable.slots().unwrap();
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots.get(0).unwrap().role, SlotRole::Attached);
+    assert_eq!(callable.child_count(), 1);
+    assert_eq!(
+        callable.slot_content_nodes(0).unwrap().first().unwrap().chars(),
+        Some("attached")
+    );
+}
+
+#[test]
+fn op_misuse_is_diagnosed_not_panicked() {
+    struct Misuse;
+    impl RestageVisitor<Latexlike, (), ()> for Misuse {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("a") {
+                // Unknown argument name:
+                let error = cx.restage_argument_named(node, "nonsense", self).unwrap_err();
+                assert!(matches!(
+                    &error,
+                    RestageError::UnknownArgumentName { name, .. } if name == "nonsense"
+                ));
+                // Argument index out of range:
+                let error = cx.restage_argument(node, 7, self).unwrap_err();
+                assert!(matches!(
+                    error,
+                    RestageError::ArgumentIndexOutOfRange { index: 7, count: 2, .. }
+                ));
+                // Slot index out of range (macros have no slots):
+                let error = cx.restage_slot(node, 0, self).unwrap_err();
+                assert!(matches!(
+                    error,
+                    RestageError::SlotIndexOutOfRange { index: 0, count: 0, .. }
+                ));
+            } else if node.is_chars() {
+                // Region ops demand a callable:
+                let error = cx.restage_argument(node, 0, self).unwrap_err();
+                assert!(matches!(error, RestageError::NotACallable { .. }));
+                let error: RestageError<OpError> =
+                    cx.restage_invocation(node, vec![], vec![], ()).unwrap_err();
+                assert!(matches!(error, RestageError::NotACallable { .. }));
+            }
+            Ok(Restage::Descend(()))
+        }
+    }
+
+    let input = parse_with_macros(r"z\a{1}{2}");
+    let output = restage(&input, &mut Misuse).unwrap();
+    validate_tree(&output).unwrap();
+}
+
+#[test]
+fn hand_built_bundles_are_first_class() {
+    // The constructors are the general take-both form: build an argument bundle
+    // from scratch (fresh content, InRegion designation) and re-invoke with it.
+    use crate::node::ContentNodes;
+
+    struct Rewrite;
+    impl RestageVisitor<Latexlike, (), ()> for Rewrite {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() != Some("a") {
+                return Ok(Restage::Descend(()));
+            }
+            let spec = Arc::clone(&node.arguments().unwrap().get(0).unwrap().spec);
+            let second = cx.restage_argument(node, 1, self)?;
+
+            // A fresh single-node region whose one node is itself the content.
+            let kind: NodeKind<Latexlike> = NodeKind::chars(TextContent::Owned("NEW".into()));
+            let span = node.span().clone();
+            let state = node.parsing_state().clone();
+            let builder = cx.builder();
+            let ext = <Latexlike as Lang>::make_node_ext(
+                &kind,
+                &span,
+                &state,
+                builder.staged_children(&[]),
+            );
+            let fresh = builder
+                .add(kind, span, state, Vec::new(), ext, ())
+                .map_err(RestageError::<OpError>::Build)?;
+            let first = RestagedArgument::provided(
+                spec,
+                vec![fresh],
+                ContentNodes::InRegion(0..1),
+                (),
+            );
+            let id = cx.restage_invocation(node, vec![first, second], vec![], ())?;
+            Ok(Restage::Emit(vec![id]))
+        }
+    }
+
+    let input = parse_with_macros(r"\a{1}{2}");
+    let output = restage(&input, &mut Rewrite).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    assert_eq!(
+        callable.argument_content_nodes(0).unwrap().first().unwrap().chars(),
+        Some("NEW")
+    );
+    assert_eq!(
+        callable.argument_content_nodes(1).unwrap().first().unwrap().chars(),
+        Some("2")
+    );
 }

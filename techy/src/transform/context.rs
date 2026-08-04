@@ -7,13 +7,18 @@ use alloc::vec::Vec;
 
 use hashbrown::HashMap;
 
+use alloc::string::String;
+use alloc::sync::Arc;
+
 use crate::node::{
-    BuildId, ContentParentMapping, NodeBuildError, NodeId, NodeRef, NodeTree,
-    NodeTreeBuilder,
+    BuildId, CallableData, ChildRegion, ContentNodes, ContentParentMapping, NodeBuildError,
+    NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
+    ParsedSlot, ParsedSlots,
 };
 use crate::state::Lang;
 
-use super::{Restage, RestageError, RestageVisitor};
+use super::bundles::ProvidedRegion;
+use super::{Restage, RestageError, RestageVisitor, RestagedArgument, RestagedSlot};
 
 /// Transform a tree by streaming restage: the visitor is invoked **top-down**
 /// over the frozen `tree` (root included), staging the output **bottom-up**;
@@ -124,6 +129,290 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         &mut self.builder
     }
 
+    // --- region-aware restaging ops -----------------------------------------------------
+
+    /// Run the full visitor over `node`'s subtree, the node itself included —
+    /// exactly what the driver does for a `Descend`ed child. Returns the staged
+    /// ids replacing `node` (one for a `Descend` of `node` itself; whatever the
+    /// visitor emitted otherwise). The typical use is a takeover that still
+    /// wants parts restaged through the pass:
+    /// `Restage::Emit(cx.restage_subtree(other, self)?)`.
+    pub fn restage_subtree<V>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        visitor: &mut V,
+    ) -> Result<Vec<BuildId>, RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        drive(self, node, visitor)
+    }
+
+    /// Run the visitor over every child subtree of `node` (the node itself
+    /// excluded), returning the concatenated replacements — the unwrap move:
+    /// `Restage::Emit(cx.restage_children(group, self)?)` dissolves a wrapper
+    /// while its content still flows through the pass.
+    pub fn restage_children<V>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        visitor: &mut V,
+    ) -> Result<Vec<BuildId>, RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        let mut ids = Vec::new();
+        for child in node.children() {
+            ids.extend(drive(self, child, visitor)?);
+        }
+        Ok(ids)
+    }
+
+    /// Restage argument `index` of callable `node` through the visitor,
+    /// returning its [`RestagedArgument`] bundle: the region's nodes are driven
+    /// like any `Descend`ed children, and the record's spec, presence, and
+    /// content designation are carried over in bundle-relative staging
+    /// coordinates. An absent argument yields
+    /// [`RestagedArgument::absent`] (presence transfers — no error).
+    ///
+    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// [`ArgumentIndexOutOfRange`](RestageError::ArgumentIndexOutOfRange),
+    /// [`ContentParentDropped`](RestageError::ContentParentDropped) (the
+    /// visitor dropped/multiplied the node anchoring the record's content),
+    /// plus anything the visitor run produces.
+    pub fn restage_argument<V>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        index: usize,
+        visitor: &mut V,
+    ) -> Result<RestagedArgument<L>, RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        let data = callable_data(node)?;
+        let count = data.arguments.len();
+        let argument = data
+            .arguments
+            .get(index)
+            .ok_or(RestageError::ArgumentIndexOutOfRange { node: node.id(), index, count })?;
+        let spec = Arc::clone(&argument.spec);
+        match &argument.region {
+            None => Ok(RestagedArgument::absent(spec)),
+            Some(region) => {
+                let ext = argument.ext.clone();
+                let (nodes, content) = self.restage_region(node, region, visitor)?;
+                Ok(RestagedArgument {
+                    spec,
+                    provided: Some(ProvidedRegion { nodes, content, ext }),
+                })
+            }
+        }
+    }
+
+    /// [`restage_argument`](RestageContext::restage_argument) by the argument's
+    /// spec name. A name matching none of the callable's argument specs is
+    /// [`UnknownArgumentName`](RestageError::UnknownArgumentName) — asking for
+    /// an argument the callable does not have is a caller bug, not an absence.
+    pub fn restage_argument_named<V>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        name: &str,
+        visitor: &mut V,
+    ) -> Result<RestagedArgument<L>, RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        let data = callable_data(node)?;
+        let index = data
+            .arguments
+            .iter()
+            .position(|argument| argument.name() == Some(name))
+            .ok_or_else(|| RestageError::UnknownArgumentName {
+                node: node.id(),
+                name: String::from(name),
+            })?;
+        self.restage_argument(node, index, visitor)
+    }
+
+    /// Restage slot `index` of callable `node` through the visitor, returning
+    /// its [`RestagedSlot`] bundle (name, role, and ext carried over; region
+    /// nodes driven; content designation in bundle-relative coordinates).
+    ///
+    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// [`SlotIndexOutOfRange`](RestageError::SlotIndexOutOfRange),
+    /// [`ContentParentDropped`](RestageError::ContentParentDropped), plus
+    /// anything the visitor run produces.
+    pub fn restage_slot<V>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        index: usize,
+        visitor: &mut V,
+    ) -> Result<RestagedSlot<L>, RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        let data = callable_data(node)?;
+        let count = data.slots.len();
+        let slot = data
+            .slots
+            .get(index)
+            .ok_or(RestageError::SlotIndexOutOfRange { node: node.id(), index, count })?;
+        let (name, role, ext) = (slot.name.clone(), slot.role, slot.ext.clone());
+        let (nodes, content) = self.restage_region(node, &slot.region, visitor)?;
+        Ok(RestagedSlot { name, role, nodes, content, ext })
+    }
+
+    /// Restage callable `node`'s invocation over the given bundles, **in the
+    /// order given**: the new node's children are the bundles' nodes
+    /// (arguments first, then slots), its argument/slot records are retiled
+    /// accordingly, and everything else — invocation form, name, spec,
+    /// invocation-syntax payload, span, state, ext — is carried over from
+    /// `node` verbatim. The annotation is the new node's (single-pathway rule).
+    ///
+    /// Reordering bundles reorders whole records: the argument swap
+    /// `\a{1}{2}` → `\a{2}{1}` is two
+    /// [`restage_argument`](RestageContext::restage_argument) calls and one
+    /// reordered `restage_invocation` — each bundle keeps its own spec, so the
+    /// swapped record's names/specs travel with their content. Children of
+    /// `node` outside every bundle are simply not part of the replacement
+    /// (bundles define the new child list exhaustively).
+    ///
+    /// Errors: [`NotACallable`](RestageError::NotACallable) and staging
+    /// failures ([`Build`](RestageError::Build) — e.g. bundle nodes already
+    /// claimed, or designations that do not fit).
+    pub fn restage_invocation<E>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        arguments: Vec<RestagedArgument<L>>,
+        slots: Vec<RestagedSlot<L>>,
+        annotation: B,
+    ) -> Result<BuildId, RestageError<E>> {
+        let data = callable_data(node)?;
+        let mut children: Vec<BuildId> = Vec::new();
+        let mut offset = |added: &[BuildId]| -> Result<core::ops::Range<u32>, RestageError<E>> {
+            let start = u32::try_from(children.len())
+                .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+            let end = start
+                .checked_add(
+                    u32::try_from(added.len())
+                        .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?,
+                )
+                .ok_or(RestageError::Build(NodeBuildError::TooManyNodes))?;
+            children.extend_from_slice(added);
+            Ok(start..end)
+        };
+
+        let mut parsed_arguments = Vec::with_capacity(arguments.len());
+        for bundle in arguments {
+            let RestagedArgument { spec, provided } = bundle;
+            let (region, ext) = match provided {
+                None => (None, None),
+                Some(ProvidedRegion { nodes, content, ext }) => {
+                    let range = offset(&nodes)?;
+                    (Some(ChildRegion::new(range, content)), ext)
+                }
+            };
+            parsed_arguments.push(ParsedArgument { spec, region, ext });
+        }
+        let mut parsed_slots = Vec::with_capacity(slots.len());
+        for bundle in slots {
+            let RestagedSlot { name, role, nodes, content, ext } = bundle;
+            let range = offset(&nodes)?;
+            parsed_slots.push(ParsedSlot {
+                name,
+                region: ChildRegion::new(range, content),
+                role,
+                ext,
+            });
+        }
+
+        let kind = NodeKind::callable(CallableData {
+            callable_type: data.callable_type,
+            name: data.name.clone(),
+            spec: Arc::clone(&data.spec),
+            arguments: ParsedArguments::new(parsed_arguments),
+            slots: ParsedSlots::new(parsed_slots),
+            invocation_syntax: data.invocation_syntax.clone(),
+        });
+        self.builder
+            .add(
+                kind,
+                node.span().clone(),
+                node.parsing_state().clone(),
+                children,
+                node.ext().clone(),
+                annotation,
+            )
+            .map_err(RestageError::Build)
+    }
+
+    /// Drive the visitor over one resolved region's nodes and translate the
+    /// region's content designation into bundle-relative staging coordinates —
+    /// the shared tail of the argument/slot ops.
+    fn restage_region<V>(
+        &mut self,
+        callable: NodeRef<'_, L, A>,
+        region: &ChildRegion,
+        visitor: &mut V,
+    ) -> Result<(Vec<BuildId>, ContentNodes), RestageError<V::Error>>
+    where
+        V: RestageVisitor<L, A, B> + ?Sized,
+    {
+        let children = region.children();
+        let content = region.content_range();
+        let parent = region.content_parent();
+
+        // Drive each region node; prefix[i] = bundle offset where region node
+        // i's replacement starts (the region-local coordinate translation).
+        let mut nodes: Vec<BuildId> = Vec::new();
+        let mut prefix: Vec<u32> = Vec::with_capacity(children.len() + 1);
+        prefix.push(0);
+        for region_node in callable.tree().nodes_in(children.clone()) {
+            nodes.extend(drive(self, region_node, visitor)?);
+            let offset = u32::try_from(nodes.len())
+                .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+            prefix.push(offset);
+        }
+
+        let designation = if parent == callable.id() {
+            // Region-level content: offsets relative to the region translate
+            // through the region's own prefix sums (in bounds by the source
+            // tree's record invariants).
+            let start = (content.start - children.start) as usize;
+            let end = (content.end - children.start) as usize;
+            ContentNodes::InRegion(prefix[start]..prefix[end])
+        } else {
+            // Content inside a descendant: re-anchor through the replacement
+            // map — the same policy as the driver's record translation
+            // (translate through a driver-restaged parent, verbatim into a
+            // single-node Emit takeover, refuse otherwise).
+            let parent_node = callable.tree().node(parent);
+            let parent_base = parent_node.children().range().start;
+            let child_range =
+                (content.start - parent_base) as usize..(content.end - parent_base) as usize;
+            match self.replaced.get(&parent) {
+                Some(Replaced::Restaged { id, prefix }) => ContentNodes::InChildrenOf(
+                    *id,
+                    prefix[child_range.start]..prefix[child_range.end],
+                ),
+                Some(Replaced::One(id)) => ContentNodes::InChildrenOf(
+                    *id,
+                    child_range.start as u32..child_range.end as u32,
+                ),
+                other => {
+                    return Err(RestageError::ContentParentDropped {
+                        callable: callable.id(),
+                        parent,
+                        replaced_by: match other {
+                            Some(Replaced::Count(count)) => Some(*count),
+                            _ => None,
+                        },
+                    })
+                }
+            }
+        };
+        Ok((nodes, designation))
+    }
+
     /// Record an `Emit` takeover's replacement for `old`.
     pub(super) fn record_emit(&mut self, old: NodeId, ids: &[BuildId]) {
         let entry = match ids {
@@ -188,6 +477,13 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
         self.replaced.insert(node.id(), Replaced::Restaged { id: result, prefix });
         Ok(result)
     }
+}
+
+/// The callable payload of `node`, or the op-misuse error.
+fn callable_data<'n, L: Lang, A, E>(
+    node: NodeRef<'n, L, A>,
+) -> Result<&'n CallableData<L>, RestageError<E>> {
+    node.callable().ok_or(RestageError::NotACallable { node: node.id() })
 }
 
 impl<L: Lang, A, B> core::fmt::Debug for RestageContext<'_, L, A, B> {

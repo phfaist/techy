@@ -19,9 +19,10 @@ Baseline (must not regress): 661 lib + 30 acceptance + 8 derive-conditions +
 - [x] M2 — transform core: module, `Restage`, `RestageVisitor` + closure blanket,
       `RestageError<E>`, driver (`restage` entry, Descend/Emit, replacement map,
       `ContentParentDropped`), basic tests (9 tests; 670 lib green)
-- [ ] M3 — region ops + bundles (`RestagedArgument`/`RestagedSlot`,
+- [x] M3 — region ops + bundles (`RestagedArgument`/`RestagedSlot`,
       `restage_subtree`/`restage_children`/`restage_argument[_named]`/`restage_slot`/
       `restage_invocation`/`builder()`), argument-swap acceptance test
+      (7 more tests; 677 lib green)
 - [ ] M4 — content-swap helpers (`restage_argument_with_content`/
       `restage_slot_with_content`) + tests
 - [ ] M5 — extract annotation minting: generalized copy machinery, the four
@@ -375,3 +376,27 @@ tests at minimum; full gates at M6).
   (annotations, not restructuring); fn items need nothing. The fixed-error
   fallback is NOT triggered — flagged here per the ruling instead of
   re-sessioning.
+
+### M3 realization notes
+
+- The ops land as planned (§ A); shared tail `RestageContext::restage_region`
+  (private) drives a resolved region's nodes and translates the content
+  designation to bundle-relative coordinates under the same three-way policy as
+  the driver (translate through `Descend`-restaged parents, verbatim into
+  single-node `Emit` takeovers, `ContentParentDropped` otherwise).
+- `RestagedArgument` internally allows a provided region with a missing ext:
+  `restage_argument` reproduces verbatim what an incoherent hand-built input
+  record carries (`ParsedArgument` fields are pub, so region-Some/ext-None is
+  representable) rather than panicking or repairing; the public
+  `provided(…)` constructor still demands the ext (the ruled arity). Below
+  deviation grade — recorded for the reviewer.
+- `restage_invocation` documents that bundles define the new child list
+  exhaustively (children of the input callable outside every bundle are not
+  part of the replacement).
+- The documented reentrant error pattern (`struct OpError(Box<RestageError<
+  OpError>>)` + one `From` impl) is exercised by every M3 test visitor; `?`
+  propagation through both op families works with unique inference.
+- The swap test additionally pins: bundle reordering moves whole records
+  (spec + name travel with content — `arguments().get(0).name() ==
+  Some("closing")` after the swap), and sibling spans out of source order pass
+  `validate_tree`.

@@ -126,8 +126,10 @@ use alloc::vec::Vec;
 use crate::node::{BuildId, NodeBuildError, NodeId, NodeRef};
 use crate::state::Lang;
 
+mod bundles;
 mod context;
 
+pub use bundles::{RestagedArgument, RestagedSlot};
 pub use context::{restage, RestageContext};
 
 /// The visitor's verdict about one input node (returned from
