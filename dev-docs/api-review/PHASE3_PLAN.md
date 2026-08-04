@@ -404,3 +404,12 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   queued (D-plan-2 engine-wide FromInvocation bound spread flagged as the
   main sign-off item). Successor 1 launched in the same worktree for
   M2-addendum + M3–M5.
+- 2026-08-04: S5 implementation COMPLETE (successor 1 finished M2-addendum +
+  M3–M5 in one run; 9 commits through b56bf0c; 614 lib tests; gates green;
+  FLM probe adapted — six itemized edits). New deviations D-plan-16
+  (compiler-forced ArgumentExt Default bound on the generalized argument-code
+  factory) + D-plan-17 (handoff post-space-pin repair vs the T5-B end_pos
+  takeover shape). S8 flag recorded: malformed terminators record no
+  end-side facts (tolerant oracle matrix must account). Whole-stage
+  independent review launched (full diff 60dfd2b..b56bf0c + D-plan-1..17
+  verdict table).
