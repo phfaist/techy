@@ -408,12 +408,12 @@ unchanged, resolver private.
 
 ### Commits
 
-1. `668e449` P3-S4: implementation plan (+ `72c020e`-ish checklist fix)
+1. `668e449` P3-S4: implementation plan (+ `45b55a1` checklist fix)
 2. `3901284` M1: GroupType::Math(MathGroupForm)
 3. `a5eb56d` M2: role traits + LatexlikeLang umbrella
 4. `7140631` M3: E4 enclosing-state stack + event lowering
 5. `7bc8161` M4: pillars + LatexlikeDriver<LLL> + parity tests
-6. (this commit) M5: docs + closure
+6. `d9496d0` M5: docs + closure (+ this hash-fix commit)
 
 ### Churn
 
