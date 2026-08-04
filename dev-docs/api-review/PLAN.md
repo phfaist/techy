@@ -655,6 +655,13 @@ projected FLM probe) is at
   `ProvenanceChain`/`ResolvedContent` keep in source; `StdParseDriver` doc
   sentence → resolver-choice guidance; `Diagnostics::into_vec` never existed,
   reject-do-not-add.
+- 2026-08-04 (user, Phase 3 S4 application): **E4 restore amendment** — the
+  exit-math-context restore excludes transient gates: `expecting_group_close`
+  and `temporary_groups` are NOT restored (amends the T1/T2 E4 "whole
+  TokenRules of the found state" policy; durable record: amendment note on
+  [§dd-dr:enclosing-state-stack]). Phase 3 execution state + resume protocol:
+  PHASE3_PLAN.md (S1–S4 merged as of this entry; reviewer-verified, deviations
+  user-confirmed per its stage log).
 - (pending) **NEXT: Phase 3 — apply + harden** (all 2b sessions ruled; topology
   and all placements closed). **Phase 3 checklist additions from the Tier-C
   session**: `NodeData` + `check_tree_invariants` → pub(crate) (wrapper shape

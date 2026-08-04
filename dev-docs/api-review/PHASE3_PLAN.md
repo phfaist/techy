@@ -142,7 +142,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   lines). [§dd-dr:display-tree]. `NodeKind::as_str()` (T1T2 §E5).
 - Acceptance: navigation/validator/annotation tests; no old ext API anywhere.
 
-### S4 — Preset generalization + state-stack events  [status: pending]
+### S4 — Preset generalization + state-stack events  [status: IN PROGRESS 2026-08-04]
 
 - P3: per-vocabulary role traits (callable accessors `macro_callable()`/
   `environment_callable()`/`specials_callable()` + `is_*`; mode trimmed to
@@ -156,7 +156,9 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   dropped; knobs stay recovery/paragraph_break_style pub + resolver behind
   builder): `math_group_interior_delta` (+ two-component recipe doc),
   `exit_math_context_delta`, `make_paragraph_break_node` (parse-side-only doc).
-  [§dd-dr:preset-driver-pillars], T3 §D, T5 §D+E.
+  [§dd-dr:preset-driver-pillars], T3 §D, T5 §D+E. **User amendment 2026-08-04**:
+  the restore excludes the transient gates `expecting_group_close` and
+  `temporary_groups` (never restored).
 - E4 enclosing-state stack: session-held stack; owning `ParsingStateStack`
   (`from_states`, `from_node_ancestors` — scan semantics); fallible
   `finalize_transition` (→ `DeriveError`; seed exempt); `cx.derive_state` /
@@ -164,8 +166,10 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   &ParsingStateStack)`; preset restore event + exit-math wiring; two-class event
   contract docs; `\text` guide-recipe forbidden_chars fix.
   [§dd-dr:enclosing-state-stack], T1T2 §E4, T5 §E.
-- `ClosedVocabulary` stays opt-in; A1(iv) bound-where-used check fn wired at
-  parse init (warning emission itself may slip to S9 with the F5 batch). T3 §E2.
+- `ClosedVocabulary` stays opt-in (no supertrait). A1(iv) — the bound-where-used
+  check fn AND its parse-init wiring — routed WHOLLY to S9 (supervisor
+  instruction at S4 launch, confirmed; lands beside its condition type in the F5
+  batch). T3 §E2.
 - Acceptance: preset behavior parity tests (math entry/exit, paragraph breaks);
   Lang-residue trend toward the C2 assertion (final check S10).
 
@@ -262,10 +266,11 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   itemize, enumerate, scoped \item via inner `"minilatex.item"` package + the
   moved specials). [§dd-dr:minidefs].
 - F5 measures: did-you-mean detail in `resolve_command_in_scopes` miss arm;
-  parse-init all-escape-char provider warning (reserved identifier
-  `core.specs.…`, wording here); `Package::insert` doc callout; `"BracedOnly"`
-  word code; `_named` accessors → `Result<Option<NodeSlice>, E>`; A4 docs.
-  T1T2 §A1–A4.
+  parse-init all-escape-char provider warning — INCL. the A1(iv)
+  bound-where-used check function + its parse-init wiring (T3 §E2 realization;
+  routed here from S4) — reserved identifier `core.specs.…`, wording here;
+  `Package::insert` doc callout; `"BracedOnly"` word code; `_named` accessors →
+  `Result<Option<NodeSlice>, E>`; A4 docs. T1T2 §A1–A4.
 - Sugar: `define_macro`/`define_environment` on `Package<LLL>`;
   `argument_specs_named`; `Diagnostics::sorted_by_position()`. T1T2 §E1b/E2/E6.
 - Acceptance: specials/ligature tests load minilatex; trap-fix tests.
@@ -280,6 +285,43 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   for every "Phase 3" rider in DESIGN_RATIONALE/rulings files — each either done
   or consciously routed; superseded-names sweep (none reintroduced).
 - PLAN.md Phase 3 checkbox + decision-log entry.
+
+## How to resume with a fresh session (cleared context)
+
+1. Read PLAN.md (master), then THIS FILE fully. Stage statuses above are
+   authoritative; each stage's full detail lives in
+   `dev-docs/api-review/reports/S<N>_REPORT.md` (implementation plan, signature
+   tables, deviations, handoff notes) — read the report of the last DONE stage
+   plus any IN PROGRESS one before acting.
+2. Per-stage cycle (established, works): (a) IMPLEMENTER agent with worktree
+   isolation, branch `phase3-s<N>-<slug>`, brief = § Protocol + § S<N> + the
+   ruling inputs listed in that section + relay discipline (plan-first commit;
+   commit per milestone; if context balloons, finish milestone, commit handoff
+   notes, STOP for a successor) + gates + report file. (b) REVIEWER agent — NO
+   worktree isolation; it works read-only in the implementer's worktree path;
+   re-runs all gates, verifies the diff against the ruling records, produces a
+   deviation verdict table (FORCED / DEFENSIBLE / OVERREACH). (c) Deviations go
+   to the USER for sign-off BEFORE merge — hard rule; trivial doc-only
+   should-fixes may be applied pre-sign-off. (d) Merge: update stage status +
+   log here; commit process files on `api-review` (primary checkout,
+   /Users/philippe/projects/techy); `git rebase api-review` INSIDE the stage
+   worktree (NOT in the primary checkout — repeated past mistake); `git merge
+   --ff-only <branch>` in the primary checkout; verify `cargo build` +
+   `cargo test` on merged api-review; `git worktree remove <path>` +
+   `git branch -d <branch>` (a "could not lock config file" warning during
+   worktree removal is cosmetic).
+3. Interruptions: session-limit kills → RESUME the same agent by sending it a
+   message after the limit resets (transcript context survives; never relaunch
+   from scratch). Safety-flag kills → relaunch a FRESH agent with the same
+   brief (resuming may re-trigger the flag).
+4. Commit messages: `P3-S<N>: <what>` on stage branches; "API review Phase 3:
+   <what>" for process-file commits on api-review; harness trailers apply.
+5. Additional Phase 3 obligations beyond the stage sections: the "Phase 3
+   checklist additions" consolidated in PLAN.md's decision log (NEXT bullet),
+   plus per-stage riders recorded in the stage sections and reports. S10 audits
+   ALL of them.
+6. NEXT ACTION when resuming: check the S4 status line below — if not yet
+   merged, finish its cycle first (see stage log). Then launch S5 per § S5.
 
 ## Stage log
 
@@ -332,3 +374,21 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   arithmetically verified; D-C1 compiler chains reproduced; both
   supervisor-resolved readings CONFIRMED; relay seams coherent. **User confirmed
   D-C1 + all delegated decisions 2026-08-04.** Merged into api-review.
+- 2026-08-04: S4 launched (worktree branch `phase3-s4-preset-generalization`;
+  relay discipline from the outset; milestones M1 math-form, M2 role traits +
+  LatexlikeLang, M3 E4 state-stack machinery, M4 pillars + LatexlikeDriver<LLL>,
+  M5 docs/closure; A1(iv) check fn routed to S9).
+- 2026-08-04: S4 implemented in one run (8 commits, 596 lib tests, gates green).
+  First reviewer killed by a false-positive safety flag post-gates; fresh
+  reviewer relaunched. Verdict: merge-ready after sign-off, 0 blockers;
+  behavioral analyses (a) whole-rules restore sound via the group-descent
+  invariant (3 probe tests) and (b) patch-merge precedence consistent with the
+  E4 record; deviation table D-plan-1..10 + applied specifics all
+  recommended-accept; should-fix discriminating «» close-expectation parity
+  test added (2eacab3, 597 lib tests).
+- 2026-08-04 (user): S4 deviations CONFIRMED, with one **ruling amendment**:
+  the exit-math restore must NOT restore transient/temporary gates —
+  **`expecting_group_close` and `temporary_groups` are excluded** from the
+  whole-`TokenRules` restore (amends T1T2-E4's "whole TokenRules of the found
+  state"; durable record = amendment note on [§dd-dr:enclosing-state-stack]).
+  Fix applied on the stage branch before merge; then merged into api-review.
