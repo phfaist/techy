@@ -160,6 +160,70 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     ))
 }
 
+/// The canned include-cycle-plus-depth check a [`SourceResolver`] calls with `?`
+/// before answering an `\input`-like reference — recursion control stays **embedder
+/// policy** (the core never interprets references and performs no recursion
+/// checking; legitimate self-inclusion exists, e.g. `.dtx` self-documenting files),
+/// and this helper makes the common policy a one-liner.
+///
+/// The check is keyed on **origins**, not on provenance reference strings — two
+/// spellings can name one file, and the *primary* source (which has no reference)
+/// participates through the origin its creator minted. The division of labor:
+///
+/// - `target_key` is the already-canonicalized key of the source *about to be
+///   included* — the resolver computes the canonical name during resolution anyway
+///   (an absolute path, a normalized URL);
+/// - `triggered_at` locates the triggering construct; the chain walked is its
+///   source's [`including_sources`](Source::including_sources) — the would-be
+///   includer and every source above it, primary included;
+/// - `origin_key` converts a chain source's origin into the same key space —
+///   a cheap conversion **when the resolver mints canonical origins** (the
+///   documented invariant this helper rests on: resolved sources must carry the
+///   canonical name as their origin, and the embedder mints the primary source
+///   with a suitable canonical origin too). A `None` key skips that chain entry
+///   (nothing comparable recorded).
+/// - `max_depth`, when `Some`, bounds the *inclusion depth* of the new source:
+///   the primary is depth 0, a source it includes is depth 1, and so on; the
+///   check fails when the new source's depth would exceed `max_depth`.
+///
+/// A detected cycle and an exceeded depth produce distinct
+/// [`ResolveError`] messages. The error's `reference` field carries the
+/// offending chain source's origin label when it has one (the key type `K` is
+/// not required to render itself); a resolver wanting its own reference spelling
+/// maps the error before returning it.
+pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
+    target_key: &K,
+    triggered_at: &SourceSpan<O>,
+    origin_key: impl Fn(&O) -> Option<K>,
+    max_depth: Option<usize>,
+) -> Result<(), ResolveError> {
+    let mut depth: usize = 0;
+    for source in triggered_at.source().including_sources() {
+        depth += 1;
+        if origin_key(source.origin()).is_some_and(|key| key == *target_key) {
+            return Err(ResolveError::new(
+                source.origin().label().unwrap_or_default(),
+                "include cycle detected: this source is already on its own \
+                 include chain",
+            ));
+        }
+    }
+    // `depth` now counts the chain sources (includer … primary), which is exactly
+    // the new source's inclusion depth (primary = 0 ⇒ its inclusions = 1, …).
+    if let Some(max_depth) = max_depth {
+        if depth > max_depth {
+            return Err(ResolveError::new(
+                triggered_at.source().origin().label().unwrap_or_default(),
+                alloc::format!(
+                    "include depth {} exceeds the maximum of {}",
+                    depth, max_depth
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What a [`SourceResolver`] returns: the referenced content, plus origin metadata for
 /// the [`Source`] the caller mints (see [`resolve_source_reference`]).
 #[derive(Debug, Clone)]
@@ -191,13 +255,17 @@ impl<O: SourceOrigin> ResolvedContent<O> {
 /// into a diagnostic as text) plus an optional structured
 /// [`cause`](ResolveError::with_cause) exposed through
 /// [`core::error::Error::source`], so an embedder can walk the chain or downcast the
-/// underlying error (e.g. an `io::Error`'s kind). Not `Clone`: the boxed cause is
-/// single-owner.
-#[derive(Debug)]
+/// underlying error (e.g. an `io::Error`'s kind).
+///
+/// `Clone`, deliberately: **techy error types stay uniformly `Clone`** — error
+/// values travel into diagnostics, which are `Clone` throughout — and
+/// out-of-crate information (the cause, whose concrete type techy cannot clone)
+/// sits behind an `Arc`, cloned by refcount.
+#[derive(Debug, Clone)]
 pub struct ResolveError {
     reference: String,
     message: String,
-    cause: Option<Box<dyn core::error::Error + Send + Sync + 'static>>,
+    cause: Option<Arc<dyn core::error::Error + Send + Sync + 'static>>,
 }
 
 impl ResolveError {
@@ -208,12 +276,13 @@ impl ResolveError {
 
     /// Attach the underlying error (available via
     /// [`Error::source`](core::error::Error::source); the `message` string stays the
-    /// rendered summary).
+    /// rendered summary). Shared internally (`Arc`), which is what keeps the whole
+    /// error `Clone` — see the type docs.
     pub fn with_cause(
         mut self,
         cause: impl core::error::Error + Send + Sync + 'static,
     ) -> Self {
-        self.cause = Some(Box::new(cause));
+        self.cause = Some(Arc::new(cause));
         self
     }
 
@@ -389,6 +458,100 @@ mod tests {
         let trigger = trigger_span();
         let resolved = resolve_source_reference(&resolver, "chapter.tex", &trigger).unwrap();
         assert_eq!(resolved.origin().label().as_deref(), Some("chapter.tex"));
+    }
+
+    // --- check_include_chain ([§dd-dr:include-chain-helpers]) -------------------------
+
+    /// A chain `primary("doc") → "a.tex" → "b.tex"`, origins = canonical names, with
+    /// a trigger span inside the innermost source.
+    fn chain_trigger() -> SourceSpan {
+        let primary: Arc<Source> =
+            Arc::new(Source::new(r"\input{a.tex}").with_origin(Some("doc.tex".into())));
+        let a: Arc<Source> = Arc::new(
+            Source::resolved(r"\input{b.tex}", "a.tex", SourceSpan::entire(&primary))
+                .with_origin(Some("a.tex".into())),
+        );
+        let b: Arc<Source> = Arc::new(
+            Source::resolved(r"\input{c.tex}", "b.tex", SourceSpan::entire(&a))
+                .with_origin(Some("b.tex".into())),
+        );
+        SourceSpan::entire(&b)
+    }
+
+    fn key(origin: &Option<String>) -> Option<String> {
+        origin.clone()
+    }
+
+    #[test]
+    fn check_include_chain_passes_a_fresh_target() {
+        let trigger = chain_trigger();
+        assert!(check_include_chain(&String::from("c.tex"), &trigger, key, None).is_ok());
+        // Depth: the new source would sit at depth 3 (primary = 0) — allowed at 3.
+        assert!(check_include_chain(&String::from("c.tex"), &trigger, key, Some(3)).is_ok());
+    }
+
+    #[test]
+    fn check_include_chain_detects_a_cycle() {
+        let trigger = chain_trigger();
+        let err =
+            check_include_chain(&String::from("a.tex"), &trigger, key, None).unwrap_err();
+        assert!(err.message().contains("include cycle"));
+        assert_eq!(err.reference(), "a.tex");
+    }
+
+    #[test]
+    fn check_include_chain_cycles_are_keyed_on_origins_including_the_primary() {
+        // The primary participates through the origin its creator minted — the
+        // user's point: `\input{doc.tex}` from anywhere inside the tree is a cycle.
+        let trigger = chain_trigger();
+        let err =
+            check_include_chain(&String::from("doc.tex"), &trigger, key, None).unwrap_err();
+        assert!(err.message().contains("include cycle"));
+        assert_eq!(err.reference(), "doc.tex");
+    }
+
+    #[test]
+    fn check_include_chain_detects_depth_overflow_with_a_distinct_message() {
+        let trigger = chain_trigger();
+        let err = check_include_chain(&String::from("c.tex"), &trigger, key, Some(2))
+            .unwrap_err();
+        assert!(err.message().contains("include depth 3 exceeds the maximum of 2"));
+        assert!(!err.message().contains("cycle"));
+    }
+
+    #[test]
+    fn check_include_chain_skips_none_keys() {
+        // A chain whose sources carry no origins: nothing comparable — no cycle is
+        // ever reported, whatever the target key.
+        let primary: Arc<Source> = Arc::new(Source::new(r"\input{a.tex}"));
+        let a: Arc<Source> =
+            Arc::new(Source::resolved("x", "a.tex", SourceSpan::entire(&primary)));
+        let trigger = SourceSpan::entire(&a);
+        assert!(check_include_chain(&String::from("a.tex"), &trigger, key, None).is_ok());
+        // The label-less offender is still named in a depth error, by empty reference.
+        let err = check_include_chain(&String::from("a.tex"), &trigger, key, Some(1))
+            .unwrap_err();
+        assert_eq!(err.reference(), "");
+    }
+
+    #[test]
+    fn resolve_error_is_clone_with_a_shared_cause() {
+        #[derive(Debug)]
+        struct Underlying;
+        impl fmt::Display for Underlying {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("io failure")
+            }
+        }
+        impl core::error::Error for Underlying {}
+
+        // The ruled principle: techy error types stay uniformly Clone; the
+        // out-of-crate cause sits behind an Arc, cloned by refcount.
+        let err = ResolveError::new("chapter.tex", "cannot read file").with_cause(Underlying);
+        let clone = err.clone();
+        assert_eq!(clone.reference(), "chapter.tex");
+        let source = core::error::Error::source(&clone).expect("cause survives the clone");
+        assert!(source.downcast_ref::<Underlying>().is_some());
     }
 
     #[test]

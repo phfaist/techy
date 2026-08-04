@@ -59,9 +59,11 @@ mod text_content;
 pub use line_index::LineIndex;
 pub use origin::SourceOrigin;
 pub use resolver::{
-    resolve_source_reference, IntoSourceResolver, MapResolver, ResolveError,
-    ResolvedContent, SourceResolver,
+    check_include_chain, resolve_source_reference, IntoSourceResolver, MapResolver,
+    ResolveError, ResolvedContent, SourceResolver,
 };
-pub use source::{ProvenanceChain, Source, SourcePos, SourceProvenance, SourceSpan};
+pub use source::{
+    IncludingSources, ProvenanceChain, Source, SourcePos, SourceProvenance, SourceSpan,
+};
 pub use span::Span;
 pub use text_content::TextContent;

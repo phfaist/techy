@@ -146,6 +146,40 @@ impl<O: SourceOrigin> Source<O> {
     pub fn provenance_chain(&self) -> ProvenanceChain<'_, O> {
         ProvenanceChain { next: Some(&self.provenance) }
     }
+
+    /// Iterate over the chain of including sources: this source first, then the
+    /// source containing each [`triggered_at`](SourceProvenance::triggered_at) hop
+    /// in turn, ending with the primary source.
+    ///
+    /// The sibling of [`provenance_chain`](Source::provenance_chain): that iterator
+    /// yields the provenance *records*, this one yields the *sources* — whose
+    /// [origins](Source::origin) carry the comparable names — making it the general
+    /// primitive under include-chain policies (`.any(…)` for a cycle check,
+    /// `.count()` for a depth bound, `.filter(…).count()` for a `.dtx`-style
+    /// bounded self-inclusion policy; the canned combination is
+    /// [`check_include_chain`](super::check_include_chain)). The chain is finite by
+    /// construction: a triggering location always lies in an older source.
+    pub fn including_sources(&self) -> IncludingSources<'_, O> {
+        IncludingSources { next: Some(self) }
+    }
+}
+
+/// Iterator over a chain of including sources; see [`Source::including_sources`].
+pub struct IncludingSources<'a, O: SourceOrigin> {
+    next: Option<&'a Source<O>>,
+}
+
+impl<'a, O: SourceOrigin> Iterator for IncludingSources<'a, O> {
+    type Item = &'a Source<O>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.next.take()?;
+        self.next = current
+            .provenance()
+            .triggered_at()
+            .map(|span| &**span.source());
+        Some(current)
+    }
 }
 
 /// Truncating content preview used by the hand-written `Debug` impls, so that debugging a
@@ -586,6 +620,32 @@ mod tests {
             }
             other => panic!("expected Resolved provenance, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn including_sources_walks_self_to_primary() {
+        let document: Arc<Source> =
+            Arc::new(Source::new(r"\input{main.tex}").with_origin(Some("doc".into())));
+        let main: Arc<Source> = Arc::new(
+            Source::resolved(r"\mycommand", "main.tex", SourceSpan::entire(&document))
+                .with_origin(Some("main".into())),
+        );
+        let expanded: Arc<Source> = Arc::new(Source::synthesized(
+            "expansion",
+            "macro expansion",
+            SourceSpan::entire(&main),
+        ));
+
+        // Self first, then each including source, ending at the primary — the
+        // *sources* (whose origins carry the names), not the provenance records.
+        let labels: Vec<Option<String>> = expanded
+            .including_sources()
+            .map(|source| source.origin().label().map(|label| label.into_owned()))
+            .collect();
+        assert_eq!(labels, [None, Some("main".into()), Some("doc".into())]);
+
+        // A primary source's chain is itself alone.
+        assert_eq!(document.including_sources().count(), 1);
     }
 
     #[test]
