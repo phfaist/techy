@@ -397,3 +397,10 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   recompose-session checklist additions in PLAN.md's decision log + the S4
   routings: MacroSpec/environments LLL generalization, fifth role trait,
   FLM-probe re-check).
+- 2026-08-04: S5 relay conversion at ~600k tokens (user-prompted): original
+  implementer landed M0–M2 green (4 commits through 4725da0; 608 lib tests;
+  core InvocationSyntax channel + stage_invocation + latexlike payload +
+  environments-over-LLL) + committed handoff notes; deviations D-plan-1..15
+  queued (D-plan-2 engine-wide FromInvocation bound spread flagged as the
+  main sign-off item). Successor 1 launched in the same worktree for
+  M2-addendum + M3–M5.
