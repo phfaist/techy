@@ -56,7 +56,7 @@ mod source;
 mod span;
 mod text_content;
 
-pub use line_index::LineIndex;
+pub use line_index::{LineColProvider, LineIndex, LineIndexCache};
 pub use origin::SourceOrigin;
 pub use resolver::{
     check_include_chain, resolve_source_reference, IntoSourceResolver, MapResolver,

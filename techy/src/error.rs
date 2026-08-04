@@ -26,12 +26,13 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use crate::source::{LineIndex, Source, SourceOrigin, SourceProvenance, SourceSpan};
+use crate::source::{
+    LineColProvider, LineIndexCache, SourceOrigin, SourceProvenance, SourceSpan,
+};
 use crate::token::TokenErrorKind;
 
 // The condition-declaration derives (ARCHITECTURE.md "Condition declaration via
@@ -426,11 +427,20 @@ impl<O: SourceOrigin> Diagnostic<O> {
     }
 
     /// Render a human-readable multi-line report: message, position (line/column via
-    /// [`LineIndex`], origin label), the traceback
+    /// a transient [`LineIndexCache`], origin label), the traceback
     /// ([`format_traceback`]), and the source's provenance chain (`included from …` /
-    /// `synthesized from …`).
+    /// `synthesized from …`). Shorthand for
+    /// [`render_with`](Diagnostic::render_with) over a fresh cache.
     pub fn render(&self) -> String {
-        render_report(&self.to_string(), &self.span, &self.frames)
+        self.render_with(&mut LineIndexCache::new())
+    }
+
+    /// [`render`](Diagnostic::render) with a caller-supplied [`LineColProvider`]
+    /// answering the line/column lookups — a persistent [`LineIndexCache`] reused
+    /// across renders (each source indexed once, ever), or an editor tool's own
+    /// incremental line table.
+    pub fn render_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
+        render_report(line_cols, &self.to_string(), &self.span, &self.frames)
     }
 }
 
@@ -551,21 +561,30 @@ impl<O: SourceOrigin> Diagnostics<O> {
     /// by an "… and N more" line when pushes were
     /// [`suppressed`](Diagnostics::suppressed) beyond the retention cap.
     ///
-    /// Positions are formatted through **one shared [`LineIndex`] per distinct source**
-    /// (matched by `Arc` pointer identity), so rendering k diagnostics over an N-byte
-    /// document scans it once, not k times — per-diagnostic [`render`](Diagnostic::render)
+    /// Positions are formatted through one transient [`LineIndexCache`] shared across
+    /// the whole report (one line-starts table per distinct source, matched by `Arc`
+    /// identity), so rendering k diagnostics over an N-byte document scans it once,
+    /// not k times — per-diagnostic [`render`](Diagnostic::render)
     /// calls in a loop rebuild the index for every position (fine for a handful; this is
     /// the API for whole collections). Provenance chains benefit the same way: each
-    /// including document is indexed once for the whole report.
+    /// including document is indexed once for the whole report. Shorthand for
+    /// [`render_all_with`](Diagnostics::render_all_with) over a fresh cache.
     pub fn render_all(&self) -> String {
-        let mut positions = SourceIndexCache::new();
+        self.render_all_with(&mut LineIndexCache::new())
+    }
+
+    /// [`render_all`](Diagnostics::render_all) with a caller-supplied
+    /// [`LineColProvider`] answering the line/column lookups — a persistent
+    /// [`LineIndexCache`] reused across reports, or an editor tool's own
+    /// incremental line table.
+    pub fn render_all_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
         let mut out = String::new();
         for (i, diagnostic) in self.items.iter().enumerate() {
             if i > 0 {
                 out.push_str("\n\n");
             }
-            out.push_str(&render_report_with(
-                &mut positions,
+            out.push_str(&render_report(
+                line_cols,
                 &diagnostic.to_string(),
                 &diagnostic.span,
                 &diagnostic.frames,
@@ -701,9 +720,16 @@ impl<O: SourceOrigin> ParseError<O> {
     }
 
     /// Render a human-readable multi-line report (message, position, traceback,
-    /// provenance chain), like [`Diagnostic::render`].
+    /// provenance chain), like [`Diagnostic::render`]. Shorthand for
+    /// [`render_with`](ParseError::render_with) over a fresh transient cache.
     pub fn render(&self) -> String {
-        render_report(&format!("error: {}", self.data), &self.span, &self.frames)
+        self.render_with(&mut LineIndexCache::new())
+    }
+
+    /// [`render`](ParseError::render) with a caller-supplied [`LineColProvider`]
+    /// answering the line/column lookups, like [`Diagnostic::render_with`].
+    pub fn render_with(&self, line_cols: &mut impl LineColProvider<O>) -> String {
+        render_report(line_cols, &format!("error: {}", self.data), &self.span, &self.frames)
     }
 }
 
@@ -715,74 +741,21 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 
-/// Position formatter sharing one lazily-built [`LineIndex`] per distinct source,
-/// matched by `Arc` pointer identity (the engine-memo idiom) — sound here because every
-/// span handed in borrows for `'a`, so its `Arc` pins the source's address for the
-/// cache's whole lifetime. This is what makes [`Diagnostics::render_all`] O(N + k)
-/// instead of O(k·N); a `LineIndex` cache on `Source` itself is blocked dep-free
-/// (`alloc` has no `Mutex`, `OnceCell` would cost `Sync`), so the renderer is its home.
-struct SourceIndexCache<'a, O: SourceOrigin> {
-    /// (source address, index) pairs; linear scan — a report touches few distinct
-    /// sources.
-    indices: Vec<(*const Source<O>, LineIndex<'a>)>,
-}
-
-impl<'a, O: SourceOrigin> SourceIndexCache<'a, O> {
-    fn new() -> Self {
-        SourceIndexCache { indices: Vec::new() }
-    }
-
-    /// [`format_position`]'s body, against the cached (or newly admitted) index for the
-    /// span's source.
-    fn format_position(&mut self, span: &'a SourceSpan<O>) -> String {
-        let source = span.source();
-        let key: *const Source<O> = Arc::as_ptr(source);
-        let index = match self.indices.iter().position(|(k, _)| *k == key) {
-            Some(i) => &mut self.indices[i].1,
-            None => {
-                self.indices.push((key, source.line_index()));
-                &mut self.indices.last_mut().expect("entry was just pushed").1
-            }
-        };
-
-        let pos_str = match index.line_col(span.start()) {
-            Some((line, col)) => format!("@ (line {}, col {})", line, col),
-            None => format!(
-                "@ char pos {} (no line info: line-index scan limit exceeded)",
-                span.start()
-            ),
-        };
-
-        match source.origin().label() {
-            Some(label) => format!("{} [{}]", pos_str, label),
-            None => pos_str,
-        }
-    }
-}
-
-/// The shared body of [`Diagnostic::render`] and [`ParseError::render`]: headline,
-/// position, traceback, provenance chain — against a one-shot index cache.
+/// The shared body of the `render`/`render_with` family: headline, position,
+/// traceback, provenance chain — line/column lookups answered by `line_cols`
+/// (what makes [`Diagnostics::render_all`] O(N + k) instead of O(k·N): one
+/// line-starts table per distinct source, however many positions ask).
 fn render_report<O: SourceOrigin>(
+    line_cols: &mut impl LineColProvider<O>,
     headline: &str,
     span: &SourceSpan<O>,
     frames: &[TraceFrame<O>],
 ) -> String {
-    render_report_with(&mut SourceIndexCache::new(), headline, span, frames)
-}
-
-/// [`render_report`] against a caller-owned [`SourceIndexCache`] —
-/// [`Diagnostics::render_all`] threads one cache through all its reports.
-fn render_report_with<'a, O: SourceOrigin>(
-    positions: &mut SourceIndexCache<'a, O>,
-    headline: &str,
-    span: &'a SourceSpan<O>,
-    frames: &'a [TraceFrame<O>],
-) -> String {
     let mut msg = String::from(headline);
     msg.push_str("\n  at: ");
-    msg.push_str(&positions.format_position(span));
+    msg.push_str(&format_position_with(span, line_cols));
 
-    let traceback = format_traceback_with(positions, frames);
+    let traceback = format_traceback_with(frames, line_cols);
     if !traceback.is_empty() {
         msg.push('\n');
         msg.push_str(&traceback);
@@ -794,14 +767,14 @@ fn render_report_with<'a, O: SourceOrigin>(
             SourceProvenance::Resolved { reference, triggered_at } => {
                 msg.push_str(&format!(
                     "\n  included from {} ({})",
-                    positions.format_position(triggered_at),
+                    format_position_with(triggered_at, line_cols),
                     reference,
                 ));
             }
             SourceProvenance::Synthesized { description, triggered_at } => {
                 msg.push_str(&format!(
                     "\n  synthesized from {} ({})",
-                    positions.format_position(triggered_at),
+                    format_position_with(triggered_at, line_cols),
                     description,
                 ));
             }
@@ -814,21 +787,45 @@ fn render_report_with<'a, O: SourceOrigin>(
 /// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
 /// back to a raw byte position — with a short parenthetical explaining that line
 /// information is unavailable — for huge sources (see
-/// [`LineIndex`]). The `[origin]` part is omitted when the
+/// [`LineIndexCache`]). The `[origin]` part is omitted when the
 /// source's origin has no label.
 ///
-/// One-shot convenience: builds (and drops) a fresh line index per call. Rendering a
-/// whole collection goes through [`Diagnostics::render_all`], which shares indices
-/// across positions.
+/// One-shot convenience: builds (and drops) a fresh transient cache per call —
+/// shorthand for [`format_position_with`]. Rendering a
+/// whole collection goes through [`Diagnostics::render_all`], which shares one
+/// cache across positions.
 pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
-    SourceIndexCache::new().format_position(span)
+    format_position_with(span, &mut LineIndexCache::new())
+}
+
+/// [`format_position`] with a caller-supplied [`LineColProvider`] answering the
+/// line/column lookup (a persistent [`LineIndexCache`], an editor's incremental
+/// line table).
+pub fn format_position_with<O: SourceOrigin>(
+    span: &SourceSpan<O>,
+    line_cols: &mut impl LineColProvider<O>,
+) -> String {
+    let source = span.source();
+    let pos_str = match line_cols.line_col(source, span.start()) {
+        Some((line, col)) => format!("@ (line {}, col {})", line, col),
+        None => format!(
+            "@ char pos {} (no line info: line-index scan limit exceeded)",
+            span.start()
+        ),
+    };
+
+    match source.origin().label() {
+        Some(label) => format!("{} [{}]", pos_str, label),
+        None => pos_str,
+    }
 }
 
 /// Format a traceback snapshot ([`TraceFrame`]s, innermost first) — one line per open
 /// block, using each frame's own source for position and origin information.
 ///
 /// Returns an empty string if `frames` is empty. [`Diagnostic::render`] and
-/// [`ParseError::render`] append this to their reports.
+/// [`ParseError::render`] append this to their reports. One-shot convenience over
+/// a fresh transient cache — shorthand for [`format_traceback_with`].
 ///
 /// # Example output
 ///
@@ -838,13 +835,15 @@ pub fn format_position<O: SourceOrigin>(span: &SourceSpan<O>) -> String {
 ///   @ (line 5, col 3): argument #1 of ‘\section’
 /// ```
 pub fn format_traceback<O: SourceOrigin>(frames: &[TraceFrame<O>]) -> String {
-    format_traceback_with(&mut SourceIndexCache::new(), frames)
+    format_traceback_with(frames, &mut LineIndexCache::new())
 }
 
-/// [`format_traceback`] against a caller-owned [`SourceIndexCache`].
-fn format_traceback_with<'a, O: SourceOrigin>(
-    positions: &mut SourceIndexCache<'a, O>,
-    frames: &'a [TraceFrame<O>],
+/// [`format_traceback`] with a caller-supplied [`LineColProvider`] answering the
+/// line/column lookups (a persistent [`LineIndexCache`], an editor's incremental
+/// line table).
+pub fn format_traceback_with<O: SourceOrigin>(
+    frames: &[TraceFrame<O>],
+    line_cols: &mut impl LineColProvider<O>,
 ) -> String {
     if frames.is_empty() {
         return String::new();
@@ -853,7 +852,7 @@ fn format_traceback_with<'a, O: SourceOrigin>(
     let mut result = String::from("Open blocks:");
     for frame in frames {
         result.push_str("\n  ");
-        result.push_str(&positions.format_position(&frame.span));
+        result.push_str(&format_position_with(&frame.span, line_cols));
         result.push_str(": ");
         result.push_str(&frame.title);
     }
@@ -1209,6 +1208,46 @@ mod tests {
     }
 
     #[test]
+    fn the_with_variants_match_their_transient_shorthands() {
+        // The shorthand-not-second-path contract: a caller-held persistent cache
+        // produces byte-identical reports, across repeated renders (entries are
+        // reused, never rebuilt — content is immutable).
+        let document: Arc<Source> = Arc::new(
+            Source::new("Hello\n\\input{main.tex}").with_origin(origin("document.tex")),
+        );
+        let main: Arc<Source> = Arc::new(Source::resolved(
+            "\\bad\nmore\n",
+            "main.tex",
+            SourceSpan::new(&document, 6..22),
+        ));
+        let mut diagnostics: Diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::from_parts(
+            Severity::Error,
+            Box::new(TestCondition::new("boom")),
+            SourceSpan::new(&main, 0..4),
+            vec![TraceFrame::new("group ‘{’", SourceSpan::new(&document, 6..7))],
+        ));
+        let error: ParseError =
+            ParseError::new(TestCondition::new("halt"), SourceSpan::new(&main, 5..9));
+
+        let mut cache = crate::source::LineIndexCache::new();
+        for _ in 0..2 {
+            assert_eq!(diagnostics.render_all_with(&mut cache), diagnostics.render_all());
+            let diagnostic = diagnostics.iter().next().unwrap();
+            assert_eq!(diagnostic.render_with(&mut cache), diagnostic.render());
+            assert_eq!(error.render_with(&mut cache), error.render());
+            assert_eq!(
+                format_position_with(diagnostic.span(), &mut cache),
+                format_position(diagnostic.span())
+            );
+            assert_eq!(
+                format_traceback_with(diagnostic.frames(), &mut cache),
+                format_traceback(diagnostic.frames())
+            );
+        }
+    }
+
+    #[test]
     fn format_position_char_pos_fallback() {
         // A source too large for line indexing falls back to raw byte positions, with a
         // parenthetical explaining why no line/column is shown.
@@ -1220,8 +1259,8 @@ mod tests {
         assert_eq!(formatted, "@ char pos 42 (no line info: line-index scan limit exceeded)");
     }
 
-    // Exceeds LineIndex's default max scan length of 100_000 bytes ("a\n" is 2 bytes).
-    const DEFAULT_MAX_TEST_LEN: usize = 60_000;
+    // Exceeds the default max scan length of 500_000 bytes ("a\n" is 2 bytes).
+    const DEFAULT_MAX_TEST_LEN: usize = 300_000;
 
     /// The derive works *inside* the defining crate too (via `extern crate self as
     /// techy` in lib.rs) — the in-crate migration of the built-in conditions relies on

@@ -16,7 +16,7 @@ F; T5_RULINGS § G + I-18; S5_REPORT signature tables (the surface built on).
 - [x] M2 — the door + the bundle + the two conditions
 - [x] M3 — parse-law checker `Attached`-scoping
 - [x] M4 — preset `input_macro_spec` + multi-source acceptance (I-18)
-- [ ] M5 — line/col ownership (`line_of`, `line_col_span`, `LineIndexCache`,
+- [x] M5 — line/col ownership (`line_of`, `line_col_span`, `LineIndexCache`,
       `LineColProvider`, `_with` variants, scan-len raise)
 - [ ] M6 — docs + records + closure (full gate run)
 
