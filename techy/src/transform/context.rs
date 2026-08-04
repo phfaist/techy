@@ -345,6 +345,278 @@ impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
             .map_err(RestageError::Build)
     }
 
+    // --- content-swap helpers -----------------------------------------------------------
+
+    /// Restage argument `index` of callable `node` with its **content swapped**
+    /// for the already-staged `content` nodes: the wrapper syntax and noise of
+    /// the argument's region are restaged **verbatim by contract** — they never
+    /// flow through a visitor — and the record's content designation is
+    /// re-anchored onto the swapped position. The record's spec and ext carry
+    /// over unchanged. `annotation` is cloned onto every verbatim-restaged
+    /// wrapper/noise node (the annotation single-pathway rule needs an explicit
+    /// channel here); the `content` nodes were staged by the caller and carry
+    /// the annotations they were staged with.
+    ///
+    /// Changing the noise or wrapper too is not this helper's job: use
+    /// [`restage_argument`](RestageContext::restage_argument) (noise flows
+    /// through the visitor) or hand-build the bundle via
+    /// [`RestagedArgument::provided`] (the general take-both form).
+    ///
+    /// The helper covers the standard wrapper shapes (groups/lists/chars on the
+    /// path to the content). A wrapper chain that contains a *callable* — whose
+    /// own records would need retiling around the swap — is outside its
+    /// contract and surfaces as a [`Build`](RestageError::Build) error; take
+    /// the visitor route for those.
+    ///
+    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// [`ArgumentIndexOutOfRange`](RestageError::ArgumentIndexOutOfRange),
+    /// [`ArgumentAbsent`](RestageError::ArgumentAbsent) (an absent argument has
+    /// no wrapper to put content into), and staging failures
+    /// ([`Build`](RestageError::Build)).
+    pub fn restage_argument_with_content<E>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        index: usize,
+        content: Vec<BuildId>,
+        annotation: B,
+    ) -> Result<RestagedArgument<L>, RestageError<E>>
+    where
+        B: Clone,
+    {
+        let data = callable_data(node)?;
+        let count = data.arguments.len();
+        let argument = data
+            .arguments
+            .get(index)
+            .ok_or(RestageError::ArgumentIndexOutOfRange { node: node.id(), index, count })?;
+        let region = argument
+            .region
+            .as_ref()
+            .ok_or(RestageError::ArgumentAbsent { node: node.id(), index })?;
+        let spec = Arc::clone(&argument.spec);
+        let ext = argument.ext.clone();
+        let (nodes, content) =
+            self.copy_region_with_swapped_content(node, region, content, &annotation)?;
+        Ok(RestagedArgument { spec, provided: Some(ProvidedRegion { nodes, content, ext }) })
+    }
+
+    /// [`restage_argument_with_content`](RestageContext::restage_argument_with_content)
+    /// for slot `index`: wrapper and noise verbatim, content swapped,
+    /// designation re-anchored; the slot's name, role, and ext carry over.
+    ///
+    /// Errors: [`NotACallable`](RestageError::NotACallable),
+    /// [`SlotIndexOutOfRange`](RestageError::SlotIndexOutOfRange), and staging
+    /// failures ([`Build`](RestageError::Build)).
+    pub fn restage_slot_with_content<E>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        index: usize,
+        content: Vec<BuildId>,
+        annotation: B,
+    ) -> Result<RestagedSlot<L>, RestageError<E>>
+    where
+        B: Clone,
+    {
+        let data = callable_data(node)?;
+        let count = data.slots.len();
+        let slot = data
+            .slots
+            .get(index)
+            .ok_or(RestageError::SlotIndexOutOfRange { node: node.id(), index, count })?;
+        let (name, role, ext) = (slot.name.clone(), slot.role, slot.ext.clone());
+        let (nodes, content) =
+            self.copy_region_with_swapped_content(node, &slot.region, content, &annotation)?;
+        Ok(RestagedSlot { name, role, nodes, content, ext })
+    }
+
+    /// The content-swap machinery: restage one resolved region with its
+    /// designated content replaced by `new_content`, everything else copied
+    /// verbatim (annotations cloned from `annotation`), returning the new
+    /// region nodes and the re-anchored designation.
+    fn copy_region_with_swapped_content<E>(
+        &mut self,
+        callable: NodeRef<'_, L, A>,
+        region: &ChildRegion,
+        new_content: Vec<BuildId>,
+        annotation: &B,
+    ) -> Result<(Vec<BuildId>, ContentNodes), RestageError<E>>
+    where
+        B: Clone,
+    {
+        let children = region.children();
+        let content = region.content_range();
+        let parent = region.content_parent();
+        let tree = callable.tree();
+
+        if parent == callable.id() {
+            // Region-level content: splice the new content at the designated
+            // position among the region's nodes, copying the rest verbatim.
+            let cstart = (content.start - children.start) as usize;
+            let cend = (content.end - children.start) as usize;
+            let mut nodes: Vec<BuildId> = Vec::new();
+            let mut new_range = 0u32..0u32;
+            let splice =
+                |nodes: &mut Vec<BuildId>| -> Result<core::ops::Range<u32>, RestageError<E>> {
+                    let start = u32::try_from(nodes.len())
+                        .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+                    nodes.extend_from_slice(&new_content);
+                    let end = u32::try_from(nodes.len())
+                        .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+                    Ok(start..end)
+                };
+            for (i, region_node) in tree.nodes_in(children.clone()).enumerate() {
+                if i == cstart {
+                    new_range = splice(&mut nodes)?;
+                }
+                if (cstart..cend).contains(&i) {
+                    continue; // the old content, replaced
+                }
+                nodes.push(self.copy_verbatim(region_node, annotation)?);
+            }
+            if cstart == children.len() {
+                // Empty content anchored at the region's end.
+                new_range = splice(&mut nodes)?;
+            }
+            Ok((nodes, ContentNodes::InRegion(new_range)))
+        } else {
+            // Content inside a descendant: copy the region verbatim except
+            // along the path to the content parent, where the parent's
+            // designated children are swapped. Path from the parent up to (not
+            // including) the callable, innermost first — the invariant that the
+            // parent lies inside the region's subtree was validated by the
+            // input tree's `finish()`.
+            let mut path: Vec<NodeId> = alloc::vec![parent];
+            let mut cursor = tree.node(parent);
+            loop {
+                let up = cursor
+                    .parent()
+                    .expect("resolved content parents lie inside their region's subtree");
+                if up.id() == callable.id() {
+                    break;
+                }
+                path.push(up.id());
+                cursor = up;
+            }
+            let anchor = *path.last().expect("path holds at least the parent");
+
+            let parent_node = tree.node(parent);
+            let parent_base = parent_node.children().range().start;
+            let rel = (content.start - parent_base) as usize..(content.end - parent_base) as usize;
+
+            let mut nodes: Vec<BuildId> = Vec::new();
+            let mut swapped: Option<(BuildId, core::ops::Range<u32>)> = None;
+            for region_node in tree.nodes_in(children.clone()) {
+                if region_node.id() == anchor {
+                    let id = self.copy_swapping_at(
+                        region_node,
+                        &path,
+                        rel.clone(),
+                        &new_content,
+                        annotation,
+                        &mut swapped,
+                    )?;
+                    nodes.push(id);
+                } else {
+                    nodes.push(self.copy_verbatim(region_node, annotation)?);
+                }
+            }
+            let (new_parent, new_range) =
+                swapped.expect("the path's anchor lies among the region's nodes");
+            Ok((nodes, ContentNodes::InChildrenOf(new_parent, new_range)))
+        }
+    }
+
+    /// Copy `node` verbatim, descending along `path` (innermost first; `node`
+    /// is its last element) and swapping the designated `rel` child range for
+    /// `new_content` at the path's innermost node — reporting that node's new
+    /// id and content range through `swapped`.
+    fn copy_swapping_at<E>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        path: &[NodeId],
+        rel: core::ops::Range<usize>,
+        new_content: &[BuildId],
+        annotation: &B,
+        swapped: &mut Option<(BuildId, core::ops::Range<u32>)>,
+    ) -> Result<BuildId, RestageError<E>>
+    where
+        B: Clone,
+    {
+        let at_target = node.id() == path[0];
+        let mut children: Vec<BuildId> = Vec::new();
+        let mut new_range = 0u32..0u32;
+        let splice =
+            |children: &mut Vec<BuildId>| -> Result<core::ops::Range<u32>, RestageError<E>> {
+                let start = u32::try_from(children.len())
+                    .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+                children.extend_from_slice(new_content);
+                let end = u32::try_from(children.len())
+                    .map_err(|_| RestageError::Build(NodeBuildError::TooManyNodes))?;
+                Ok(start..end)
+            };
+        for (i, child) in node.children().iter().enumerate() {
+            if at_target {
+                if i == rel.start {
+                    new_range = splice(&mut children)?;
+                }
+                if rel.contains(&i) {
+                    continue; // the old content, replaced
+                }
+                children.push(self.copy_verbatim(child, annotation)?);
+            } else if path[..path.len() - 1].last() == Some(&child.id()) {
+                // The next node down the path.
+                let id = self.copy_swapping_at(
+                    child,
+                    &path[..path.len() - 1],
+                    rel.clone(),
+                    new_content,
+                    annotation,
+                    swapped,
+                )?;
+                children.push(id);
+            } else {
+                children.push(self.copy_verbatim(child, annotation)?);
+            }
+        }
+        if at_target && rel.start == node.child_count() {
+            new_range = splice(&mut children)?;
+        }
+
+        // Stage the node itself over the reassembled children: kind, span,
+        // state, and ext cloned verbatim. A callable here would carry resolved
+        // records that cannot survive a child swap — the staged add rejects it
+        // (the documented Build boundary of the _with_content helpers).
+        let id = self
+            .builder
+            .add(
+                node.kind().clone(),
+                node.span().clone(),
+                node.parsing_state().clone(),
+                children,
+                node.ext().clone(),
+                annotation.clone(),
+            )
+            .map_err(RestageError::Build)?;
+        if at_target {
+            *swapped = Some((id, new_range));
+        }
+        Ok(id)
+    }
+
+    /// Deep-copy `node` verbatim (exts and records carried; annotations cloned
+    /// from `annotation`).
+    fn copy_verbatim<E>(
+        &mut self,
+        node: NodeRef<'_, L, A>,
+        annotation: &B,
+    ) -> Result<BuildId, RestageError<E>>
+    where
+        B: Clone,
+    {
+        crate::node::copy_subtree_into(&mut self.builder, node, &mut |_| annotation.clone())
+            .map_err(RestageError::Build)
+    }
+
     /// Drive the visitor over one resolved region's nodes and translate the
     /// region's content designation into bundle-relative staging coordinates —
     /// the shared tail of the argument/slot ops.

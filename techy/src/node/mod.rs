@@ -1754,7 +1754,7 @@ mod tests {
     fn copy_subtree_reproduces_structure_and_records() {
         let tree = example_tree();
         let mut b = NodeTreeBuilder::new();
-        let root = super::copy::copy_subtree_into(&mut b, tree.root()).unwrap();
+        let root = super::copy::copy_subtree_into(&mut b, tree.root(), &mut |_| ()).unwrap();
         let copy = b.finish(root).unwrap();
 
         // A pure copy is a well-formed tree: full invariants (span partition included).
@@ -1826,7 +1826,7 @@ mod tests {
         let tree = b.finish(m).unwrap();
 
         let mut b = NodeTreeBuilder::new();
-        let root = super::copy::copy_subtree_into(&mut b, tree.root()).unwrap();
+        let root = super::copy::copy_subtree_into(&mut b, tree.root(), &mut |_| ()).unwrap();
         let copy = b.finish(root).unwrap();
         check_tree_invariants(&copy);
         let content = copy.root().argument_content_nodes(0).unwrap();
@@ -2029,12 +2029,12 @@ mod tests {
         let st = state::<PlainLang>();
         let root = tree.root();
         let mut b = NodeTreeBuilder::new();
-        let x2 = super::copy::copy_subtree_into(&mut b, root.child(0).unwrap()).unwrap();
-        let frac2 = super::copy::copy_subtree_into(&mut b, root.child(1).unwrap()).unwrap();
+        let x2 = super::copy::copy_subtree_into(&mut b, root.child(0).unwrap(), &mut |_| ()).unwrap();
+        let frac2 = super::copy::copy_subtree_into(&mut b, root.child(1).unwrap(), &mut |_| ()).unwrap();
         let z = b
             .add(NodeKind::chars(Span::new(0, 1)), SourceSpan::entire(&foreign), st.clone(), vec![], (), ())
             .unwrap();
-        let c2 = super::copy::copy_subtree_into(&mut b, root.child(3).unwrap()).unwrap();
+        let c2 = super::copy::copy_subtree_into(&mut b, root.child(3).unwrap(), &mut |_| ()).unwrap();
         let new_root = b
             .restage_node(root, &[vec![x2], vec![frac2], vec![z], vec![c2]], |_| None, ())
             .unwrap();
@@ -2105,7 +2105,7 @@ mod tests {
         let mut b = NodeTreeBuilder::new();
         // Keep only the content child ("y"); the noise child is dropped. The region
         // shrinks from two children to one, and the InRegion designation re-bases.
-        let y2 = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
+        let y2 = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap(), &mut |_| ()).unwrap();
         let root = b.restage_node(m, &[vec![], vec![y2]], |_| None, ()).unwrap();
         let new = b.finish(root).unwrap();
         assert_eq!(new.root().child_count(), 1);
@@ -2136,11 +2136,11 @@ mod tests {
         let tree = two_child_region_tree();
         let m = tree.root();
         let mut b = NodeTreeBuilder::new();
-        let x2 = super::copy::copy_subtree_into(&mut b, m.child(0).unwrap()).unwrap();
+        let x2 = super::copy::copy_subtree_into(&mut b, m.child(0).unwrap(), &mut |_| ()).unwrap();
         // The content child is replaced by two nodes: the region grows to three
         // children and the content designation covers both replacements.
-        let y2a = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
-        let y2b = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap()).unwrap();
+        let y2a = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap(), &mut |_| ()).unwrap();
+        let y2b = super::copy::copy_subtree_into(&mut b, m.child(1).unwrap(), &mut |_| ()).unwrap();
         let root = b.restage_node(m, &[vec![x2], vec![y2a, y2b]], |_| None, ()).unwrap();
         let new = b.finish(root).unwrap();
         assert_eq!(new.root().child_count(), 3);
@@ -2157,8 +2157,8 @@ mod tests {
         let tree = example_tree();
         let frac = tree.root().child(1).unwrap();
         let mut b = NodeTreeBuilder::new();
-        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
-        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap()).unwrap();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap(), &mut |_| ()).unwrap();
+        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap(), &mut |_| ()).unwrap();
         let a_group_id = frac.child(0).unwrap().id();
         let b_group_id = frac.child(1).unwrap().id();
         let map = move |old: NodeId| {
@@ -2192,8 +2192,8 @@ mod tests {
         let frac = tree.root().child(1).unwrap();
         let a_group_id = frac.child(0).unwrap().id();
         let mut b = NodeTreeBuilder::new();
-        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
-        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap()).unwrap();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap(), &mut |_| ()).unwrap();
+        let bg2 = super::copy::copy_subtree_into(&mut b, frac.child(1).unwrap(), &mut |_| ()).unwrap();
         let err = b.restage_node(frac, &[vec![ag2], vec![bg2]], |_| None, ()).unwrap_err();
         assert_eq!(err, NodeBuildError::ContentParentUnmapped { parent: a_group_id });
     }
@@ -2203,7 +2203,7 @@ mod tests {
         let tree = example_tree();
         let frac = tree.root().child(1).unwrap();
         let mut b = NodeTreeBuilder::new();
-        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap()).unwrap();
+        let ag2 = super::copy::copy_subtree_into(&mut b, frac.child(0).unwrap(), &mut |_| ()).unwrap();
         let err = b.restage_node(frac, &[vec![ag2]], |_| None, ()).unwrap_err();
         assert_eq!(
             err,
@@ -2232,8 +2232,8 @@ mod tests {
         assert_eq!(*tree.root().ext(), MintExt { descendants: 1, chars_below: 1 });
 
         let mut b: NodeTreeBuilder<MintLang> = NodeTreeBuilder::new();
-        let a1 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap()).unwrap();
-        let a2 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap()).unwrap();
+        let a1 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap(), &mut |_| ()).unwrap();
+        let a2 = super::copy::copy_subtree_into(&mut b, tree.root().child(0).unwrap(), &mut |_| ()).unwrap();
         let root = b.restage_node(tree.root(), &[vec![a1, a2]], |_| None, ()).unwrap();
         let new = b.finish(root).unwrap();
         assert_eq!(new.root().child_count(), 2);

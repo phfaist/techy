@@ -225,29 +225,33 @@ fn restage_region<'a, L: Lang, AOld>(
 /// [`restage_node`](NodeTreeBuilder::restage_node): children are staged bottom-up in
 /// source order, each as the singleton replacement of itself, with the accumulated
 /// old-id map as the content-parent mapping. Copied nodes carry their exts
-/// **verbatim** (frozen parse facts — `make_node_ext` never re-runs on copies); the
-/// extract-built trees these helpers feed are `A = ()`, so every copy's annotation
-/// is `()`.
-pub(crate) fn copy_subtree_into<L: Lang>(
-    builder: &mut NodeTreeBuilder<L>,
-    node: NodeRef<'_, L>,
+/// **verbatim** (frozen parse facts — `make_node_ext` never re-runs on copies);
+/// `annotate` supplies each copy's annotation from the node it was copied from
+/// (the extract producers route their annotation-mint callback through here;
+/// `&mut |_| ()` for annotation-free trees).
+pub(crate) fn copy_subtree_into<L: Lang, AOld, B>(
+    builder: &mut NodeTreeBuilder<L, B>,
+    node: NodeRef<'_, L, AOld>,
+    annotate: &mut impl FnMut(NodeRef<'_, L, AOld>) -> B,
 ) -> Result<BuildId, NodeBuildError> {
     // Old NodeId → new BuildId, for `InChildrenOf` content parents (descendants of
     // the callable, staged before it by the bottom-up order).
     let mut ids: HashMap<NodeId, BuildId> = HashMap::new();
-    copy_node(builder, node, &mut ids)
+    copy_node(builder, node, annotate, &mut ids)
 }
 
-fn copy_node<L: Lang>(
-    builder: &mut NodeTreeBuilder<L>,
-    node: NodeRef<'_, L>,
+fn copy_node<L: Lang, AOld, B>(
+    builder: &mut NodeTreeBuilder<L, B>,
+    node: NodeRef<'_, L, AOld>,
+    annotate: &mut impl FnMut(NodeRef<'_, L, AOld>) -> B,
     ids: &mut HashMap<NodeId, BuildId>,
 ) -> Result<BuildId, NodeBuildError> {
     let mut replacements = Vec::with_capacity(node.child_count());
     for child in node.children() {
-        replacements.push(alloc::vec![copy_node(builder, child, ids)?]);
+        replacements.push(alloc::vec![copy_node(builder, child, annotate, ids)?]);
     }
-    let id = builder.restage_node(node, &replacements, |old| ids.get(&old).copied(), ())?;
+    let annotation = annotate(node);
+    let id = builder.restage_node(node, &replacements, |old| ids.get(&old).copied(), annotation)?;
     ids.insert(node.id(), id);
     Ok(id)
 }

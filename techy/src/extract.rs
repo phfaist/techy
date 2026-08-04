@@ -357,7 +357,7 @@ fn stage_piece<L: Lang>(
     piece: &Piece<'_, L>,
 ) -> Result<BuildId, NodeBuildError> {
     let Some(sub) = &piece.part else {
-        return copy_subtree_into(builder, piece.node);
+        return copy_subtree_into(builder, piece.node, &mut |_| ());
     };
     let NodeKind::Chars { content, .. } = piece.node.kind() else {
         unreachable!("parts are only minted for Chars nodes (split_pieces)")
@@ -763,7 +763,7 @@ impl<L: Lang> KeyVals<L> {
                 }
             }
             for node in value.iter() {
-                children.push(copy_subtree_into(&mut builder, node)?);
+                children.push(copy_subtree_into(&mut builder, node, &mut |_| ())?);
             }
         }
         let kind = NodeKind::list();

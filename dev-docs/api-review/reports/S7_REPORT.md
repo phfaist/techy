@@ -23,8 +23,8 @@ Baseline (must not regress): 661 lib + 30 acceptance + 8 derive-conditions +
       `restage_subtree`/`restage_children`/`restage_argument[_named]`/`restage_slot`/
       `restage_invocation`/`builder()`), argument-swap acceptance test
       (7 more tests; 677 lib green)
-- [ ] M4 — content-swap helpers (`restage_argument_with_content`/
-      `restage_slot_with_content`) + tests
+- [x] M4 — content-swap helpers (`restage_argument_with_content`/
+      `restage_slot_with_content`) + tests (5 more tests; 682 lib green)
 - [ ] M5 — extract annotation minting: generalized copy machinery, the four
       producer triples, part contexts, input genericity, caller updates, tests
 - [ ] M6 — docs + records + gates (rustdoc pass, DR status lines, ARCHITECTURE,
@@ -400,3 +400,29 @@ tests at minimum; full gates at M6).
   (spec + name travel with content — `arguments().get(0).name() ==
   Some("closing")` after the swap), and sibling spans out of source order pass
   `validate_tree`.
+
+### M4 realization notes
+
+- Helper signatures as planned (D-plan-4): `restage_argument_with_content(node,
+  index, content: Vec<BuildId>, annotation: B)` /
+  `restage_slot_with_content(…)`, both `where B: Clone`, returning bundles.
+  The record's spec/ext (argument) and name/role/ext (slot) carry over
+  verbatim — the "one-line spec/ext transcription" the rejected both-taking
+  helper would have duplicated happens inside the helper.
+- Verbatim copies route through the generalized crate-internal
+  `copy_subtree_into(builder, node, annotate)` (pulled forward from the M5
+  plan: node/copy.rs now takes an annotation-mint callback; extract.rs and
+  node/mod.rs test call sites pass `&mut |_| ()` until M5 threads the real
+  extract callbacks).
+- Documented helper boundary: a wrapper chain containing a *callable* (whose
+  own records would need retiling around the swap) is outside the helper's
+  contract and surfaces as `Build` (the staged add rejects the callable's
+  already-resolved records); the visitor route or a hand-built bundle covers
+  those. Content parents deeper than the region node (the `\o[{…}]` lone-group
+  unwrap shape) are handled via path descent with the swap at the innermost
+  node.
+- Empty-but-provided content ranges splice at their anchored position
+  (`\a{}{2}` fill test).
+- Test-relevant parse fact: whitespace after the command word is the macro's
+  `post_space` payload (S5), NOT region noise — inter-argument whitespace is
+  the region-noise case the wrapper/noise tests pin (`\a{1} {2}`).

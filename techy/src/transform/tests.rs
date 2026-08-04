@@ -696,3 +696,262 @@ fn hand_built_bundles_are_first_class() {
         Some("2")
     );
 }
+
+// --- content-swap helpers (M4) ----------------------------------------------------------
+
+/// Stage a fresh owned-content chars node through the raw builder (the
+/// explicit `make_node_ext` recipe), annotated.
+fn stage_chars<B>(
+    cx: &mut RestageContext<'_, Latexlike, (), B>,
+    at: NodeRef<'_, Latexlike>,
+    text: &str,
+    annotation: B,
+) -> Result<crate::node::BuildId, RestageError<OpError>>
+where
+    B: Clone + core::fmt::Debug + Send + Sync,
+{
+    let kind: NodeKind<Latexlike> = NodeKind::chars(TextContent::Owned(text.into()));
+    let span = at.span().clone();
+    let state = at.parsing_state().clone();
+    let builder = cx.builder();
+    let ext =
+        <Latexlike as Lang>::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+    builder.add(kind, span, state, Vec::new(), ext, annotation).map_err(RestageError::Build)
+}
+
+#[test]
+fn content_swap_keeps_wrapper_and_noise_verbatim() {
+    // `\a{1} {2}`: argument 1's region is [whitespace noise, group{2}] (the
+    // whitespace scanned while looking for the argument is region noise) — the
+    // swap keeps both verbatim and re-anchors the designation inside the
+    // group's copy.
+    struct Swap;
+    impl RestageVisitor<Latexlike, (), ()> for Swap {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("a") {
+                let fresh = stage_chars(cx, node, "NEW", ())?;
+                let first = cx.restage_argument(node, 0, self)?;
+                let second = cx.restage_argument_with_content(node, 1, vec![fresh], ())?;
+                let id = cx.restage_invocation(node, vec![first, second], vec![], ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse_with_macros("\\a{1} {2}");
+    // Sanity: the input's second region really carries leading noise.
+    assert_eq!(input.root().child(0).unwrap().argument_nodes(1).unwrap().len(), 2);
+
+    let output = restage(&input, &mut Swap).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+
+    // Region shape preserved: noise chars node, then the group wrapper.
+    let region = callable.argument_nodes(1).unwrap();
+    assert_eq!(region.len(), 2);
+    assert_eq!(region.get(0).unwrap().chars(), Some(" "));
+    let group = region.get(1).unwrap();
+    assert!(group.is_group());
+    assert_eq!(group.group_delimiters(), Some(("{", "}")));
+    // Content swapped, designation re-anchored onto the group's copy.
+    let content = callable.argument_content_nodes(1).unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(content.first().unwrap().chars(), Some("NEW"));
+    assert!(callable.arguments().unwrap().get(1).unwrap().is_provided());
+}
+
+#[test]
+fn content_swap_reanchors_through_deep_wrappers() {
+    // `\o[{deep}]{x}`: the optional argument's lone inner group protects and
+    // unwraps — its content parent sits at grandchild depth. The swap copies
+    // the outer `[…]` and inner `{…}` wrappers verbatim and swaps inside.
+    struct Swap;
+    impl RestageVisitor<Latexlike, (), ()> for Swap {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("o") {
+                let fresh = stage_chars(cx, node, "SWAPPED", ())?;
+                let optional = cx.restage_argument_with_content(node, 0, vec![fresh], ())?;
+                let mandatory = cx.restage_argument(node, 1, self)?;
+                let id = cx.restage_invocation(node, vec![optional, mandatory], vec![], ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse_with_macros(r"\o[{deep}]{x}");
+    // Sanity: the input's designated content parent is the inner group.
+    let input_callable = input.root().child(0).unwrap();
+    let inner = input_callable.argument_content_nodes(0).unwrap().first().unwrap().parent().unwrap();
+    assert!(inner.is_group());
+    assert_ne!(inner.id(), input_callable.id());
+
+    let output = restage(&input, &mut Swap).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    let region = callable.argument_nodes(0).unwrap();
+    assert_eq!(region.len(), 1);
+    let outer = region.first().unwrap();
+    assert!(outer.is_group());
+    assert_eq!(outer.group_delimiters(), Some(("[", "]")));
+    let inner = outer.child(0).unwrap();
+    assert!(inner.is_group());
+    assert_eq!(inner.group_delimiters(), Some(("{", "}")));
+    let content = callable.argument_content_nodes(0).unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(content.first().unwrap().chars(), Some("SWAPPED"));
+}
+
+#[test]
+fn content_swap_fills_an_empty_argument() {
+    // `\a{}{2}`: an empty-but-provided content range anchored inside the group
+    // — the swap splices at the anchored position.
+    struct Fill;
+    impl RestageVisitor<Latexlike, (), ()> for Fill {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("a") {
+                let fresh = stage_chars(cx, node, "filled", ())?;
+                let first = cx.restage_argument_with_content(node, 0, vec![fresh], ())?;
+                let second = cx.restage_argument(node, 1, self)?;
+                let id = cx.restage_invocation(node, vec![first, second], vec![], ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = parse_with_macros(r"\a{}{2}");
+    assert!(input.root().child(0).unwrap().argument_content_nodes(0).unwrap().is_empty());
+    let output = restage(&input, &mut Fill).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    assert_eq!(
+        callable.argument_content_nodes(0).unwrap().first().unwrap().chars(),
+        Some("filled")
+    );
+}
+
+#[test]
+fn content_swap_on_a_slot_and_its_misuse_errors() {
+    struct SwapSlot;
+    impl RestageVisitor<Latexlike, (), ()> for SwapSlot {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.is_callable() {
+                let fresh = stage_chars(cx, node, "swapped-slot", ())?;
+                let slot = cx.restage_slot_with_content(node, 0, vec![fresh], ())?;
+                assert_eq!(slot.role(), SlotRole::Content);
+                let others = [
+                    cx.restage_slot(node, 1, self)?,
+                    cx.restage_slot(node, 2, self)?,
+                ];
+                let mut slots = vec![slot];
+                slots.extend(others);
+                let id = cx.restage_invocation(node, vec![], slots, ())?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(()))
+            }
+        }
+    }
+
+    let input = three_slot_fixture();
+    let output = restage(&input, &mut SwapSlot).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root();
+    assert_eq!(
+        callable.slot_content_nodes(0).unwrap().first().unwrap().chars(),
+        Some("swapped-slot")
+    );
+    assert_eq!(
+        callable.slot_content_nodes(1).unwrap().first().unwrap().chars(),
+        Some("attached")
+    );
+
+    // Misuse: swapping content of an absent argument is refused.
+    struct AbsentSwap;
+    impl RestageVisitor<Latexlike, (), ()> for AbsentSwap {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, OpError> {
+            if node.name() == Some("o") {
+                let fresh = stage_chars(cx, node, "zzz", ())?;
+                let error: RestageError<OpError> = cx
+                    .restage_argument_with_content(node, 0, vec![fresh], ())
+                    .unwrap_err();
+                assert!(matches!(error, RestageError::ArgumentAbsent { index: 0, .. }));
+            }
+            Ok(Restage::Descend(()))
+        }
+    }
+    // NOTE: the staged-but-unused `fresh` node is dropped by finish() (staged
+    // nodes unreachable from the root are dropped — builder contract).
+    let input = parse_with_macros(r"\o{x}");
+    let output = restage(&input, &mut AbsentSwap).unwrap();
+    validate_tree(&output).unwrap();
+}
+
+#[test]
+fn content_swap_annotations_flow_explicitly() {
+    // The helper's `annotation` argument lands (cloned) on every verbatim
+    // wrapper/noise copy; the caller-staged content keeps its own annotations.
+    struct Swap;
+    impl RestageVisitor<Latexlike, (), u8> for Swap {
+        type Error = OpError;
+        fn restage(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            cx: &mut RestageContext<'_, Latexlike, (), u8>,
+        ) -> Result<Restage<u8>, OpError> {
+            if node.name() == Some("a") {
+                let fresh = stage_chars(cx, node, "NEW", 9)?;
+                let first = cx.restage_argument(node, 0, self)?;
+                let second = cx.restage_argument_with_content(node, 1, vec![fresh], 7)?;
+                let id = cx.restage_invocation(node, vec![first, second], vec![], 5)?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok(Restage::Descend(1))
+            }
+        }
+    }
+
+    let input = parse_with_macros("\\a{1} {2}");
+    let output = restage(&input, &mut Swap).unwrap();
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    assert_eq!(*callable.annotation(), 5);
+    let region = callable.argument_nodes(1).unwrap();
+    assert_eq!(*region.get(0).unwrap().annotation(), 7); // noise copy
+    assert_eq!(*region.get(1).unwrap().annotation(), 7); // group wrapper copy
+    let content = callable.argument_content_nodes(1).unwrap();
+    assert_eq!(*content.first().unwrap().annotation(), 9); // caller-staged
+    // The visitor-driven first argument flowed through Descend(1).
+    let first = callable.argument_content_nodes(0).unwrap();
+    assert_eq!(*first.first().unwrap().annotation(), 1);
+}
