@@ -282,7 +282,7 @@ where
         let entry = cx.tokens.pos();
 
         // Read the opening delimiter: one raw char after optional whitespace.
-        let probe_state = cx.derived_state(&self.delimiter_probe_delta())?;
+        let probe_state = cx.derive_state(&self.delimiter_probe_delta())?;
         let Some(token) = cx.probe_token(&probe_state)? else {
             cx.tokens.move_to_pos(entry);
             return Ok(None);
@@ -335,7 +335,7 @@ where
             open: String::from(open),
             close: String::from(close),
         });
-        let content_state = cx.derived_state(&verbatim_state_delta(Arc::clone(&close_rule)))?;
+        let content_state = cx.derive_state(&verbatim_state_delta(Arc::clone(&close_rule)))?;
         let paired = open != close;
         // Shared by the two `read_raw_content` callbacks (each captures it by `&`).
         let depth = core::cell::Cell::new(1usize);
@@ -523,7 +523,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
             open: String::new(),
             close: self.terminator.clone(),
         });
-        let verbatim_state = cx.derived_state(&verbatim_state_delta(close_rule))?;
+        let verbatim_state = cx.derive_state(&verbatim_state_delta(close_rule))?;
 
         let mut children = Vec::new();
 

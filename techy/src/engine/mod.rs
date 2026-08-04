@@ -25,7 +25,7 @@ use crate::error::{
 use crate::node::{BuildId, NodeBuildError, NodeTree, NodeTreeBuilder};
 use crate::source::SourceSpan;
 use crate::spec::{CallableSpec, FrameRole};
-use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta};
+use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
 use crate::token::GroupRule;
 
 use alloc::boxed::Box;
@@ -174,6 +174,18 @@ pub struct ParserSession<L: Lang> {
     /// condition the recover funnel records. Private: the push/pop balance is an
     /// invariant.
     frames: Vec<Frame<L>>,
+    /// The live **enclosing-state stack** ([`ParsingStateStack`]): the states the
+    /// parse descended through, pushed/popped at the same descent points as the
+    /// frame stack — maintained exclusively by
+    /// [`ParseContext::with_parsing_state`](crate::constructs::ParseContext::with_parsing_state)
+    /// (closure-scoped push/pop) and lent by reference to the driver's
+    /// event-lowering hook ([`ParseDriver::resolve_state_event`]) inside
+    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state).
+    /// The engine retains exactly these states implicitly anyway (leaving a scope
+    /// structurally restores the outer `Arc`) — the stack only materializes them,
+    /// and it dies with the session: no ancestry residue survives into parsed
+    /// material. Private: the push/pop balance is an invariant.
+    state_stack: ParsingStateStack<L>,
 }
 
 impl<L: Lang> ParserSession<L> {
@@ -187,7 +199,28 @@ impl<L: Lang> ParserSession<L> {
             state_memo: StateMemo::new(),
             group_interior_memo: GroupInteriorMemo::new(),
             frames: Vec::new(),
+            state_stack: ParsingStateStack::new(),
         }
+    }
+
+    /// Push onto the live enclosing-state stack — called only by
+    /// [`ParseContext::with_parsing_state`](crate::constructs::ParseContext::with_parsing_state)
+    /// (and the event-lowering lend in
+    /// [`derive_state`](crate::constructs::ParseContext::derive_state)), whose
+    /// closure scoping guarantees the matching pop.
+    pub(crate) fn push_state(&mut self, state: Arc<ParsingState<L>>) {
+        self.state_stack.push(state);
+    }
+
+    /// Pop the innermost enclosing-state entry (`with_parsing_state`'s epilogue).
+    pub(crate) fn pop_state(&mut self) {
+        let popped = self.state_stack.pop();
+        debug_assert!(popped.is_some(), "with_parsing_state pops exactly what it pushed");
+    }
+
+    /// The live enclosing-state stack (innermost-first; see [`ParsingStateStack`]).
+    pub(crate) fn state_stack(&self) -> &ParsingStateStack<L> {
+        &self.state_stack
     }
 
     /// Push a live traceback frame — called only by
@@ -214,14 +247,15 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Session-mediated state derivation — the in-parse standard: within a parse frame, construct parsers derive states through this seam
-    /// (usually via the [`ParseContext::derived_state`] sugar, which supplies the
-    /// driver) so every transition event reaches
+    /// (usually via the [`ParseContext::derive_state`] choke point, which supplies
+    /// the driver **and lowers context-dependent events first** — this session
+    /// method performs no event lowering) so every transition event reaches
     /// [`ParseDriver::observe_transition`] (with the session's
     /// [`ext`](ParserSession::ext)). **Data-equivalent to
     /// [`ParsingState::derived`]** — the session layer may deduplicate and observe,
     /// never alter the resulting state.
     ///
-    /// [`ParseContext::derived_state`]: crate::constructs::ParseContext::derived_state
+    /// [`ParseContext::derive_state`]: crate::constructs::ParseContext::derive_state
     ///
     /// **Overrides-only deltas are memoized**: when the delta carries no ext replacement, no
     /// events, and no scope ops — i.e. only token-rules overrides and/or a mode
@@ -395,6 +429,7 @@ impl<L: Lang> fmt::Debug for ParserSession<L> {
             .field("state_memo", &self.state_memo.len())
             .field("group_interior_memo", &self.group_interior_memo.len())
             .field("frames", &self.frames.len())
+            .field("state_stack", &self.state_stack.len())
             .finish()
     }
 }
@@ -1328,5 +1363,244 @@ mod tests {
         let ok_b = session.group_interior_state(&FailingDescentDriver, &base, &good).unwrap();
         assert!(Arc::ptr_eq(&ok_a, &ok_b));
         assert_eq!(session.ext.transitions, 2);
+    }
+
+    // --- the enclosing-state stack + context-dependent event lowering (E4) -------------
+
+    /// A lang with both event classes: `NeedsContext` is context-dependent (the
+    /// driver lowers it; finalize refuses it loudly), `Plain` is context-free
+    /// (finalize counts it into the state ext).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CtxEvent {
+        NeedsContext,
+        Plain,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    struct CtxSeen {
+        plain_events: usize,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct CtxLang;
+    impl Lang for CtxLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = CtxSeen;
+        type Event = CtxEvent;
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type Driver = CtxDriver;
+
+        fn finalize_transition(
+            new: &mut StateData<CtxLang>,
+            _prev: &ParsingState<CtxLang>,
+            events: &[CtxEvent],
+        ) -> Result<(), crate::state::FinalizeError> {
+            for event in events {
+                match event {
+                    // The two-class contract's loud arm: a context-requiring event
+                    // reaching the bare choke point is refused, never dropped.
+                    CtxEvent::NeedsContext => {
+                        return Err(crate::state::FinalizeError::new(
+                            "the NeedsContext event requires the enclosing-state \
+                             stack — derive through a parse context",
+                        ));
+                    }
+                    CtxEvent::Plain => new.ext.plain_events += 1,
+                }
+            }
+            Ok(())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+
+    /// Lowers `NeedsContext` into a forbidden-chars patch encoding the lent
+    /// stack's depth (proving the hook saw the live stack); `lower: false`
+    /// simulates a mis-wired driver that fails to lower.
+    #[derive(Debug, Clone, Copy)]
+    struct CtxDriver {
+        lower: bool,
+    }
+    impl ParseDriver<CtxLang> for CtxDriver {
+        fn recovery(&self) -> Recovery {
+            Recovery::Tolerant
+        }
+        fn resolve_state_event(
+            &self,
+            event: &CtxEvent,
+            stack: &crate::state::ParsingStateStack<CtxLang>,
+        ) -> Option<ParsingStateDelta<CtxLang>> {
+            if !self.lower || *event != CtxEvent::NeedsContext {
+                return None;
+            }
+            // A context-derived patch: depth many 'd's (any stack-derived fact
+            // observable from the derived state works).
+            let depth_marker: String = core::iter::repeat('d').take(stack.len()).collect();
+            Some(ParsingStateDelta::new().rules(
+                crate::state::TokenRulesOverrides {
+                    forbidden_chars: Some(depth_marker.into()),
+                    ..Default::default()
+                },
+            ))
+        }
+    }
+
+    fn ctx_context<'a, 's>(
+        reader: &'a mut crate::token::TokenListReader<'s, CtxLang>,
+        source: &Arc<Source>,
+        state: Arc<ParsingState<CtxLang>>,
+        session: &'a mut ParserSession<CtxLang>,
+        driver: &'a CtxDriver,
+    ) -> ParseContext<'a, 's, CtxLang> {
+        ParseContext::new(reader, Arc::clone(source), state, session, driver)
+    }
+
+    #[test]
+    fn with_parsing_state_maintains_the_session_stack() {
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let outer: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let inner = Arc::new(outer.derived(&ParsingStateDelta::new()).unwrap());
+        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut session = ParserSession::new();
+        let driver = CtxDriver { lower: true };
+        let mut cx =
+            ctx_context(&mut reader, &source, Arc::clone(&outer), &mut session, &driver);
+
+        assert_eq!(cx.session.state_stack().len(), 0);
+        cx.with_parsing_state(Arc::clone(&outer), |cx| {
+            assert_eq!(cx.session.state_stack().len(), 1);
+            cx.with_parsing_state(Arc::clone(&inner), |cx| {
+                assert_eq!(cx.session.state_stack().len(), 2);
+                // Innermost-first, current state first.
+                let innermost = cx.session.state_stack().iter().next().unwrap();
+                assert!(Arc::ptr_eq(innermost, &inner));
+            });
+            assert_eq!(cx.session.state_stack().len(), 1);
+            // The scoped state was restored along with the stack.
+            assert!(Arc::ptr_eq(&cx.state, &outer));
+        });
+        assert_eq!(session.state_stack().len(), 0, "zero residue after the scope");
+    }
+
+    #[test]
+    fn derive_state_lowers_context_dependent_events_through_the_stack() {
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut session = ParserSession::new();
+        let driver = CtxDriver { lower: true };
+        let mut cx =
+            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+
+        let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
+        // Outside any scope: the lend pushes the current state (depth 1).
+        let derived = cx.derive_state(&delta).unwrap();
+        assert_eq!(&*derived.rules().forbidden_chars, "d");
+        // The event was removed before finalize (no refusal, no Plain count).
+        assert_eq!(derived.ext().plain_events, 0);
+
+        // Inside a scope whose innermost entry IS the current state: no
+        // duplicate push — the hook sees exactly the scoped depth.
+        let scoped = cx.with_parsing_state(Arc::clone(&base), |cx| {
+            cx.with_parsing_state(Arc::clone(&base), |cx| cx.derive_state(&delta))
+        });
+        assert_eq!(&*scoped.unwrap().rules().forbidden_chars, "dd");
+
+        // A current state that evolved past the innermost entry is lent on top.
+        let evolved = Arc::new(base.derived(&ParsingStateDelta::new()).unwrap());
+        let lent = cx.with_parsing_state(Arc::clone(&base), |cx| {
+            cx.state = Arc::clone(&evolved); // a sibling after-effect
+            cx.derive_state(&delta)
+        });
+        assert_eq!(&*lent.unwrap().rules().forbidden_chars, "dd");
+        assert_eq!(session.state_stack().len(), 0);
+    }
+
+    #[test]
+    fn derive_state_keeps_context_free_events_for_finalize_and_the_author_wins() {
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut session = ParserSession::new();
+        let driver = CtxDriver { lower: true };
+        let mut cx =
+            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+
+        // A context-free event passes through to finalize untouched…
+        let plain = cx.derive_state(&ParsingStateDelta::new().event(CtxEvent::Plain)).unwrap();
+        assert_eq!(plain.ext().plain_events, 1);
+
+        // …mixed deltas lower only the context-dependent one…
+        let mixed = cx
+            .derive_state(
+                &ParsingStateDelta::new()
+                    .event(CtxEvent::Plain)
+                    .event(CtxEvent::NeedsContext),
+            )
+            .unwrap();
+        assert_eq!(mixed.ext().plain_events, 1);
+        assert_eq!(&*mixed.rules().forbidden_chars, "d");
+
+        // …and the delta's own explicit override wins over the event's patch
+        // (the delta author spoke).
+        let authored = cx
+            .derive_state(
+                &ParsingStateDelta::new().event(CtxEvent::NeedsContext).rules(
+                    crate::state::TokenRulesOverrides {
+                        forbidden_chars: Some("A".into()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(&*authored.rules().forbidden_chars, "A");
+    }
+
+    #[test]
+    fn context_dependent_event_in_bare_derived_errors_loudly() {
+        // Out of any parse, the two-class contract's loud arm: finalize refuses,
+        // derived() folds the refusal into the DeriveError.
+        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let error = base
+            .derived(&ParsingStateDelta::new().event(CtxEvent::NeedsContext))
+            .unwrap_err();
+        assert!(error.failures.is_empty());
+        let finalize_error = error.finalize_error.as_ref().unwrap();
+        assert!(finalize_error.message().contains("NeedsContext"));
+        assert!(error.to_string().contains("transition refused"));
+    }
+
+    #[test]
+    fn unlowered_context_event_in_parse_aborts_as_implementation_error() {
+        // A driver that fails to lower a context-requiring event is extension
+        // wiring gone wrong: derive_state aborts under ANY recovery policy
+        // (CtxDriver reports Tolerant).
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut session = ParserSession::new();
+        let driver = CtxDriver { lower: false };
+        let mut cx =
+            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+
+        let error = cx
+            .derive_state(&ParsingStateDelta::new().event(CtxEvent::NeedsContext))
+            .unwrap_err();
+        use crate::error::DiagnosticInfo as _;
+        assert_eq!(
+            error.identifier(),
+            crate::constructs::ImplementationError::IDENTIFIER
+        );
+        assert!(error.to_string().contains("NeedsContext"));
+        assert!(session.diagnostics.is_empty(), "not a tolerant diagnostic");
     }
 }

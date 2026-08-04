@@ -22,8 +22,11 @@
 //!
 //! [`ParseContext::state`] is the parser's **input** state — the caller sets it. A parser
 //! that scopes a child state (group interior, argument extent, slot body) derives it
-//! locally and either builds a child `cx` or swaps `cx.state` and restores it afterwards
-//! (structural revert — `Arc` clone is cheap). The `Option<ParsingStateDelta>` in the
+//! locally and scopes it through
+//! [`with_parsing_state`](ParseContext::with_parsing_state) /
+//! [`parse_scoped`](ParseContext::parse_scoped) (structural revert — `Arc` clone is
+//! cheap — plus the session's enclosing-state stack bookkeeping). The
+//! `Option<ParsingStateDelta>` in the
 //! return value is exclusively the *after-effect for the caller* (`\newcommand`).
 //!
 //! # Errors
@@ -229,20 +232,33 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     where
         P: ConstructParser<L> + ?Sized,
     {
-        self.with_scoped_state(state, |cx| parser.parse(cx))
+        self.with_parsing_state(state, |cx| parser.parse(cx))
     }
 
-    /// The scoped-state primitive under [`parse_scoped`](ParseContext::parse_scoped),
-    /// for the descents that are not `ConstructParser`-shaped (the per-argument
-    /// delta around `ArgumentParser::parse_argument`).
-    pub(crate) fn with_scoped_state<R>(
+    /// Run `f` with [`state`](ParseContext::state) scoped to `state`, restoring the
+    /// outer state afterwards — the closure-shaped scoped-state primitive under
+    /// [`parse_scoped`](ParseContext::parse_scoped), for descents that are not
+    /// `ConstructParser`-shaped (the per-argument delta around
+    /// `ArgumentParser::parse_argument`; takeover parsers scoping hand-derived
+    /// states around arbitrary code).
+    ///
+    /// Besides the structural swap/restore, this maintains the session's
+    /// **enclosing-state stack** ([`ParsingStateStack`](crate::state::ParsingStateStack)):
+    /// `state` is pushed for the duration of `f` and popped after — the same
+    /// closure-scoped discipline as [`with_frame`](ParseContext::with_frame), at
+    /// the same descent points. Prefer this over hand-rolled `cx.state` swaps: a
+    /// manual swap leaves the stack (and therefore context-dependent event
+    /// lowering, [`derive_state`](ParseContext::derive_state)) blind to the scope.
+    pub fn with_parsing_state<R>(
         &mut self,
         state: Arc<ParsingState<L>>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        self.session.push_state(Arc::clone(&state));
         let outer = core::mem::replace(&mut self.state, state);
         let result = f(self);
         self.state = outer;
+        self.session.pop_state();
         result
     }
 
@@ -271,12 +287,31 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.driver.recover(self.session, &self.state, data, span)
     }
 
-    /// Session-mediated derivation from the **current** state
-    /// ([`state`](ParseContext::state)) — sugar over
-    /// [`ParserSession::derived_state`] supplying this context's driver, so every
-    /// transition reaches [`ParseDriver::observe_transition`]. The dominant descent
-    /// shape; derive from another base via the session method directly
-    /// (`cx.session.derived_state(cx.driver, &base, &delta)`).
+    /// The parser-facing state derivation, from the **current** state
+    /// ([`state`](ParseContext::state)) — the one choke point every construct
+    /// parser derives through: lowers **context-dependent events**, then runs the
+    /// session-mediated derivation ([`ParserSession::derived_state`] with this
+    /// context's driver), so every transition reaches
+    /// [`ParseDriver::observe_transition`]. Deriving from another base goes through
+    /// the session method directly
+    /// (`cx.session.derived_state(cx.driver, &base, &delta)`) — with no event
+    /// lowering: context-dependent events are positional, they mean something only
+    /// at *this* context's position.
+    ///
+    /// # Event lowering
+    ///
+    /// When the delta carries [`events`](crate::state::ParsingStateDelta::events),
+    /// each is offered to [`ParseDriver::resolve_state_event`] with the session's
+    /// live enclosing-state stack (current state first —
+    /// [`ParsingStateStack`](crate::state::ParsingStateStack)). Lowered events are
+    /// **removed** and their patches merged; unlowered (context-free) events stay
+    /// for [`Lang::finalize_transition`](crate::state::Lang::finalize_transition).
+    /// The event *loop* lives here — parsers never iterate events; per-event
+    /// *policy* lives on the driver. Merge order: patches apply in event order,
+    /// and the delta's own explicit overrides win over patch overrides (the delta
+    /// author spoke).
+    ///
+    /// # Failures
     ///
     /// **Failing scope ops** route through the recover funnel as
     /// [`ScopeOpFailed`] conditions at the current position: under
@@ -285,15 +320,95 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// recorded and the parse continues under the error's
     /// [`recovered`](crate::state::DeriveError::recovered) state (the failing ops
     /// skipped, everything else applied), with the transition observed as usual.
-    pub fn derived_state(
+    /// A **finalize refusal** ([`FinalizeError`](crate::state::FinalizeError) — a
+    /// context-requiring event the driver did not lower) is an extension wiring
+    /// bug, not a source condition: it aborts as an
+    /// [`ImplementationError`] under any recovery policy.
+    pub fn derive_state(
         &mut self,
         delta: &ParsingStateDelta<L>,
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
         let base = Arc::clone(&self.state);
+        let effective;
+        let delta = if delta.events.is_empty() {
+            delta
+        } else {
+            effective = self.lower_state_events(delta);
+            &effective
+        };
         match self.session.derived_state(self.driver, &base, delta) {
             Ok(new) => Ok(new),
             Err(failure) => self.recover_derive_failure(&base, failure),
         }
+    }
+
+    /// Derive via [`derive_state`](ParseContext::derive_state), then run `f` with
+    /// [`state`](ParseContext::state) scoped to the derived state
+    /// ([`with_parsing_state`](ParseContext::with_parsing_state)) — the
+    /// delta-shaped scoped descent in one call, for takeover parsers.
+    pub fn with_derived_state<R>(
+        &mut self,
+        delta: &ParsingStateDelta<L>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> ConstructParserResult<L, R> {
+        let state = self.derive_state(delta)?;
+        Ok(self.with_parsing_state(state, f))
+    }
+
+    /// The event loop of [`derive_state`](ParseContext::derive_state): offer each
+    /// event to the driver with the live enclosing-state stack lent **current
+    /// state first** (the context's current state is pushed for the lend when it
+    /// is not already the innermost entry — sibling after-effects evolve
+    /// `cx.state` between descents; an `Arc`-equal duplicate is harmless under
+    /// the stack's scan semantics), and build the effective delta: patches merged
+    /// in event order, the original delta's explicit overrides on top, lowered
+    /// events removed.
+    fn lower_state_events(&mut self, delta: &ParsingStateDelta<L>) -> ParsingStateDelta<L> {
+        let lent = match self.session.state_stack().innermost() {
+            Some(innermost) => !Arc::ptr_eq(innermost, &self.state),
+            None => true,
+        };
+        if lent {
+            self.session.push_state(Arc::clone(&self.state));
+        }
+        let mut patches: Vec<ParsingStateDelta<L>> = Vec::new();
+        let mut kept_events: Vec<L::Event> = Vec::new();
+        for event in &delta.events {
+            match self.driver.resolve_state_event(event, self.session.state_stack()) {
+                Some(patch) => patches.push(patch),
+                None => kept_events.push(event.clone()),
+            }
+        }
+        if lent {
+            self.session.pop_state();
+        }
+
+        // Merge: patches in event order (later wins), then the original delta's own
+        // explicit overrides on top of all patches (the delta author spoke).
+        let mut effective = ParsingStateDelta::new();
+        for patch in patches {
+            effective.rules.merge_from(patch.rules);
+            effective.scope_ops.extend(patch.scope_ops);
+            if patch.mode.is_some() {
+                effective.mode = patch.mode;
+            }
+            if patch.ext.is_some() {
+                effective.ext = patch.ext;
+            }
+            // Patch events are context-free by contract (resolve_state_event docs):
+            // they pass through to finalize_transition un-lowered.
+            effective.events.extend(patch.events);
+        }
+        effective.rules.merge_from(delta.rules.clone());
+        effective.scope_ops.extend(delta.scope_ops.iter().cloned());
+        if delta.mode.is_some() {
+            effective.mode = delta.mode;
+        }
+        if delta.ext.is_some() {
+            effective.ext = delta.ext.clone();
+        }
+        effective.events.extend(kept_events);
+        effective
     }
 
     /// The group-interior derivation from the **current** state — sugar over
@@ -301,7 +416,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// canonical expecting-close override merged with the driver's
     /// [`group_interior_delta`](ParseDriver::group_interior_delta), memoized per
     /// `(base, rule)`. Failing scope ops in the driver's descent delta recover exactly
-    /// like [`derived_state`](ParseContext::derived_state)'s (the recovered interior
+    /// like [`derive_state`](ParseContext::derive_state)'s (the recovered interior
     /// still expects the entered rule's close — the descent invariant is an override,
     /// not an op).
     pub fn group_interior_state(
@@ -316,8 +431,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// The shared recovery path of the two fallible derivation sugars: report every
-    /// failing op through the recover funnel (strict: the first one aborts), then
-    /// commit the ops-skipped transition — continue under the error's recovered state
+    /// failing op through the recover funnel (strict: the first one aborts); a
+    /// finalize refusal aborts as an [`ImplementationError`] under any policy (a
+    /// context-requiring event survived to the bare choke point — the driver
+    /// failed to lower it: extension wiring, not source input). Otherwise commit
+    /// the ops-skipped transition — continue under the error's recovered state
     /// and observe it with the delta the derivation actually applied (which the
     /// error carries: for group interiors that is the *merged* descent delta this
     /// context never built).
@@ -328,9 +446,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
         let pos = self.tokens.pos();
         let span = SourceSpan::new(&self.source, Span::new(pos, pos));
-        let crate::state::DeriveError { failures, recovered, delta } = failure;
+        let crate::state::DeriveError { failures, finalize_error, recovered, delta } = failure;
         for failed_op in &failures {
             self.recover(ScopeOpFailed::new(failed_op.to_string()), span.clone())?;
+        }
+        if let Some(finalize_error) = finalize_error {
+            return Err(self.implementation_error(finalize_error, Span::new(pos, pos)));
         }
         // Tolerant continuation: commit the recovered transition — the session seam
         // observed nothing on the Err path (no transition had been committed).

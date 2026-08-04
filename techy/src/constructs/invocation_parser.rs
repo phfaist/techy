@@ -110,7 +110,7 @@ pub fn parse_declared_arguments<L: Lang>(
     let mut arguments: Vec<ParsedArgument<L>> = Vec::with_capacity(argument_specs.len());
     for (index, argument_spec) in argument_specs.iter().enumerate() {
         let argument_state = match &argument_spec.parsing_state_delta {
-            Some(delta) => cx.derived_state(delta)?,
+            Some(delta) => cx.derive_state(delta)?,
             None => Arc::clone(&cx.state),
         };
         // The argument's traceback frame, anchored where the argument's region starts.
@@ -123,7 +123,7 @@ pub fn parse_declared_arguments<L: Lang>(
             span: SourceSpan::new(&cx.source, Span::empty(cx.tokens.pos())),
         };
         let result = cx.with_frame(frame, |cx| {
-            cx.with_scoped_state(argument_state, |cx| {
+            cx.with_parsing_state(argument_state, |cx| {
                 argument_spec.parser.parse_argument(cx, argument_spec)
             })
         });

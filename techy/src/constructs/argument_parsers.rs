@@ -697,7 +697,7 @@ fn probe_minted_group<'s, L: Lang>(
             ..TokenRulesOverrides::default()
         })
     };
-    let probe_state = cx.derived_state(&temporaries(rules.to_vec()))?;
+    let probe_state = cx.derive_state(&temporaries(rules.to_vec()))?;
     let matched = match cx.probe_token(&probe_state)? {
         Some(token) => {
             let rule = match &token.kind {
@@ -716,7 +716,7 @@ fn probe_minted_group<'s, L: Lang>(
     let contents_state = if rules.len() == 1 {
         probe_state
     } else {
-        cx.derived_state(&temporaries(alloc::vec![Arc::clone(&rule)]))?
+        cx.derive_state(&temporaries(alloc::vec![Arc::clone(&rule)]))?
     };
     Ok(Some(MintedGroupMatch { open, rule, contents_state }))
 }

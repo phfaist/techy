@@ -79,6 +79,35 @@ impl<L: Lang> TokenRulesOverrides<L> {
         }
     }
 
+    /// Merge `stronger` into `self`: every `Some` field of `stronger` replaces
+    /// `self`'s, every `None` field leaves `self`'s untouched — the override-layer
+    /// composition used by event lowering
+    /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)).
+    pub(crate) fn merge_from(&mut self, stronger: TokenRulesOverrides<L>) {
+        macro_rules! take_stronger {
+            ($($field:ident),* $(,)?) => {
+                $(if let Some(value) = stronger.$field {
+                    self.$field = Some(value);
+                })*
+            };
+        }
+        take_stronger!(
+            enable_whitespace,
+            whitespace,
+            enable_multi_newline_paragraphs,
+            enable_groups,
+            groups,
+            temporary_groups,
+            enable_commands,
+            commands,
+            enable_comments,
+            comments,
+            enable_specials,
+            forbidden_chars,
+            expecting_group_close,
+        );
+    }
+
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
     pub fn apply(&self, rules: &mut TokenRules<L>) {
         if let Some(v) = self.enable_whitespace {
@@ -151,7 +180,16 @@ pub struct ParsingStateDelta<L: Lang> {
     /// Whole-value replacement of the language-specific state extension; generic code
     /// leaves this `None` (presets prefer events + `finalize_transition`).
     pub ext: Option<L::StateExt>,
-    /// Semantic transition events, consumed by [`Lang::finalize_transition`].
+    /// Semantic transition events. **Two classes** (the contract on
+    /// [`Lang::Event`]): *context-free* events are consumed by
+    /// [`Lang::finalize_transition`] wherever the delta is applied;
+    /// *context-dependent* events (needing the enclosing-state stack — the
+    /// latexlike exit-math restore) are lowered to ordinary override patches by
+    /// the driver inside
+    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
+    /// and never reach `finalize_transition` — reaching it anyway (a bare
+    /// out-of-parse [`derived()`](super::ParsingState::derived)) is a loud
+    /// [`FinalizeError`](super::FinalizeError).
     pub events: Vec<L::Event>,
 }
 

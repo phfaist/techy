@@ -1,6 +1,7 @@
 //! [`ParsingState`] and its stored [`StateData`]; [`DeriveError`], the failure carrier
 //! of the fallible transition choke point.
 
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -153,16 +154,29 @@ impl<L: Lang> ParsingState<L> {
     ///
     /// # Fallibility
     ///
-    /// A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets an
-    /// absent provider name; a definition op routed to an immutable provider). A delta
-    /// without scope ops **cannot fail**. On failure, every failing op is skipped —
-    /// the rest of the delta still applies — and the result is returned as a
-    /// [`DeriveError`]: the mechanical failure records plus the fully derived
-    /// **recovered state** (finalized and frozen like any other), so a tolerant caller
-    /// can diagnose and continue while a strict caller aborts. Classification is the
-    /// caller's: the in-parse seam routes failures through the recover funnel
-    /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder deriving out
-    /// of parse treats an `Err` as its own input error.
+    /// Two failure sources, both folded into [`DeriveError`]:
+    ///
+    /// - A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets
+    ///   an absent provider name; a definition op routed to an immutable provider).
+    ///   Every failing op is skipped — the rest of the delta still applies.
+    /// - [`Lang::finalize_transition`] can refuse the transition
+    ///   ([`FinalizeError`]) — above all when a *context-dependent* event reaches
+    ///   this bare choke point (the two-class contract on [`Lang::Event`]): the
+    ///   enclosing-state context such an event needs exists only inside a driven
+    ///   parse, where
+    ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
+    ///   lowers the event before the delta ever gets here.
+    ///
+    /// A delta without scope ops and without events **cannot fail** under a `Lang`
+    /// whose customizer only refuses events. The error carries the mechanical
+    /// failure records plus the fully derived **recovered state** (frozen like any
+    /// other; on a finalize refusal, the data as the hook left it), so a tolerant
+    /// caller can diagnose and continue while a strict caller aborts.
+    /// Classification is the caller's: the in-parse seam routes scope-op failures
+    /// through the recover funnel
+    /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)) and treats a finalize
+    /// refusal as an implementation error (the driver failed to lower); an embedder
+    /// deriving out of parse treats an `Err` as its own input error.
     ///
     /// # Temporary group rules
     ///
@@ -197,7 +211,7 @@ impl<L: Lang> ParsingState<L> {
         if ends_temporary_scope && delta.rules.temporary_groups.is_none() {
             data.rules.temporary_groups.clear();
         }
-        L::finalize_transition(&mut data, self, &delta.events);
+        let finalize_error = L::finalize_transition(&mut data, self, &delta.events).err();
         // Checked *after* finalize_transition: the customizer may rewrite `groups` too.
         let table_inputs_unchanged = data.rules.enable_groups == self.data.rules.enable_groups
             && data.rules.groups.len() == self.data.rules.groups.len()
@@ -219,10 +233,10 @@ impl<L: Lang> ParsingState<L> {
         } else {
             ParsingState::freeze(data)
         };
-        if failures.is_empty() {
+        if failures.is_empty() && finalize_error.is_none() {
             Ok(state)
         } else {
-            Err(DeriveError { failures, recovered: state, delta: delta.clone() })
+            Err(DeriveError { failures, finalize_error, recovered: state, delta: delta.clone() })
         }
     }
 
@@ -322,8 +336,9 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
     }
 }
 
-/// A [`derived()`](ParsingState::derived) transition whose delta carried failing
-/// [`scope ops`](ParsingStateDelta::scope_ops).
+/// A [`derived()`](ParsingState::derived) transition that failed: the delta carried
+/// failing [`scope ops`](ParsingStateDelta::scope_ops), and/or
+/// [`Lang::finalize_transition`] refused the transition.
 ///
 /// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
 /// embedder input error is the *caller's* context. The error carries everything a
@@ -331,14 +346,21 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// material rides in the error):
 ///
 /// - [`failures`](DeriveError::failures): one record per failing op, in delta order;
+/// - [`finalize_error`](DeriveError::finalize_error): the customizer's refusal, when
+///   [`Lang::finalize_transition`] returned `Err` (typically a context-dependent
+///   event reaching the bare choke point — the two-class contract on
+///   [`Lang::Event`]);
 /// - [`recovered`](DeriveError::recovered): the fully derived state with exactly the
 ///   failing ops skipped — finalized and frozen like every state, ready to continue
-///   under;
+///   under (on a finalize refusal: the data as the hook left it, best-effort);
 /// - [`delta`](DeriveError::delta): the delta as applied, so a recovering seam can
 ///   still feed
 ///   [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition)
 ///   the true transition (needed because the group-interior seam derives with a
 ///   *merged* delta its caller never sees).
+///
+/// At least one of [`failures`](DeriveError::failures) (non-empty) and
+/// [`finalize_error`](DeriveError::finalize_error) (`Some`) is always present.
 ///
 /// Not `Clone`: states are identity-bearing (deliberately non-`Clone`), and the
 /// recovered state is a state.
@@ -348,8 +370,11 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// returning it `#[allow(clippy::result_large_err)]` rather than box: `Box`-free
 /// signatures were judged worth the bigger `Result` return slot.
 pub struct DeriveError<L: Lang> {
-    /// One record per failing op, in delta order (never empty).
+    /// One record per failing op, in delta order (may be empty only when
+    /// [`finalize_error`](DeriveError::finalize_error) is `Some`).
     pub failures: Vec<ScopeOpError>,
+    /// [`Lang::finalize_transition`]'s refusal, if the customizer returned `Err`.
+    pub finalize_error: Option<FinalizeError>,
     /// The derived state with the failing ops skipped (everything else applied).
     pub recovered: ParsingState<L>,
     /// The delta the derivation applied (cloned into the error).
@@ -358,12 +383,20 @@ pub struct DeriveError<L: Lang> {
 
 impl<L: Lang> fmt::Display for DeriveError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "scope op(s) failed while deriving a parsing state: ")?;
-        for (i, failure) in self.failures.iter().enumerate() {
-            if i > 0 {
+        write!(f, "failed to derive a parsing state: ")?;
+        let mut first = true;
+        for failure in &self.failures {
+            if !first {
                 write!(f, "; ")?;
             }
-            write!(f, "{failure}")?;
+            first = false;
+            write!(f, "scope op failed: {failure}")?;
+        }
+        if let Some(finalize_error) = &self.finalize_error {
+            if !first {
+                write!(f, "; ")?;
+            }
+            write!(f, "{finalize_error}")?;
         }
         Ok(())
     }
@@ -373,6 +406,7 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeriveError")
             .field("failures", &self.failures)
+            .field("finalize_error", &self.finalize_error)
             .field("recovered", &self.recovered)
             .field("delta", &self.delta)
             .finish()
@@ -380,6 +414,39 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
 }
 
 impl<L: Lang> core::error::Error for DeriveError<L> {}
+
+/// [`Lang::finalize_transition`]'s refusal of a transition — the customizer's loud
+/// "this delta cannot be applied here". The canonical producer: a
+/// **context-dependent** event reaching the bare choke point (out of any driven
+/// parse, or under a driver that failed to lower it) — see the two-class contract
+/// on [`Lang::Event`]. Folded into [`DeriveError::finalize_error`] by
+/// [`derived()`](ParsingState::derived).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalizeError {
+    message: String,
+}
+
+impl FinalizeError {
+    /// A refusal with the given human-facing description (say *which* event or
+    /// invariant, and what the caller should have done — e.g. "derive through a
+    /// parse context so the driver can lower the event").
+    pub fn new(message: impl Into<String>) -> FinalizeError {
+        FinalizeError { message: message.into() }
+    }
+
+    /// The refusal's description.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for FinalizeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "transition refused by finalize_transition: {}", self.message)
+    }
+}
+
+impl core::error::Error for FinalizeError {}
 
 #[cfg(test)]
 mod tests {
@@ -762,7 +829,7 @@ mod tests {
             new: &mut StateData<Self>,
             _prev: &ParsingState<Self>,
             events: &[MathEvent],
-        ) {
+        ) -> Result<(), FinalizeError> {
             for event in events {
                 match event {
                     MathEvent::EnterMath => new.ext.in_math = true,
@@ -774,6 +841,7 @@ mod tests {
             for rule in &mut new.rules.commands {
                 Arc::make_mut(rule).escape_char = if new.ext.in_math { '#' } else { '\\' };
             }
+            Ok(())
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -878,13 +946,14 @@ mod tests {
             new: &mut StateData<Self>,
             prev: &ParsingState<Self>,
             _events: &[()],
-        ) {
+        ) -> Result<(), FinalizeError> {
             // Level normalization: comments are a text-mode feature in this toy
             // language — a pure function of the incoming mode.
             new.rules.enable_comments = new.mode == Mode::Text;
             // Edge visibility: the hook compares prev.mode() with the applied override.
             new.ext =
                 SeenEdge { entered_math: prev.mode() == Mode::Text && new.mode == Mode::Math };
+            Ok(())
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,

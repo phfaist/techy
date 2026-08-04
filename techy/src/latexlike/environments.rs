@@ -539,7 +539,7 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         // terminator in the default shape.
         let body_delta = behavior.and_then(|b| b.body_state_delta(env_invocation));
         let body_state = match &body_delta {
-            Some(delta) => cx.derived_state(delta)?,
+            Some(delta) => cx.derive_state(delta)?,
             None => Arc::clone(&cx.state),
         };
         let mut body_parser = match behavior {

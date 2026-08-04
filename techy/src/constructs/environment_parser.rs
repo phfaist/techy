@@ -185,7 +185,7 @@ pub fn read_rigid_name_group<L: Lang>(
     // close delimiter is guaranteed recognizable regardless of the base's delimiter
     // table.
     let interior_state = cx.group_interior_state(&rule)?;
-    let result = cx.with_scoped_state(interior_state, |cx| read_name_chars(cx, &rule));
+    let result = cx.with_parsing_state(interior_state, |cx| read_name_chars(cx, &rule));
     match result? {
         Some(name_group) => Ok(Some(name_group)),
         None => {
@@ -756,7 +756,7 @@ mod tests {
                 .downcast_ref::<EnvSpec>()
                 .and_then(|env_spec| env_spec.body_delta.clone());
             let slot_state = match &body_delta {
-                Some(delta) => cx.derived_state(delta)?,
+                Some(delta) => cx.derive_state(delta)?,
                 None => Arc::clone(&cx.state),
             };
             let mut body_parser =
@@ -871,8 +871,8 @@ mod tests {
                 expecting_group_close: Some(Some(raw_rule)),
                 ..TokenRulesOverrides::default()
             });
-            let verbatim_state = cx.derived_state(&delta)?;
-            let terminator = cx.with_scoped_state(verbatim_state, |cx| {
+            let verbatim_state = cx.derive_state(&delta)?;
+            let terminator = cx.with_parsing_state(verbatim_state, |cx| {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
                     match &token.kind {

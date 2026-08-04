@@ -659,7 +659,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             // The after-effect applies to the loop's own state, not the policy base
             // (decided semantics 4, [§dd-dr:parsers-engine] — [§dd-dr:parsing-state]'s outward propagation blesses applying
             // a delta to a base the producer never saw).
-            cx.state = cx.derived_state(&delta)?;
+            cx.state = cx.derive_state(&delta)?;
         }
         Ok(self.test_node_stop(cx, id))
     }
@@ -3334,8 +3334,9 @@ mod tests {
                 _new: &mut StateData<Self>,
                 _prev: &ParsingState<Self>,
                 _events: &[()],
-            ) {
+            ) -> Result<(), crate::state::FinalizeError> {
                 FINALIZE_RUNS.fetch_add(1, Ordering::Relaxed);
+                Ok(())
             }
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,

@@ -16,9 +16,10 @@ each.
       0 warnings; note: a few rustdoc links reference M3/M4 items
       (`resolve_state_event`, `derive_state`, `exit_math_context_delta`) and
       resolve once those milestones land (docs gate runs at M5)
-- [ ] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible
-      `finalize_transition`, `resolve_state_event` hook, `cx.derive_state` /
-      `with_derived_state` / `with_parsing_state`
+- [x] M3 — E4 core machinery: session state stack, `ParsingStateStack`, fallible
+      `finalize_transition` (+ `FinalizeError` folded into `DeriveError`),
+      `resolve_state_event` hook, `cx.derive_state` / `with_derived_state` /
+      `with_parsing_state` — build/tests green (588 lib tests), 0 warnings
 - [ ] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity tests
 - [ ] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
       superseded-names, ARCHITECTURE passages, full gate run, stage summary

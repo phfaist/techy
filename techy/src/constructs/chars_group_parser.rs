@@ -159,7 +159,7 @@ where
         // The outer (unrestricted) state, kept for the default descent policy; the
         // restriction applies to the group's interior only.
         let outer = Arc::clone(&cx.state);
-        let contents_state = cx.derived_state(&self.contents_delta(&outer))?;
+        let contents_state = cx.derive_state(&self.contents_delta(&outer))?;
 
         stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
         cx.tokens.move_past(&open, true);

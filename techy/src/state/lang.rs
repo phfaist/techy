@@ -15,7 +15,7 @@ use crate::node::{NodeExt, NodeKind, StagedChildren};
 use crate::source::{SourceOrigin, SourceSpan};
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
-use super::parsing_state::{ParsingState, StateData};
+use super::parsing_state::{FinalizeError, ParsingState, StateData};
 
 /// The bundle of node extension types of a language — per-instance language data
 /// attached alongside the structural node/record data, orthogonal to structural
@@ -140,8 +140,26 @@ pub trait Lang: Sized + 'static {
     /// sanctioned for *node* exts does not carry over here.)
     type StateExt: Clone + fmt::Debug + Default + Send + Sync;
 
-    /// Semantic transition events (e.g. an `EnterMath`), consumed by
-    /// [`finalize_transition`](Lang::finalize_transition). `()` if unused.
+    /// Semantic transition events (e.g. an `EnterMath`), carried on
+    /// [`ParsingStateDelta::events`](super::ParsingStateDelta::events). `()` if
+    /// unused.
+    ///
+    /// **Events come in two classes**, and the split decides who consumes them:
+    ///
+    /// - **Context-free** events — interpretable from `(new, prev, events)` alone —
+    ///   are consumed by [`finalize_transition`](Lang::finalize_transition), in and
+    ///   out of parses alike.
+    /// - **Context-dependent** events — whose effect depends on the *enclosing*
+    ///   states at the point of use (the latexlike exit-math-context restore) — are
+    ///   lowered to ordinary override patches by the driver
+    ///   ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event),
+    ///   which receives the session's enclosing-state stack) inside
+    ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state),
+    ///   and never reach `finalize_transition`. A context-dependent event that
+    ///   *does* reach it — a bare out-of-parse
+    ///   [`derived()`](ParsingState::derived) call — must **error loudly**
+    ///   (`finalize_transition` returns `Err`), never be silently dropped: the
+    ///   context it needs does not exist there.
     type Event: Clone + fmt::Debug + Send + Sync;
 
     /// Parse-global **mutable** extension, `Default`-initialized and stored on
@@ -232,12 +250,30 @@ pub trait Lang: Sized + 'static {
     /// occurrence) belongs in
     /// [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition), which
     /// fires on every transition, memo hits included.
+    ///
+    /// # Fallibility
+    ///
+    /// Returns `Err` ([`FinalizeError`]) to **refuse** the transition — above all
+    /// for a *context-dependent* event reaching this hook (see the two-class
+    /// contract on [`Event`](Lang::Event)): such an event is meaningless without
+    /// the enclosing-state context that only in-parse driver lowering has, and a
+    /// customizer that recognizes one here must fail loudly rather than silently
+    /// ignore it. The failure folds into the
+    /// [`DeriveError`](super::DeriveError) that
+    /// [`derived()`](ParsingState::derived) returns
+    /// ([`finalize_error`](super::DeriveError::finalize_error)); inside a driven
+    /// parse it aborts as an implementation error (the driver failed to lower —
+    /// extension wiring, not source input). The default does nothing and returns
+    /// `Ok(())`. The seed never runs this hook, so seed construction stays
+    /// infallible ([`initial_state_data`](Lang::initial_state_data)'s coherence
+    /// contract).
     fn finalize_transition(
         new: &mut StateData<Self>,
         prev: &ParsingState<Self>,
         events: &[Self::Event],
-    ) {
+    ) -> Result<(), FinalizeError> {
         let _ = (new, prev, events);
+        Ok(())
     }
 
     /// Specials scan: is a callable-triggering character sequence at `content[pos..]`?

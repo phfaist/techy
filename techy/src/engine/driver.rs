@@ -62,7 +62,7 @@ use crate::source::{
     IntoSourceResolver, Source, SourceOrigin, SourceResolver, SourceSpan, Span,
 };
 use crate::spec::CallableSpec;
-use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
 use crate::token::{GroupRule, Token, TokenKind, TokenReader};
 
 use super::ParserSession;
@@ -247,6 +247,34 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         delta: &ParsingStateDelta<L>,
     ) {
         let _ = (ext, prev, new, delta);
+    }
+
+    /// Lower one **context-dependent** transition event to an ordinary state-delta
+    /// patch, given the session's live enclosing-state stack — the driver half of
+    /// the two-class event contract ([`Lang::Event`]), consulted by
+    /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
+    /// once per event before the delta reaches the derivation choke point.
+    ///
+    /// - Return `Some(patch)` to **lower** the event: the patch is merged into the
+    ///   delta and the event is removed — it never reaches
+    ///   [`Lang::finalize_transition`]. This is where context-dependent semantics
+    ///   live (the latexlike exit-math restore scans `stack` for the innermost
+    ///   non-math state and patches its whole token rules + mode back in —
+    ///   [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta)).
+    /// - Return `None` — the default — for a **context-free** event: it stays on
+    ///   the delta for [`Lang::finalize_transition`] to consume as usual.
+    ///
+    /// `stack` iterates innermost-first, current state first
+    /// ([`ParsingStateStack`]). A returned patch should carry only overrides
+    /// (rules/mode/ext/scope ops); events inside a patch are **not** lowered again
+    /// — they pass through to `finalize_transition` like any context-free event.
+    fn resolve_state_event(
+        &self,
+        event: &L::Event,
+        stack: &ParsingStateStack<L>,
+    ) -> Option<ParsingStateDelta<L>> {
+        let _ = (event, stack);
+        None
     }
 
     // --- source resolution ---------------------------------------------------------
