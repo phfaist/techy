@@ -397,8 +397,9 @@ unchanged, resolver private.
 ### Gate results (final run)
 
 - `cargo build`: 0 warnings; `cargo build --tests`: 0 warnings.
-- `cargo test`: 596 lib + 30 acceptance + 8 derive-conditions + 1 derive +
-  27 doctests — all green (S3 baseline was 576 lib tests; +20).
+- `cargo test`: 597 lib + 30 acceptance + 8 derive-conditions + 1 derive +
+  27 doctests — all green (S3 baseline was 576 lib tests; +21; the 597th is the
+  review should-fix below).
 - `rm -rf target/doc && cargo docs`: clean (no warnings, no broken links).
 - README quick-start: compiled + ran against the built `libtechy.rlib`
   (`README-RLIB-OK`).
@@ -413,7 +414,12 @@ unchanged, resolver private.
 3. `a5eb56d` M2: role traits + LatexlikeLang umbrella
 4. `7140631` M3: E4 enclosing-state stack + event lowering
 5. `7bc8161` M4: pillars + LatexlikeDriver<LLL> + parity tests
-6. `d9496d0` M5: docs + closure (+ this hash-fix commit)
+6. `d9496d0` M5: docs + closure (+ `97bedfa` hash fix)
+7. Review should-fix: discriminating close-expectation parity test
+   (`text_argument_close_expectation_survives_a_foreign_restored_expectation`,
+   latexlike/mod.rs — the restored context expects `»` while the `\text`
+   argument closes on its own `}`; the sibling test's spellings coincide and
+   could not catch a descent-invariant regression).
 
 ### Churn
 

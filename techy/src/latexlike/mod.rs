@@ -894,6 +894,89 @@ mod tests {
     }
 
     #[test]
+    fn text_argument_close_expectation_survives_a_foreign_restored_expectation() {
+        // Discriminating shape (S4 review should-fix): in the sibling test the
+        // restored context's `expecting_group_close` and the `\text` argument's
+        // own close share one spelling (`}`), so a regression where the
+        // argument-group descent failed to re-install its own close-expectation
+        // over the restored one would be invisible. Here the outer `\wrap`
+        // argument is a `«»`-delimited group, so the restored (first non-math)
+        // context *expects `»`* — different from the `\text` argument's `{`/`}`.
+        let custom_group = Arc::new(GroupRule {
+            group_type: GroupType::Content,
+            open: "«".into(),
+            close: "»".into(),
+        });
+        let wrap_argument = Arc::new(ArgumentSpec::new_unnamed(GroupArgumentParser::new(
+            GroupType::Content,
+        )));
+        let mut package = Package::new("mydefs");
+        package.insert(
+            CallableType::Macro,
+            "wrap",
+            Arc::new(super::MacroSpec::new(vec![wrap_argument])),
+        );
+        package.insert(
+            CallableType::Macro,
+            "text",
+            Arc::new(super::MacroSpec::new(vec![text_argument()])),
+        );
+
+        let mut groups = default_token_rules::<Latexlike>().groups;
+        groups.push(Arc::clone(&custom_group));
+        let seed = ParsingState::lang_initial_with_packages([package])
+            .derived(&ParsingStateDelta::new().rules(crate::state::TokenRulesOverrides {
+                groups: Some(groups),
+                ..crate::state::TokenRulesOverrides::default()
+            }))
+            .unwrap();
+        let language =
+            Language::new(LatexlikeDriver::new(crate::error::Recovery::Strict), seed);
+
+        let result = language.parse(r"\wrap«$$a\text{y}b$$»").unwrap();
+        check_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        // The trailing `»` closed the wrap argument: the region node is the
+        // `«»`-delimited group, with the display math inside it.
+        let wrap = result.tree.root().child(0).unwrap();
+        assert_eq!(wrap.macro_name(), Some("wrap"));
+        let wrap_group = wrap.argument_nodes(0).unwrap().get(0).unwrap();
+        assert_eq!(wrap_group.group_delimiters(), Some(("«", "»")));
+        let math = wrap.argument_content_nodes(0).unwrap().get(0).unwrap();
+        assert!(math.is_math_group());
+        assert_eq!(math.math_form(), Some(MathGroupForm::Display));
+
+        let text = math.child(1).unwrap();
+        assert_eq!(text.macro_name(), Some("text"));
+        // The restored context really is the `«»` interior: the `\text`
+        // argument's state (recorded on its group node) expects `»`…
+        let argument_group = text.argument_nodes(0).unwrap().get(0).unwrap();
+        let restored_state = argument_group.parsing_state();
+        assert_eq!(restored_state.mode(), Mode::Text);
+        assert_eq!(
+            restored_state
+                .rules()
+                .expecting_group_close
+                .as_ref()
+                .map(|rule| &*rule.close),
+            Some("»")
+        );
+        // …yet the argument group still closes on its OWN `}` (the descent
+        // invariant re-installed the entered rule's close over the restored
+        // expectation), with the content in the restored text context.
+        assert_eq!(argument_group.group_delimiters(), Some(("{", "}")));
+        let content = text.argument_content_nodes(0).unwrap().get(0).unwrap();
+        assert_eq!(content.chars(), Some("y"));
+        assert_eq!(content.parsing_state().mode(), Mode::Text);
+
+        // After the argument the display math resumes in math mode.
+        let after = math.child(2).unwrap();
+        assert_eq!(after.chars(), Some("b"));
+        assert_eq!(after.parsing_state().mode(), Mode::Math);
+    }
+
+    #[test]
     fn exit_math_event_in_bare_derived_is_refused_loudly() {
         // The two-class contract's loud arm on the preset: out of any parse the
         // context does not exist, so finalize_transition refuses the event.
