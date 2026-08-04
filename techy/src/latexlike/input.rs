@@ -383,7 +383,7 @@ fn argument_text_span<LLL: LatexlikeLang>(
 mod tests {
     use super::super::test_support::root_shapes;
     use super::super::{
-        check_latexlike_tree_invariants, BodyMarker, CallableType, Latexlike,
+        check_latexlike_tree_invariants, BodyMarker, CallableType, GroupType, Latexlike,
         LatexlikeDriver, MacroSpec,
     };
     use super::*;
@@ -399,7 +399,7 @@ mod tests {
         check_include_chain, MapResolver, ResolveError, ResolvedContent,
         SourceProvenance, SourceResolver,
     };
-    use crate::state::ParsingState;
+    use crate::state::{ParsingState, TokenRulesOverrides};
 
     /// The **shipped registration recipe**: `\input` state-transparent, the attached
     /// slot carrying the preset's not-body marker (Ruling A: the preset never
@@ -724,5 +724,239 @@ mod tests {
             attached.push_str(child.span_content());
         }
         assert_eq!(attached, "in{ner}");
+    }
+
+    #[test]
+    fn a_body_marked_ext_makes_the_attached_slot_findable_as_the_body() {
+        // The framework-choice path: an embedder passing a body-marked ext gets
+        // an `Attached` slot that `NodeRef::body()` finds — the T5 findability
+        // clause ([§dd-dr:slot-roles]: `body()` selects on the ext axis alone,
+        // no hidden role conjunction, so an Attached-body choice is never
+        // silently unlocatable). The pairing is a framework option, never the
+        // shipped default.
+        let language = language_with_packages(
+            Recovery::Strict,
+            &[("chapter.tex", "content")],
+            [input_package_with(false, BodyMarker::make_body())],
+        );
+        let result = language.parse(r"\input{chapter.tex}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty());
+        let input = result.tree.root().child(0).unwrap();
+        let slot = input.slots().unwrap().get(0).unwrap();
+        assert_eq!(slot.role, SlotRole::Attached);
+        assert!(slot.ext.is_body());
+        assert_eq!(input.body().unwrap().source_text(), Some("content"));
+    }
+
+    // --- persist_state (Ruling B) ----------------------------------------------------
+
+    /// A `\def`-style test callable: stages the standard invocation node, then
+    /// returns `delta` as its after-effect for subsequent siblings — no shipped
+    /// construct produces an after-effect delta, so the persist tests mint one.
+    #[derive(Debug)]
+    struct AfterEffectSpec {
+        delta: ParsingStateDelta<Latexlike>,
+    }
+
+    impl CallableSpec<Latexlike> for AfterEffectSpec {
+        fn make_invocation_parser<'a, 's>(
+            &'a self,
+            invocation: Invocation<'a, 's, Latexlike>,
+        ) -> alloc::boxed::Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
+        where
+            's: 'a,
+        {
+            alloc::boxed::Box::new(AfterEffectParser {
+                inner: StdInvocationParser::new(invocation),
+                delta: self.delta.clone(),
+            })
+        }
+    }
+
+    struct AfterEffectParser<'a, 's> {
+        inner: StdInvocationParser<'a, 's, Latexlike>,
+        delta: ParsingStateDelta<Latexlike>,
+    }
+
+    impl ConstructParser<Latexlike> for AfterEffectParser<'_, '_> {
+        type Output = BuildId;
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, Latexlike>,
+        ) -> ConstructParserResult<Latexlike, (BuildId, Option<ParsingStateDelta<Latexlike>>)>
+        {
+            let (id, _) = self.inner.parse(cx)?;
+            Ok((id, Some(self.delta.clone())))
+        }
+    }
+
+    /// A package defining `\{name}` as an [`AfterEffectSpec`] carrying `delta`.
+    fn defining_package(name: &str, delta: ParsingStateDelta<Latexlike>) -> Package<Latexlike> {
+        let mut package = Package::new(name);
+        package.insert(CallableType::Macro, name, AfterEffectSpec { delta });
+        package
+    }
+
+    /// An after-effect delta pushing a provider that defines the zero-argument
+    /// macro `\{defined}`.
+    fn definition_delta(defined: &str, package_name: &str) -> ParsingStateDelta<Latexlike> {
+        let mut lib: Package<Latexlike> = Package::new(package_name);
+        lib.insert(CallableType::Macro, defined, MacroSpec::new(vec![]));
+        ParsingStateDelta::new().push_provider(Arc::new(lib))
+    }
+
+    #[test]
+    fn persist_state_true_carries_included_definitions_past_the_input() {
+        // Persist test (a), the paradigm case: the included file's `\def`
+        // registers `\x` via an after-effect delta; under `persist_state: true`
+        // the definition is USED after the `\input` in the includer.
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("defs.tex", r"\def\x")],
+            [
+                input_package_with(true, BodyMarker::not_body()),
+                defining_package("def", definition_delta("x", "xdefs")),
+            ],
+        );
+        let result = language.parse(r"\input{defs.tex}\x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "diagnostics: {:?}", result.diagnostics);
+        // The included run resolved its own `\x` (state evolves within the run
+        // regardless of persist_state) AND the includer's `\x` after the
+        // `\input` resolved through the persisted definition.
+        assert_eq!(root_shapes(&result), ["Macro(input)", "Macro(x)"]);
+        let input = result.tree.root().child(0).unwrap();
+        let attached = input.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(attached.len(), 2); // \def, \x — both resolved inside too
+    }
+
+    #[test]
+    fn persist_state_false_leaves_the_includers_state_untouched() {
+        // Persist test (b): the SAME input under `persist_state: false` — the
+        // included run still resolves its own `\x` (transparent means the
+        // after-effects end with the file, not that they never applied), but
+        // the includer's `\x` after the `\input` is unresolvable.
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("defs.tex", r"\def\x")],
+            [
+                input_package_with(false, BodyMarker::not_body()),
+                defining_package("def", definition_delta("x", "xdefs")),
+            ],
+        );
+        let result = language.parse(r"\input{defs.tex}\x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        // Exactly one diagnostic: the includer-side `\x`.
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.identifier(), UnresolvableCommand::IDENTIFIER);
+        assert_eq!(diagnostic.span().range(), 16..18);
+        assert!(Arc::ptr_eq(
+            diagnostic.span().source(),
+            result.tree.root().span().source()
+        ));
+        // Inside the included file the definition applied as usual.
+        let input = result.tree.root().child(0).unwrap();
+        let attached = input.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(attached.get(1).unwrap().name(), Some("x"));
+    }
+
+    #[test]
+    fn nested_inclusion_composes_persisted_effects_to_the_primary() {
+        // Persist test (c): inner.tex defines `\x`; outer.tex uses it after its
+        // own `\input` (inner persisted effects visible to the outer file's
+        // remainder) and the primary uses it after the outer `\input` (the
+        // inner-origin delta rides the outer run's merged record outward).
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("outer.tex", r"\input{inner.tex}\x"), ("inner.tex", r"\def")],
+            [
+                input_package_with(true, BodyMarker::not_body()),
+                defining_package("def", definition_delta("x", "xdefs")),
+            ],
+        );
+        let result = language.parse(r"\input{outer.tex}\x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "diagnostics: {:?}", result.diagnostics);
+        assert_eq!(root_shapes(&result), ["Macro(input)", "Macro(x)"]);
+        // Outer file's remainder saw the inner definition.
+        let outer = result.tree.root().child(0).unwrap();
+        let outer_attached = outer.slot_content_nodes_named("attached").unwrap();
+        assert_eq!(outer_attached.get(1).unwrap().name(), Some("x"));
+    }
+
+    #[test]
+    fn merged_after_effects_apply_in_order() {
+        // Persist test (d): two delta-producing constructs in the included file.
+        //
+        // (d1) Field override, last-writer-wins: `\con` re-enables comments,
+        // `\coff` disables them — the later override governs the includer after
+        // the `\input`, so `%x` stages as plain chars (an empty or first-wins
+        // record would leave comments enabled and stage a comment node).
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("toggles.tex", r"\con\coff")],
+            [
+                input_package_with(true, BodyMarker::not_body()),
+                defining_package(
+                    "con",
+                    ParsingStateDelta::new().rules(TokenRulesOverrides {
+                        enable_comments: Some(true),
+                        ..TokenRulesOverrides::default()
+                    }),
+                ),
+                defining_package(
+                    "coff",
+                    ParsingStateDelta::new().rules(TokenRulesOverrides {
+                        enable_comments: Some(false),
+                        ..TokenRulesOverrides::default()
+                    }),
+                ),
+            ],
+        );
+        let result = language.parse("\\input{toggles.tex}%x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "diagnostics: {:?}", result.diagnostics);
+        assert_eq!(root_shapes(&result), ["Macro(input)", "chars(%x)"]);
+
+        // (d2) Scope pushes concatenate in application order: both constructs
+        // define `\x`, the later push is innermost and wins resolution — its
+        // zero-argument shape leaves `{q}` a sibling group (the earlier,
+        // one-argument shape would consume it).
+        let takes_arg = {
+            let mut lib: Package<Latexlike> = Package::new("xa");
+            lib.insert(
+                CallableType::Macro,
+                "x",
+                MacroSpec::new(vec![Arc::new(ArgumentSpec::new(
+                    Arc::new(GroupArgumentParser::new(GroupType::Content)),
+                    "arg",
+                ))]),
+            );
+            Arc::new(lib)
+        };
+        let no_arg = {
+            let mut lib: Package<Latexlike> = Package::new("xb");
+            lib.insert(CallableType::Macro, "x", MacroSpec::new(vec![]));
+            Arc::new(lib)
+        };
+        let language = language_with_packages(
+            Recovery::Tolerant,
+            &[("defs.tex", r"\defa\defb")],
+            [
+                input_package_with(true, BodyMarker::not_body()),
+                defining_package("defa", ParsingStateDelta::new().push_provider(takes_arg)),
+                defining_package("defb", ParsingStateDelta::new().push_provider(no_arg)),
+            ],
+        );
+        let result = language.parse(r"\input{defs.tex}\x{q}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "diagnostics: {:?}", result.diagnostics);
+        let shapes = root_shapes(&result);
+        assert_eq!(shapes[1], "Macro(x)");
+        assert!(shapes[2].starts_with("group("), "expected a sibling group, got {:?}", shapes);
+        let x = result.tree.root().child(1).unwrap();
+        assert!(x.arguments().unwrap().is_empty());
     }
 }
