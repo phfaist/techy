@@ -566,3 +566,14 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   the brief; scope = §S8 + the S5 malformed-terminator flag for the tolerant
   oracle matrix + the S7 RestageError/RestageContext mirror anchor + the
   S5-report shipped invocation-syntax shape as the substrate record).
+- 2026-08-05: S8 implemented in one run (7 commits through b449df1, branched
+  off bc25770 — the log-commit tip, noted in the report; 726 lib tests, was
+  689; 21-test oracle suite green first run — strict 10 / tolerant 8 /
+  multi-source 3; 33 doctests, was 30; gates green; purely additive).
+  10 deviations queued (D-plan-1..10); no escalations claimed. S5
+  malformed-terminator flag resolved record-determined (D-plan-10: `\end`
+  alone recorded nowhere ⇒ excluded from byte-equality, pinned by elision
+  test). Whole-stage independent review launched (full diff bc25770..HEAD;
+  special scrutiny ordered on the mirror-rule cluster D-plan-5/6/7 —
+  literal-vs-pattern reading of "RecomposeError mirrors RestageError
+  exactly" flagged as a potential escalation).
