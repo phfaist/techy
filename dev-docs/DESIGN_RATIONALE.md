@@ -2771,12 +2771,16 @@ surface mirrors this entry deliberately — `RecomposeError` variants mirror
 the restage family; no `Send`/`Sync` bounds, same argument. One recorded contrast:
 a restage takeover stages its subtree explicitly, while a wrap-intended recomposer
 returns instructions that lower against the *outermost* recomposer and never
-descends explicitly — the wrapping contract; [§dd-dr:recompose-machinery].)*
+descends explicitly — the wrapping contract; [§dd-dr:recompose-machinery].
+Applied — Phase 3 S8; the as-applied mirror-what-applies roster, incl. the
+variants omitted as analogue-free and the two the ruled recompose ops force, is
+recorded in [§dd-dr:recompose-machinery]'s application note.)*
 
 #### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
 
-Status: DECIDED (user, API-review P4 session — direction and scope; detailed design
-DEFERRED to its own planning session).
+Status: DECIDED (user, API-review P4 session — direction and scope; the dedicated
+session ruled the details — see the last amendment below; applied — Phase 3 S8,
+through [§dd-dr:recompose-machinery] and [§dd-dr:visit-engine]).
 
 Recomposition (tree → output text) is a generic fold in a top-level
 `techy::recompose` module: the consumer supplies per-node logic; a typed
@@ -2855,8 +2859,10 @@ S5: the core channel (`Lang::InvocationSyntax` bounded by the core
 the latexlike payload enum `InvocationSyntaxData` with the `EnvironmentSyntax`
 record contract and the fifth role trait `LatexlikeInvocationSyntax`, the
 paragraph-break name-as-written fix with the canonical `ParagraphBreakSpec`, and
-the parse-law payload pins; the reemit oracle suite itself rides the recompose
-stage, S8. **REVISED — S5 design-revision session, see the dated amendment note
+the parse-law payload pins; the reemit oracle suite landed with the recompose
+stage, S8 — `techy/tests/recompose_oracle.rs`, public-API-only, strict +
+tolerant + multi-source matrices ([§dd-dr:recompose-machinery] application
+note). **REVISED — S5 design-revision session, see the dated amendment note
 at the end of this entry**: name swap, `from_parsed` supersedes the accumulator
 shape, `&Source` threading, preset-side pins.)
 
@@ -3015,7 +3021,26 @@ sibling asserts are queued as an S10 rider).)*
 #### Recompose machinery: the meaning-free `Piece` fold with instruction lowering [§dd-dr:recompose-machinery]
 
 Status: DECIDED (user, API-review recompose session; completes [§dd-dr:recompose]'s
-deferred detailing; application pending).
+deferred detailing; applied — Phase 3 S8. Application specifics, queued in the S8
+report for sign-off: the entry gained a mandatory root-state argument —
+`recompose(tree, state, recomposer)`, the ruled "argument-threaded S" made
+explicit, recomposer last per the restage visitor-last convention; the
+`RecomposeError` roster as applied mirrors what applies — `Recomposer(E)` named
+for the failing trait (the `RestageVisitor` → `Visitor` pattern), the op-misuse
+group verbatim, two variants the ruled ops force with no restage source
+(`UnknownSlotName`, `NoBodySlot`), and `Build`/`ContentParentDropped`/
+`ArgumentAbsent`/`RootNotSingular` omitted as analogue-free (the fold stages
+nothing, re-anchors nothing, has no `_with_content` helpers — an absent argument
+composes the empty piece — and always yields one piece); the ruled
+`_slot_content_named` op ships beside its positional `recompose_slot_content`
+sibling per the `_named` convention; `SourceRecomposer`'s specials arm emits
+name-as-head over the children rather than a bare name — specials specs can
+declare arguments whose regions must follow. The R15 oracle suite landed as
+`techy/tests/recompose_oracle.rs`, public-API-only: strict + tolerant matrices +
+multi-source over the S6 `\input` surface; the one recorded-less-than-consumed
+recovery — the malformed environment terminator, whose `\end` is consumed alone
+and recorded nowhere (the S5 flag) — is excluded from the equality matrix and
+pinned by a dedicated elision test, per this entry's own accuracy coupling.)
 
 The recompose machinery is **meaning-free** (user decoupling directive): it
 composes generic *pieces* over the visit; source recomposition is ONE `Recomposer`
@@ -3093,7 +3118,18 @@ Revisit if: a real consumer's piece type cannot satisfy `Clone` — the per-gap
 #### `techy::visit`: one shared traversal engine for walk and recompose [§dd-dr:visit-engine]
 
 Status: DECIDED (user, API-review recompose session; realizes the read-only walker
-routed by [§dd-dr:recompose]'s T4 amendment; application pending).
+routed by [§dd-dr:recompose]'s T4 amendment; applied — Phase 3 S8. Application
+specifics, queued in the S8 report for sign-off: `walk` takes the start
+`NodeRef` — the veto was the *method* placement, and the walker's T4 origin
+demands subtree walks (whole tree = `walk(tree.root(), v)`); the walk is
+infallible (`enter` returns bare `VisitFlow` as sketched; error-carrying
+visitors `Stop` with the error in their own state); `exit` fires after a node's
+children for `Descend` and immediately for `SkipChildren`, receives the same
+`(node, cx)` pair as `enter`, and `Stop` aborts with no further calls;
+`VisitContext` carries exactly `depth()` + `tree()`. The one descent kernel is
+the crate-internal `scoped_children(node, include_attached, include_hidden)` —
+the walk calls it role-blind, the recompose driver with the `ConcatPieces`
+scope flags.)
 
 The read-only structural walker and the recompose driver share **one traversal
 engine**, in direction **walker-on-recompose-core** (user challenge upheld: the
@@ -3136,13 +3172,16 @@ Status: DECIDED (user, API-review P4 session; amends
 [§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
 applied — Phase 3 S3 (record + roles + `BodySlotExt` + the preset's `BodyMarker`
 claim), the `LLL` genericization S4, the restage driver's role-uniform descent
-S7 ([§dd-dr:restage-ops]), and the parse-law checker's byte-accounting
+S7 ([§dd-dr:restage-ops]), the parse-law checker's byte-accounting
 scoping S6: children in an `Attached` slot's region are excluded from the
 including callable's children-in-source/contiguity checks and carry their own
 per-source accounting (one source per attached region, contiguous within it),
 while `Hidden`-region children carry no byte accounting at all — declaration
 replaces source-change inference, so the remaining children must be contiguous
-across the excluded regions).
+across the excluded regions; and the one role-*sensitive* site S8 — recompose's
+`Concat` default scope skips `Attached` AND `Hidden` slot children while the
+`visit` walk stays role-blind ([§dd-dr:recompose-machinery],
+[§dd-dr:visit-engine])).
 
 `ParsedSlot` gains `role: SlotRole { Content, Attached, Hidden }` (default
 `Content`). `Content` = constitutive — the node's meaning is incomplete without it

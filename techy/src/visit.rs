@@ -66,8 +66,7 @@
 //! This is a deliberate contrast to recompose's
 //! [`Concat`](crate::recompose::Recompose::Concat) default scope, which skips
 //! both roles: the read/compose asymmetry is the ruled role semantics
-//! ([`SlotRole`](crate::core::node::SlotRole)), not an accident of
-//! implementation.
+//! ([`SlotRole`]), not an accident of implementation.
 
 use core::fmt;
 use core::ops::ControlFlow;

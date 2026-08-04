@@ -601,3 +601,10 @@ assert_eq!(label.value_content().unwrap().source_text(), Some("fig,main"));
 - The acceptance suite (`techy/tests/acceptance.rs`) is this page's bigger sibling:
   span-exact ports of pylatexenc's walker tests, error-recovery matrices in both
   recovery modes, and the shared test-side spec database pattern.
+- Beyond reading a parse: [`visit::walk`](crate::visit::walk) traverses with
+  structure (enter/exit), [`transform::restage`](crate::transform::restage)
+  rebuilds trees, and [`recompose::recompose`](crate::recompose::recompose)
+  folds a tree into text or any composed value — the preset's
+  [`source_recomposer`](crate::latexlike::source_recomposer) reemits a tree's
+  exact source spelling from its recorded facts (the reemit oracle in
+  `techy/tests/recompose_oracle.rs` pins that round trip).

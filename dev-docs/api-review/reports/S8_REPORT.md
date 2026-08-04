@@ -38,7 +38,8 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
       (11 tests; 726 lib green, 0 warnings)
 - [x] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices;
       21 tests in tests/recompose_oracle.rs, all green on the first run)
-- [ ] M7 — records + docs + gates + closure
+- [x] M7 — records + docs + gates + closure (all gates green; closure tables
+      below)
 
 ## Design synthesis (records → code)
 
@@ -613,3 +614,113 @@ tests at minimum; full gates at M7).
   `RecomposeError`); empty included file (slot present, empty piece).
 - Doctest delta: +3 (the visit module example, the recompose module
   example, the `ConcatPieces` example).
+
+### M7 realization notes
+
+- DR records: [§dd-dr:recompose-machinery] + [§dd-dr:visit-engine] status →
+  applied (Phase 3 S8) with full application-specifics paragraphs (the
+  D-plan anchors: entry state argument, mirror-what-applies error roster,
+  positional slot sibling, specials-arm children, walk-over-NodeRef,
+  infallible walk, exit semantics, the shared kernel);
+  [§dd-dr:recompose] status → applied through the two machinery entries;
+  [§dd-dr:invocation-syntax] status line → the reemit oracle landed
+  (tests/recompose_oracle.rs); [§dd-dr:restage-ops] mirror amendment →
+  applied note pointing at the as-applied roster; [§dd-dr:slot-roles]
+  status → the S8 role-sensitive site added (Concat default scope vs
+  role-blind walk).
+- ARCHITECTURE: [§dd-arch:arch] topology passage — the top-level set now
+  reads `{source, error, extract, transform, visit, recompose}`, applied
+  S8; [§dd-arch:nodes] — the "Still ruled, not yet applied" passage
+  rewritten as the applied-S8 passage (fold + wrapping contract + scope +
+  SourceRecomposer + oracle + visit); [§dd-arch:latexlike] — new
+  `SourceRecomposer` bullet + generalization-tracker sentence;
+  [§dd-arch:engine] checked — no invalidated claims, untouched.
+- CLAUDE.md facade list: `techy::visit` + `techy::recompose` lines added;
+  the latexlike line names the SourceRecomposer. lib.rs module list carries
+  both (landed M2/M3). Guide pages: concepts-overview's node-tree section
+  now points at walk/restage/recompose + source_recomposer;
+  learn-by-example's "Where to go from here" gains the
+  beyond-reading-a-parse bullet with the oracle pointer.
+- Docs-gate fixes: `SourceRecomposer`'s public story moved from the
+  (private) latexlike/recompose.rs module docs onto the type's own rustdoc
+  (a private module's `//!` docs are publicly invisible; the module header
+  now says so); one redundant explicit link target in visit.rs.
+- Superseded-names sweep: clean — no `Bit`/`ComposeBit`,
+  `ConcatSpec`/`ConcatParts`, `walk_tree`/`recompose_tree`,
+  `new_for_invocation`, "span-verbatim", `VisitCx`/`RecomposeCx`; no sink
+  type or parameter (the module docs' "there is no sink" negation is the
+  record's own wording); "honest" absent from all new rustdoc.
+
+## Consolidated stage summary (M7 closure)
+
+### Outcome
+
+All §S8 scope items landed, no escalations: no rulings tension surfaced;
+every judgment call is queued as D-plan-1..10 above. The stage is COMPLETE
+pending review + user sign-off of the deviation list.
+
+### Signature table (new public surface — all additive)
+
+| Item | Signature / shape |
+|---|---|
+| `visit::walk` | `walk<L, A, V>(node: NodeRef<'_, L, A>, visitor: &mut V) where L: Lang, V: NodeVisitor<L, A> + ?Sized` — preorder subtree walk from `node` (whole tree: `walk(tree.root(), v)`); role-blind (visits `Attached` and `Hidden` slot children); infallible |
+| `visit::NodeVisitor<L, A>` | `fn enter(&mut self, node: NodeRef<'_, L, A>, cx: &VisitContext<'_, L, A>) -> VisitFlow` + defaulted `fn exit(&mut self, node, cx)`; blanket impl for `FnMut(NodeRef<'_, L, A>, &VisitContext<'_, L, A>) -> VisitFlow` closures; no `Send`/`Sync` bounds |
+| `visit::VisitFlow` | `enum { Descend, SkipChildren, Stop }` (`Clone, Copy, Debug, PartialEq, Eq`); `Stop` aborts the whole walk (no further enters/exits) |
+| `visit::VisitContext<'t, L, A = ()>` | engine bookkeeping only: `depth() -> usize` (0 at the start node), `tree() -> &'t NodeTree<L, A>`; NO user state (three-channel discipline documented); `Debug` |
+| crate-internal | `visit::scoped_children(node, include_attached, include_hidden)` — the ONE descent kernel (walk role-blind; recompose scope-flagged) |
+| `recompose::recompose` | `recompose<L, A, R>(tree: &NodeTree<L, A>, state: R::State, recomposer: &mut R) -> Result<R::Piece, RecomposeError<R::Error>> where L: Lang, R: Recomposer<L, A> + ?Sized` |
+| `recompose::Recomposer<L, A>` | `type State; type Piece: ComposePiece; type Error;` + `fn recompose_node(&mut self, node: NodeRef<'_, L, A>, state: &Self::State, cx: &mut RecomposeContext<'_, L, A>) -> Result<Recompose<Self::Piece, Self::State>, Self::Error>`; no `Send`/`Sync`; no closure blanket |
+| `recompose::Recompose<P, S>` | `enum { Emit(P), Concat(ConcatPieces<P, S>) }` (`Clone`/`Debug` conditional) |
+| `recompose::ConcatPieces<P, S>` | joiner payload `head + child₁ + sep + … + childₙ + tail`; chainable constructors only (fields private): `children()` seed, `.wrap(head, tail)` / `.join(sep)` (both `impl Into<P>`), `.with_state(S)`, `.include_attached()`, `.include_hidden()`; default scope skips `Attached` AND `Hidden` slot children |
+| `recompose::ComposePiece` | `trait: Clone { fn empty() -> Self; fn append(&mut self, other: Self); }`; impls `String`, `()` (streaming = recomposer-held writer with `Piece = ()`; no sink concept) |
+| `recompose::RecomposeError<E>` | `#[non_exhaustive] enum { Recomposer(E), UnknownArgumentName { node, name }, ArgumentIndexOutOfRange { node, index, count }, SlotIndexOutOfRange { node, index, count }, NotACallable { node }, UnknownSlotName { node, name }, NoBodySlot { node } }`; derives mirror `RestageError` (`Clone/Debug/PartialEq/Eq` conditional on `E`; `Display where E: Display`; `Error where E: Error + 'static`) |
+| `recompose::RecomposeContext<'t, L, A = ()>` | self-passing ops, state then recomposer last: `recompose_argument(node, index, state, recomposer)` / `recompose_argument_named(node, name, …)` / `recompose_argument_content(…)` / `recompose_argument_content_named(…)` / `recompose_slot_content(node, index, …)` / `recompose_slot_content_named(node, name, …)` → `Result<R::Piece, RecomposeError<R::Error>>`; `recompose_body(node, state, recomposer) where SlotExt<L>: BodySlotExt`; absent argument → empty piece; nodes may come from any tree; `Debug` |
+| `recompose::core_source_instruction` | `<'t, L, A, P, S>(node: NodeRef<'t, L, A>) -> Option<Recompose<P, S>> where L: Lang, P: ComposePiece + From<&'t str>` — Chars/Comment/Group/List from own payload; `None` for callables (Lang-owned payload) |
+| `latexlike::SourceRecomposer<LLL = Latexlike>` | public ZST (manual Clone/Default/Debug); `impl<LLL: LatexlikeLang, A> Recomposer<LLL, A>`: `State = ()`, `Piece = String`, `Error = SourceRecomposeError`; instruction-only; no scope call (default skip suffices); macro arm head = escape + name + resolved post-space over children; environment arm = `write_begin`/`write_end` as `Concat` head/tail; specials arm = name-as-written head over children |
+| `latexlike::source_recomposer` | `<LLL: LatexlikeLang>() -> SourceRecomposer<LLL>` |
+| `latexlike::SourceRecomposeError` | `#[non_exhaustive] enum { IncoherentInvocationSyntax { node: NodeId, callable_form: &'static str, payload_arm: &'static str } }`; `Clone/Debug/PartialEq/Eq` + `Display`/`Error` |
+
+### Acceptance-test outcomes (§ S8 acceptance)
+
+- **The oracle suite green across the strict + tolerant matrices** (the § S8
+  acceptance bar): 21/21 in `techy/tests/recompose_oracle.rs` — strict (10),
+  tolerant (8, incl. the malformed-terminator elision pin), multi-source (3,
+  riding the S6 `\input` surface). PASS.
+- Machinery + preset unit coverage: 9 visit + 17 recompose + 11 preset tests
+  (fold shapes, state threading, scope asymmetry, wrapping contract,
+  streaming, op-misuse matrix, coherence error, materialized reemission).
+
+### Gate results (final full run)
+
+- `cargo build` and `cargo build --tests`: 0 warnings, 0 errors.
+- `cargo test`: **726 lib** (baseline 689 + 37) + 30 acceptance + **21
+  recompose-oracle** (new suite) + 8 derive-conditions + 1 derive + **33
+  doctests** (baseline 30 + 3; 2 ignored pre-existing) — all green.
+- `rm -rf target/doc && cargo docs`: clean — no missing_docs, no broken
+  intra-doc links.
+- Superseded-names sweep: clean (M7 notes above).
+- Behavior changes: none — the stage is purely additive (no existing public
+  item changed shape; the oracle pins existing parse recordings).
+
+### Commits (bc25770 → HEAD)
+
+- 0a60ac1 P3-S8: implementation plan
+- a96b7b4 P3-S8 M2: techy::visit — walk/NodeVisitor/VisitFlow/VisitContext +
+  scoped-children kernel
+- be88d08 P3-S8 M3: techy::recompose core — Piece fold, instructions,
+  RecomposeError, core_source_instruction
+- 1b268cc P3-S8 M4: RecomposeContext region ops + wrapping contract +
+  streaming piece
+- 7d0c3a5 P3-S8 M5: latexlike SourceRecomposer + source_recomposer
+- ad9e66a P3-S8 M6: recompose oracle suite — strict/tolerant/multi-source
+  matrices
+- (this commit) P3-S8 M7: records + docs + closure
+
+### Churn
+
+Whole stage (bc25770..HEAD incl. this commit): 14 files, ~+3580/−40. Code
+portion: visit.rs 515 lines (incl. tests); recompose/ 1415 (mod.rs 453 +
+context.rs 312 + tests.rs 650); latexlike/recompose.rs 492 (incl. tests);
+tests/recompose_oracle.rs 417; lib.rs + latexlike/mod.rs wiring. Records/docs:
+DESIGN_RATIONALE (5 entries touched), ARCHITECTURE (3 passages), CLAUDE.md,
+2 guide pages, this report.

@@ -1,27 +1,8 @@
 //! The preset's source re-emission: [`SourceRecomposer`] (constructor
 //! [`source_recomposer`]) — the ONE recomposer implementation that
-//! reconstructs a latexlike-family tree's **source spelling from its recorded
-//! facts**.
-//!
-//! Everything it emits comes from node payload: the core-complete kinds
-//! through [`core_source_instruction`] (chars content, comment parts, group
-//! delimiters), and callables from the family's recorded invocation-syntax
-//! payload — the macro escape character + name + post-space, the environment
-//! sides through the record's own spelling writers
-//! ([`write_begin`](EnvironmentSyntax::write_begin)/[`write_end`](EnvironmentSyntax::write_end)),
-//! and the specials name-as-written. No span content is ever resolved (the
-//! per-node doctrine, [`techy::recompose`](crate::recompose)); on a
-//! [`materialize`](crate::core::node::NodeTree::materialize)d tree the
-//! reconstruction touches no `Source` at all.
-//!
-//! **Accuracy is what the parse records** (the preset's accuracy doctrine,
-//! [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
-//! for trees the latexlike parse produces, reemission is byte-exact —
-//! including tolerant-recovery shapes, which reemit exactly what was recorded
-//! (an environment that never found its terminator has an empty end side and
-//! reemits no terminator). The one recorded-less-than-consumed recovery is
-//! the malformed terminator (`\end` consumed alone, diagnosed, recorded
-//! nowhere): its consumed command spelling is not reproduced.
+//! reconstructs a latexlike-family tree's source spelling from its recorded
+//! facts. (Internal file note: this module is private; the public story
+//! lives on the items' own docs.)
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -38,15 +19,37 @@ use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{LatexlikeCallableType, LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
 
-/// The preset source reemitter (see the [module docs](self)): a
-/// [`Recomposer`] with `State = ()`, `Piece = String`, instruction-only — it
-/// never descends explicitly, so it composes correctly under a wrapping
-/// recomposer (the wrapping contract), and it needs no scope call at all: the
-/// default `Concat` scope already skips `Attached` and `Hidden` slot children
-/// (an `\input`'s attached content reemits as the `\input{…}` invocation it
-/// came from).
+/// The preset's source reemitter: reconstructs a latexlike-family tree's
+/// **source spelling from its recorded facts** —
+/// `recompose(&tree, (), &mut source_recomposer())` reemits the tree.
 ///
-/// Works for any language family member (`LLL:`
+/// Everything it emits comes from node payload: the core-complete kinds
+/// through [`core_source_instruction`] (chars content, comment parts, group
+/// delimiters), and callables from the family's recorded invocation-syntax
+/// payload — the macro escape character + name + post-space, the environment
+/// sides through the record's own spelling writers
+/// ([`write_begin`](EnvironmentSyntax::write_begin)/[`write_end`](EnvironmentSyntax::write_end)),
+/// and the specials name-as-written. No span content is ever resolved (the
+/// per-node reading contract, [`techy::recompose`](crate::recompose)); on a
+/// [`materialize`](crate::core::node::NodeTree::materialize)d tree the
+/// reconstruction touches no `Source` at all.
+///
+/// **Accuracy is what the parse records** (the preset's accuracy doctrine,
+/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
+/// for trees the latexlike parse produces, reemission is byte-exact —
+/// including tolerant-recovery shapes, which reemit exactly what was
+/// recorded (an environment that never found its terminator has an empty end
+/// side and reemits no terminator). The one recorded-less-than-consumed
+/// recovery is the malformed environment terminator (its `\end` is consumed
+/// alone, diagnosed, and recorded nowhere): that consumed command spelling
+/// is not reproduced.
+///
+/// A [`Recomposer`] with `State = ()`, `Piece = String`, instruction-only —
+/// it never descends explicitly, so it composes correctly under a wrapping
+/// recomposer (the wrapping contract), and it needs no scope call at all:
+/// the default `Concat` scope already skips `Attached` and `Hidden` slot
+/// children (an `\input`'s attached content reemits as the `\input{…}`
+/// invocation it came from). Works for any language family member (`LLL:`
 /// [`LatexlikeLang`]) over trees with any annotation type.
 pub struct SourceRecomposer<LLL: LatexlikeLang = Latexlike> {
     _lang: PhantomData<LLL>,

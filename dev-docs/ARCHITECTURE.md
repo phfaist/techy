@@ -138,15 +138,15 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 
 **Public export topology (decided; applied):**
 the public API is exposed through re-export facades with one canonical path per
-item — `techy::{source, error, extract, transform}` top-level, `techy::core` as a
-flat machinery hub with extracted satellites `core::{constructs, specs, node}`,
-`techy::latexlike` unchanged — and internal src modules are private
-(internal reorganization stops being public-breaking). The topic modules sketched
-above describe the *internal* organization only. Full decision incl. the
-specs-vs-hub author-side/run-side rule and rejected shapes:
-[§dd-dr:public-namespace-topology]. Later rulings add `techy::recompose` and
-`techy::visit` to the top-level set ([§dd-dr:recompose-machinery],
-[§dd-dr:visit-engine]).
+item — `techy::{source, error, extract, transform, visit, recompose}` top-level,
+`techy::core` as a flat machinery hub with extracted satellites
+`core::{constructs, specs, node}`, `techy::latexlike` unchanged — and internal
+src modules are private (internal reorganization stops being public-breaking).
+The topic modules sketched above describe the *internal* organization only. Full
+decision incl. the specs-vs-hub author-side/run-side rule and rejected shapes:
+[§dd-dr:public-namespace-topology]; `techy::recompose` and `techy::visit` joined
+the top-level set by the recompose-session rulings, applied Phase 3 S8
+([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).
 
 **Stability rubric (decided):** everything `pub` is one stability class under one
 semver discipline — no unstable tier; access tiers are expressed by placement and
@@ -479,20 +479,35 @@ in-crate test utility ([§dd-dr:tree-validation]).
   annotations through a general per-part callback with suffixed shorthands over
   any input annotation type (`SplitAtChars`/`KeyVals` results;
   [§dd-dr:extract-annotations]).
-  **Still ruled, not yet applied**: recomposition (`techy::recompose`,
-  [§dd-dr:recompose]) joins as a top-level module, bound to the per-node doctrine
-  (spans are provenance — no inter-node span arithmetic; [§dd-dr:recompose]
-  amendment). The dedicated recompose session then
-  fixed the machinery: trigger spelling becomes recorded payload —
-  `Lang::InvocationSyntax` on `CallableData`, replacing the core `post_space`
-  field ([§dd-dr:invocation-syntax]; **applied in Phase 3 S5**, with
-  `stage_invocation` and the parse-law payload pins — preset-side since the S5
-  design revision: core's checker is payload-blind, the latexlike checker
-  layers the pins); recomposition is a meaning-free `Piece`
-  value fold with instruction lowering (`techy::recompose`; ONE preset
-  `SourceRecomposer`; [§dd-dr:recompose-machinery]); and the read-only walk and
-  the recompose driver share one traversal engine in the top-level `techy::visit`
-  module ([§dd-dr:visit-engine]).
+  **Applied in Phase 3 S8** (the recompose-session machinery; substrate:
+  trigger spelling is recorded payload — `Lang::InvocationSyntax` on
+  `CallableData`, replacing the core `post_space` field
+  ([§dd-dr:invocation-syntax]; applied in Phase 3 S5, with `stage_invocation`
+  and the parse-law payload pins — preset-side since the S5 design revision:
+  core's checker is payload-blind, the latexlike checker layers the pins)):
+  recomposition is the top-level `techy::recompose` — a meaning-free `Piece`
+  value fold with instruction lowering (`recompose(tree, state, recomposer)`;
+  `Recompose::{Emit, Concat(ConcatPieces)}` with chainable
+  `children()`/`wrap()`/`join()`; the `ComposePiece` monoid over `String` and
+  `()` — streaming is a recomposer-held writer, no sink concept), bound to the
+  per-node doctrine (spans are provenance — no inter-node span arithmetic; the
+  recomposer never resolves span content; [§dd-dr:recompose] and its
+  amendments); wrap-intended recomposers return instructions that lower against
+  the *outermost* recomposer (the wrapping contract — targeted replacement is
+  the wrapper pattern + the restage→recompose pipeline, not a mechanism);
+  `Concat`'s default scope skips `Attached` AND `Hidden` slot children (the one
+  role-sensitive site) with explicit widening opt-ins; `RecomposeError` and the
+  `RecomposeContext` op roster mirror the restage family
+  ([§dd-dr:recompose-machinery]). Source re-emission is ONE preset recomposer —
+  `latexlike::SourceRecomposer` (`source_recomposer()`), reconstructing
+  spelling from recorded facts via the invocation-syntax payload and the
+  environment writer pair; the in-crate reemit oracle
+  (`techy/tests/recompose_oracle.rs`) certifies payload completeness across
+  strict + tolerant + multi-source matrices. The read-only walk and the
+  recompose driver share one traversal engine in the top-level `techy::visit`
+  module (`walk` + `NodeVisitor`/`VisitFlow`; `VisitContext` = engine
+  bookkeeping only, the three-channel state discipline; the walk is role-blind
+  — the deliberate read/compose asymmetry; [§dd-dr:visit-engine]).
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -848,6 +863,13 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   invocation-syntax payload — reading vocabulary through the role traits;
   [§dd-dr:inherent-preset-sugar]); default whitespace is the six-character
   ASCII set ([§dd-dr:ascii-whitespace]).
+- **`SourceRecomposer<LLL>`** (constructor `source_recomposer()`) is the
+  preset's source re-emission — the ONE recomposer reconstructing spelling
+  from recorded facts (macro escape + name + post-space; the environment
+  record's `write_begin`/`write_end` pair; specials name-as-written), with a
+  coherence error for payload/`callable_type` mismatches; accuracy = what the
+  parse records, certified by the reemit oracle
+  ([§dd-dr:recompose-machinery], applied Phase 3 S8).
 - **The acceptance suite** (`techy/tests/acceptance.rs`) is a public-API-only
   integration port of pylatexenc's walker tests — anything the port cannot reach is an
   API gap by construction ([§dd-dr:acceptance-suite]).
@@ -862,9 +884,10 @@ and the composition), `argument_specs`, and the fifth role trait
 `InvocationSyntaxData<Env>`, the `EnvironmentSyntax` record contract
 (`from_parsed` + the writer pair; composition-owned scanning, per the S5
 design-revision amendment on [§dd-dr:invocation-syntax]), and the
-canonical `ParagraphBreakSpec` — are applied (Phase 3 S5). Still monomorphic
-pending the preset-definitions stage: `base_package` and `minidefs`. `Lang`
-itself stays whole.
+canonical `ParagraphBreakSpec` — are applied (Phase 3 S5); the opt-in
+`input_macro_spec` (S6) and `SourceRecomposer` (S8) are `LLL`-generic from
+birth. Still monomorphic pending the preset-definitions stage: `base_package`
+and `minidefs`. `Lang` itself stays whole.
 [§dd-dr:latexlike-generalization], [§dd-dr:math-group-form].
 
 Decisions behind this section (full topic: [§dd-dr:latexlike]):

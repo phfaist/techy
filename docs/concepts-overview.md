@@ -70,8 +70,13 @@ the [`SpecsProvider`](crate::core::specs::SpecsProvider) contract.
 A parse produces a flat, frozen [`NodeTree`](crate::core::node::NodeTree). Structure
 is the closed [`NodeKind`](crate::core::node::NodeKind) (characters, group, callable
 invocation, comment, list); custom per-node data attaches through extension
-types supplied by `Lang`. Nodes are visited through
-[`NodeRef`](crate::core::node::NodeRef) proxies.
+types supplied by `Lang`. Nodes are read through
+[`NodeRef`](crate::core::node::NodeRef) proxies; the structured traversal is
+[`visit::walk`](crate::visit::walk), tree→tree transformation is
+[`transform::restage`](crate::transform::restage), and tree→text (or any
+composed value) is [`recompose::recompose`](crate::recompose::recompose) — the
+preset's [`source_recomposer`](crate::latexlike::source_recomposer) reemits a
+tree's source spelling from its recorded facts.
 
 ## Construct parsers
 
