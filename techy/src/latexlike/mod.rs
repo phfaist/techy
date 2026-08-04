@@ -765,6 +765,16 @@ mod tests {
             parse_shapes("a~b & c"),
             ["chars(a)", "Specials(~)", "chars(b )", "Specials(&)", "chars( c)"]
         );
+
+        // Negative spec-identity pin: an ordinary specials node is NOT identified
+        // as a paragraph break — the ParagraphBreakSpec downcast must fail.
+        let result = strict().parse("a~b").unwrap();
+        let tilde = result.tree.root().child(1).unwrap();
+        assert_eq!(tilde.specials_name(), Some("~"));
+        let spec = tilde.spec().expect("a callable node");
+        assert!((&**spec as &dyn core::any::Any)
+            .downcast_ref::<ParagraphBreakSpec>()
+            .is_none());
     }
 
     #[test]

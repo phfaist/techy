@@ -671,6 +671,6 @@ records no end facts → tolerant oracle matrix must exclude/special-case) stand
 
 ### Churn
 
-39 files changed, ~2960 insertions, ~430 deletions (whole stage, docs included);
-code portion (techy/src + techy/tests): 37 files, ~2340 insertions, ~410
-deletions.
+42 files changed, +3123/−469 (whole stage, docs included; reviewer-corrected
+count — the earlier "39 files/~2960/~430" was bookkeeping drift); code portion
+(techy/src + techy/tests): 37 files, ~2340 insertions, ~410 deletions.
