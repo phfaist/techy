@@ -917,6 +917,101 @@ fn content_swap_on_a_slot_and_its_misuse_errors() {
     validate_tree(&output).unwrap();
 }
 
+// --- ContentParentDropped driver matrix (review should-fix) -----------------------------
+
+#[test]
+fn multiplied_content_parent_is_diagnosed() {
+    // An `Emit(vec![a, b])` replacement of a designated content parent: the
+    // enclosing callable's record cannot re-anchor onto two nodes — the driver
+    // refuses with the multiplied count.
+    let input = parse_with_macros(r"\a{1}{2}");
+    let group_id = input.root().child(0).unwrap().child(0).unwrap().id();
+
+    let result = restage(
+        &input,
+        &mut |node: NodeRef<'_, Latexlike>,
+              cx: &mut RestageContext<'_, Latexlike, (), ()>| {
+            if node.id() == group_id {
+                let a = stage_chars(cx, node, "a", ())?;
+                let b = stage_chars(cx, node, "b", ())?;
+                Ok(Restage::Emit(vec![a, b]))
+            } else {
+                Ok::<_, RestageError<OpError>>(Restage::Descend(()))
+            }
+        },
+    );
+    let error = result.unwrap_err();
+    let RestageError::ContentParentDropped { callable, parent, replaced_by } = &error else {
+        panic!("expected ContentParentDropped, got {error:?}");
+    };
+    assert_eq!(*callable, input.root().child(0).unwrap().id());
+    assert_eq!(*parent, group_id);
+    assert_eq!(*replaced_by, Some(2));
+    assert!(error.to_string().contains("replaced by 2 nodes"), "message: {error}");
+}
+
+#[test]
+fn single_node_takeover_of_a_content_parent_carries_the_designation() {
+    // The `Replaced::One` verbatim arm: a single-node `Emit` takeover of a
+    // content parent re-anchors the designation onto the replacement with the
+    // child-offset range carried verbatim (re-validated at staging).
+    use crate::latexlike::GroupType;
+    use crate::node::GroupData;
+
+    let input = parse_with_macros(r"\a{1}{2}");
+    let group_id = input.root().child(0).unwrap().child(0).unwrap().id();
+
+    let output = restage(
+        &input,
+        &mut |node: NodeRef<'_, Latexlike>,
+              cx: &mut RestageContext<'_, Latexlike, (), ()>| {
+            if node.id() == group_id {
+                // Takeover: a fresh one-child group stands in for `{1}` — a
+                // shape the verbatim range 0..1 stays valid against.
+                let child = stage_chars(cx, node, "R", ())?;
+                let kind: NodeKind<Latexlike> = NodeKind::group(GroupData {
+                    group_type: Some(GroupType::Content),
+                    open: TextContent::Owned("{".into()),
+                    close: TextContent::Owned("}".into()),
+                });
+                let span = node.span().clone();
+                let state = node.parsing_state().clone();
+                let builder = cx.builder();
+                let ext = <Latexlike as Lang>::make_node_ext(
+                    &kind,
+                    &span,
+                    &state,
+                    builder.staged_children(&[child]),
+                );
+                let id = builder
+                    .add(kind, span, state, vec![child], ext, ())
+                    .map_err(RestageError::<OpError>::Build)?;
+                Ok(Restage::Emit(vec![id]))
+            } else {
+                Ok::<_, RestageError<OpError>>(Restage::Descend(()))
+            }
+        },
+    )
+    .unwrap();
+
+    validate_tree(&output).unwrap();
+    let callable = output.root().child(0).unwrap();
+    assert!(callable.arguments().unwrap().get(0).unwrap().is_provided());
+    let content = callable.argument_content_nodes(0).unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(content.first().unwrap().chars(), Some("R"));
+    // The takeover group is the re-anchored content parent.
+    assert_eq!(
+        content.first().unwrap().parent().unwrap().group_delimiters(),
+        Some(("{", "}"))
+    );
+    // The untouched second argument restaged normally.
+    assert_eq!(
+        callable.argument_content_nodes(1).unwrap().first().unwrap().chars(),
+        Some("2")
+    );
+}
+
 #[test]
 fn content_swap_annotations_flow_explicitly() {
     // The helper's `annotation` argument lands (cloned) on every verbatim

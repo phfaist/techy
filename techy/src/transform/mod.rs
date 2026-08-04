@@ -18,7 +18,7 @@
 //! // The origin-tracking convention: the consumer's own annotation type carries
 //! // the original node's id (ids are tree-tagged, so old ids stay unambiguous).
 //! #[derive(Clone, Debug)]
-//! struct Origin { original: NodeId }
+//! struct Ann { original: NodeId }
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
@@ -27,12 +27,12 @@
 //! let input = language.parse("a{b}c").unwrap().tree;
 //!
 //! // Restage every node unchanged, annotating each copy with its original:
-//! let output: NodeTree<Latexlike, Origin> = restage(
+//! let output: NodeTree<Latexlike, Ann> = restage(
 //!     &input,
 //!     &mut |node: NodeRef<'_, Latexlike>,
-//!           _cx: &mut RestageContext<'_, Latexlike, (), Origin>| {
+//!           _cx: &mut RestageContext<'_, Latexlike, (), Ann>| {
 //!         Ok::<_, core::convert::Infallible>(
-//!             Restage::Descend(Origin { original: node.id() }),
+//!             Restage::Descend(Ann { original: node.id() }),
 //!         )
 //!     },
 //! )
@@ -154,8 +154,12 @@ pub enum Restage<B> {
 /// the visitor from *inside* a visitor call — `cx.restage_argument(node, 0, self)`
 /// — and a closure cannot pass itself. For non-reentrant passes, any
 /// `FnMut(NodeRef<'_, L, A>, &mut RestageContext<'_, L, A, B>) ->
-/// Result<Restage<B>, E>` closure is a visitor via the blanket impl:
-/// `restage(&tree, &mut |node, cx| { … })`.
+/// Result<Restage<B>, E>` closure is a visitor via the blanket impl. One
+/// inference note: an **inline closure must annotate its two parameter types**
+/// (`&mut |node: NodeRef<'_, L, A>, cx: &mut RestageContext<'_, L, A, B>| { … }`
+/// — the [module](self) doctest models the spelling; a fully unannotated
+/// `|node, cx|` does not infer against the generic visitor parameter), while a
+/// fn item needs no annotations.
 ///
 /// Deliberately **no `Send`/`Sync` bounds** (here and on
 /// [`annotate`](crate::core::node::NodeTree::annotate) callbacks): the driver

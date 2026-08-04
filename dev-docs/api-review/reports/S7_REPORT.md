@@ -551,3 +551,32 @@ review + user sign-off of the deviation list.
 ~960 test lines; extract.rs +720/−196 spread; copy.rs refactor; records/docs:
 DESIGN_RATIONALE, ARCHITECTURE, CLAUDE.md, lib.rs, learn-by-example.md,
 S7_REPORT.md).
+
+## Review should-fixes (applied post-verdict, 7th commit)
+
+Review verdict: merge-ready after user sign-off, 0 blockers, D-plan-1..7 all
+FORCED/DEFENSIBLE. Three ordered should-fixes, applied on the stage branch:
+
+1. **Closure-inference rustdoc fix**: the `RestageVisitor` trait docs showed
+   the unannotated `restage(&tree, &mut |node, cx| { … })` spelling, which
+   does not compile (the recorded M2 finding). The example now shows the
+   annotated two-parameter spelling, states the rule in one sentence (inline
+   closures annotate both parameter types; fn items need nothing), and points
+   at the module doctest, which models it correctly.
+2. **`ContentParentDropped` driver-matrix tests**:
+   `multiplied_content_parent_is_diagnosed` (an `Emit(vec![a, b])` replacement
+   of a designated content parent → `ContentParentDropped` with
+   `replaced_by: Some(2)` and the "replaced by 2 nodes" message) and
+   `single_node_takeover_of_a_content_parent_carries_the_designation` (the
+   `Replaced::One` verbatim arm: a fresh one-child group takeover of `{1}` —
+   the designation re-anchors verbatim onto the replacement, is re-validated
+   at staging, and the content reads through it).
+3. **Doctest annotation-type rename**: the module example's `Origin
+   { original }` → `Ann { original }` (the records' own spelling; "origin"
+   stays reserved for the source model).
+
+### Final gate results (post-should-fix)
+
+- `cargo build`: 0 warnings. `cargo test`: **689 lib** (+2) + 30 acceptance +
+  8 derive-conditions + 1 derive + **30 doctests** (2 ignored pre-existing) —
+  all green. `rm -rf target/doc && cargo docs`: clean.
