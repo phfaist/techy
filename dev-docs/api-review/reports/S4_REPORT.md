@@ -20,7 +20,8 @@ each.
       `finalize_transition` (+ `FinalizeError` folded into `DeriveError`),
       `resolve_state_event` hook, `cx.derive_state` / `with_derived_state` /
       `with_parsing_state` — build/tests green (588 lib tests), 0 warnings
-- [ ] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity tests
+- [x] M4 — Preset pillars + `LatexlikeDriver<LLL>` + exit-math wiring + parity
+      tests — build/tests green (596 lib tests), 0 warnings
 - [ ] M5 — Docs + closure: guide `\text` recipe fix, DR status lines,
       superseded-names, ARCHITECTURE passages, full gate run, stage summary
 

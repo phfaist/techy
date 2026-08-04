@@ -12,10 +12,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 
-use super::Latexlike;
+use super::{Latexlike, LatexlikeLang};
 
 /// Render a preset frame title: the callable-kind word (`macro`, `environment`,
 /// `specials`) with the invocation spelling — the shared body of the preset's
@@ -63,33 +64,58 @@ impl CallableSpec<Latexlike> for MacroSpec {
 }
 
 /// The preset's declarative specials spec: the argument structure of a
-/// [`Specials`](super::CallableType::Specials) callable as plain data, with the
-/// preset's traceback vocabulary ("specials ‘~’").
+/// specials-form callable ([`CallableType::Specials`](super::CallableType::Specials))
+/// as plain data, with the preset's traceback vocabulary ("specials ‘~’").
 ///
 /// Registered via [`Package::insert_specials`](crate::scopes::Package::insert_specials);
 /// the trigger sequence is the registration key, not spec data (specs are de-keyed —
 /// the [`base_package`](super::base_package) registers one shared argument-less
 /// instance for all its triggers).
-#[derive(Debug, Clone, Default)]
-pub struct SpecialsSpec {
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
+/// [`Latexlike`]) — it is also what the paragraph-break pillar
+/// ([`make_paragraph_break_node`](super::make_paragraph_break_node)) stamps on
+/// `Specials`-style break nodes for any family member.
+pub struct SpecialsSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure, in invocation order.
-    pub arguments: Vec<Arc<ArgumentSpec<Latexlike>>>,
+    pub arguments: Vec<Arc<ArgumentSpec<LLL>>>,
 }
 
-impl SpecialsSpec {
+impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
     /// A specials callable with the given argument structure.
-    pub fn new(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> SpecialsSpec {
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> SpecialsSpec<LLL> {
         SpecialsSpec { arguments }
     }
 }
 
-impl CallableSpec<Latexlike> for SpecialsSpec {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for SpecialsSpec<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
         frame_title("specials", role, name)
+    }
+}
+
+// Manual impls: derives would demand `LLL: Debug`/`Clone`/`Default` although only
+// `Arc`s are stored.
+
+impl<LLL: LatexlikeLang> fmt::Debug for SpecialsSpec<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SpecialsSpec").field("arguments", &self.arguments).finish()
+    }
+}
+
+impl<LLL: LatexlikeLang> Clone for SpecialsSpec<LLL> {
+    fn clone(&self) -> Self {
+        SpecialsSpec { arguments: self.arguments.clone() }
+    }
+}
+
+impl<LLL: LatexlikeLang> Default for SpecialsSpec<LLL> {
+    fn default() -> Self {
+        SpecialsSpec { arguments: Vec::new() }
     }
 }
 
@@ -122,7 +148,7 @@ mod tests {
             "argument #1 of macro ‘\\frac’"
         );
 
-        let tilde = SpecialsSpec::default();
+        let tilde: SpecialsSpec = SpecialsSpec::default();
         assert_eq!(tilde.stack_frame_title(FrameRole::Invocation, "~"), "specials ‘~’");
         assert_eq!(
             tilde.stack_frame_title(FrameRole::Argument { index: 1 }, "~"),
@@ -137,7 +163,7 @@ mod tests {
         assert_eq!(dyn_spec.arguments().len(), 1);
         // One non-emptiable argument ⇒ bare expression use is diagnosed.
         assert!(dyn_spec.requires_content());
-        assert!(!SpecialsSpec::default().requires_content());
+        assert!(!SpecialsSpec::<Latexlike>::default().requires_content());
     }
 
     #[test]

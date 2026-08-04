@@ -64,7 +64,10 @@ mod spec;
 mod test_support;
 
 pub use arguments::{argument_specs, argument_specs_from_str, ArgumentCodeError};
-pub use driver::{LatexlikeDriver, ParagraphBreakStyle};
+pub use driver::{
+    exit_math_context_delta, make_paragraph_break_node, math_group_interior_delta,
+    LatexlikeDriver, ParagraphBreakStyle,
+};
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
@@ -82,7 +85,9 @@ use alloc::vec::Vec;
 use crate::node::BodySlotExt;
 use crate::scopes::{Package, ScopeStack};
 use crate::spec::CallableSpec;
-use crate::state::{ClosedVocabulary, Lang, NodeExtTypes, ParsingState, StateData};
+use crate::state::{
+    ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState, StateData,
+};
 use crate::token::{
     CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
     TriggerChars, WhitespaceRules,
@@ -319,6 +324,33 @@ impl Lang for Latexlike {
             mode: Mode::Text,
             ext: (),
         }
+    }
+
+    /// The two-class event contract's loud arm ([`Event`]): the preset's
+    /// [`ExitMathContext`](Event::ExitMathContext) is **context-dependent** — it
+    /// is lowered by [`LatexlikeDriver::resolve_state_event`] (via
+    /// [`exit_math_context_delta`]) inside a driven parse and never reaches this
+    /// hook there. Reaching it here means a bare out-of-parse
+    /// [`derived()`](ParsingState::derived) call (or a mis-wired driver): the
+    /// transition is refused, never silently dropped.
+    fn finalize_transition(
+        new: &mut StateData<Self>,
+        prev: &ParsingState<Self>,
+        events: &[Event],
+    ) -> Result<(), FinalizeError> {
+        let _ = (new, prev);
+        for event in events {
+            match event {
+                Event::ExitMathContext => {
+                    return Err(FinalizeError::new(
+                        "the ExitMathContext event needs the enclosing-state stack: \
+                         derive through a parse context (cx.derive_state), where the \
+                         driver lowers it via exit_math_context_delta",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The standard scope-stack fold: every provider is consulted innermost-first,
@@ -749,6 +781,193 @@ mod tests {
         // `!`, `?`, `'`, `` ` `` are trigger *first characters*, but alone (no
         // following backtick / quote pair) the scan declines and they remain chars.
         assert_eq!(parse_shapes("a!b?c'd`e"), ["chars(a!b?c'd`e)"]);
+    }
+
+    // --- exit-math event: the \text recipe (E4) ---------------------------------------
+
+    use crate::constructs::GroupArgumentParser;
+    use crate::spec::ArgumentSpec;
+
+    /// The `\text` recipe: a mandatory content-group argument whose state delta
+    /// carries the exit-math-context **event** (never a static rules reset).
+    fn text_argument() -> Arc<ArgumentSpec<Latexlike>> {
+        Arc::new(
+            ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
+                .with_state_delta(ParsingStateDelta::new().event(Event::ExitMathContext)),
+        )
+    }
+
+    #[test]
+    fn exit_math_event_restores_text_context_inside_math() {
+        let mut package = Package::new("mydefs");
+        package.insert(
+            CallableType::Macro,
+            "text",
+            Arc::new(super::MacroSpec::new(vec![text_argument()])),
+        );
+        let language = test_support::with_package(crate::error::Recovery::Strict, package);
+
+        let result = language.parse(r"\[ x \text{if $y<0$} \]").unwrap();
+        check_tree_invariants(&result.tree);
+        let math = result.tree.root().child(0).unwrap();
+        let text = math.child(1).unwrap();
+        assert_eq!(text.macro_name(), Some("text"));
+
+        // The argument parses back in the enclosing text context…
+        let argument = text.argument_content_nodes(0).unwrap();
+        assert_eq!(argument.get(0).unwrap().parsing_state().mode(), Mode::Text);
+        // …with the math delimiters restored as openers: the nested `$…$` is a
+        // math group again…
+        let nested = argument.get(1).unwrap();
+        assert!(nested.is_math_group());
+        assert_eq!(nested.child(0).unwrap().parsing_state().mode(), Mode::Math);
+        // …and the restore is scoped to the argument: after `\text{…}` the
+        // enclosing display math continues in math mode.
+        let after = math.child(2).unwrap();
+        assert_eq!(after.parsing_state().mode(), Mode::Math);
+    }
+
+    #[test]
+    fn exit_math_event_restores_the_innermost_non_math_context_not_the_seed() {
+        // `\wrap`'s argument installs an embedder-customized context (forbidden
+        // `!`, a custom `«»` content pair). `\text` inside math entered from that
+        // context must restore THAT context — custom rules and forbidden set
+        // included — never the seed and never a static reset.
+        let custom_group = Arc::new(GroupRule {
+            group_type: GroupType::Content,
+            open: "«".into(),
+            close: "»".into(),
+        });
+        let mut wrap_groups = default_token_rules::<Latexlike>().groups;
+        wrap_groups.push(Arc::clone(&custom_group));
+        let wrap_argument = Arc::new(
+            ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
+                .with_state_delta(ParsingStateDelta::new().rules(
+                    crate::state::TokenRulesOverrides {
+                        groups: Some(wrap_groups),
+                        forbidden_chars: Some("!".into()),
+                        ..crate::state::TokenRulesOverrides::default()
+                    },
+                )),
+        );
+        let mut package = Package::new("mydefs");
+        package.insert(
+            CallableType::Macro,
+            "wrap",
+            Arc::new(super::MacroSpec::new(vec![wrap_argument])),
+        );
+        package.insert(
+            CallableType::Macro,
+            "text",
+            Arc::new(super::MacroSpec::new(vec![text_argument()])),
+        );
+        let language = test_support::with_package(crate::error::Recovery::Strict, package);
+
+        let result = language.parse(r"\wrap{$a\text{«q»}b$}").unwrap();
+        check_tree_invariants(&result.tree);
+        let wrap = result.tree.root().child(0).unwrap();
+        let math = wrap.argument_content_nodes(0).unwrap().get(0).unwrap();
+        assert!(math.is_math_group());
+
+        // Math entry merged the derived chars into the *embedder's* forbidden set.
+        let in_math = math.child(0).unwrap();
+        assert_eq!(in_math.chars(), Some("a"));
+        let math_forbidden = &*in_math.parsing_state().rules().forbidden_chars;
+        assert!(math_forbidden.contains('!') && math_forbidden.contains('$'));
+
+        // The \text argument came back to the wrap-argument context: text mode,
+        // the embedder's forbidden set (no `$`), and the custom `«»` pair parsing
+        // as a group again.
+        let text = math.child(1).unwrap();
+        assert_eq!(text.macro_name(), Some("text"));
+        let restored_group = text.argument_content_nodes(0).unwrap().get(0).unwrap();
+        assert_eq!(restored_group.group_delimiters(), Some(("«", "»")));
+        let restored_state = restored_group.parsing_state();
+        assert_eq!(restored_state.mode(), Mode::Text);
+        assert_eq!(&*restored_state.rules().forbidden_chars, "!");
+
+        // After the argument, the math context resumes untouched.
+        let after = math.child(2).unwrap();
+        assert_eq!(after.chars(), Some("b"));
+        assert_eq!(after.parsing_state().mode(), Mode::Math);
+    }
+
+    #[test]
+    fn exit_math_event_in_bare_derived_is_refused_loudly() {
+        // The two-class contract's loud arm on the preset: out of any parse the
+        // context does not exist, so finalize_transition refuses the event.
+        let seed = ParsingState::<Latexlike>::lang_initial();
+        let error =
+            seed.derived(&ParsingStateDelta::new().event(Event::ExitMathContext)).unwrap_err();
+        let finalize_error = error.finalize_error.as_ref().unwrap();
+        assert!(finalize_error.message().contains("ExitMathContext"));
+    }
+
+    #[test]
+    fn the_generic_driver_serves_a_foreign_family_member() {
+        // A foreign Lang adopting the preset vocabularies joins the family with
+        // zero role code and reuses LatexlikeDriver<LLL>, default_token_rules,
+        // the pillars, and the NodeRef sugar (MacroSpec/EnvironmentSpec stay
+        // Latexlike-monomorphic until the invocation-syntax stage — the generic
+        // StdCallableSpec carries the \text recipe here).
+        use crate::spec::StdCallableSpec;
+
+        #[derive(Debug, Clone, Copy)]
+        struct Flavored;
+        impl Lang for Flavored {
+            type GroupTypeId = GroupType;
+            type CallableTypeId = CallableType;
+            type ModeId = Mode;
+            type StateExt = ();
+            type Event = Event;
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type Driver = LatexlikeDriver<Flavored>;
+
+            fn initial_state_data() -> StateData<Self> {
+                StateData {
+                    rules: default_token_rules(),
+                    scopes: ScopeStack::new(),
+                    mode: Mode::Text,
+                    ext: (),
+                }
+            }
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &Arc<ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
+        }
+        impl super::LatexlikeLang for Flavored {}
+
+        let text_spec: StdCallableSpec<Flavored> = StdCallableSpec::new([
+            ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
+                .with_state_delta(ParsingStateDelta::new().event(Event::ExitMathContext)),
+        ]);
+        let mut package: Package<Flavored> = Package::new("defs");
+        package.insert(CallableType::Macro, "text", Arc::new(text_spec));
+
+        let language: Language<Flavored> = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
+        let result = language.parse(r"a $x\text{ b }y$ c").unwrap();
+        check_tree_invariants(&result.tree);
+
+        let math = result.tree.root().child(1).unwrap();
+        // The generic NodeRef sugar works on the foreign tree…
+        assert!(math.is_math_group());
+        assert_eq!(math.math_form(), Some(MathGroupForm::Inline));
+        // …the math plug entered math mode…
+        assert_eq!(math.child(0).unwrap().parsing_state().mode(), Mode::Math);
+        // …and the exit-math event restored the enclosing text context inside
+        // the \text argument (whitespace tokenization included).
+        let text = math.child(1).unwrap();
+        let argument = text.argument_content_nodes(0).unwrap();
+        assert_eq!(argument.get(0).unwrap().parsing_state().mode(), Mode::Text);
     }
 
     #[test]
