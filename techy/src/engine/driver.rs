@@ -184,6 +184,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// itself); a preset may return a callable-shaped kind (FLM's paragraph
     /// constructs) without any core change.
     ///
+    /// `source_content` is the content of the source being parsed — the bytes the
+    /// token's span indexes into — so a callable-shaped kind can record the break's
+    /// actual spelling (name-as-written) as owned node data.
+    ///
     /// **Constraint:** the kind is staged with *no children*, so a callable-shaped
     /// kind must carry no argument regions and no slots — the builder's region-tiling
     /// assert panics otherwise. (Structurally intrinsic: this hook has no
@@ -196,8 +200,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
+        source_content: &str,
     ) -> NodeKind<L> {
-        let _ = state;
+        let _ = (state, source_content);
         NodeKind::chars(token.span)
     }
 

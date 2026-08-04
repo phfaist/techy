@@ -786,8 +786,14 @@ where
                     }
                     // Invariant 2: the break is its own node — the hook's kind, staged
                     // by the loop over the full token span (a driver cannot stage nodes
-                    // itself); runs never merge across it.
-                    let kind = cx.driver.make_paragraph_break_node(&cx.state, &token);
+                    // itself); runs never merge across it. The hook receives the
+                    // source's content so a callable-shaped kind can record the
+                    // break's actual spelling (name-as-written).
+                    let kind = cx.driver.make_paragraph_break_node(
+                        &cx.state,
+                        &token,
+                        cx.source.content(),
+                    );
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }
@@ -1521,6 +1527,7 @@ mod tests {
                 &self,
                 _state: &ParsingState<MarkLang>,
                 _token: &Token<'_, MarkLang>,
+                _source_content: &str,
             ) -> NodeKind<MarkLang> {
                 NodeKind::chars("¶") // owned content, unlike the spanned default
             }

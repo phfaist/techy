@@ -67,7 +67,7 @@ mod test_support;
 pub use arguments::{argument_specs, argument_specs_from_str, ArgumentCodeError};
 pub use driver::{
     exit_math_context_delta, make_paragraph_break_node, math_group_interior_delta,
-    LatexlikeDriver, ParagraphBreakStyle,
+    LatexlikeDriver, ParagraphBreakSpec, ParagraphBreakStyle,
 };
 pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
@@ -584,7 +584,8 @@ mod tests {
     #[test]
     fn paragraph_breaks_can_emit_specials_nodes() {
         // ParagraphBreakStyle::Specials (7.9): pylatexenc-modern's paragraph shape —
-        // a Specials-formed callable named "\n\n".
+        // a Specials-formed callable named by the actual whitespace run
+        // (name-as-written), stamped with the canonical ParagraphBreakSpec.
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials),
@@ -597,13 +598,18 @@ mod tests {
         assert_eq!(break_node.specials_name(), Some("\n\n"));
         assert_eq!(break_node.span().range(), 1..3);
 
-        // The name is canonical "\n\n" (the vocabulary key); the span covers the
-        // actual whitespace run of the break token.
+        // Name-as-written: the actual run is the recorded name (canonical-"\n\n"
+        // superseded); the span covers the same run. Identification is by spec
+        // identity — the canonical ParagraphBreakSpec, recognized by downcast.
         let result = language.parse("a\n \t\nb").unwrap();
         check_tree_invariants(&result.tree);
         let break_node = result.tree.root().child(1).unwrap();
-        assert_eq!(break_node.specials_name(), Some("\n\n"));
+        assert_eq!(break_node.specials_name(), Some("\n \t\n"));
         assert_eq!(break_node.span().content(), "\n \t\n");
+        let spec = break_node.spec().expect("a callable node");
+        assert!((&**spec as &dyn core::any::Any)
+            .downcast_ref::<ParagraphBreakSpec>()
+            .is_some());
     }
 
     // --- math modes -------------------------------------------------------------------
@@ -1146,6 +1152,42 @@ mod tests {
         let end = syntax.end.as_ref().expect("the literal terminator was consumed");
         assert!(end.command_word.is_owned());
         assert_eq!(syntax.write_end("verbatim", content), "\\end{verbatim}");
+    }
+
+    #[test]
+    fn preset_declarative_specs_serve_a_foreign_family_member() {
+        // MacroSpec<LLL> + the argument-code factory over LLL: the declarative
+        // preset specs register under the foreign member directly (`LLL` inferred
+        // from the package); the `v` code resolves its group class through the
+        // family's verbatim_group() role constructor.
+        let mut package: Package<Flavored> = Package::new("defs");
+        package.insert(
+            CallableType::Macro,
+            "emph",
+            Arc::new(MacroSpec::new(argument_specs(["m"]).unwrap())),
+        );
+        package.insert(
+            CallableType::Macro,
+            "verb",
+            Arc::new(MacroSpec::new(argument_specs(["v"]).unwrap())),
+        );
+        let language: Language<Flavored> = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
+
+        let result = language.parse("\\emph{x} \\verb|a%\\y{|!").unwrap();
+        check_tree_invariants(&result.tree);
+        let emph = result.tree.root().child(0).unwrap();
+        assert_eq!(emph.macro_name(), Some("emph"));
+        assert!(emph.arguments().unwrap().get(0).unwrap().is_provided());
+        let verb = result.tree.root().child(2).unwrap();
+        assert_eq!(verb.macro_name(), Some("verb"));
+        // The verbatim argument read raw (comment/escape chars inert) into a
+        // verbatim-class group of the family.
+        let raw = verb.child(0).unwrap();
+        assert_eq!(raw.group_type(), Some(GroupType::Verbatim));
+        assert_eq!(raw.group_delimiters(), Some(("|", "|")));
     }
 
     #[test]

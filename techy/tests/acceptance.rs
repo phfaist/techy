@@ -1088,13 +1088,19 @@ mod paragraph_breaks {
         let break_node = result.tree.root().child(1).unwrap();
         assert_eq!(break_node.specials_name(), Some("\n\n"));
 
-        // The name is the canonical "\n\n" vocabulary key even when the actual run
-        // is longer; the span covers the actual run.
+        // Name-as-written: the actual whitespace run is the recorded name (never a
+        // canonical spelling); the span covers the same run. Paragraph-break nodes
+        // are identified by spec identity — the canonical ParagraphBreakSpec,
+        // recognized by downcast.
         let result = parse_ok_in(specials_style, "one\n \t\ntwo");
         let break_node = result.tree.root().child(1).unwrap();
-        assert_eq!(break_node.specials_name(), Some("\n\n"));
+        assert_eq!(break_node.specials_name(), Some("\n \t\n"));
         assert_eq!(break_node.span().range(), 3..7);
         assert_eq!(break_node.span().content(), "\n \t\n");
+        let spec = break_node.spec().expect("a callable node");
+        assert!((&**spec as &dyn std::any::Any)
+            .downcast_ref::<techy::latexlike::ParagraphBreakSpec>()
+            .is_some());
     }
 
     // The observable consequence beyond node shape: a Specials-formed paragraph

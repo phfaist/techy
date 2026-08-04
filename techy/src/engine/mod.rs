@@ -818,7 +818,8 @@ mod tests {
         let st = state();
         let token: Token<'static, PlainLang> =
             Token::new(TokenKind::ParagraphBreak, Span::new(3, 5), Span::new(1, 3));
-        let kind = StdParseDriver::new(Recovery::Strict, ()).make_paragraph_break_node(&st, &token);
+        let kind = StdParseDriver::new(Recovery::Strict, ())
+            .make_paragraph_break_node(&st, &token, "x  \n\nz");
         match kind {
             NodeKind::Chars { content, .. } => {
                 // Span-backed over the full token span (newlines included), per the

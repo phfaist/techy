@@ -25,13 +25,13 @@ use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
 use crate::source::{IntoSourceResolver, SourceResolver};
-use crate::spec::CallableSpec;
+use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{ParsingState, ParsingStateDelta, ParsingStateStack, TokenRulesOverrides};
 use crate::token::{GroupRule, Token};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang,
-    LatexlikeMode, SpecialsSpec,
+    LatexlikeMode,
 };
 
 /// How [`LatexlikeDriver`] emits the node for a paragraph-break token (a whitespace
@@ -55,17 +55,41 @@ pub enum ParagraphBreakStyle {
     #[default]
     Chars,
     /// A [`Specials`](super::CallableType::Specials)-formed `Callable` node —
-    /// pylatexenc-modern's paragraph-break shape. The node's *name* is the canonical
-    /// `"\n\n"` (the vocabulary key, like `"~"` or `"---"`), whatever the actual
-    /// whitespace run looked like; the node's *span* covers the actual run. The
-    /// token level is unchanged (still
+    /// pylatexenc-modern's paragraph-break shape. The node's *name* is the **actual
+    /// whitespace run as written** (`"\n \t\n"` stays `"\n \t\n"`) — the specials
+    /// name-as-written rule of the invocation-syntax payload
+    /// ([`InvocationSyntax::Specials`](super::InvocationSyntax::Specials)); the
+    /// node's *span* covers the same run. Identify paragraph-break nodes by **spec
+    /// identity** — the stamped spec is the canonical [`ParagraphBreakSpec`],
+    /// recognized by `Any`-downcast — never by a name spelling. The token level is
+    /// unchanged (still
     /// [`ParagraphBreak`](crate::token::TokenKind::ParagraphBreak)), and the spec
-    /// stamped on the node is a fresh argument-less [`SpecialsSpec`] — it lives on
-    /// no provider, so `"\n\n"` does **not** appear in
+    /// lives on no provider, so paragraph breaks do **not** appear in
     /// [`iter_symbols`](crate::scopes::ScopeStack::iter_symbols) enumerations.
     /// Extraction helpers treat the node as the non-text material it now is
     /// (`content_as_chars` reports it instead of folding it into text).
     Specials,
+}
+
+/// The canonical paragraph-break spec: the **definite, identifiable spec object**
+/// stamped on every [`ParagraphBreakStyle::Specials`] break node, for every family
+/// member (`impl<LLL: LatexlikeLang> CallableSpec<LLL>`). A consumer identifies
+/// paragraph-break nodes by **spec identity**, which for this ZST is *type*
+/// identity — `Any`-downcast the node's [`spec`](crate::node::CallableData::spec)
+/// to `ParagraphBreakSpec` — never by a name spelling (the node's `name` is the
+/// actual whitespace run, [`ParagraphBreakStyle::Specials`]). The pillar never
+/// mints an anonymous per-break spec.
+///
+/// Argument-less and content-less (the trait defaults); frame titles speak the
+/// preset's specials vocabulary. It lives on no provider — paragraph breaks are a
+/// driver emission policy ([`ParagraphBreakStyle`]), not scope-stack data.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParagraphBreakSpec;
+
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
+    fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
+        super::spec::frame_title("specials", role, name)
+    }
 }
 
 // --- the pillar functions ------------------------------------------------------------
@@ -202,9 +226,11 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
 
 /// The **paragraph-break** pillar: the node kind for a paragraph-break token in
 /// the given [`ParagraphBreakStyle`] — the core default whitespace `Chars` shape,
-/// or a `Specials`-formed `Callable` named `"\n\n"` (see
-/// [`ParagraphBreakStyle::Specials`] for the exact contract; the stamped spec is a
-/// fresh argument-less [`SpecialsSpec`]).
+/// or a `Specials`-formed `Callable` named by the actual whitespace run (see
+/// [`ParagraphBreakStyle::Specials`] for the exact contract; the stamped spec is
+/// the canonical [`ParagraphBreakSpec`]). `source_content` is the parsed source's
+/// content — the bytes the token's span indexes into — which the `Specials` shape
+/// records its name-as-written from.
 ///
 /// **Parse-side only**: the returned kind is built around a live token (the
 /// span-backed `Chars` shape resolves against the token's source; the node is
@@ -214,16 +240,19 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
     style: ParagraphBreakStyle,
     state: &ParsingState<LLL>,
     token: &Token<'_, LLL>,
+    source_content: &str,
 ) -> NodeKind<LLL> {
     let _ = state;
     match style {
         ParagraphBreakStyle::Chars => NodeKind::chars(token.span),
-        // The spec is minted per break rather than cached: the allocation is
-        // negligible (once per paragraph break, cold next to a parse), and a
-        // cached `Arc` would be one more datum carrying no configuration (specs
-        // are behavior, never compared).
+        // The canonical ZST is minted per break rather than cached: the
+        // allocation is negligible (once per paragraph break, cold next to a
+        // parse), and identity is type identity (downcast), so distinct `Arc`s
+        // are indistinguishable to consumers.
         ParagraphBreakStyle::Specials => {
-            let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(SpecialsSpec::<LLL>::default());
+            let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(ParagraphBreakSpec);
+            // Name-as-written: the actual whitespace run under the token's span.
+            let name = &source_content[token.span.range()];
             // The preset's specials staging site consults the standard
             // constructor ([`FromInvocation`]) like every std site — over a
             // synthetic invocation bundling the break token — so a family
@@ -231,7 +260,7 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
             // specials-formed trigger (the preset enum: the unit `Specials`).
             let invocation = Invocation {
                 callable_type: LLL::CallableTypeId::specials_callable(),
-                name: "\n\n",
+                name,
                 spec: &spec,
                 token,
             };
@@ -391,8 +420,9 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         &self,
         state: &ParsingState<LLL>,
         token: &Token<'_, LLL>,
+        source_content: &str,
     ) -> NodeKind<LLL> {
-        make_paragraph_break_node(self.paragraph_break_style, state, token)
+        make_paragraph_break_node(self.paragraph_break_style, state, token, source_content)
     }
 
     /// One-line delegation to the [`math_group_interior_delta`] pillar (the math
@@ -609,18 +639,30 @@ mod tests {
         use crate::token::TokenKind;
 
         let state = ParsingState::<Latexlike>::lang_initial();
+        let content = "a\n \t\nb";
         let token: Token<'static, Latexlike> =
-            Token::new(TokenKind::ParagraphBreak, Span::new(1, 3), Span::empty(1));
+            Token::new(TokenKind::ParagraphBreak, Span::new(1, 5), Span::empty(1));
 
-        let chars = make_paragraph_break_node(ParagraphBreakStyle::Chars, &state, &token);
+        let chars =
+            make_paragraph_break_node(ParagraphBreakStyle::Chars, &state, &token, content);
         assert!(matches!(chars, NodeKind::Chars { .. }));
 
         let specials =
-            make_paragraph_break_node(ParagraphBreakStyle::Specials, &state, &token);
+            make_paragraph_break_node(ParagraphBreakStyle::Specials, &state, &token, content);
         let NodeKind::Callable(data) = specials else {
             panic!("expected a Callable kind")
         };
         assert_eq!(data.callable_type, super::super::CallableType::Specials);
-        assert_eq!(&*data.name, "\n\n");
+        // Name-as-written: the actual whitespace run, never a canonical spelling.
+        assert_eq!(&*data.name, "\n \t\n");
+        // The stamped spec is the canonical ZST — identity by downcast.
+        assert!((&*data.spec as &dyn core::any::Any)
+            .downcast_ref::<ParagraphBreakSpec>()
+            .is_some());
+        // The payload came through the standard constructor: the unit arm.
+        use super::super::LatexlikeInvocationSyntax;
+        assert!(LatexlikeInvocationSyntax::<Latexlike>::is_specials(
+            &data.invocation_syntax
+        ));
     }
 }

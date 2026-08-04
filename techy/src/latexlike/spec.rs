@@ -40,26 +40,50 @@ pub(crate) fn frame_title(kind: &str, role: FrameRole, name: &str) -> String {
 /// the scope stack. Any [`CallableSpec`] works there — this type adds no behavior
 /// beyond the vocabulary, and generic specs ([`StdCallableSpec`](crate::spec::StdCallableSpec),
 /// custom takeovers) remain first-class.
-#[derive(Debug, Clone, Default)]
-pub struct MacroSpec {
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
+/// [`Latexlike`]) — a family member registers the same declarative macro shape
+/// under its own marker type.
+pub struct MacroSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure, in invocation order.
-    pub arguments: Vec<Arc<ArgumentSpec<Latexlike>>>,
+    pub arguments: Vec<Arc<ArgumentSpec<LLL>>>,
 }
 
-impl MacroSpec {
+impl<LLL: LatexlikeLang> MacroSpec<LLL> {
     /// A macro with the given argument structure.
-    pub fn new(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> MacroSpec {
+    pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> MacroSpec<LLL> {
         MacroSpec { arguments }
     }
 }
 
-impl CallableSpec<Latexlike> for MacroSpec {
-    fn arguments(&self) -> &[Arc<ArgumentSpec<Latexlike>>] {
+impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
+    fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &self.arguments
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {
         frame_title("macro", role, name)
+    }
+}
+
+// Manual impls: derives would demand `LLL: Debug`/`Clone`/`Default` although only
+// `Arc`s are stored.
+
+impl<LLL: LatexlikeLang> fmt::Debug for MacroSpec<LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MacroSpec").field("arguments", &self.arguments).finish()
+    }
+}
+
+impl<LLL: LatexlikeLang> Clone for MacroSpec<LLL> {
+    fn clone(&self) -> Self {
+        MacroSpec { arguments: self.arguments.clone() }
+    }
+}
+
+impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
+    fn default() -> Self {
+        MacroSpec { arguments: Vec::new() }
     }
 }
 

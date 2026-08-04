@@ -18,10 +18,11 @@ use crate::constructs::{
     EmbellishmentsArgumentParser, GroupArgumentParser, MarkerArgumentParser,
     OptionalGroupArgumentParser, VerbatimArgumentParser,
 };
+use crate::node::ArgumentExt;
 use crate::spec::{ArgumentParser, ArgumentSpec};
 use crate::token::GroupRule;
 
-use super::{GroupType, Latexlike};
+use super::{LatexlikeGroupType, LatexlikeLang};
 
 /// A malformed argument code ([`argument_specs`] / [`argument_specs_from_str`]):
 /// embedder input, reported eagerly at spec-construction time.
@@ -137,6 +138,13 @@ impl core::error::Error for ArgumentCodeError {}
 /// via [`ArgumentSpec`]'s builders where needed (the factory is convenience, never a
 /// requirement; any hand-built parser remains first-class).
 ///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]): the mandatory/verbatim
+/// group classes come from the family's role constructors
+/// ([`content_group`](LatexlikeGroupType::content_group) /
+/// [`verbatim_group`](LatexlikeGroupType::verbatim_group)); the minted
+/// optional-group rules keep their delimiter spellings. `LLL` is ordinarily inferred
+/// from the receiving spec (e.g. the [`MacroSpec`](super::MacroSpec) below).
+///
 /// ```
 /// use techy::core::{Language, ParsingState};
 /// use techy::error::Recovery;
@@ -162,8 +170,12 @@ impl core::error::Error for ArgumentCodeError {}
 ///     Some("fig.png"),
 /// );
 /// ```
-pub fn argument_specs<I>(codes: I) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError>
+pub fn argument_specs<LLL, I>(
+    codes: I,
+) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
 where
+    LLL: LatexlikeLang,
+    ArgumentExt<LLL>: Default,
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
@@ -188,12 +200,15 @@ where
 
 /// Resolve a whole-element word code (`AnyDelimited` / `AnyDelimitedOptional`) —
 /// list-form only (see [`argument_specs`]).
-fn scan_word_code(code: &str) -> Option<Arc<ArgumentSpec<Latexlike>>> {
-    let parser: Arc<dyn ArgumentParser<Latexlike>> = match code {
+fn scan_word_code<LLL: LatexlikeLang>(code: &str) -> Option<Arc<ArgumentSpec<LLL>>>
+where
+    ArgumentExt<LLL>: Default,
+{
+    let parser: Arc<dyn ArgumentParser<LLL>> = match code {
         "AnyDelimited" => Arc::new(GroupArgumentParser::any_of(any_delimited_rules())),
         "AnyDelimitedOptional" => Arc::new(
             OptionalGroupArgumentParser::any_of(any_delimited_rules())
-                .with_unwrap_lone_group(GroupType::Content),
+                .with_unwrap_lone_group(LLL::GroupTypeId::content_group()),
         ),
         _ => return None,
     };
@@ -202,7 +217,7 @@ fn scan_word_code(code: &str) -> Option<Arc<ArgumentSpec<Latexlike>>> {
 
 /// The default delimiter alternatives of the `AnyDelimited` codes (pylatexenc's
 /// list): `{}`, `[]`, `()`, `<>`, minted as content-class rules per use.
-fn any_delimited_rules() -> Vec<Arc<GroupRule<Latexlike>>> {
+fn any_delimited_rules<LLL: LatexlikeLang>() -> Vec<Arc<GroupRule<LLL>>> {
     [('{', '}'), ('[', ']'), ('(', ')'), ('<', '>')]
         .into_iter()
         .map(|(open, close)| minted_rule(open, close))
@@ -219,9 +234,12 @@ fn any_delimited_rules() -> Vec<Arc<GroupRule<Latexlike>>> {
 /// character reads that and the next character as its prescribed delimiters (`"v||"`);
 /// a bare auto-delimiter `v` must therefore stand last or be separated from the next
 /// code by whitespace (`"v {"` — whereas `"v{"` is a truncated `v{…?`).
-pub fn argument_specs_from_str(
+pub fn argument_specs_from_str<LLL: LatexlikeLang>(
     codes: &str,
-) -> Result<Vec<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
+) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
+where
+    ArgumentExt<LLL>: Default,
+{
     let mut specs = Vec::new();
     let mut chars = codes.char_indices().peekable();
     while let Some(spec) = scan_code(&mut chars, None)? {
@@ -233,10 +251,13 @@ pub fn argument_specs_from_str(
 /// Scan one code (with its parameter characters) off `chars`, skipping leading
 /// whitespace; `Ok(None)` when the string is exhausted first. `index` is the list
 /// coordinate threaded into errors (`None` in the compact-string form).
-fn scan_code(
+fn scan_code<LLL: LatexlikeLang>(
     chars: &mut core::iter::Peekable<core::str::CharIndices<'_>>,
     index: Option<usize>,
-) -> Result<Option<Arc<ArgumentSpec<Latexlike>>>, ArgumentCodeError> {
+) -> Result<Option<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
+where
+    ArgumentExt<LLL>: Default,
+{
     let (offset, code) = loop {
         match chars.next() {
             Some((_, c)) if c.is_whitespace() => continue,
@@ -250,8 +271,8 @@ fn scan_code(
             _ => Err(ArgumentCodeError::TruncatedCode { index, offset, code }),
         }
     };
-    let parser: Arc<dyn ArgumentParser<Latexlike>> = match code {
-        'm' | '{' => Arc::new(GroupArgumentParser::new(GroupType::Content)),
+    let parser: Arc<dyn ArgumentParser<LLL>> = match code {
+        'm' | '{' => Arc::new(GroupArgumentParser::new(LLL::GroupTypeId::content_group())),
         'o' | '[' => Arc::new(optional_group_parser('[', ']')),
         's' | '*' => Arc::new(MarkerArgumentParser::new("*")),
         't' => Arc::new(MarkerArgumentParser::new(String::from(parameter(&mut *chars)?))),
@@ -292,11 +313,11 @@ fn scan_code(
                 let open = parameter(&mut *chars)?;
                 let close = parameter(&mut *chars)?;
                 Arc::new(
-                    VerbatimArgumentParser::new(GroupType::Verbatim)
+                    VerbatimArgumentParser::new(LLL::GroupTypeId::verbatim_group())
                         .with_delimiters(open, close),
                 )
             }
-            _ => Arc::new(VerbatimArgumentParser::new(GroupType::Verbatim)),
+            _ => Arc::new(VerbatimArgumentParser::new(LLL::GroupTypeId::verbatim_group())),
         },
         _ => return Err(ArgumentCodeError::UnknownCode { index, offset, code }),
     };
@@ -304,9 +325,9 @@ fn scan_code(
 }
 
 /// The minted per-use content-class rule of the `o`/`r`/`d` codes.
-fn minted_rule(open: char, close: char) -> Arc<GroupRule<Latexlike>> {
+fn minted_rule<LLL: LatexlikeLang>(open: char, close: char) -> Arc<GroupRule<LLL>> {
     Arc::new(GroupRule {
-        group_type: GroupType::Content,
+        group_type: LLL::GroupTypeId::content_group(),
         open: String::from(open),
         close: String::from(close),
     })
@@ -315,14 +336,17 @@ fn minted_rule(open: char, close: char) -> Arc<GroupRule<Latexlike>> {
 /// The optional-group shape shared by `o` and `d`: minted delimiters, with the
 /// protective lone `{…}` group unwrapping (the parse-time resolution of pylatexenc's
 /// `unwrap_double_group` accessor default).
-fn optional_group_parser(open: char, close: char) -> OptionalGroupArgumentParser<Latexlike> {
+fn optional_group_parser<LLL: LatexlikeLang>(
+    open: char,
+    close: char,
+) -> OptionalGroupArgumentParser<LLL> {
     OptionalGroupArgumentParser::new(minted_rule(open, close))
-        .with_unwrap_lone_group(GroupType::Content)
+        .with_unwrap_lone_group(LLL::GroupTypeId::content_group())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CallableType, LatexlikeDriver, MacroSpec};
+    use super::super::{CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec};
     use super::*;
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
@@ -342,9 +366,9 @@ mod tests {
 
     #[test]
     fn empty_lists_and_whitespace_only_compact_strings_declare_no_arguments() {
-        assert!(argument_specs(Vec::<&str>::new()).unwrap().is_empty());
-        assert!(argument_specs_from_str("").unwrap().is_empty());
-        assert!(argument_specs_from_str("  \t ").unwrap().is_empty());
+        assert!(argument_specs::<Latexlike, _>(Vec::<&str>::new()).unwrap().is_empty());
+        assert!(argument_specs_from_str::<Latexlike>("").unwrap().is_empty());
+        assert!(argument_specs_from_str::<Latexlike>("  \t ").unwrap().is_empty());
     }
 
     #[test]
@@ -410,7 +434,7 @@ mod tests {
 
         // Directly followed means the delimiters must both be there.
         assert_eq!(
-            argument_specs_from_str("v{").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("v{").unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 'v' }
         );
 
@@ -424,28 +448,28 @@ mod tests {
     #[test]
     fn malformed_compact_strings_report_offset_and_code() {
         assert_eq!(
-            argument_specs_from_str("m x").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("m x").unwrap_err(),
             ArgumentCodeError::UnknownCode { index: None, offset: 2, code: 'x' }
         );
         assert_eq!(
-            argument_specs_from_str("t").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("t").unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 't' }
         );
         // Whitespace cannot be a parameter character.
         assert_eq!(
-            argument_specs_from_str("t !").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("t !").unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: None, offset: 0, code: 't' }
         );
         assert_eq!(
-            argument_specs_from_str("or(").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("or(").unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: None, offset: 1, code: 'r' }
         );
         assert_eq!(
-            argument_specs_from_str("x").unwrap_err().to_string(),
+            argument_specs_from_str::<Latexlike>("x").unwrap_err().to_string(),
             "unknown argument code ‘x’ at offset 0"
         );
         assert_eq!(
-            argument_specs_from_str("d<").unwrap_err().to_string(),
+            argument_specs_from_str::<Latexlike>("d<").unwrap_err().to_string(),
             "argument code ‘d’ at offset 0 is missing its parameter character(s)"
         );
     }
@@ -453,47 +477,47 @@ mod tests {
     #[test]
     fn malformed_code_lists_report_index_offset_and_code() {
         assert_eq!(
-            argument_specs(["m", "x"]).unwrap_err(),
+            argument_specs::<Latexlike, _>(["m", "x"]).unwrap_err(),
             ArgumentCodeError::UnknownCode { index: Some(1), offset: 0, code: 'x' }
         );
         assert_eq!(
-            argument_specs(["o", "r("]).unwrap_err(),
+            argument_specs::<Latexlike, _>(["o", "r("]).unwrap_err(),
             ArgumentCodeError::TruncatedCode { index: Some(1), offset: 0, code: 'r' }
         );
         // One code per element: a second code is trailing, not concatenated.
         assert_eq!(
-            argument_specs(["mo"]).unwrap_err(),
+            argument_specs::<Latexlike, _>(["mo"]).unwrap_err(),
             ArgumentCodeError::TrailingCode { index: 0, offset: 1, trailing: 'o' }
         );
         assert_eq!(
-            argument_specs(["m", "o m"]).unwrap_err(),
+            argument_specs::<Latexlike, _>(["m", "o m"]).unwrap_err(),
             ArgumentCodeError::TrailingCode { index: 1, offset: 2, trailing: 'm' }
         );
         // Empty elements are bugs, not zero-argument declarations.
         assert_eq!(
-            argument_specs(["m", ""]).unwrap_err(),
+            argument_specs::<Latexlike, _>(["m", ""]).unwrap_err(),
             ArgumentCodeError::EmptyCode { index: 1 }
         );
         assert_eq!(
-            argument_specs([" \t"]).unwrap_err(),
+            argument_specs::<Latexlike, _>([" \t"]).unwrap_err(),
             ArgumentCodeError::EmptyCode { index: 0 }
         );
         // Display strings name the list element.
         assert_eq!(
-            argument_specs(["x"]).unwrap_err().to_string(),
+            argument_specs::<Latexlike, _>(["x"]).unwrap_err().to_string(),
             "unknown argument code ‘x’ at offset 0 of code string 0"
         );
         assert_eq!(
-            argument_specs(["r<"]).unwrap_err().to_string(),
+            argument_specs::<Latexlike, _>(["r<"]).unwrap_err().to_string(),
             "argument code ‘r’ at offset 0 of code string 0 is missing its parameter \
              character(s)"
         );
         assert_eq!(
-            argument_specs(["mo"]).unwrap_err().to_string(),
+            argument_specs::<Latexlike, _>(["mo"]).unwrap_err().to_string(),
             "unexpected ‘o’ at offset 1 of code string 0 (one argument code per string)"
         );
         assert_eq!(
-            argument_specs([""]).unwrap_err().to_string(),
+            argument_specs::<Latexlike, _>([""]).unwrap_err().to_string(),
             "code string 0 is empty (one argument code per string)"
         );
     }
@@ -669,7 +693,7 @@ mod tests {
         assert_eq!(compact.len(), 3);
         assert!(parser_debug(&compact[1]).contains("EmbellishmentsArgumentParser"));
         assert_eq!(
-            argument_specs_from_str("AnyDelimited").unwrap_err(),
+            argument_specs_from_str::<Latexlike>("AnyDelimited").unwrap_err(),
             ArgumentCodeError::UnknownCode { index: None, offset: 0, code: 'A' }
         );
 
@@ -677,7 +701,7 @@ mod tests {
         // unterminated set.
         for bad in ["e", "ex", "e{}", "e{^", "e{^ _}"] {
             assert_eq!(
-                argument_specs([bad]).unwrap_err(),
+                argument_specs::<Latexlike, _>([bad]).unwrap_err(),
                 ArgumentCodeError::TruncatedCode { index: Some(0), offset: 0, code: 'e' },
                 "code {bad:?}"
             );

@@ -28,8 +28,25 @@ milestone, Progress updated each milestone.
       specs and asserts begin/end payload facts (write_begin/write_end round
       trips, verbatim std end facts) + `body()` through the `()` slot ext.
       609 lib tests, 0 warnings.
-- [ ] M3 — `MacroSpec<LLL>` + `argument_specs<LLL>` + paragraph-break
-      name-as-written / canonical spec
+- [x] M3 — `MacroSpec<LLL>` + `argument_specs<LLL>` + paragraph-break
+      name-as-written / canonical spec: `MacroSpec<LLL = Latexlike>` (SpecialsSpec
+      pattern, manual Debug/Clone/Default); `argument_specs`/`argument_specs_from_str`
+      + helpers over `LLL` via role-trait constructors (`content_group()` for
+      `m`/minted rules/lone-group unwrap, `verbatim_group()` for the `v` codes;
+      minted delimiter spellings unchanged) with the compiler-forced
+      `ArgumentExt<LLL>: Default` bound (D-plan-16); `ParagraphBreakSpec` ZST
+      beside `ParagraphBreakStyle` (blanket `CallableSpec<LLL>` impl, "specials"
+      frame vocabulary, identity = type identity per D-plan-8);
+      `make_paragraph_break_node` + `ParseDriver` hook gained `source_content:
+      &str` (D-plan-7; core default, nodes_parser call site, latexlike pillar +
+      driver delegation, MarkDriver test override, engine/mod.rs test); the
+      Specials arm records the actual whitespace run as name (both the synthetic
+      Invocation's and the node's) and stamps `ParagraphBreakSpec`;
+      ParagraphBreakStyle::Specials rustdoc rewritten (canonical-"\n\n"
+      superseded). Tests: run-as-name + spec-downcast identity (pillar unit,
+      latexlike end-to-end, acceptance), foreign-member MacroSpec/argument_specs
+      incl. `v`-code verbatim group. base_package untouched (monomorphic — S9).
+      610 lib tests, 0 warnings.
 - [ ] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep
 - [ ] M5 — Docs + closure (DR status lines, ARCHITECTURE, superseded-names sweep,
       full gates, stage summary)
@@ -364,6 +381,15 @@ commits, churn).
   growth by field.
 - D-plan-15 (routed from S4): `MacroSpec<LLL = Latexlike>` and
   `argument_specs`/`argument_specs_from_str` generalize over `LLL`.
+- D-plan-16 (compiler-forced, successor 1): the generalized argument-code
+  factory fns (`argument_specs`, `argument_specs_from_str`, and their private
+  helpers) carry `where ArgumentExt<LLL>: Default` — they construct the std
+  argument parsers, whose `ArgumentParser<L>` impls discharge that bound at
+  spec construction (the recorded ArgumentExt-precedent from D-plan-2's bound
+  spread). Consequence: error-shape unit tests whose result never reaches a
+  typed spec need a `::<Latexlike, _>` turbofish (the factory has no defaulted
+  type parameter — Rust fns cannot default them); ordinary embedder use infers
+  `LLL` from the receiving `MacroSpec`/`Package`.
 - S8 note (recorded, not S5's to decide): a *malformed* terminator (`\end y` —
   command consumed alone) records no end-side facts, so payload-only reemission
   of that recovered shape cannot reproduce the consumed `\end` bytes; the
