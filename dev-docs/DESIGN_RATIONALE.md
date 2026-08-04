@@ -3223,6 +3223,15 @@ cross-tree door ([§dd-dr:restage-ops]); latexpp's verbatim output path needs no
 splicing at all — recompose emits `\input{file}` per source, so per-file
 pipelines compose without tree merging.)*
 
+*(Amended — user-ruled 2026-08-04, S6 sign-off: the "preset-configurable"
+state-feedback case above is now concrete — `input_macro_spec` takes a
+mandatory **`persist_state: bool`**, realized as merged after-effect deltas
+returned by the door's outcome bundle and forwarded through the ordinary
+sibling channel (mechanism details: [§dd-dr:input-wiring]'s 2026-08-04
+amendment). This strengthens the no-caching stance: the shipped spec itself
+can feed state back, so the splice recipe's state-transparency precondition is
+now a per-registration fact (`persist_state: false`), not a preset guarantee.)*
+
 #### Parent links, `SourcePos` lookup, and read-side honesty [§dd-dr:tree-navigation]
 
 Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 with the 2b
@@ -4542,16 +4551,37 @@ failure conditions, and the preset `input_macro_spec` are stage S6.)*
 
 *(Fully applied — Phase 3 S6. Application notes: the door's parser parameter is
 `&mut P where P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` — the
-ruled `Vec<BuildId>` return plus the ruled local stray-close recovery require the
+ruled return plus the ruled local stray-close recovery require the
 nodes-run outcome vocabulary; the bundle is a `ParseContext` **method** (the
-T4-1c "on the `ParseContext` surface" home), returning `Option<Vec<BuildId>>`
-(`None` = diagnosed-and-recovered, nothing attached); `NoSourceResolver` carries
+T4-1c "on the `ParseContext` surface" home), returning `Option` (`None` =
+diagnosed-and-recovered, nothing attached); `NoSourceResolver` carries
 the `reference`; the preset spec type is the public `InputMacroSpec<LLL>` (the
-`MacroSpec` pattern), its attached slot named `"attached"` with the ext minted
-via `BodySlotExt::make_body()` — the slot is the node's body on the ext axis,
-`Attached` on the role axis — and the shipped spec is state-transparent (the
-included content's after-effects do not continue into the includer;
-state-propagating `\input` is custom-composition work).)*
+`MacroSpec` pattern), its attached slot named `"attached"`, `Attached` on the
+role axis.)*
+
+*(Amended — user-ruled 2026-08-04, the S6 sign-off design revisions: **outcome
+bundle + persist_state**. (1) The door returns
+**`AttachedSourceOutcome<L> { nodes: Vec<BuildId>, after_effects:
+Option<ParsingStateDelta<L>> }`** instead of bare `Vec<BuildId>` (amending the
+T4-B2 signature above): `NodesOutcome` now exports the merged record of the
+sibling after-effect deltas the run applied (the previously dormant
+merged-delta hook), each component recorded in its **effective, as-applied**
+form — context-dependent events lowered into their override patches before
+recording — merged last-writer-wins per field with scope ops (and any
+context-free events) concatenated in application order; the door merges across
+resumed runs, and `attach_source_reference` returns
+`Option<AttachedSourceOutcome<L>>`. (2) The preset constructor is
+**`input_macro_spec::<LLL>(persist_state: bool, attached_slot_ext:
+SlotExt<LLL>)`** — both parameters mandatory, embedders decide consciously.
+`persist_state: true` forwards the bundle's merged delta as the invocation's
+own after-effect through the existing sibling channel (the
+preamble-defines-macros case; nested inclusions compose outward);
+`false` keeps the transparent behavior. (3) The shipped spec **no longer
+mints body-ness**: the attached slot's ext is the embedder-supplied
+constructor value, cloned per invocation — the preset recipe passes
+`BodyMarker::not_body()` (retrieval by slot name `"attached"`); a body-marked
+ext remains a framework option `body()` finds ([§dd-dr:slot-roles]'s
+findability clause), never the shipped default.)*
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 

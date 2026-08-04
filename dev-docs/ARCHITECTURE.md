@@ -562,9 +562,15 @@ returns (nodes, StopCause) — the caller interprets the ending.
   anchors conditions at the inclusion site. Beside it,
   `cx.attach_source_reference(reference, at, state, parser)` is the single
   resolve-diagnose-attach raising site of the two `core.sources.*` conditions
-  (`NoSourceResolver`, `UnresolvableSourceReference`); the door returns content
-  nodes only — slot assembly stays the invocation parser's job (the preset's
-  opt-in `input_macro_spec` stages them as the `Attached` body slot).
+  (`NoSourceResolver`, `UnresolvableSourceReference`). The door returns an
+  `AttachedSourceOutcome` — content nodes plus the included run's merged
+  after-effect record (`NodesOutcome::after_effects`, the effective as-applied
+  deltas merged in application order) — and slot assembly stays the invocation
+  parser's job: the preset's opt-in `input_macro_spec(persist_state,
+  attached_slot_ext)` stages the nodes as the `Attached` slot under the
+  embedder-supplied ext (not-body in the shipped recipe) and, under
+  `persist_state: true`, forwards the merged record as the invocation's own
+  after-effect through the ordinary sibling channel.
 - The standard inventory mirrors pylatexenc's parser library: the group parser,
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,

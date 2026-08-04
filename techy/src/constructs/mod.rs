@@ -628,7 +628,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///   stage a span-backed chars fallback over them (the unresolvable-command
     ///   precedent, [`UnresolvableCommand`]) so the siblings keep tiling the parsed
     ///   extent. And a node stop condition counts each run's own siblings — its count
-    ///   argument restarts at zero in a resumed segment.
+    ///   argument restarts at zero in a resumed segment. A bridge that *propagates*
+    ///   the runs' state effects likewise merges each run's
+    ///   [`NodesOutcome::after_effects`] into one record in run order (the
+    ///   attached-source door's precedent,
+    ///   [`parse_attached_source`](ParseContext::parse_attached_source)).
     ///
     /// Whether to resume at all is a per-construct policy question, not a default:
     /// the environment body deliberately **unwinds** on a terminator mismatch instead

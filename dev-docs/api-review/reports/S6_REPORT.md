@@ -325,18 +325,23 @@ cache entries compute from one line-starts search body.
 - **D-plan-7** (realization): the constructor's return type is the new public
   `InputMacroSpec<LLL>` (the preset spec-type pattern: stable downcast target,
   preset traceback vocabulary). The record names only `input_macro_spec()`.
-- **D-plan-8** (realization): the attached slot is named `"attached"` (the
-  door/bundle/role family vocabulary) and its ext is minted via
-  `BodySlotExt::make_body()` — the slot is the node's body on the ext axis
-  (the only generic slot-ext mint; the T5 slot-roles amendment sanctions the
-  Attached-body pairing explicitly), `role: SlotRole::Attached` on the role
-  axis.
-- **D-plan-9** (consequence of the ruled door shape): the shipped
-  `input_macro_spec` is **state-transparent** — included content's after-effect
-  deltas do not continue into the includer (the door returns nodes only; a
-  delta cannot be reconstructed from an exit state). Documented loudly;
-  state-propagating `\input` is custom-composition work (T5-G's
-  "preset-configurable" reading).
+- **D-plan-8** — **SUPERSEDED-BY-RULING (user, 2026-08-04)**: the shipped
+  `\input` must NOT overload the preset's body marker. New shape (M7): the
+  attached slot stays named `"attached"` with `role: SlotRole::Attached`, but
+  its ext is an **embedder-supplied constructor value**
+  (`input_macro_spec(…, attached_slot_ext: SlotExt<LLL>)`, cloned per
+  invocation); the spec never calls `BodySlotExt::make_body()`. Shipped
+  registrations pass `BodyMarker::not_body()` — `body()` returns `None`,
+  retrieval is `slot_content_nodes_named("attached")`; a body-marked ext
+  remains a framework option that `body()` finds (T5 findability clause,
+  pinned by test).
+- **D-plan-9** — **RESOLVED AS RULINGS AMENDMENT (user, 2026-08-04)**:
+  `persist_state: bool` (mandatory) on `input_macro_spec` decides whether
+  included state changes persist past the `\input`; mechanism = merged
+  after-effect deltas (NOT state diffing), carried by the door's new outcome
+  bundle and forwarded through the existing sibling channel when `true`
+  (`false` = the previously shipped transparent behavior). See the M7 section
+  below for the machinery.
 - **D-plan-10** (ruled-elsewhere realization): the parse-law checker also
   excludes `Hidden`-slot children from byte accounting entirely — the ruled
   `Hidden` semantics from [§dd-dr:slot-roles]/T5-A9, landed here because the
@@ -355,9 +360,12 @@ cache entries compute from one line-starts search body.
   parser is the standard `{` shape (`GroupArgumentParser::new(content_group)`,
   expression fallback on — `\input a` takes the one-expression reference `a`,
   the pylatexenc `'{'`-code convention).
-- **D-plan-14** (realization): the door discards the sub-parse's pass-through
-  state delta (nowhere to apply it — the door returns nodes; documented on the
-  door together with the state-transparency consequence, D-plan-9).
+- **D-plan-14** (realization; scope narrowed by the 2026-08-04 ruling): the
+  door still discards the sub-parse's **pass-through** delta channel (the
+  standard nodes parser returns `None` there by convention), but the run's
+  *applied* after-effects are no longer lost — they travel as the outcome
+  bundle's merged record (`AttachedSourceOutcome::after_effects`), and
+  forwarding is the caller's choice (M7).
 
 ## Consolidated stage summary (M6 closure)
 
@@ -569,3 +577,81 @@ D-plan-17 below, resolved toward exactness, not approximation.
   `DeriveError::delta` "as applied" notion; ScopeOpError carries no op index
   to strip by): a persisted replay may re-attempt and re-diagnose them at the
   includer — documented, and inherent to the ruled merged-delta mechanism.
+
+### M7 closure
+
+**What changed (code):**
+
+- `state/delta.rs`: crate-private `ParsingStateDelta::merge_from` (sequential
+  composition: rules last-writer-wins via `TokenRulesOverrides::merge_from`,
+  scope ops + events concatenated, `mode`/`ext` last-writer-wins) and
+  `is_empty` (the `None` spelling's probe).
+- `constructs/mod.rs`: crate-private
+  `ParseContext::derive_state_recording(delta, record)` — the capture seam:
+  lowers events exactly like `derive_state` (shared `commit_derivation` tail),
+  merges the effective as-applied delta into `record` only when the
+  transition commits. `parse_nodes`'s resume-bridge rustdoc gains the
+  propagating-bridge obligation (merge `after_effects` across runs).
+- `constructs/nodes_parser.rs`: `NodesOutcome<L>` gains **`after_effects:
+  Option<ParsingStateDelta<L>>`**; `NodesParser` accumulates through the
+  capture seam in `dispatch_invocation` and drains the field at every return
+  (re-invocation contract holds); the "no current consumer of a merged delta"
+  note is consumed and rewritten.
+- `constructs/attached_source.rs`: new public **`AttachedSourceOutcome<L> {
+  nodes, after_effects }`** (manual Debug/Clone, the `NodesOutcome` pattern);
+  `parse_attached_source` returns it (T4-B2 amendment per the ruling), merging
+  `after_effects` across resumed runs; `attach_source_reference` returns
+  `Option<AttachedSourceOutcome<L>>`. Exported via `techy::core::constructs`.
+- `latexlike/input.rs`: `input_macro_spec::<LLL>(persist_state: bool,
+  attached_slot_ext: SlotExt<LLL>)` — both mandatory; the spec stores the ext
+  and clones it per invocation into the `ParsedSlot`; the
+  `SlotExt<LLL>: BodySlotExt` bounds dropped from the spec and its invocation
+  parser; `persist_state: true` returns the bundle's merged delta as the
+  invocation's after-effect (existing sibling channel), `false` returns
+  `None`. Rustdoc: new ext section (embedder decides body-ness; findability
+  clause cited), "# State handling — `persist_state` decides" (paradigm case,
+  nested composition), no-caching section strengthened (the shipped spec can
+  now feed state back). Doctest updated to the two-parameter registration +
+  slot-name retrieval.
+
+**Signature-table rows (new/changed):**
+
+| Item | Signature / shape |
+|---|---|
+| `constructs::AttachedSourceOutcome<L>` | `{ nodes: Vec<BuildId>, after_effects: Option<ParsingStateDelta<L>> }`; manual Debug/Clone (D-plan-15) |
+| `ParseContext::parse_attached_source` | return `ConstructParserResult<L, AttachedSourceOutcome<L>>` (was `Vec<BuildId>`; user-ruled 2026-08-04) |
+| `ParseContext::attach_source_reference` | return `ConstructParserResult<L, Option<AttachedSourceOutcome<L>>>` |
+| `constructs::NodesOutcome` | new field `after_effects: Option<ParsingStateDelta<L>>` — merged effective as-applied sibling deltas, `None` = none (D-plan-17) |
+| `latexlike::input_macro_spec` | `<LLL>(persist_state: bool, attached_slot_ext: SlotExt<LLL>) -> InputMacroSpec<LLL> where ArgumentExt<LLL>: Default` — the `BodySlotExt` bound gone (D-plan-16) |
+| `\input` staged shape | slot `"attached"`/`Attached` unchanged; ext = the constructor value cloned per invocation; `body()` finds it only under a body-marked ext (framework choice) |
+
+**Tests:** 660 lib (+6: door bundle-`None`; preset findability under a
+body-marked ext; persist (a) definition-then-use, (b) transparent leaves the
+includer untouched (single includer-side `UnresolvableCommand`, included-file
+use still resolves), (c) nested composition to the primary, (d) merge order —
+later `enable_comments` override wins, later scope push innermost). Persist
+test (e) is the door-level bundle-`None` test
+(`a_run_without_after_effects_bundles_none`). All prior S6 suites pass under
+the not-body shipped registration (retrieval switched to
+`slot_content_nodes_named("attached")`; `body()` pinned `None`).
+
+**Records:** [§dd-dr:input-wiring] 2026-08-04 amendment note (outcome bundle +
+persist_state + embedder-supplied ext); [§dd-dr:input-attachment] rider (the
+"preset-configurable" case now concrete; no-caching stance strengthened);
+[§dd-dr:slot-roles] needs no edit — it never claimed the preset pairing (its
+findability clause is now exactly the shipped semantics); ARCHITECTURE
+attached-source bullet rewritten; D-plan-8 SUPERSEDED-BY-RULING, D-plan-9
+resolved as rulings amendment, D-plan-14 narrowed.
+
+**Gates (full run at M7 close):** `cargo build` + `cargo build --tests` 0
+warnings; `cargo test` all green — 660 lib + 30 acceptance + 8
+derive-conditions + 1 derive + 28 doctests (2 pre-existing ignored);
+`rm -rf target/doc && cargo docs` 0 warnings, links clean; superseded-names
+sweep clean (incl. no `make_body` in the shipped spec path — only the
+framework-choice test and the doc reference). No escalations: the composition
+clause was checked per component (see "Escalation check" above) — nothing
+fails sequential composition.
+
+**M7 commits:** c921363 revision plan; fb8662c wip (machinery + bundle + spec
+reshape compiling); 6b17598 preset persist_state + embedder-supplied slot ext,
+tests (a)-(e) green; (+ this commit) records + docs + closure.
