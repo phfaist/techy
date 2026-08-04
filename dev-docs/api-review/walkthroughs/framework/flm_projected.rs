@@ -1,7 +1,12 @@
-//! T5 P3-acceptance sketch: the FLM probe **as it would look under the ruled
-//! generalization** (P3 + T3 D/E + P4 + T1/T2 E4 + T4 — none applied to code yet, so
-//! this file does NOT compile today; the binding compile check happens at Phase 3
-//! acceptance, per PLAN).
+//! T5 P3-acceptance sketch: the FLM probe against the ruled generalization.
+//! **Adapted at P3-S5 (M4)**: the vocabulary/driver/event/invocation-syntax
+//! constructs below now reflect the LANDED S1–S5 surface (role traits +
+//! LatexlikeLang umbrella + LatexlikeEvent + ParsingStateStack from S4;
+//! Lang::InvocationSyntax + the latexlike payload enum + FromInvocation from S5).
+//! The file still does NOT compile as a whole: the registration one-liners
+//! (`define_macro`, `minidefs`, `initial_state_data` pillar — S9) and the restage
+//! pass (T5 §A — S7) remain projections; the binding compile check happens at
+//! Phase 3 acceptance, per PLAN.
 //!
 //! Projection sources, per construct:
 //!   [G]  = [§dd-dr:latexlike-generalization] (role traits, LatexlikeLang, pillars)
@@ -13,6 +18,7 @@
 //!   [ES] = [§dd-dr:enclosing-state-stack] + T3 D amendment (exit_math_context_delta)
 //!   [LI] = [§dd-dr:language-init] + T4 collapse
 //!   [IW] = [§dd-dr:input-wiring] (driver resolver field)
+//!   [IS] = [§dd-dr:invocation-syntax] + RECOMPOSE_RULINGS Round 2 (landed, S5)
 //!   [T5?] = NOT ruled — proposed in T5_BRIEF.md (points cited inline)
 //!
 //! Old probe for contrast: walkthroughs/framework probes flm_lang.rs +
@@ -20,11 +26,11 @@
 
 use std::sync::Arc;
 
-// Post-P1 topology paths (illustrative):
-use techy::core::{Lang, LatexlikeLangBoundsEtc /* placeholder */, Language, ParsingState};
+// Post-P1 topology paths (landed except the S9 registration items):
+use techy::core::{Lang, Language, ParsingState};
 use techy::latexlike::{
-    self, builtin_package, minidefs, CallableType, LatexlikeDriver, MacroSpec, Mode,
-    MathGroupForm,
+    self, builtin_package /* S9 */, minidefs /* S9 */, CallableType, LatexlikeDriver,
+    MacroSpec, Mode, MathGroupForm,
 };
 
 // ---------------------------------------------------------------------------------
@@ -56,25 +62,20 @@ impl latexlike::LatexlikeGroupType for FlmGroupType {
 // its own enums, so these two cost zero code. [G]
 // (Mode role trait post-T3 E: only math_mode() + is_math() — no text constructor.)
 
-/// [T5?] — THE GAP (brief point C1): the ruled role-trait set has NO Event member,
-/// but the LLL-generic `\text`-style factory ([§dd-dr:argument-factory-additions])
-/// must mint the exit-math event *in FLM's own Event vocabulary*, and
-/// `LatexlikeDriver<Flm>::resolve_state_event` must recognize it. Proposed:
-///
-///   trait LatexlikeEvent: Clone + ... {
-///       fn exit_math_context() -> Self;          // constructor role
-///       fn is_exit_math_context(&self) -> bool;  // recognizer role
-///   }
-///
-/// with the usual coherence contract. Without it, an FLM using its own Event type
-/// loses the preset text-restore machinery (a fresh cliff of exactly the P3 kind).
+/// The event role trait — RULED (T5 C1) and LANDED (S4): `LatexlikeEvent` closes
+/// the old probe's gap. FLM's own Event type carries the exit-math member through
+/// the constructor/recognizer pair, so the preset text-restore machinery works
+/// with FLM's own events beside it.
 #[derive(Debug, Clone, PartialEq)]
 enum FlmEvent {
     ExitMathContext,
     BeginTheorem, // FLM's own events coexist
 }
 
-// impl latexlike::LatexlikeEvent for FlmEvent { ... }   // [T5?]
+impl latexlike::LatexlikeEvent for FlmEvent {
+    fn exit_math_context() -> Self { FlmEvent::ExitMathContext }
+    fn is_exit_math_context(&self) -> bool { matches!(self, FlmEvent::ExitMathContext) }
+}
 
 // ---------------------------------------------------------------------------------
 // 2. Ext bundle: post-P4 shape — three members, no tier-2, no blanket Default. [EM]
@@ -122,6 +123,16 @@ impl Lang for Flm {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = FlmExts;
+    /// [IS] LANDED (S5): the family payload enum over FLM's own environment-syntax
+    /// record type (`Env = StdEnvironmentSyntax<Flm>`; the enum has no `L` param —
+    /// family members name their Env explicitly, S5 D-plan-4). This one line
+    /// satisfies the umbrella's `LatexlikeInvocationSyntax<Flm> + FromInvocation<Flm>`
+    /// bound (D-plan-9): `FromInvocation` comes with the enum's standard-site
+    /// constructor impl, so FLM drives the std engine (`Language::parse`'s
+    /// bound-where-used, D-plan-2) with zero payload code — macro escape/post-space
+    /// and specials name-as-written recorded for free; the environment arm is staged
+    /// by the (now `LLL`-generic) begin composition.
+    type InvocationSyntax = latexlike::InvocationSyntax<latexlike::StdEnvironmentSyntax<Flm>>;
     type Driver = FlmDriver; // custom (one extra hook) — LatexlikeDriver<Flm> works for wholesale
 
     /// One line instead of the old probe's 13-field TokenRules literal:
@@ -205,13 +216,15 @@ impl techy::core::ParseDriver<Flm> for FlmDriver {
     }
 
     /// E4 hook: preset pillar for the exit-math event, FLM's own events beside it.
-    /// [ES] — signature sufficiency for post-parse synthesis is brief point E.
+    /// [ES] LANDED (S4): the stack parameter is the owning `ParsingStateStack<Flm>`
+    /// (post-parse synthesis feeds one from `from_node_ancestors` — no session
+    /// anywhere), consumed by the pillar directly.
     fn resolve_state_event(
-        &self, event: &FlmEvent, stack: &techy::core::StateStackView<'_, Flm>,
+        &self, event: &FlmEvent, stack: &techy::core::ParsingStateStack<Flm>,
     ) -> Option<techy::core::ParsingStateDelta<Flm>> {
         match event {
             FlmEvent::ExitMathContext =>
-                Some(latexlike::exit_math_context_delta::<Flm>(stack.states() /* [T5?] point E */)),
+                Some(latexlike::exit_math_context_delta::<Flm>(stack)),
             FlmEvent::BeginTheorem => None, // handled in finalize_transition? FLM's business
         }
     }
@@ -226,8 +239,10 @@ impl techy::core::ParseDriver<Flm> for FlmDriver {
 
 fn main() {
     // Registration: LLL-generic specs + one-liners (T1/T2 E1; wish-8 named-first).
+    // MacroSpec<Flm> + argument_specs::<Flm, _> are LANDED (S5 D-plan-15/16); the
+    // `define_macro` one-liner riding them is S9.
     let mut package = techy::core::specs::Package::<Flm>::new("flm");
-    package.define_macro("ref", "m").unwrap(); // MacroSpec<Flm> under the hood [G]
+    package.define_macro("ref", "m").unwrap(); // = MacroSpec::new(argument_specs(["m"])?)
 
     // Language init: P2/T1-T2/T3/T4 collapsed surface. [LI]
     let language = Language::new(

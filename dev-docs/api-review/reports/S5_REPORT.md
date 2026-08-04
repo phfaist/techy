@@ -47,7 +47,16 @@ milestone, Progress updated each milestone.
       latexlike end-to-end, acceptance), foreign-member MacroSpec/argument_specs
       incl. `v`-code verbatim group. base_package untouched (monomorphic — S9).
       610 lib tests, 0 warnings.
-- [ ] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep
+- [x] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep:
+      `check_invocation_syntax_payload` filled (D-plan-12 downcast to the
+      default-Env latexlike enum; Macro spelling-prefix + post-space positional
+      pins — childless arm repaired to containment, D-plan-17; Specials
+      name-as-written prefix pin; Environment write_begin prefix / write_end
+      suffix byte pins); four discriminating should_panic tests
+      (invariants.rs `payload_pins` module: hand-built Latexlike trees with
+      diverging payloads); the whole in-crate suite passes under the active pins
+      (the positive direction — every latexlike parse runs the oracle). FLM
+      probe adapted (edit list below). 614 lib tests, 0 warnings.
 - [ ] M5 — Docs + closure (DR status lines, ARCHITECTURE, superseded-names sweep,
       full gates, stage summary)
 
@@ -390,11 +399,57 @@ commits, churn).
   typed spec need a `::<Latexlike, _>` turbofish (the factory has no defaulted
   type parameter — Rust fns cannot default them); ordinary embedder use infers
   `LLL` from the receiving `MacroSpec`/`Package`.
+- D-plan-17 (handoff-choice repair, successor 1): the handoff's Macro
+  childless-post-space pin ("ends the node's span when childless" — the old
+  invariant-3 arm) contradicts the T5-B `end_pos: Some` rule the same stage
+  landed: the stage_invocation takeover test
+  (latexlike/invocation_syntax.rs `RestOfLineSpec`, `\title The Title\n` →
+  childless span 0..16, trigger post-space 6..7) is exactly the sanctioned
+  consumed-extent-outruns-children shape, and the `==`-pin panics on it.
+  Record-consistent repair implemented: the Macro arm pins the **spelling
+  fact** instead (escape char + name-as-written as the span's byte prefix —
+  the acceptance's "macro spelling facts" verification), the post-space start
+  (immediately after that spelling), and the end — `==` first child's start
+  when children exist, `<=` span end (containment) when childless, since the
+  oracle cannot distinguish the std childless shape (trailing) from a
+  takeover's claimed extent. Std shapes lose no coverage: their trigger end IS
+  the span end, and the start pin is exact.
 - S8 note (recorded, not S5's to decide): a *malformed* terminator (`\end y` —
   command consumed alone) records no end-side facts, so payload-only reemission
   of that recovered shape cannot reproduce the consumed `\end` bytes; the
   tolerant oracle matrix (S8) must exclude or special-case it, or a partial
   end-side record must be added then.
+
+## FLM probe adaptation (M4 — every edit recorded)
+
+dev-docs/api-review/walkthroughs/framework/flm_projected.rs, adapted to the
+landed S1–S5 surface (the file remains a projection as a whole — the S9
+registration one-liners and the S7 restage pass keep their markers):
+
+1. Header rewritten: landed-vs-projected status per construct; `[IS]` source tag
+   added ([§dd-dr:invocation-syntax] + Round 2, landed S5).
+2. Import drift: `LatexlikeLangBoundsEtc /* placeholder */` dropped from the
+   `techy::core` use (the umbrella is `latexlike::LatexlikeLang`);
+   `builtin_package`/`minidefs` marked S9.
+3. The `[T5?]` LatexlikeEvent GAP block replaced by the landed trait's actual
+   impl for `FlmEvent` (`exit_math_context()`/`is_exit_math_context()` — ruled
+   T5 C1, landed S4).
+4. Lang impl gains `type InvocationSyntax =
+   latexlike::InvocationSyntax<latexlike::StdEnvironmentSyntax<Flm>>;` with the
+   D-plan-4 (explicit Env, no `L` param on the enum) and D-plan-9/D-plan-2
+   (umbrella bound; `FromInvocation` via the enum's standard-site constructor —
+   zero payload code to drive the std engine) notes.
+5. `resolve_state_event` S4 drift fixed: `StateStackView<'_, Flm>` →
+   `ParsingStateStack<Flm>`, `stack.states()` → `stack` (the `[T5?] point E`
+   marker resolved — the pillar consumes the owning stack directly).
+6. Registration comment updated: `MacroSpec<Flm>` + `argument_specs::<Flm, _>`
+   landed (D-plan-15/16); the `define_macro` one-liner stays an S9 projection.
+
+Outcome: the S5-relevant construct (a foreign family member whose payload is the
+latexlike enum over its own environment record, driving the std engine and the
+`LLL`-generic environments machinery) is compile-and-run-checked in-crate by the
+`Flavored` tests (latexlike/mod.rs); the probe file matches that landed shape
+line-for-line on those constructs.
 
 ## Handoff notes (relay — written at the supervisor's ~600k-token cutoff)
 
