@@ -665,7 +665,9 @@ records no end facts → tolerant oracle matrix must exclude/special-case) stand
 - a888682 P3-S5 M2 addendum: foreign-LLL environment smoke test
 - d339c0c P3-S5 M3: MacroSpec<LLL> + argument_specs<LLL> + paragraph-break name-as-written
 - 5f362bb P3-S5 M4: parse-law payload pins + FLM probe adaptation
-- (M5 closure commit: docs riders + DR status lines + this summary)
+- ac12223 P3-S5 M5: docs + closure — DR status lines, ARCHITECTURE passages,
+  guide fix, doc links, gates green, stage summary
+- (plus this commit-hash fix)
 
 ### Churn
 
