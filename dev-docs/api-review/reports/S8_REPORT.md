@@ -32,7 +32,8 @@ Baseline (must not regress): 689 lib + 30 acceptance + 8 derive-conditions +
       Recomposer, RecomposeError, driver + instruction lowering,
       core_source_instruction + machinery tests (10 tests; 708 lib green,
       0 warnings)
-- [ ] M4 — RecomposeContext region ops + wrapping-contract + streaming tests
+- [x] M4 — RecomposeContext region ops + wrapping-contract + streaming tests
+      (7 tests; 715 lib green, 0 warnings)
 - [ ] M5 — preset SourceRecomposer + source_recomposer() + preset tests
 - [ ] M6 — oracle acceptance suite (strict + tolerant + multi-source matrices)
 - [ ] M7 — records + docs + gates + closure
@@ -502,3 +503,34 @@ tests at minimum; full gates at M7).
   (wrapper + restage→recompose pipeline), the no-sink/streaming shape, the
   scope asymmetry, and the state model; the lib.rs module list gained
   `visit` (M2) and `recompose` bullets.
+
+### M4 realization notes
+
+- Region ops shipped per the plan roster (D-plan-8 positional sibling
+  included), as `RecomposeContext` methods in context.rs; shared private tail
+  `fold_nodes(node, range, state, recomposer)` drives `tree.nodes_in(range)`
+  through the passed recomposer — self-passing keeps outermost lowering
+  intact through op re-entry. Private helpers `argument`/`argument_index`
+  are `E`-generic so the misuse errors type-unify at every call site.
+- `recompose_argument`/`_content` on an absent argument return `P::empty()`
+  (documented presence semantics, D-plan-7's argument); ops verify
+  callable-ness first (`NotACallable`), then index/name, mirroring restage's
+  op order; `recompose_body` filters slot exts under the bound-where-used
+  `SlotExt<L>: BodySlotExt` and reports `NoBodySlot`.
+- Wrapping-contract test: a wrapper over the core reemitter overrides the
+  chars node "X" buried two delegated levels down (`a{b{X}}` → `a{b{!}}`) —
+  discriminating: lowering against the inner recomposer after the first
+  delegation would reemit the buried X verbatim. The wrapper never descends
+  explicitly.
+- Streaming test: `Piece = ()` with the writer in `&mut self` (plain-text
+  extraction in visit order). Realization note, not a deviation: with unit
+  pieces a `Concat` head/tail cannot carry bytes, so *bracketed* output
+  streams need the value fold (or writer-side bookkeeping) — enter-ordered
+  output is the streaming shape the records describe.
+- Tests (7): whole-region vs content designation (`\a{1} {2}` — the
+  inter-argument noise case), named variants + `UnknownArgumentName`, absent
+  argument → empty piece, slot content by index/name + `recompose_body` +
+  `UnknownSlotName` (environment fixture, slot name `"body"`), op-misuse
+  matrix (`ArgumentIndexOutOfRange` with count, `SlotIndexOutOfRange`,
+  `NoBodySlot` on a macro, `NotACallable` on chars), the wrapping-contract
+  test, the streaming test.
