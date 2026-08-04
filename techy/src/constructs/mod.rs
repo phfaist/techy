@@ -56,10 +56,10 @@ pub use child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 pub use embellishments_parser::EmbellishmentsArgumentParser;
 pub use tack_on_parser::{RepeatedTackOnField, TackOnFieldsArgumentParser};
 pub use environment_parser::{
-    read_rigid_name_group, EnvironmentBody, EnvironmentBodyParser,
-    EnvironmentTerminatorFacts, EnvironmentTerminatorMismatch,
-    MalformedEnvironmentTerminator, MissingEnvironmentTerminator,
-    MissingTerminatorFound, NameGroup,
+    read_rigid_name_group, EnvironmentBeginSyntaxData, EnvironmentBody,
+    EnvironmentBodyParser, EnvironmentTerminatorMismatch,
+    EnvironmentTerminatorSyntaxData, MalformedEnvironmentTerminator,
+    MissingEnvironmentTerminator, MissingTerminatorFound, NameGroup,
 };
 pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
 pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};

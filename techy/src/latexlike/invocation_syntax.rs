@@ -19,14 +19,14 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::constructs::{
-    read_rigid_name_group, ConstructParserResult, FromInvocation, Invocation, NameGroup,
-    ParseContext,
+    EnvironmentBeginSyntaxData, EnvironmentTerminatorSyntaxData, FromInvocation,
+    Invocation, NameGroup,
 };
 use crate::source::{Source, Span, TextContent};
 use crate::state::{InvocationSyntax, Lang};
-use crate::token::{GroupRule, Token, TokenKind};
+use crate::token::{GroupRule, TokenKind};
 
-use super::lang::{LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang};
+use super::lang::{LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
 
 /// The latexlike invocation-syntax payload ([`Lang::InvocationSyntax`]): the
@@ -240,57 +240,47 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
     }
 }
 
-/// The environment-syntax contract of an `Env` payload type (the
-/// [`Environment`](InvocationSyntaxData::Environment) arm): **scanning and payload
-/// construction, consolidated** in the accumulator shape — [`parse_begin`] scans
-/// the begin-side scaffolding and returns the accumulator with the begin side
-/// filled and the end side empty; [`parse_end`] fills the end side from the facts
-/// the body parser (the terminator consumer) reported back; the intermediate
-/// state doubles as the synthesis constructor's shape. The type also owns its own
-/// re-emission ([`write_begin`]/[`write_end`]) — the accuracy doctrine made
-/// literal: what `parse_begin`/`parse_end` record is exactly what the writers
-/// emit.
+/// The environment-syntax **record contract** of an `Env` payload type (the
+/// [`Environment`](InvocationSyntaxData::Environment) arm): a constructor from
+/// the parsed facts, plus the type's own re-emission.
+///
+/// The record does **no scanning**: the driving composition (the preset's
+/// `\begin` invocation parser) owns all scanning — the begin trigger, the rigid
+/// name group, arguments, and the body whose parser consumes the terminator —
+/// and hands the collected facts to [`from_parsed`] exactly once, at staging
+/// time. (An earlier accumulator shape had the record "scan" its sides; it was
+/// superseded — the body parser is the terminator consumer, so end-side scanning
+/// delegation was illusory, and the mutate-in-place accumulator locked custom
+/// `Env` types into the standard flow's shape.) Scanning **tolerance** is
+/// likewise a parser concern: swap the invocation/body parser through the
+/// behavior door; the record records what its parser consumed.
+///
+/// Re-emission stays a **writer pair** ([`write_begin`]/[`write_end`]) — the
+/// recompose stage's `Concat` head/tail and the parse-law checker's
+/// prefix/suffix pins each need the two sides separately — and is the accuracy
+/// doctrine made literal: what `from_parsed` recorded is exactly what the
+/// writers emit.
 ///
 /// The data bounds and materialization come from the core
 /// [`InvocationSyntax`] supertrait (the name-group rule `Arc` is
 /// source-independent and exempt).
 ///
-/// # The verbatim caveat
-///
-/// A raw (verbatim) body consumes its terminator as **one literal token** — the
-/// whole `\end{name}` spelling is the expected-close string — so no tokenized end
-/// scan exists to delegate: that path records standard-shaped end facts via the
-/// one std-facts method the trait keeps, [`record_std_end_facts`].
-///
-/// [`parse_begin`]: EnvironmentSyntax::parse_begin
-/// [`parse_end`]: EnvironmentSyntax::parse_end
+/// [`from_parsed`]: EnvironmentSyntax::from_parsed
 /// [`write_begin`]: EnvironmentSyntax::write_begin
 /// [`write_end`]: EnvironmentSyntax::write_end
-/// [`record_std_end_facts`]: EnvironmentSyntax::record_std_end_facts
 pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
-    /// The begin-side scan, entered at the reader position right past the consumed
-    /// begin trigger (`trigger`): read the environment's name scaffolding per this
-    /// type's syntax — the standard record reads the **rigid** name group
-    /// ([`read_rigid_name_group`]) — and return the name info the composition
-    /// needs plus the accumulator (begin side filled, end side empty).
-    ///
-    /// `Ok(None)` = no name scaffolding at the position (malformed begin);
-    /// **nothing is consumed** and the composition applies its own recovery.
-    fn parse_begin(
-        cx: &mut ParseContext<'_, '_, L>,
-        trigger: &Token<'_, L>,
-    ) -> ConstructParserResult<L, Option<(NameGroup<L>, Self)>>;
-
-    /// Fill the end side from the tokenized terminator facts the body parser
-    /// reported back
-    /// ([`EnvironmentTerminatorFacts::Scanned`](crate::constructs::EnvironmentTerminatorFacts)).
-    fn parse_end(&mut self, end: StdEnvironmentSideSyntax<L>);
-
-    /// The **one std-facts method** — the verbatim path (see the trait docs):
-    /// record a standard-shaped end side synthesized from the begin side's facts
-    /// (same escape character and name-group rule, empty post-space) and
-    /// `command_word` (the terminator's command word, `end`).
-    fn record_std_end_facts(&mut self, command_word: &str);
+    /// Build the record from the parsed facts: the begin side's
+    /// [`EnvironmentBeginSyntaxData`] (validated command trigger + matched rigid
+    /// name group) and the terminator facts the body parser reported back —
+    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a tokenized
+    /// terminator, [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a
+    /// raw (verbatim) body's one-token literal terminator, `None` when the body
+    /// closed without consuming one (mismatch, malformed terminator, end of
+    /// input) — the end side then stays empty.
+    fn from_parsed(
+        begin: EnvironmentBeginSyntaxData<L>,
+        terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
+    ) -> Self;
 
     /// The begin-side spelling as recorded, resolved around `name` (the
     /// environment's name as written); `source` (the carrying node's own source)
@@ -304,12 +294,11 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     fn write_end(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 }
 
-/// The standard environment-syntax record: strict rigid scanning (the begin
-/// composition's canonical shape), per-side facts in
-/// [`StdEnvironmentSideSyntax`] — begin always present, end filled by
-/// [`parse_end`](EnvironmentSyntax::parse_end) /
-/// [`record_std_end_facts`](EnvironmentSyntax::record_std_end_facts) (or left
-/// empty on the recovery paths: mismatch, malformed terminator, end of input).
+/// The standard environment-syntax record: per-side facts in
+/// [`StdEnvironmentSideSyntax`] — begin always present, end filled from the
+/// terminator facts at construction
+/// ([`from_parsed`](EnvironmentSyntax::from_parsed)), or left empty on the
+/// recovery paths (mismatch, malformed terminator, end of input).
 pub struct StdEnvironmentSyntax<L: Lang> {
     /// The `\begin{name}` side's facts.
     pub begin: StdEnvironmentSideSyntax<L>,
@@ -331,51 +320,66 @@ impl<L: Lang> InvocationSyntax<L> for StdEnvironmentSyntax<L> {
 }
 
 impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
-    /// The rigid begin scan: the name group must be the immediately next token, of
-    /// the language's [content class](LatexlikeGroupType::content_group)
-    /// ([`read_rigid_name_group`]'s contract); the begin side records the trigger
-    /// token's facts and the matched name-group rule.
-    fn parse_begin(
-        cx: &mut ParseContext<'_, '_, L>,
-        trigger: &Token<'_, L>,
-    ) -> ConstructParserResult<L, Option<(NameGroup<L>, Self)>> {
-        let Some(name_group) = read_rigid_name_group(cx, L::GroupTypeId::content_group())?
-        else {
-            return Ok(None);
+    /// Transcription per terminator arm:
+    ///
+    /// - the begin side transcribes the begin facts verbatim (spans stay
+    ///   span-backed);
+    /// - a [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) terminator
+    ///   transcribes the end side the same way;
+    /// - a [`Literal`](EnvironmentTerminatorSyntaxData::Literal) terminator (the
+    ///   verbatim path — the whole `\end{name}` spelling was one expected-close
+    ///   token, so no tokenized facts exist) synthesizes a **standard-shaped**
+    ///   end side from the begin side's facts and the preset's `end` command
+    ///   word: same escape character and name-group rule, owned command word,
+    ///   empty post-space — exactly the spelling the literal terminator was
+    ///   composed from;
+    /// - `None` leaves the end side empty.
+    fn from_parsed(
+        begin: EnvironmentBeginSyntaxData<L>,
+        terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
+    ) -> Self {
+        let transcribe_side = |escape_char: char,
+                               command_word: Span,
+                               post_space: Span,
+                               name_group: &NameGroup<L>| {
+            StdEnvironmentSideSyntax {
+                escape_char,
+                command_word: TextContent::Spanned(command_word),
+                post_space: TextContent::Spanned(post_space),
+                name_group_rule: Arc::clone(&name_group.rule),
+            }
         };
-        let (escape_char, post_space) = match &trigger.kind {
-            TokenKind::Command { escape_char, post_space, .. } => (*escape_char, *post_space),
-            // The begin composition dispatches off a command token; a non-command
-            // trigger (custom composition) records a degenerate empty spelling.
-            _ => ('\u{0}', Span::empty(trigger.span.end())),
-        };
-        let begin = StdEnvironmentSideSyntax {
-            escape_char,
-            command_word: TextContent::Spanned(Span::new(
-                trigger.span.start() + escape_char.len_utf8(),
-                post_space.start(),
+        let begin_side = transcribe_side(
+            begin.escape_char,
+            begin.command_word,
+            begin.post_space,
+            &begin.name_group,
+        );
+        let end = match &terminator {
+            Some(EnvironmentTerminatorSyntaxData::Scanned {
+                escape_char,
+                command_word,
+                post_space,
+                name_group,
+            }) => Some(transcribe_side(
+                *escape_char,
+                *command_word,
+                *post_space,
+                name_group,
             )),
-            post_space: TextContent::Spanned(post_space),
-            name_group_rule: Arc::clone(&name_group.rule),
+            Some(EnvironmentTerminatorSyntaxData::Literal { .. }) => {
+                Some(StdEnvironmentSideSyntax {
+                    escape_char: begin_side.escape_char,
+                    command_word: TextContent::from(String::from(
+                        super::environments::END_COMMAND_NAME,
+                    )),
+                    post_space: TextContent::empty(),
+                    name_group_rule: Arc::clone(&begin_side.name_group_rule),
+                })
+            }
+            None => None,
         };
-        let syntax = StdEnvironmentSyntax { begin, end: None };
-        Ok(Some((name_group, syntax)))
-    }
-
-    fn parse_end(&mut self, end: StdEnvironmentSideSyntax<L>) {
-        self.end = Some(end);
-    }
-
-    /// Standard end facts off the begin side: same escape character and name-group
-    /// rule, owned `command_word`, empty post-space — exactly the spelling the
-    /// verbatim path's literal terminator was composed from.
-    fn record_std_end_facts(&mut self, command_word: &str) {
-        self.end = Some(StdEnvironmentSideSyntax {
-            escape_char: self.begin.escape_char,
-            command_word: TextContent::from(String::from(command_word)),
-            post_space: TextContent::empty(),
-            name_group_rule: Arc::clone(&self.begin.name_group_rule),
-        });
+        StdEnvironmentSyntax { begin: begin_side, end }
     }
 
     fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String {
@@ -578,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_environments_record_std_end_facts_from_the_literal() {
+    fn verbatim_environments_synthesize_std_end_facts_from_the_literal() {
         let language = env_language();
         let content = "\\begin{verbatim}\na % b\n\\end{verbatim}";
         let result = parse_ok(&language, content);

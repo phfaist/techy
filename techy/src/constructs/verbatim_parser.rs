@@ -57,7 +57,7 @@ use crate::token::{GroupRule, Token, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
-    EnvironmentBody, EnvironmentTerminatorFacts, MissingEnvironmentTerminator,
+    EnvironmentBody, EnvironmentTerminatorSyntaxData, MissingEnvironmentTerminator,
     MissingTerminatorFound,
 };
 use super::{ConstructParser, ConstructParserResult, ParseContext};
@@ -590,7 +590,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
                 // end facts from it (no tokenized scan exists for a raw body).
                 terminator: raw_end
                     .terminator
-                    .map(|span| EnvironmentTerminatorFacts::Literal { span }),
+                    .map(|span| EnvironmentTerminatorSyntaxData::Literal { span }),
             },
             None,
         ))

@@ -63,8 +63,8 @@ use alloc::format;
 
 use crate::constructs::{
     parse_declared_arguments, read_rigid_name_group, ConstructParser,
-    ConstructParserResult, EnvironmentBody, EnvironmentBodyParser,
-    EnvironmentTerminatorFacts, Invocation, ParseContext, VerbatimBodyParser,
+    ConstructParserResult, EnvironmentBeginSyntaxData, EnvironmentBody,
+    EnvironmentBodyParser, Invocation, ParseContext, VerbatimBodyParser,
 };
 use crate::error::DiagnosticInfo;
 use crate::node::{
@@ -74,11 +74,11 @@ use crate::node::{
 use core::marker::PhantomData;
 
 use crate::scopes::{CallableQuery, CallableSyntax};
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
-use super::invocation_syntax::{EnvironmentSyntax, StdEnvironmentSideSyntax};
+use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{
     LatexlikeCallableType, LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang,
 };
@@ -585,8 +585,22 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
 }
 
 /// The environment composition (a tier-2 temporary, [`BeginSpec`]'s parser):
-/// scaffolding, resolution, arguments, body, node assembly — minimal scanning code of
-/// its own, assembled from the public core building blocks (module docs).
+/// scaffolding, resolution, arguments, body, node assembly — assembled from the
+/// public core building blocks (module docs). The composition owns **all
+/// scanning**: it validates the trigger, reads the rigid name group
+/// ([`read_rigid_name_group`]), parses arguments and body, and hands the
+/// collected facts to the environment record's constructor
+/// ([`EnvironmentSyntax::from_parsed`]) once, at staging time.
+///
+/// # Contract: std environments are command-initiated
+///
+/// This parser is dispatched for the `\begin` **command** ([`BeginSpec`] is a
+/// macro-shaped entry), and its trigger must be a
+/// [`Command`](crate::token::TokenKind::Command) token — a different trigger
+/// shape (a specials-dispatched begin, say) is a documented-contract violation
+/// and aborts as an implementation error. A custom trigger shape needs its own
+/// composition *and* its own `Env` record type: this composition's begin facts
+/// ([`EnvironmentBeginSyntaxData`]) are command-spelling facts by construction.
 struct EnvironmentInvocationParser<'a, 's, LLL: LatexlikeLang> {
     invocation: Invocation<'a, 's, LLL>,
 }
@@ -603,20 +617,34 @@ where
     ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)>
     {
         // The language's environment-side record ([`LatexlikeInvocationSyntax::Env`])
-        // owns the begin/end syntax; the composition owns resolution, arguments,
-        // and node assembly.
+        // records the begin/end syntax; the composition owns all scanning plus
+        // resolution, arguments, and node assembly.
         type Env<LLL> =
             <<LLL as crate::state::Lang>::InvocationSyntax as LatexlikeInvocationSyntax<
                 LLL,
             >>::Env;
         let trigger = self.invocation.token;
 
-        // Begin-side scaffolding scan, delegated to the environment-syntax record
-        // ([`EnvironmentSyntax::parse_begin`]): the rigid name group must be the
-        // immediately next token; the begin-side spelling facts (escape char,
-        // command word, post-space, name-group rule) are recorded on the
-        // accumulator, no longer normalized away.
-        let Some((name_group, mut env_syntax)) = Env::<LLL>::parse_begin(cx, trigger)?
+        // The trigger contract first (see the type docs): std environments are
+        // command-initiated, so a non-command trigger is a documented-contract
+        // violation by whatever dispatched this composition — an implementation
+        // error, not a source condition.
+        let crate::token::TokenKind::Command { escape_char, post_space, .. } =
+            &trigger.kind
+        else {
+            return Err(cx.implementation_error(
+                "the std environment composition requires a Command trigger \
+                 (custom trigger shapes need their own composition and Env type)",
+                trigger.span,
+            ));
+        };
+        let (escape_char, post_space) = (*escape_char, *post_space);
+
+        // The begin-side scaffolding scan, composition-owned: the rigid name
+        // group must be the immediately next token, of the language's content
+        // class ([`read_rigid_name_group`]'s contract).
+        let Some(name_group) =
+            read_rigid_name_group(cx, LLL::GroupTypeId::content_group())?
         else {
             cx.recover(MalformedBegin, SourceSpan::new(&cx.source, trigger.span))?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
@@ -632,6 +660,19 @@ where
         };
         let source = Arc::clone(&cx.source);
         let name = &source.content()[name_group.name_span.range()];
+
+        // The begin side's spelling facts (escape char, command word, post-space,
+        // matched name group) — recorded, no longer normalized away; handed to the
+        // record's constructor at staging time.
+        let begin_syntax = EnvironmentBeginSyntaxData {
+            escape_char,
+            command_word: Span::new(
+                trigger.span.start() + escape_char.len_utf8(),
+                post_space.start(),
+            ),
+            post_space,
+            name_group: name_group.clone(),
+        };
 
         // Resolve the environment's spec by name through the scope stack. A provider
         // failure is an operational error, not a source condition — abort via the
@@ -673,16 +714,14 @@ where
             .map(|environment_spec| environment_spec.behavior());
         // The invocation facts handed to the behavior hooks, spelling pieces
         // included (a takeover body composes its terminator from them). The rule
-        // `Arc` clone pins the delimiter strings for the borrow.
+        // `Arc` clone pins the delimiter strings for the borrow; the escape char
+        // transcribes from the already-validated command trigger.
         let name_group_rule = Arc::clone(&name_group.rule);
         let env_invocation = EnvironmentInvocation {
             trigger_span: trigger.span,
             name,
             name_span: name_group.name_span,
-            escape_char: match &trigger.kind {
-                crate::token::TokenKind::Command { escape_char, .. } => *escape_char,
-                _ => '\u{0}',
-            },
+            escape_char,
             name_group_open: &name_group_rule.open,
             name_group_close: &name_group_rule.close,
         };
@@ -702,31 +741,24 @@ where
         };
         let (body, passthrough) = cx.parse_scoped(body_state, &mut *body_parser)?;
         drop(body_parser);
-        debug_assert!(passthrough.is_none(), "the body parser returns no pass-through delta");
-
-        // End-side facts, reported back by the body parser (the terminator
-        // consumer): a tokenized terminator fills the end side verbatim; a raw
-        // (verbatim) body consumed its terminator as one literal token, so the
-        // record notes standard-shaped end facts; a body that closed without a
-        // terminator (mismatch, malformed, end of input) leaves the end side
-        // empty.
-        match &body.terminator {
-            Some(EnvironmentTerminatorFacts::Scanned {
-                escape_char,
-                command_word,
-                post_space,
-                name_group,
-            }) => env_syntax.parse_end(StdEnvironmentSideSyntax {
-                escape_char: *escape_char,
-                command_word: TextContent::Spanned(*command_word),
-                post_space: TextContent::Spanned(*post_space),
-                name_group_rule: Arc::clone(&name_group.rule),
-            }),
-            Some(EnvironmentTerminatorFacts::Literal { .. }) => {
-                env_syntax.record_std_end_facts(END_COMMAND_NAME);
-            }
-            None => {}
+        // A behavior-supplied body parser is outer-layer input; its documented
+        // contract (no pass-through delta) is enforced as an implementation
+        // error, never a panic ([§dd-dr:panic-policy]).
+        if passthrough.is_some() {
+            return Err(cx.implementation_error(
+                "the environment body parser must return no pass-through state delta",
+                trigger.span,
+            ));
         }
+
+        // The payload, constructed once at staging time: the begin facts the
+        // composition scanned plus the terminator facts the body parser (the
+        // terminator consumer) reported back — a tokenized terminator carries its
+        // full spelling; a raw (verbatim) body consumed its terminator as one
+        // literal token (std-shaped facts synthesized by the record); a body that
+        // closed without a terminator (mismatch, malformed, end of input) leaves
+        // the end side empty.
+        let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator);
 
         let offset = children.len() as u32;
         children.push(body.body);

@@ -171,13 +171,60 @@ impl<L: Lang> fmt::Debug for NameGroup<L> {
     }
 }
 
+/// The spelling facts of a consumed environment **begin** trigger — the
+/// begin-side channel of the Lang-owned invocation-syntax recording
+/// ([`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
+/// built by the driving composition from the validated command trigger and the
+/// matched rigid name group ([`read_rigid_name_group`]), and handed — together
+/// with the end side's [`EnvironmentTerminatorSyntaxData`] — to the environment
+/// record's constructor (the latexlike `EnvironmentSyntax::from_parsed`).
+///
+/// Mirrors the [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) arm's
+/// fields: spans into the source being parsed, plus the matched name group.
+pub struct EnvironmentBeginSyntaxData<L: Lang> {
+    /// The begin command's escape character as written.
+    pub escape_char: char,
+    /// The command word's span (the name, without the escape character).
+    pub command_word: Span,
+    /// The command token's own syntactic post-space span (`\begin {name}`'s
+    /// tolerated inline whitespace).
+    pub post_space: Span,
+    /// The matched rigid name group (span, end, and the matched rule).
+    pub name_group: NameGroup<L>,
+}
+
+// Manual impls: derives would demand `L: Clone`/`L: Debug`.
+
+impl<L: Lang> Clone for EnvironmentBeginSyntaxData<L> {
+    fn clone(&self) -> Self {
+        EnvironmentBeginSyntaxData {
+            escape_char: self.escape_char,
+            command_word: self.command_word,
+            post_space: self.post_space,
+            name_group: self.name_group.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for EnvironmentBeginSyntaxData<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnvironmentBeginSyntaxData")
+            .field("escape_char", &self.escape_char)
+            .field("command_word", &self.command_word)
+            .field("post_space", &self.post_space)
+            .field("name_group", &self.name_group)
+            .finish()
+    }
+}
+
 /// The spelling facts of a consumed environment terminator, reported back on
 /// [`EnvironmentBody::terminator`] by the body parser (the terminator consumer) —
 /// the end-side channel of the Lang-owned invocation-syntax recording
 /// ([`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
-/// the driving composition transcribes these facts into its payload's end side.
+/// the driving composition hands these facts, together with the begin side's
+/// [`EnvironmentBeginSyntaxData`], to the environment record's constructor.
 #[non_exhaustive]
-pub enum EnvironmentTerminatorFacts<L: Lang> {
+pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
     /// The tokenized flow consumed a well-formed terminator — the stop command
     /// followed by its rigid name group — and reports its full spelling facts
     /// (spans into the body's source).
@@ -204,31 +251,31 @@ pub enum EnvironmentTerminatorFacts<L: Lang> {
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`.
 
-impl<L: Lang> Clone for EnvironmentTerminatorFacts<L> {
+impl<L: Lang> Clone for EnvironmentTerminatorSyntaxData<L> {
     fn clone(&self) -> Self {
         match self {
-            EnvironmentTerminatorFacts::Scanned {
+            EnvironmentTerminatorSyntaxData::Scanned {
                 escape_char,
                 command_word,
                 post_space,
                 name_group,
-            } => EnvironmentTerminatorFacts::Scanned {
+            } => EnvironmentTerminatorSyntaxData::Scanned {
                 escape_char: *escape_char,
                 command_word: *command_word,
                 post_space: *post_space,
                 name_group: name_group.clone(),
             },
-            EnvironmentTerminatorFacts::Literal { span } => {
-                EnvironmentTerminatorFacts::Literal { span: *span }
+            EnvironmentTerminatorSyntaxData::Literal { span } => {
+                EnvironmentTerminatorSyntaxData::Literal { span: *span }
             }
         }
     }
 }
 
-impl<L: Lang> fmt::Debug for EnvironmentTerminatorFacts<L> {
+impl<L: Lang> fmt::Debug for EnvironmentTerminatorSyntaxData<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EnvironmentTerminatorFacts::Scanned {
+            EnvironmentTerminatorSyntaxData::Scanned {
                 escape_char,
                 command_word,
                 post_space,
@@ -240,7 +287,7 @@ impl<L: Lang> fmt::Debug for EnvironmentTerminatorFacts<L> {
                 .field("post_space", post_space)
                 .field("name_group", name_group)
                 .finish(),
-            EnvironmentTerminatorFacts::Literal { span } => {
+            EnvironmentTerminatorSyntaxData::Literal { span } => {
                 f.debug_struct("Literal").field("span", span).finish()
             }
         }
@@ -349,12 +396,13 @@ pub struct EnvironmentBody<L: Lang> {
     /// staged the body is the one that knows, exactly as for arguments
     /// (parse-time designation).
     pub content: ContentNodes,
-    /// The consumed terminator's spelling facts ([`EnvironmentTerminatorFacts`]),
+    /// The consumed terminator's spelling facts ([`EnvironmentTerminatorSyntaxData`]),
     /// `None` when the body closed without consuming one (name mismatch, malformed
     /// terminator, unexpected group close, end of input) — the end-side channel of
-    /// the invocation-syntax recording: the driving composition transcribes these
-    /// facts into its payload.
-    pub terminator: Option<EnvironmentTerminatorFacts<L>>,
+    /// the invocation-syntax recording: the driving composition hands these facts
+    /// to its environment record's constructor (together with the begin side's
+    /// [`EnvironmentBeginSyntaxData`]) when it builds the payload at staging time.
+    pub terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
 }
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`.
@@ -449,13 +497,13 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     /// its span start: read the rigid name group that must follow immediately, verify
     /// the back-reference, and consume — or unwind — per decision 8 (module docs).
     /// Returns the environment's end position, plus the consumed terminator's
-    /// spelling facts on the clean path ([`EnvironmentTerminatorFacts::Scanned`];
+    /// spelling facts on the clean path ([`EnvironmentTerminatorSyntaxData::Scanned`];
     /// `None` on every recovery path — nothing well-formed was consumed).
     fn finish_terminator(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
         body_end: usize,
-    ) -> ConstructParserResult<L, (usize, Option<EnvironmentTerminatorFacts<L>>)> {
+    ) -> ConstructParserResult<L, (usize, Option<EnvironmentTerminatorSyntaxData<L>>)> {
         // Re-read the stop token (its pre-space is already flushed as body content, so
         // it sits at its own span start). It was cleanly read under this same state
         // moments ago, so this cannot fail; the defensive arm only guards a misbehaving
@@ -483,7 +531,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                     // command token and the matched name group.
                     let facts = match &end_token.kind {
                         TokenKind::Command { escape_char, post_space, .. } => {
-                            Some(EnvironmentTerminatorFacts::Scanned {
+                            Some(EnvironmentTerminatorSyntaxData::Scanned {
                                 escape_char: *escape_char,
                                 command_word: Span::new(
                                     end_token.span.start() + escape_char.len_utf8(),
