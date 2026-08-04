@@ -1130,6 +1130,17 @@ entry (an `Arc`-equal duplicate otherwise being harmless under scan semantics).
 Patch merging: patches in event order, the delta's own explicit overrides win —
 "the delta author spoke".)*
 
+*(Amended — user ruling, 2026-08-04: the restore is the found state's
+`TokenRules` **minus the transient gates** — `expecting_group_close` and
+`temporary_groups` are **never restored**. They describe in-flight structural
+expectations of the abandoned context (which close that context's own group
+descent was waiting for; which scoped-lifecycle delimiters were live there), not
+lexical context; restoring them would plant another scope's expectations into
+the new one. This supersedes the literal whole-`TokenRules` reading above (the
+S4 application initially implemented the literal reading, correct at the time);
+the derived state inherits both fields from its base as usual, and a following
+group descent installs its own expectation through the descent invariant.)*
+
 #### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
 
 Status: DECIDED (user, API-review T3 session).
@@ -6154,8 +6165,9 @@ Two additions to the latexlike argument vocabulary, and one reshaped wish:
    composable with every argument shape, optional included. The old guide recipe is
    repaired: it statically reset `forbidden_chars` and `groups`, clobbering embedder
    customizations. Restore semantics — nearest enclosing text-mode state (else the
-   outermost), whole `TokenRules` — and the public pillar functions:
-   [§dd-dr:enclosing-state-stack].
+   outermost), whole `TokenRules` (since amended: minus the transient gates —
+   the 2026-08-04 note on [§dd-dr:enclosing-state-stack]) — and the public pillar
+   functions: [§dd-dr:enclosing-state-stack].
 
 Rejected alternatives: a canned `text_mode_argument()` factory (composes with
 nothing — a text-mode *optional* argument would need a second factory; codifies the

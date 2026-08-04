@@ -140,8 +140,8 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
 /// [`Event::ExitMathContext`](super::Event::ExitMathContext)) — scan `stack`
 /// (innermost-first) for the **first non-math enclosing state**
 /// ([`LatexlikeMode::is_math`] on the state's mode) and restore that context:
-/// its **whole [`TokenRules`](crate::token::TokenRules)** (every override field)
-/// plus its mode.
+/// its [`TokenRules`](crate::token::TokenRules) **minus the transient gates**
+/// (below) plus its mode.
 ///
 /// The delta is defined by *exiting the math context*, deliberately **never** by
 /// seeking or constructing a "text mode": the restore target is whatever the
@@ -151,6 +151,16 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
 /// clobber them. When *every* enclosing state is math, the fallback target is the
 /// **outermost** (seed-side) entry; on an empty stack there is nothing to restore
 /// and the returned delta is empty (a no-op).
+///
+/// **Excluded from the restore** (never `Some` in the returned overrides):
+/// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) and
+/// [`temporary_groups`](crate::token::TokenRules::temporary_groups) — they
+/// describe *in-flight structural expectations* of the abandoned context (which
+/// close the found state's own group descent was waiting for; which
+/// scoped-lifecycle delimiters were live there), not lexical context; restoring
+/// them would plant another scope's expectations into the new one. The derived
+/// state inherits both from its base as usual, and a following group descent
+/// installs its own expectation through the descent invariant.
 ///
 /// In-parse this is [`LatexlikeDriver`]'s
 /// [`resolve_state_event`](ParseDriver::resolve_state_event) lowering, fed the
@@ -166,20 +176,25 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
         return ParsingStateDelta::new();
     };
     let rules = target.rules();
+    // Exhaustive literal on purpose: a new TokenRulesOverrides field breaks this
+    // build until the restore-or-exclude decision is made for it.
     ParsingStateDelta::new().mode(target.mode()).rules(TokenRulesOverrides {
         enable_whitespace: Some(rules.enable_whitespace),
         whitespace: Some(rules.whitespace.clone()),
         enable_multi_newline_paragraphs: Some(rules.enable_multi_newline_paragraphs),
         enable_groups: Some(rules.enable_groups),
         groups: Some(rules.groups.clone()),
-        temporary_groups: Some(rules.temporary_groups.clone()),
+        // Transient gate — in-flight structural expectation, never restored
+        // (user ruling amendment, 2026-08-04).
+        temporary_groups: None,
         enable_commands: Some(rules.enable_commands),
         commands: Some(rules.commands.clone()),
         enable_comments: Some(rules.enable_comments),
         comments: Some(rules.comments.clone()),
         enable_specials: Some(rules.enable_specials),
         forbidden_chars: Some(rules.forbidden_chars.clone()),
-        expecting_group_close: Some(rules.expecting_group_close.clone()),
+        // Transient gate — see above.
+        expecting_group_close: None,
     })
 }
 
@@ -487,12 +502,22 @@ mod tests {
     }
 
     #[test]
-    fn exit_math_pillar_restores_the_first_non_math_context_wholesale() {
+    fn exit_math_pillar_restores_the_first_non_math_context() {
         let seed = Arc::new(ParsingState::<Latexlike>::lang_initial());
-        // A distinguishable enclosing text context: custom forbidden chars.
+        // A distinguishable enclosing text context: custom forbidden chars, plus
+        // in-flight transients (an expected close and a temporary rule) that the
+        // restore must NOT carry over (user ruling amendment, 2026-08-04).
+        let brace_rule = Arc::clone(&seed.rules().groups[0]);
+        let temporary = Arc::new(GroupRule {
+            group_type: GroupType::Content,
+            open: "[".into(),
+            close: "]".into(),
+        });
         let text_context = Arc::new(
             seed.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 forbidden_chars: Some("!".into()),
+                temporary_groups: Some(alloc::vec![Arc::clone(&temporary)]),
+                expecting_group_close: Some(Some(Arc::clone(&brace_rule))),
                 ..TokenRulesOverrides::default()
             }))
             .unwrap(),
@@ -513,10 +538,27 @@ mod tests {
             Arc::clone(&seed),
         ]);
         let delta = exit_math_context_delta(&stack);
+        // The transient gates are excluded from the restore — never `Some`.
+        assert!(delta.rules.expecting_group_close.is_none());
+        assert!(delta.rules.temporary_groups.is_none());
+        // Every lexical field IS restored.
+        assert!(delta.rules.groups.is_some());
+        assert!(delta.rules.forbidden_chars.is_some());
         let restored = math_interior.derived(&delta).unwrap();
         assert_eq!(restored.mode(), Mode::Text);
-        assert_eq!(restored.rules(), text_context.rules(), "whole TokenRules restored");
         assert_eq!(&*restored.rules().forbidden_chars, "!");
+        assert_eq!(restored.rules().groups, text_context.rules().groups);
+        // The found context's in-flight expectations did not come back: the
+        // derived state keeps its base's transients as usual (the base inherited
+        // the text context's expectation structurally; nothing was *restored*).
+        assert_eq!(
+            restored.rules().expecting_group_close,
+            math_interior.rules().expecting_group_close
+        );
+        assert_eq!(
+            restored.rules().temporary_groups,
+            math_interior.rules().temporary_groups
+        );
 
         // All-math stack: the outermost entry is the fallback.
         let all_math = ParsingStateStack::from_states(vec![Arc::clone(&math_interior)]);

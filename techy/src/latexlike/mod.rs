@@ -212,8 +212,9 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Event {
     /// **Exit the math context** (context-dependent): restore the innermost
-    /// enclosing *non-math* context — its whole
-    /// [`TokenRules`] and its mode — found on the
+    /// enclosing *non-math* context — its [`TokenRules`] minus the transient
+    /// gates (`expecting_group_close`/`temporary_groups`, in-flight structural
+    /// expectations that are never restored) and its mode — found on the
     /// enclosing-state stack (else the outermost, seed context). The `\text{…}`
     /// recipe: an [`ArgumentSpec`](crate::spec::ArgumentSpec) state delta carrying
     /// this event makes the argument parse in the surrounding non-math context
@@ -949,12 +950,14 @@ mod tests {
 
         let text = math.child(1).unwrap();
         assert_eq!(text.macro_name(), Some("text"));
-        // The restored context really is the `«»` interior: the `\text`
-        // argument's state (recorded on its group node) expects `»`…
+        // The restored context is the `«»` interior — but its in-flight `»`
+        // expectation is a transient gate, EXCLUDED from the restore (user
+        // ruling amendment, 2026-08-04): the `\text` argument's state (recorded
+        // on its group node) does NOT expect `»`.
         let argument_group = text.argument_nodes(0).unwrap().get(0).unwrap();
         let restored_state = argument_group.parsing_state();
         assert_eq!(restored_state.mode(), Mode::Text);
-        assert_eq!(
+        assert_ne!(
             restored_state
                 .rules()
                 .expecting_group_close
@@ -962,9 +965,9 @@ mod tests {
                 .map(|rule| &*rule.close),
             Some("»")
         );
-        // …yet the argument group still closes on its OWN `}` (the descent
-        // invariant re-installed the entered rule's close over the restored
-        // expectation), with the content in the restored text context.
+        // The argument group closes on its OWN `}` (the descent invariant
+        // installs the entered rule's close), with the content in the restored
+        // text context.
         assert_eq!(argument_group.group_delimiters(), Some(("{", "}")));
         let content = text.argument_content_nodes(0).unwrap().get(0).unwrap();
         assert_eq!(content.chars(), Some("y"));

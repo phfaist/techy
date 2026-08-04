@@ -319,11 +319,16 @@ sites (default param covers type positions; value positions infer through
   escape-led delimiters (`$$`, `\(`) need no forbidding (unreachable once the
   single-char triggers are forbidden / routed to the command path, per
   [§dd-dr:math-no-nesting]).
-- D-plan-8 (application detail): `exit_math_context_delta` restores the found
-  state's **whole** `TokenRules` literally (every override field, incl.
-  `expecting_group_close`/`temporary_groups`); the descent invariant re-installs
-  the correct expected close at the next group descent (the documented
-  two-component recipe).
+- D-plan-8 (application detail — **amended by user ruling 2026-08-04, applied**):
+  originally the literal whole-`TokenRules` restore (every override field). The
+  user amended the T1T2-E4 policy itself: `expecting_group_close` and
+  `temporary_groups` are **transient gates, excluded from the restore** (in-flight
+  structural expectations of the abandoned context, not lexical context) — the
+  pillar now restores every field except those two (`None` in the exhaustive
+  literal), the derived state inherits them from its base, and the descent
+  invariant installs the argument group's own close as before. DR amendment note
+  added on [§dd-dr:enclosing-state-stack]; tests updated (the discriminating «»
+  test now asserts the restored state does NOT carry the `»` expectation).
 - D-plan-9 (application detail): the NodeRef preset sugar impl becomes generic
   over `LLL: LatexlikeLang` (the DR component roster lists "the `NodeRef`
   sugar"); spellings unchanged for `Latexlike` trees.
@@ -358,7 +363,7 @@ smoke test.
 | `latexlike::default_token_rules` | `fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL>` |
 | `latexlike::SpecialsSpec` | `SpecialsSpec<LLL: LatexlikeLang = Latexlike>` (manual Clone/Debug/Default) |
 | `latexlike::math_group_interior_delta` | `fn <LLL: LatexlikeLang>(&ParsingState<LLL>, &Arc<GroupRule<LLL>>) -> Option<ParsingStateDelta<LLL>>` (two-component-recipe rustdoc) |
-| `latexlike::exit_math_context_delta` | `fn <LLL: LatexlikeLang>(&ParsingStateStack<LLL>) -> ParsingStateDelta<LLL>` (first-non-math scan; whole-rules + mode; outermost fallback; empty-stack no-op) |
+| `latexlike::exit_math_context_delta` | `fn <LLL: LatexlikeLang>(&ParsingStateStack<LLL>) -> ParsingStateDelta<LLL>` (first-non-math scan; rules minus the transient gates `expecting_group_close`/`temporary_groups` + mode; outermost fallback; empty-stack no-op) |
 | `latexlike::make_paragraph_break_node` | `fn <LLL: LatexlikeLang>(ParagraphBreakStyle, &ParsingState<LLL>, &Token<'_, LLL>) -> NodeKind<LLL>` (parse-side-only rustdoc) |
 | `latexlike::LatexlikeDriver` | `LatexlikeDriver<LLL: LatexlikeLang = Latexlike>` — `PhantomData<fn() -> LLL>`; `Clone + Debug` only; knobs unchanged (`recovery`/`paragraph_break_style` pub, resolver private); every hook a one-line pillar delegation incl. `resolve_state_event` |
 | `core::ParsingStateStack` | owning `Vec<Arc<ParsingState<L>>>`-backed; `new()`, `from_states(Vec)` (innermost-first input), `from_node_ancestors(NodeRef)`, `iter()` (innermost-first), `outermost()`, `len()`, `is_empty()`; `Clone`/`Debug`/`Default` |

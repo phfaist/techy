@@ -259,7 +259,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///   delta and the event is removed — it never reaches
     ///   [`Lang::finalize_transition`]. This is where context-dependent semantics
     ///   live (the latexlike exit-math restore scans `stack` for the innermost
-    ///   non-math state and patches its whole token rules + mode back in —
+    ///   non-math state and patches its token rules — minus that context's
+    ///   in-flight transients — and mode back in —
     ///   [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta)).
     /// - Return `None` — the default — for a **context-free** event: it stays on
     ///   the delta for [`Lang::finalize_transition`] to consume as usual.
