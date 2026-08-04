@@ -187,10 +187,12 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
 ///   check fails when the new source's depth would exceed `max_depth`.
 ///
 /// A detected cycle and an exceeded depth produce distinct
-/// [`ResolveError`] messages. The error's `reference` field carries the
-/// offending chain source's origin label when it has one (the key type `K` is
-/// not required to render itself); a resolver wanting its own reference spelling
-/// maps the error before returning it.
+/// [`ResolveError`] messages. The error's `reference` field carries an origin
+/// label when one exists (the key type `K` is not required to render itself):
+/// for a cycle, the offending chain source's; for a depth overflow, the
+/// immediate includer's (the target itself has no renderable origin yet). A
+/// resolver wanting its own reference spelling maps the error before returning
+/// it.
 pub fn check_include_chain<O: SourceOrigin, K: PartialEq>(
     target_key: &K,
     triggered_at: &SourceSpan<O>,

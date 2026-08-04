@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reference_argument_accepts_the_expression_fallback(){
+    fn the_reference_argument_accepts_the_expression_fallback() {
         // `\input a` — the `{` argument code's single-expression fallback: the
         // one-char reference "a".
         let language = language(Recovery::Strict, &[("a", "ok")]);
