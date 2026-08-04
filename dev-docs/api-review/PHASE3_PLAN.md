@@ -180,7 +180,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
 - Acceptance: preset behavior parity tests (math entry/exit, paragraph breaks);
   Lang-residue trend toward the C2 assertion (final check S10).
 
-### S5 — Invocation syntax + staging sugar  [status: pending]
+### S5 — Invocation syntax + staging sugar  [status: DONE — merged 2026-08-04]
 
 - `Lang::InvocationSyntax` assoc type; core data-bound trait (named at
   application, aligned with the ext-bound family; `materialized(source_content)`;
@@ -332,8 +332,9 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
    checklist additions" consolidated in PLAN.md's decision log (NEXT bullet),
    plus per-stage riders recorded in the stage sections and reports. S10 audits
    ALL of them.
-6. NEXT ACTION when resuming: check the S4 status line below — if not yet
-   merged, finish its cycle first (see stage log). Then launch S5 per § S5.
+6. NEXT ACTION when resuming: check the S6 stage-log lines below — if S6 is in
+   flight, finish its cycle first (see stage log). Otherwise launch the next
+   pending stage per its § section.
 
 ## Stage log
 
@@ -451,3 +452,12 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   implementation-error path; pre-existing sibling asserts → S10 rider.
   (7) NEW PROTOCOL RULE recorded above (rulings-revision escalation).
   M6 launched on the stage branch (successor 2, same worktree).
+- 2026-08-04: S5 M6 landed (4 commits through cc78dee; one watchdog-stall
+  resume, no work lost; gates green; new deviations D-plan-18/19). Delta
+  review (resumed reviewer): all R1–R9 points PASS, D-plan-18/19 DEFENSIBLE,
+  foreign-family pin improvement verified real, whole-stage verdict stands
+  over 60dfd2b..cc78dee. **User signed off the consolidated list**
+  (D-plan-1/6/12 resolved by rulings; 2/7/15/16/17 forced; the rest
+  defensible) **and authorized the merge 2026-08-04.** Merged into
+  api-review (14 stage commits; 614 lib + 30 acceptance + 8 + 1 + 27 doc
+  tests; full gate table in S5_REPORT.md). S5 COMPLETE.
