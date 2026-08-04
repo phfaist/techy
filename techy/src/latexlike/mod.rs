@@ -57,6 +57,7 @@
 mod arguments;
 mod driver;
 mod environments;
+mod invocation_syntax;
 mod lang;
 mod node_ref;
 mod spec;
@@ -72,8 +73,12 @@ pub use environments::{
     BeginSpec, EndSpec, EnvironmentBehavior, EnvironmentInvocation, EnvironmentSpec,
     MalformedBegin, OrphanEnd, UnknownEnvironment, VerbatimBehavior,
 };
+pub use invocation_syntax::{
+    EnvironmentSideSyntax, EnvironmentSyntax, InvocationSyntax, StdEnvironmentSyntax,
+};
 pub use lang::{
-    LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang, LatexlikeMode,
+    LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeInvocationSyntax,
+    LatexlikeLang, LatexlikeMode,
 };
 pub use spec::{MacroSpec, SpecialsSpec};
 
@@ -307,6 +312,7 @@ impl Lang for Latexlike {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = LatexlikeNodeExts;
+    type InvocationSyntax = InvocationSyntax;
     type Driver = LatexlikeDriver;
 
     /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding
@@ -1010,6 +1016,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = InvocationSyntax<StdEnvironmentSyntax<Flavored>>;
             type Driver = LatexlikeDriver<Flavored>;
 
             fn initial_state_data() -> StateData<Self> {

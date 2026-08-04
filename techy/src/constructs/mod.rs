@@ -57,8 +57,9 @@ pub use embellishments_parser::EmbellishmentsArgumentParser;
 pub use tack_on_parser::{RepeatedTackOnField, TackOnFieldsArgumentParser};
 pub use environment_parser::{
     read_rigid_name_group, EnvironmentBody, EnvironmentBodyParser,
-    EnvironmentTerminatorMismatch, MalformedEnvironmentTerminator,
-    MissingEnvironmentTerminator, MissingTerminatorFound, NameGroup,
+    EnvironmentTerminatorFacts, EnvironmentTerminatorMismatch,
+    MalformedEnvironmentTerminator, MissingEnvironmentTerminator,
+    MissingTerminatorFound, NameGroup,
 };
 pub use group_parser::{GroupParser, UnclosedGroup, UnclosedGroupFound};
 pub use invocation_parser::{parse_declared_arguments, StdInvocationParser};
@@ -82,7 +83,10 @@ use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession};
 use crate::error::{DiagnosticData, DiagnosticInfo, ParseError};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
-use crate::node::{BuildId, NodeBuildError, NodeKind, StagedNodes};
+use crate::node::{
+    BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
+    StagedNodes,
+};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenReader};
 
@@ -185,6 +189,71 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// through [`stage_node`](ParseContext::stage_node).
     pub fn staged_nodes(&self) -> StagedNodes<'_, L> {
         self.session.builder.staged_nodes()
+    }
+
+    /// Stage the resolved invocation's `Callable` node — the **transcription-case
+    /// shorthand** over the one staging door ([`stage_node`](ParseContext::stage_node)):
+    /// builds the [`CallableData`] by transcribing `callable_type`/`name`/`spec`
+    /// from the bundle and minting the invocation-syntax payload from it
+    /// ([`FromInvocation`]), computes the node's span, stages (the door mints the
+    /// node ext), and returns the id. What [`StdInvocationParser`] does, packaged
+    /// for takeover parsers of the same macro shape.
+    ///
+    /// `arguments`/`slots` are **caller-tiled** records in staged child-list
+    /// coordinates, and `children` the flat child list they tile — the natural
+    /// output of the argument loop
+    /// ([`parse_declared_arguments`]). The parse-side/restage-side symmetry with
+    /// `restage_invocation` is by shared *vocabulary*, deliberately not shared
+    /// arity: the restage side passes driver-tiled bundles because the region
+    /// arithmetic is owned by the other party there.
+    ///
+    /// `end_pos: None` = the **standard rule**: the node's span runs from the
+    /// trigger's start to the last staged child's span end — or the trigger's own
+    /// end for childless shapes. `Some(end)` serves takeovers whose consumed
+    /// extent outruns their last child (rest-of-line and heredoc shapes).
+    ///
+    /// Deliberately **no `callable_type`/`name` overrides**: a composition that
+    /// overrides both and whose span outruns its children (the environment shape)
+    /// stays on the canonical [`stage_node`](ParseContext::stage_node) door with
+    /// an explicit [`CallableData`]. No ext/annotation parameters — the door
+    /// mints the ext, and parse annotations are `()`.
+    pub fn stage_invocation(
+        &mut self,
+        invocation: &Invocation<'_, '_, L>,
+        arguments: ParsedArguments<L>,
+        slots: ParsedSlots<L>,
+        children: Vec<BuildId>,
+        end_pos: Option<usize>,
+    ) -> ConstructParserResult<L, BuildId>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
+        let token = invocation.token;
+        // The std end rule: last staged child's span end, else the trigger's end.
+        // A last child no parser ever staged (an implementation bug) falls back to
+        // the trigger's end — the builder diagnoses the foreign id in `add`.
+        let end = end_pos.unwrap_or_else(|| {
+            children
+                .last()
+                .and_then(|last| self.staged_nodes().get(*last))
+                .map(|child| child.span().end())
+                .unwrap_or(token.span.end())
+        });
+        let data = CallableData {
+            callable_type: invocation.callable_type,
+            name: invocation.name.into(),
+            spec: Arc::clone(invocation.spec),
+            arguments,
+            slots,
+            invocation_syntax: L::InvocationSyntax::from_invocation(invocation),
+        };
+        self.stage_node(
+            NodeKind::callable(data),
+            SourceSpan::new(&self.source, token.span.start()..end),
+            Arc::clone(&self.state),
+            children,
+        )
+        .map_err(|error| self.implementation_error(error, Span::new(token.span.start(), end)))
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error
@@ -523,6 +592,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<ParsingStateDelta<L>>)>
     where
         'a: 'p,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         let driver = self.driver;
         let mut parser = driver.make_nodes_parser(stop, child_states);
@@ -544,6 +614,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)>
     where
         'a: 'p,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         let driver = self.driver;
         let mut parser = driver.make_group_parser(open_span, rule, child_states);
@@ -693,4 +764,39 @@ impl<L: Lang> fmt::Debug for Invocation<'_, '_, L> {
             .field("token", &self.token)
             .finish()
     }
+}
+
+/// Opt-in constructor contract on a language's invocation-syntax payload
+/// ([`Lang::InvocationSyntax`], bounded by
+/// [`InvocationSyntaxData`](crate::state::InvocationSyntaxData)): build the
+/// recorded trigger-spelling facts from one resolved [`Invocation`].
+///
+/// Consulted by the **standard staging sites** —
+/// [`ParseContext::stage_invocation`] (and through it
+/// [`StdInvocationParser`] and the expression-position bare-callable staging) plus
+/// the preset's specials sites — under a bound-where-used
+/// (`where L::InvocationSyntax: FromInvocation<L>`): a standard parser's knowledge
+/// about a custom payload is exactly "what the invocation bundle shows", and the
+/// bound says so. The bundle carries the trigger token
+/// ([`Invocation::token`]), so the constructor sees precisely what was matched
+/// (spelling, escape character, syntactic post-space).
+///
+/// Deliberately **separate from the required data bound**: a language whose
+/// payload cannot be built from an `Invocation` alone stages its callables through
+/// custom parsers (the [`stage_node`](ParseContext::stage_node) door) and never
+/// implements this trait — but driving the standard engine requires it (the
+/// standard dispatch loop reaches [`StdInvocationParser`] through the defaulted
+/// spec factory). techy implements it for `()` (records nothing), and the
+/// latexlike preset for its payload enum, so `Lang`s with `InvocationSyntax = ()`
+/// and latexlike-family languages satisfy the bound out of the box.
+pub trait FromInvocation<L: Lang>: Sized {
+    /// The payload recording `invocation`'s trigger spelling. Pure transcription:
+    /// reads the bundle (typically [`Invocation::token`]'s facts), performs no
+    /// parsing and consumes nothing.
+    fn from_invocation(invocation: &Invocation<'_, '_, L>) -> Self;
+}
+
+/// The no-record payload: nothing to transcribe.
+impl<L: Lang> FromInvocation<L> for () {
+    fn from_invocation(_invocation: &Invocation<'_, '_, L>) {}
 }

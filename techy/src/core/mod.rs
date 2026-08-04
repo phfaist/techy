@@ -44,8 +44,9 @@ pub use crate::engine::{
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
-    ClosedVocabulary, DeriveError, FinalizeError, Lang, NodeExtTypes, ParsingState,
-    ParsingStateDelta, ParsingStateStack, StateData, TokenRulesOverrides, TrivialLang,
+    ClosedVocabulary, DeriveError, FinalizeError, InvocationSyntaxData, Lang,
+    NodeExtTypes, ParsingState, ParsingStateDelta, ParsingStateStack, StateData,
+    TokenRulesOverrides, TrivialLang,
 };
 pub use crate::token::{
     skip_whitespace, CommandRule, CommentRule, EndOfStreamAfterEscape, ForbiddenChar,

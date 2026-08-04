@@ -222,7 +222,7 @@ mod tests {
                 .into(),
                 slots: ParsedSlots::empty(),
                 // The trigger token's own syntactic post-space: empty (`{` follows).
-                post_space: TextContent::Spanned(Span::empty(6)),
+                invocation_syntax: (),
             }),
             spanned(&source, 1..12),
             st.clone(),
@@ -273,7 +273,6 @@ mod tests {
         assert!(frac.is_callable());
         assert_eq!(frac.name(), Some("frac"));
         assert_eq!(frac.callable_type(), Some(CT_MACRO));
-        assert_eq!(frac.post_space(), Some(""));
         assert_eq!(frac.span_content(), r"\frac{a}{b}");
         assert!(frac.spec().is_some());
 
@@ -383,7 +382,7 @@ mod tests {
                 ]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -447,7 +446,7 @@ mod tests {
                     (),
                 )]
                 .into(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -498,7 +497,7 @@ mod tests {
                 arguments: ParsedArguments::empty(),
                 slots: vec![ParsedSlot::new(ChildRegion::single(0), "body", SlotRole::Content, ())]
                     .into(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -649,7 +648,7 @@ mod tests {
                 ]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -721,7 +720,7 @@ mod tests {
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -770,7 +769,7 @@ mod tests {
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -808,7 +807,7 @@ mod tests {
                 spec,
                 arguments: args.into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(source),
             st.clone(),
@@ -1021,7 +1020,6 @@ mod tests {
         // Logical text identical…
         let root = owned.root();
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
-        assert_eq!(root.child(1).unwrap().post_space(), Some(""));
         assert_eq!(root.child(2).unwrap().chars(), Some(" "));
         assert_eq!(root.child(3).unwrap().comment(), Some(" note"));
         assert_eq!(root.child(3).unwrap().comment_start(), Some("%"));
@@ -1040,8 +1038,10 @@ mod tests {
                     assert!(data.open.is_owned());
                     assert!(data.close.is_owned());
                 }
-                NodeKind::Callable(data) => {
-                    assert!(data.post_space.is_owned());
+                NodeKind::Callable(_) => {
+                    // The invocation-syntax payload is `()` for PlainLang; the
+                    // latexlike payload's materialize-through is pinned in the
+                    // preset's tests.
                 }
                 _ => {}
             }
@@ -1097,6 +1097,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ExtBundle;
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         /// A fixed marker value: proves the mint's output lands on the node.
@@ -1186,6 +1187,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = RoleBundle;
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn make_node_ext(
@@ -1231,7 +1233,7 @@ mod tests {
                     ),
                 ]
                 .into(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -1349,6 +1351,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = MintExts;
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn make_node_ext(
@@ -1627,7 +1630,7 @@ mod tests {
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -1707,7 +1710,7 @@ mod tests {
                     (),
                 )]
                 .into(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -1808,7 +1811,7 @@ mod tests {
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),
@@ -1914,7 +1917,7 @@ mod tests {
                     SlotRole::Attached,
                     (),
                 )]),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             spanned(&main, 1..10),
             st.clone(),
@@ -2078,7 +2081,7 @@ mod tests {
                 )]
                 .into(),
                 slots: ParsedSlots::empty(),
-                post_space: TextContent::empty(),
+                invocation_syntax: (),
             }),
             SourceSpan::entire(&source),
             st.clone(),

@@ -70,6 +70,45 @@ impl NodeExtTypes for () {
     type SlotExt = ();
 }
 
+/// The data contract on a language's invocation-syntax payload type
+/// ([`Lang::InvocationSyntax`]): the recorded **trigger-spelling facts** of one
+/// callable invocation — what was written to invoke it (escape character,
+/// syntactic post-space, environment scaffolding), in the language's own logical
+/// canonical form.
+///
+/// The payload is a **parse-level-syntax channel**, distinct from the node ext
+/// (preset-logic data, [`NodeExtTypes`]): it is stored as the
+/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)
+/// field and is what makes recomposition accuracy the *language's* choice —
+/// byte-exact vs. up-to-noise vs. loose is decided by what the language records
+/// here, and recomposition reads raw node payload only. `()` records nothing (the
+/// trivial impl): Lang-agnostic tooling then sees only name + span of the
+/// language's callables, by design.
+///
+/// Like [`NodeExtTypes`], this trait lives beside [`Lang`]: its *meaning* is a
+/// node concern, but it is a constituent of the compile-time bundle.
+///
+/// Construction is a separate, opt-in contract
+/// ([`FromInvocation`](crate::constructs::FromInvocation)) consulted by the
+/// standard staging sites; a language whose payload cannot be built from an
+/// [`Invocation`](crate::constructs::Invocation) alone stages its callables
+/// through custom parsers instead.
+pub trait InvocationSyntaxData: Clone + fmt::Debug + Send + Sync + 'static {
+    /// A copy with every span-backed field resolved to owned text against
+    /// `source_content` — the content of the carrying node's own source (the
+    /// `Spanned` invariant). Called by
+    /// [`NodeTree::materialize`](crate::node::NodeTree::materialize) alongside
+    /// the structural payload's own materialization. Source-independent fields
+    /// (rule `Arc`s, plain chars) pass through unchanged.
+    #[must_use]
+    fn materialized(&self, source_content: &str) -> Self;
+}
+
+/// The no-record payload: nothing was recorded, nothing to materialize.
+impl InvocationSyntaxData for () {
+    fn materialized(&self, _source_content: &str) {}
+}
+
 /// The compile-time type bundle of a language definition. Every core type takes one
 /// `L: Lang` parameter — never five (the one-generic-parameter principle).
 ///
@@ -181,6 +220,21 @@ pub trait Lang: Sized + 'static {
     /// The node extension type bundle ([`NodeExtTypes`]); `()` for languages without
     /// custom node data.
     type NodeExts: NodeExtTypes;
+
+    /// The language's recorded **invocation-syntax payload**
+    /// ([`InvocationSyntaxData`]): the trigger-spelling facts stored per callable
+    /// invocation on
+    /// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax).
+    /// `()` records nothing; the latexlike preset records its macro / environment /
+    /// specials forms ([`latexlike::InvocationSyntax`](crate::latexlike::InvocationSyntax)).
+    ///
+    /// Minted by the invocation parser that stages the node — the standard sites
+    /// construct it via the opt-in
+    /// [`FromInvocation`](crate::constructs::FromInvocation) contract; takeover
+    /// parsers staging through
+    /// [`stage_node`](crate::constructs::ParseContext::stage_node) supply the
+    /// value themselves.
+    type InvocationSyntax: InvocationSyntaxData;
 
     /// The language's [`ParseDriver`] type — the **instance** face of parse-time
     /// behavior: recovery policy, command
@@ -402,6 +456,7 @@ impl<T: TrivialLang> Lang for T {
     type SessionExt = ();
     type SourceOrigin = Option<String>;
     type NodeExts = ();
+    type InvocationSyntax = ();
     type Driver = StdParseDriver;
 
     /// The trivial mint: no ext data (`NodeExt = ()`).

@@ -15,7 +15,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::constructs::{
-    ChildStateSpec, ImplementationError, ParseContext, StopCause, StopSpec, StrayGroupClose,
+    ChildStateSpec, FromInvocation, ImplementationError, ParseContext, StopCause, StopSpec, StrayGroupClose,
 };
 use crate::error::ParseError;
 use crate::node::NodeKind;
@@ -104,7 +104,10 @@ impl<L: Lang> Language<L> {
     pub fn parse(
         &self,
         content: impl Into<String>,
-    ) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>> {
+    ) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
         self.parse_source(Arc::new(Source::new(content)))
     }
 
@@ -131,7 +134,10 @@ impl<L: Lang> Language<L> {
     pub fn parse_source(
         &self,
         source: Arc<Source<L::SourceOrigin>>,
-    ) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>> {
+    ) -> Result<ParseResult<L>, ParseError<L::SourceOrigin>>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
         let mut reader = StdTokenReader::new(source.content());
         let mut session = ParserSession::new();
         let mut nodes = Vec::new();
@@ -254,6 +260,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = StdParseDriver;
 
         fn initial_state_data() -> StateData<Self> {
@@ -469,6 +476,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = BogusDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,
@@ -545,6 +553,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = MacroDriver;
 
         fn initial_state_data() -> StateData<Self> {

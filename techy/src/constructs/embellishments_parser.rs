@@ -64,7 +64,7 @@ use crate::token::TokenKind;
 use super::argument_parsers::{
     parse_expression_node, scan_argument_noise, stage_pre_space,
 };
-use super::{ConstructParserResult, ParseContext};
+use super::{ConstructParserResult, FromInvocation, ParseContext};
 
 /// The embellishment-arguments parser (see the module docs): marker alternatives, each
 /// followed by one expression (at most plain whitespace apart), repeating in any order
@@ -94,6 +94,7 @@ impl EmbellishmentsArgumentParser {
 impl<L: Lang> ArgumentParser<L> for EmbellishmentsArgumentParser
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,

@@ -20,10 +20,12 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 
+use crate::constructs::{FromInvocation, Invocation};
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
-use crate::source::{IntoSourceResolver, SourceResolver, TextContent};
+use crate::source::{IntoSourceResolver, SourceResolver};
+use crate::spec::CallableSpec;
 use crate::state::{ParsingState, ParsingStateDelta, ParsingStateStack, TokenRulesOverrides};
 use crate::token::{GroupRule, Token};
 
@@ -220,14 +222,29 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
         // negligible (once per paragraph break, cold next to a parse), and a
         // cached `Arc` would be one more datum carrying no configuration (specs
         // are behavior, never compared).
-        ParagraphBreakStyle::Specials => NodeKind::callable(CallableData {
-            callable_type: LLL::CallableTypeId::specials_callable(),
-            name: "\n\n".into(),
-            spec: Arc::new(SpecialsSpec::<LLL>::default()),
-            arguments: ParsedArguments::empty(),
-            slots: ParsedSlots::empty(),
-            post_space: TextContent::empty(),
-        }),
+        ParagraphBreakStyle::Specials => {
+            let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(SpecialsSpec::<LLL>::default());
+            // The preset's specials staging site consults the standard
+            // constructor ([`FromInvocation`]) like every std site — over a
+            // synthetic invocation bundling the break token — so a family
+            // member's payload records whatever its constructor answers for a
+            // specials-formed trigger (the preset enum: the unit `Specials`).
+            let invocation = Invocation {
+                callable_type: LLL::CallableTypeId::specials_callable(),
+                name: "\n\n",
+                spec: &spec,
+                token,
+            };
+            let invocation_syntax = LLL::InvocationSyntax::from_invocation(&invocation);
+            NodeKind::callable(CallableData {
+                callable_type: invocation.callable_type,
+                name: invocation.name.into(),
+                spec,
+                arguments: ParsedArguments::empty(),
+                slots: ParsedSlots::empty(),
+                invocation_syntax,
+            })
+        }
     }
 }
 

@@ -52,7 +52,7 @@ use crate::token::GroupRule;
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
-use super::{ConstructParser, ConstructParserResult, ParseContext};
+use super::{ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
 /// by [`GroupParser`], which defines the condition next to its detection site.
@@ -132,7 +132,10 @@ impl<'p, L: Lang> GroupParser<'p, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for GroupParser<'_, L> {
+impl<L: Lang> ConstructParser<L> for GroupParser<'_, L>
+where
+    L::InvocationSyntax: FromInvocation<L>,
+{
     type Output = BuildId;
 
     fn parse(

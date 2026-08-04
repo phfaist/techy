@@ -38,17 +38,20 @@
 //! ended). Argument parsers return no after-effect deltas (an argument scopes no state
 //! beyond its own extent) and neither does this parser.
 //!
-//! # Post-space
+//! # Invocation syntax
 //!
-//! [`CallableData::post_space`] records **exactly the trigger token's syntactic
-//! post-space** — the name-terminating whitespace the tokenizer already claimed as
-//! invocation syntax (pylatexenc's `macro_post_space`). Nothing beyond it is ever
-//! claimed: whitespace after a single-character command (`\& b`) or after a final
-//! argument is ordinary sibling/region content, exactly as TeX treats it. With
-//! arguments present the recorded post-space thus sits **between** the name and the
-//! first argument region — a sub-range of the node's span, no longer necessarily
-//! trailing (whitespace invariant 3; see
-//! [`check_tree_invariants`](crate::node::check_tree_invariants)).
+//! [`CallableData::invocation_syntax`] records the language's trigger-spelling
+//! facts, minted from the [`Invocation`] via the standard constructor
+//! ([`FromInvocation`](super::FromInvocation)) inside
+//! [`stage_invocation`](ParseContext::stage_invocation). The latexlike payload
+//! records e.g. **exactly the trigger token's syntactic post-space** — the
+//! name-terminating whitespace the tokenizer already claimed as invocation syntax
+//! (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed:
+//! whitespace after a single-character command (`\& b`) or after a final argument
+//! is ordinary sibling/region content, exactly as TeX treats it. With arguments
+//! present that recorded post-space sits **between** the name and the first
+//! argument region — a sub-range of the node's span, no longer necessarily
+//! trailing (whitespace invariant 3).
 //!
 //! # Slots
 //!
@@ -71,14 +74,15 @@ use core::fmt;
 
 use crate::engine::{Frame, FrameTitle};
 use crate::node::{
-    BuildId, CallableData, ChildRegion, NodeKind, ParsedArgument, ParsedArguments,
-    ParsedSlots,
+    BuildId, ChildRegion, ParsedArgument, ParsedArguments, ParsedSlots,
 };
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{Lang, ParsingStateDelta};
 
-use super::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use super::{
+    ConstructParser, ConstructParserResult, FromInvocation, Invocation, ParseContext,
+};
 
 /// Parse a callable's declared arguments at the reader's position — the argument half of
 /// [`StdInvocationParser`], shared with environment-shaped compositions.
@@ -160,7 +164,10 @@ impl<'a, 's, L: Lang> StdInvocationParser<'a, 's, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
+impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L>
+where
+    L::InvocationSyntax: FromInvocation<L>,
+{
     type Output = BuildId;
 
     fn parse(
@@ -174,32 +181,17 @@ impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L> {
         let (children, arguments) =
             parse_declared_arguments(cx, self.invocation.spec, name_span)?;
 
-        // Span: trigger through the last child (regions are span-contiguous); the
-        // trigger's span alone for argument-less shapes (6.4 parity). A last child an
-        // argument parser never staged (an implementation bug) falls back to the
-        // trigger's span — the builder diagnoses the foreign id in `add` below.
-        let end = children
-            .last()
-            .and_then(|last| cx.staged_nodes().get(*last))
-            .map(|child| child.span().end())
-            .unwrap_or(token.span.end());
-
-        let data = CallableData {
-            callable_type: self.invocation.callable_type,
-            name: self.invocation.name.into(),
-            spec: Arc::clone(self.invocation.spec),
-            arguments: ParsedArguments::from(arguments),
-            slots: ParsedSlots::empty(),
-            // Exactly the trigger token's syntactic post-space (module docs).
-            post_space: TextContent::Spanned(token.post_space()),
-        };
-        let id = cx.stage_node(
-                NodeKind::callable(data),
-                SourceSpan::new(&cx.source, token.span.start()..end),
-                Arc::clone(&cx.state),
-                children,
-            )
-            .map_err(|error| cx.implementation_error(error, Span::new(token.span.start(), end)))?;
+        // The transcription-case staging shorthand: callable_type/name/spec and the
+        // invocation-syntax payload transcribed from the bundle; `None` = the std
+        // span rule — trigger through the last staged child, the trigger's span
+        // alone for argument-less shapes (6.4 parity).
+        let id = cx.stage_invocation(
+            &self.invocation,
+            ParsedArguments::from(arguments),
+            ParsedSlots::empty(),
+            children,
+            None,
+        )?;
         Ok((id, None))
     }
 }

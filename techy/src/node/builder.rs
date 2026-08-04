@@ -640,7 +640,10 @@ fn check_spanned_contents<L: Lang>(
             check(start, "comment start delimiter")?;
             check(post_space, "comment post_space")
         }
-        NodeKind::Callable(data) => check(&data.post_space, "callable post_space"),
+        // A Callable's invocation-syntax payload is Lang-opaque here: span-backed
+        // fields inside it are the Lang's own recording discipline (checked by the
+        // in-crate parse-law oracle for the shipped payloads, not builder law).
+        NodeKind::Callable(_) => Ok(()),
         NodeKind::Group(data) => {
             check(&data.open, "group open delimiter")?;
             check(&data.close, "group close delimiter")

@@ -10,7 +10,10 @@
 
 use crate::node::NodeRef;
 
-use super::{LatexlikeCallableType, LatexlikeGroupType, LatexlikeLang, MathGroupForm};
+use super::{
+    LatexlikeCallableType, LatexlikeGroupType, LatexlikeInvocationSyntax, LatexlikeLang,
+    MathGroupForm,
+};
 
 /// Latexlike accessor sugar (preset vocabulary over the generic accessors), for
 /// every language of the latexlike family.
@@ -61,6 +64,25 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
         } else {
             None
         }
+    }
+
+    /// A `Callable` node's recorded post-space, as logical text — read off the
+    /// invocation-syntax payload
+    /// ([`macro_syntax`](LatexlikeInvocationSyntax::macro_syntax)): a macro-formed
+    /// invocation answers **exactly its trigger token's syntactic post-space**
+    /// (the name-terminating whitespace of a multi-character command; nothing
+    /// beyond the token's own post-space is ever recorded — whitespace after a
+    /// single-character command or a final argument is sibling/region content);
+    /// environment- and specials-formed invocations answer `Some("")` (an
+    /// environment's begin/end scaffolding whitespace is recorded per side in its
+    /// [`environment_syntax`](LatexlikeInvocationSyntax::environment_syntax)
+    /// record, and specials record no post-space). `None` for non-callables.
+    pub fn post_space(&self) -> Option<&'t str> {
+        let syntax = self.invocation_syntax()?;
+        Some(match syntax.macro_syntax() {
+            Some((_escape_char, post_space)) => post_space.resolve(self.source_content()),
+            None => "",
+        })
     }
 }
 

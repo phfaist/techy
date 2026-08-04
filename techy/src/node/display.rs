@@ -141,7 +141,7 @@ mod tests {
     use super::super::tree::NodeTree;
     use super::*;
     use crate::scopes::ScopeStack;
-    use crate::source::{Span, TextContent};
+    use crate::source::Span;
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TrivialLang};
     use crate::token::{TokenRules, WhitespaceRules};
@@ -285,7 +285,7 @@ mod tests {
             spec: Arc::new(StdCallableSpec::default()) as Arc<dyn CallableSpec<PlainLang>>,
             arguments: super::super::arguments::ParsedArguments::empty(),
             slots: super::super::arguments::ParsedSlots::new(vec![]),
-            post_space: TextContent::empty(),
+            invocation_syntax: (),
         });
         let comment: NodeKind<PlainLang> =
             NodeKind::comment(Span::new(0, 1), Span::new(1, 2), Span::new(2, 3));

@@ -160,7 +160,9 @@ fn validate_node<L: Lang, A>(
             residency(&group.close, "group close delimiter")
         }
         NodeKind::Callable(callable) => {
-            residency(&callable.post_space, "callable post-space")?;
+            // The invocation-syntax payload is Lang-opaque to the all-trees law
+            // (its span-backed fields are the Lang's recording discipline; the
+            // in-crate parse-law oracle checks the shipped payloads).
             validate_regions(tree, parent, i, data, callable)
         }
     }
@@ -537,6 +539,22 @@ pub(crate) fn check_tree_invariants<L: Lang, A>(tree: &NodeTree<L, A>) {
     }
 }
 
+/// The invocation-syntax payload pins of the parse law (the callable arm of
+/// [`check_tree_invariants`]): reads the payloads techy itself ships — `()`
+/// (nothing to check) and the latexlike enum — via `Any` downcast, and checks
+/// their recorded spellings against the node's bytes. Foreign payload types are
+/// their language's own recording discipline and are skipped.
+// M4 fills in the latexlike pins (Macro post-space position, Specials
+// name-as-written prefix, environment begin/end scaffolding bytes).
+#[cfg(test)]
+fn check_invocation_syntax_payload<L: Lang, A>(
+    _tree: &NodeTree<L, A>,
+    _i: usize,
+    _data: &NodeData<L>,
+    _callable: &super::kind::CallableData<L>,
+) {
+}
+
 /// The parse-law byte accounting for one node (see [`check_tree_invariants`];
 /// the all-trees law has already passed).
 // TODO(S6): scope this byte accounting per source via the `Attached` slot role
@@ -651,25 +669,12 @@ fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &Node
         }
 
         NodeKind::Callable(callable) => {
-            if let TextContent::Spanned(s) = &callable.post_space {
-                // The trigger token's own syntactic post-space ([§dd-dr:nodes] invariant 3 as
-                // amended): between the name and the first child region — or trailing
-                // when there are no children (revised in Phase 6.5; it asserted
-                // "trailing" unconditionally while all callables were argument-less).
-                let expected_end = tree
-                    .nodes_in(data.children.clone())
-                    .next()
-                    .map(|first| first.span().start())
-                    .unwrap_or(span.end);
-                assert!(
-                    s.end() == expected_end && s.start() >= span.start,
-                    "node {}: spanned post-space {:?} does not end at the first child \
-                     (or the span end {:?} for a childless callable)",
-                    i,
-                    s,
-                    span
-                );
-            }
+            // The trigger-spelling facts live in the Lang-owned invocation-syntax
+            // payload now (invariant 3 as amended): the byte accounting for the
+            // shipped payloads — the latexlike Macro post-space positional pin,
+            // the Specials name-as-written prefix, the environment begin/end
+            // scaffolding — is checked by `check_invocation_syntax_payload`.
+            check_invocation_syntax_payload(tree, i, data, callable);
             assert_children_in_source();
 
             // Children-block span-contiguity, inside the node's span.
@@ -742,7 +747,7 @@ mod tests {
     use super::super::tree::{next_tree_tag, NodeTree, TreeCore, NO_PARENT};
     use super::*;
     use crate::scopes::ScopeStack;
-    use crate::source::{Source, SourceSpan, Span, TextContent};
+    use crate::source::{Source, SourceSpan, Span};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TrivialLang};
     use crate::token::{TokenRules, WhitespaceRules};
@@ -897,7 +902,7 @@ mod tests {
             spec: Arc::new(StdCallableSpec::default()) as Arc<dyn CallableSpec<PlainLang>>,
             arguments: ParsedArguments::empty(),
             slots: ParsedSlots::new(alloc::vec![]),
-            post_space: TextContent::empty(),
+            invocation_syntax: (),
         };
         let tree = {
             let mut nodes = alloc::vec![

@@ -855,6 +855,7 @@ mod tests {
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = ObserverDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1056,6 +1057,7 @@ mod tests {
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = DescentDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1161,6 +1163,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = QuietDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,
@@ -1214,6 +1217,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = HelperDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,
@@ -1298,6 +1302,7 @@ mod tests {
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = FailingDescentDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1392,6 +1397,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = CtxDriver;
 
         fn finalize_transition(

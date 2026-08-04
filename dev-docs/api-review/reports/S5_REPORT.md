@@ -7,9 +7,14 @@ milestone, Progress updated each milestone.
 ## Progress
 
 - [x] M0 — implementation plan committed (this file)
-- [ ] M1 — Core recording channel + staging sugar + latexlike payload minimum
-- [ ] M2 — `EnvironmentSyntax` trait + fifth role trait + environments machinery
-      over `LLL`
+- [x] M1 — Core recording channel + staging sugar + latexlike payload (grew per
+      plan note: the `EnvironmentSyntax` trait, the fifth role trait +
+      umbrella bounds, and the `StdEnvironmentSyntax` recording all landed here —
+      the sugar/tests need them; the begin scan already delegates to
+      `parse_begin` on the concrete record). 608 lib tests (+11), 0 warnings.
+- [ ] M2 — Environments machinery over `LLL`
+      (EnvironmentBehavior/EnvironmentSpec/VerbatimBehavior/BeginSpec/EndSpec/
+      EnvironmentInvocationParser generic; environment_form via the role trait)
 - [ ] M3 — `MacroSpec<LLL>` + `argument_specs<LLL>` + paragraph-break
       name-as-written / canonical spec
 - [ ] M4 — Parse-law payload checks + FLM probe adaptation + regression sweep

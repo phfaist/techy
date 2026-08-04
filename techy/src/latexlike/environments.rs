@@ -63,8 +63,8 @@ use alloc::format;
 
 use crate::constructs::{
     parse_declared_arguments, read_rigid_name_group, ConstructParser,
-    ConstructParserResult, EnvironmentBody, EnvironmentBodyParser, Invocation,
-    ParseContext, VerbatimBodyParser,
+    ConstructParserResult, EnvironmentBody, EnvironmentBodyParser,
+    EnvironmentTerminatorFacts, Invocation, ParseContext, VerbatimBodyParser,
 };
 use crate::error::DiagnosticInfo;
 use crate::node::{
@@ -76,6 +76,9 @@ use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
+use super::invocation_syntax::{
+    EnvironmentSideSyntax, EnvironmentSyntax, InvocationSyntax, StdEnvironmentSyntax,
+};
 use super::spec::frame_title;
 use super::{CallableType, GroupType, Latexlike};
 
@@ -198,7 +201,7 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody> + 'p> {
+    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
         default_body_parser(invocation)
     }
 }
@@ -208,7 +211,7 @@ pub trait EnvironmentBehavior: fmt::Debug + Send + Sync {
 /// over the preset's terminator shape.
 fn default_body_parser<'p>(
     invocation: EnvironmentInvocation<'p>,
-) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody> + 'p> {
+) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
     Box::new(
         EnvironmentBodyParser::new(
             invocation.trigger_span,
@@ -297,7 +300,7 @@ impl EnvironmentBehavior for VerbatimBehavior {
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody> + 'p> {
+    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
         Box::new(
             VerbatimBodyParser::new(
                 invocation.trigger_span,
@@ -334,7 +337,7 @@ impl EnvironmentBehavior for BodyDeltaOverride {
     fn make_body_parser<'p>(
         &'p self,
         invocation: EnvironmentInvocation<'p>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody> + 'p> {
+    ) -> Box<dyn ConstructParser<Latexlike, Output = EnvironmentBody<Latexlike>> + 'p> {
         self.inner.make_body_parser(invocation)
     }
 }
@@ -476,9 +479,14 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
     {
         let trigger = self.invocation.token;
 
-        // Rigid scaffolding: the name group must be the immediately next token (the
-        // trigger's own syntactic post-space is the one tolerated, unrecorded gap).
-        let Some(name_group) = read_rigid_name_group(cx, GroupType::Content)? else {
+        // Begin-side scaffolding scan, delegated to the environment-syntax record
+        // ([`EnvironmentSyntax::parse_begin`]): the rigid name group must be the
+        // immediately next token; the begin-side spelling facts (escape char,
+        // command word, post-space, name-group rule) are recorded on the
+        // accumulator, no longer normalized away.
+        let Some((name_group, mut env_syntax)) =
+            StdEnvironmentSyntax::parse_begin(cx, trigger)?
+        else {
             cx.recover(MalformedBegin, SourceSpan::new(&cx.source, trigger.span))?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
             // accepted tolerant-recovery artifact); nothing past it is consumed.
@@ -550,6 +558,30 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
         drop(body_parser);
         debug_assert!(passthrough.is_none(), "the body parser returns no pass-through delta");
 
+        // End-side facts, reported back by the body parser (the terminator
+        // consumer): a tokenized terminator fills the end side verbatim; a raw
+        // (verbatim) body consumed its terminator as one literal token, so the
+        // record notes standard-shaped end facts; a body that closed without a
+        // terminator (mismatch, malformed, end of input) leaves the end side
+        // empty.
+        match &body.terminator {
+            Some(EnvironmentTerminatorFacts::Scanned {
+                escape_char,
+                command_word,
+                post_space,
+                name_group,
+            }) => env_syntax.parse_end(EnvironmentSideSyntax {
+                escape_char: *escape_char,
+                command_word: TextContent::Spanned(*command_word),
+                post_space: TextContent::Spanned(*post_space),
+                name_group_rule: Arc::clone(&name_group.rule),
+            }),
+            Some(EnvironmentTerminatorFacts::Literal { .. }) => {
+                env_syntax.record_std_end_facts(END_COMMAND_NAME);
+            }
+            None => {}
+        }
+
         let offset = children.len() as u32;
         children.push(body.body);
         // The slot record is pure node vocabulary: minted here, name carried on the
@@ -571,10 +603,11 @@ impl ConstructParser<Latexlike> for EnvironmentInvocationParser<'_, '_> {
             spec,
             arguments: ParsedArguments::from(arguments),
             slots,
-            // Environment shapes record empty post-space ([§dd-dr:nodes] invariant 3 as
-            // amended): whitespace after `\begin` is unrecorded scaffolding
-            // normalization, whitespace after `\end{…}` is sibling content.
-            post_space: TextContent::empty(),
+            // The recorded begin/end scaffolding facts — the environment arm of
+            // the Lang-owned invocation-syntax payload (whitespace after the
+            // begin/end commands is a recorded fact now, not a normalized-away
+            // gap; whitespace after `\end{…}` stays sibling content).
+            invocation_syntax: InvocationSyntax::Environment(env_syntax),
         };
         let id = cx.stage_node(
                 NodeKind::callable(data),

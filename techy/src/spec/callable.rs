@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use crate::constructs::{ConstructParser, Invocation, StdInvocationParser};
+use crate::constructs::{ConstructParser, FromInvocation, Invocation, StdInvocationParser};
 use crate::node::BuildId;
 use crate::state::Lang;
 
@@ -109,12 +109,19 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// however it wants (`\verb` raw content, tabular preambles), stages its own node
     /// shape, and may return a state delta as the invocation's after-effect for
     /// subsequent siblings (`\newcommand`).
+    ///
+    /// The `FromInvocation` clause is the standard parser's
+    /// ([`StdInvocationParser`] mints the invocation-syntax payload from the
+    /// bundle); a trait method's clause cannot be per-implementation, so overriding
+    /// takeovers inherit it — every language driving the standard dispatch
+    /// satisfies it anyway (`()` and the latexlike payload are covered by techy).
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, L>,
     ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
     where
         's: 'a,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         Box::new(StdInvocationParser::new(invocation))
     }

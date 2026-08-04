@@ -7,7 +7,7 @@ use core::fmt;
 
 use crate::source::TextContent;
 use crate::spec::CallableSpec;
-use crate::state::Lang;
+use crate::state::{InvocationSyntaxData, Lang};
 
 use super::arguments::{ParsedArguments, ParsedSlots};
 
@@ -55,7 +55,9 @@ pub enum NodeKind<L: Lang> {
         start: TextContent,
         /// Syntactic whitespace consumed after the content: the terminating newline plus
         /// following indentation — empty when the comment ran to end of input or
-        /// bordered a paragraph break. Mirrors [`CallableData::post_space`].
+        /// bordered a paragraph break (the comment token's own syntactic
+        /// post-space; a callable trigger's counterpart is recorded in the
+        /// Lang-owned [`CallableData::invocation_syntax`] payload).
         post_space: TextContent,
     },
     /// A plain sequence of nodes (the children range): the tree root, a slot body
@@ -211,17 +213,27 @@ pub struct CallableData<L: Lang> {
     pub arguments: ParsedArguments<L>,
     /// The parsed slots: each slot's region and content nodes.
     pub slots: ParsedSlots<L>,
-    /// The syntactic whitespace consumed by the invocation's **trigger token** — the
+    /// The language's recorded **invocation syntax**
+    /// ([`Lang::InvocationSyntax`](crate::state::Lang::InvocationSyntax)): the
+    /// trigger-spelling facts of *this* invocation — what was written to invoke it
+    /// (escape character, the trigger token's syntactic post-space, environment
+    /// scaffolding), in the language's own payload type and logical canonical
+    /// form. A parse-level-syntax channel, distinct from the node ext
+    /// (preset-logic data); minted by the invocation parser that staged the node
+    /// (the standard sites via
+    /// [`FromInvocation`](crate::constructs::FromInvocation)).
+    ///
+    /// What the payload records is the language's recomposition-accuracy choice:
+    /// recomposition reads raw node payload only, so byte-exact vs. up-to-noise
+    /// vs. loose reemission is decided here. `()` records nothing. The latexlike
+    /// preset records e.g. the trigger token's own syntactic post-space — the
     /// name-terminating whitespace of a multi-character command (pylatexenc's
-    /// `macro_post_space`), reproduced verbatim in recomposition. Nothing beyond the
-    /// token's own post-space is ever claimed: whitespace after a
-    /// single-character command or after a final argument is ordinary sibling/region
-    /// content, as in TeX. Included in the node's span (a `Spanned` post-space is a
-    /// sub-range of it — trailing for zero-argument callables; between the name and the
-    /// first argument region otherwise). Deliberately a field, not a child node: it lies
-    /// *outside* the argument/slot region tiling of the children range, and it is
-    /// whitespace-only by construction.
-    pub post_space: TextContent,
+    /// `macro_post_space`), a sub-range of the node's span lying *outside* the
+    /// argument/slot region tiling — in its
+    /// [`Macro`](crate::latexlike::InvocationSyntax::Macro) arm, and the
+    /// begin/end scaffolding facts of environment-shaped callables in its
+    /// [`Environment`](crate::latexlike::InvocationSyntax::Environment) arm.
+    pub invocation_syntax: L::InvocationSyntax,
 }
 
 impl<L: Lang> CallableData<L> {
@@ -232,7 +244,7 @@ impl<L: Lang> CallableData<L> {
             spec: Arc::clone(&self.spec),
             arguments: self.arguments.clone(),
             slots: self.slots.clone(),
-            post_space: self.post_space.materialized(source_content),
+            invocation_syntax: self.invocation_syntax.materialized(source_content),
         }
     }
 }
@@ -303,7 +315,7 @@ impl<L: Lang> Clone for CallableData<L> {
             spec: Arc::clone(&self.spec),
             arguments: self.arguments.clone(),
             slots: self.slots.clone(),
-            post_space: self.post_space.clone(),
+            invocation_syntax: self.invocation_syntax.clone(),
         }
     }
 }
@@ -316,7 +328,7 @@ impl<L: Lang> fmt::Debug for CallableData<L> {
             .field("spec", &self.spec)
             .field("arguments", &self.arguments)
             .field("slots", &self.slots)
-            .field("post_space", &self.post_space)
+            .field("invocation_syntax", &self.invocation_syntax)
             .finish()
     }
 }

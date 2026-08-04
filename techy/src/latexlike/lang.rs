@@ -33,9 +33,11 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::source::TextContent;
 use crate::state::Lang;
 use crate::token::GroupRule;
 
+use super::invocation_syntax::EnvironmentSyntax;
 use super::{CallableType, Event, GroupType, MathGroupForm, Mode};
 
 /// Role trait for a latexlike **group-class vocabulary**
@@ -175,11 +177,58 @@ pub trait LatexlikeEvent {
     fn is_exit_math_context(&self) -> bool;
 }
 
+/// Role trait for a latexlike **invocation-syntax payload**
+/// ([`Lang::InvocationSyntax`]): the macro / environment / specials invocation
+/// forms as constructors on the host's own payload type, with the matching
+/// accessors — the fifth member of the role-trait roster, so the preset's staging
+/// sites (the invocation and specials sites, the environment composition) and its
+/// source recomposer work over any family member's payload type.
+///
+/// The associated [`Env`](LatexlikeInvocationSyntax::Env) names the
+/// environment-side record ([`EnvironmentSyntax`]) — the single customization
+/// entry for environment-syntax recording: a language picks its record by picking
+/// its payload type (the preset enum
+/// [`InvocationSyntax<Env>`](super::InvocationSyntax) implements this trait for
+/// any `Env`).
+///
+/// # Coherence contracts
+///
+/// Mirroring the other role traits': `macro_form(e, p).macro_syntax() ==
+/// Some((e, &p))`, `environment_form(env).environment_syntax() == Some(&env)`,
+/// `specials_form().is_specials() == true`, and each accessor answers `Some`/
+/// `true` for exactly the values playing that form.
+pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
+    /// The environment-side record type ([`EnvironmentSyntax`]).
+    type Env: EnvironmentSyntax<L>;
+
+    /// The macro form: a command-triggered invocation's recorded facts (escape
+    /// character + the trigger token's syntactic post-space).
+    fn macro_form(escape_char: char, post_space: TextContent) -> Self;
+
+    /// The environment form, over the filled environment-side record.
+    fn environment_form(env: Self::Env) -> Self;
+
+    /// The specials form (records nothing beyond the node's as-written `name`).
+    fn specials_form() -> Self;
+
+    /// The macro facts, when this payload plays the macro form.
+    fn macro_syntax(&self) -> Option<(char, &TextContent)>;
+
+    /// The environment record, when this payload plays the environment form.
+    fn environment_syntax(&self) -> Option<&Self::Env>;
+
+    /// Whether this payload plays the specials form.
+    fn is_specials(&self) -> bool;
+}
+
 /// The latexlike **language family** umbrella: a [`Lang`] whose vocabularies play
 /// the latexlike roles ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
-/// [`LatexlikeMode`], [`LatexlikeEvent`]) — the bound every generic preset
-/// component takes (conventional parameter `LLL`), plus the preset's language-level
-/// behavior defaults as **overridable defaulted methods**.
+/// [`LatexlikeMode`], [`LatexlikeEvent`], and — on the invocation-syntax
+/// payload — [`LatexlikeInvocationSyntax`] +
+/// [`FromInvocation`](crate::constructs::FromInvocation)) — the bound every
+/// generic preset component takes (conventional parameter `LLL`), plus the
+/// preset's language-level behavior defaults as **overridable defaulted
+/// methods**.
 ///
 /// Opting in is explicit and one line — `impl LatexlikeLang for MyLang {}` — and
 /// [`Latexlike`](super::Latexlike) itself opts in exactly that way. There is
@@ -195,6 +244,8 @@ pub trait LatexlikeLang:
         CallableTypeId: LatexlikeCallableType,
         ModeId: LatexlikeMode,
         Event: LatexlikeEvent,
+        InvocationSyntax: LatexlikeInvocationSyntax<Self>
+                              + crate::constructs::FromInvocation<Self>,
     >
 {
     /// The math-delimiter group rules of this language's canonical token rules —

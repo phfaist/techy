@@ -48,10 +48,10 @@ use core::mem;
 
 use crate::error::DiagnosticInfo;
 use crate::node::{
-    ArgumentExt, BuildId, CallableData, ContentNodes, NodeKind, ParsedArgument,
-    ParsedArguments, ParsedSlots,
+    ArgumentExt, BuildId, ContentNodes, NodeKind, ParsedArgument, ParsedArguments,
+    ParsedSlots,
 };
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
@@ -62,7 +62,7 @@ use super::nodes_parser::{
     CommandResolutionFailed, ExpressionCallableRequiresContent, UnresolvableCommand,
 };
 use super::{
-    ConstructParserResult, Invocation, ParseContext,
+    ConstructParserResult, FromInvocation, Invocation, ParseContext,
 };
 
 /// Condition: a mandatory argument was missing at its position (end of input, a
@@ -244,7 +244,10 @@ pub(super) fn parse_expression_node<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
     next: &Token<'s, L>,
     nodes: &mut Vec<BuildId>,
-) -> ConstructParserResult<L, Option<BuildId>> {
+) -> ConstructParserResult<L, Option<BuildId>>
+where
+    L::InvocationSyntax: FromInvocation<L>,
+{
     match &next.kind {
         TokenKind::Char(_) => {
             stage_pre_space(cx, nodes, next.pre_space)?;
@@ -328,7 +331,10 @@ fn dispatch_expression_invocation<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
     nodes: &mut Vec<BuildId>,
     invocation: Invocation<'_, 's, L>,
-) -> ConstructParserResult<L, Option<BuildId>> {
+) -> ConstructParserResult<L, Option<BuildId>>
+where
+    L::InvocationSyntax: FromInvocation<L>,
+{
     let token = invocation.token;
     if invocation.spec.requires_content() {
         // The trigger's written spelling, built only on this cold branch (the hot
@@ -346,28 +352,21 @@ fn dispatch_expression_invocation<'s, L: Lang>(
         stage_pre_space(cx, nodes, token.pre_space)?;
         cx.tokens.move_past(token, true);
         // The bare single-token callable: every declared argument absent, no slots —
-        // the record stays self-describing (each entry keeps its spec).
+        // the record stays self-describing (each entry keeps its spec). Staged via
+        // the transcription-case shorthand (childless: the trigger's own span).
         let arguments: Vec<ParsedArgument<L>> = invocation
             .spec
             .arguments()
             .iter()
             .map(|argument_spec| ParsedArgument::absent(Arc::clone(argument_spec)))
             .collect();
-        let data = CallableData {
-            callable_type: invocation.callable_type,
-            name: invocation.name.into(),
-            spec: Arc::clone(invocation.spec),
-            arguments: ParsedArguments::from(arguments),
-            slots: ParsedSlots::empty(),
-            post_space: TextContent::Spanned(token.post_space()),
-        };
-        let id = cx.stage_node(
-                NodeKind::callable(data),
-                SourceSpan::new(&cx.source, token.span),
-                Arc::clone(&cx.state),
-                Vec::new(),
-            )
-            .map_err(|error| cx.implementation_error(error, token.span))?;
+        let id = cx.stage_invocation(
+            &invocation,
+            ParsedArguments::from(arguments),
+            ParsedSlots::empty(),
+            Vec::new(),
+            None,
+        )?;
         nodes.push(id);
         return Ok(Some(id));
     }
@@ -420,6 +419,7 @@ impl ExpressionParser {
 impl<L: Lang> ArgumentParser<L> for ExpressionParser
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,
@@ -564,6 +564,7 @@ impl<L: Lang> GroupArgumentParser<L> {
 impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L>
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,
@@ -804,6 +805,7 @@ impl<L: Lang> OptionalGroupArgumentParser<L> {
 impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L>
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,
@@ -1009,6 +1011,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = ArgDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1283,8 +1286,8 @@ mod tests {
         assert!(frac.is_callable());
         assert_eq!(frac.name(), Some("frac"));
         assert_eq!(frac.span().range(), 0..11);
-        // The trigger's own post-space: empty, `{` follows the name directly.
-        assert_eq!(frac.post_space(), Some(""));
+        // (Trigger post-space now lives in the Lang-owned invocation-syntax
+        // payload — `()` here; the latexlike payload tests pin it.)
         // Children = the two argument regions (raw-syntax view).
         assert_eq!(frac.child_count(), 2);
         assert_eq!(frac.child(0).unwrap().group_delimiters(), Some(("{", "}")));
@@ -1309,7 +1312,6 @@ mod tests {
         assert_eq!(frac.span().range(), 0..9);
         // The name-terminating whitespace is the recorded post-space — between the
         // name and the first region ([§dd-dr:nodes] invariant 3 as amended).
-        assert_eq!(frac.post_space(), Some(" "));
         // Children: "1", the inter-argument whitespace node, "2".
         assert_eq!(frac.child_count(), 3);
         assert_eq!(frac.child(0).unwrap().chars(), Some("1"));
@@ -1570,7 +1572,6 @@ mod tests {
         let item = root_child(&parsed, 0);
         // The trigger's own post-space; the argument-less span is the trigger's.
         assert_eq!(item.span().range(), 0..6);
-        assert_eq!(item.post_space(), Some(" "));
         assert!(!item.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(root_child(&parsed, 1).chars(), Some("x"));
         assert!(parsed.result.diagnostics.is_empty());

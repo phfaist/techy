@@ -57,7 +57,8 @@ use crate::token::{GroupRule, Token, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
-    EnvironmentBody, MissingEnvironmentTerminator, MissingTerminatorFound,
+    EnvironmentBody, EnvironmentTerminatorFacts, MissingEnvironmentTerminator,
+    MissingTerminatorFound,
 };
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
@@ -490,12 +491,12 @@ impl<'p, L: Lang> VerbatimBodyParser<'p, L> {
 }
 
 impl<L: Lang> ConstructParser<L> for VerbatimBodyParser<'_, L> {
-    type Output = EnvironmentBody;
+    type Output = EnvironmentBody<L>;
 
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
         // The same environment-body traceback frame as the tokenized parser.
         let title = match self.invocation_name_span {
             Some(name_span) => FrameTitle::Quoted {
@@ -514,7 +515,7 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
     fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
         let body_start = cx.tokens.pos();
         let close_rule = Arc::new(GroupRule {
             group_type: self.group_type,
@@ -585,6 +586,11 @@ impl<L: Lang> VerbatimBodyParser<'_, L> {
                 body,
                 end,
                 content: ContentNodes::InChildrenOf(body, content_designation_start..child_count),
+                // The matched literal's span — the composition records standard
+                // end facts from it (no tokenized scan exists for a raw body).
+                terminator: raw_end
+                    .terminator
+                    .map(|span| EnvironmentTerminatorFacts::Literal { span }),
             },
             None,
         ))
@@ -641,6 +647,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = VerbDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,

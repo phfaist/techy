@@ -723,6 +723,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn initial_state_data() -> StateData<Self> {
@@ -823,6 +824,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn finalize_transition(
@@ -929,6 +931,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn initial_state_data() -> StateData<Self> {
@@ -979,6 +982,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = crate::engine::StdParseDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,

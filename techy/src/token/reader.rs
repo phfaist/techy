@@ -503,6 +503,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1223,6 +1224,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
@@ -1326,6 +1328,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = crate::engine::StdParseDriver;
             fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
                 TriggerChars::Only("~".into())

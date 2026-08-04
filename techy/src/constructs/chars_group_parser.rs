@@ -56,7 +56,7 @@ use crate::token::TokenKind;
 
 use super::argument_parsers::{missing_mandatory, scan_argument_noise, stage_pre_space};
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-use super::{ConstructParserResult, ParseContext};
+use super::{ConstructParserResult, FromInvocation, ParseContext};
 
 /// The chars-group argument parser (see the module docs): a mandatory group of the
 /// configured class whose contents parse under a restricted state — commands and
@@ -136,6 +136,7 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
 impl<L: Lang> ArgumentParser<L> for CharsGroupArgumentParser<L>
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,

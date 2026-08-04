@@ -88,10 +88,7 @@ use crate::state::{Lang, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
-use super::{
-    invocation_frame, ConstructParser, ConstructParserResult, Invocation,
-    ParseContext,
-};
+use super::{ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
 /// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
@@ -636,7 +633,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         &mut self,
         cx: &mut ParseContext<'_, 's, L>,
         invocation: Invocation<'_, 's, L>,
-    ) -> ConstructParserResult<L, bool> {
+    ) -> ConstructParserResult<L, bool>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
         // `Arc` in, `Arc` out — pass-through policies preserve pointer identity.
         let base = match &self.child_states.invocation {
             InvocationChildState::Inherit => Arc::clone(&cx.state),
@@ -674,7 +674,10 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for NodesParser<'_, L> {
+impl<L: Lang> ConstructParser<L> for NodesParser<'_, L>
+where
+    L::InvocationSyntax: FromInvocation<L>,
+{
     type Output = NodesOutcome<L>;
 
     fn parse(
@@ -1081,6 +1084,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = CmdDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1129,6 +1133,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn scan_specials<'s>(
@@ -1252,6 +1257,7 @@ mod tests {
     ) -> Result<Parsed<L>, ParseError>
     where
         L::Driver: TestDriver,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         try_run_with(content, tokens, state, recovery, stop, ChildStateSpec::inherit())
     }
@@ -1267,6 +1273,7 @@ mod tests {
     ) -> Result<Parsed<L>, ParseError>
     where
         L::Driver: TestDriver,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new();
@@ -1335,6 +1342,7 @@ mod tests {
     ) -> Parsed<L>
     where
         L::Driver: TestDriver,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         run_both_with(content, state, recovery, stop_std, stop_list, ChildStateSpec::inherit())
     }
@@ -1351,6 +1359,7 @@ mod tests {
     ) -> Parsed<L>
     where
         L::Driver: TestDriver,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         let mut std_reader = StdTokenReader::new(content);
         let a = try_run_with(
@@ -1481,6 +1490,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = MarkDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,
@@ -2054,6 +2064,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn scan_specials<'s>(
@@ -2329,6 +2340,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = HintDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -2405,6 +2417,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = RefineDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -2487,7 +2500,6 @@ mod tests {
         let node = parsed.result.tree.root().child(1).unwrap();
         assert_eq!(node.callable_type(), Some(CT_MACRO));
         assert_eq!(node.name(), Some("foo"));
-        assert_eq!(node.post_space(), Some(" "));
         let data = node.callable().unwrap();
         assert!(data.arguments.is_empty() && data.slots.is_empty());
         // The node records the package's spec (the flyweight Arc).
@@ -2518,8 +2530,6 @@ mod tests {
         let parsed =
             run_both("\\foo bar", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
         assert_eq!(shapes(&parsed.result), ["callable 0..5", "chars 5..8 \"bar\""]);
-        let node = parsed.result.tree.root().child(0).unwrap();
-        assert_eq!(node.post_space(), Some(" "));
         assert_partition(&parsed.result, 0..8);
 
         // A single non-name-char command (`\&`) takes no post-space at the token level,
@@ -2528,8 +2538,6 @@ mod tests {
         let parsed =
             run_both("\\& b", &st, Recovery::Strict, StopSpec::none(), StopSpec::none());
         assert_eq!(shapes(&parsed.result), ["callable 0..2", "chars 2..4 \" b\""]);
-        let node = parsed.result.tree.root().child(0).unwrap();
-        assert_eq!(node.post_space(), Some(""));
         assert_partition(&parsed.result, 0..4);
     }
 
@@ -2549,7 +2557,6 @@ mod tests {
             shapes(&parsed.result),
             ["callable 0..5", "chars 5..7 \"\\n\\n\"", "chars 7..8 \"b\""]
         );
-        assert_eq!(parsed.result.tree.root().child(0).unwrap().post_space(), Some(" "));
         assert_partition(&parsed.result, 0..8);
     }
 
@@ -2567,7 +2574,6 @@ mod tests {
         let node = parsed.result.tree.root().child(1).unwrap();
         assert_eq!(node.callable_type(), Some(CT_SPECIALS));
         assert_eq!(node.name(), Some("~"));
-        assert_eq!(node.post_space(), Some("")); // a specials token has no post-space
         assert!(parsed.result.diagnostics.is_empty());
         assert_partition(&parsed.result, 0..3);
     }
@@ -2820,6 +2826,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ExtBundle;
+            type InvocationSyntax = ();
             type Driver = ExtDriver;
 
             fn make_node_ext(
@@ -3328,6 +3335,7 @@ mod tests {
             type SessionExt = Counts;
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = CountDriver;
 
             fn finalize_transition(
@@ -3465,6 +3473,7 @@ mod tests {
             type SessionExt = ();
             type SourceOrigin = Option<String>;
             type NodeExts = ();
+            type InvocationSyntax = ();
             type Driver = DriveDriver;
             fn make_node_ext(
                 _kind: &crate::node::NodeKind<Self>,
@@ -3661,6 +3670,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = FailingMathDriver;
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -3747,6 +3757,7 @@ mod tests {
         type SessionExt = ();
         type SourceOrigin = Option<String>;
         type NodeExts = ();
+        type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
         fn scan_specials<'s>(

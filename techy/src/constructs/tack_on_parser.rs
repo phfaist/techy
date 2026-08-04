@@ -65,7 +65,7 @@ use crate::state::Lang;
 use crate::token::TokenKind;
 
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
-use super::{invocation_frame, ConstructParserResult, Invocation, ParseContext};
+use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
 /// Condition: a non-repeatable tack-on information field was specified more than once
 /// (`\section{x}\label{a}\label{b}` with `label` registered via
@@ -143,6 +143,7 @@ impl<L: Lang> TackOnFieldsArgumentParser<L> {
 impl<L: Lang> ArgumentParser<L> for TackOnFieldsArgumentParser<L>
 where
     ArgumentExt<L>: Default,
+    L::InvocationSyntax: FromInvocation<L>,
 {
     fn parse_argument(
         &self,

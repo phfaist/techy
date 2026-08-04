@@ -52,8 +52,8 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::constructs::{
-    ChildStateSpec, ConstructParser, ConstructParserResult, GroupParser, Invocation,
-    NodesOutcome, NodesParser, StopSpec,
+    ChildStateSpec, ConstructParser, ConstructParserResult, FromInvocation, GroupParser,
+    Invocation, NodesOutcome, NodesParser, StopSpec,
 };
 use crate::error::{DiagnosticData, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
@@ -338,7 +338,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         &'p self,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Box<dyn ConstructParser<L, Output = NodesOutcome<L>> + 'p> {
+    ) -> Box<dyn ConstructParser<L, Output = NodesOutcome<L>> + 'p>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
         Box::new(NodesParser::new(stop).with_child_states(child_states))
     }
 
@@ -357,7 +360,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         open_span: Span,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'p> {
+    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'p>
+    where
+        L::InvocationSyntax: FromInvocation<L>,
+    {
         Box::new(GroupParser::new(open_span, rule).with_child_states(child_states))
     }
 
@@ -377,6 +383,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
     where
         's: 'a,
+        L::InvocationSyntax: FromInvocation<L>,
     {
         let spec = invocation.spec;
         spec.make_invocation_parser(invocation)

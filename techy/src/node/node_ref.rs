@@ -140,7 +140,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
 
     /// The content of this node's own source (what `TextContent::Spanned` resolves
     /// against).
-    fn source_content(&self) -> &'t str {
+    pub(crate) fn source_content(&self) -> &'t str {
         self.data().span.source().content()
     }
 
@@ -286,9 +286,12 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         self.callable().map(|data| &data.spec)
     }
 
-    /// A `Callable` node's post-space, as logical text.
-    pub fn post_space(&self) -> Option<&'t str> {
-        self.callable().map(|data| data.post_space.resolve(self.source_content()))
+    /// A `Callable` node's recorded invocation-syntax payload
+    /// ([`CallableData::invocation_syntax`]) — the Lang-owned trigger-spelling
+    /// facts. Typed readers live with the payload type (the latexlike sugar's
+    /// [`post_space`](NodeRef::post_space) reads its `Macro` arm).
+    pub fn invocation_syntax(&self) -> Option<&'t L::InvocationSyntax> {
+        self.callable().map(|data| &data.invocation_syntax)
     }
 
     /// A `Callable` node's parsed-arguments record.
