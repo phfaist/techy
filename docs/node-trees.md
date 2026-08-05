@@ -1,3 +1,3 @@
-# The parsing model
+# Node trees
 
 *(This chapter is being written.)*

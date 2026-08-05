@@ -64,9 +64,27 @@ document.addEventListener("DOMContentLoaded", () => {
     /* Guide chapters in reading order: [path under techy/guide/, title]. */
     const GUIDE_PAGES = [
         ["", "Overview"],
+        /* User Guide */
+        ["introduction/", "Introduction"],
+        ["language_syntax/", "Language syntax"],
+        ["node_trees/", "Node trees"],
+        ["specs/", "Defining macros, environments, and specials"],
+        ["parsing/", "Running the parser"],
         ["learn_by_example/", "Learn techy by example"],
-        ["parsing_model/", "The parsing model"],
+        /* Developer Guide */
         ["concepts_overview/", "Concepts overview"],
+        ["parsing_model/", "The parsing model"],
+        ["construct_parsers/", "Custom construct parsers"],
+        ["custom_lang/", "Defining a custom language"],
+        ["integration/", "Integration: tooling, embedding, and bindings"],
+        ["pylatexenc_migration/", "Migrating from pylatexenc"],
+        /* AI Guide */
+        ["ai_guide/", "AI guide"],
+        ["ai_guide_definitions/", "AI guide: definitions"],
+        ["ai_guide_trees/", "AI guide: node trees"],
+        ["ai_guide_custom_lang/", "AI guide: custom languages"],
+        ["ai_guide_embedding/", "AI guide: embedding"],
+        ["ai_guide_pylatexenc/", "AI guide: pylatexenc migration"],
     ];
     /* The workspace crates: the entry points of the "API" section. */
     const CRATES = ["techy", "techy_derive"];

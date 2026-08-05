@@ -109,14 +109,62 @@ pub mod visit;
 #[cfg(doc)]
 #[doc = include_str!("../../docs/guide.md")]
 pub mod guide {
+    // User Guide.
+    #[doc = include_str!("../../docs/introduction.md")]
+    pub mod introduction {}
+
+    #[doc = include_str!("../../docs/language-syntax.md")]
+    pub mod language_syntax {}
+
+    #[doc = include_str!("../../docs/node-trees.md")]
+    pub mod node_trees {}
+
+    #[doc = include_str!("../../docs/specs.md")]
+    pub mod specs {}
+
+    #[doc = include_str!("../../docs/parsing.md")]
+    pub mod parsing {}
+
     #[doc = include_str!("../../docs/learn-by-example.md")]
     pub mod learn_by_example {}
+
+    // Developer Guide.
+    #[doc = include_str!("../../docs/concepts-overview.md")]
+    pub mod concepts_overview {}
 
     #[doc = include_str!("../../docs/parsing-model.md")]
     pub mod parsing_model {}
 
-    #[doc = include_str!("../../docs/concepts-overview.md")]
-    pub mod concepts_overview {}
+    #[doc = include_str!("../../docs/construct-parsers.md")]
+    pub mod construct_parsers {}
+
+    #[doc = include_str!("../../docs/custom-lang.md")]
+    pub mod custom_lang {}
+
+    #[doc = include_str!("../../docs/integration.md")]
+    pub mod integration {}
+
+    #[doc = include_str!("../../docs/pylatexenc-migration.md")]
+    pub mod pylatexenc_migration {}
+
+    // AI Guide.
+    #[doc = include_str!("../../docs/ai-guide.md")]
+    pub mod ai_guide {}
+
+    #[doc = include_str!("../../docs/ai-guide-definitions.md")]
+    pub mod ai_guide_definitions {}
+
+    #[doc = include_str!("../../docs/ai-guide-trees.md")]
+    pub mod ai_guide_trees {}
+
+    #[doc = include_str!("../../docs/ai-guide-custom-lang.md")]
+    pub mod ai_guide_custom_lang {}
+
+    #[doc = include_str!("../../docs/ai-guide-embedding.md")]
+    pub mod ai_guide_embedding {}
+
+    #[doc = include_str!("../../docs/ai-guide-pylatexenc.md")]
+    pub mod ai_guide_pylatexenc {}
 }
 
 /// Support module for `techy-derive`-generated code only: everything the generated code

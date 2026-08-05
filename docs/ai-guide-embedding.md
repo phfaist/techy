@@ -1,3 +1,3 @@
-# The parsing model
+# AI guide: embedding
 
 *(This chapter is being written.)*
