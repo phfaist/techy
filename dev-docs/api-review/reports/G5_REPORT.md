@@ -3,7 +3,8 @@
 Branch `phase4-g5-audit` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a637426ea387790c7`,
 branched from `api-review` @ c172cab, which contains 996e49f = G4 merged).
-Status: **M0 (plan)** — subsequent sections fill in per milestone.
+Status: **M0–M5 COMPLETE** — all gates green; awaiting stage review +
+merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb, predating the api-review series); the branch was reset to the
@@ -417,4 +418,102 @@ No OPEN entries remain.
 3. "footgun" (extract.rs parse_keyval doc) — informal metaphor in public
    rustdoc, pre-existing; left (outside M3's process-wording mandate).
 
-## M5 — closure (fills in after execution)
+## M5 — closure
+
+### Gate table (final run at closure; identical results at M1, M2, M3, M4)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS, 0 warnings |
+| `cargo test` | PASS — 758+30+8+21+1 lib/suite tests, 66 doctests passed + 2 ignored (counts UNCHANGED) |
+| `rm -rf target/doc && cargo docs` | PASS, 0 warnings |
+| `scripts/check_semver.sh` | PASS — "no semver update required" (196 checks) |
+| `cargo build --target wasm32-unknown-unknown -p techy` (M1 extra) | PASS |
+
+### Changed-file summary
+
+- Rustdoc (doc comments only; zero code-semantics changes): lib.rs (M1
+  WebAssembly sentence + M2 Panics section), extract.rs, source/resolver.rs,
+  source/mod.rs, error.rs, visit.rs, spec/callable.rs, spec/structure.rs,
+  scopes/mod.rs, engine/driver.rs, constructs/child_state.rs,
+  constructs/verbatim_parser.rs, constructs/argument_parsers.rs,
+  latexlike/mod.rs, latexlike/driver.rs, latexlike/environments.rs,
+  latexlike/arguments.rs, latexlike/invocation_syntax.rs (34 public
+  rustdoc sites total: 2 additions + 32 rewordings).
+- docs/guide.md: one stale sentence removed (M4 trivial audit fix).
+- DOC_GAPS.md: #2, #3 → RESOLVED. This report.
+
+### Deviations
+
+1. Stale worktree HEAD (2110bbb) at agent start — reset to the api-review
+   tip c172cab before any work, per the brief. PROCEDURAL.
+2. The G2-named extract.rs sweep sites were "×2"; the M3 sweep found and
+   fixed 3 more public extract.rs sites (heading at :16, :730; :163 is
+   private and left). SANCTIONED by the own-sweep mandate.
+3. docs/guide.md stale "Chapters still being written…" sentence removed —
+   a guide-content edit slightly beyond "typo/metaphor/anchor", but a
+   plain accuracy fix (no unwritten chapters exist since G4). DEFENSIBLE
+   as a trivial audit fix.
+4. The brief's "28 definitions in each of the two migration files" =
+   27 `[pyl-…]` + 1 `[pyl]` root definition per file. Composition
+   confirmed, sets byte-identical; no deviation, recorded for precision.
+
+### DRAFT — PLAN.md closure records (NOT applied; supervisor applies at merge)
+
+Checkbox change (PLAN.md line ~144), `- [ ]` → `- [x]`, replacing the
+Phase 4 entry's head line and appending the closure pointer, mirroring the
+Phase 3 entry's shape:
+
+```markdown
+- [x] **Phase 4 — Guides** (done 2026-08-05; G1–G5 all merged): the full
+  guide bundle live under `techy::guide` — landing page + 18 chapters
+  (User 6 / Developer 6 / AI 6), written from public documentation only;
+  DOC_GAPS register fully resolved; crate-level WebAssembly + panic-contract
+  anchors added; process-flavored rustdoc swept; final wiring/length/
+  anchor/terminology/superseded/link audits green. Stage plan + status +
+  per-stage logs: PHASE4_PLAN.md; reports under dev-docs/api-review/reports/.
+```
+
+Decision-log entry (append at the log's tail):
+
+```markdown
+- 2026-08-05 (supervisor merges under the user's standing Phase-4 merge
+  authorization; supervising session): **Phase 4 — guides COMPLETE** (G1–G5
+  all merged into api-review; stage log + per-stage detail in
+  PHASE4_PLAN.md / reports/G<N>_REPORT.md). G1 skeleton + landing +
+  introduction + concepts-overview (all 18 chapters wired from day one);
+  G2 User Guide (five chapters + the module-doc sufficiency pass; DOC_GAPS
+  #1 resolved — condition identifiers render on all 25 condition pages);
+  G3 Developer Guide (five chapters incl. the new integration.md and the
+  both-sides-linked pylatexenc migration); G4 AI Guide (root + five
+  sub-chapters, 84 kB, 14 new doctests); G5 verification + audit closed
+  the phase: DOC_GAPS #2 resolved (wasm32-unknown-unknown build
+  re-verified; the crate `no_std` rustdoc now names WebAssembly) and #3
+  resolved (crate-level Panics section — parsing never panics on document
+  input, problems surface as diagnostics or an `Err`; the always-on
+  precondition asserts stay caller-contract-side, phrased consistently
+  with their item pages); process-flavored rustdoc sweep — the 5 G2-named
+  sites plus 27 more public sites reworded into timeless prose (checkpoint
+  numbers, dates-as-justification, session/ruling references, stratum
+  labels removed from public text; the private/test leave-list with
+  reasons in G5_REPORT.md); final audits all green: wiring 19/19
+  (files / lib.rs guide block / GUIDE_PAGES / guide.md index), every
+  chapter within its ruled size target, fragment anchors 44/44 on a fresh
+  docs build, terminology and superseded-names sweeps clean, readthedocs
+  link sample 6/6 live (28 definitions per migration file, sets
+  identical), docs build zero warnings, test counts unchanged
+  (758+30+8+21+1; 66+2 doctests), check_semver green. Every DOC_GAPS
+  entry RESOLVED. Residual notes for the user (G5_REPORT M4): the
+  "(module docs)" pointers on some re-exported items target private
+  pages; the [§dd-dr:…] pointers in public rustdoc (panic-policy family,
+  ext-minting) await a four-case-rule call; "footgun" in one extract doc.
+  **The phase plan (Phases 0–4) is complete**; disposal of the
+  dev-docs/api-review/ scaffolding remains the user's call per the
+  documents' own headers.
+```
+
+### Handoff
+
+Branch `phase4-g5-audit`, 6 commits (M0 6247fe5, M1 21cf0e7, M2 d16b6f7,
+M3 e151f7c, M4 c3b01c1, M5 this commit). Ready for independent review +
+supervisor merge per PHASE4_PLAN § Protocol.
