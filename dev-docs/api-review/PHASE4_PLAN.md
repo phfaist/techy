@@ -134,7 +134,11 @@ context — compressed but obeying all clarity rules):
   entries verified by agents against code/tests/rulings; GAP entries fixed in
   rustdoc); full link sweep (`rm -rf target/doc && cargo docs`); length-target
   audit (REMOVE rule); terminology/jargon sweep; superseded-names sweep; wiring
-  audit; PLAN.md Phase 4 closure entry.
+  audit; PLAN.md Phase 4 closure entry. Additions from the G2 review: resolve
+  DOC_GAPS #3 (crate-level panic-contract sentence); sweep pre-existing
+  process-flavored rustdoc wording (extract.rs "7.8 checkpoint" ×2,
+  default_token_rules "7.5 checkpoint", builtin_package "7.6 checkpoint",
+  SourceResolver "decided July 2026").
 
 ## Protocol (per stage)
 
@@ -170,6 +174,24 @@ context — compressed but obeying all clarity rules):
 
 ## Status log
 
+- 2026-08-05: **G2 DONE — merged into api-review (e0cf619)**. Implementer: 9
+  commits — five chapters (language-syntax 12.5 kB / node-trees 9.0 kB /
+  specs 15.9 kB / parsing 8.8 kB / learn-by-example re-curation 29.6 kB; all
+  within targets incl. the two ruled exceptions), module-doc sufficiency pass
+  (extract/visit/transform/recompose all SUFFICIENT, zero expansions needed),
+  post_space note added to InvocationSyntaxData docs, \input-caching note
+  already covered (location recorded), DOC_GAPS #1 RESOLVED (identifier
+  rendered on 25/25 condition pages; no rustdoc change needed). Independent
+  review: MERGE-READY, 0 blockers, 26 claims traced to public docs, 31 stage
+  doctests, fragment anchors verified; deviations all FORCED/DEFENSIBLE
+  (argument-code "enum" correctly rendered as the typed parser-constructor
+  alternative — no such enum exists; dangling include-chapter reference in
+  input_macro_spec docs repaired; acceptance-suite path mentions KEPT as
+  load-bearing parity pins). Supervisor read all five chapters in full;
+  merge-round fixes: "byte-accounted" → plain wording (parsing.md), report
+  doctest count 32→31, DOC_GAPS #3 filed (crate-level panic-contract
+  sentence gap → G5); G5 scope grew by the process-flavored-rustdoc sweep.
+  NEXT: G3.
 - 2026-08-05: **G1 DONE — merged into api-review (4e1244e)**. Implementer: 6
   commits (landing page rewrite; introduction.md 6.6 kB; concepts-overview
   expansion 11.8 kB, all 12 headings byte-identical; 15 wired stubs; lib.rs
