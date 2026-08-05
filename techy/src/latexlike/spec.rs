@@ -93,8 +93,8 @@ impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
 ///
 /// Registered via [`Package::insert_specials`](crate::scopes::Package::insert_specials);
 /// the trigger sequence is the registration key, not spec data (specs are de-keyed —
-/// the [`base_package`](super::base_package) registers one shared argument-less
-/// instance for all its triggers).
+/// the [`minilatex_package`](super::minidefs::minilatex_package) registers one shared
+/// argument-less instance for all its typography triggers).
 ///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
 /// [`Latexlike`]) — it is also what the paragraph-break pillar

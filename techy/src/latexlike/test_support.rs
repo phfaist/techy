@@ -39,6 +39,18 @@ pub(super) fn with_package(recovery: Recovery, package: Package<Latexlike>) -> L
     )
 }
 
+/// A latexlike `Language` under `recovery` with several `packages` pushed over the
+/// seed defaults (in iteration order — the last is innermost).
+pub(super) fn with_packages(
+    recovery: Recovery,
+    packages: impl IntoIterator<Item = Package<Latexlike>>,
+) -> Language<Latexlike> {
+    Language::new(
+        LatexlikeDriver::new(recovery),
+        ParsingState::lang_initial_with_packages(packages),
+    )
+}
+
 /// The root list's child summaries ([`NodeRef::summary`]).
 pub(super) fn root_shapes(result: &ParseResult<Latexlike>) -> Vec<String> {
     result.tree.root().children().iter().map(|node| node.summary()).collect()

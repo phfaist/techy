@@ -416,7 +416,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::super::test_support::{macro_package, with_package};
+    use super::super::test_support::{macro_package, with_package, with_packages};
     use super::super::{
         CallableType, EnvironmentSpec, Latexlike, LatexlikeDriver, MacroSpec,
         VerbatimBehavior,
@@ -515,7 +515,11 @@ mod tests {
 
     #[test]
     fn specials_record_the_unit_arm_and_the_name_as_written() {
-        let language = with_package(Recovery::Strict, macro_package("t", "emph", None));
+        // minilatex supplies the `---`/`~` typography specials.
+        let language = with_packages(
+            Recovery::Strict,
+            [super::super::minidefs::minilatex_package(), macro_package("t", "emph", None)],
+        );
         let result = parse_ok(&language, "a---b ~ c");
         let ligature = result.tree.root().child(1).unwrap();
         assert!(matches!(payload(ligature), InvocationSyntaxData::Specials));
@@ -753,7 +757,11 @@ mod tests {
             )))]),
         );
         package.insert(CallableType::Macro, "title", Arc::new(RestOfLineSpec));
-        let language = with_package(Recovery::Strict, package);
+        // minilatex supplies the `---` specials the childless-shape probe uses.
+        let language = with_packages(
+            Recovery::Strict,
+            [super::super::minidefs::minilatex_package(), package],
+        );
 
         let result = parse_ok(&language, "\\emph{ab} x");
         let emph = result.tree.root().child(0).unwrap();

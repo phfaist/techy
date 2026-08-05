@@ -2674,7 +2674,7 @@ mod tests {
             }
         }
 
-        let mut lib: Package<CmdLang> = Package::new("base");
+        let mut lib: Package<CmdLang> = Package::new("cmds");
         lib.insert(CT_MACRO, "def", Arc::new(DefSpec));
         let mut scopes = ScopeStack::new();
         scopes.push(Arc::new(lib));
@@ -2787,7 +2787,7 @@ mod tests {
             }
         }
 
-        let mut lib: Package<CmdLang> = Package::new("base");
+        let mut lib: Package<CmdLang> = Package::new("cmds");
         lib.insert(CT_MACRO, "take", Arc::new(TakeSpec));
         let mut scopes = ScopeStack::new();
         scopes.push(Arc::new(lib));
@@ -3660,7 +3660,7 @@ mod tests {
     fn error_callable_spec_diagnoses_and_recovers_as_chars() {
         use crate::scopes::{CallableDefinedAsError, ErrorCallableSpec};
 
-        let mut package: Package<CmdLang> = Package::new("base");
+        let mut package: Package<CmdLang> = Package::new("cmds");
         package.insert(
             CT_MACRO,
             "gone",

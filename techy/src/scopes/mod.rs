@@ -1643,7 +1643,7 @@ mod tests {
 
         let mut stack = ScopeStack::new();
         stack.push(Arc::new(fallbacks)); // bottom: pushed first
-        stack.push(Arc::new(package_with("base", &[("known", &defined)])));
+        stack.push(Arc::new(package_with("outer", &[("known", &defined)])));
         let st = state_with(ScopeStack::new());
 
         // Stack hit above the fallback: the fallback never answers.
@@ -1678,7 +1678,7 @@ mod tests {
 
         let mut stack = ScopeStack::new();
         stack.push(Arc::new(fallbacks));
-        stack.push(Arc::new(package_with("base", &[("gone", &real)])));
+        stack.push(Arc::new(package_with("outer", &[("gone", &real)])));
         stack.push(Arc::new(shadow));
         let st = state_with(ScopeStack::new());
 
@@ -1819,7 +1819,7 @@ mod tests {
         math_pkg.insert_specials(MACRO, "&", Arc::clone(&math_spec));
         math_pkg.set_visible_modes(Some(vec![Mode::Math]));
 
-        let mut base: Package<ModedLang> = Package::new("base");
+        let mut base: Package<ModedLang> = Package::new("allmodes");
         base.insert(MACRO, "vec", Arc::clone(&text_spec));
 
         let mut stack = ScopeStack::new();
@@ -2272,7 +2272,7 @@ mod tests {
         let mut math_pkg: Package<ModedLang> = Package::new("math-only");
         math_pkg.insert(MACRO, "vec", Arc::clone(&moded_spec));
         math_pkg.set_visible_modes(Some(vec![Mode::Math]));
-        let mut base: Package<ModedLang> = Package::new("base");
+        let mut base: Package<ModedLang> = Package::new("allmodes");
         base.insert(MACRO, "vec", Arc::clone(&text_spec));
         let mut stack: ScopeStack<ModedLang> = ScopeStack::new();
         stack.push(Arc::new(base));
@@ -2303,20 +2303,20 @@ mod tests {
         }
 
         use crate::latexlike::{CallableType, Latexlike, Mode as LMode};
-        let seed = crate::state::ParsingState::<Latexlike>::new(
-            crate::state::Lang::initial_state_data(),
-        );
+        let seed = crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([
+            crate::latexlike::minidefs::minilatex_package(),
+        ]);
         let symbols = all_symbols(&seed.scopes().clone(), LMode::Text);
         let has = |ct: CallableType, name: &str| {
             symbols.iter().any(|(t, n)| *t == ct && &**n == name)
         };
-        // The base package's \begin/\end are ordinary Macro entries; the typography
-        // ligatures are Specials rows named by their trigger.
+        // The builtin package's \begin/\end are ordinary Macro entries; minilatex's
+        // typography ligatures are Specials rows named by their trigger.
         assert!(has(CallableType::Macro, "begin"));
         assert!(has(CallableType::Macro, "end"));
         assert!(has(CallableType::Specials, "--"));
         assert!(has(CallableType::Specials, "~"));
-        // Base ligatures are text-only: invisible under Math.
+        // The ligatures are text-only: invisible under Math.
         let in_math = all_symbols(&seed.scopes().clone(), LMode::Math);
         assert!(!in_math.iter().any(|(t, n)| *t == CallableType::Specials && &**n == "--"));
         // ALL lists the full vocabularies.

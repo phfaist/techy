@@ -89,15 +89,20 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::test_support::{macro_package, with_package};
+    use super::super::minidefs::minilatex_package;
+    use super::super::test_support::{macro_package, with_packages};
     use super::super::{GroupType, Latexlike};
     use crate::engine::Language;
     use crate::error::Recovery;
     use alloc::vec::Vec;
 
-    /// A latexlike `Language` seeded with the zero-argument macro `\emph`.
+    /// A latexlike `Language` seeded with the zero-argument macro `\emph` (shadowing
+    /// minilatex's one-argument `\emph`) plus minilatex for its specials.
     fn language() -> Language<Latexlike> {
-        with_package(Recovery::Strict, macro_package("testpkg", "emph", None))
+        with_packages(
+            Recovery::Strict,
+            [minilatex_package(), macro_package("testpkg", "emph", None)],
+        )
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! building blocks only. This module promotes a composition once rehearsed test-side:
 //!
 //! - [`BeginSpec`] — the `\begin` dispatcher, registered as an ordinary
-//!   [`Macro`](CallableType::Macro) entry of the [`base_package`](super::base_package)
+//!   [`Macro`](CallableType::Macro) entry of the [`builtin_package`](super::builtin_package)
 //!   (decided at the 7.6 checkpoint: data in the scope stack, not driver code — it is
 //!   shadowable and unloadable like any definition). Its invocation parser reads the
 //!   rigid name group ([`read_rigid_name_group`]), resolves the environment's spec from
@@ -86,11 +86,11 @@ use super::spec::frame_title;
 use super::Latexlike;
 
 /// The command name that introduces every environment (`\begin`), under which
-/// [`BeginSpec`] is registered in the [`base_package`](super::base_package).
+/// [`BeginSpec`] is registered in the [`builtin_package`](super::builtin_package).
 pub(crate) const BEGIN_COMMAND_NAME: &str = "begin";
 
 /// The terminator command name (`\end`): the body parser's stop condition, and the
-/// [`base_package`](super::base_package) registration of [`EndSpec`].
+/// [`builtin_package`](super::builtin_package) registration of [`EndSpec`].
 pub(crate) const END_COMMAND_NAME: &str = "end";
 
 // --- conditions --------------------------------------------------------------------
@@ -460,7 +460,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 
 /// The `\begin` dispatcher: every environment enters through this shared spec, an
 /// ordinary [`Macro`](super::CallableType::Macro) entry of the
-/// [`base_package`](super::base_package) (shadowable and unloadable like any
+/// [`builtin_package`](super::builtin_package) (shadowable and unloadable like any
 /// definition). Its parser is the preset's environment composition (module docs).
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,
@@ -529,7 +529,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
 /// The orphan-`\end` spec: a resolved `\end` never belongs to an environment (the
 /// body parser consumes well-formed terminators before command resolution), so its
 /// parser diagnoses [`OrphanEnd`] and recovers. An ordinary
-/// [`Macro`](super::CallableType::Macro) entry of the [`base_package`](super::base_package),
+/// [`Macro`](super::CallableType::Macro) entry of the [`builtin_package`](super::builtin_package),
 /// alongside [`BeginSpec`].
 pub struct EndSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,
@@ -1141,11 +1141,11 @@ mod tests {
         assert_eq!(messages(&text), ["unknown environment ‘aligned’"]);
     }
 
-    // --- the `"base"` seed: begin/end out of the box ------------------------------------
+    // --- the `"_builtin"` seed: begin/end out of the box --------------------------------
 
     #[test]
     fn begin_and_end_dispatch_out_of_the_box() {
-        // No extra packages: `\begin`/`\end` are `"base"` entries; the environment
+        // No extra packages: `\begin`/`\end` are `"_builtin"` entries; the environment
         // name is unknown, but the composition still parses the body to its
         // terminator under the tolerant fallback.
         let language = Language::new(
@@ -1161,11 +1161,11 @@ mod tests {
     }
 
     #[test]
-    fn unloading_base_removes_the_dispatch_pair() {
+    fn unloading_builtin_removes_the_dispatch_pair() {
         let seed = ParsingState::<Latexlike>::lang_initial()
-            .derived(
-                &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
-            )
+            .derived(&ParsingStateDelta::new().scope_op(ScopeOp::Unload {
+                name: "_builtin".into(),
+            }))
             .unwrap();
         let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed);
         let result = language.parse("\\begin{itemize}").unwrap();

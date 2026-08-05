@@ -17,7 +17,7 @@ the seed parsing state and the parse driver (which carries the optional source
 resolver for `\input`-like lookups). Define it once, parse
 many documents. The [`Latexlike`](crate::latexlike::Latexlike) defaults give you the
 canonical tokenization (`\` commands, `{…}` groups, `$…$` math, `%` comments) and the
-`"base"` package (`\begin`/`\end` dispatch plus the standard specials):
+`"_builtin"` package (the `\begin`/`\end` environment dispatch):
 
 ```rust
 use techy::core::{Language, ParsingState};
@@ -43,7 +43,11 @@ assert_eq!(shapes, ["chars(Hello )", "group(Content { })", "chars( world!)"]);
 
 No definitions are registered by default — the standard macro database is a later
 phase — so `\emph` is an *unresolvable command* out of the box. Everything below
-registers what it needs; that is the intended embedder workflow today.
+registers what it needs; that is the intended embedder workflow today. For quick
+experiments,
+[`minidefs::minilatex_package()`](crate::latexlike::minidefs::minilatex_package)
+ships a toy package (`\emph`, `\textbf`, `\textit`, the list environments, and the
+typography specials) you can load explicitly.
 
 ## Reading nodes: kinds, spans, provenance
 
@@ -276,7 +280,7 @@ assert_eq!(nested.child(0).unwrap().parsing_state().mode(), Mode::Math);
 ## Environments
 
 `\begin{name} … \end{name}` is a preset composition: `\begin` and `\end` are ordinary
-macro entries of the base package whose parsers dispatch the environment's own spec —
+macro entries of the `"_builtin"` package whose parsers dispatch the environment's own spec —
 an [`EnvironmentSpec`](crate::latexlike::EnvironmentSpec) registered under
 [`CallableType::Environment`](crate::latexlike::CallableType). The parsed environment
 is a callable node whose *body* is a slot:
@@ -390,19 +394,23 @@ assert_eq!(body.get(0).unwrap().chars(), Some("a % b \\x{\n"));
 
 ## Specials
 
-Specials are trigger character sequences resolved through the scope stack. The base
-package ships pylatexenc's standard set (`~`, `&`, and the text-only typography
-ligatures ``` `` ```, `''`, `--`, `---`); the scan takes the longest match, and
-per-entry mode visibility keeps the ligatures out of math:
+Specials are trigger character sequences resolved through the scope stack. The seed
+ships none — typography interpretation is definitions content, not parsing
+substrate — but the opt-in
+[`minidefs::minilatex_package()`](crate::latexlike::minidefs::minilatex_package)
+carries the familiar set (`~` and the text-only typography ligatures ``` `` ```,
+`''`, `--`, `---`); the scan takes the longest match, and per-entry mode
+visibility keeps the ligatures out of math:
 
 ```rust
 use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
+use techy::latexlike::minidefs::minilatex_package;
 use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial_with_packages([minilatex_package()]),
 );
 let result = language.parse("x---y--z").unwrap();
 let shapes: Vec<String> =

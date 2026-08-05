@@ -2,7 +2,7 @@
 //! macro — resolve a referenced source and attach its parsed content to the
 //! invocation.
 //!
-//! **Never preloaded**: the spec is not part of [`base_package`](super::base_package)
+//! **Never preloaded**: the spec is not part of [`builtin_package`](super::builtin_package)
 //! — an always-on `\input` under a resolver-less driver would just diagnose every
 //! use. Embedders that want it insert it into their own package, under their own
 //! macro callable type and any command name — choosing **consciously**, through the

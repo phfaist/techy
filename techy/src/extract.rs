@@ -1165,15 +1165,17 @@ mod tests {
     use crate::latexlike::Latexlike;
     use crate::node::NodeTree;
 
-    /// Parse `input` with the out-of-the-box latexlike preset (strict; the base package
-    /// defines `\begin`/`\end` and the typography specials — no other callables).
+    /// Parse `input` with the latexlike preset plus the minilatex package (strict;
+    /// minilatex supplies the typography specials these tests lean on — the seed
+    /// itself defines only `\begin`/`\end`).
     fn parse(input: &str) -> NodeTree<Latexlike> {
         use crate::error::Recovery;
+        use crate::latexlike::minidefs::minilatex_package;
         use crate::latexlike::LatexlikeDriver;
         use crate::state::ParsingState;
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial_with_packages([minilatex_package()]),
         );
         let result = language.parse(input).expect("test inputs parse cleanly");
         assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);

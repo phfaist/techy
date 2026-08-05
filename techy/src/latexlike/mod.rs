@@ -14,13 +14,15 @@
 //!   exts joins the family instead of forking the preset;
 //! - [`LatexlikeDriver`] — the preset's [`ParseDriver`](crate::engine::ParseDriver):
 //!   recovery policy, scope-stack command resolution, and the math-mode group plug;
-//! - [`default_token_rules`] and [`base_package`] — the canonical seed data behind
+//! - [`default_token_rules`] and [`builtin_package`] — the canonical seed data behind
 //!   [`Latexlike::initial_state_data`];
+//! - [`minidefs`] — the opt-in toy `"minilatex"` package (a handful of familiar
+//!   definitions for prototyping; never preloaded);
 //! - the callable spec types — [`MacroSpec`] and [`SpecialsSpec`] (declarative,
 //!   with the preset's traceback vocabulary), and [`EnvironmentSpec`] (declared
 //!   arguments plus body behavior via [`EnvironmentBehavior`]) with the
 //!   `\begin`/`\end` composition ([`BeginSpec`]/[`EndSpec`], seeded in
-//!   [`base_package`]);
+//!   [`builtin_package`]);
 //! - the argument-code factory [`argument_specs`] (`["o", "{"]` → configured
 //!   [`ArgumentSpec`](crate::spec::ArgumentSpec)s; compact whole-spec strings via
 //!   [`argument_specs_from_str`]) and the verbatim wiring —
@@ -54,8 +56,9 @@
 //! then embedders and tests register the specs they need in their own packages
 //! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
 //! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
-//! [`CallableSpec`]) — `\verb` and `verbatim` included: the machinery ships here, the
-//! definitions with the database.
+//! [`CallableSpec`](crate::spec::CallableSpec)) — `\verb` and `verbatim` included:
+//! the machinery ships here, the definitions with the database. For a quick start,
+//! [`minidefs`] carries a toy package to load explicitly.
 
 mod arguments;
 mod driver;
@@ -65,6 +68,7 @@ mod input;
 mod invariants;
 mod invocation_syntax;
 mod lang;
+pub mod minidefs;
 mod node_ref;
 mod recompose;
 mod spec;
@@ -105,7 +109,6 @@ use alloc::vec::Vec;
 
 use crate::node::BodySlotExt;
 use crate::scopes::{Package, ScopeStack};
-use crate::spec::CallableSpec;
 use crate::state::{
     ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState, StateData,
 };
@@ -188,7 +191,7 @@ pub enum GroupType {
 pub enum CallableType {
     /// A macro invocation (`\emph{…}`). Every command token resolves as a macro —
     /// `\begin` and `\end` themselves are ordinary macro entries of the
-    /// [`base_package`] ([`BeginSpec`]/[`EndSpec`]) whose parsers dispatch the
+    /// [`builtin_package`] ([`BeginSpec`]/[`EndSpec`]) whose parsers dispatch the
     /// environment shape.
     Macro,
     /// An environment (`\begin{itemize}…\end{itemize}`): entered through
@@ -314,7 +317,7 @@ impl NodeExtTypes for LatexlikeNodeExts {
 
 /// The latexlike language bundle: a ZST implementing [`Lang`] with the preset's
 /// vocabularies ([`GroupType`], [`CallableType`], [`Mode`]), the canonical seed
-/// ([`default_token_rules`] + the [`base_package`] on the scope stack), and the
+/// ([`default_token_rules`] + the [`builtin_package`] on the scope stack), and the
 /// scope-stack specials scan. Parse-time behavior lives on [`LatexlikeDriver`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Latexlike;
@@ -332,7 +335,7 @@ impl Lang for Latexlike {
     type Driver = LatexlikeDriver;
 
     /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding
-    /// the [`base_package`] (standard specials), [`Mode::Text`].
+    /// the [`builtin_package`] (`\begin`/`\end` dispatch), [`Mode::Text`].
     ///
     /// Coherence contract: `finalize_transition` is not customized (nothing to
     /// normalize yet — math groups only set the mode), so the seed is trivially
@@ -340,7 +343,7 @@ impl Lang for Latexlike {
     /// data-equivalence mechanically.
     fn initial_state_data() -> StateData<Self> {
         let mut scopes = ScopeStack::new();
-        scopes.push(Arc::new(base_package()));
+        scopes.push(Arc::new(builtin_package()));
         StateData {
             rules: default_token_rules(),
             scopes,
@@ -469,20 +472,17 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
     }
 }
 
-/// The seed package `"base"`: the environment dispatch pair and the standard
-/// specials of pylatexenc's default context (bar the paragraph-break special; see
-/// below).
+/// The seed package `"_builtin"`: exactly what any latexlike parse must have
+/// preloaded — the `\begin`/`\end` environment dispatch pair, nothing else.
 ///
-/// - The [`Macro`](CallableType::Macro) entries `begin` ([`BeginSpec`] — the
-///   environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics):
-///   ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
-///   not driver code, so they are shadowable and unloadable like anything else.
-/// - The specials: alignment `&` and non-breaking space `~` (visible in every mode),
-///   plus the text-only typography ligatures ``` `` ```, `''`, `--`, `---` (visible in
-///   [`Mode::Text`] only — they carry no math meaning, so inside `$…$` they stay plain
-///   chars) — each a zero-argument [`SpecialsSpec`] callable sharing one instance
-///   (many-to-one is the package flyweight contract). The multi-character triggers ride
-///   the scope-stack scan's longest-match rule (`---` beats `--`).
+/// The [`Macro`](CallableType::Macro) entries `begin` ([`BeginSpec`] — the
+/// environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics) are
+/// ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
+/// not driver code, so they are shadowable and unloadable like anything else. The
+/// internal-flavored name marks the package as parsing substrate rather than
+/// definitions content: typography specials (`~`, the `--`/`---`/quote ligatures)
+/// are *definitions* and live in the opt-in [`minidefs`] package — a seed-only
+/// parse emits those triggers as plain characters.
 ///
 /// pylatexenc's default context also ships a `\n\n` paragraph-break special; the
 /// preset deliberately omits it — a multi-newline break is a whitespace chars node
@@ -491,41 +491,28 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// not a specials node.
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
-/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"base"` (which also removes
+/// [`Unload`](crate::scopes::ScopeOp::Unload) op naming `"_builtin"` (which removes
 /// `\begin`/`\end`), or shadow single entries by pushing a provider above it.
-pub fn base_package() -> Package<Latexlike> {
-    let mut package = Package::new("base");
+///
+/// Generic over the language family (`LLL`, [`LatexlikeLang`]): a family member
+/// seeds the same dispatch pair under its own vocabulary (the bound is
+/// [`BeginSpec`]'s — the composition marks environment body slots through the
+/// language's [`BodySlotExt`]).
+pub fn builtin_package<LLL: LatexlikeLang>() -> Package<LLL>
+where
+    crate::node::SlotExt<LLL>: BodySlotExt,
+{
+    let mut package = Package::new("_builtin");
     package.insert(
-        CallableType::Macro,
+        LLL::CallableTypeId::macro_callable(),
         environments::BEGIN_COMMAND_NAME,
-        Arc::new(BeginSpec::<Latexlike>::new()),
+        BeginSpec::<LLL>::new(),
     );
     package.insert(
-        CallableType::Macro,
+        LLL::CallableTypeId::macro_callable(),
         environments::END_COMMAND_NAME,
-        Arc::new(EndSpec::<Latexlike>::new()),
+        EndSpec::<LLL>::new(),
     );
-    let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(SpecialsSpec::default());
-    // Alignment `&` and non-breaking space `~` occur in text and math alike.
-    // ### PhF -- We should not include & here
-    for trigger in ["&", "~"] {
-        package.insert_specials(CallableType::Specials, trigger, Arc::clone(&spec));
-    }
-    // Typography ligatures are text-mode only (no math meaning): inside `$…$` they stay
-    // plain chars (7.5 review — per-entry mode visibility).
-    for trigger in ["``", "''", "--", "---"] {
-        package.insert_specials_in_modes(
-            CallableType::Specials,
-            trigger,
-            Arc::clone(&spec),
-            Some(vec![Mode::Text]),
-        );
-    }
-
-    // ### PhF --- The "base" package should:
-    // ###       1) be renamed to something internal, like "_base" or "_builtin" or "_primitive".  Collects the absolutely necessary things that MUST be preloaded in any latexlike parsing situation.
-    // ###       2) NOT contain the specials above.  No reason that any latexlike parser should count those as specials.  Should be included in techy::latexlike::minidefs/minilatex package instead.
-
     package
 }
 
@@ -546,7 +533,7 @@ mod tests {
         let language = strict();
         let seed = language.initial_state();
         assert_eq!(seed.mode(), Mode::Text);
-        assert_eq!(seed.scopes().provider_names().collect::<Vec<_>>(), ["base"]);
+        assert_eq!(seed.scopes().provider_names().collect::<Vec<_>>(), ["_builtin"]);
         assert_eq!(seed.rules(), &default_token_rules());
     }
 
@@ -736,7 +723,7 @@ mod tests {
         assert_eq!(root_shapes(&text), [r"chars(\alpha)"]);
         assert_eq!(text.diagnostics.len(), 1);
         let message = text.diagnostics.iter().next().unwrap().message();
-        assert!(message.contains("searched providers: alphapkg, base"), "{message}");
+        assert!(message.contains("searched providers: alphapkg, _builtin"), "{message}");
     }
 
     #[test]
@@ -758,7 +745,7 @@ mod tests {
         // tolerant diagnostic (guards the strict path from silently dropping it).
         let err = strict().parse(r"a \foo b").unwrap_err();
         assert!(
-            err.to_string().contains("searched providers: base"),
+            err.to_string().contains("searched providers: _builtin"),
             "strict error lost the searched-providers detail: {err}"
         );
 
@@ -769,66 +756,23 @@ mod tests {
         assert_eq!(diag.severity(), Severity::Error);
         assert_eq!(diag.span().content(), r"\foo ");
         assert!(
-            diag.message().contains("searched providers: base"),
+            diag.message().contains("searched providers: _builtin"),
             "{}",
             diag.message()
         );
     }
 
     #[test]
-    fn base_specials_parse_out_of_the_box() {
+    fn the_seed_ships_no_specials_definitions() {
+        // The typography specials are definitions content, not parsing substrate
+        // ([§dd-dr:base-package] amendment): they live in minidefs' `"minilatex"`
+        // package now, so a seed-only parse emits them as plain characters — and the
+        // alignment `&` special is gone from the shipped definitions entirely (it is
+        // not in minilatex either; see the minidefs tests for the moved coverage).
         assert_eq!(
-            parse_shapes("a~b & c"),
-            ["chars(a)", "Specials(~)", "chars(b )", "Specials(&)", "chars( c)"]
+            parse_shapes("a~b & c---d ``q''"),
+            ["chars(a~b & c---d ``q'')"]
         );
-
-        // Negative spec-identity pin: an ordinary specials node is NOT identified
-        // as a paragraph break — the ParagraphBreakSpec downcast must fail.
-        let result = strict().parse("a~b").unwrap();
-        let tilde = result.tree.root().child(1).unwrap();
-        assert_eq!(tilde.specials_name(), Some("~"));
-        let spec = tilde.spec().expect("a callable node");
-        assert!((&**spec as &dyn core::any::Any)
-            .downcast_ref::<ParagraphBreakSpec>()
-            .is_none());
-    }
-
-    #[test]
-    fn ligature_specials_take_the_longest_match() {
-        assert_eq!(
-            parse_shapes("x---y--z"),
-            ["chars(x)", "Specials(---)", "chars(y)", "Specials(--)", "chars(z)"]
-        );
-        assert_eq!(
-            parse_shapes("``q''"),
-            ["Specials(``)", "chars(q)", "Specials('')"]
-        );
-        // `` !` `` and `` ?` `` were dropped from the base package (PhF, July 2026 —
-        // see the `base_package` note): plain characters now.
-        assert_eq!(parse_shapes("!`Si?`"), ["chars(!`Si?`)"]);
-    }
-
-    #[test]
-    fn base_ligature_specials_are_text_only() {
-        // Inside math the text-only typography ligatures stay plain chars, while the
-        // universal specials `~`/`&` still fire (7.5 review — per-entry mode visibility).
-        let result = strict().parse("$a~b---c$").unwrap();
-        check_latexlike_tree_invariants(&result.tree);
-        let math = result.tree.root().child(0).unwrap();
-        assert!(matches!(math.group_type(), Some(GroupType::Math(_))));
-        let interior: Vec<String> =
-            math.children().iter().map(|node| node.summary()).collect();
-        assert_eq!(interior, ["chars(a)", "Specials(~)", "chars(b---c)"]);
-
-        // In text mode the same ligature fires as before.
-        assert_eq!(parse_shapes("a---b"), ["chars(a)", "Specials(---)", "chars(b)"]);
-    }
-
-    #[test]
-    fn trigger_chars_without_a_match_stay_plain() {
-        // `!`, `?`, `'`, `` ` `` are trigger *first characters*, but alone (no
-        // following backtick / quote pair) the scan declines and they remain chars.
-        assert_eq!(parse_shapes("a!b?c'd`e"), ["chars(a!b?c'd`e)"]);
     }
 
     // --- exit-math event: the \text recipe (E4) ---------------------------------------
@@ -1221,17 +1165,18 @@ mod tests {
     }
 
     #[test]
-    fn the_base_package_is_unloadable_by_name() {
+    fn the_builtin_package_is_unloadable_by_name() {
         let seed = ParsingState::<Latexlike>::lang_initial()
-            .derived(
-                &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "base".into() }),
-            )
+            .derived(&ParsingStateDelta::new().scope_op(ScopeOp::Unload {
+                name: "_builtin".into(),
+            }))
             .unwrap();
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
             seed,
         );
-        let result = language.parse("a~b --- c").unwrap();
-        assert_eq!(root_shapes(&result), ["chars(a~b --- c)"]);
+        // With `\begin`/`\end` unloaded, a `\begin` command is unresolvable.
+        let err = language.parse(r"\begin{itemize}").unwrap_err();
+        assert!(err.to_string().contains("cannot resolve command ‘\\begin’"), "{err}");
     }
 }

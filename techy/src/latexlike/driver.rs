@@ -284,7 +284,7 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
 /// [`Latexlike`]): carries the tolerant-parsing policy, resolves command tokens
 /// through the state's scope stack (under the language's
 /// [macro role](LatexlikeCallableType::macro_callable) — `\begin`/`\end` resolve
-/// like any other command to the [`base_package`](super::base_package)'s dispatch
+/// like any other command to the [`builtin_package`](super::builtin_package)'s dispatch
 /// entries), plugs math-class group interiors into math mode through the
 /// descent-delta channel, lowers the exit-math-context event over the
 /// enclosing-state stack, emits paragraph-break nodes per its

@@ -36,8 +36,9 @@ mod support {
     use techy::core::{Language, ParseResult};
     use techy::error::Recovery;
     use techy::latexlike::{
-        argument_specs, base_package, default_token_rules, CallableType, EnvironmentSpec,
-        GroupType, Latexlike, LatexlikeDriver, MacroSpec, Mode, VerbatimBehavior,
+        argument_specs, builtin_package, default_token_rules, CallableType,
+        EnvironmentSpec, GroupType, Latexlike, LatexlikeDriver, MacroSpec, Mode,
+        VerbatimBehavior,
     };
     use techy::core::node::{validate_tree, NodeRef};
     use techy::core::specs::{FallbackProvider, Package, ScopeOp};
@@ -186,7 +187,7 @@ mod support {
         let seed = ParsingState::lang_initial()
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
-                Arc::new(base_package()),
+                Arc::new(builtin_package()),
                 Arc::new(testdb()),
             ])))
             .unwrap();

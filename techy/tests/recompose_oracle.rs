@@ -29,6 +29,7 @@ use techy::core::{
     CommandRule, Language, ParsingState, ParsingStateDelta, TokenRulesOverrides,
 };
 use techy::error::Recovery;
+use techy::latexlike::minidefs::minilatex_package;
 use techy::latexlike::{
     argument_specs, input_macro_spec, source_recomposer, BodyMarker, CallableType,
     EnvironmentSpec, Latexlike, LatexlikeDriver, MacroSpec, ParagraphBreakStyle,
@@ -86,9 +87,12 @@ fn testdb() -> Package<Latexlike> {
 }
 
 fn language(recovery: Recovery) -> Language<Latexlike> {
+    // minilatex supplies the typography specials rows (`~`, the ligatures) — the
+    // seed no longer ships them; testdb stays innermost so its `itemize`/`emph`
+    // definitions win.
     Language::new(
         LatexlikeDriver::new(recovery),
-        ParsingState::lang_initial_with_packages([testdb()]),
+        ParsingState::lang_initial_with_packages([minilatex_package(), testdb()]),
     )
 }
 
@@ -190,7 +194,9 @@ fn strict_verbatim() {
 
 #[test]
 fn strict_specials() {
-    // The seed's base specials: ligatures and the tie.
+    // minilatex's typography specials: ligatures and the tie (the oracle language
+    // loads minilatex — the seed alone would parse these as plain chars, which
+    // would reemit trivially and prove nothing about specials recomposition).
     assert_reemit("a---b ~ c");
     assert_reemit("``quoted'' -- dashed");
 }
