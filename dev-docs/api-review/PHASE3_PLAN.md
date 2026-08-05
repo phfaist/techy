@@ -651,3 +651,17 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   blocks as the audit roster; instructed NOT to edit PLAN.md/PHASE3_PLAN.md
   in-branch — closure entries drafted in the report, applied by the
   supervisor at merge).
+- 2026-08-05: S10 implemented in one run (7 commits through 82ca14c;
+  750 lib tests, was 740 — +10 Err-path; gates green under
+  missing_docs=deny; semver script 196 checks pass vs HEAD). Headlines:
+  C2 PASS (25-line Lang residue / 7 driver one-liners); panic-policy sweep
+  12 converted site groups + full LEAVE table; cargo-semver-checks 0.50.0 +
+  `scripts/check_semver.sh` (durable guard: `api-baseline` tag to be minted
+  by the supervisor at the Phase-3 landing commit — D-plan-4); surface
+  audit 283 item pages / 0 duplicate paths / exact ruled roster; rider
+  sweep 0 MISS; superseded-names clean (one guide-variable should-fix
+  applied in-stage). 4 deviations (D-plan-1..4), no escalations. PLAN.md /
+  PHASE3_PLAN closure entries drafted in S10_REPORT. Whole-stage
+  independent review launched (special scrutiny: every panic→Err
+  conversion + the LEAVE table; audit spot-checks; the semver-guard
+  procedure).
