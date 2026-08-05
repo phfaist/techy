@@ -26,12 +26,13 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
 use crate::source::{
-    LineColProvider, LineIndexCache, SourceOrigin, SourceProvenance, SourceSpan,
+    LineColProvider, LineIndexCache, Source, SourceOrigin, SourceProvenance, SourceSpan,
 };
 use crate::token::TokenErrorKind;
 
@@ -556,6 +557,39 @@ impl<O: SourceOrigin> Diagnostics<O> {
         &self.items
     }
 
+    /// The retained diagnostics **sorted by source position**: diagnostics arrive
+    /// in *recovery* order (the order the parse hit them, which nested descents
+    /// and deferred recoveries can permute), and this view re-sorts them by
+    /// (source, span start) — **source order within each source**, for reports
+    /// that read along the document.
+    ///
+    /// Sources are ordered by **first appearance** in the recorded sequence
+    /// (matched by `Arc` identity). Deliberately narrow: a total "position order"
+    /// across sources is ill-defined on multi-source parse trees (`\input`
+    /// attachments are first-class), so no cross-source claim is made beyond the
+    /// stable first-appearance grouping. The sort is stable — equal positions
+    /// keep recovery order.
+    pub fn sorted_by_position(&self) -> Vec<&Diagnostic<O>> {
+        let mut sources: Vec<&Arc<Source<O>>> = Vec::new();
+        let mut keyed: Vec<(usize, usize, usize)> =
+            Vec::with_capacity(self.items.len());
+        for (arrival, diagnostic) in self.items.iter().enumerate() {
+            let source = diagnostic.span().source();
+            let source_index = sources
+                .iter()
+                .position(|known| Arc::ptr_eq(known, source))
+                .unwrap_or_else(|| {
+                    sources.push(source);
+                    sources.len() - 1
+                });
+            keyed.push((source_index, diagnostic.span().start(), arrival));
+        }
+        // The arrival index is part of the key, so equal positions keep recovery
+        // order (and the unstable sort is de-facto stable).
+        keyed.sort_unstable();
+        keyed.into_iter().map(|(_, _, arrival)| &self.items[arrival]).collect()
+    }
+
     /// Render every retained diagnostic as one human-readable report — the
     /// [`Diagnostic::render`] blocks in recording order, blank-line separated, followed
     /// by an "… and N more" line when pushes were
@@ -918,6 +952,39 @@ mod tests {
         let rendered = diagnostic.render();
         assert!(rendered.contains("error: unknown macro"));
         assert!(rendered.contains("line 2"));
+    }
+
+    #[test]
+    fn sorted_by_position_is_source_major_span_start_minor_and_stable() {
+        let first = arc_source("first source content");
+        let second = arc_source("second source content");
+        let mut diagnostics: Diagnostics = Diagnostics::new();
+        // Recovery order deliberately scrambled: positions out of order within
+        // each source, sources interleaved.
+        for (source, range, tag) in [
+            (&first, 10..12, "f10"),
+            (&second, 5..6, "s5"),
+            (&first, 0..2, "f0"),
+            (&first, 10..11, "f10-later"), // equal start: keeps recovery order
+            (&second, 0..1, "s0"),
+        ] {
+            diagnostics.push(Diagnostic::error(
+                TestCondition::new(tag),
+                SourceSpan::new(source, range),
+            ));
+        }
+
+        let tags: Vec<String> = diagnostics
+            .sorted_by_position()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message())
+            .collect();
+        // `first` appeared first: its diagnostics lead, in span order; the equal
+        // starts keep their recovery order (stable).
+        assert_eq!(tags, ["f0", "f10", "f10-later", "s0", "s5"]);
+
+        // The view borrows: the collection itself keeps recovery order.
+        assert_eq!(diagnostics.iter().next().unwrap().message(), "f10");
     }
 
     #[test]

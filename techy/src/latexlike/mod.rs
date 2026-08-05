@@ -75,7 +75,9 @@ mod spec;
 #[cfg(test)]
 mod test_support;
 
-pub use arguments::{argument_specs, argument_specs_from_str, ArgumentCodeError};
+pub use arguments::{
+    argument_specs, argument_specs_from_str, argument_specs_named, ArgumentCodeError,
+};
 pub use driver::{
     exit_math_context_delta, make_paragraph_break_node, math_group_interior_delta,
     LatexlikeDriver, ParagraphBreakSpec, ParagraphBreakStyle,

@@ -8,15 +8,21 @@
 //! [`EnvironmentSpec`](super::EnvironmentSpec), which carries body behavior and lives
 //! with the `\begin` composition.
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::node::ArgumentExt;
+use crate::scopes::Package;
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 
-use super::{Latexlike, LatexlikeLang};
+use super::{
+    argument_specs, ArgumentCodeError, EnvironmentSpec, Latexlike, LatexlikeCallableType,
+    LatexlikeLang,
+};
 
 /// Render a preset frame title: the callable-kind word (`macro`, `environment`,
 /// `specials`) with the invocation spelling — the shared body of the preset's
@@ -143,6 +149,75 @@ impl<LLL: LatexlikeLang> Default for SpecialsSpec<LLL> {
     }
 }
 
+// --- the preset one-liners on Package ------------------------------------------------
+
+/// The preset **definition one-liners** — inherent methods on latexlike-shaped
+/// [`Package`]s, written in the preset module (the
+/// in-crate mechanism behind the `NodeRef` sugar as well): each pairs the callable
+/// type and spec type correctly *by construction* and parses its argument codes
+/// eagerly. A shorter spelling of the same [`insert`](Package::insert) operation —
+/// deliberately not a second registration model.
+impl<LLL: LatexlikeLang> Package<LLL> {
+    /// Define the macro `name` with the given argument codes — one line for the
+    /// full `insert(macro_callable(), name, MacroSpec::new(argument_specs(…)?))`
+    /// ceremony:
+    ///
+    /// ```
+    /// # use techy::core::specs::Package;
+    /// # use techy::latexlike::Latexlike;
+    /// let mut package: Package<Latexlike> = Package::new("mydefs");
+    /// package.define_macro("includegraphics", ["o", "m"]).unwrap();
+    /// ```
+    ///
+    /// `codes` is [`argument_specs`](super::argument_specs)'s list form (word codes
+    /// included); a malformed code is the eager
+    /// [`Err`](super::ArgumentCodeError). On success, returns the spec previously
+    /// defined under the key, like [`insert`](Package::insert). The name follows
+    /// [`insert`](Package::insert)'s normalized-spelling contract (no escape
+    /// character), and — deliberately — **no escape-char validation happens here
+    /// either** (escape characters can change mid-parse, and a leading
+    /// escape-character-like char can be intended).
+    pub fn define_macro<I>(
+        &mut self,
+        name: impl Into<Box<str>>,
+        codes: I,
+    ) -> Result<Option<Arc<dyn CallableSpec<LLL>>>, ArgumentCodeError>
+    where
+        ArgumentExt<LLL>: Default,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        Ok(self.insert(
+            LLL::CallableTypeId::macro_callable(),
+            name,
+            MacroSpec::new(argument_specs(codes)?),
+        ))
+    }
+
+    /// Define the environment `name` with the given argument codes — the
+    /// [`define_macro`](Package::define_macro) sibling over
+    /// [`EnvironmentSpec`](super::EnvironmentSpec) under the environment role
+    /// (default body handling; for body deltas or custom behavior, build the
+    /// [`EnvironmentSpec`](super::EnvironmentSpec) yourself and
+    /// [`insert`](Package::insert) it).
+    pub fn define_environment<I>(
+        &mut self,
+        name: impl Into<Box<str>>,
+        codes: I,
+    ) -> Result<Option<Arc<dyn CallableSpec<LLL>>>, ArgumentCodeError>
+    where
+        ArgumentExt<LLL>: Default,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        Ok(self.insert(
+            LLL::CallableTypeId::environment_callable(),
+            name,
+            EnvironmentSpec::new(argument_specs(codes)?),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +285,34 @@ mod tests {
         assert_eq!(emph.macro_name(), Some("emph"));
         assert_eq!(emph.arguments().unwrap().len(), 1);
         assert!(emph.arguments().unwrap().get(0).unwrap().is_provided());
+    }
+
+    #[test]
+    fn define_one_liners_pair_type_and_spec_by_construction() {
+        let mut package: Package<Latexlike> = Package::new("mydefs");
+        package.define_macro("emph", ["m"]).unwrap();
+        package.define_environment("enumerate", ["o"]).unwrap();
+
+        // A malformed code errors eagerly, before anything is inserted.
+        assert!(package.define_macro("bad", ["x"]).is_err());
+        assert!(package.get(CallableType::Macro, "bad").is_none());
+
+        // Redefinition returns the replaced spec, like `insert`.
+        assert!(package.define_macro("emph", ["m"]).unwrap().is_some());
+
+        let language = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        );
+        let result = language
+            .parse("\\emph{x}\\begin{enumerate}[i] y\\end{enumerate}")
+            .unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let emph = result.tree.root().child(0).unwrap();
+        assert_eq!(emph.macro_name(), Some("emph"));
+        let env = result.tree.root().child(1).unwrap();
+        assert_eq!(env.environment_name(), Some("enumerate"));
+        assert!(env.arguments().unwrap().get(0).unwrap().is_provided());
     }
 }

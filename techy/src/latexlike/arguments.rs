@@ -9,6 +9,7 @@
 //! whole-spec strings pylatexenc's default spec database (a later phase's porting
 //! target) and FLM's feature definitions are written in (`"o{"`), verbatim.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -189,32 +190,74 @@ where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    let mut specs = Vec::new();
-    for (index, code) in codes.into_iter().enumerate() {
-        // The word codes claim whole (trimmed) list elements before the
-        // character-code scan sees them.
-        if let Some(spec) = scan_word_code(code.as_ref().trim()) {
-            specs.push(spec);
-            continue;
-        }
-        let mut chars = code.as_ref().char_indices().peekable();
-        let spec = scan_code(&mut chars, Some(index))?
-            .ok_or(ArgumentCodeError::EmptyCode { index })?;
-        if let Some((offset, trailing)) = chars.find(|(_, c)| !c.is_whitespace()) {
-            return Err(ArgumentCodeError::TrailingCode { index, offset, trailing });
-        }
-        specs.push(spec);
+    codes
+        .into_iter()
+        .enumerate()
+        .map(|(index, code)| {
+            let parser = scan_element(code.as_ref(), index)?;
+            Ok(Arc::new(ArgumentSpec::new_unnamed(parser)))
+        })
+        .collect()
+}
+
+/// [`argument_specs`] with **names**: one `(code, name)` pair per argument —
+/// `argument_specs_named([("o", "greeting"), ("m", "name")])` builds the same
+/// configured parsers with each spec named ([`ArgumentSpec::new`]), ready for the
+/// by-name access family
+/// ([`argument_nodes_named`](crate::node::NodeRef::argument_nodes_named) & co. —
+/// the robust access path the API recommends). Same code grammar and errors as
+/// [`argument_specs`] (`index` = the pair's position; word codes included).
+pub fn argument_specs_named<LLL, I, C, N>(
+    codes: I,
+) -> Result<Vec<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
+where
+    LLL: LatexlikeLang,
+    ArgumentExt<LLL>: Default,
+    I: IntoIterator<Item = (C, N)>,
+    C: AsRef<str>,
+    N: Into<Box<str>>,
+{
+    codes
+        .into_iter()
+        .enumerate()
+        .map(|(index, (code, name))| {
+            let parser = scan_element(code.as_ref(), index)?;
+            Ok(Arc::new(ArgumentSpec::new(parser, name)))
+        })
+        .collect()
+}
+
+/// Scan one whole list element (see [`argument_specs`]): a word code claims the
+/// trimmed element; otherwise exactly one character code with its parameters,
+/// surrounded by optional whitespace.
+fn scan_element<LLL: LatexlikeLang>(
+    code: &str,
+    index: usize,
+) -> Result<Arc<dyn ArgumentParser<LLL>>, ArgumentCodeError>
+where
+    ArgumentExt<LLL>: Default,
+{
+    // The word codes claim whole (trimmed) list elements before the
+    // character-code scan sees them.
+    if let Some(parser) = scan_word_code(code.trim()) {
+        return Ok(parser);
     }
-    Ok(specs)
+    let mut chars = code.char_indices().peekable();
+    let parser = scan_code(&mut chars, Some(index))?
+        .ok_or(ArgumentCodeError::EmptyCode { index })?;
+    if let Some((offset, trailing)) = chars.find(|(_, c)| !c.is_whitespace()) {
+        return Err(ArgumentCodeError::TrailingCode { index, offset, trailing });
+    }
+    Ok(parser)
 }
 
 /// Resolve a whole-element word code (`AnyDelimited` / `AnyDelimitedOptional` /
 /// `BracedOnly`) — list-form only (see [`argument_specs`]).
-fn scan_word_code<LLL: LatexlikeLang>(code: &str) -> Option<Arc<ArgumentSpec<LLL>>>
+fn scan_word_code<LLL: LatexlikeLang>(code: &str) -> Option<Arc<dyn ArgumentParser<LLL>>>
 where
     ArgumentExt<LLL>: Default,
 {
-    let parser: Arc<dyn ArgumentParser<LLL>> = match code {
+    Some(match code {
         "AnyDelimited" => Arc::new(GroupArgumentParser::any_of(any_delimited_rules())),
         "AnyDelimitedOptional" => Arc::new(
             OptionalGroupArgumentParser::any_of(any_delimited_rules())
@@ -225,8 +268,7 @@ where
                 .with_expression_fallback(false),
         ),
         _ => return None,
-    };
-    Some(Arc::new(ArgumentSpec::new_unnamed(parser)))
+    })
 }
 
 /// The default delimiter alternatives of the `AnyDelimited` codes (pylatexenc's
@@ -256,8 +298,8 @@ where
 {
     let mut specs = Vec::new();
     let mut chars = codes.char_indices().peekable();
-    while let Some(spec) = scan_code(&mut chars, None)? {
-        specs.push(spec);
+    while let Some(parser) = scan_code(&mut chars, None)? {
+        specs.push(Arc::new(ArgumentSpec::new_unnamed(parser)));
     }
     Ok(specs)
 }
@@ -268,7 +310,7 @@ where
 fn scan_code<LLL: LatexlikeLang>(
     chars: &mut core::iter::Peekable<core::str::CharIndices<'_>>,
     index: Option<usize>,
-) -> Result<Option<Arc<ArgumentSpec<LLL>>>, ArgumentCodeError>
+) -> Result<Option<Arc<dyn ArgumentParser<LLL>>>, ArgumentCodeError>
 where
     ArgumentExt<LLL>: Default,
 {
@@ -335,7 +377,7 @@ where
         },
         _ => return Err(ArgumentCodeError::UnknownCode { index, offset, code }),
     };
-    Ok(Some(Arc::new(ArgumentSpec::new_unnamed(parser))))
+    Ok(Some(parser))
 }
 
 /// The minted per-use content-class rule of the `o`/`r`/`d` codes.
@@ -892,6 +934,58 @@ mod tests {
         // The optional flavor unwraps a lone protective brace group, like `o`.
         let result = parse_ok("AnyDelimitedOptional", r"\m[{a]b}]");
         assert_eq!(content_chars(macro_node(&result), 0), "a]b");
+    }
+
+    #[test]
+    fn argument_specs_named_builds_named_specs() {
+        let specs = argument_specs_named::<Latexlike, _, _, _>([
+            ("o", "greeting"),
+            ("m", "name"),
+        ])
+        .unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name.as_deref(), Some("greeting"));
+        assert_eq!(specs[1].name.as_deref(), Some("name"));
+        assert!(parser_debug(&specs[0]).contains("OptionalGroupArgumentParser"));
+        assert!(parser_debug(&specs[1]).contains("GroupArgumentParser"));
+
+        // Word codes participate; the error coordinates name the pair index.
+        let specs =
+            argument_specs_named::<Latexlike, _, _, _>([("BracedOnly", "payload")]).unwrap();
+        assert_eq!(specs[0].name.as_deref(), Some("payload"));
+        assert_eq!(
+            argument_specs_named::<Latexlike, _, _, _>([("m", "a"), ("x", "b")])
+                .unwrap_err(),
+            ArgumentCodeError::UnknownCode { index: Some(1), offset: 0, code: 'x' }
+        );
+    }
+
+    #[test]
+    fn named_specs_feed_the_by_name_accessors() {
+        let mut package: Package<Latexlike> = Package::new("factory-tests");
+        package.insert(
+            CallableType::Macro,
+            "m",
+            Arc::new(MacroSpec::new(
+                argument_specs_named([("o", "greeting"), ("m", "name")]).unwrap(),
+            )),
+        );
+        let language = Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            crate::state::ParsingState::lang_initial_with_packages([package]),
+        );
+        let result = language.parse(r"\m{world}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        let m = result.tree.root().child(0).unwrap();
+        assert!(matches!(m.argument_nodes_named("greeting"), Ok(None))); // absent
+        let name: String = m
+            .argument_content_nodes_named("name")
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|node| node.chars().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(name, "world");
     }
 
     #[test]
