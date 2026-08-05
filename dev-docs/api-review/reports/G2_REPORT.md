@@ -164,3 +164,25 @@ No rustdoc expansions required; zero DOC_GAPS entries raised by the pass.
   (table above), no rustdoc changes needed. Sources: core::node facade doc,
   NodeKind/NodeRef/GroupData/CallableData item docs, latexlike NodeRef sugar
   docs, the four module docs.
+- M3: docs/specs.md written, 15,945 bytes (target ≤ ~20 kB); 5 doctests pass
+  (incl. the `no_run` filesystem-resolver recipe, compile-checked). Sources:
+  core::specs facade + Package/Scope/ScopeOp item docs, latexlike spec.rs
+  (spec types + define one-liners), arguments.rs (code factory, fallback
+  trap, BracedOnly, named specs), environments.rs (EnvironmentSpec/
+  VerbatimBehavior/EnvironmentBehavior), minidefs, source/resolver.rs
+  (SourceResolver contract, check_include_chain, MapResolver), input.rs
+  (input_macro_spec). The "enum spelling of codes" ruled item is rendered as
+  the documented typed alternative (codes resolve to configured argument
+  parsers; ArgumentSpec built from parser types directly) plus the word
+  codes — there is no argument-code enum in the API, and argument_specs'
+  docs state the factory is convenience, never a requirement.
+- M4: docs/parsing.md written, 8,753 bytes (target ≤ ~10–15 kB); 3 doctests
+  pass. DOC_GAPS #1 RESOLVED (no rustdoc change needed): all 25 public
+  condition types' rendered pages display their identifier via the
+  derive-generated `impl DiagnosticInfo`'s rendered
+  `const IDENTIFIER = "…"`; the DiagnosticInfo trait page's Implementors
+  section lists them (mechanical check script; see the register entry).
+  Sources: error.rs module + item docs (Diagnostic/Diagnostics/Recovery/
+  ParseError, render/sort/cap), engine/language.rs (Language, parse,
+  parse_source, recovery paragraph), nodes_parser.rs condition docs,
+  latexlike driver builder docs.

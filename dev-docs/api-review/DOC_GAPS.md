@@ -39,7 +39,25 @@ never by drafting-agent guesswork. Entry format:
 - Why it matters: consumers matching conditions at a boundary (logs, wire,
   bindings) need to find a condition's identifier from its API page; without
   it, they will guess strings — exactly what the ruled matching rule forbids.
-- Status: OPEN.
+- Status: RESOLVED — verified at G2 (parsing.md milestone) on a `cargo docs`
+  build: every public condition type's rendered page displays its identifier,
+  because the derive-generated `impl DiagnosticInfo` renders the associated
+  constant with its literal value (`const IDENTIFIER: &'static str =
+  "core.token.forbidden-char"`) in the page's Trait Implementations section.
+  Checked mechanically for all 25 public condition types (core:
+  EndOfStreamAfterEscape, ForbiddenChar, UnterminatedVerbatim,
+  ExpectedVerbatimDelimiter, ImplementationError, ScopeOpFailed,
+  UnresolvableCommand, CommandResolutionFailed, StrayGroupClose,
+  UnusableRecoveryToken, RepeatedTackOnField, EnvironmentTerminatorMismatch,
+  MalformedEnvironmentTerminator, MissingEnvironmentTerminator,
+  MissingMandatoryArgument, ExpectedExpressionArgument,
+  ExpressionCallableRequiresContent, UnclosedGroup, NoSourceResolver,
+  UnresolvableSourceReference, ProviderCommandsShadowedByEscape,
+  CallableDefinedAsError; latexlike: MalformedBegin, UnknownEnvironment,
+  OrphanEnd): 25/25 show the identifier string on their canonical page. The
+  `DiagnosticInfo` trait page's auto-generated Implementors section lists
+  the condition types, so parsing.md's link plus per-page identifiers covers
+  the Wish-23/F9 need with no duplicated table and no rustdoc changes.
 
 ## 2. [CHECK] WebAssembly suitability is stated in the introduction but not named in rustdoc
 
