@@ -136,6 +136,31 @@ DOC_GAPS delta, file/size table. Final commit.
 Interruption rule: if context balloons (~400k+ tokens), finish the current
 milestone, commit handoff notes here, and stop for a successor.
 
+## Module-doc sufficiency pass (M2 verdicts)
+
+Criterion (per stage brief): a reader arriving from node-trees.md's pointer
+must find a usable API-use narrative — entry point, core types, at least one
+worked example — in the module-level rustdoc.
+
+| Module | Verdict | Basis |
+|---|---|---|
+| techy::extract | SUFFICIENT as-is | Module doc names both input shapes (readers/builders), the builder route (new-tree minting, edge behaviors), the producer annotation triple (`bare`/`_drop_annotations`/`_keep_annotations`), and carries a compiling doctest (split + compose with content_as_chars). |
+| techy::visit | SUFFICIENT as-is | Module doc gives walk + NodeVisitor + VisitFlow + VisitContext, document-order contract, the three-channel state discipline, role-blindness, and a compiling doctest (chars + depth collection). |
+| techy::transform | SUFFICIENT as-is | Module doc gives restage + RestageVisitor + Restage::{Descend,Emit} contract, top-down/bottom-up mediation, read-frozen/write-staged, annotation pathway + origin-id convention, region-edit error semantics, cross-tree contract, and a compiling doctest (annotate-with-original restage). |
+| techy::recompose | SUFFICIENT as-is | Module doc gives recompose + Recomposer + Recompose/ConcatPieces + ComposePiece, state threading, streaming pattern, Concat role scope, wrapping contract, reading contract, and a compiling doctest (core-source reemitter). |
+
+No rustdoc expansions required; zero DOC_GAPS entries raised by the pass.
+
 ## Milestone log
 
 - M0: this plan. (Committed before other work.)
+- M1: docs/language-syntax.md written, 12,490 bytes (target ≤ ~10–15 kB);
+  2 doctests pass. Sources: latexlike module rustdoc (mod.rs module doc,
+  default_token_rules, builtin_package, MathGroupForm, GroupType,
+  CallableType, minidefs), token-rule item docs (CommandRule, CommentRule),
+  concepts-overview anchors.
+- M2: docs/node-trees.md written, 9,008 bytes (target ≤ ~10–15 kB); 1
+  doctest passes. Module-doc sufficiency pass: all four modules SUFFICIENT
+  (table above), no rustdoc changes needed. Sources: core::node facade doc,
+  NodeKind/NodeRef/GroupData/CallableData item docs, latexlike NodeRef sugar
+  docs, the four module docs.
