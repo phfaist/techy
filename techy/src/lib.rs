@@ -19,6 +19,16 @@
 //! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
 //! supplies all input.
 //!
+//! ## Panics
+//!
+//! Parsing never panics on document input: problems in the parsed content surface as
+//! diagnostics or as an `Err` (see [`error`]), and every fallible seam of the API returns
+//! a `Result`. A few value constructors and low-level helpers (for example
+//! [`Span::new`](source::Span::new) and [`SourceSpan::new`](source::SourceSpan::new))
+//! document a precondition on their arguments and panic, in all builds, when the calling
+//! code violates it — as stated on each such item's own page, those panics guard against
+//! programming errors in the caller; no document content can trigger them.
+//!
 //! ## The public modules
 //!
 //! Every item has exactly one canonical public path, placed by role: data models and

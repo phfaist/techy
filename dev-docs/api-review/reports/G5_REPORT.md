@@ -218,7 +218,23 @@ Gates run at every milestone that touches techy/src or docs/.
 - DOC_GAPS #2 marked RESOLVED with the verification trail.
 - Gates: see gate table in M5 (run per milestone; all green at M1).
 
-## M2 — DOC_GAPS #3 (fills in after execution)
+## M2 — DOC_GAPS #3: DONE
+
+- New crate-level `## Panics` section in techy/src/lib.rs (between
+  `## no_std` and `## The public modules`), 3 sentences: never panics on
+  document input (diagnostics / `Err`; every fallible seam returns
+  `Result`); the precondition-assert value functions panic in all builds
+  on caller contract violation (examples linked: `Span::new`,
+  `SourceSpan::new`); those guard programming errors in calling code — no
+  document content can trigger them.
+- Grounding: read the rustdoc of all named precondition-assert functions
+  (span.rs:27–29 + extend_to, token.rs:151–154, source.rs:231–235 and
+  371–374, reader.rs:89–91) — each states the all-builds panic; wording
+  chosen so the crate passage and the item pages are simultaneously true.
+- DOC_GAPS #3 marked RESOLVED with the verification trail.
+- Incidental sweep find while grepping "panic": error.rs:197 references
+  "CLAUDE.md panic policy" in a `///` — on a PRIVATE `macro_rules!`
+  definition (not `#[macro_export]`; never rendered) → leave-list.
 
 ## M3 — sweep execution (fills in after execution)
 

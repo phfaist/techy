@@ -96,4 +96,15 @@ never by drafting-agent guesswork. Entry format:
   crate-level sentence should not contradict them.
 - Why it matters: "can this panic?" is a standard embedder question (FFI
   boundaries, services); the guide claim needs a documentation anchor.
-- Status: OPEN.
+- Status: RESOLVED — at G5. Crate-level `## Panics` section added to
+  techy/src/lib.rs (after `## no_std`): parsing never panics on document
+  input — problems surface as diagnostics or an `Err`, every fallible seam
+  returns a `Result`; the precondition-assert value functions are named as
+  the deliberate exception in the caller-contract sense (verified against
+  each function's own rustdoc — `Span::new` span.rs, `Token::new` token.rs,
+  `SourceSpan::new`/`SourcePos::new` source.rs, `skip_whitespace` reader.rs
+  each state the all-builds panic on caller contract violation, per the
+  user ruling commit 5611d2b), phrased so both claims hold: those panics
+  guard programming errors in calling code; document content never reaches
+  them. Anchors the learn-by-example header claim and the
+  ai-guide-embedding table row.
