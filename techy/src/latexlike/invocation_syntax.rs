@@ -42,6 +42,10 @@ use super::Latexlike;
 ///   argument is ordinary sibling/region content, as in TeX). A `Spanned`
 ///   post-space is a sub-range of the node's span: trailing for zero-argument
 ///   callables, between the name and the first argument region otherwise.
+///   Source recomposition ([`SourceRecomposer`](super::SourceRecomposer))
+///   re-emits the recorded post-space **verbatim** — any smarter spacing policy
+///   (normalizing, collapsing, or dropping the whitespace) belongs to a
+///   converter built on techy, not to techy.
 /// - [`Environment`](InvocationSyntaxData::Environment) — an environment-shaped
 ///   invocation: the begin/end scaffolding facts, in the `Env` record (default
 ///   [`StdEnvironmentSyntax`]).
