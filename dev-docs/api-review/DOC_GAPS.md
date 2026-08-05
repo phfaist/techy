@@ -77,3 +77,18 @@ never by drafting-agent guesswork. Entry format:
   `cargo build --target wasm32-unknown-unknown -p techy` verified clean in the
   stage worktree. Remaining action: the crate-rustdoc WebAssembly mention
   (G5).
+
+## 3. [GAP] No crate-level rustdoc sentence anchors the "never panics on document input" contract
+
+- Raised-by: G2 review (the learn-by-example header states "techy never
+  panics on input"; the claim matches the shipped panic discipline, but no
+  crate-level documentation sentence states it).
+- Question/Claim: the crate-level docs should state the panic contract in
+  user-facing terms: parsing never panics on document input — problems
+  surface as diagnostics or `Err`. The documented precondition asserts on a
+  few value constructors (each states its all-builds panic in its own
+  rustdoc) concern caller contract violations, not document input; the
+  crate-level sentence should not contradict them.
+- Why it matters: "can this panic?" is a standard embedder question (FFI
+  boundaries, services); the guide claim needs a documentation anchor.
+- Status: OPEN.

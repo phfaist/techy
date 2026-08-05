@@ -62,7 +62,7 @@ each problem site repaired by that condition's documented recovery — an
 unresolvable command is staged as its literal characters, a stray `}` at the
 top level is consumed as a character node, and so on (the recovery is part of
 each condition's documentation). The tree remains well-formed and
-byte-accounted; check
+accounts for every input byte; check
 [`diagnostics.has_errors()`](crate::error::Diagnostics::has_errors) before
 treating it as clean.
 

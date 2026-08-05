@@ -237,7 +237,7 @@ No rustdoc expansions required; zero DOC_GAPS entries raised by the pass.
 |---|---|
 | `cargo build` | PASS (clean) |
 | `cargo test` (all suites) | PASS — 758 lib + 30 acceptance + 8 derive_conditions + 21 recompose_oracle + 1 techy-derive |
-| `cargo test --doc` | PASS — 49 doctests (2 ignored), incl. this stage's 32 new/revised guide doctests |
+| `cargo test --doc` | PASS — 49 doctests (2 ignored), incl. this stage's 31 new/revised guide doctests (count corrected at review: 2+1+5+3+20) |
 | `rm -rf target/doc && cargo docs` | PASS — zero warnings |
 | `scripts/check_semver.sh` | PASS — "no semver update required" (196 checks pass) |
 | Four-step wiring | Intact for all five chapters (wired in G1; verified lib.rs guide block + GUIDE_PAGES + guide.md index untouched) |
