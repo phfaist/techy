@@ -55,4 +55,7 @@ never by drafting-agent guesswork. Entry format:
 - Why it matters: the introduction is the first page readers meet; its
   claims should each have a rustdoc sentence behind them, and embedders
   choosing techy for browser/plugin targets will act on this one.
-- Status: OPEN.
+- Status: OPEN (narrowed) — build half RESOLVED at the G1 review:
+  `cargo build --target wasm32-unknown-unknown -p techy` verified clean in the
+  stage worktree. Remaining action: the crate-rustdoc WebAssembly mention
+  (G5).

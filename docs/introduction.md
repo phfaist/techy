@@ -12,15 +12,15 @@ hard-coded meaning for `{`, `}`, `%`, or `\`. The familiar LaTeX behavior is
 provided by a *preset* — the [`latexlike`](crate::latexlike) module — built
 entirely from the same public extension points that are available to you. If
 you need a variant language, or a markup language that only resembles LaTeX,
-you define it with the same machinery instead of fighting a LaTeX-shaped
-parser.
+you define it with the same machinery instead of working around a parser
+with LaTeX behavior built in.
 
 ## What techy does
 
 **Parsing.** A [`Language`](crate::core::Language) bundles everything that
 outlives one parse — the initial [parsing
-state](crate::guide::concepts_overview#parsing-state-and-deltas) and the parse
-driver — and its `parse()` entry point produces a
+state](crate::guide::concepts_overview#parsing-state-and-deltas), the parse
+driver, and an optional source resolver — and its `parse()` entry point produces a
 [`ParseResult`](crate::core::ParseResult). Parsing can be *strict* (stop at the
 first problem) or *tolerant* (recover and continue), governed by the
 [`Recovery`](crate::error::Recovery) policy; problems are reported as

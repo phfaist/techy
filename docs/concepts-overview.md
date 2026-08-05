@@ -44,7 +44,7 @@ every stream. Tokens carry no macro/environment taxonomy: `\begin` is a
 [`Command`](crate::core::TokenKind::Command) token like any other, and what its
 name means is decided at parse time — the one exception is
 [`Specials`](crate::core::TokenKind::Specials), where recognition *is*
-resolution, so the token carries its spec. Tokenization behavior is plain data
+resolution, so the token carries its [spec](#callable-specs-and-arguments). Tokenization behavior is plain data
 — [`TokenRules`](crate::core::TokenRules) stored in the parsing state — so it
 can change mid-parse through state transitions.
 
@@ -93,7 +93,7 @@ customizer.
 
 A *callable* is anything invocable from the token stream — macros,
 environments, and specials, in LaTeX terms. Its behavior is recorded by a
-[`CallableSpec`](crate::core::specs::CallableSpec), which is de-keyed from any
+[`CallableSpec`](crate::core::specs::CallableSpec), which is not tied to any
 particular name: one spec may back several names. The declarative surface is
 the list of [`ArgumentSpec`](crate::core::specs::ArgumentSpec)s describing the
 invocation's arguments; the behavioral surface is a factory returning the
@@ -117,8 +117,9 @@ mutable-by-replacement provider; a
 [`FallbackProvider`](crate::core::specs::FallbackProvider) expresses the
 unknown-callable policy. Definitions change mid-parse through scope operations
 carried by [parsing state deltas](#parsing-state-and-deltas) (`\newcommand`,
-package loads), and scopes revert structurally when the derived state is
-dropped. Name lookup during a parse is the command-resolution family around
+package loads), and scopes revert structurally when the enclosing group ends
+and parsing resumes with the outer state, which still holds the previous
+scope stack. Name lookup during a parse is the command-resolution family around
 [`resolve_command_in_scopes`](crate::core::specs::resolve_command_in_scopes).
 
 ## The node tree
