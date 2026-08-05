@@ -608,3 +608,15 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   in the brief; scope = §S9 + the S4-routed A1(iv) check fn + the note that
   the S8 oracle's specials/ligature rows must switch to loading minilatex
   as part of the ruled base-package slimming).
+- 2026-08-05: S9 implemented in one run (7 commits through ce6d61a; 740 lib
+  tests, was 726; 35 doctests, was 33; gates green; coverage moved per the
+  ruled base→minilatex reshape, none lost). 8 deviations queued
+  (D-plan-1..8); no escalations claimed. Implementer correction accepted:
+  the launch brief's A1 paraphrase ("escape char disabled") drifted from
+  the frozen records — implemented semantics are the records' "all provider
+  definitions shadowed by escape-char registration" (identifier
+  `core.specs.provider-commands-shadowed-by-escape`). Whole-stage
+  independent review launched (full diff f1f53f2..HEAD; special scrutiny
+  ordered on D-plan-3 — the NEW defaulted `ParseDriver::observe_parse_start`
+  core hook as the A1(iv) wiring — and D-plan-2 ligature seed-mode
+  visibility; brief-vs-records semantics to be re-verified against T1T2 §A1).
