@@ -174,6 +174,22 @@ context — compressed but obeying all clarity rules):
 
 ## Status log
 
+- 2026-08-05: **G4 DONE — merged into api-review (c49406c; incorporates the
+  user's own 12a9ce5 TODO_Big.md commit via rebase)**. Six AI Guide chapters,
+  84 kB / ~21k tokens total: root 16.4 kB (55% of the ~30 kB HARD cap;
+  written last against the finished sub-chapters; 18-line pitfalls index) +
+  definitions 13.4 / trees 14.5 / custom-lang 18.3 / embedding 8.2 /
+  pylatexenc 13.3 kB; 14 new compiling doctests (66 total); zero new
+  DOC_GAPS. Independent review: MERGE-READY, ~40 claims sampled for
+  compression fidelity — only drift found: two truth-preserving dropped
+  qualifiers ("or multiplying"; "immediately") + one unlinked term
+  (InChildrenOf), all fixed at merge with the report's URL-count footnote;
+  self-containment verified (root alone PASS; root+trees pair PASS);
+  "staging door"/"sanctioned splice door" verified as shipped module-doc
+  vocabulary (FORCED keep); readthedocs URL set byte-identical to the
+  verified G3 set. Deviations all FORCED/DEFENSIBLE (chapter-map rows read
+  as minimums — synthesized-node pointer kept). Supervisor read all six
+  chapters in full. NEXT: G5 (final verification + audit).
 - 2026-08-05: **G3 DONE — merged into api-review (6f19d4b)**. Two sequential
   implementers per the relay plan: M0–M4 (parsing-model 15.9 kB /
   construct-parsers 20.6 kB incl. the complete compile-checked `\until`
