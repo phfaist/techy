@@ -313,6 +313,13 @@ let body: Vec<String> = env.body().unwrap().iter().map(|node| node.summary()).co
 assert_eq!(body, ["chars( a b )"]);
 ```
 
+Registration deliberately performs no spec-type/callable-type cross-check: the
+*composition* owns the environment parse, and the registered spec contributes its
+argument structure — so a non-`EnvironmentSpec` under
+[`CallableType::Environment`](crate::latexlike::CallableType) is legitimate (its
+declared arguments parse after `\begin{name}`, the body takes the default
+handling). See [`Package::insert`](crate::core::specs::Package::insert).
+
 An environment can install a parsing-state delta for its body's whole extent —
 `equation` entering math mode is one line:
 

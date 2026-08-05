@@ -47,8 +47,11 @@
 //! [`TrivialLang`](crate::state::TrivialLang) default.
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constructs::{
@@ -679,10 +682,23 @@ pub enum CommandResolution<L: Lang> {
 /// fired escape character), consults
 /// [`ScopeStack::retrieve_spec`](crate::scopes::ScopeStack::retrieve_spec), and maps
 /// the outcome: a hit is [`Resolved`](CommandResolution::Resolved); a clean miss is
-/// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers as
+/// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers —
+/// and, where the scopes advertise their symbols, a **did-you-mean** hint — as
 /// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
 /// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
 /// token — a caller-contract violation — yields `Unresolved { detail: None }`.
+///
+/// **The did-you-mean detail** scans the providers' advertised definitions
+/// ([`SpecsProvider::iter_symbols`](crate::scopes::SpecsProvider::iter_symbols),
+/// under the queried callable type and the state's current mode) for near-misses
+/// of the unresolved name: a definition registered *with* its escape character
+/// (`\greet` instead of `greet` — the registration trap
+/// [`Package::insert`](crate::scopes::Package::insert)'s contract warns about) is
+/// called out explicitly, and small-edit-distance names are suggested. Providers
+/// that cannot enumerate are skipped, and an in-stack fallback provider makes
+/// resolution *succeed*, so the miss path — hints included — never runs there
+/// (accepted limitation; the parse-initialization check
+/// `check_provider_commands_shadowed_by_escape` fires regardless of fallbacks).
 pub fn resolve_command_in_scopes<L: Lang>(
     state: &ParsingState<L>,
     token: &Token<'_, L>,
@@ -701,11 +717,106 @@ pub fn resolve_command_in_scopes<L: Lang>(
         Ok(Some(spec)) => {
             CommandResolution::Resolved(ResolvedCallable { callable_type, spec })
         }
-        Ok(None) => CommandResolution::Unresolved {
-            detail: Some(state.scopes().searched_providers().to_string()),
-        },
+        Ok(None) => {
+            let mut detail = state.scopes().searched_providers().to_string();
+            if let Some(hint) = did_you_mean_hint(state, name, *escape_char, callable_type)
+            {
+                detail.push_str("; ");
+                detail.push_str(&hint);
+            }
+            CommandResolution::Unresolved { detail: Some(detail) }
+        }
         Err(error) => CommandResolution::Failed { detail: Some(error.to_string()) },
     }
+}
+
+/// Compose the did-you-mean miss detail (see [`resolve_command_in_scopes`]): scan
+/// the enumerable providers innermost-first for (a) the unresolved name registered
+/// *with* its escape character and (b) small-edit-distance near-misses. `None`
+/// when nothing nearby is advertised.
+fn did_you_mean_hint<L: Lang>(
+    state: &ParsingState<L>,
+    name: &str,
+    escape_char: char,
+    callable_type: L::CallableTypeId,
+) -> Option<String> {
+    /// At most this many near-miss suggestions (innermost-first).
+    const MAX_SUGGESTIONS: usize = 3;
+
+    let mut escape_trap: Option<String> = None; // the defining provider's name
+    let mut suggestions: Vec<(String, String)> = Vec::new(); // (provider, name)
+    let escape_spelling = {
+        let mut s = String::with_capacity(escape_char.len_utf8() + name.len());
+        s.push(escape_char);
+        s.push_str(name);
+        s
+    };
+    let threshold = if name.chars().count() <= 4 { 1 } else { 2 };
+
+    for provider in state.scopes().providers().iter().rev() {
+        let Some(symbols) = provider.iter_symbols(callable_type, state.mode()) else {
+            continue; // cannot enumerate (e.g. a fallback provider): skipped
+        };
+        for entry in symbols {
+            if escape_trap.is_none() && entry.name == escape_spelling {
+                escape_trap = Some(provider.name().into());
+            } else if suggestions.len() < MAX_SUGGESTIONS
+                && entry.name != name
+                && !suggestions.iter().any(|(_, n)| n == entry.name)
+                && edit_distance_at_most(entry.name, name, threshold)
+            {
+                suggestions.push((provider.name().into(), entry.name.into()));
+            }
+        }
+    }
+
+    let mut hint = String::new();
+    if let Some(provider) = escape_trap {
+        hint.push_str(&format!(
+            "provider ‘{provider}’ defines ‘{escape_spelling}’ — command names are \
+             registered without the escape character"
+        ));
+    }
+    if !suggestions.is_empty() {
+        if !hint.is_empty() {
+            hint.push_str("; ");
+        }
+        hint.push_str("did you mean ");
+        for (i, (provider, suggested)) in suggestions.iter().enumerate() {
+            if i > 0 {
+                hint.push_str(" or ");
+            }
+            hint.push_str(&format!("‘{suggested}’ (provider ‘{provider}’)"));
+        }
+        hint.push('?');
+    }
+    (!hint.is_empty()).then_some(hint)
+}
+
+/// Whether the Levenshtein distance of `a` and `b` is `<= bound` (char-based;
+/// two-row dynamic programming with an early length gate).
+fn edit_distance_at_most(a: &str, b: &str, bound: usize) -> bool {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > bound {
+        return false;
+    }
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        current[0] = i + 1;
+        let mut row_min = current[0];
+        for (j, &cb) in b.iter().enumerate() {
+            let substitution = previous[j] + usize::from(ca != cb);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+            row_min = row_min.min(current[j + 1]);
+        }
+        if row_min > bound {
+            return false; // every path already exceeds the bound
+        }
+        core::mem::swap(&mut previous, &mut current);
+    }
+    previous[b.len()] <= bound
 }
 
 /// `Some`/`None` from a lookup maps to `Resolved`/`Unresolved` with no detail — the

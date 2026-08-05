@@ -763,6 +763,50 @@ mod tests {
     }
 
     #[test]
+    fn did_you_mean_reports_escape_char_registrations() {
+        // The A1 registration trap: a name registered WITH its escape character
+        // (`insert(…, "\\greet", …)`) can never resolve — command tokens arrive
+        // without it. The miss detail calls the shadowed definition out.
+        let mut package = Package::new("mydefs");
+        package.insert(
+            CallableType::Macro,
+            r"\greet",
+            Arc::new(super::MacroSpec::default()),
+        );
+        let language = test_support::with_package(crate::error::Recovery::Tolerant, package);
+        let result = language.parse(r"\greet x").unwrap();
+        assert_eq!(result.diagnostics.len(), 1);
+        let message = result.diagnostics.iter().next().unwrap().message();
+        assert!(message.contains("searched providers: mydefs, _builtin"), "{message}");
+        assert!(message.contains("provider ‘mydefs’ defines ‘\\greet’"), "{message}");
+        assert!(message.contains("without the escape character"), "{message}");
+    }
+
+    #[test]
+    fn did_you_mean_suggests_near_miss_names() {
+        let mut package = Package::new("mydefs");
+        package.insert(
+            CallableType::Macro,
+            "greet",
+            Arc::new(super::MacroSpec::default()),
+        );
+        let language = test_support::with_package(crate::error::Recovery::Tolerant, package);
+        let result = language.parse(r"\gret x").unwrap();
+        assert_eq!(result.diagnostics.len(), 1);
+        let message = result.diagnostics.iter().next().unwrap().message();
+        assert!(
+            message.contains("did you mean ‘greet’ (provider ‘mydefs’)?"),
+            "{message}"
+        );
+
+        // A far-off name gets no suggestion — the searched-providers detail alone.
+        let result = language.parse(r"\xyzzy x").unwrap();
+        let message = result.diagnostics.iter().next().unwrap().message();
+        assert!(message.contains("searched providers"), "{message}");
+        assert!(!message.contains("did you mean"), "{message}");
+    }
+
+    #[test]
     fn the_seed_ships_no_specials_definitions() {
         // The typography specials are definitions content, not parsing substrate
         // ([§dd-dr:base-package] amendment): they live in minidefs' `"minilatex"`

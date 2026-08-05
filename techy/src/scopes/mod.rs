@@ -695,6 +695,30 @@ impl<L: Lang> Package<L> {
     /// visible in every mode the package is. Returns the spec previously defined under
     /// that key, if any.
     ///
+    /// **The name is the *normalized* spelling — never include the escape
+    /// character.** Register `"emph"`, not `"\\emph"`: command tokens carry their
+    /// name *without* the escape character, so an escape-prefixed registration can
+    /// never match — the definition is silently unreachable. This is deliberately
+    /// *not* validated here: escape characters are a [`TokenRules`](crate::token::TokenRules)
+    /// fact this layer cannot know, they can change mid-parse, and a leading
+    /// escape-character-like char can be fully intended (`@greet` registered before
+    /// `@` *becomes* an escape character). The trap is caught where it bites
+    /// instead: the resolution-miss detail suggests escape-prefixed near-misses
+    /// ([`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes)),
+    /// and a parse-initialization check warns when *all* of a provider's
+    /// definitions are escape-shadowed
+    /// (`check_provider_commands_shadowed_by_escape`).
+    ///
+    /// **No spec-type/callable-type cross-check either — deliberately.** A
+    /// "mismatched" registration (say, a plain macro-shaped spec under an
+    /// environment form) is documented-legitimate: the *composition* that parses
+    /// the invocation form owns the parse, and the spec contributes argument
+    /// structure — e.g. the latexlike environment composition parses any
+    /// `CallableSpec`'s declared arguments after `\begin{name}` and gives the body
+    /// the default handling. The preset one-liners (`define_macro`/
+    /// `define_environment` on latexlike packages) make the correct pairing
+    /// structural on the happy path.
+    ///
     /// The spec passes through the sealed [`IntoCallableSpec`] conversion: by value
     /// (`insert(CallableType::Macro, "emph", MacroSpec::new(…))` — no `Arc::new`), or
     /// pre-shared as an `Arc` for flyweight sharing across names.

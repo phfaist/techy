@@ -126,13 +126,23 @@ impl core::error::Error for ArgumentCodeError {}
 /// | `e{<chars>}` | embellishments: one marker per character, each followed immediately by an expression, any order, each at most once — [`EmbellishmentsArgumentParser`] |
 /// | `AnyDelimited` | mandatory group delimited by any of `{}` `[]` `()` `<>` (minted per use; contents keep only the matched pair) — [`GroupArgumentParser::any_of`] |
 /// | `AnyDelimitedOptional` | the optional flavor (lone inner `{…}` protects and unwraps, like `o`) — [`OptionalGroupArgumentParser::any_of`] |
+/// | `BracedOnly` | mandatory content-class group with **no** expression fallback — [`GroupArgumentParser::with_expression_fallback`]`(false)` |
+///
+/// **`m` keeps TeX's single-expression fallback — deliberately.** `\frac12` reads
+/// two one-token arguments; a missing group is *not* diagnosed as long as any
+/// expression follows, which silently swallows sibling content when the argument
+/// was meant to be group-only. Where that trap matters (config-like payloads,
+/// machine-written arguments), use the word code **`BracedOnly`**: the same
+/// mandatory *content-class* group with the fallback off. "Braced" names the
+/// class's delimiters, not literal `{}` — with `<`/`>` declared as the
+/// content-group delimiters in the parsing state, `<arg>` is accepted.
 ///
 /// In list form the two `v` shapes need no disambiguation: `["v"]` is the
 /// auto-matched-delimiter form, `["v||"]` the prescribed one (the whitespace rule of
 /// the compact grammar lives with [`argument_specs_from_str`]). The word codes
-/// `AnyDelimited`/`AnyDelimitedOptional` are **list-form only** — each is a whole
-/// element (pylatexenc uses them as whole `arg_spec` strings the same way); in a
-/// compact string they would read as an unknown code `A`.
+/// `AnyDelimited`/`AnyDelimitedOptional`/`BracedOnly` are **list-form only** — each
+/// is a whole element (pylatexenc uses word codes as whole `arg_spec` strings the
+/// same way); in a compact string they would read as an unknown code `A`/`B`.
 ///
 /// The argument specs carry no names and no per-argument state deltas — attach those
 /// via [`ArgumentSpec`]'s builders where needed (the factory is convenience, never a
@@ -198,8 +208,8 @@ where
     Ok(specs)
 }
 
-/// Resolve a whole-element word code (`AnyDelimited` / `AnyDelimitedOptional`) —
-/// list-form only (see [`argument_specs`]).
+/// Resolve a whole-element word code (`AnyDelimited` / `AnyDelimitedOptional` /
+/// `BracedOnly`) — list-form only (see [`argument_specs`]).
 fn scan_word_code<LLL: LatexlikeLang>(code: &str) -> Option<Arc<ArgumentSpec<LLL>>>
 where
     ArgumentExt<LLL>: Default,
@@ -209,6 +219,10 @@ where
         "AnyDelimitedOptional" => Arc::new(
             OptionalGroupArgumentParser::any_of(any_delimited_rules())
                 .with_unwrap_lone_group(LLL::GroupTypeId::content_group()),
+        ),
+        "BracedOnly" => Arc::new(
+            GroupArgumentParser::new(LLL::GroupTypeId::content_group())
+                .with_expression_fallback(false),
         ),
         _ => return None,
     };
@@ -878,6 +892,63 @@ mod tests {
         // The optional flavor unwraps a lone protective brace group, like `o`.
         let result = parse_ok("AnyDelimitedOptional", r"\m[{a]b}]");
         assert_eq!(content_chars(macro_node(&result), 0), "a]b");
+    }
+
+    #[test]
+    fn braced_only_code_takes_a_content_group_with_no_fallback() {
+        // The group parses exactly like `m`…
+        let result = parse_ok("BracedOnly", r"\m{arg} rest");
+        let m = macro_node(&result);
+        assert_eq!(content_chars(m, 0), "arg");
+
+        // …but a bare expression is NOT swallowed (no fallback): strict diagnoses
+        // the missing mandatory argument; tolerant leaves `x` as sibling content.
+        let err = language(Recovery::Strict, "BracedOnly").parse(r"\m x").unwrap_err();
+        assert!(err.to_string().contains("missing mandatory argument"), "{err}");
+        let result = language(Recovery::Tolerant, "BracedOnly").parse(r"\m x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(result.diagnostics.len(), 1);
+        let m = macro_node(&result);
+        assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
+        assert_eq!(result.tree.root().child(1).unwrap().chars(), Some("x"));
+
+        // Word codes are list-form only: a compact string reads `B` as unknown.
+        assert_eq!(
+            argument_specs_from_str::<Latexlike>("BracedOnly").unwrap_err(),
+            ArgumentCodeError::UnknownCode { index: None, offset: 0, code: 'B' }
+        );
+    }
+
+    #[test]
+    fn braced_only_accepts_any_content_class_group() {
+        // "Braced" names the content *class*, not literal `{}`: with `«…»` declared
+        // as a content pair in the parsing state, a `«…»` group satisfies it.
+        use super::super::default_token_rules;
+        use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+
+        let mut package = Package::new("factory-tests");
+        package.insert(
+            CallableType::Macro,
+            "m",
+            Arc::new(MacroSpec::new(argument_specs(["BracedOnly"]).unwrap())),
+        );
+        let mut groups = default_token_rules::<Latexlike>().groups;
+        groups.push(Arc::new(GroupRule {
+            group_type: GroupType::Content,
+            open: "«".into(),
+            close: "»".into(),
+        }));
+        let seed = ParsingState::<Latexlike>::lang_initial_with_packages([package])
+            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
+                groups: Some(groups),
+                ..TokenRulesOverrides::default()
+            }))
+            .unwrap();
+        let language = Language::new(LatexlikeDriver::new(Recovery::Strict), seed);
+        let result = language.parse("\\m«arg»").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        let m = macro_node(&result);
+        assert_eq!(content_chars(m, 0), "arg");
     }
 
     #[test]
