@@ -66,9 +66,16 @@ use super::argument_parsers::{
 };
 use super::{ConstructParserResult, FromInvocation, ParseContext};
 
-/// The embellishment-arguments parser (see the module docs): marker alternatives, each
-/// followed by one expression (at most plain whitespace apart), repeating in any order
-/// until no available marker matches; each marker at most once.
+/// The embellishment-arguments parser (xparse's `e{<chars>}` argument type): marker
+/// alternatives (`^`, `_`, `'`, …), each followed by one expression (at most plain
+/// whitespace apart), repeating in any source order until no available marker
+/// matches; each marker matches at most once per invocation. The whole run is
+/// recorded as **one argument**: each matched pair stages one classless wrapper
+/// `Group` ([`GroupData::untyped`](crate::node::GroupData::untyped)) whose `open` is
+/// the marker as written and whose children are the expression's nodes — by-marker
+/// access is [`split_embellishments`](crate::extract::split_embellishments). Longest
+/// match wins among still-available markers sharing a prefix; a marker not followed
+/// by an expression is rewound whole and ends the run silently.
 pub struct EmbellishmentsArgumentParser {
     markers: Vec<Box<str>>,
 }

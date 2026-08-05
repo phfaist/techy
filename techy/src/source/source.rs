@@ -229,9 +229,9 @@ impl<O: SourceOrigin> SourceSpan<O> {
     /// into `Arc`-carrying land).
     ///
     /// The range must lie within the source content and fall on `char` boundaries —
-    /// the caller's contract: a violation panics here, in all builds (an individually
-    /// approved panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy]
-    /// rule 3). Every constructed `SourceSpan` is therefore valid for
+    /// the caller's contract: a violation panics here, in all builds — one of the
+    /// crate's few deliberate panics (see the [crate-level Panics list](crate#panics)).
+    /// Every constructed `SourceSpan` is therefore valid for
     /// [`content`](Self::content).
     pub fn new(source: &Arc<Source<O>>, range: impl Into<Range<usize>>) -> Self {
         let range = range.into();
@@ -370,8 +370,8 @@ impl<O: SourceOrigin> SourcePos<O> {
     ///
     /// The offset must lie within the source content (`0..=len`; the length itself is
     /// a valid end-of-content position) and fall on a `char` boundary — the caller's
-    /// contract: a violation panics, in all builds (an individually approved
-    /// panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
+    /// contract: a violation panics, in all builds — one of the crate's few
+    /// deliberate panics (see the [crate-level Panics list](crate#panics)).
     pub fn new(source: &Arc<Source<O>>, pos: usize) -> Self {
         assert!(
             pos <= source.content.len(),
@@ -420,8 +420,8 @@ impl<O: SourceOrigin> fmt::Debug for SourcePos<O> {
 ///
 /// `Resolved` and `Synthesized` sources point back (via `triggered_at`) to the location that
 /// caused their creation. Since a triggering location always lies in an *older* source, these
-/// back-references form a provenance tree, never a cycle. Per the module-level invariant,
-/// provenance only ever references sources — never nodes.
+/// back-references form a provenance tree, never a cycle. Provenance only ever
+/// references sources — never nodes.
 #[derive(Debug, Clone)]
 pub enum SourceProvenance<O: SourceOrigin = Option<String>> {
     /// Top-level source provided directly by the user.

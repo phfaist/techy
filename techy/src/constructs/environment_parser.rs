@@ -430,12 +430,16 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
 }
 
 /// The environment-body construct parser: a tier-2 temporary constructed by the
-/// invocation parser driving the environment shape (see the module docs for the design
-/// and recovery contract).
+/// invocation parser driving the environment shape, parameterized by the terminator
+/// data (the stop command's name, the name group's class, whether the name must
+/// back-reference the invocation).
 ///
-/// Runs at the position right after the environment's scaffolding and arguments; parses
-/// sibling content up to the terminator command, handles the terminator per decision 8,
-/// and stages the body `List`. Returns no after-effect delta.
+/// Runs at the position right after the environment's `\begin{name}` syntax and
+/// arguments; parses sibling content up to the terminator command, handles the
+/// terminator (each problem's recovery is documented on its condition type:
+/// [`EnvironmentTerminatorMismatch`], [`MalformedEnvironmentTerminator`],
+/// [`MissingEnvironmentTerminator`]), and stages the body `List`. Returns no
+/// after-effect delta.
 pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{name}`'s command token), anchoring the
     /// missing-terminator diagnostic (the group parser's unclosed-at-open precedent).

@@ -72,7 +72,8 @@ use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame,
 /// (`\section{x}\label{a}\label{b}` with `label` registered via
 /// [`with_field`](TackOnFieldsArgumentParser::with_field)) — detected by
 /// [`TackOnFieldsArgumentParser`]. Tolerant recovery keeps the repeated field parsed
-/// in the argument's region (module docs).
+/// in the argument's region — techy trees keep every byte, so nothing is discarded:
+/// consumers see both the diagnostic and the record. Strict parses abort.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -94,8 +95,14 @@ struct TackOnField<L: Lang> {
     repeatable: bool,
 }
 
-/// The tack-on information-fields parser (see the module docs): configured with the
-/// invocation form its field nodes record and the accepted field commands by name.
+/// The tack-on information-fields parser: absorbs trailing `\label{…}`-style
+/// invocations after a construct's declared arguments, as the callable's **last
+/// declared argument**. It is configured with the invocation form its field nodes
+/// record and the accepted field commands by **name** — a peeked command token whose
+/// name is configured dispatches with the configured spec directly (the scope stack
+/// is never consulted); anything else ends the absorption, silently. Each absorbed
+/// field stages a full `Callable` node under the configured per-name spec; by-name
+/// reading is [`split_tack_on_fields`](crate::extract::split_tack_on_fields).
 pub struct TackOnFieldsArgumentParser<L: Lang> {
     callable_type: L::CallableTypeId,
     fields: Vec<TackOnField<L>>,

@@ -126,8 +126,8 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// construct parsers make no forward parsing decision from raw content — even a
     /// verbatim parser reads `Char` tokens under a features-disabled state.
     pub source: Arc<Source<L::SourceOrigin>>,
-    /// The parser's **input** parsing state (the caller sets it; see the module docs
-    /// for the state-threading convention).
+    /// The parser's **input** parsing state (the caller sets it; see the
+    /// state-threading contract in [`core::constructs`](crate::core::constructs)).
     pub state: Arc<ParsingState<L>>,
     /// The session: node building, diagnostics, derivation memos, frames.
     pub session: &'a mut ParserSession<L>,
@@ -757,7 +757,8 @@ impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {
     }
 }
 
-/// Result type of construct parsing. `Err` means abort — see the module docs.
+/// Result type of construct parsing. `Err` means abort — see the error contract
+/// in [`core::constructs`](crate::core::constructs).
 ///
 /// Parameter convention follows [`TokenResult`](crate::token::TokenResult) (lang first,
 /// payload last). The underlying [`ParseError`] is generic over the source origin only
@@ -766,7 +767,8 @@ pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceO
 
 /// A parser for one construct, reading tokens and staging nodes through the context.
 ///
-/// Implementations are tier-2 **temporaries** (module docs): per-use configuration in
+/// Implementations are tier-2 **temporaries** (the two-tier ownership model in
+/// [`core::constructs`](crate::core::constructs)): per-use configuration in
 /// fields, `&mut self` working state, dropped with the frame.
 ///
 /// On success, a parser returns its output (typically staged `BuildId`s) together with
@@ -796,7 +798,7 @@ pub trait ConstructParser<L: Lang> {
 ///
 /// When the parser runs, the trigger token has already been **consumed whole** by the
 /// dispatching arm (`move_past(token, true)`, syntactic post-space included) — see
-/// [`StdInvocationParser`]'s module docs for the full contract.
+/// [`StdInvocationParser`]'s documentation for the full contract.
 ///
 /// [`CallableSpec::make_invocation_parser`]: crate::spec::CallableSpec::make_invocation_parser
 pub struct Invocation<'a, 's, L: Lang> {

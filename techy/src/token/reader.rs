@@ -87,8 +87,8 @@ pub trait TokenReader<'s, L: Lang> {
 /// whitespace handling is disabled).
 ///
 /// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
-/// caller-contract violation and panics, in all builds (an individually approved
-/// panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
+/// caller-contract violation and panics, in all builds — one of the crate's few
+/// deliberate panics (see the [crate-level Panics list](crate#panics)).
 ///
 /// **The multi-newline rule** (`TokenRules::enable_multi_newline_paragraphs`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
@@ -178,7 +178,7 @@ impl<'s> StdTokenReader<'s> {
     /// Move to an absolute byte position (must lie on a `char` boundary, at most the
     /// content's length). A violating position is not diagnosed here — the next
     /// [`peek`](TokenReader::peek) validates it and reports an implementation error
-    /// ([§dd-dr:panic-policy]: one validation point, at the consumption boundary).
+    /// (deliberately one validation point, at the consumption boundary).
     pub fn move_to_pos(&mut self, pos: usize) {
         self.pos = pos;
     }

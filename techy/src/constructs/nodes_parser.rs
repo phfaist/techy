@@ -289,7 +289,9 @@ pub struct StopSpec<'p, L: Lang> {
     /// Node condition, tested after each staged node with (number of nodes staged so
     /// far, view of the just-staged node); a match includes that node and stops after
     /// it. Not consulted on the final flush a matched token condition triggers — the
-    /// token condition wins outright (see the module docs on the position seam). The
+    /// token condition wins outright (its answer could change nothing, and the
+    /// predicate is a stateful `FnMut` that must not observe a
+    /// consulted-but-ignored call). The
     /// (count, last node) signature is a deliberate deviation from pylatexenc's
     /// whole-nodelist rescans.
     // The decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]); an alias would only rename it.

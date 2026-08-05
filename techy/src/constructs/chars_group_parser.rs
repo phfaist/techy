@@ -60,9 +60,16 @@ use super::argument_parsers::{
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{ConstructParserResult, FromInvocation, ParseContext};
 
-/// The chars-group argument parser (see the module docs): a mandatory group of the
-/// configured class whose contents parse under a restricted state — commands and
-/// specials off, comments and nested groups per the knobs.
+/// The chars-group argument parser: a mandatory group of the configured class whose
+/// contents parse under a **restricted state** — commands and specials off (`\foo`
+/// and `~` read as ordinary characters), comments and nested groups per the
+/// settings below — for `\label{…}`/`\cite{…}`-style chars-only arguments. By
+/// default a nested group's interior restores the outer, unrestricted state
+/// ([`with_restricted_descent`](CharsGroupArgumentParser::with_restricted_descent)
+/// keeps the restriction at every depth). The argument is mandatory with **no**
+/// expression fallback: where no group of the configured class opens,
+/// [`MissingMandatoryArgument`](super::MissingMandatoryArgument) is diagnosed
+/// (tolerant) or aborts (strict), the argument reported absent, nothing consumed.
 pub struct CharsGroupArgumentParser<L: Lang> {
     group_type: L::GroupTypeId,
     comments: bool,
@@ -92,15 +99,17 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
 
     /// Set whether nested groups of the entered class stay recognized inside the
     /// group (default: `true`; pylatexenc's `enable_groups`). When `false`, interior
-    /// open/close delimiters read as plain characters and the first close of the
-    /// entered pairing terminates the group (module docs).
+    /// open/close delimiters read as plain characters while the outer close still
+    /// terminates the group — the expected-close recognizer stays active even with
+    /// groups disabled — so the first close of the entered pairing ends the group.
     pub fn with_nested_groups(mut self, nested_groups: bool) -> Self {
         self.nested_groups = nested_groups;
         self
     }
 
     /// Keep the restriction in force inside nested groups (default: `false` — nested
-    /// interiors restore the outer, unrestricted state; module docs).
+    /// interiors restore the outer, unrestricted state, so braced values inside a
+    /// chars-only argument regain full parsing richness).
     pub fn with_restricted_descent(mut self, restricted_descent: bool) -> Self {
         self.restricted_descent = restricted_descent;
         self

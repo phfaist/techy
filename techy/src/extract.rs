@@ -724,8 +724,8 @@ impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
 /// first top-level `=` separates the key from the value; grouped content protects both
 /// (`legend={a,b}`). Keys flatten via [`content_as_chars`] and are
 /// **whitespace-trimmed** (a deliberate deviation from pylatexenc, which keeps `" a "`
-/// verbatim: LaTeX's keyval packages trim, and untrimmed keys are a recurring
-/// pylatexenc footgun). Values are recorded **raw and in source order, duplicates
+/// verbatim: LaTeX's keyval packages trim, and pylatexenc's untrimmed keys are a
+/// recurring source of user mistakes). Values are recorded **raw and in source order, duplicates
 /// preserved** — deliberately, with no aggregation knobs: pylatexenc's `repeated_key_aggregate_action`
 /// policies are one-line derivations over [`iter`](KeyVals::iter), and
 /// [`get`](KeyVals::get) answers the common "effective value" question (last wins —

@@ -461,7 +461,11 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 /// The `\begin` dispatcher: every environment enters through this shared spec, an
 /// ordinary [`Macro`](super::CallableType::Macro) entry of the
 /// [`builtin_package`](super::builtin_package) (shadowable and unloadable like any
-/// definition). Its parser is the preset's environment composition (module docs).
+/// definition). Its parser is the preset's environment composition, which reads the
+/// rigid `\begin{name}` syntax ([`read_rigid_name_group`](crate::constructs::read_rigid_name_group)),
+/// resolves the environment's own definition, parses its declared arguments and its
+/// body ([`EnvironmentBodyParser`](crate::constructs::EnvironmentBodyParser)), and
+/// stages the environment node.
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,
 }

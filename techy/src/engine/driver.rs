@@ -70,8 +70,10 @@ use crate::token::{GroupRule, Token, TokenKind, TokenReader};
 
 use super::ParserSession;
 
-/// The Lang-provided parse-behavior object (see the module docs): policy, migrated
-/// parse-time hooks, the group descent-delta channel, and construct provision — all
+/// The Lang-provided parse-behavior object, grouping five concerns: the recovery
+/// policy, the parse-time hooks (command resolution, paragraph-break emission,
+/// diagnostic refinement, transition observation, event lowering), source
+/// resolution, the group descent-delta channel, and construct provision — all
 /// defaulted, so `impl ParseDriver<MyLang> for MyDriver {}` is a complete driver.
 ///
 /// Implementations are **stateless behavior objects**: `&self` everywhere, shared
@@ -193,7 +195,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     ///
     /// **Constraint:** the kind is staged with *no children*, so a callable-shaped
     /// kind must carry no argument regions and no slots — the builder's region-tiling
-    /// assert panics otherwise. (Structurally intrinsic: this hook has no
+    /// check rejects any such kind, and the staging site aborts with an
+    /// [`ImplementationError`](crate::constructs::ImplementationError).
+    /// (Structurally intrinsic: this hook has no
     /// session/builder and cannot stage children.)
     ///
     /// The default preserves the whitespace-as-chars invariant: a
@@ -409,9 +413,10 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// merely gets a uniform veto/wrap point (instrumentation, per-language parser
     /// substitution) that no per-spec override could provide.
     ///
-    /// The caller has already consumed the trigger token whole; see the
-    /// [`StdInvocationParser`](crate::constructs::StdInvocationParser) module docs for
-    /// the invocation-parser contract an implementation must uphold.
+    /// The caller has already consumed the trigger token whole; see
+    /// [`StdInvocationParser`](crate::constructs::StdInvocationParser)'s
+    /// documentation for the invocation-parser contract an implementation must
+    /// uphold.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, L>,

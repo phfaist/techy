@@ -225,7 +225,60 @@ left.
 
 ## M2 — findings
 
-(to be filled)
+**(a) "(module docs)" pointers — 24 rendered sites fixed, 0 remaining broken.**
+Central fix: the public `core::constructs` facade (techy/src/core/constructs.rs)
+now carries the three module-level contracts that public text claims live there
+(the two-tier ownership model; state threading / the caller applies deltas; the
+`Err`-means-abort error contract) — this makes the guide claims
+(construct-parsers.md 13–14 + 40–41, parsing-model.md 181 + 231 + 283) true and
+gives three constructs/mod.rs pointers a public target. The
+invocation-parsing contract (Contract/Arguments/Invocation syntax/Slots) moved
+verbatim from the private invocation_parser.rs `//!` docs onto
+`StdInvocationParser`'s own item docs (public); the four "StdInvocationParser's
+module docs" pointers (spec/callable.rs:104, constructs/mod.rs:799,
+engine/driver.rs:413, invocation_parser.rs itself) now say "documentation".
+Self-contained rewrites at: token/rules.rs:203, argument_parsers.rs:135,
+nodes_parser.rs:292, embellishments_parser.rs:69, environment_parser.rs:433,
+group_parser.rs:101 (+ the UnclosedGroup condition type now documents its
+recovery, honoring parsing.md's "each condition's page states its recovery"
+claim), tack_on_parser.rs:75+97, chars_group_parser.rs:63+96+103,
+latexlike/environments.rs:464, latexlike/input.rs:76+141, node/arguments.rs:93,
+node/builder.rs:249, engine/driver.rs:73 (now names all five driver concerns,
+matching custom-lang.md's claim), engine/mod.rs:327, source/source.rs:423.
+Sites found to be on non-rendered items and deliberately left: list_reader.rs:41,
+state_memo.rs:95, nodes_parser.rs recover_as_chars, environment_parser.rs
+finish_terminator, chars_group_parser.rs contents_delta + `//!`,
+node/arguments.rs `//!`, latexlike/environments.rs EnvironmentInvocationParser
+(private struct), engine/mod.rs private fields, extract.rs `struct Piece`
+(private; its "(7.8 decision)" residue is likewise non-rendered).
+
+**(b) dev-doc references — 7 rendered sites fixed, 0 remaining in rendered
+docs.** The five precondition-assert items (Token::new, skip_whitespace,
+Span::new, SourceSpan::new, SourcePos::new) now say "one of the crate's few
+deliberate panics (see the [crate-level Panics list](crate#panics))";
+StdTokenReader::move_to_pos keeps the plain rationale ("deliberately one
+validation point, at the consumption boundary"); NodeTreeBuilder's ext-minting
+note is self-contained ("ext population is the staging caller's choice — the
+builder never runs hooks", grounded in the same paragraph's hook-free
+statement). Three §dd- references remain in NON-rendered text only
+(spec/mod.rs:84 test fn, argument_parsers.rs pub(super) helper,
+nodes_parser.rs private fn) — developer-facing, verified absent from rendered
+HTML.
+
+**(c) footgun — both rendered sites fixed** (extract.rs parse_keyval →
+"a recurring source of user mistakes"; text_content.rs → "would give
+misleading answers"). node/slice.rs:209 is a `//` code comment (not rendered,
+left).
+
+**Accuracy fix found during (a)/(b)**: ParseDriver::make_paragraph_break_node
+claimed "the builder's region-tiling assert panics otherwise" — verified false
+(builder.add returns NodeBuildError; the staging site maps it to an
+ImplementationError abort — nodes_parser.rs stage(), panic-policy oracle
+agrees). Doc corrected to the real behavior.
+
+Gate after M2: cargo build clean; `cargo docs` zero warnings (two link paths
+qualified after the contract move); rendered-HTML grep: zero `§dd-`, all
+remaining "module docs" mentions target public pages.
 
 ## M3 — panic roster
 

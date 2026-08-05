@@ -75,7 +75,8 @@ struct Staged<L: Lang> {
 /// transform author writes the explicit two-line recipe (call
 /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) — via
 /// [`staged_children`](NodeTreeBuilder::staged_children) — then `add`), or supplies a
-/// bespoke value ([§dd-dr:ext-minting]).
+/// bespoke value (ext population is the staging caller's choice — the builder never
+/// runs hooks).
 ///
 /// # Contract (validated at the boundary — violations return [`NodeBuildError`])
 ///
@@ -245,8 +246,9 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
 
     /// Freeze everything reachable from `root` into a flat [`NodeTree`] (breadth-first:
     /// root at index 0, each node's children as one contiguous block), **resolving**
-    /// every callable's staged argument/slot regions into global node-index ranges (see
-    /// the module docs). Staged nodes not reachable from `root` are dropped. `Err`
+    /// every callable's staged argument/slot regions into global node-index ranges
+    /// (the two-phase region contract on [`ChildRegion`](super::ChildRegion)).
+    /// Staged nodes not reachable from `root` are dropped. `Err`
     /// means the staged input violated the contract's layout-time obligations (root
     /// staged and unclaimed; content parents inside their region's subtree).
     pub fn finish(self, root: BuildId) -> Result<NodeTree<L, A>, NodeBuildError> {

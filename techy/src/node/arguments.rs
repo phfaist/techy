@@ -90,7 +90,7 @@ pub enum ContentNodes {
 /// The child region of one provided argument or slot: the full syntactic extent
 /// (noise + content + delimiting syntax) and its designated content nodes.
 ///
-/// **Two-phase** (module docs): built by a parser in staging coordinates, resolved by
+/// **Two-phase**: built by a parser in staging coordinates, resolved by
 /// [`NodeTreeBuilder::finish`](super::NodeTreeBuilder::finish) into global node-index
 /// ranges. The read accessors ([`children`](ChildRegion::children),
 /// [`content_range`](ChildRegion::content_range),

@@ -72,8 +72,9 @@ use super::{Latexlike, LatexlikeLang};
 /// driver's [`SourceResolver`](crate::source::SourceResolver) and parses the
 /// content **at the invocation point, into the same tree** — recorded as an
 /// [`Attached`](SlotRole::Attached) slot (named `"attached"`) of the staged
-/// callable. Constructed by [`input_macro_spec`], **never preloaded** (see the
-/// module docs).
+/// callable. Constructed by [`input_macro_spec`], **never preloaded**: inclusion is
+/// an explicit embedder choice — an always-on `\input` under a driver with no
+/// source resolver would only diagnose every use.
 ///
 /// The node's own span is its invocation in the *includer's* source (`\input{…}`);
 /// only the attached slot's children live in the resolved source — a multi-source
@@ -137,8 +138,9 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
     attached_slot_ext: SlotExt<LLL>,
 }
 
-/// Create the preset's opt-in `\input` spec ([`InputMacroSpec`] — never
-/// preloaded; see the type and module docs).
+/// Create the preset's opt-in `\input` spec ([`InputMacroSpec`] — never preloaded:
+/// inclusion is an explicit embedder choice; the type's documentation carries the
+/// full contract).
 ///
 /// # The two mandatory choices
 ///

@@ -200,7 +200,8 @@ impl<L: Lang> TokenRules<L> {
     /// which flips the gates while the data stays in place.
     ///
     /// Deliberately a named constructor, not a `Default` impl: there is no privileged
-    /// "default language" here (see the module docs), and a struct-update
+    /// "default language" in the machinery (the familiar LaTeX values are the
+    /// latexlike preset's [`default_token_rules`](crate::latexlike::default_token_rules)), and a struct-update
     /// `..Default::default()` would silently zero future fields where the named
     /// constructor documents the all-empty intent.
     pub fn empty() -> TokenRules<L> {

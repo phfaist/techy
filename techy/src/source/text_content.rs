@@ -21,9 +21,10 @@ use super::span::Span;
 /// # Equality
 ///
 /// `TextContent` deliberately implements no `PartialEq`: logical-text equality of a
-/// `Spanned` value requires the source content, so a structural `==` would be a footgun
-/// (`Spanned(2..4)` vs `Owned("ab")` may denote identical text). Compare resolved `&str`s
-/// (via [`resolve`](TextContent::resolve) or node-level accessors) instead.
+/// `Spanned` value requires the source content, so a structural `==` would give
+/// misleading answers (`Spanned(2..4)` vs `Owned("ab")` may denote identical text).
+/// Compare resolved `&str`s (via [`resolve`](TextContent::resolve) or node-level
+/// accessors) instead.
 #[derive(Clone, Debug)]
 pub enum TextContent {
     /// A byte range into the carrying node's own source — zero-copy parser output.

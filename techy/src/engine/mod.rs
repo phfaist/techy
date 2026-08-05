@@ -323,8 +323,10 @@ impl<L: Lang> ParserSession<L> {
     /// channel that lets a group class change its interior's state (a math group
     /// setting the parsing mode). Sibling groups under one state repeat the identical
     /// derivation — the dominant state-cloning cost in deep documents — so the result
-    /// is memoized per `(base, rule)` (`Arc` identities; a dedicated session map —
-    /// see the `state_memo` module docs for why it cannot share the general memo).
+    /// is memoized per `(base, rule)` (`Arc` identities; a dedicated session map,
+    /// deliberately separate from the general derivation memo — sharing one map
+    /// would let a hand-built expecting-close delta collide with a driver-augmented
+    /// descent under the same key).
     ///
     /// The driver hook runs on memo **miss** only — sound because it is contractually
     /// a pure function of `(base, rule)`; a memoized hit substitutes its previous

@@ -132,7 +132,9 @@ pub struct ArgumentNoise<'s, L: Lang> {
     /// The first non-noise token, peeked and left unconsumed; its `pre_space` is *not*
     /// staged (the parser stages it via [`stage_pre_space`] once it commits to the
     /// argument being present). `None` when a tokenizer error sits at the position
-    /// (tolerant mode — see the module docs on recovery).
+    /// (tolerant mode): the error is neither consumed nor diagnosed by the argument
+    /// parser — it reports the argument absent, and the enclosing content loop
+    /// re-reads and recovers the token itself.
     pub next: Option<Token<'s, L>>,
 }
 

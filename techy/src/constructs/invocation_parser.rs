@@ -1,72 +1,8 @@
 //! [`StdInvocationParser`]: the default declarative invocation parser, returned by
 //! [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
 //! (pylatexenc's `LatexMacroCallParser`-family, behind one factory).
-//!
-//! # Contract
-//!
-//! Constructed around the resolved [`Invocation`], which travels inside the parser
-//! instance. The **caller consumes the
-//! trigger token whole** — `move_past(token, true)`, syntactic post-space included —
-//! before running the parser (the dispatch-loop arm that peeked it, mirroring the
-//! [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
-//! since no invocation parser can forget to consume its trigger). The token's pre-space
-//! is likewise the caller's (housed as sibling content). A takeover parser that needs
-//! the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself,
-//! positionally — `move_to_pos(token.post_space().start())`: the stored trigger token
-//! cannot be handed back to the reader through the uniform `parse` signature.
-//!
-//! `cx.state` is the invocation's **base** state: the caller resolves any
-//! [`InvocationChildState`](super::InvocationChildState) policy first and scopes the
-//! state structurally (swap/revert).
-//!
-//! # Arguments
-//!
-//! The parser iterates the spec's [`ArgumentSpec`](crate::spec::ArgumentSpec)s in
-//! invocation order, running each argument's [`ArgumentParser`] under the argument's
-//! own state — the spec's `parsing_state_delta` stacked on the invocation's base
-//! (session-mediated, so the transition is observed), reverted structurally after; the
-//! argument's whole extent, noise scan included, runs under it. Each provided argument
-//! contributes its region's nodes to the child list and a staged
-//! [`ChildRegion`](crate::node::ChildRegion) to the [`ParsedArguments`] record; an
-//! absent argument keeps its entry (spec included — the record is self-describing) and
-//! contributes nothing. Missing-mandatory recovery is the argument parser's own
-//! detection-site business: by the time `parse_argument` reports absent, any
-//! diagnostic is already recorded.
-//!
-//! The node's span runs from the trigger token through the last child (the children
-//! block is span-contiguous by construction: each region starts where the previous
-//! ended). Argument parsers return no after-effect deltas (an argument scopes no state
-//! beyond its own extent) and neither does this parser.
-//!
-//! # Invocation syntax
-//!
-//! [`CallableData::invocation_syntax`] records the language's trigger-spelling
-//! facts, minted from the [`Invocation`] via the standard constructor
-//! ([`FromInvocation`](super::FromInvocation)) inside
-//! [`stage_invocation`](ParseContext::stage_invocation). The latexlike payload
-//! records e.g. **exactly the trigger token's syntactic post-space** — the
-//! name-terminating whitespace the tokenizer already claimed as invocation syntax
-//! (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed:
-//! whitespace after a single-character command (`\& b`) or after a final argument
-//! is ordinary sibling/region content, exactly as TeX treats it. With arguments
-//! present that recorded post-space sits **between** the name and the first
-//! argument region — a sub-range of the node's span, no longer necessarily
-//! trailing (whitespace invariant 3).
-//!
-//! # Slots
-//!
-//! `StdInvocationParser` is macro-shaped: it parses no body and records empty
-//! [`ParsedSlots`]. Slots are record-level vocabulary with no spec-side declaration
-//! (there is nothing a spec could declare that this
-//! parser wouldn't parse): body content is inseparable from terminator syntax and from
-//! invocation facts like the `\end{name}` back-reference, so a body-bearing spec
-//! overrides
-//! [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) with a
-//! composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser) and
-//! mints its own [`ParsedSlot`](crate::node::ParsedSlot) records (the
-//! argument half is shared as [`parse_declared_arguments`]) — and says "I take
-//! material" via [`requires_content`](crate::spec::CallableSpec::requires_content), the
-//! expression-position guard's channel.
+//! The full invocation-parsing contract — what every parser returned by that factory
+//! runs under — lives on [`StdInvocationParser`]'s own documentation.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -150,8 +86,80 @@ pub fn parse_declared_arguments<L: Lang>(
     Ok((children, arguments))
 }
 
-/// The standard declarative invocation parser: a tier-2 temporary constructed per
-/// invocation by the spec's factory (see the module docs for the contract).
+/// The standard declarative invocation parser — the default returned by
+/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+/// — and the carrier of the invocation-parsing contract, which any takeover
+/// parser supplied by an overridden factory runs under too. A tier-2 temporary
+/// (see [`core::constructs`](crate::core::constructs)), constructed per
+/// invocation by the spec's factory.
+///
+/// # Contract
+///
+/// Constructed around the resolved [`Invocation`], which travels inside the parser
+/// instance. The **caller consumes the
+/// trigger token whole** — `move_past(token, true)`, syntactic post-space included —
+/// before running the parser (the dispatch-loop arm that peeked it, mirroring the
+/// [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
+/// since no invocation parser can forget to consume its trigger). The token's pre-space
+/// is likewise the caller's (housed as sibling content). A takeover parser that needs
+/// the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself,
+/// positionally — `move_to_pos(token.post_space().start())`: the stored trigger token
+/// cannot be handed back to the reader through the uniform `parse` signature.
+///
+/// `cx.state` is the invocation's **base** state: the caller resolves any
+/// [`InvocationChildState`](super::InvocationChildState) policy first and scopes the
+/// state structurally (swap/revert).
+///
+/// # Arguments
+///
+/// The parser iterates the spec's [`ArgumentSpec`](crate::spec::ArgumentSpec)s in
+/// invocation order, running each argument's
+/// [`ArgumentParser`](crate::spec::ArgumentParser) under the argument's
+/// own state — the spec's `parsing_state_delta` stacked on the invocation's base
+/// (session-mediated, so the transition is observed), reverted structurally after; the
+/// argument's whole extent, noise scan included, runs under it. Each provided argument
+/// contributes its region's nodes to the child list and a staged
+/// [`ChildRegion`](crate::node::ChildRegion) to the [`ParsedArguments`] record; an
+/// absent argument keeps its entry (spec included — the record is self-describing) and
+/// contributes nothing. Missing-mandatory recovery is the argument parser's own
+/// detection-site business: by the time `parse_argument` reports absent, any
+/// diagnostic is already recorded.
+///
+/// The node's span runs from the trigger token through the last child (the children
+/// block is span-contiguous by construction: each region starts where the previous
+/// ended). Argument parsers return no after-effect deltas (an argument scopes no state
+/// beyond its own extent) and neither does this parser.
+///
+/// # Invocation syntax
+///
+/// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)
+/// records the language's trigger-spelling
+/// facts, minted from the [`Invocation`] via the standard constructor
+/// ([`FromInvocation`](super::FromInvocation)) inside
+/// [`stage_invocation`](ParseContext::stage_invocation). The latexlike payload
+/// records e.g. **exactly the trigger token's syntactic post-space** — the
+/// name-terminating whitespace the tokenizer already claimed as invocation syntax
+/// (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed:
+/// whitespace after a single-character command (`\& b`) or after a final argument
+/// is ordinary sibling/region content, exactly as TeX treats it. With arguments
+/// present that recorded post-space sits **between** the name and the first
+/// argument region — a sub-range of the node's span, no longer necessarily
+/// trailing (whitespace invariant 3).
+///
+/// # Slots
+///
+/// `StdInvocationParser` is macro-shaped: it parses no body and records empty
+/// [`ParsedSlots`]. Slots are record-level vocabulary with no spec-side declaration
+/// (there is nothing a spec could declare that this
+/// parser wouldn't parse): body content is inseparable from terminator syntax and from
+/// invocation facts like the `\end{name}` back-reference, so a body-bearing spec
+/// overrides
+/// [`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser) with a
+/// composition that drives [`EnvironmentBodyParser`](super::EnvironmentBodyParser) and
+/// mints its own [`ParsedSlot`](crate::node::ParsedSlot) records (the
+/// argument half is shared as [`parse_declared_arguments`]) — and says "I take
+/// material" via [`requires_content`](crate::spec::CallableSpec::requires_content), the
+/// expression-position guard's channel.
 pub struct StdInvocationParser<'a, 's, L: Lang> {
     invocation: Invocation<'a, 's, L>,
 }

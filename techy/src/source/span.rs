@@ -25,8 +25,8 @@ pub struct Span {
 
 impl Span {
     /// Create a span covering `start..end`. `start <= end` is the caller's contract:
-    /// a violation panics, in all builds (an individually approved panic-policy
-    /// exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
+    /// a violation panics, in all builds — one of the crate's few deliberate panics
+    /// (see the [crate-level Panics list](crate#panics)).
     #[inline]
     pub fn new(start: usize, end: usize) -> Span {
         assert!(start <= end, "span start {} is after end {}", start, end);

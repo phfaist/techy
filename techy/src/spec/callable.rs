@@ -101,7 +101,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     ///
     /// When the parser runs, the trigger token has already been consumed whole by the
     /// dispatching arm; the parser's `cx.state` is the invocation's base state (see
-    /// [`StdInvocationParser`]'s module docs for the full contract, including the
+    /// [`StdInvocationParser`]'s documentation for the full contract, including the
     /// post-space rule).
     ///
     /// The default returns the declarative [`StdInvocationParser`]. **Overriding this

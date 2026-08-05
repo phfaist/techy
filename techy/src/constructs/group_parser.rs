@@ -56,6 +56,13 @@ use super::{ConstructParser, ConstructParserResult, FromInvocation, ParseContext
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
 /// by [`GroupParser`], which defines the condition next to its detection site.
+///
+/// Tolerant recovery, per [`found`](UnclosedGroup::found) situation: at end of input,
+/// the group closes with an empty recorded `close`
+/// ([`GroupData`](crate::node::GroupData)'s documented recovery value); on a close
+/// delimiter of a different pairing, the group closes **without consuming** the stray
+/// token, which is left for an enclosing level to claim (or for the root, which
+/// diagnoses and skips it). Strict parses abort instead.
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.groups.unclosed-group")]
@@ -97,8 +104,13 @@ impl fmt::Display for UnclosedGroup {
     }
 }
 
-/// The group construct parser: a tier-2 temporary, constructed per group descent from
-/// the opening token's facts (see the module docs for the contract).
+/// The group construct parser: a tier-2 temporary, constructed per group descent
+/// from the opening token's facts (its span and resolved
+/// [`GroupRule`](crate::token::GroupRule)). The caller has already consumed the
+/// opening token; `cx.state` is the interior's **base** state, from which the parser
+/// derives the actual interior state (base plus the expected close delimiter from
+/// the opening rule), scoped structurally over the descent. Recovery for a group
+/// that never closes is documented on [`UnclosedGroup`].
 pub struct GroupParser<'p, L: Lang> {
     /// The opening delimiter's span (the consumed `GroupOpen` token's span).
     open_span: Span,
