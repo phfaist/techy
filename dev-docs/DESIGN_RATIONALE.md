@@ -5843,6 +5843,16 @@ freeze is hard and breaking changes need migration paths and dependent coordinat
 *(The per-item Tier-C rulings this rubric's consequence clause called for are
 complete — [§dd-dr:public-visibility-sweep].)*
 
+*(Applied — API-review Phase 3 S10: the guards are in place. `missing_docs` is a
+workspace `deny` lint (promoted at zero warnings). The cargo-semver-checks baseline
+is realized the unpublished-crate way — a git revision, not a registry version:
+`scripts/check_semver.sh` runs `cargo semver-checks check-release -p techy
+--baseline-rev api-baseline`, where the `api-baseline` tag is pinned to the commit
+where Phase 3 landed and is re-pinned deliberately at each version bump; the script
+clears `RUSTDOCFLAGS` because the workspace's rustdoc-header injection uses a
+root-relative path that scratch builds cannot resolve. Verified against
+cargo-semver-checks 0.50.0 — 196 checks pass on the landed surface.)*
+
 #### The public-visibility sweep: pub-vs-pub(crate) rulings for the walkthrough-untouched items [§dd-dr:public-visibility-sweep]
 
 Status: DECIDED (user, API-review Tier-C session; completes the per-item ruling

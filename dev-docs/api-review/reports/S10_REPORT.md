@@ -249,6 +249,37 @@ LatexlikeDriver<LLL>` (latexlike/driver.rs:393) is exactly **7 hooks with
 one-line bodies each** — the pillar-delegation doctrine holds in the shipped
 driver.
 
+## M5 — missing_docs → deny (COMPLETE)
+
+Workspace lint flipped to `deny` (Cargo.toml comment updated; both member
+crates inherit via `[lints] workspace = true`). Gates under deny: `cargo
+build` 0 warnings; full `cargo test` green (counts unchanged); `rm -rf
+target/doc && cargo docs` clean.
+
+## M6 — cargo-semver-checks baseline (COMPLETE)
+
+- Tool installed in this environment: cargo-semver-checks 0.50.0 (`cargo
+  install cargo-semver-checks --locked`; the sandboxed install failed on the
+  `~/.cargo` registry cache write and was retried unsandboxed).
+- Pipeline proven end-to-end on the stage tip (self-comparison,
+  `--baseline-rev HEAD`): **196 checks pass, 58 skip, "no semver update
+  required"**. First run surfaced a real wrinkle: the workspace's
+  `.cargo/config.toml` injects `docs/rustdoc-header.html` via root-relative
+  `rustdocflags`, which does not resolve in semver-checks' scratch builds —
+  the guard run clears `RUSTDOCFLAGS` (doc-presentation only; no bearing on
+  the compared surface).
+- Durable guard committed: **`scripts/check_semver.sh`** — runs
+  `cargo semver-checks check-release -p techy --baseline-rev api-baseline`
+  (override via `BASELINE_REV=<rev>`).
+- Baseline realization for an unpublished crate (**delegated decision
+  D-plan-4**): the baseline is a **git tag `api-baseline`**, to be pinned by
+  the supervising session/user on the api-review/main commit where Phase 3
+  lands (a tag minted from this stage branch would point at a pre-merge
+  commit — deliberately NOT created here); re-pinned deliberately at each
+  0.x version bump per the rubric's discipline. Procedure documented in the
+  script header + the [§dd-dr:stability-rubric] applied note (added this
+  stage).
+
 ## Deviation log
 
 - **D-plan-1 (delegated realization)**: the C2 residue assertion is realized
@@ -274,6 +305,11 @@ driver.
   one validation regime), and the chars-run contiguity guards (silently-wrong
   spans). Both use the established channels (Custom token error /
   `cx.implementation_error`).
+- **D-plan-4 (delegated realization)**: the semver baseline for the
+  unpublished crate = the `api-baseline` git tag pinned at the Phase-3
+  landing commit (created by the supervisor/user at merge, not from this
+  branch), consumed by `scripts/check_semver.sh` via `--baseline-rev`. See
+  the M6 section.
 
 ## Handoff notes
 
