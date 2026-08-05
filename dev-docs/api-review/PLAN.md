@@ -136,9 +136,11 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   + FS-trait option (T4 session); SimpleLang role + on-ramp cliffs F10 (T3 session);
   sugar batch (wishlist; distribute); T5 session: transformation-infra scope, FFI-driven
   API needs (owned handles vs lifetimes), reconstruction guarantees.
-- [ ] **Phase 3 — Apply + harden** (agents in worktrees, merged locally): apply rulings;
-  guards: cargo-semver-checks baseline, missing_docs → deny (already at zero warnings).
-  **IN PROGRESS 2026-08-03** — stage plan + status: PHASE3_PLAN.md (S1–S10).
+- [x] **Phase 3 — Apply + harden** (done 2026-08-05; S1–S10 all merged): all
+  2a/2b rulings applied; guards live (missing_docs deny; cargo-semver-checks
+  vs the movable `api-baseline` branch); full audit exact. Stage plan +
+  status + per-stage logs: PHASE3_PLAN.md; reports under
+  dev-docs/api-review/reports/.
 - [ ] **Phase 4 — Guides** (agent-drafted, user-reviewed), written from public docs only
   (needing source = doc gap):
   - Human guide: docs/ chapters + per-tier cookbook; **framework-builder chapter** incl.
@@ -662,9 +664,11 @@ projected FLM probe) is at
   [§dd-dr:enclosing-state-stack]). Phase 3 execution state + resume protocol:
   PHASE3_PLAN.md (S1–S4 merged as of this entry; reviewer-verified, deviations
   user-confirmed per its stage log).
-- (pending) **NEXT: Phase 3 — apply + harden** (all 2b sessions ruled; topology
-  and all placements closed). **Phase 3 checklist additions from the Tier-C
-  session**: `NodeData` + `check_tree_invariants` → pub(crate) (wrapper shape
+- (2026-08-03 checklist, retained for the record — every item below was
+  audited DONE or consciously ROUTED in the S10 sweep, table in
+  S10_REPORT.md) **Phase 3 — apply + harden** (all 2b sessions ruled;
+  topology and all placements closed). **Phase 3 checklist additions from
+  the Tier-C session**: `NodeData` + `check_tree_invariants` → pub(crate) (wrapper shape
   above; violation detail must keep panic messages informative); delete
   `NoResolver` (rides the T4 resolver-move application); rename free
   `resolve_source` → `resolve_source_reference`; `StdParseDriver` reshape per
@@ -693,3 +697,31 @@ projected FLM probe) is at
   `Attached`-scoping; A8 extract input-genericity rides the annotation
   application; the `\text` recipe forbidden_chars fix (T1/T2) and all prior
   application riders as logged.
+- 2026-08-05 (user sign-offs per stage; supervising session): **Phase 3 —
+  apply + harden COMPLETE** (S1–S10 all merged into api-review; landing
+  commit 8ed2884; stage log + per-stage detail in PHASE3_PLAN.md /
+  reports/S<N>_REPORT.md). S7 transform (restage + extract annotations,
+  689→751-test trajectory begins), S8 visit + recompose + the R15 oracle
+  suite (reemit == input across strict/tolerant/multi-source matrices),
+  S9 preset definitions + consumer polish (`"_builtin"` slim package,
+  minidefs/minilatex, F5 trap fixes, sugar), S10 hardening closed the
+  phase: C2 residue assertion PASSED (25-line Lang delegation residue on
+  the FLM projection, 7 driver delegation one-liners — within the ruled
+  ~30/~12 envelopes); panic-policy sweep complete per [§dd-dr:panic-policy]
+  + the S5 rider (all outer-layer-input guards now Err implementation-error
+  paths or recorded staged-id degradations, +11 tests; value-constructor
+  debug asserts kept under the recorded skip_whitespace pattern — site
+  table in S10_REPORT; D-plan-2 confirmed at sign-off: document input can
+  never reach them, release builds cannot panic there under trait
+  customization); `missing_docs` promoted to workspace deny;
+  cargo-semver-checks baseline realized as scripts/check_semver.sh against
+  the **movable `api-baseline` git branch** (user ruling at sign-off:
+  branch over tag; minted on the landing commit, guard proven — 196 checks
+  pass); full public-surface audit exact (283 item pages, zero duplicate
+  paths, every item at its ruled home); all-riders sweep: every Phase 3
+  obligation DONE or consciously ROUTED to Phase 4; superseded-names sweep
+  clean. The soft freeze of [§dd-dr:stability-rubric] is IN FORCE from this
+  landing. Residual follow-up noted at sign-off (pre-existing, documented,
+  not S10 scope): `SourceSpan::content`'s implicit indexing panic —
+  candidate for the panic-policy rule-3 approved list or a `get` companion.
+  **NEXT: Phase 4 — guides.**

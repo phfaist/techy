@@ -282,7 +282,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   `argument_specs_named`; `Diagnostics::sorted_by_position()`. T1T2 §E1b/E2/E6.
 - Acceptance: specials/ligature tests load minilatex; trap-fix tests.
 
-### S10 — Hardening, guards, audit  [status: pending]
+### S10 — Hardening, guards, audit  [status: DONE — merged 2026-08-05; PHASE 3 COMPLETE]
 
 - C2 residue assertion (Lang ≤ ~30 + driver ≤ ~12 lines acceptance check).
 - Panic-policy sweep (S5 design-revision rider): `debug_assert!` guards on
@@ -333,9 +333,11 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
    checklist additions" consolidated in PLAN.md's decision log (NEXT bullet),
    plus per-stage riders recorded in the stage sections and reports. S10 audits
    ALL of them.
-6. NEXT ACTION when resuming: check the S6 stage-log lines below — if S6 is in
-   flight, finish its cycle first (see stage log). Otherwise launch the next
-   pending stage per its § section.
+6. NEXT ACTION when resuming: **Phase 3 is COMPLETE** (S1–S10 all merged,
+   2026-08-05). NEXT = Phase 4 (guides) per PLAN.md's Phase 4 section. The
+   soft freeze is in force: `scripts/check_semver.sh` guards the surface
+   against the movable `api-baseline` branch (moved deliberately at each
+   version bump).
 
 ## Stage log
 
@@ -683,3 +685,27 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   (api-baseline tag = supervisor ACTION at merge). D-plan-1..4:
   3 FORCED/DEFENSIBLE-clean, D-plan-3 effectively ruled scope. No
   escalation candidates. Fix round launched.
+- 2026-08-05: S10 fix round landed (69bdddf: chars_group_parser staged-id
+  degradation through the shared helper + foreign-BuildId pin test — 751 lib
+  tests; record accuracy restored; F1 claim scoped per the S3 resolution;
+  extract citations corrected). Gates re-verified green at the fixed tip.
+- 2026-08-05 (user): **S10 signed off, with two sign-off rulings**:
+  (1) D-plan-2 CONFIRMED after supervisor verification — no remaining
+  debug_assert is reachable from document input in any build; release builds
+  cannot panic at any of these sites under trait customization (documented
+  degradations + downstream implementation-error funnels); debug builds
+  intentionally assert on documented-contract violations per the
+  [§dd-dr:panic-policy] author-aid pattern. Residual follow-up noted (NOT
+  S10 scope, pre-existing + documented): `SourceSpan::content`'s implicit
+  indexing panic — candidate for the rule-3 approved list or a `get`
+  companion. (2) **D-plan-4 AMENDED: the semver baseline is a movable git
+  BRANCH `api-baseline`, not a tag** (moved with `git branch -f` at each
+  deliberate version bump; script/records reworded on the stage branch —
+  commit 8ed2884 post-rebase). **Merge + closure authorized.**
+- 2026-08-05: **S10 merged — PHASE 3 COMPLETE.** Landing commit 8ed2884 on
+  api-review (10 stage commits); 751 lib + 30 acceptance + 21 oracle + 8 +
+  1 + 36 doc tests green on the merged tree; **`api-baseline` branch minted
+  on the landing commit** and the guard proven end-to-end against it
+  (196 checks pass, "no semver update required"). Soft freeze in force per
+  [§dd-dr:stability-rubric]. PLAN.md Phase 3 checkbox + decision-log entry
+  applied. NEXT: Phase 4 — guides.
