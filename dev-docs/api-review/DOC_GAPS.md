@@ -73,10 +73,15 @@ never by drafting-agent guesswork. Entry format:
 - Why it matters: the introduction is the first page readers meet; its
   claims should each have a rustdoc sentence behind them, and embedders
   choosing techy for browser/plugin targets will act on this one.
-- Status: OPEN (narrowed) — build half RESOLVED at the G1 review:
-  `cargo build --target wasm32-unknown-unknown -p techy` verified clean in the
-  stage worktree. Remaining action: the crate-rustdoc WebAssembly mention
-  (G5).
+- Status: RESOLVED — at G5. Build re-verified in the G5 stage worktree:
+  `cargo build --target wasm32-unknown-unknown -p techy` clean (exit 0; the
+  target is installed there), confirming the G1-review verification. The
+  crate-level `no_std` rustdoc section (techy/src/lib.rs) now names
+  WebAssembly: "In particular the crate builds for WebAssembly targets such
+  as `wasm32-unknown-unknown`, where the host supplies all input." — the
+  same facts introduction.md claims (atomics requirement and no-input/output
+  were already stated in that section), so the introduction's "Where techy
+  runs" claim has its direct documentation anchor.
 
 ## 3. [GAP] No crate-level rustdoc sentence anchors the "never panics on document input" contract
 

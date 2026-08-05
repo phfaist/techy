@@ -13,9 +13,11 @@
 //! ## no_std
 //!
 //! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
-//! as `Arc`, so the target must support atomics). Consequently the library performs no I/O
-//! of its own — content lookup for `\input`-like constructs is delegated to the embedder via
-//! the [`SourceResolver`](source::SourceResolver) trait.
+//! as `Arc`, so the target must support atomics). Consequently the library performs no
+//! input/output of its own — content lookup for `\input`-like constructs is delegated to the
+//! embedder via the [`SourceResolver`](source::SourceResolver) trait. In particular the
+//! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
+//! supplies all input.
 //!
 //! ## The public modules
 //!

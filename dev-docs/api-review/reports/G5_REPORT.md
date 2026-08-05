@@ -205,7 +205,18 @@ merge). Commit.
 
 Gates run at every milestone that touches techy/src or docs/.
 
-## M1 — DOC_GAPS #2 (fills in after execution)
+## M1 — DOC_GAPS #2: DONE
+
+- `cargo build --target wasm32-unknown-unknown -p techy`: PASS (exit 0,
+  clean finish; target installed in this worktree).
+- techy/src/lib.rs `## no_std` section: one WebAssembly sentence appended
+  ("In particular the crate builds for WebAssembly targets such as
+  `wasm32-unknown-unknown`, where the host supplies all input."), wording
+  aligned with introduction.md's "Where techy runs" paragraph; also
+  "no I/O" → "no input/output" in the same sentence I extended (acronym
+  rule alignment; introduction.md already spells it out).
+- DOC_GAPS #2 marked RESOLVED with the verification trail.
+- Gates: see gate table in M5 (run per milestone; all green at M1).
 
 ## M2 — DOC_GAPS #3 (fills in after execution)
 
