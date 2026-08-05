@@ -75,19 +75,16 @@ pub struct EmbellishmentsArgumentParser {
 
 impl EmbellishmentsArgumentParser {
     /// An embellishments argument over the given markers (e.g. `["^", "_"]`; xparse's
-    /// `e{^_}`). Markers must be non-empty; the list must be non-empty. Multi-character
+    /// `e{^_}`). Markers must be non-empty; the list must be non-empty (violations are
+    /// reported as implementation errors when the parser runs). Multi-character
     /// markers are allowed and win over shorter alternatives at the same position
     /// (longest match).
     pub fn new(
         markers: impl IntoIterator<Item = impl Into<Box<str>>>,
     ) -> EmbellishmentsArgumentParser {
-        let markers: Vec<Box<str>> = markers.into_iter().map(Into::into).collect();
-        debug_assert!(!markers.is_empty(), "an embellishments argument needs markers");
-        debug_assert!(
-            markers.iter().all(|marker| !marker.is_empty()),
-            "embellishment markers need at least one character"
-        );
-        EmbellishmentsArgumentParser { markers }
+        EmbellishmentsArgumentParser {
+            markers: markers.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -101,6 +98,20 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
+        // Spec-author contract, validated where the parser runs
+        // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
+        if self.markers.is_empty() {
+            return Err(cx.implementation_error(
+                "EmbellishmentsArgumentParser::new needs at least one marker",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
+        if self.markers.iter().any(|marker| marker.is_empty()) {
+            return Err(cx.implementation_error(
+                "EmbellishmentsArgumentParser::new needs non-empty markers",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
         let mut nodes = Vec::new();
         let mut used = alloc::vec![false; self.markers.len()];
         let mut content_start: Option<u32> = None;
@@ -283,7 +294,7 @@ mod tests {
     use crate::node::{check_tree_invariants, NodeRef};
     use crate::scopes::Package;
     use crate::state::ParsingState;
-    use crate::error::Recovery;
+    use crate::error::{DiagnosticInfo, Recovery};
     use crate::latexlike::LatexlikeDriver;
     use alloc::string::ToString;
     use alloc::vec;
@@ -382,5 +393,19 @@ mod tests {
         let wrapper = m.argument_content_nodes(0).unwrap().first().unwrap();
         assert_eq!(wrapper.child(0).unwrap().chars(), Some("2"));
         assert_eq!(result.tree.root().child(1).unwrap().chars(), Some(" rest"));
+    }
+
+    // --- spec-author contract violations are implementation errors ([§dd-dr:panic-policy]) --
+
+    #[test]
+    fn an_empty_marker_list_is_an_implementation_error() {
+        let err = language(&[]).parse(r"\m x").unwrap_err();
+        assert_eq!(err.identifier(), super::super::ImplementationError::IDENTIFIER);
+    }
+
+    #[test]
+    fn an_empty_marker_is_an_implementation_error() {
+        let err = language(&["^", ""]).parse(r"\m^2").unwrap_err();
+        assert_eq!(err.identifier(), super::super::ImplementationError::IDENTIFIER);
     }
 }

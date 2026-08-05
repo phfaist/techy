@@ -15,8 +15,11 @@
 //! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 
+use alloc::boxed::Box;
+use alloc::format;
 use alloc::sync::Arc;
 
+use crate::constructs::ImplementationError;
 use crate::source::Span;
 use crate::state::{Lang, ParsingState};
 
@@ -174,10 +177,11 @@ impl<'s> StdTokenReader<'s> {
         self.pos >= self.content.len()
     }
 
-    /// Move to an absolute byte position (must lie on a `char` boundary).
+    /// Move to an absolute byte position (must lie on a `char` boundary, at most the
+    /// content's length). A violating position is not diagnosed here — the next
+    /// [`peek`](TokenReader::peek) validates it and reports an implementation error
+    /// ([§dd-dr:panic-policy]: one validation point, at the consumption boundary).
     pub fn move_to_pos(&mut self, pos: usize) {
-        debug_assert!(pos <= self.content.len(), "position {} beyond content end", pos);
-        debug_assert!(self.content.is_char_boundary(pos), "position {} not on char boundary", pos);
         self.pos = pos;
     }
 
@@ -190,6 +194,24 @@ impl<'s> StdTokenReader<'s> {
         let s = self.content;
         let rules = state.rules();
         let start = self.pos;
+
+        // The position was set through outer-layer hands (`move_to_pos` serves
+        // custom recoveries' `resume_pos` and argument rewinds; `move_past` accepts
+        // caller-held tokens), so it is validated at this single consumption
+        // boundary ([§dd-dr:panic-policy]): an out-of-bounds or non-boundary
+        // position aborts the read instead of panicking in the scanners below.
+        if s.get(start..).is_none() {
+            return Err(TokenError::new(
+                TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
+                    "token reader position {} is out of bounds or not a char \
+                     boundary (content length {})",
+                    start,
+                    s.len()
+                )))),
+                Span::empty(start.min(s.len())),
+                None,
+            ));
+        }
 
         let ws_end = skip_whitespace(s, start, rules);
         let pre_space = Span::new(start, ws_end);
@@ -227,13 +249,25 @@ impl<'s> StdTokenReader<'s> {
         if state.trigger_chars().may_start(c) {
             if let Some(m) = L::scan_specials(state, s, pos)? {
                 // A malformed `end` from the hook would yield a zero-width token (the
-                // dispatch loop would never advance) or a span that panics when sliced.
-                debug_assert!(
-                    m.end > pos && m.end <= s.len() && s.is_char_boundary(m.end),
-                    "scan_specials returned an invalid match end {} at pos {}",
-                    m.end,
-                    pos
-                );
+                // dispatch loop would never advance) or a span that panics when
+                // sliced. The hook is outer-layer code, so the contract is validated,
+                // not debug-asserted ([§dd-dr:panic-policy]); no recovery — an
+                // implementation bug aborts even under tolerant recovery.
+                if !(m.end > pos && m.end <= s.len() && s.is_char_boundary(m.end)) {
+                    return Err(TokenError::new(
+                        TokenErrorKind::Custom(Box::new(ImplementationError::new(
+                            format!(
+                                "Lang::scan_specials returned an invalid match end \
+                                 {} for a match at {} (content length {})",
+                                m.end,
+                                pos,
+                                s.len()
+                            ),
+                        ))),
+                        Span::empty(pos),
+                        None,
+                    ));
+                }
                 return Ok(Token::new(
                     TokenKind::Specials {
                         callable_type: m.callable_type,
@@ -472,6 +506,7 @@ impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::DiagnosticInfo;
     use crate::scopes::ScopeStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
@@ -1300,6 +1335,95 @@ mod tests {
         let mut tr = StdTokenReader::new("-x");
         let st = specials_state(latex_rules());
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('-'));
+    }
+
+    // --- outer-layer contract violations are reported, never panicking or hanging
+    // --- ([§dd-dr:panic-policy]) ----------------------------------------------------------
+
+    /// A lang whose scan hook violates the match-end contract: a zero-width match
+    /// (`end == pos`) that would hang the dispatch loop if the reader emitted it.
+    #[derive(Debug, Clone, Copy)]
+    struct BadEndLang;
+    impl Lang for BadEndLang {
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = crate::engine::StdParseDriver;
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("~".into())
+        }
+        fn scan_specials<'s>(
+            _state: &ParsingState<Self>,
+            content: &'s str,
+            pos: usize,
+        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            Ok(Some(SpecialsMatch {
+                end: pos, // contract violation: a match must advance
+                callable_type: 7,
+                name: &content[pos..pos],
+                spec: Arc::new(BadEndStubSpec),
+            }))
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+
+    #[derive(Debug)]
+    struct BadEndStubSpec;
+    impl CallableSpec<BadEndLang> for BadEndStubSpec {}
+
+    #[test]
+    fn scan_specials_invalid_match_end_is_an_unrecoverable_implementation_error() {
+        let mut tr = StdTokenReader::new("~x");
+        let rules: TokenRules<BadEndLang> = latex_rules();
+        let st = Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }));
+        let err = TokenReader::peek(&mut tr, &st).unwrap_err();
+        match err.kind() {
+            TokenErrorKind::Custom(data) => assert_eq!(
+                data.identifier(),
+                crate::constructs::ImplementationError::IDENTIFIER
+            ),
+            other => panic!("expected a Custom implementation error, got {:?}", other),
+        }
+        // No recovery: an implementation bug aborts even under tolerant recovery.
+        assert!(err.into_recovery().is_none());
+    }
+
+    #[test]
+    fn invalid_reader_position_is_an_unrecoverable_implementation_error_at_peek() {
+        let st = state(latex_rules());
+
+        // Out of bounds (`move_to_pos` serves outer-layer resume positions, so the
+        // violation is reported at the next read, not panicked).
+        let mut tr = StdTokenReader::new("ab");
+        tr.move_to_pos(5);
+        let err = TokenReader::peek(&mut tr, &st).unwrap_err();
+        assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
+            if data.identifier() == crate::constructs::ImplementationError::IDENTIFIER));
+        assert!(err.into_recovery().is_none());
+
+        // Not a char boundary.
+        let mut tr = StdTokenReader::new("é");
+        tr.move_to_pos(1);
+        let err = TokenReader::peek(&mut tr, &st).unwrap_err();
+        assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
+            if data.identifier() == crate::constructs::ImplementationError::IDENTIFIER));
     }
 
     #[test]

@@ -544,12 +544,12 @@ impl<L: Lang> GroupArgumentParser<L> {
     /// (pylatexenc's `LatexDelimitedMultiDelimGroupParser`, the `AnyDelimited` code):
     /// whichever pair opens at the position is the argument's delimiters; the contents
     /// keep only that pair (see the type docs). Expression fallback off. Must be
-    /// non-empty; ties between same-spelling opens go to the first listed rule.
+    /// non-empty (an empty rule set is reported as an implementation error when the
+    /// parser runs); ties between same-spelling opens go to the first listed rule.
     pub fn any_of(
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> GroupArgumentParser<L> {
         let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
-        debug_assert!(!rules.is_empty(), "a delimited argument needs at least one rule");
         GroupArgumentParser { form: GroupArgumentForm::Rules(rules), expression_fallback: false }
     }
 
@@ -571,6 +571,14 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
+        // Spec-author contract, validated where the parser runs
+        // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
+        if matches!(&self.form, GroupArgumentForm::Rules(rules) if rules.is_empty()) {
+            return Err(cx.implementation_error(
+                "GroupArgumentParser::any_of needs at least one delimiter rule",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
         let mut noise = scan_argument_noise(cx)?;
 
         match &self.form {
@@ -661,10 +669,13 @@ pub(super) fn missing_mandatory<L: Lang>(
     Ok(None)
 }
 
-/// The number of children of a staged node (builder read-back).
+/// The number of children of a staged node (builder read-back). The id comes from a
+/// driver-factory parse, i.e. through outer-layer hands: a bogus id degrades to a
+/// zero-child answer rather than panicking — it still lands in the argument's node
+/// region, where `builder.add` diagnoses it ([§dd-dr:panic-policy] staged-id rule).
 fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32 {
     let staged = cx.staged_nodes();
-    let view = staged.get(id).expect("the node was just staged");
+    let Some(view) = staged.get(id) else { return 0 };
     view.children().len() as u32
 }
 
@@ -784,13 +795,13 @@ impl<L: Lang> OptionalGroupArgumentParser<L> {
     }
 
     /// An optional argument delimited by **any** of the given minted rules (the
-    /// `AnyDelimitedOptional` code — see the type docs). Must be non-empty; ties
+    /// `AnyDelimitedOptional` code — see the type docs). Must be non-empty (an empty
+    /// rule set is reported as an implementation error when the parser runs); ties
     /// between same-spelling opens go to the first listed rule.
     pub fn any_of(
         rules: impl IntoIterator<Item = Arc<GroupRule<L>>>,
     ) -> OptionalGroupArgumentParser<L> {
         let rules: Vec<Arc<GroupRule<L>>> = rules.into_iter().collect();
-        debug_assert!(!rules.is_empty(), "a delimited argument needs at least one rule");
         OptionalGroupArgumentParser { rules, unwrap_lone_group: None }
     }
 
@@ -812,6 +823,14 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
+        // Spec-author contract, validated where the parser runs
+        // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
+        if self.rules.is_empty() {
+            return Err(cx.implementation_error(
+                "OptionalGroupArgumentParser::any_of needs at least one delimiter rule",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
         let mut noise = scan_argument_noise(cx)?;
         if noise.next.is_none() {
             noise.rewind(cx);
@@ -844,22 +863,30 @@ where
         )?;
 
         // Content: the option group's children, or a lone protective child group's.
+        // The ids come from a driver-factory parse, i.e. through outer-layer hands:
+        // a bogus id degrades to a zero-child region rather than panicking — it still
+        // lands in the argument's node region, where `builder.add` diagnoses it
+        // ([§dd-dr:panic-policy] staged-id rule).
         let (content_parent, content_len) = {
             let staged = cx.staged_nodes();
-            let children = staged.get(id).expect("the group was just staged").children();
+            let children = staged.get(id).map(|view| view.children()).unwrap_or(&[]);
             let unwrapped = match (self.unwrap_lone_group, children) {
-                (Some(protective), [only]) => {
-                    let inner = staged.get(*only).expect("staged child");
-                    matches!(
-                        inner.kind(),
-                        NodeKind::Group(data) if data.group_type == Some(protective)
-                    )
-                    .then_some(*only)
-                }
+                (Some(protective), [only]) => staged
+                    .get(*only)
+                    .is_some_and(|inner| {
+                        matches!(
+                            inner.kind(),
+                            NodeKind::Group(data) if data.group_type == Some(protective)
+                        )
+                    })
+                    .then_some(*only),
                 _ => None,
             };
             let parent = unwrapped.unwrap_or(id);
-            let len = staged.get(parent).expect("staged node").children().len() as u32;
+            let len = staged
+                .get(parent)
+                .map(|view| view.children().len() as u32)
+                .unwrap_or(0);
             (parent, len)
         };
         noise.nodes.push(id);
@@ -887,11 +914,10 @@ pub struct MarkerArgumentParser {
 }
 
 impl MarkerArgumentParser {
-    /// An optional literal marker (e.g. `*`). Must be non-empty.
+    /// An optional literal marker (e.g. `*`). Must be non-empty (an empty marker is
+    /// reported as an implementation error when the parser runs).
     pub fn new(marker: impl Into<Box<str>>) -> MarkerArgumentParser {
-        let marker = marker.into();
-        debug_assert!(!marker.is_empty(), "a marker needs at least one character");
-        MarkerArgumentParser { marker }
+        MarkerArgumentParser { marker: marker.into() }
     }
 }
 
@@ -904,9 +930,16 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
+        // Spec-author contract, validated where the parser runs
+        // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
+        let Some(first_char) = self.marker.chars().next() else {
+            return Err(cx.implementation_error(
+                "MarkerArgumentParser::new needs a non-empty marker",
+                Span::empty(cx.tokens.pos()),
+            ));
+        };
         let mut noise = scan_argument_noise(cx)?;
-        let (Some(first), Some(first_char)) = (noise.next.clone(), self.marker.chars().next())
-        else {
+        let Some(first) = noise.next.clone() else {
             noise.rewind(cx);
             return Ok(None);
         };
@@ -2263,5 +2296,41 @@ mod tests {
         assert!(!m.arguments().unwrap().get(0).unwrap().is_provided());
         assert_eq!(root_child(&parsed, 1).chars(), Some("(x)"));
         assert!(parsed.result.diagnostics.is_empty());
+    }
+
+    // --- spec-author contract violations are implementation errors ([§dd-dr:panic-policy]) --
+
+    /// Drive a parse expecting the implementation-error abort — under **tolerant**
+    /// recovery, deliberately: an implementation error bypasses the recover funnel
+    /// and aborts even there.
+    fn expect_implementation_error(content: &str, st: &Arc<ParsingState<ArgLang>>) {
+        let mut reader = StdTokenReader::new(content);
+        let err = try_run(content, &mut reader, st, Recovery::Tolerant)
+            .expect_err("the spec-author contract violation must abort the parse");
+        assert_eq!(err.identifier(), super::super::ImplementationError::IDENTIFIER);
+    }
+
+    #[test]
+    fn empty_any_of_rule_set_is_an_implementation_error() {
+        let empty: Arc<ArgumentSpec<ArgLang>> = Arc::new(ArgumentSpec::new_unnamed(
+            GroupArgumentParser::any_of(Vec::new()),
+        ));
+        let st = state_with(&[("m", vec![empty])]);
+        expect_implementation_error(r"\m{x}", &st);
+    }
+
+    #[test]
+    fn empty_optional_any_of_rule_set_is_an_implementation_error() {
+        let empty: Arc<ArgumentSpec<ArgLang>> = Arc::new(ArgumentSpec::new_unnamed(
+            OptionalGroupArgumentParser::any_of(Vec::new()),
+        ));
+        let st = state_with(&[("m", vec![empty])]);
+        expect_implementation_error(r"\m[x]", &st);
+    }
+
+    #[test]
+    fn empty_marker_is_an_implementation_error() {
+        let st = state_with(&[("m", vec![marker_arg("")])]);
+        expect_implementation_error(r"\m*", &st);
     }
 }

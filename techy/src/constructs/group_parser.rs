@@ -170,7 +170,16 @@ where
         let (outcome, delta) = cx.with_frame(frame, |cx| {
             cx.parse_nodes(interior_state, stop, child_states)
         })?;
-        debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
+        // The content-loop parser comes from the driver's factory (outer-layer code
+        // for a custom driver), so its contract is validated, not debug-asserted
+        // ([§dd-dr:panic-policy]).
+        if delta.is_some() {
+            return Err(cx.implementation_error(
+                "the driver's content-loop parser returned a pass-through state delta \
+                 (a nodes parser has no after-effect to report)",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
 
         let (close, end) = match outcome.stop {
             // The close was consumed at match time; its span becomes the recorded
@@ -193,7 +202,11 @@ where
                 (TextContent::empty(), span.start())
             }
             StopCause::NodeCondition => {
-                unreachable!("the group parser sets no node stop condition")
+                return Err(cx.implementation_error(
+                    "the driver's content-loop parser reported a node-condition stop, \
+                     but the group interior's stop spec sets no node condition",
+                    Span::empty(cx.tokens.pos()),
+                ));
             }
         };
 

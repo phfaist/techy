@@ -51,6 +51,7 @@
 //! no further field rewinds exactly its own noise scan — absorbed fields stay.
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -59,7 +60,7 @@ use core::fmt;
 use crate::engine::ParseDriver;
 use crate::error::DiagnosticInfo;
 use crate::node::{ArgumentExt, ContentNodes};
-use crate::source::SourceSpan;
+use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes};
 use crate::state::Lang;
 use crate::token::TokenKind;
@@ -111,7 +112,9 @@ impl<L: Lang> TackOnFieldsArgumentParser<L> {
     }
 
     /// Accept the field command `name` (without escape character), parsed under
-    /// `spec`, at most **once** per invocation.
+    /// `spec`, at most **once** per invocation. Field names must be distinct across
+    /// registrations (a duplicate is reported as an implementation error when the
+    /// parser runs).
     pub fn with_field(
         self,
         name: impl Into<Box<str>>,
@@ -130,11 +133,10 @@ impl<L: Lang> TackOnFieldsArgumentParser<L> {
         self.field(name.into(), spec, true)
     }
 
+    // Field names must be distinct — a spec-author contract, validated where the
+    // parser runs ([§dd-dr:panic-policy]: an outer-layer contract violation is an
+    // `Err`, never a panic).
     fn field(mut self, name: Box<str>, spec: Arc<dyn CallableSpec<L>>, repeatable: bool) -> Self {
-        debug_assert!(
-            self.fields.iter().all(|field| field.name != name),
-            "tack-on field names must be distinct"
-        );
         self.fields.push(TackOnField { name, spec, repeatable });
         self
     }
@@ -150,6 +152,22 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
+        // Spec-author contract, validated where the parser runs
+        // ([§dd-dr:panic-policy]: an outer-layer contract violation is an `Err`).
+        if let Some(duplicate) = self.fields.iter().enumerate().find_map(|(i, field)| {
+            self.fields[..i]
+                .iter()
+                .any(|earlier| earlier.name == field.name)
+                .then_some(&*field.name)
+        }) {
+            return Err(cx.implementation_error(
+                format!(
+                    "TackOnFieldsArgumentParser field names must be distinct \
+                     (duplicate registration of ‘{duplicate}’)"
+                ),
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
         let mut nodes = Vec::new();
         let mut seen = alloc::vec![false; self.fields.len()];
         let mut content_start: Option<u32> = None;
@@ -448,6 +466,24 @@ mod tests {
         assert_eq!(
             content_as_chars(fields.get("label").unwrap().value().unwrap()).unwrap(),
             "x"
+        );
+    }
+
+    // --- spec-author contract violations are implementation errors ([§dd-dr:panic-policy]) --
+
+    #[test]
+    fn duplicate_field_names_are_an_implementation_error() {
+        let tack_on = TackOnFieldsArgumentParser::new(CallableType::Macro)
+            .with_field("label", label_spec())
+            .with_repeatable_field("label", label_spec());
+        // Tolerant recovery, deliberately: an implementation error bypasses the
+        // recover funnel and aborts even there.
+        let err = language(tack_on, Recovery::Tolerant)
+            .parse(r"\section{A}\label{x}")
+            .unwrap_err();
+        assert_eq!(
+            err.identifier(),
+            crate::constructs::ImplementationError::IDENTIFIER
         );
     }
 }

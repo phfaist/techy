@@ -506,17 +506,30 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     ) -> ConstructParserResult<L, (usize, Option<EnvironmentTerminatorSyntaxData<L>>)> {
         // Re-read the stop token (its pre-space is already flushed as body content, so
         // it sits at its own span start). It was cleanly read under this same state
-        // moments ago, so this cannot fail; the defensive arm only guards a misbehaving
-        // custom reader.
+        // moments ago, so a mismatch here can only mean a misbehaving custom reader —
+        // an extension contract violation, reported as an implementation error
+        // ([§dd-dr:panic-policy]: outer-layer input never panics core code).
         let Some(end_token) = cx.probe_token(&Arc::clone(&cx.state))? else {
-            debug_assert!(false, "the matched stop token disappeared on re-peek");
-            return Ok((body_end, None));
+            return Err(cx.implementation_error(
+                "the matched environment stop token disappeared on re-peek \
+                 (the token reader re-read the same position differently)",
+                Span::empty(body_end),
+            ));
         };
-        debug_assert!(
-            matches!(&end_token.kind, TokenKind::Command { name, .. }
-                if *name == self.stop_command_name),
-            "the matched stop token changed kind on re-peek"
-        );
+        let (token_escape_char, token_post_space) = match &end_token.kind {
+            TokenKind::Command { name, escape_char, post_space }
+                if *name == self.stop_command_name =>
+            {
+                (*escape_char, *post_space)
+            }
+            _ => {
+                return Err(cx.implementation_error(
+                    "the matched environment stop token changed on re-peek \
+                     (the token reader re-read the same position differently)",
+                    end_token.span,
+                ));
+            }
+        };
         // Consume the command whole (syntactic post-space included — `\end {name}`'s
         // tolerated inline whitespace); the name group must be the very next token.
         cx.tokens.move_past(&end_token, true);
@@ -528,23 +541,17 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 let name = &source.content()[name_group.name_span.range()];
                 if !self.match_invocation_name || name == self.invocation_name {
                     // The consumed terminator's spelling facts, straight off the
-                    // command token and the matched name group.
-                    let facts = match &end_token.kind {
-                        TokenKind::Command { escape_char, post_space, .. } => {
-                            Some(EnvironmentTerminatorSyntaxData::Scanned {
-                                escape_char: *escape_char,
-                                command_word: Span::new(
-                                    end_token.span.start() + escape_char.len_utf8(),
-                                    post_space.start(),
-                                ),
-                                post_space: *post_space,
-                                name_group: name_group.clone(),
-                            })
-                        }
-                        // Only a misbehaving custom reader changes the token's
-                        // kind between the stop match and the re-peek.
-                        _ => None,
-                    };
+                    // command token (kind validated at the re-peek above) and the
+                    // matched name group.
+                    let facts = Some(EnvironmentTerminatorSyntaxData::Scanned {
+                        escape_char: token_escape_char,
+                        command_word: Span::new(
+                            end_token.span.start() + token_escape_char.len_utf8(),
+                            token_post_space.start(),
+                        ),
+                        post_space: token_post_space,
+                        name_group: name_group.clone(),
+                    });
                     Ok((name_group.end, facts))
                 } else {
                     // Mismatch: close without consuming — rewind to the terminator
@@ -561,8 +568,15 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             None => {
                 // Malformed terminator: consume the command alone (the failed name
                 // group read consumed nothing — the reader stands just past the
-                // command) and close.
-                debug_assert_eq!(cx.tokens.pos(), after_command);
+                // command) and close. A reader that drifted from that position broke
+                // the read-consume contract — an implementation error, not recoverable.
+                if cx.tokens.pos() != after_command {
+                    return Err(cx.implementation_error(
+                        "the token reader moved during a failed terminator name-group \
+                         read (a failed read must consume nothing)",
+                        end_token.span,
+                    ));
+                }
                 cx.recover(
                     MalformedEnvironmentTerminator::new(self.invocation_name),
                     SourceSpan::new(&cx.source, end_token.span),
@@ -624,7 +638,16 @@ where
         // from the driver's factory (Phase 7.2 uniform routing).
         let body_state = Arc::clone(&cx.state);
         let (outcome, delta) = cx.parse_nodes(body_state, stop, ChildStateSpec::inherit())?;
-        debug_assert!(delta.is_none(), "NodesParser returns no pass-through delta");
+        // The content-loop parser comes from the driver's factory (outer-layer code
+        // for a custom driver), so its contract is validated, not debug-asserted
+        // ([§dd-dr:panic-policy]).
+        if delta.is_some() {
+            return Err(cx.implementation_error(
+                "the driver's content-loop parser returned a pass-through state delta \
+                 (a nodes parser has no after-effect to report)",
+                Span::empty(cx.tokens.pos()),
+            ));
+        }
 
         // The body's content interior: the staged nodes tile it exactly (a stop token's
         // pre-space is already flushed as body content). A last node no one staged (a
@@ -663,7 +686,11 @@ where
                 (body_end, None)
             }
             StopCause::NodeCondition => {
-                unreachable!("the environment body parser sets no node stop condition")
+                return Err(cx.implementation_error(
+                    "the driver's content-loop parser reported a node-condition stop, \
+                     but the environment body's stop spec sets no node condition",
+                    Span::empty(cx.tokens.pos()),
+                ));
             }
         };
 
@@ -711,7 +738,7 @@ mod tests {
     use crate::engine::{
         CommandResolution, ParseDriver, ParseResult, ParserSession, ResolvedCallable,
     };
-    use crate::error::{ParseError, Recovery};
+    use crate::error::{DiagnosticInfo, ParseError, Recovery};
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeStack};
     use crate::node::{
         CallableData, ChildRegion, ContentNodes, NodeRef, ParsedArguments, ParsedSlot,
@@ -1896,6 +1923,98 @@ mod tests {
         assert_eq!(result.tree.root().span().range(), 0..1);
         assert_eq!(result.tree.root().child(0).unwrap().chars(), Some("x"));
         assert!(result.diagnostics.is_empty());
+    }
+
+    // --- misbehaving custom readers are implementation errors ([§dd-dr:panic-policy]) -------
+
+    /// How the flaky reader betrays the re-peek contract at the terminator.
+    #[derive(Clone, Copy)]
+    enum Betrayal {
+        /// The second peek at the betrayal position returns a different token kind.
+        KindChange,
+        /// The second peek at the betrayal position returns a recoverable token error
+        /// (under tolerant recovery the probe then reports the position unusable —
+        /// the "stop token disappeared" arm).
+        Vanish,
+    }
+
+    /// A delegating reader that violates peek idempotence at one position: from the
+    /// second peek at `betray_at` on, it misreports the token.
+    struct FlakyReader<'s> {
+        inner: StdTokenReader<'s>,
+        betray_at: usize,
+        peeks_at_betrayal: u32,
+        mode: Betrayal,
+    }
+
+    impl<'s> TokenReader<'s, EnvLang> for FlakyReader<'s> {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<EnvLang>>,
+        ) -> crate::token::TokenResult<'s, EnvLang, Token<'s, EnvLang>> {
+            if self.inner.pos() == self.betray_at {
+                self.peeks_at_betrayal += 1;
+                if self.peeks_at_betrayal >= 2 {
+                    let span = Span::new(self.betray_at, self.betray_at + 1);
+                    let pre_space = Span::empty(self.betray_at);
+                    return match self.mode {
+                        Betrayal::KindChange => {
+                            Ok(Token::new(TokenKind::Char('x'), span, pre_space))
+                        }
+                        Betrayal::Vanish => Err(crate::token::TokenError::new(
+                            crate::token::TokenErrorKind::ForbiddenChar(
+                                crate::token::ForbiddenChar::new('\\'),
+                            ),
+                            span,
+                            Some(crate::token::TokenRecovery {
+                                token: Token::new(TokenKind::Char('\\'), span, pre_space),
+                                resume_pos: span.end(),
+                            }),
+                        )),
+                    };
+                }
+            }
+            TokenReader::peek(&mut self.inner, state)
+        }
+        fn move_past(&mut self, tok: &Token<'s, EnvLang>, skip_post_space: bool) {
+            TokenReader::move_past(&mut self.inner, tok, skip_post_space);
+        }
+        fn move_to(&mut self, tok: &Token<'s, EnvLang>, rewind_pre_space: bool) {
+            TokenReader::move_to(&mut self.inner, tok, rewind_pre_space);
+        }
+        fn move_to_pos(&mut self, pos: usize) {
+            self.inner.move_to_pos(pos);
+        }
+        fn pos(&self) -> usize {
+            self.inner.pos()
+        }
+    }
+
+    /// Parse `\begin{A}b\end{A}` with the reader betraying the terminator's re-peek
+    /// (the `\end` sits at byte 10) — under **tolerant** recovery, deliberately: an
+    /// implementation error bypasses the recover funnel and aborts even there.
+    fn flaky_terminator_error(mode: Betrayal) -> ParseError {
+        let content = "\\begin{A}b\\end{A}";
+        let mut reader = FlakyReader {
+            inner: StdTokenReader::new(content),
+            betray_at: 10,
+            peeks_at_betrayal: 0,
+            mode,
+        };
+        try_run(content, &mut reader, &suite_state(), Recovery::Tolerant)
+            .expect_err("the reader contract violation must abort the parse")
+    }
+
+    #[test]
+    fn a_reader_changing_the_stop_token_on_repeek_is_an_implementation_error() {
+        let err = flaky_terminator_error(Betrayal::KindChange);
+        assert_eq!(err.identifier(), crate::constructs::ImplementationError::IDENTIFIER);
+    }
+
+    #[test]
+    fn a_reader_dropping_the_stop_token_on_repeek_is_an_implementation_error() {
+        let err = flaky_terminator_error(Betrayal::Vanish);
+        assert_eq!(err.identifier(), crate::constructs::ImplementationError::IDENTIFIER);
     }
 
     // --- the verbatim escape hatch ----------------------------------------------------------
