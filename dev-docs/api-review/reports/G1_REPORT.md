@@ -2,8 +2,8 @@
 
 Branch `phase4-g1-skeleton` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a16640bd4b26a4196`,
-branched from `api-review` @ 36ed4e9). Status: **IN PROGRESS** — plan committed
-(Milestone 0).
+branched from `api-review` @ 36ed4e9). Status: **COMPLETE** — Milestones 0–5
+done, all gates green; awaiting review + merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb, predating the api-review series); the branch was reset to the local
@@ -98,4 +98,91 @@ appears in the GUIDE_PAGES sidebar list.
 
 ## Results
 
-(to be filled at Milestone 5)
+### What was done
+
+- **M1 — skeleton**: 15 new stub chapters created (heading +
+  `*(This chapter is being written.)*`); parsing-model.md normalized to the
+  same stub style; all 18 chapters wired through the four steps (file; `guide`
+  submodule in techy/src/lib.rs, declared in reading order with User/Developer/
+  AI comment groupers; GUIDE_PAGES in docs/rustdoc-header.html — 19 entries:
+  Overview + 6 User + 6 Developer + 6 AI; guide.md index landed with M2).
+- **M2 — landing page**: docs/guide.md rewritten — three summary paragraphs
+  drawn from the crate-level rustdoc (toolkit intent; no-privileged-concepts +
+  preset; no_std + no-I/O + SourceResolver delegation), the three-section
+  chapter index with one-sentence reader-facing descriptions derived from the
+  chapter map, and a bolded "read the Introduction first" pointer.
+  concepts-overview is indexed under the Developer Guide.
+- **M3 — introduction.md** (6.6 kB): intent/capabilities (parsing, node tree,
+  consumer toolkit, scoped definitions, multi-source); three use levels
+  (preset + custom definitions → custom construct parsers → custom Lang /
+  LatexlikeLang family); three use realms (application; no_std/WebAssembly —
+  no_std facts cited from crate rustdoc, WebAssembly flagged as DOC_GAPS #2;
+  PyO3 — kept to documented facts: no I/O, auto-trait listings, NodeTree
+  Send/Sync per its listing and the CallableSpec thread-safety contract
+  sentence); guide structure. No embedder/bindings findings (integration.md,
+  G3).
+- **M4 — concepts-overview.md** (11.8 kB ≤ ~12 kB): all 12 existing sections
+  expanded into compact self-contained definitions, present tense, linking the
+  embodying API items; headings byte-identical (diff shows zero changed
+  heading lines), order unchanged; skeleton placeholder note removed; link
+  targets normalized to canonical public paths (crate::core::Token etc. —
+  printed text unchanged).
+- **M5 — DOC_GAPS.md** created with header + 2 entries (below); this report.
+
+### Gate results (run at stage tip)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS (0 warnings) |
+| `cargo test` | PASS — 758 + 30 + 8 + 21 + 1 + 36 doctests (2 pre-existing ignored ×2 listings), 0 failed |
+| `cargo test --doc` | PASS — 36 passed, 2 pre-existing ignored |
+| `rm -rf target/doc && cargo docs` | PASS — 0 warnings (deny lints in force); all intra-doc links resolve |
+| `scripts/check_semver.sh` | PASS — 196 checks pass, 58 skip; "no semver update required" |
+| Chapter rendering | PASS — all 18 chapter pages render under target/doc/techy/guide/; GUIDE_PAGES lists all 19 sidebar entries |
+
+### File/size table (docs touched)
+
+| File | Size | State |
+|---|---|---|
+| docs/guide.md | 5.0 kB | rewritten landing page |
+| docs/introduction.md | 6.6 kB | written (target ≤ ~10–15 kB) |
+| docs/concepts-overview.md | 11.8 kB | expanded (target ≤ ~12 kB) |
+| docs/parsing-model.md | 56 B | normalized stub |
+| 14 further new chapters | 54–96 B each | stubs |
+| docs/rustdoc-header.html | 7.3 kB | GUIDE_PAGES 4 → 19 entries |
+| techy/src/lib.rs | — | guide block: 3 → 18 submodules (doc-only) |
+| dev-docs/api-review/DOC_GAPS.md | 3.2 kB | new register, 2 entries |
+
+### DOC_GAPS entries filed
+
+1. [CHECK] Every diagnostic condition type's rustdoc page must visibly
+   display its stable identifier string (ruled seed; for G2 parsing.md).
+2. [CHECK] WebAssembly suitability stated in introduction.md but not named in
+   the crate rustdoc (facts cited are documented; suggest wasm32 build
+   verification + a rustdoc mention).
+
+### Deviations / observations for the reviewer
+
+- **Stale worktree HEAD at start** (see note above): branch reset to
+  `api-review` @ 36ed4e9 before work; no other branch surgery.
+- **"14 concept sections" vs. 12 in the repository**: PHASE4_PLAN's
+  concepts-overview row says "the 14 concept sections"; the published page has
+  (and always had, at this branch point) 12 `##` sections. The stage brief
+  rules "expand each existing section" with headings frozen and no additions
+  mandated, so the 12 existing sections were expanded and none invented. If
+  two further concept sections were intended, that is a supervisor/user call
+  (new sections would be additive and anchor-safe). Flagged here rather than
+  in DOC_GAPS since it is a plan-accuracy point, not an API-doc gap.
+- Stub titles chosen (they become sidebar entries; anchors are otherwise
+  stable): "Language syntax", "Node trees", "Defining macros, environments,
+  and specials" (specs.md), "Running the parser" (parsing.md), "Custom
+  construct parsers", "Defining a custom language", "Integration: tooling,
+  embedding, and bindings", "Migrating from pylatexenc", "AI guide" (+ five
+  "AI guide: …" sub-chapter titles).
+- Scrutinize: introduction.md's PyO3 paragraph (kept deliberately modest —
+  verify it reads as supported); the landing-page one-sentence descriptions
+  against the chapter map; the concepts-overview claim-to-doc traceability
+  (every sentence was written from the module //! headers of source, state,
+  token, engine, constructs, specs, node, error, latexlike, extract, visit,
+  transform, recompose, or from CallableSpec's rustdoc, or from the crate
+  root).
