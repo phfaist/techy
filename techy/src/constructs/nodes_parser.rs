@@ -474,40 +474,52 @@ impl<'p, L: Lang> NodesParser<'p, L> {
 
     /// Extend the pending run with a token's pre-space (content whitespace joins the
     /// run — invariant 1; pending whitespace with no adjacent chars becomes a
-    /// whitespace-only run).
-    fn take_pre_space(&mut self, pre_space: Span) {
+    /// whitespace-only run). A non-contiguous extension can only come from a token
+    /// reader breaking the in-order, gap-free token contract — outer-layer input,
+    /// reported as the `Err` detail rather than asserted ([§dd-dr:panic-policy]).
+    fn take_pre_space(&mut self, pre_space: Span) -> Result<(), String> {
         if pre_space.is_empty() {
-            return;
+            return Ok(());
         }
         match &mut self.run {
             Some(run) => {
-                debug_assert!(
-                    run.end() == pre_space.start(),
-                    "pre-space {:?} is not contiguous with the pending run {:?}",
-                    pre_space,
-                    run
-                );
+                if run.end() != pre_space.start() {
+                    return Err(alloc::format!(
+                        "pre-space {:?} is not contiguous with the pending chars run \
+                         {:?} (the token reader broke the in-order, gap-free token \
+                         contract)",
+                        pre_space,
+                        run
+                    ));
+                }
                 run.extend_to(pre_space.end());
             }
             None => self.run = Some(pre_space),
         }
+        Ok(())
     }
 
-    /// The `Char` arm: pre-space and the character extend the pending run.
-    fn extend_run(&mut self, token: &Token<'_, L>) {
-        self.take_pre_space(token.pre_space);
+    /// The `Char` arm: pre-space and the character extend the pending run. Same
+    /// contiguity contract (and `Err` reporting) as
+    /// [`take_pre_space`](Self::take_pre_space).
+    fn extend_run(&mut self, token: &Token<'_, L>) -> Result<(), String> {
+        self.take_pre_space(token.pre_space)?;
         match &mut self.run {
             Some(run) => {
-                debug_assert!(
-                    run.end() == token.span.start(),
-                    "char token {:?} is not contiguous with the pending run {:?}",
-                    token.span,
-                    run
-                );
+                if run.end() != token.span.start() {
+                    return Err(alloc::format!(
+                        "char token {:?} is not contiguous with the pending chars run \
+                         {:?} (the token reader broke the in-order, gap-free token \
+                         contract)",
+                        token.span,
+                        run
+                    ));
+                }
                 run.extend_to(token.span.end());
             }
             None => self.run = Some(token.span),
         }
+        Ok(())
     }
 
     /// Flush the pending run as a `Chars` node (span-backed over the exact run slice).
@@ -528,7 +540,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &mut ParseContext<'_, '_, L>,
         pre_space: Span,
     ) -> ConstructParserResult<L, bool> {
-        self.take_pre_space(pre_space);
+        self.take_pre_space(pre_space)
+            .map_err(|detail| cx.implementation_error(detail, pre_space))?;
         self.flush(cx)
     }
 
@@ -546,7 +559,8 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         cx: &mut ParseContext<'_, '_, L>,
         pre_space: Span,
     ) -> ConstructParserResult<L, ()> {
-        self.take_pre_space(pre_space);
+        self.take_pre_space(pre_space)
+            .map_err(|detail| cx.implementation_error(detail, pre_space))?;
         if let Some(run) = self.run.take() {
             self.stage(cx, NodeKind::chars(run), run)?;
         }
@@ -780,7 +794,8 @@ where
 
             match &token.kind {
                 TokenKind::Char(_) => {
-                    self.extend_run(&token);
+                    self.extend_run(&token)
+                        .map_err(|detail| cx.implementation_error(detail, token.span))?;
                     if !recovered {
                         cx.tokens.move_past(&token, true);
                     }

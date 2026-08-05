@@ -119,6 +119,112 @@ recorded) · `rm -rf target/doc && cargo docs` (clean; deny from M5 on) ·
 superseded-names sweep at M7 · behavior changes only where ruled (the
 panic→Err conversions are ruled by [§dd-dr:panic-policy] + the S5 rider).
 
+## M2+M3 — panic-policy sweep (COMPLETE)
+
+Method: scripted extraction of every `debug_assert!`/`assert!`/`panic!`/
+`unreachable!`/`.unwrap()`/`.expect(` site in techy/src + techy-derive/src
+with `#[cfg(test)]`-region tracking (brace-scoped, verified by spot checks);
+~4000 test-code sites exempt (tests assert by design; includes the whole
+`transform/tests.rs`, `recompose/tests.rs`, `latexlike/test_support.rs`,
+`latexlike/invariants.rs` cfg(test) files and the cfg(test)-gated
+`check_tree_invariants` wrapper, whose purpose is panicking — policy-exempt).
+Non-test sites classified below. Conversion pattern = the S5-established
+implementation-error path (`cx.implementation_error(...)` /
+`TokenErrorKind::Custom(ImplementationError)`, both aborting even under
+tolerant recovery).
+
+### Converted sites (outer-layer input; behavior change ruled by the policy)
+
+| Site (pre-change) | Guarded input | Conversion |
+|---|---|---|
+| constructs/environment_parser.rs:512 `debug_assert!(false, "stop token disappeared on re-peek")` | custom reader re-peek (rider-named site) | `Err(cx.implementation_error(...))`; test `a_reader_dropping_the_stop_token_on_repeek_...` |
+| constructs/environment_parser.rs:515 kind-change re-peek `debug_assert!` | custom reader re-peek (rider-named site) | validated destructure → `Err(...)`; the now-unreachable `_ => None` facts arm removed; test `a_reader_changing_the_stop_token_on_repeek_...` |
+| constructs/environment_parser.rs:565 `debug_assert_eq!(cx.tokens.pos(), after_command)` | custom reader position drift after a failed name-group read | `if != → Err(cx.implementation_error(...))` |
+| constructs/environment_parser.rs:627 + group_parser.rs:173 `debug_assert!(delta.is_none())` | driver-factory content-loop parser (custom driver) | `if delta.is_some() → Err(...)` |
+| constructs/environment_parser.rs:666 + group_parser.rs:196 `unreachable!(NodeCondition)` | driver-factory content-loop parser's stop cause | `Err(...)` (pattern-identical to the root-loop guards at engine/language.rs:196/203, which carry the Bogus-driver test) |
+| constructs/argument_parsers.rs:552/793 `any_of` empty-rules `debug_assert!` (constructors) | spec author (rider-named class) | constructors infallible + parse-time `Err(...)`; tests `empty_any_of_rule_set_...` / `empty_optional_any_of_rule_set_...` |
+| constructs/argument_parsers.rs:893 empty-marker `debug_assert!` | spec author | parse-time `Err(...)`; test `empty_marker_is_an_implementation_error` |
+| constructs/embellishments_parser.rs:85/86 empty-markers `debug_assert!`s | spec author | parse-time `Err(...)`; tests `an_empty_marker_list_...` / `an_empty_marker_...` |
+| constructs/tack_on_parser.rs:134 duplicate-field-name `debug_assert!` (builder) | spec author | parse-time `Err(...)`; test `duplicate_field_names_...` |
+| token/reader.rs:231 `scan_specials` match-end `debug_assert!` | `Lang::scan_specials` hook output (release hazard: zero-width match = infinite loop) | `Err(TokenError::new(Custom(ImplementationError), .., None))` — unrecoverable, aborts both modes; test `scan_specials_invalid_match_end_...` |
+| token/reader.rs:179–180 `move_to_pos` debug asserts | custom recoveries' `resume_pos` / caller-held tokens via `move_past` (release hazard: slice panic at next scan) | single-boundary validation at `peek_impl` entry → unrecoverable Custom ImplementationError; `move_to_pos` asserts removed (one validation regime); test `invalid_reader_position_...` |
+| constructs/nodes_parser.rs:484/501 chars-run contiguity `debug_assert!`s | custom reader token stream (release hazard: silently-wrong covering span) | `take_pre_space`/`extend_run` → `Result<(), String>`, lifted at the three cx-holding call sites into `cx.implementation_error` |
+| constructs/argument_parsers.rs:667(+849/852/862/870-block, chars_group_parser.rs:182) staged-id `.expect("just staged")` read-backs | driver-factory-returned `BuildId` | graceful degradation to zero-child/identity answers per the policy's recorded staged-id rule (bogus id still lands in the region and `builder.add` diagnoses it) |
+
+Test delta: +10 lib tests (740 → 750). All conversions abort under BOTH
+recovery modes (implementation errors bypass the recover funnel — asserted by
+running the new tests under `Recovery::Tolerant`).
+
+### Sites consciously left (with justification)
+
+Rule-1 (verifiably unreachable crate-internal invariant, invariant stated):
+
+- extract.rs:507 (`split_pieces` mints parts only for Chars nodes — same-fn
+  minting), extract.rs:756 (`max_split=1` arithmetic), extract.rs:189/522/529
+  (`piece sub-ranges on char boundaries by construction`), extract.rs:1135
+  (`len 1` checked the line above).
+- token/reader.rs:215/364 (`pos < len checked above`), token/reader.rs:361
+  (`PrefixEntry` fields private; `PrefixTable::for_rules` is the only
+  constructor and always sets a direction).
+- engine/mod.rs:218/236 (`with_parsing_state`/`with_frame` pop exactly what
+  they pushed — same-fn pairing).
+- node/builder.rs:279/296/298/349 (the builder's internal post-validation
+  read-backs — explicitly sanctioned by [§dd-dr:panic-policy]: "validate at
+  the boundary, assert inside").
+- transform/context.rs:493/500/524 (restage path invariants over
+  crate-computed regions; S7-review-verified conformant).
+- node/display.rs:117 (`just pushed`), latexlike/recompose.rs:149
+  (`core_source_instruction` answers every non-callable kind — the arm runs
+  only for non-callables), latexlike/minidefs.rs:83/93 (literal in-crate
+  argument-code lists), node/node_ref.rs:37 (pub(crate) constructor; public
+  boundaries validate ids via `get`).
+- constructs/argument_parsers.rs:462 (`region_with_last_as_content`
+  emptiness: every `Some`-returning arm of `parse_expression_node`/
+  `dispatch_expression_invocation` pushes crate-side before returning).
+- techy-derive/diagnostic_info.rs:43/159/198/308/313 (`Fields::Named` ⇒
+  `ident` is `Some` — syn structural invariant; proc-macro compile-time
+  context besides).
+
+Rule-3 (explicitly approved indexing-style accessors with non-panicking
+companions, documented panics):
+
+- node/tree.rs:205/211/270 (`NodeTree::node`/`nodes_in` asserts; `get` is the
+  companion), node/slice.rs:46, node/arguments.rs:185 (`ChildRegion`
+  resolved-only accessors; `staged()` companion) — all named in the policy's
+  approved list.
+
+Recorded-pattern family (debug-asserted caller contract on a value
+constructor with graceful/diagnosed release behavior — the shape the policy's
+applied consequences sanction for `skip_whitespace` and `Span::len`; no `Err`
+channel exists in a value constructor, and the violating value is diagnosed
+where it breaks the parse, which M2/M3 made an implementation error for the
+reader-side routes):
+
+- source/span.rs:30 (`Span::new`) + :81 (`extend_to`) — documented
+  "caller's contract (debug-asserted)"; `len`/`is_empty` saturate.
+- source/source.rs:235/242 (`SourceSpan::new`) + :371/377 (`SourcePos::new`)
+  — documented "checked in debug builds"; the slice panic beyond is the
+  rule-3-approved `content()` documented panic.
+- token/token.rs:153-170 (`Token::new` span coherence) — doc sentence added
+  this stage stating the contract + degraded-release behavior.
+- token/list_reader.rs:55 (`TokenListReader::new` source order) — doc
+  sentence added; an out-of-order list now surfaces as the run-contiguity
+  implementation error at parse time.
+- token/reader.rs:100 (`skip_whitespace`) — the policy's own recorded
+  exemplar (returns `pos` unchanged; rustdoc cites the panic policy).
+
+Judgment-call note for the reviewer: converting `Span::new`/`SourceSpan::new`
+/`SourcePos::new`/`Token::new`/`TokenListReader::new` to `Result` would be an
+unruled breaking reshape of ruled constructor surfaces; the recorded-pattern
+reading keeps them debug-checked with the release path now funneling into
+implementation errors where the parse consumes the bad value. Flagged as
+D-plan-2.
+
+Root-loop observation (no change): engine/language.rs:160 discards the root
+content loop's pass-through delta (`_delta`) — benign-silent rather than
+validated; the root loop's stop-cause guards (lines 196/203) already follow
+the implementation-error pattern. Left as the ruled S6 shape.
+
 ## Deviation log
 
 - **D-plan-1 (delegated realization)**: the C2 residue assertion is realized
@@ -126,7 +232,24 @@ panic→Err conversions are ruled by [§dd-dr:panic-policy] + the S5 rider).
   shipped line-counting test — grounds: all three recorded forms place the
   assertion in the Phase 3 acceptance run; the "~" tolerances and
   formatting-sensitivity make a permanent test brittle; no record orders a
-  shipped guard. (Further deviations appended as they arise.)
+  shipped guard.
+- **D-plan-2 (delegated line)**: the value-constructor debug-assert family
+  (`Span::new`, `extend_to`, `SourceSpan::new`, `SourcePos::new`,
+  `Token::new`, `TokenListReader::new`) is LEFT debug-asserted under the
+  recorded `skip_whitespace`/`Span::len` pattern rather than converted to
+  `Result` constructors — a `Result` reshape of these ruled surfaces is
+  unruled and breaking; the release-mode consumption routes now funnel into
+  implementation errors (M2's reader-boundary and run-contiguity
+  conversions). See the M3 table's judgment-call note.
+- **D-plan-3 (scope extension, policy-grounded)**: two grep-found sibling
+  classes beyond the rider's named examples were converted because they carry
+  real release-mode hazards reachable from outer layers: the
+  `Lang::scan_specials` match-end guard (infinite-loop hazard) with a
+  single-boundary reader-position validation at `peek_impl` (slice-panic
+  hazard; `StdTokenReader::move_to_pos`'s redundant debug asserts removed for
+  one validation regime), and the chars-run contiguity guards (silently-wrong
+  spans). Both use the established channels (Custom token error /
+  `cx.implementation_error`).
 
 ## Handoff notes
 

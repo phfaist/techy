@@ -148,7 +148,10 @@ pub struct Token<'s, L: Lang> {
 }
 
 impl<'s, L: Lang> Token<'s, L> {
-    /// Create a token.
+    /// Create a token. Span coherence — `pre_space` ending at `span`'s start, a
+    /// command/comment `post_space` lying as a trailing sub-range of `span` — is the
+    /// caller's contract (debug-asserted; a violating token is not rejected here, and
+    /// downstream span bookkeeping diagnoses it where it breaks the parse).
     pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
         debug_assert!(
             pre_space.end() == span.start(),

@@ -50,7 +50,10 @@ pub struct TokenListReader<'s, L: Lang> {
 }
 
 impl<'s, L: Lang> TokenListReader<'s, L> {
-    /// Create a reader positioned before the first token.
+    /// Create a reader positioned before the first token. The source-order contract
+    /// (type docs) is the caller's; it is debug-asserted here, and an out-of-order
+    /// list is not rejected — the parse's span bookkeeping reports the breakage as an
+    /// implementation error where it surfaces.
     pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L> {
         debug_assert!(
             tokens.windows(2).all(|w| w[0].span.end() <= w[1].span.start()),
