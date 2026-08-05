@@ -454,8 +454,9 @@ in-crate test utility ([§dd-dr:tree-validation]).
   [§dd-dr:node-id-provenance]).
 - Indices are `u32` behind a private newtype; the one safeguard that matters is the
   checked conversion at the single mint site.
-- **The API-review P4 redesign** (full topic [§dd-dr:transform]; working detail in
-  `dev-docs/api-review/P4_RULING.md` while the review runs) — **its node-core half
+- **The API-review P4 redesign** (full topic [§dd-dr:transform]; the working
+  detail lived in `dev-docs/api-review/P4_RULING.md`, a process file now only in
+  git history) — **its node-core half
   applied in Phase 3 S3**: trees carry consumer-owned per-node **annotations**
   (`NodeTree<L, A = ()>`, a parallel `Vec<A>` over an `Arc`-shared node core;
   zero-copy `annotate()`; [§dd-dr:node-annotations]); tree tags are always-on
