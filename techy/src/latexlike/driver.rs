@@ -399,6 +399,19 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         self.source_resolver.as_deref()
     }
 
+    /// One-line delegation to the language's
+    /// [`check_parse_start`](LatexlikeLang::check_parse_start) behavior default —
+    /// the parse-initialization checks (for [`Latexlike`](super::Latexlike): the
+    /// all-escape-shadowed provider warning).
+    fn observe_parse_start(
+        &self,
+        source: &Arc<crate::source::Source<LLL::SourceOrigin>>,
+        seed: &Arc<ParsingState<LLL>>,
+        diagnostics: &mut crate::error::Diagnostics<LLL::SourceOrigin>,
+    ) {
+        LLL::check_parse_start(source, seed, diagnostics);
+    }
+
     /// Resolve a command token under the language's
     /// [macro role](LatexlikeCallableType::macro_callable) through the state's
     /// scope stack, via the standard

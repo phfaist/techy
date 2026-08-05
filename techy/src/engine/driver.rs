@@ -58,7 +58,7 @@ use crate::constructs::{
     ChildStateSpec, ConstructParser, ConstructParserResult, FromInvocation, GroupParser,
     Invocation, NodesOutcome, NodesParser, StopSpec,
 };
-use crate::error::{DiagnosticData, ParseError, Recovery};
+use crate::error::{DiagnosticData, Diagnostics, ParseError, Recovery};
 use crate::node::{BuildId, NodeKind};
 use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{
@@ -255,6 +255,33 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         delta: &ParsingStateDelta<L>,
     ) {
         let _ = (ext, prev, new, delta);
+    }
+
+    /// Once-per-parse **initialization observation**: called by
+    /// [`Language::parse_source`](crate::engine::Language::parse_source) after the
+    /// session is created and before any token is read — the layering-correct
+    /// moment for registration-sanity diagnostics (the sink is live, and the
+    /// seed's [`TokenRules`](crate::token::TokenRules) — escape characters
+    /// included — are known, which no registration-time layer can see). May record
+    /// **warnings/notes** into `diagnostics`; it cannot alter the parse. The
+    /// default does nothing.
+    ///
+    /// The latexlike driver delegates to
+    /// [`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
+    /// which for the shipped preset runs the all-escape-shadowed provider check
+    /// ([`check_provider_commands_shadowed_by_escape`](crate::scopes::check_provider_commands_shadowed_by_escape)).
+    ///
+    /// Attached-source sub-parses
+    /// ([`parse_attached_source`](crate::constructs::ParseContext::parse_attached_source))
+    /// deliberately do **not** re-fire this hook: it observes *parse
+    /// initialization* (the seeded providers), not every descent.
+    fn observe_parse_start(
+        &self,
+        source: &Arc<Source<L::SourceOrigin>>,
+        seed: &Arc<ParsingState<L>>,
+        diagnostics: &mut Diagnostics<L::SourceOrigin>,
+    ) {
+        let _ = (source, seed, diagnostics);
     }
 
     /// Lower one **context-dependent** transition event to an ordinary state-delta

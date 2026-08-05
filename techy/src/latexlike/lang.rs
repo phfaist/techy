@@ -33,8 +33,9 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::source::TextContent;
-use crate::state::Lang;
+use crate::error::Diagnostics;
+use crate::source::{Source, TextContent};
+use crate::state::{Lang, ParsingState};
 use crate::token::GroupRule;
 
 use super::invocation_syntax::EnvironmentSyntax;
@@ -302,6 +303,30 @@ pub trait LatexlikeLang:
             }
         }
         chars
+    }
+
+    /// The language's **parse-initialization checks**, fired once per root parse
+    /// by [`LatexlikeDriver`](super::LatexlikeDriver)'s
+    /// [`observe_parse_start`](crate::engine::ParseDriver::observe_parse_start)
+    /// hook — registration-sanity diagnostics at the layering-correct moment (the
+    /// sink is live, the seed's escape characters are known). The default checks
+    /// nothing.
+    ///
+    /// [`Latexlike`](super::Latexlike) overrides this with the all-escape-shadowed
+    /// provider check
+    /// ([`check_provider_commands_shadowed_by_escape`](crate::scopes::check_provider_commands_shadowed_by_escape)) —
+    /// legal there because the concrete preset vocabularies implement
+    /// [`ClosedVocabulary`](crate::state::ClosedVocabulary). A family member whose
+    /// vocabularies are enumerable opts in with the same one-line override (the
+    /// bound holds monomorphically at that call site — "provide, don't require":
+    /// the trait itself never demands enumeration); one whose vocabularies are not
+    /// enumerable simply keeps the default, and the check is gracefully absent.
+    fn check_parse_start(
+        source: &Arc<Source<Self::SourceOrigin>>,
+        seed: &Arc<ParsingState<Self>>,
+        diagnostics: &mut Diagnostics<Self::SourceOrigin>,
+    ) {
+        let _ = (source, seed, diagnostics);
     }
 }
 

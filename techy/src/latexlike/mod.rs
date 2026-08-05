@@ -407,10 +407,21 @@ impl Lang for Latexlike {
     }
 }
 
-/// [`Latexlike`] opts into its own language family with zero code: its
-/// vocabularies are the preset enums (which implement the role traits), and every
-/// [`LatexlikeLang`] behavior default is exactly the preset behavior.
-impl LatexlikeLang for Latexlike {}
+/// [`Latexlike`] opts into its own language family: its vocabularies are the
+/// preset enums (which implement the role traits), and every [`LatexlikeLang`]
+/// behavior default is exactly the preset behavior — except the
+/// parse-initialization checks, wired here unconditionally (the preset
+/// vocabularies are enumerable, so the check function's
+/// [`ClosedVocabulary`] bounds hold).
+impl LatexlikeLang for Latexlike {
+    fn check_parse_start(
+        source: &Arc<crate::source::Source<Option<String>>>,
+        seed: &Arc<ParsingState<Self>>,
+        diagnostics: &mut crate::error::Diagnostics<Option<String>>,
+    ) {
+        crate::scopes::check_provider_commands_shadowed_by_escape(seed, source, diagnostics);
+    }
+}
 
 /// The preset's canonical [`TokenRules`]: `\` + letters commands (single non-letter
 /// characters form single-character commands like `\&` by the tokenizer's standard
@@ -775,11 +786,82 @@ mod tests {
         );
         let language = test_support::with_package(crate::error::Recovery::Tolerant, package);
         let result = language.parse(r"\greet x").unwrap();
-        assert_eq!(result.diagnostics.len(), 1);
-        let message = result.diagnostics.iter().next().unwrap().message();
+        // Both defenses fire: the parse-init warning (every mydefs definition is
+        // escape-shadowed) and the per-miss did-you-mean detail.
+        assert_eq!(result.diagnostics.len(), 2);
+        let message = result
+            .diagnostics
+            .with_identifier("core.specs.unresolvable-command")
+            .next()
+            .unwrap()
+            .message();
         assert!(message.contains("searched providers: mydefs, _builtin"), "{message}");
         assert!(message.contains("provider ‘mydefs’ defines ‘\\greet’"), "{message}");
         assert!(message.contains("without the escape character"), "{message}");
+    }
+
+    #[test]
+    fn parse_init_warns_when_all_of_a_providers_commands_are_escape_shadowed() {
+        use crate::scopes::ProviderCommandsShadowedByEscape;
+
+        // Every Macro definition of `mydefs` begins with the escape character: the
+        // A1 registration trap in bulk. The warning fires at parse initialization —
+        // on any input, even one that never invokes the definitions.
+        let mut package = Package::new("mydefs");
+        package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
+        package.insert(CallableType::Macro, r"\bye", Arc::new(super::MacroSpec::default()));
+        let language = test_support::with_package(crate::error::Recovery::Strict, package);
+        let result = language.parse("plain text").unwrap();
+        assert_eq!(result.diagnostics.len(), 1);
+        let diag = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diag.severity(), Severity::Warning);
+        assert_eq!(diag.identifier(), "core.specs.provider-commands-shadowed-by-escape");
+        let condition =
+            diag.data().downcast_ref::<ProviderCommandsShadowedByEscape>().unwrap();
+        assert_eq!(condition.provider, "mydefs");
+        assert_eq!(condition.callable_type, "Macro");
+        assert_eq!(condition.count, 2);
+        assert_eq!(condition.example, r"\bye"); // sorted: deterministic example
+        assert_eq!(condition.escape_chars, "\\");
+        assert!(diag.message().contains("without the escape character"), "{}", diag.message());
+
+        // A mixed table means the author knows the convention (the lone
+        // escape-prefixed entry may be intended): no warning.
+        let mut package = Package::new("mydefs");
+        package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
+        package.insert(CallableType::Macro, "hello", Arc::new(super::MacroSpec::default()));
+        let language = test_support::with_package(crate::error::Recovery::Strict, package);
+        let result = language.parse("plain text").unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn parse_init_warning_fires_regardless_of_fallback_providers() {
+        use crate::scopes::{FallbackProvider, ScopeOp};
+
+        // A fallback provider makes every resolution SUCCEED, so the did-you-mean
+        // miss detail never runs — the init-time check is the defense that still
+        // fires (and the fallback itself, unable to enumerate, is skipped).
+        let mut package = Package::new("mydefs");
+        package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
+        let mut fallback = FallbackProvider::new("anymacro");
+        fallback.set(CallableType::Macro, Arc::new(super::MacroSpec::default()));
+        let seed = ParsingState::<Latexlike>::lang_initial()
+            .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
+                Arc::new(fallback),
+                Arc::new(builtin_package()),
+                Arc::new(package),
+            ])))
+            .unwrap();
+        let language = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            seed,
+        );
+        let result = language.parse(r"\greet x").unwrap(); // resolves via the fallback
+        assert_eq!(result.diagnostics.len(), 1);
+        let diag = result.diagnostics.iter().next().unwrap();
+        assert_eq!(diag.identifier(), "core.specs.provider-commands-shadowed-by-escape");
+        assert_eq!(diag.severity(), Severity::Warning);
     }
 
     #[test]

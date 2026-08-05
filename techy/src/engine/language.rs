@@ -19,6 +19,7 @@ use crate::constructs::{
 };
 use crate::error::ParseError;
 use crate::node::NodeKind;
+use super::driver::ParseDriver;
 use crate::source::{Source, SourceSpan, Span};
 use crate::state::{Lang, ParsingState};
 use crate::token::StdTokenReader;
@@ -142,6 +143,9 @@ impl<L: Lang> Language<L> {
         let mut session = ParserSession::new();
         let mut nodes = Vec::new();
         let seed = Arc::clone(&self.initial_state);
+        // Parse-initialization observation (registration-sanity diagnostics): once
+        // per root parse, before any token is read.
+        self.driver.observe_parse_start(&source, &seed, &mut session.diagnostics);
         let mut cx = ParseContext::new(
             &mut reader,
             Arc::clone(&source),

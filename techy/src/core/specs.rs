@@ -20,12 +20,15 @@
 //!   [`IntoSpecsProvider`] (packages/providers into
 //!   [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)).
 //! - **Command resolution** — [`resolve_command_in_scopes`] is the standard
-//!   resolution body (build the query, consult the scope stack, map the outcome),
+//!   resolution body (build the query, consult the scope stack, map the outcome —
+//!   a clean miss carries the searched providers plus a did-you-mean detail),
 //!   packaged as the [`ScopesCommandResolver`] strategy for
 //!   [`StdParseDriver`](crate::core::StdParseDriver);
 //!   [`CommandResolution`] (with [`ResolvedCallable`]) is the outcome vocabulary;
 //!   [`CallableQuery`], [`CallableSyntax`], and [`SearchedProviders`] describe the
-//!   lookup.
+//!   lookup. [`check_provider_commands_shadowed_by_escape`] is the
+//!   parse-initialization registration-sanity check (warning condition
+//!   [`ProviderCommandsShadowedByEscape`]).
 //!
 //! The run-side machinery that consumes these definitions — state, tokens, engine —
 //! is the [`core`](crate::core) hub.
@@ -34,8 +37,9 @@ pub use crate::engine::{
     resolve_command_in_scopes, CommandResolution, ResolvedCallable, ScopesCommandResolver,
 };
 pub use crate::scopes::{
-    CallableDefinedAsError, CallableQuery, CallableSyntax, DefinitionOp, ErrorCallableSpec,
-    FallbackProvider, IntoSpecsProvider, Package, ProviderError, Scope, ScopeOp,
+    check_provider_commands_shadowed_by_escape, CallableDefinedAsError, CallableQuery,
+    CallableSyntax, DefinitionOp, ErrorCallableSpec, FallbackProvider, IntoSpecsProvider,
+    Package, ProviderCommandsShadowedByEscape, ProviderError, Scope, ScopeOp,
     ScopeOpError, ScopeStack, ScopeStackError, SearchedProviders, SpecsProvider,
     SymbolEntry,
 };

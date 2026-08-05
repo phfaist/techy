@@ -53,11 +53,11 @@ use core::fmt;
 use hashbrown::HashMap;
 
 use crate::constructs::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
-use crate::error::DiagnosticInfo;
+use crate::error::{Diagnostic, DiagnosticInfo, Diagnostics};
 use crate::node::{BuildId, NodeKind};
-use crate::source::SourceSpan;
+use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, IntoCallableSpec};
-use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::state::{ClosedVocabulary, Lang, ParsingState, ParsingStateDelta};
 use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
 
 /// The syntax through which a callable invocation was recognized.
@@ -594,6 +594,141 @@ impl<L: Lang> fmt::Debug for SymbolEntry<'_, L> {
     }
 }
 
+// --- the parse-initialization escape-shadowing check -------------------------------------
+
+/// Condition (warning): every definition a provider advertises under one callable
+/// type begins with an escape character — the registration trap where names were
+/// inserted *with* their escape character (`"\greet"` instead of `"greet"`,
+/// [`Package::insert`]'s normalized-name contract), leaving the whole table
+/// unreachable: command tokens carry their name without the escape character, so
+/// none of these definitions can ever resolve.
+///
+/// Emitted by [`check_provider_commands_shadowed_by_escape`] at parse
+/// initialization (the latexlike preset wires it for every parse).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(id = "core.specs.provider-commands-shadowed-by-escape")]
+pub struct ProviderCommandsShadowedByEscape {
+    /// The provider whose definitions are all escape-shadowed.
+    pub provider: String,
+    /// The affected callable type (its `Debug` rendering — the wire payload cannot
+    /// carry a language's type id directly).
+    pub callable_type: String,
+    /// How many definitions the provider advertises under that type (all of them
+    /// escape-shadowed).
+    pub count: usize,
+    /// One offending name, exactly as registered (e.g. `"\\greet"`).
+    pub example: String,
+    /// The escape character(s) the offending names begin with.
+    pub escape_chars: String,
+}
+
+// Hand-written wording: the count needs number agreement, which the derive's message
+// format string cannot express.
+impl fmt::Display for ProviderCommandsShadowedByEscape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "every ‘{}’ definition of provider ‘{}’ begins with an escape character \
+             (‘{}’ — {} definition{}, e.g. ‘{}’): command names are registered \
+             without the escape character, so none of these definitions can resolve",
+            self.callable_type,
+            self.provider,
+            self.escape_chars,
+            self.count,
+            if self.count == 1 { "" } else { "s" },
+            self.example,
+        )
+    }
+}
+
+/// Check the state's seeded providers for all-escape-shadowed definition tables
+/// and record one [`ProviderCommandsShadowedByEscape`] **warning** per affected
+/// (provider, callable type) — the parse-initialization half of the registration
+/// trap's defenses (the resolution-miss half is
+/// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes)'s
+/// did-you-mean detail, which an in-stack fallback provider can mute; this check
+/// fires regardless of fallbacks).
+///
+/// For each provider on `state`'s scope stack and each callable type in the
+/// language's vocabulary, the provider's advertised names
+/// ([`SpecsProvider::iter_symbols`], unioned over every mode) are tested against
+/// the state's command escape characters
+/// ([`TokenRules::commands`](crate::token::TokenRules::commands)): when **all**
+/// (≥ 1) of them begin with an escape character, a warning is recorded at
+/// `source`'s start. Nothing is checked when commands are disabled, and providers
+/// that cannot enumerate (a [`FallbackProvider`]) are skipped — the check is a
+/// best-effort diagnostics nicety, not semantics.
+///
+/// **Bound where used** ("provide, don't require"): enumerating *vocabularies*
+/// needs [`ClosedVocabulary`] on the callable-type and mode ids, so the bound sits
+/// on this function alone — never on [`Lang`](crate::state::Lang) or the latexlike
+/// role traits. The latexlike preset calls it unconditionally at parse
+/// initialization (its vocabularies are enumerable); a family member or framework
+/// with enumerable vocabularies wires it the same way
+/// ([`LatexlikeLang::check_parse_start`](crate::latexlike::LatexlikeLang::check_parse_start),
+/// or directly at its own parse entry); for non-enumerable vocabularies the check
+/// is gracefully absent.
+pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
+    state: &ParsingState<L>,
+    source: &Arc<Source<L::SourceOrigin>>,
+    diagnostics: &mut Diagnostics<L::SourceOrigin>,
+) where
+    L::CallableTypeId: ClosedVocabulary,
+    L::ModeId: ClosedVocabulary,
+{
+    let rules = state.rules();
+    if !rules.enable_commands || rules.commands.is_empty() {
+        return;
+    }
+    let escape_chars: Vec<char> =
+        rules.commands.iter().map(|rule| rule.escape_char).collect();
+
+    for provider in state.scopes().providers().iter().rev() {
+        for &callable_type in L::CallableTypeId::ALL {
+            // The provider's advertised names under this type, unioned over every
+            // mode (deduplicated; sorted so the reported example is deterministic).
+            let mut names: Vec<Box<str>> = Vec::new();
+            for &mode in L::ModeId::ALL {
+                let Some(symbols) = provider.iter_symbols(callable_type, mode) else {
+                    continue; // cannot enumerate: gracefully absent
+                };
+                for entry in symbols {
+                    if !names.iter().any(|name| &**name == entry.name) {
+                        names.push(entry.name.into());
+                    }
+                }
+            }
+            if names.is_empty() {
+                continue;
+            }
+            names.sort_unstable();
+            let shadowed = |name: &str| {
+                name.chars().next().is_some_and(|first| escape_chars.contains(&first))
+            };
+            if !names.iter().all(|name| shadowed(name)) {
+                continue;
+            }
+            let mut offending_escapes: Vec<char> = names
+                .iter()
+                .filter_map(|name| name.chars().next())
+                .collect();
+            offending_escapes.sort_unstable();
+            offending_escapes.dedup();
+            diagnostics.push(Diagnostic::warning(
+                ProviderCommandsShadowedByEscape {
+                    provider: provider.name().into(),
+                    callable_type: alloc::format!("{callable_type:?}"),
+                    count: names.len(),
+                    example: names[0].clone().into(),
+                    escape_chars: offending_escapes.into_iter().collect(),
+                },
+                SourceSpan::new(source, Span::empty(0)),
+            ));
+        }
+    }
+}
+
 // --- Package ----------------------------------------------------------------------------
 
 /// One data-driven specials entry of a [`Package`]: a trigger string resolving to a
@@ -707,7 +842,7 @@ impl<L: Lang> Package<L> {
     /// ([`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes)),
     /// and a parse-initialization check warns when *all* of a provider's
     /// definitions are escape-shadowed
-    /// (`check_provider_commands_shadowed_by_escape`).
+    /// ([`check_provider_commands_shadowed_by_escape`]).
     ///
     /// **No spec-type/callable-type cross-check either — deliberately.** A
     /// "mismatched" registration (say, a plain macro-shaped spec under an
@@ -2305,6 +2440,48 @@ mod tests {
         assert!(Arc::ptr_eq(in_text[0].spec, &text_spec));
         let in_math = stack.iter_symbols(MACRO, Mode::Math);
         assert!(Arc::ptr_eq(in_math[0].spec, &moded_spec));
+    }
+
+    #[test]
+    fn escape_shadowing_check_reports_per_provider_and_type() {
+        use crate::latexlike::{
+            CallableType, EnvironmentSpec, Latexlike, MacroSpec,
+        };
+        use crate::source::Source;
+
+        // Identifier stability: the reserved wire identifier, frozen by the slate.
+        assert_eq!(
+            ProviderCommandsShadowedByEscape::IDENTIFIER,
+            "core.specs.provider-commands-shadowed-by-escape"
+        );
+
+        // One provider, two tables: the Environment table is all-escape-shadowed,
+        // the Macro table is clean — exactly one warning, naming the shadowed
+        // type. (Pooling the tables would let the clean entry silence it.)
+        let mut package: Package<Latexlike> = Package::new("mixed");
+        package.insert(CallableType::Macro, "good", Arc::new(MacroSpec::default()));
+        package.insert(
+            CallableType::Environment,
+            r"\align",
+            Arc::new(EnvironmentSpec::new(alloc::vec![])),
+        );
+        let state =
+            crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([package]);
+        let source = Arc::new(Source::new("any content"));
+        let mut diagnostics = crate::error::Diagnostics::new();
+        check_provider_commands_shadowed_by_escape(&state, &source, &mut diagnostics);
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.severity(), crate::error::Severity::Warning);
+        let condition = diagnostic
+            .data()
+            .downcast_ref::<ProviderCommandsShadowedByEscape>()
+            .unwrap();
+        assert_eq!(condition.provider, "mixed");
+        assert_eq!(condition.callable_type, "Environment");
+        assert_eq!(condition.count, 1);
+        assert_eq!(condition.example, r"\align");
+        assert_eq!(condition.escape_chars, "\\");
     }
 
     #[test]
