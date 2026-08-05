@@ -225,6 +225,30 @@ content loop's pass-through delta (`_delta`) — benign-silent rather than
 validated; the root loop's stop-cause guards (lines 196/203) already follow
 the implementation-error pattern. Left as the ruled S6 shape.
 
+## M4 — C2 residue assertion (the Phase 3 acceptance audit) — PASS
+
+Realization per D-plan-1: the acceptance run asserts the numbers here (no
+shipped line-counting test). Counted on the frozen FLM projection probe
+(walkthroughs/framework/flm_projected.rs — the artifact the T5 C2 ruling
+measured, last re-verified against the shipped surface in S5/S9), code lines
+only (blank/comment/doc lines excluded), by brace-scoped script.
+
+| Block | Counted | Envelope | Verdict |
+|---|---|---|---|
+| `impl Lang for Flm` — delegation residue (11 associated types + the three one-line hook delegations `initial_state_data`/`scan_specials`/`specials_trigger_chars`, impl header+close) | **25 lines** | ≤ ~30 (Lang) | PASS |
+| — plus FLM's *own* ext-mint feature (`make_node_ext`, 14 lines incl. signature): whole impl | 39 lines | (outside the residue: framework-owned behavior any topology requires) | n/a |
+| `impl LatexlikeLang for Flm {}` opt-in | 2 lines | (family opt-in, counted for completeness) | n/a |
+| `impl ParseDriver<Flm> for FlmDriver` — delegation one-liner bodies (recovery 1, source_resolver 1, resolve_command 1, group_interior_delta 1, resolve_state_event 3) | **7 delegation lines** (26 code lines whole impl incl. signatures + FLM's own `refine_diagnostic` hook) | ≤ ~12 (driver) | PASS |
+
+Context (the preset's own canonical impls, not the assertion's target): the
+shipped `impl Lang for Latexlike` (latexlike/mod.rs:327) is 58 code lines —
+the preset carries the canonical behaviors itself (the 17-line
+`finalize_transition` loud-refusal arm, the seed construction), which a
+delegating framework does not rewrite; `impl ParseDriver<LLL> for
+LatexlikeDriver<LLL>` (latexlike/driver.rs:393) is exactly **7 hooks with
+one-line bodies each** — the pillar-delegation doctrine holds in the shipped
+driver.
+
 ## Deviation log
 
 - **D-plan-1 (delegated realization)**: the C2 residue assertion is realized
