@@ -134,6 +134,21 @@ let mandatory = cite.argument_content_nodes(1).unwrap();
 assert_eq!(mandatory.source_text(), Some("Author"));
 ```
 
+The same registration in one line:
+[`define_macro`](crate::core::specs::Package::define_macro) /
+[`define_environment`](crate::core::specs::Package::define_environment) are preset
+shorthands over exactly this `insert` operation — not a second registration model —
+pairing the callable type and spec type correctly by construction:
+
+```rust
+use techy::core::specs::Package;
+use techy::latexlike::Latexlike;
+
+let mut package: Package<Latexlike> = Package::new("mydefs");
+package.define_macro("cite", ["o", "m"]).unwrap();
+package.define_environment("enumerate", ["o"]).unwrap();
+```
+
 Absent optional arguments are recorded, not invented — and a trailing optional at end
 of input is no error (pylatexenc issue #57's regression test lives in the acceptance
 suite):

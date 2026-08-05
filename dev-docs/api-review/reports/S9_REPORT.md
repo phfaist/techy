@@ -379,8 +379,22 @@ warning implements the frozen "all definitions start with the escape char"
 semantics, not the brief's "escape char disabled" paraphrase (see the top of
 this report).
 
+## Review should-fix (applied post-verdict)
+
+Review verdict (2026-08-05): PASS, merge-ready after user sign-off, 0 blockers,
+no escalations — D-plan-3 and D-plan-8 verified FORCED, all others DEFENSIBLE.
+One doc-only should-fix, applied on the stage branch:
+
+- **Guide mentions the registration one-liners**: docs/learn-by-example.md's
+  first registration chapter now shows `define_macro`/`define_environment` as
+  the one-line shorthand over the taught `insert` ceremony (explicitly
+  shorthand-not-second-path), with a small doctest example. Doctests 35 → 36;
+  all other counts unchanged; gates re-run green.
+
 ## Status
 
-COMPLETE — all six milestones landed; gates green at every milestone and at
-closure. Worktree:
+COMPLETE — all six milestones landed plus the review should-fix; gates green at
+every milestone and at closure: **740 lib + 30 acceptance + 21 oracle +
+8 derive-conditions + 1 derive + 36 doctests (2 ignored pre-existing)**;
+0 warnings; docs clean. Worktree:
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a13b2549c0a026aaf`.
