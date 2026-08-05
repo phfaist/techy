@@ -646,3 +646,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   cargo-semver-checks baseline, full public-surface audit vs the ruled
   roster, the all-riders grep sweep, superseded-names sweep, PLAN.md
   Phase 3 closure entry.
+- 2026-08-05: S10 launched (worktree branch `phase3-s10-hardening` off
+  api-review c6cd171; scope = §S10 + the consolidated PLAN.md checklist
+  blocks as the audit roster; instructed NOT to edit PLAN.md/PHASE3_PLAN.md
+  in-branch — closure entries drafted in the report, applied by the
+  supervisor at merge).
