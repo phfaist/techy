@@ -316,7 +316,7 @@ supervisor.
 | ai-guide-custom-lang.md | 18,254 | ≤ ~60 kB | PASS |
 | ai-guide-embedding.md | 8,249 | ≤ ~60 kB | PASS |
 | ai-guide-pylatexenc.md | 13,344 | ≤ ~60 kB | PASS |
-| guide.md (landing) | 5,048 → 4,966 after stale-sentence fix | (none) | — |
+| guide.md (landing) | 5,048 → 4,975 after stale-sentence fix (figure corrected at review) | (none) | — |
 
 ### 4. Fragment-anchor audit — 44/44 PASS (scripted)
 
