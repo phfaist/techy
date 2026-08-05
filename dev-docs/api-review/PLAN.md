@@ -178,6 +178,11 @@ Repo (durable), all under dev-docs/api-review/:
 - PLAN.md — this file (master).
 - PHASE3_PLAN.md — Phase 3 execution plan: stage breakdown S1–S10 (worktree
   protocol, per-stage ruling inputs, acceptance gates, stage log).
+- PHASE4_PLAN.md — Phase 4 execution plan (RULED 2026-08-05): guide structure
+  (User/Developer/AI categories), method rules incl. the no-assumption DOC_GAPS
+  protocol, size targets, rehomings, stage breakdown G1–G5, per-stage protocol.
+- DOC_GAPS.md — Phase 4 register of documentation gaps (GAP) and
+  behavior-verification notes (CHECK); created in G1, fully resolved by G5.
 - INVENTORY.md — Phase 0 full item inventory (+ provisional tier tags; see SYNTHESIS §3
   for empirical corrections).
 - SYNTHESIS.md — cross-persona matrix, unused-list, friction themes F1–F13, wishlist.
@@ -741,3 +746,23 @@ projected FLM probe) is at
   CLOSES the SourceSpan::content follow-up from the S10 sign-off (unreachable
   by construction). All six rustdocs state the all-builds panic; should_panic
   pins added per assert (7 new tests); CLAUDE.md rule 4 updated.
+- 2026-08-05 (user, two ruling rounds): **Phase 4 plan RULED** (PHASE4_PLAN.md
+  v3 is the execution record). Headlines: guides = three categories (User /
+  Developer / AI) of short, aggressively distilled chapters; volume discipline
+  REMOVE-DON'T-SUMMARIZE with size caps (user chapters ~10–15 kB; exceptions
+  learn-by-example ≤ ~30 kB, specs.md ≤ ~20 kB; dev soft cap ~30 kB; AI root
+  ≤ ~30 kB + five sub-chapters); v1's full framework/tooling/custom-language
+  cookbook chapters CUT — embedder findings + tooling starting points land as
+  short sections in the NEW dev chapter integration.md; guides never duplicate
+  rustdoc — extensive API-use documentation belongs in the module docs
+  (transform/visit/recompose/extract); landing page = 2–3-paragraph summary +
+  one-sentence chapter index; separate introduction.md; concepts-overview.md
+  kept (dev-guide page); rehomings: FS-resolver recipe → specs.md, post_space
+  + `\input`-caching notes → API docs only (brief), wish-23 identifier table
+  SUPERSEDED by the DiagnosticInfo implementors listing + match-via-IDENTIFIER
+  rule in parsing.md; NEVER-ASSUME rule — behavioral uncertainty goes to the
+  DOC_GAPS.md GAP/CHECK register, resolved by verification agents; pylatexenc
+  references link to readthedocs; **merge authorization: the supervisor
+  reviews chapter text and commits/merges once convinced of accuracy** (user
+  reviews post-merge). Stages: G1 skeleton+landing+introduction+concepts →
+  G2 User Guide → G3 Developer Guide → G4 AI Guide → G5 verification+audit.
