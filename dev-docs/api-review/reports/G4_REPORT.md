@@ -2,7 +2,8 @@
 
 Branch `phase4-g4-ai-guide` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a283fa102a3175a1f`,
-branched from `api-review` @ 855adb7). Status: **M0 (plan)**.
+branched from `api-review` @ 855adb7). Status: **M0–M7 COMPLETE** — all
+gates green after M6; awaiting stage review + merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb, predating the api-review series); the branch was reset to the local
@@ -148,3 +149,173 @@ pointers.
 ## Milestone log
 
 - M0: this plan. (Committed before other work.)
+- M1: docs/ai-guide-definitions.md, 13,384 bytes, 4 doctests (registration
+  with one-liners + insert + named-argument access; equation body delta;
+  body-scoped ScopeOp::Push package; `\input` via MapResolver + attached
+  slot). Full argument-code table compressed from the argument_specs
+  rustdoc table (all 11 rows incl. word codes); the three-trap table
+  (escape-char registration / `m` fallback / no cross-check) compressed
+  from specs.md § Registration pitfalls; mode visibility, Scope/
+  DefinitionOp, spec-type table, verbatim body, filesystem-recipe pointer.
+- M2: docs/ai-guide-trees.md, 14,518 bytes, 3 doctests (read/navigate;
+  extract split + keyval; restage→recompose pipeline). NodeKind table,
+  navigation table, all four extract producers + the three annotation
+  spellings, walk contract + three-channel discipline + role-blindness,
+  restage Descend/Emit table + region-edit error rules + original-node
+  idiom + cross-tree splice, recompose instruction model + Concat scope +
+  wrapping + streaming + the reconstruction doctrine (all compressed from
+  the respective module docs; vocabulary kept verbatim — "original node",
+  never provenance, per the transform module's own rule).
+- M3: docs/ai-guide-custom-lang.md, 18,254 bytes, 1 doctest (TrivialLang).
+  Lang associated-types table (10 rows, one-liners traced to the trait's
+  per-item rustdoc; make_node_ext stated as the one required method),
+  TrivialLang vs latexlike family (role traits, LatexlikeLang opt-in,
+  pillar functions, projection pattern), token rules + the specials
+  double-hook silent trap (both obligations), ext family table with
+  population-is-initialization, finalize_transition obligations + the
+  ruled replay-granularity note (compressed from custom-lang.md's
+  doc-traced passage), driver five-concern summary + CommandResolver,
+  construct parsers (trait shape text-fence as in the human chapter,
+  ParseContext toolkit table, takeover essentials + two staging doors,
+  ArgumentParser contract, conditions + ImplementationError), pointer to
+  the complete `\until` takeover doctest in construct-parsers.md.
+- M4: docs/ai-guide-embedding.md, 8,249 bytes, 1 doctest (parse_source
+  with a held Arc<Source> + LineIndexCache line/col + span correlation
+  across two parses of the same source — compiled evidence for the
+  span-stability rule). Bindings/threading facts table (owned handle +
+  TreeTag, Send+Sync trees, no-Send visitors, Severity exhaustive,
+  synthesized-node recipe pointer, never-panics-on-input), multi-source +
+  include policy, tooling entry points (node_at/covering_slice/parent,
+  LineIndexCache/LineColProvider + scan cap, span stability), no_std/
+  WebAssembly (compressed from introduction.md § Where techy runs),
+  streaming recomposition.
+- M5: docs/ai-guide-pylatexenc.md, 13,344 bytes, 1 doctest (the
+  quick-start translation: tolerant Language, math-as-group,
+  diagnostics-as-data — same evidence shape as the human chapter's).
+  Four tables: core concept map (15 rows), node classes (8 rows — the
+  three classes the human chapter covers in prose (`LatexCharsNode`,
+  `LatexGroupNode`, `LatexCommentNode`) added as rows linked to the
+  verified latexnodes.nodes module-page URL, no new anchor URLs
+  invented), argument-spec strings (v2 aliases `*`/`{`/`[` explicit),
+  behavior differences (6 rows: entry model, byte offsets, span
+  identity, tolerant→Recovery+Diagnostics, unknown macros, `\input`
+  layer move). All 24 readthedocs URLs reused verbatim from
+  docs/pylatexenc-migration.md's G3-verified link block (/en/latest/;
+  zero new URLs).
+- M6 (root, LAST): docs/ai-guide.md, 16,420 bytes (HARD cap ~30 kB), 4
+  doctests (parse; register macro+environment / read arguments / body /
+  spans / descendants; extract; diagnostics incl. `is::<T>()`,
+  `downcast_ref`, `T::IDENTIFIER`, typed payload field). Orientation
+  (4 sentences), module-topology table (11 rows, canonical paths),
+  everyday-flow text diagram, four recipes, 18-line pitfalls index (each
+  line pointing to the sub-chapter/API item with the detail), pointer
+  table to the five sub-chapters + all 13 human-guide pages. Written
+  against the finished sub-chapters (anchors `#traps`,
+  `#argument-codes`, `#input-like-inclusion` verified in built HTML).
+  One doctest correction during writing: the descendants assertion
+  initially omitted the environment's optional-argument content `"(i)"`
+  — the failing doctest supplied the real shape (also confirming that
+  environment name scaffolding does NOT leak into chars descendants).
+
+## Gates (run after M6)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS (clean) |
+| `cargo test` (all suites) | PASS — 758 lib + 30 acceptance + 8 derive_conditions + 21 recompose_oracle + 1 techy-derive |
+| `cargo test --doc` | PASS — 66 doctests (2 ignored), incl. this stage's 14 new guide doctests (definitions 4, trees 3, custom-lang 1, embedding 1, pylatexenc 1, root 4) |
+| `rm -rf target/doc && cargo docs` | PASS — zero warnings (broken-intra-doc-links deny in force; all new intra-doc links resolve, `NodeRef::specials_name` included) |
+| Fragment anchors | All in-page anchors used by the new chapters verified as generated ids in the built HTML: `argument-codes`, `traps`, `input-like-inclusion` (ai_guide_definitions), `a-complete-takeover-parser` (construct_parsers), `resolving-external-sources-input-like-inclusion` (specs), `working-with-diagnostics` (parsing), `scopes-and-packages` (concepts_overview) |
+| `scripts/check_semver.sh` | PASS — "no semver update required" (196 checks pass) |
+| Four-step wiring | Intact for all six chapters (files; lib.rs guide block lines 152–167; GUIDE_PAGES rows 82–87; guide.md AI Guide index — wired in G1, only file contents changed; published stub headings kept verbatim) |
+| Superseded-names sweep | CLEAN — two grep batteries over the [§dd-dr:superseded-names] register; only hits: the canonical `ParsingStateDelta` and pylatexenc-side class references in the migration chapter (`LatexWalker`, `Latex*Node`, `LatexContextDb`) — same classification as the G3 sweep |
+| Markdown-only discipline | No code or rustdoc files touched; the only non-docs/ change is this report |
+
+## Chapter size table (root HARD cap ~30 kB; sub-chapters ≤ ~60 kB)
+
+| File | Bytes | Tokens ≈ bytes/4 | Status |
+|---|---|---|---|
+| docs/ai-guide.md (root) | 16,420 | ~4,100 | OK — 55% of the HARD cap |
+| docs/ai-guide-definitions.md | 13,384 | ~3,300 | OK |
+| docs/ai-guide-trees.md | 14,518 | ~3,600 | OK |
+| docs/ai-guide-custom-lang.md | 18,254 | ~4,600 | OK |
+| docs/ai-guide-embedding.md | 8,249 | ~2,100 | OK |
+| docs/ai-guide-pylatexenc.md | 13,344 | ~3,300 | OK |
+| Total | 84,169 | ~21,000 | root + largest sub-chapter ≈ 8,700 tokens |
+
+## DOC_GAPS delta
+
+- No new entries. Every chapter claim is compressed from a finished human
+  guide chapter (public documentation per the ruled method), traced to
+  module/item rustdoc, or demonstrated by one of the 14 compiling
+  doctests. The embedding chapter's "never panics on document input" row
+  restates learn-by-example's public claim; the crate-level rustdoc
+  anchor for it is already tracked as DOC_GAPS #3 (OPEN, G5 scope) — no
+  duplicate entry filed.
+- #2 (WebAssembly rustdoc mention) and #3: untouched (G5 scope). The
+  embedding chapter's WebAssembly sentence compresses introduction.md's
+  (which #2's build half already verified).
+
+## Deviations / items for the supervisor
+
+1. Stale worktree HEAD at agent start (2110bbb) — reset to api-review tip
+   855adb7 before branching, per the brief. Procedural.
+2. The pylatexenc node-class table adds three rows the human chapter
+   handles as "the other mappings are direct" (`LatexCharsNode`,
+   `LatexGroupNode`, `LatexCommentNode`). They are linked to the
+   G3-verified latexnodes.nodes module page URL, not to per-class
+   anchors, honoring "reuse the verified URLs — do not invent new ones".
+3. The embedding chapter includes the synthesized-node recipe pointer
+   (one table row) although the ruled ai-guide-embedding content list
+   does not name it: it is one of the ruled integration.md items being
+   compressed, and it is embedder-audience material. REMOVE-rule
+   candidate if the reviewer reads the chapter map as exhaustive.
+4. The custom-lang chapter's `ConstructParser` trait shape is a
+   `text`-fenced signature paraphrase — same presentation as the human
+   construct-parsers.md chapter (not compiled; the real declaration is
+   the trace).
+5. The root's pitfalls index has 18 entries (the ruled list plus
+   sub-chapter-surfaced one-liners: `descendants()` self-exclusion,
+   `body()` None-vs-empty, Emit-no-descent, reconstruction doctrine,
+   Concat role scope, no-Send visitors, LineIndexCache cap). Each is one
+   line + pointer, per the ruled format.
+6. Vocabulary note: the trees chapter says "the sanctioned splice door"
+   and "staging door(s)" — both are the shipped module docs' own wording
+   (transform/mod.rs; constructs docs and the human chapters use
+   "staging door" throughout), kept deliberately for term stability with
+   the API docs an agent will read next.
+
+## Scrutiny pointers for the reviewer
+
+- ai-guide.md: the everyday-flow text diagram is synthesized (no single
+  doc source states it as a diagram) — verify each edge: Package →
+  lang_initial_with_packages (specs.md), driver+state → Language::new
+  (parsing.md), parse → Result<ParseResult, ParseError> (parsing.md),
+  ParseResult fields (parsing.md), root()/children()/descendants()
+  (node-trees.md). The pitfalls index lines are each one-line
+  compressions — the pointer target carries the authority.
+- ai-guide-definitions.md: the argument-code table is the densest
+  compression (11 rows from the argument_specs rustdoc table) — check
+  row-by-row against the rustdoc; the `o` row drops the rustdoc's
+  parenthetical about lone-inner-group protection (kept only on the
+  `AnyDelimitedOptional` row's source; REMOVE-rule cut).
+- ai-guide-trees.md: the restage and recompose fact lists compress the
+  two module docs' section headers nearly 1:1 — the highest-risk
+  compression is the region-edit paragraph (provided-with-empty vs
+  absent; ContentParentDropped remedy) — trace to transform/mod.rs
+  "Region edits: no silent repair".
+- ai-guide-custom-lang.md: the Lang associated-types table one-liners
+  are compressions of the trait's per-item docs (state/lang.rs) — the
+  StateExt "no interior mutability" and Event two-class rows carry
+  contract weight; the replay-granularity paragraph re-compresses the
+  G3-traced custom-lang.md passage (trace chain in G3_REPORT M3 entry).
+- ai-guide-embedding.md: the doctest's final assertion (spans of two
+  parses of the same Arc<Source> compare equal) is the strongest new
+  demonstration — it is the positive side of the documented
+  identity-based-equality rule; the negative side ("never correlate"
+  across parse() calls) stays prose, traced to integration.md.
+- ai-guide-pylatexenc.md: pylatexenc-side facts are unchanged from the
+  G3-verified human chapter (this stage did not re-read pylatexenc
+  sources); the compression risk is table-cell truncation — the
+  tolerant-parsing row carries the full strict/tolerant contract in one
+  cell.
