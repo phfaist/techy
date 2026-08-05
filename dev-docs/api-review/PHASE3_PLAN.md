@@ -603,3 +603,8 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   merged tree). S8 COMPLETE. NEXT: launch **S9** per § S9 (preset
   definitions + consumer polish, T1/T2 batch) — includes the A1(iv)
   bound-where-used check fn + parse-init wiring routed from S4 (T3 §E2).
+- 2026-08-05: S9 launched (worktree branch `phase3-s9-preset-defs` off
+  api-review f1f53f2; relay discipline + rulings-revision escalation rule
+  in the brief; scope = §S9 + the S4-routed A1(iv) check fn + the note that
+  the S8 oracle's specials/ligature rows must switch to loading minilatex
+  as part of the ruled base-package slimming).
