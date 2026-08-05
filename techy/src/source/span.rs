@@ -114,8 +114,8 @@ impl Span {
     /// # Panics
     ///
     /// Panics if the span is out of bounds for `content` or not on `char` boundaries
-    /// (same contract as `&content[range]` — the approved indexing-style exception
-    /// of the panic policy).
+    /// (same contract as `&content[range]`) — one of the crate's few deliberate
+    /// panics (see the [crate-level Panics list](crate#panics)).
     #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]

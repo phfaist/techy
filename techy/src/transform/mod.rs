@@ -219,7 +219,7 @@ where
 /// ([`Build`](RestageError::Build)), driver-detected unrepairable edits
 /// ([`ContentParentDropped`](RestageError::ContentParentDropped)), or misuse of
 /// a context op (a documented-contract violation returns an `Err`, never
-/// panics — the panic policy).
+/// panics).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RestageError<E> {

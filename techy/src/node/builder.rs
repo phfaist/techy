@@ -82,7 +82,7 @@ struct Staged<L: Lang> {
 ///
 /// The staging input comes from argument/construct parser implementations —
 /// outer layers whose bugs must surface as errors, not
-/// panics (the panic policy). Every check runs in every build:
+/// panics. Every check runs in every build:
 ///
 /// - A child `BuildId` must already be staged (which also makes cycles unrepresentable).
 /// - Each staged node is used as a child at most once, and the root must not be anyone's

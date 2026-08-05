@@ -282,7 +282,51 @@ remaining "module docs" mentions target public pages.
 
 ## M3 — panic roster
 
-(to be filled)
+Derivation: rendered-HTML scan of every public page for `id="panics"` sections
+plus a prose scan for every remaining "panic" mention (UnwindSafe auto-trait
+link noise excluded), cross-checked against dev-docs/DESIGN_RATIONALE.md
+[§dd-dr:panic-policy] as the read-only completeness oracle. The two sources
+agree exactly.
+
+**Final roster (public API, documented panics):**
+
+- Precondition asserts (all-builds, six items): `Span::new`, `Span::extend_to`,
+  `SourceSpan::new`, `SourcePos::new`, `Token::new`, `skip_whitespace`.
+- Indexing-style accessors (documented `# Panics`, non-panicking companions
+  where named): `NodeTree::node` (companion `get`), `NodeTree::nodes_in`,
+  `Span::slice` (companion `get`), `TextContent::resolve`,
+  `ChildRegion::{children, content_range, content_parent}` (staged-region
+  panic, unreachable through finished trees).
+
+Items the brief expected but that are NOT on the roster, with verification:
+`SourceSpan::content` documents no panic and cannot panic — `SourceSpan::new`
+validates bounds and `char` boundaries at construction (the oracle's amendment
+note records this follow-up as closed). The `check_tree_invariants` /
+`check_latexlike_tree_invariants` panicking test oracles are `pub(crate)` +
+`#[cfg(test)]` — not public API.
+
+**Findings (stale panic claims in public docs, both verified against code and
+corrected):** (1) `ParseDriver::make_paragraph_break_node` claimed the
+"builder's region-tiling assert panics" — actual behavior is
+`NodeBuildError` → `ImplementationError` abort (fixed in M2). (2)
+`SpecialsMatch::end` claimed an invalid end "panics later when the span is
+sliced" and that "the reader debug-asserts this" — the standard reader
+validates the contract always-on and reports an implementation error
+(reader.rs scan site); doc corrected.
+
+**Crate-level section:** techy/src/lib.rs `## Panics` rewritten — opening
+no-panic-on-input sentence kept ("fallible seam" → "fallible operation" per
+the sweep), then the two families, every item an intra-doc link with a
+one-line contract, one-sentence rationale per family (paraphrased from the
+oracle, no dev-doc citation), closing exhaustiveness statement. Item-level
+pages that referenced "the panic policy" / "the approved exception" now link
+to the crate-level list instead (span.rs slice, arguments.rs ChildRegion,
+builder.rs, transform/mod.rs RestageError).
+
+**Documentation_Structure.md:** maintenance note added under "API
+documentation directly in code" naming the crate-level Panics section as the
+exhaustive user-facing list, to be updated with any public panicking-behavior
+change.
 
 ## M5 — closure
 

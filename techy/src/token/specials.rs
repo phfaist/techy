@@ -34,8 +34,9 @@ pub struct SpecialsMatch<'s, L: Lang> {
     /// satisfy `pos < end <= content.len()` and fall on a `char` boundary, and `name`
     /// should be the matched slice `&content[pos..end]`. A zero-width match would
     /// produce a token that never advances the parse (an infinite loop); an
-    /// out-of-range or mid-codepoint `end` panics later when the span is sliced.
-    /// The reader debug-asserts this at the call site.
+    /// out-of-range or mid-codepoint `end` would produce an invalid span. The
+    /// standard reader validates the contract at the call site and reports a
+    /// violation as an unrecoverable implementation error — never a panic.
     pub end: usize,
     /// The invocation form the trigger resolved to (recorded on the token; the dispatch
     /// loop needs it to build an `Invocation`). Recognition = resolution, and a
