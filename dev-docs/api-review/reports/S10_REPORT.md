@@ -288,11 +288,12 @@ target/doc && cargo docs` clean.
   `cargo semver-checks check-release -p techy --baseline-rev api-baseline`
   (override via `BASELINE_REV=<rev>`).
 - Baseline realization for an unpublished crate (**delegated decision
-  D-plan-4**): the baseline is a **git tag `api-baseline`**, to be pinned by
-  the supervising session/user on the api-review/main commit where Phase 3
-  lands (a tag minted from this stage branch would point at a pre-merge
-  commit — deliberately NOT created here); re-pinned deliberately at each
-  0.x version bump per the rubric's discipline. Procedure documented in the
+  D-plan-4; amended by user ruling at sign-off — movable BRANCH, not tag**):
+  the baseline is the **git branch `api-baseline`**, minted by the
+  supervising session/user on the api-review/main commit where Phase 3
+  lands (a ref minted from this stage branch would point at a pre-merge
+  commit — deliberately NOT created here); moved deliberately
+  (`git branch -f`) at each 0.x version bump per the rubric's discipline. Procedure documented in the
   script header + the [§dd-dr:stability-rubric] applied note (added this
   stage).
 
@@ -433,8 +434,9 @@ scripts/. Findings:
 >   recorded skip_whitespace pattern — site table in S10_REPORT);
 >   `missing_docs` promoted to workspace deny;
 >   cargo-semver-checks baseline realized as scripts/check_semver.sh against
->   the `api-baseline` git tag (**ACTION: tag the Phase-3 landing commit
->   `api-baseline` at merge**); full public-surface audit exact (283 item
+>   the `api-baseline` git branch — movable, per the user ruling at sign-off
+>   (**ACTION: mint the `api-baseline` branch on the Phase-3 landing commit
+>   at merge**); full public-surface audit exact (283 item
 >   pages, zero duplicate paths, every item at its ruled home; INVENTORY +
 >   all-stage reconciliation in S10_REPORT); all-riders grep sweep: every
 >   Phase 3 obligation DONE or consciously ROUTED to Phase 4 (table in
@@ -457,8 +459,8 @@ scripts/. Findings:
 >   missed and now shares the degradation helper);
 >   missing_docs deny green everywhere; cargo-semver-checks 0.50.0 installed,
 >   pipeline proven (196 checks pass on self-comparison), durable guard =
->   scripts/check_semver.sh + `api-baseline` tag procedure (tag to be minted
->   on the landing commit); surface audit 283 pages/zero dupes/exact roster;
+>   scripts/check_semver.sh + the movable `api-baseline` branch (minted
+>   on the landing commit; user ruling at sign-off: branch over tag); surface audit 283 pages/zero dupes/exact roster;
 >   rider sweep 0 MISS; superseded-names sweep clean (one guide-variable
 >   rename applied). Deviations D-plan-1..4 (all delegated realizations /
 >   policy-grounded scope extensions — none touch ruled shapes). Reports:
@@ -489,11 +491,12 @@ scripts/. Findings:
   one validation regime), and the chars-run contiguity guards (silently-wrong
   spans). Both use the established channels (Custom token error /
   `cx.implementation_error`).
-- **D-plan-4 (delegated realization)**: the semver baseline for the
-  unpublished crate = the `api-baseline` git tag pinned at the Phase-3
-  landing commit (created by the supervisor/user at merge, not from this
-  branch), consumed by `scripts/check_semver.sh` via `--baseline-rev`. See
-  the M6 section.
+- **D-plan-4 (delegated realization; user-amended at sign-off: movable
+  branch, not tag)**: the semver baseline for the unpublished crate = the
+  `api-baseline` git branch pointed at the Phase-3 landing commit (created
+  by the supervisor/user at merge, not from this stage branch; moved with
+  `git branch -f` at each deliberate version bump), consumed by
+  `scripts/check_semver.sh` via `--baseline-rev`. See the M6 section.
 
 ## Handoff notes
 

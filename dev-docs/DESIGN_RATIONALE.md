@@ -5865,8 +5865,10 @@ complete — [§dd-dr:public-visibility-sweep].)*
 workspace `deny` lint (promoted at zero warnings). The cargo-semver-checks baseline
 is realized the unpublished-crate way — a git revision, not a registry version:
 `scripts/check_semver.sh` runs `cargo semver-checks check-release -p techy
---baseline-rev api-baseline`, where the `api-baseline` tag is pinned to the commit
-where Phase 3 landed and is re-pinned deliberately at each version bump; the script
+--baseline-rev api-baseline`, where `api-baseline` is a git *branch* pointed at
+the commit where Phase 3 landed and moved deliberately at each version bump
+(user ruling at the S10 sign-off: a movable branch, not a tag, so the baseline
+follows deliberate API adjustments during the soft freeze); the script
 clears `RUSTDOCFLAGS` because the workspace's rustdoc-header injection uses a
 root-relative path that scratch builds cannot resolve. Verified against
 cargo-semver-checks 0.50.0 — 196 checks pass on the landed surface.)*

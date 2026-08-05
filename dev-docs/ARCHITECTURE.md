@@ -155,8 +155,8 @@ when the API-review restructuring lands, but important shortcomings may still be
 fixed breakingly until frameworks actually build on techy; from that adoption on,
 the freeze is hard. The guards (applied Phase 3 S10): `missing_docs` is a workspace
 `deny` lint, and `scripts/check_semver.sh` runs cargo-semver-checks against the
-`api-baseline` git tag (the Phase-3 landing commit; re-pinned at each version
-bump). Full decision: [§dd-dr:stability-rubric].
+`api-baseline` git branch (the Phase-3 landing commit; moved deliberately at
+each version bump — a movable branch, not a tag, by user ruling). Full decision: [§dd-dr:stability-rubric].
 
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
