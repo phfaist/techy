@@ -141,13 +141,13 @@ heavy weight; guides and API curation follow **access-tier logic, not frequency 
   vs the movable `api-baseline` branch); full audit exact. Stage plan +
   status + per-stage logs: PHASE3_PLAN.md; reports under
   dev-docs/api-review/reports/.
-- [ ] **Phase 4 — Guides** (agent-drafted, user-reviewed), written from public docs only
-  (needing source = doc gap):
-  - Human guide: docs/ chapters + per-tier cookbook; **framework-builder chapter** incl.
-    bindings guidance.
-  - AI-agent guide: one dense self-contained doc (task → recipe → code, pitfalls).
-  - Migration guides pylatexenc v2/v3 → techy: human (high-level + pointers) and AI
-    (dense mapping tables). pylatexenc sources: `$HOME/Research/util/pylatexenc/`.
+- [x] **Phase 4 — Guides** (done 2026-08-05; G1–G5 all merged): the full
+  guide bundle live under `techy::guide` — landing page + 18 chapters
+  (User 6 / Developer 6 / AI 6), written from public documentation only;
+  DOC_GAPS register fully resolved; crate-level WebAssembly + panic-contract
+  anchors added; process-flavored rustdoc swept; final wiring/length/
+  anchor/terminology/superseded/link audits green. Stage plan + status +
+  per-stage logs: PHASE4_PLAN.md; reports under dev-docs/api-review/reports/. pylatexenc sources: `$HOME/Research/util/pylatexenc/`.
 
 ## Companion projects & feature ideas (tracked here, decided in 2a/2b)
 
@@ -746,6 +746,39 @@ projected FLM probe) is at
   CLOSES the SourceSpan::content follow-up from the S10 sign-off (unreachable
   by construction). All six rustdocs state the all-builds panic; should_panic
   pins added per assert (7 new tests); CLAUDE.md rule 4 updated.
+- 2026-08-05 (supervisor merges under the user's standing Phase-4 merge
+  authorization; supervising session): **Phase 4 — guides COMPLETE** (G1–G5
+  all merged into api-review; stage log + per-stage detail in
+  PHASE4_PLAN.md / reports/G<N>_REPORT.md). G1 skeleton + landing +
+  introduction + concepts-overview (all 18 chapters wired from day one);
+  G2 User Guide (five chapters + the module-doc sufficiency pass; DOC_GAPS
+  #1 resolved — condition identifiers render on all 25 condition pages);
+  G3 Developer Guide (five chapters incl. the new integration.md and the
+  both-sides-linked pylatexenc migration); G4 AI Guide (root + five
+  sub-chapters, 84 kB, 14 new doctests); G5 verification + audit closed
+  the phase: DOC_GAPS #2 resolved (wasm32-unknown-unknown build
+  re-verified; the crate `no_std` rustdoc now names WebAssembly) and #3
+  resolved (crate-level Panics section — parsing never panics on document
+  input, problems surface as diagnostics or an `Err`; the always-on
+  precondition asserts stay caller-contract-side, phrased consistently
+  with their item pages); process-flavored rustdoc sweep — the 5 G2-named
+  sites plus 27 more public sites reworded into timeless prose (checkpoint
+  numbers, dates-as-justification, session/ruling references, stratum
+  labels removed from public text; the private/test leave-list with
+  reasons in G5_REPORT.md); final audits all green: wiring 19/19
+  (files / lib.rs guide block / GUIDE_PAGES / guide.md index), every
+  chapter within its ruled size target, fragment anchors 44/44 on a fresh
+  docs build, terminology and superseded-names sweeps clean, readthedocs
+  link sample 6/6 live (28 definitions per migration file, sets
+  identical), docs build zero warnings, test counts unchanged
+  (758+30+8+21+1; 66+2 doctests), check_semver green. Every DOC_GAPS
+  entry RESOLVED. Residual notes for the user (G5_REPORT M4): the
+  "(module docs)" pointers on some re-exported items target private
+  pages; the [§dd-dr:…] pointers in public rustdoc (panic-policy family,
+  ext-minting) await a four-case-rule call; "footgun" in one extract doc.
+  **The phase plan (Phases 0–4) is complete**; disposal of the
+  dev-docs/api-review/ scaffolding remains the user's call per the
+  documents' own headers.
 - 2026-08-05 (user, two ruling rounds): **Phase 4 plan RULED** (PHASE4_PLAN.md
   v3 is the execution record). Headlines: guides = three categories (User /
   Developer / AI) of short, aggressively distilled chapters; volume discipline

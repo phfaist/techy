@@ -174,6 +174,24 @@ context — compressed but obeying all clarity rules):
 
 ## Status log
 
+- 2026-08-05: **G5 DONE — merged into api-review (76c7913); PHASE 4
+  COMPLETE.** DOC_GAPS #2/#3 resolved (WebAssembly sentence in the crate
+  no_std section, build re-verified; crate-level Panics section read
+  against all six precondition-assert rustdocs — no contradiction);
+  process-flavored rustdoc sweep: 34 public sites across 18 files (2
+  additions + 32 rewordings; leave-list with reasons in G5_REPORT).
+  Independent review: MERGE-READY, 0 blockers — every changed line
+  verified doc-text-only, all 32 rewordings meaning-preserving, rendered-
+  HTML process-wording grep zero hits, anchors 44/44 reproduced, wiring
+  19/19, sweeps clean, wasm build re-run. Three findings escalated to the
+  user (not fixed, correctly): private-page "(module docs)" pointers on
+  some re-exported items; [§dd-dr:…] pointers in public rustdoc
+  (panic-policy family = the user's own ruling text + builder.rs
+  ext-minting) awaiting a Documentation_Structure four-case call;
+  "footgun" in the parse_keyval doc (pre-existing, possibly user-authored).
+  Optional user call noted by the reviewer: the crate Panics section could
+  name the indexing-accessor family for exhaustiveness (true as written).
+  PLAN.md closure records applied at merge. Phase 4 closed.
 - 2026-08-05: **G4 DONE — merged into api-review (c49406c; incorporates the
   user's own 12a9ce5 TODO_Big.md commit via rebase)**. Six AI Guide chapters,
   84 kB / ~21k tokens total: root 16.4 kB (55% of the ~30 kB HARD cap;
