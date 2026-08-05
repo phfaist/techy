@@ -170,6 +170,21 @@ context — compressed but obeying all clarity rules):
 
 ## Status log
 
+- 2026-08-05: **G1 DONE — merged into api-review (4e1244e)**. Implementer: 6
+  commits (landing page rewrite; introduction.md 6.6 kB; concepts-overview
+  expansion 11.8 kB, all 12 headings byte-identical; 15 wired stubs; lib.rs
+  guide block 3→18 submodules; GUIDE_PAGES 4→19; DOC_GAPS.md with 2 CHECK
+  entries; G1_REPORT.md). Independent review: MERGE-READY, 0 blockers, ~15
+  traceability spot-checks all doc-verbatim, link canonicality verified,
+  superseded-names clean; 4 trivial should-fixes ordered. Supervisor read all
+  three content pages, applied the 4 should-fixes + 1 own nit ("de-keyed") in
+  a review-fix commit; bonus: `cargo build --target wasm32-unknown-unknown`
+  PASSES (DOC_GAPS #2 narrowed to the rustdoc-mention half, G5). Gates
+  re-verified on the merged tree (758+30+8+21+1 tests, 36 doctests, docs build
+  0 warnings). Deviations: 12-vs-14 section count (plan error, corrected
+  bf80856); stale worktree HEAD reset (procedural); parsing-model stub
+  normalization; target-users woven not sectioned — all FORCED/DEFENSIBLE.
+  NEXT: G2.
 - 2026-08-05: v1 (12-chapter map) superseded by user trim rulings; v2 drafted;
   v3 RULED same day (second ruling round): separate introduction.md + minimal
   landing page; learn-by-example ≤ ~30 kB and specs.md ≤ ~20 kB exceptions; AI
