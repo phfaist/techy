@@ -272,6 +272,149 @@ in a sentence I edited for site 7) — left: metaphor cleanup in rustdoc
 beyond process wording is outside the M3 mandate; reported here for the
 supervisor.
 
-## M4 — audit results (fills in after execution)
+## M4 — audit results: DONE
+
+### 1. Docs build
+
+`rm -rf target/doc && cargo docs` after all G5 edits: **zero warnings**
+(deny lints for missing_docs / broken intra-doc links in force).
+
+### 2. Wiring audit — PASS
+
+- docs/: all 18 chapter files + guide.md present (19 .md files +
+  rustdoc-header.html; no strays).
+- lib.rs guide block: 18 submodule declarations, order User → Developer →
+  AI, matching the files one-to-one.
+- GUIDE_PAGES (docs/rustdoc-header.html): **19 entries** — `["",
+  "Overview"]` + 18 chapters, grouped by the three comment-marked sections
+  in the ruled order; slugs match the module names.
+- docs/guide.md: all 18 chapters indexed, one-sentence description each,
+  same order. One stale sentence found and fixed (trivial audit fix):
+  "Chapters still being written appear below with a short placeholder
+  page." — no unwritten chapters remain since G4.
+
+### 3. Length audit — ALL WITHIN TARGETS
+
+| Chapter | Bytes | Target | Verdict |
+|---|---|---|---|
+| introduction.md | 6,602 | ≤ ~10–15 kB | PASS |
+| language-syntax.md | 12,490 | ≤ ~10–15 kB | PASS |
+| node-trees.md | 9,008 | ≤ ~10–15 kB | PASS |
+| specs.md | 15,945 | ≤ ~20 kB | PASS |
+| parsing.md | 8,768 | ≤ ~10–15 kB | PASS |
+| learn-by-example.md | 29,561 | ≤ ~30 kB | PASS |
+| concepts-overview.md | 11,924 | soft ~30 kB | PASS |
+| parsing-model.md | 15,910 | soft ~30 kB | PASS |
+| construct-parsers.md | 20,638 | soft ~30 kB | PASS |
+| custom-lang.md | 16,438 | soft ~30 kB | PASS |
+| integration.md | 6,382 | soft ~30 kB | PASS |
+| pylatexenc-migration.md | 17,431 | soft ~30 kB | PASS |
+| ai-guide.md | 16,420 | ≤ ~30 kB | PASS |
+| ai-guide-definitions.md | 13,396 | ≤ ~60 kB | PASS |
+| ai-guide-trees.md | 14,584 | ≤ ~60 kB | PASS |
+| ai-guide-custom-lang.md | 18,254 | ≤ ~60 kB | PASS |
+| ai-guide-embedding.md | 8,249 | ≤ ~60 kB | PASS |
+| ai-guide-pylatexenc.md | 13,344 | ≤ ~60 kB | PASS |
+| guide.md (landing) | 5,048 → 4,966 after stale-sentence fix | (none) | — |
+
+### 4. Fragment-anchor audit — 44/44 PASS (scripted)
+
+Script: extract every markdown link with a `#fragment` (inline +
+reference-style) from all 19 docs/*.md files; resolve
+`crate::guide::<module>#frag` to target/doc/techy/guide/<module>/index.html
+and check the fragment against the rendered `id="…"` set. Re-run on the
+fresh post-edit docs build: **44 links checked, 44 OK, 0 failures** (no
+non-guide fragment targets, no same-page fragments). Distinct fragments
+verified: concepts_overview #the-node-tree, #scopes-and-packages,
+#parsing-state-and-deltas, #callable-specs-and-arguments,
+#sources-and-spans, #construct-parsers, #diagnostics-and-tolerant-parsing;
+specs #the-spec-types, #registration-pitfalls,
+#resolving-external-sources-input-like-inclusion; parsing
+#working-with-diagnostics; introduction #where-techy-runs;
+language_syntax #no-definitions-ship-by-default; construct_parsers
+#a-complete-takeover-parser; ai_guide_definitions #argument-codes, #traps,
+#input-like-inclusion. (Full 44-link list in the M4 script output; each
+row is chapter → link.)
+
+### 5. Terminology sweep over docs/*.md — CLEAN (no fixes needed)
+
+- Acronym scan (all `[A-Z]{2,}` tokens): every hit is either on the
+  allowed list (AST — defined in guide.md as "Abstract Syntax Tree"; API,
+  HTML, URL, ASCII, AI; LaTeX/TeX; PyO3, FLM — proper names; CT_MACRO — a
+  code identifier), a code identifier (`LLL` type parameter, only inside
+  code spans; `T::IDENTIFIER`), or emphasis capitals in the AI guide
+  ("SAME", "AND", "ONE" — compression emphasis, sanctioned style). No
+  "WASM", "DR", or other violations.
+- Metaphor scan (footgun/under the hood/magic/journey/on-ramp/heart
+  of/glue/…): one hit, "boilerplate" (construct-parsers.md:226) — kept:
+  established programming vocabulary, not a review coinage. ("door"
+  vocabulary is a FORCED keep per the G4 record: shipped module-doc
+  vocabulary.)
+- No review-coined jargon found (checkpoint/persona/walkthrough/stratum/
+  S0-S2/rider/tier-misuse: zero hits in docs/).
+
+### 6. Superseded-names sweep — CLEAN
+
+Register: dev-docs/DESIGN_RATIONALE.md [§dd-dr:superseded-names] (~110
+names/shapes). Scripted word-boundary sweep over docs/*.md + all 17
+rustdoc files touched in M1–M3. 27 raw hits, all benign on inspection:
+
+- `LatexWalker`/`LatexNode` in the two migration chapters — pylatexenc's
+  OWN class names being mapped (with readthedocs link definitions); not
+  techy vocabulary reintroduction.
+- "Split …"/"Ancestors of …" — English words in prose/comments, not the
+  rejected `Split`/`Ancestors` types.
+- "no `SlotSpec`" (spec/structure.rs:17, internal module doc) and "no
+  `ConflictStrategy`" (scopes/mod.rs:20 internal + :1402 public) —
+  deliberate NEGATIVE mentions documenting the design by contrast;
+  pre-existing, survived the Phase-3 stage reviews; kept.
+- "Library conditions are reported…" (error.rs:5) — English "library".
+
+### 7. External-link audit — PASS (6/6 sample)
+
+Both files carry **28** readthedocs definitions each (27 `[pyl-…]` + 1
+`[pyl]` root), and the two 27-entry `[pyl-…]` sets are byte-identical
+(diff-verified), matching the G3/G4 records. Sampled 6 URLs (every fifth
+definition + the root), fetched live:
+
+| URL | Result |
+|---|---|
+| /en/latest/latexwalker/ | OK — LatexWalker + get_latex_nodes + parse_content present |
+| /en/latest/latexnodes.nodes/ | OK — LatexNode + LatexEnvironmentNode present |
+| /en/latest/macrospec/ | OK — EnvironmentSpec + LatexContextDb present |
+| /en/latest/latexnodes/ | OK — ParsingStateDelta present |
+| /en/latest/latex2text/ | OK — LatexNodes2Text.set_tex_input_directory present |
+| https://pylatexenc.readthedocs.io/ | OK — landing page, four-module overview |
+
+(Anchor-item presence confirmed on each fetched page, covering the
+`#pylatexenc.…` fragments of the sampled definitions.)
+
+### 8. DOC_GAPS.md final state — ALL RESOLVED
+
+| Entry | State |
+|---|---|
+| #1 CHECK condition-identifier display | RESOLVED (G2) |
+| #2 CHECK WebAssembly mention | RESOLVED (G5 M1) |
+| #3 GAP panic-contract sentence | RESOLVED (G5 M2) |
+
+No OPEN entries remain.
+
+### Non-trivial findings reported, NOT fixed (supervisor attention)
+
+1. Public rustdoc referencing "(module docs)" of PRIVATE modules: the
+   pattern "…(module docs)" on re-exported items sometimes points at an
+   internal module page invisible in the public build (fixed the two
+   verbatim_parser cases via a public anchor / self-containment in M3;
+   e.g. constructs/mod.rs:769 "tier-2 **temporaries** (module docs)"
+   remains, though the tier vocabulary itself is publicly defined in the
+   construct-parsers guide chapter). A systematic repointing is beyond
+   trivial scope.
+2. `[§dd-dr:…]` references in public rustdoc (panic-policy family +
+   builder.rs:78 ext-minting): the panic-policy wording is the user's own
+   same-day ruling text (5611d2b); whether the dev-docs-pointer pattern
+   should be repaired per Documentation_Structure's four-case rule is a
+   policy question for the user — left untouched.
+3. "footgun" (extract.rs parse_keyval doc) — informal metaphor in public
+   rustdoc, pre-existing; left (outside M3's process-wording mandate).
 
 ## M5 — closure (fills in after execution)

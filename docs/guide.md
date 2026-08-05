@@ -21,8 +21,7 @@ live in `docs/` in the repository. The chapters are grouped into a **User
 Guide** (using techy as it ships), a **Developer Guide** (extending techy with
 your own parsers and languages, and embedding it elsewhere), and an **AI
 Guide** (condensed chapters written to be loaded into an AI assistant's
-context). Chapters still being written appear below with a short placeholder
-page.
+context).
 
 **New to techy? Read the [Introduction](crate::guide::introduction) first** —
 it explains what the library is for and where each part of this guide fits.
