@@ -174,6 +174,24 @@ context — compressed but obeying all clarity rules):
 
 ## Status log
 
+- 2026-08-05: **G3 DONE — merged into api-review (6f19d4b)**. Two sequential
+  implementers per the relay plan: M0–M4 (parsing-model 15.9 kB /
+  construct-parsers 20.6 kB incl. the complete compile-checked `\until`
+  takeover-parser doctest / custom-lang 16.4 kB incl. the ruled replay-
+  granularity note fully doc-traced / integration 6.4 kB with all nine ruled
+  pointer items), then M5 (pylatexenc-migration 17.4 kB: 16-row both-sides-
+  linked concept map + 7 non-obvious-difference sections; 28 readthedocs
+  links verified, /en/stable/ is 404 so /en/latest/ used — FORCED). Zero new
+  DOC_GAPS entries — every claim doc-traced, incl. both supervisor scrutiny
+  items (NodeId "8 bytes, Copy" is stated in tree.rs docs; the pylatexenc-2
+  `[`/`{`/`*` argument-code aliases are in the argument_specs code table).
+  Whole-stage independent review: MERGE-READY, 0 blockers, ~25 claims traced
+  (zero failures), pylatexenc-side claims verified in its sources (tolerant
+  mode leaves only a logger.info — accurate), link spot-checks 6/6 + 404
+  negative, migration size verdict "lean, would remove nothing"; deviations
+  all FORCED/DEFENSIBLE. Supervisor read all five chapters; merge-round
+  fixes: two metaphor removals ("heart of the parse"; "on-ramps" heading +
+  its in-page anchor — safe pre-publication). NEXT: G4.
 - 2026-08-05: **G2 DONE — merged into api-review (e0cf619)**. Implementer: 9
   commits — five chapters (language-syntax 12.5 kB / node-trees 9.0 kB /
   specs 15.9 kB / parsing 8.8 kB / learn-by-example re-curation 29.6 kB; all
