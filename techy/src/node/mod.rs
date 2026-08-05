@@ -49,7 +49,7 @@ pub use builder::{
 pub use display::display_tree;
 pub use invariants::{validate_tree, TreeViolation, TreeViolationKind};
 pub use kind::{CallableData, GroupData, NodeKind};
-pub use node_ref::{Descendants, NodeRef};
+pub use node_ref::{Descendants, NamedAccessError, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
 pub use tree::{NodeId, NodeTree, TreeTag};
 
@@ -1725,29 +1725,55 @@ mod tests {
         let tree = b.finish(section).unwrap();
         let node = tree.root();
 
-        assert_eq!(node.argument_nodes_named("title").unwrap().source_text(), Some("{t}"));
         assert_eq!(
-            node.argument_content_nodes_named("title").unwrap().first().unwrap().chars(),
+            node.argument_nodes_named("title").unwrap().unwrap().source_text(),
+            Some("{t}")
+        );
+        assert_eq!(
+            node.argument_content_nodes_named("title")
+                .unwrap().unwrap().first().unwrap().chars(),
             Some("t")
         );
         assert_eq!(
-            node.argument_content_nodes_named("star").unwrap().first().unwrap().chars(),
+            node.argument_content_nodes_named("star")
+                .unwrap().unwrap().first().unwrap().chars(),
             Some("*")
         );
-        // Absent argument: entry exists, no region — the accessor answers None.
-        assert!(node.argument_nodes_named("placement").is_none());
-        assert!(node.argument_content_nodes_named("placement").is_none());
-        // No such argument at all: also None (records distinguish, accessors do not).
-        assert!(node.argument_nodes_named("nonsense").is_none());
-        // Slots by name.
+        // Absent argument: entry exists, no region — precisely `Ok(None)`.
+        assert!(matches!(node.argument_nodes_named("placement"), Ok(None)));
+        assert!(matches!(node.argument_content_nodes_named("placement"), Ok(None)));
+        // No such argument at all: the category ERROR — never a silent None (the
+        // misspelling trap has a discriminator at the call site).
+        assert_eq!(
+            node.argument_nodes_named("nonsense").unwrap_err(),
+            NamedAccessError::UnknownArgumentName { name: "nonsense".into() }
+        );
+        assert_eq!(
+            node.argument_content_nodes_named("nonsense").unwrap_err(),
+            NamedAccessError::UnknownArgumentName { name: "nonsense".into() }
+        );
+        // Slots by name (no Option layer: a recorded slot always has content).
         assert_eq!(
             node.slot_content_nodes_named("annex").unwrap().first().unwrap().chars(),
             Some("t")
         );
-        assert!(node.slot_content_nodes_named("nonsense").is_none());
-        // Non-callables answer None throughout.
-        let leaf = tree.node(tree.root().argument_content_nodes_named("star").unwrap().first().unwrap().id());
-        assert!(leaf.argument_nodes_named("title").is_none());
+        assert_eq!(
+            node.slot_content_nodes_named("nonsense").unwrap_err(),
+            NamedAccessError::UnknownSlotName { name: "nonsense".into() }
+        );
+        // Non-callables answer the NotACallable category error throughout.
+        let leaf = tree.node(
+            node.argument_content_nodes_named("star")
+                .unwrap().unwrap().first().unwrap().id(),
+        );
+        assert_eq!(
+            leaf.argument_nodes_named("title").unwrap_err(),
+            NamedAccessError::NotACallable
+        );
+        assert_eq!(
+            leaf.slot_content_nodes_named("annex").unwrap_err(),
+            NamedAccessError::NotACallable
+        );
     }
 
     #[test]

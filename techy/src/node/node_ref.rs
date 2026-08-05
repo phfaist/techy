@@ -1,5 +1,6 @@
 //! [`NodeRef`]: the copyable read proxy over a [`NodeTree`]'s flat storage.
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -306,29 +307,56 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// The nodes of argument `i`'s region — the argument's full syntactic extent
     /// (leading comment/whitespace noise plus the syntax-bearing nodes), in source
     /// order. `None` for non-callables, out-of-range indices, and absent arguments
-    /// (consult [`arguments`](NodeRef::arguments) to distinguish).
+    /// (consult [`arguments`](NodeRef::arguments) to distinguish — or use the
+    /// by-name form [`argument_nodes_named`](NodeRef::argument_nodes_named), whose
+    /// `Result` discriminates the category errors from a merely absent argument).
     pub fn argument_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_nodes(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
     /// The nodes of the region of the argument named `name` (per its
     /// [`ArgumentSpec`](crate::spec::ArgumentSpec)) — [`argument_nodes`](NodeRef::argument_nodes)
-    /// by name.
-    pub fn argument_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
-        self.region_nodes(self.callable()?.arguments.get_named(name)?.region.as_ref()?)
+    /// by name, with the by-name error contract: `Err` is the category mismatch (not
+    /// a callable, or `name` is not among the spec's declared arguments — the
+    /// misspelling trap), `Ok(None)` is precisely "declared but absent", `Ok(Some)`
+    /// is present.
+    pub fn argument_nodes_named(
+        &self,
+        name: &str,
+    ) -> Result<Option<NodeSlice<'t, L, A>>, NamedAccessError> {
+        let callable = self.callable().ok_or(NamedAccessError::NotACallable)?;
+        let argument = callable.arguments.get_named(name).ok_or_else(|| {
+            NamedAccessError::UnknownArgumentName { name: name.into() }
+        })?;
+        Ok(argument.region.as_ref().and_then(|region| self.region_nodes(region)))
     }
 
     /// The content nodes of argument `i`, noise and delimiters excluded: the group's
     /// children for `\textbf{abc}`, the single `Chars` node for `\frac 1 2` — exactly
-    /// what the argument's parser designated, no unwrap heuristics.
+    /// what the argument's parser designated, no unwrap heuristics. `None` for
+    /// non-callables, out-of-range indices, and absent arguments (consult
+    /// [`arguments`](NodeRef::arguments) to distinguish — or use the by-name form
+    /// [`argument_content_nodes_named`](NodeRef::argument_content_nodes_named),
+    /// whose `Result` discriminates the category errors from a merely absent
+    /// argument).
     pub fn argument_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(self.callable()?.arguments.get(i)?.region.as_ref()?)
     }
 
     /// The content nodes of the argument named `name` —
-    /// [`argument_content_nodes`](NodeRef::argument_content_nodes) by name.
-    pub fn argument_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
-        self.region_content(self.callable()?.arguments.get_named(name)?.region.as_ref()?)
+    /// [`argument_content_nodes`](NodeRef::argument_content_nodes) by name, with
+    /// the by-name error contract of
+    /// [`argument_nodes_named`](NodeRef::argument_nodes_named): `Err` = category
+    /// mismatch, `Ok(None)` = declared but absent, `Ok(Some)` = present.
+    pub fn argument_content_nodes_named(
+        &self,
+        name: &str,
+    ) -> Result<Option<NodeSlice<'t, L, A>>, NamedAccessError> {
+        let callable = self.callable().ok_or(NamedAccessError::NotACallable)?;
+        let argument = callable.arguments.get_named(name).ok_or_else(|| {
+            NamedAccessError::UnknownArgumentName { name: name.into() }
+        })?;
+        Ok(argument.region.as_ref().and_then(|region| self.region_content(region)))
     }
 
     fn region_nodes(&self, region: &ChildRegion) -> Option<NodeSlice<'t, L, A>> {
@@ -353,16 +381,32 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     }
 
     /// The content nodes of slot `i` (the body nodes, for the standard environment
-    /// shape), in source order.
+    /// shape), in source order. `None` for non-callables and out-of-range indices
+    /// (the by-name form
+    /// [`slot_content_nodes_named`](NodeRef::slot_content_nodes_named) turns those
+    /// category mismatches into errors).
     pub fn slot_content_nodes(&self, i: usize) -> Option<NodeSlice<'t, L, A>> {
         self.region_content(&self.callable()?.slots.get(i)?.region)
     }
 
     /// The content nodes of the slot named `name` (per its
     /// [`ParsedSlot`](super::ParsedSlot) record) —
-    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) by name.
-    pub fn slot_content_nodes_named(&self, name: &str) -> Option<NodeSlice<'t, L, A>> {
-        self.region_content(&self.callable()?.slots.get_named(name)?.region)
+    /// [`slot_content_nodes`](NodeRef::slot_content_nodes) by name, with the
+    /// by-name error contract: `Err` is the category mismatch (not a callable, or
+    /// no slot named `name` — the misspelling trap). Unlike the argument family
+    /// there is no `Option` layer: a recorded slot always has content nodes
+    /// (possibly zero of them — an `Ok` slice may be empty), with no
+    /// "declared but absent" state.
+    pub fn slot_content_nodes_named(
+        &self,
+        name: &str,
+    ) -> Result<NodeSlice<'t, L, A>, NamedAccessError> {
+        let callable = self.callable().ok_or(NamedAccessError::NotACallable)?;
+        let slot = callable
+            .slots
+            .get_named(name)
+            .ok_or_else(|| NamedAccessError::UnknownSlotName { name: name.into() })?;
+        Ok(NodeSlice::new(self.tree, slot.region.content_range()))
     }
 
     /// The content nodes of the **body slot** — the *body* of environment-shaped
@@ -386,6 +430,53 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         self.region_content(&slot.region)
     }
 }
+
+/// Error of the by-name accessors ([`NodeRef::argument_nodes_named`],
+/// [`NodeRef::argument_content_nodes_named`],
+/// [`NodeRef::slot_content_nodes_named`]): a **category mismatch** — the node is
+/// not a callable, or the name matches nothing declared.
+///
+/// Deliberately an error rather than a silent `None`: for a *name*, `None` on a
+/// typo has no cheap call-site discriminator — and names, unlike indices, are
+/// exactly the access form the API recommends. `Ok(None)` stays reserved for the
+/// argument family's "declared but absent". Never a panic: this family is the
+/// non-panicking companion shape by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NamedAccessError {
+    /// The node is not a `Callable` — it has no arguments or slots to access.
+    NotACallable,
+    /// The name matches none of the callable's declared arguments (the names on
+    /// its spec's [`ArgumentSpec`](crate::spec::ArgumentSpec)s).
+    UnknownArgumentName {
+        /// The unmatched name, as queried.
+        name: Box<str>,
+    },
+    /// The name matches none of the callable's recorded slots
+    /// ([`ParsedSlot`](super::ParsedSlot) names).
+    UnknownSlotName {
+        /// The unmatched name, as queried.
+        name: Box<str>,
+    },
+}
+
+impl fmt::Display for NamedAccessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NamedAccessError::NotACallable => {
+                write!(f, "the node is not a callable (no arguments or slots)")
+            }
+            NamedAccessError::UnknownArgumentName { name } => {
+                write!(f, "no argument named ‘{name}’ among the declared arguments")
+            }
+            NamedAccessError::UnknownSlotName { name } => {
+                write!(f, "no slot named ‘{name}’ on the callable")
+            }
+        }
+    }
+}
+
+impl core::error::Error for NamedAccessError {}
 
 /// Iterator over a node's descendants in document order (see
 /// [`NodeRef::descendants`]; preorder depth-first via an explicit stack).

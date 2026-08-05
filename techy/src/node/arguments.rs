@@ -292,6 +292,11 @@ impl<L: Lang> ParsedArguments<L> {
 
     /// The entry of the argument named `name` (a scan over the specs' names — argument
     /// counts are small, and the specs are the single source of truth for names).
+    ///
+    /// A plain record lookup: `None` means only "no argument of that name" (every
+    /// declared argument has an entry, absent ones included). The
+    /// [`NodeRef`](super::NodeRef) `_named` accessors turn that miss into a
+    /// [`NamedAccessError`](super::NamedAccessError) instead.
     pub fn get_named(&self, name: &str) -> Option<&ParsedArgument<L>> {
         self.arguments.iter().find(|arg| arg.name() == Some(name))
     }
@@ -466,7 +471,9 @@ impl<L: Lang> ParsedSlots<L> {
         self.slots.get(i)
     }
 
-    /// The entry of the slot named `name`.
+    /// The entry of the slot named `name`. A plain record lookup: `None` means only
+    /// "no slot of that name" (the [`NodeRef`](super::NodeRef) `_named` accessor
+    /// turns that miss into a [`NamedAccessError`](super::NamedAccessError)).
     pub fn get_named(&self, name: &str) -> Option<&ParsedSlot<L>> {
         self.slots.iter().find(|slot| slot.name() == Some(name))
     }

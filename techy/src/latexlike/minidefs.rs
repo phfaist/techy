@@ -131,9 +131,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{root_shapes, with_package};
-    use super::super::{
-        check_latexlike_tree_invariants, GroupType, Latexlike, ParagraphBreakSpec,
-    };
+    use super::super::{check_latexlike_tree_invariants, GroupType, ParagraphBreakSpec};
     use super::*;
     use crate::error::Recovery;
     use alloc::string::String;

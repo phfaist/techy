@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(arguments.len(), 1);
         assert!(arguments.get(0).unwrap().is_provided());
         assert_eq!(
-            input.argument_content_nodes_named("reference").unwrap().source_text(),
+            input.argument_content_nodes_named("reference").unwrap().unwrap().source_text(),
             Some("chapter.tex")
         );
 
@@ -679,7 +679,12 @@ mod tests {
         let outer_attached = outer.slot_content_nodes_named("attached").unwrap();
         let inner = outer_attached.get(1).unwrap();
         assert_eq!(inner.name(), Some("input"));
-        assert!(inner.slot_content_nodes_named("attached").is_none());
+        // The failed inner `\input` recorded no slot at all: the by-name access is
+        // the unknown-name category error, not a silent miss.
+        assert!(matches!(
+            inner.slot_content_nodes_named("attached"),
+            Err(crate::node::NamedAccessError::UnknownSlotName { .. })
+        ));
     }
 
     #[test]

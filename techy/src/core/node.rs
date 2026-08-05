@@ -19,9 +19,9 @@
 
 pub use crate::node::{
     display_tree, validate_tree, ArgumentExt, BodySlotExt, BuildId, CallableData, ChildRegion,
-    ContentNodes, Descendants, GroupData, NodeBuildError, NodeExt, NodeId, NodeKind,
-    NodeRef, NodeSlice, NodeSliceIter, NodeTree, NodeTreeBuilder, ParsedArgument,
-    ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole, StagedChildView,
-    StagedChildren, StagedNodeView, StagedNodes, TreeTag, TreeViolation,
-    TreeViolationKind,
+    ContentNodes, Descendants, GroupData, NamedAccessError, NodeBuildError, NodeExt,
+    NodeId, NodeKind, NodeRef, NodeSlice, NodeSliceIter, NodeTree, NodeTreeBuilder,
+    ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
+    StagedChildView, StagedChildren, StagedNodeView, StagedNodes, TreeTag,
+    TreeViolation, TreeViolationKind,
 };
