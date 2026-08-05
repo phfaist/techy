@@ -10,11 +10,11 @@ points by feature and says what each is *for*; the contracts and obligations
 live on [`Lang`](crate::core::Lang)'s own API page and its per-method
 documentation, which is the reference throughout.
 
-You rarely start from a blank `Lang`: there are two on-ramps — the
-all-defaults [`TrivialLang`](crate::core::TrivialLang) for experiments, and
-the `latexlike` language family for anything LaTeX-shaped — described
-[at the end of this chapter](#the-two-on-ramps) once the pieces are on the
-table. This chapter builds on [The parsing model](crate::guide::parsing_model)
+You rarely start from a blank `Lang`: there are two standard starting
+points — the all-defaults [`TrivialLang`](crate::core::TrivialLang) for
+experiments, and the `latexlike` language family for anything LaTeX-shaped
+— described [at the end of this chapter](#the-two-starting-points) once the
+pieces are on the table. This chapter builds on [The parsing model](crate::guide::parsing_model)
 (what drivers, specs, and construct parsers do at parse time).
 
 ## Vocabularies: group classes and callable types
@@ -204,7 +204,7 @@ A language with several command-shaped callable types, or non-scope-stack
 resolution, writes its own resolver or its own driver — the documented
 normal path.
 
-## The two on-ramps
+## The two starting points
 
 **Experiments: `TrivialLang`.** For exercising the machinery — tests,
 prototypes of custom construct parsers, learning the engine —

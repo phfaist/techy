@@ -64,7 +64,7 @@ readable [`NodeTree`](crate::core::node::NodeTree) only at the final freeze.
 
 ## The content dispatch loop
 
-The heart of the parse is the content loop,
+The core of the parse is the content loop,
 [`NodesParser`](crate::core::constructs::NodesParser): it parses a run of
 sibling nodes — the top-level content, a group's interior, and an
 environment's body each run one. The loop peeks one token at a time and
