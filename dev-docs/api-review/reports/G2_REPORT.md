@@ -2,8 +2,8 @@
 
 Branch `phase4-g2-user-guide` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a833debc29d055132`,
-branched from `api-review` @ f8b2987). Status: **IN PROGRESS** — M0 (this
-plan).
+branched from `api-review` @ f8b2987). Status: **COMPLETE** — Milestones 0–6
+done, all gates green; awaiting review + merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb, predating the api-review series); the branch was reset to the local
@@ -186,3 +186,101 @@ No rustdoc expansions required; zero DOC_GAPS entries raised by the pass.
   ParseError, render/sort/cap), engine/language.rs (Language, parse,
   parse_source, recovery paragraph), nodes_parser.rs condition docs,
   latexlike driver builder docs.
+- M5: docs/learn-by-example.md revised, 29,561 bytes (target ≤ ~30 kB); 20
+  doctests pass. Added sections: Rendering diagnostics (render_all +
+  LineIndexCache line/col on a node + sorted_by_position pointer — the T1/T4
+  friction signals), Including other sources (input_macro_spec +
+  MapResolver — F8 signal), Transforming and recomposing (restage drop-
+  comments + source_recomposer round trip — the reconstruction pipeline).
+  Ruled folds landed: generic `name()` beside `macro_name()` (Defining
+  macros), `body()` None semantics (Environments), `descendants()`
+  self-exclusion sentence (Reading nodes), argument-codes typed-alternative
+  + BracedOnly + argument_specs_named pointer paragraph (Defining macros),
+  body-scoped-definitions example (minidefs `\item`, Environments).
+  REMOVE-rule application: first draft was 31,332 bytes; the `\text`
+  exit-math doctest block was removed and replaced by a four-line pointer
+  paragraph to Event::ExitMathContext's documented recipe (the least
+  everyday example; the API item carries the full worked recipe). Also
+  removed as now-duplicated in specs.md: the equation body-delta doctest
+  (replaced by the body-scoped example + pointer) and the no-cross-check
+  paragraph (one-sentence pointer to specs.md + Package::insert). Process
+  wording scrubbed ("Phase 7.9", "a later phase", "pylatexenc-modern",
+  "level-1 recomposition"); existing heading slugs all kept (three new
+  headings added; nothing links into this page's anchors — grepped).
+  Curation inputs consulted for signals only (SYNTHESIS §4–§5); no API
+  spelling copied from them.
+- M6a (post_space note): ADDED — the latexlike invocation-syntax macro-data
+  docs (InvocationSyntaxData enum, Macro bullet;
+  techy/src/latexlike/invocation_syntax.rs) now state that source
+  recomposition re-emits the recorded post-space verbatim and that any
+  smarter spacing policy belongs to a converter built on techy, not to
+  techy. (The re-emission fact alone was already implied by the module doc's
+  "reemitting the exact input bytes" sentence; the policy half was absent —
+  hence a brief addition at the record's own docs, doc-only.)
+- M6b (input caching note): ALREADY COVERED — `input_macro_spec`'s rustdoc
+  carries a dedicated "# No input caching" section
+  (techy/src/latexlike/input.rs) stating exactly the ruled content: content
+  is read through the resolver at parse time on every inclusion; a
+  parse-without-attachment cache is unsound because an inclusion can change
+  the caller's parsing state (grounded in the documented persist_state
+  behavior); resolvers may freely cache content. One repair made while
+  verifying: that section's closing sentence referenced "The guide's include
+  chapter", a chapter that does not exist in the ruled Phase 4 chapter map
+  (the ruling routed the caching trade-offs to API doc only). Rewrote the
+  sentence to keep the brief separate-parse-then-splice condition in the API
+  doc itself with no guide reference (doc-only; flagged here as a small
+  in-scope deviation — leaving a dangling chapter reference seemed worse).
+
+## Gates (run at M6, after all edits)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS (clean) |
+| `cargo test` (all suites) | PASS — 758 lib + 30 acceptance + 8 derive_conditions + 21 recompose_oracle + 1 techy-derive |
+| `cargo test --doc` | PASS — 49 doctests (2 ignored), incl. this stage's 32 new/revised guide doctests |
+| `rm -rf target/doc && cargo docs` | PASS — zero warnings |
+| `scripts/check_semver.sh` | PASS — "no semver update required" (196 checks pass) |
+| Four-step wiring | Intact for all five chapters (wired in G1; verified lib.rs guide block + GUIDE_PAGES + guide.md index untouched) |
+| Superseded-names sweep | CLEAN over all seven touched files (two grep batches over the [§dd-dr:superseded-names] register) |
+| DOC_GAPS #1 re-verified on the clean doc build | 25/25 condition pages show their identifier |
+
+## Chapter size table
+
+| File | Bytes | Target | Status |
+|---|---|---|---|
+| docs/language-syntax.md | 12,490 | ≤ ~10–15 kB | OK |
+| docs/node-trees.md | 9,008 | ≤ ~10–15 kB | OK |
+| docs/specs.md | 15,945 | ≤ ~20 kB | OK |
+| docs/parsing.md | 8,753 | ≤ ~10–15 kB | OK |
+| docs/learn-by-example.md | 29,561 | ≤ ~30 kB | OK (REMOVE rule applied once) |
+
+## DOC_GAPS delta
+
+- #1 (condition-page identifiers): OPEN → RESOLVED, no rustdoc change needed
+  (evidence in the register entry; mechanical 25/25 check, re-run on the
+  clean gate build).
+- #2 (WebAssembly rustdoc mention): untouched (G5 scope).
+- New entries: none — every chapter claim traced to a documentation sentence
+  or is demonstrated by a compiling doctest in the chapter.
+
+## Deviations / items for the supervisor
+
+1. Stale worktree HEAD at agent start (2110bbb) — reset to api-review tip
+   f8b2987 before branching, per the brief. Procedural.
+2. The "enum spelling of codes" item in the M3 brief: there is no
+   argument-code enum in the API. Rendered as the documented typed
+   alternative (codes resolve to configured argument parsers; ArgumentSpec
+   built from parser types directly) plus the word codes
+   (BracedOnly/AnyDelimited…), all sourced from argument_specs' rustdoc. If
+   the ruling meant something else, the chapter text is one paragraph to
+   adjust.
+3. M6b repair of the dangling "guide's include chapter" sentence in
+   input_macro_spec's rustdoc (see M6b above) — doc-only, one sentence,
+   flagged for review.
+4. learn-by-example retains two references to the repository path
+   `techy/tests/acceptance.rs` (header + closing section) as the pin for
+   pylatexenc-parity claims. It is a repo test path, not a dev-docs
+   reference; kept deliberately, easily removable if the reviewer reads the
+   writing rules more strictly.
+5. Not done (out of scope, noted): none of the G1-frozen pages needed
+   changes; no code beyond rustdoc comments was touched (semver gate green).
