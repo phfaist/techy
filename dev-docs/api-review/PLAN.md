@@ -725,3 +725,19 @@ projected FLM probe) is at
   not S10 scope): `SourceSpan::content`'s implicit indexing panic —
   candidate for the panic-policy rule-3 approved list or a `get` companion.
   **NEXT: Phase 4 — guides.**
+- 2026-08-05 (user, post-Phase-3 ruling): **always-on precondition asserts** —
+  the six value-function debug asserts (`Span::new`/`extend_to`, `Token::new`,
+  `SourceSpan::new`, `SourcePos::new`, `skip_whitespace`) upgraded to plain
+  `assert!` (contract violation panics in ALL builds; the release degradation
+  fallbacks are superseded, incl. skip_whitespace's return-unchanged and the
+  documented Span::len saturation semantics — the saturation stays as defensive
+  code only). The panic policy REMAINS in place; the user articulated the
+  governing principle for its rule-3 exceptions (few, individually escalated
+  for user approval, deep/often-used code primary users rarely call directly,
+  std-standard policy) — recorded in [§dd-dr:panic-policy] rule 3 with the
+  approved register as family (b). Rationale: infallible-by-design functions
+  have no Err channel, so the release alternative was unspecified misbehavior
+  or a later cryptic panic; O(1) checks; invalid values become unrepresentable.
+  CLOSES the SourceSpan::content follow-up from the S10 sign-off (unreachable
+  by construction). All six rustdocs state the all-builds panic; should_panic
+  pins added per assert (7 new tests); CLAUDE.md rule 4 updated.

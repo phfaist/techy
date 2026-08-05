@@ -12,8 +12,9 @@ use core::ops::Range;
 /// caller contract, enforced where spans meet content ([`slice`](Span::slice) panics,
 /// [`get`](Span::get) returns `None`), not by this type.
 ///
-/// Fields are private and every mutator preserves `start <= end` (consistent with `SourceSpan`): [`new`](Span::new) debug-asserts
-/// it, and in-place growth goes through the monotone [`extend_to`](Span::extend_to).
+/// Fields are private and every mutator preserves `start <= end` (consistent with
+/// `SourceSpan`): [`new`](Span::new) asserts it — a violation panics, in all builds —
+/// and in-place growth goes through the monotone [`extend_to`](Span::extend_to).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Byte offset of the first byte of the range.
@@ -23,11 +24,12 @@ pub struct Span {
 }
 
 impl Span {
-    /// Create a span covering `start..end`. `start <= end` is the caller's contract
-    /// (debug-asserted).
+    /// Create a span covering `start..end`. `start <= end` is the caller's contract:
+    /// a violation panics, in all builds (an individually approved panic-policy
+    /// exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
     #[inline]
     pub fn new(start: usize, end: usize) -> Span {
-        debug_assert!(start <= end, "span start {} is after end {}", start, end);
+        assert!(start <= end, "span start {} is after end {}", start, end);
         Span { start, end }
     }
 
@@ -51,9 +53,9 @@ impl Span {
 
     /// Length of the range in bytes.
     ///
-    /// Saturating: an inverted span (`start > end` — a caller bug `new` debug-asserts
-    /// against, unreachable through the mutators) has length 0 rather than wrapping in
-    /// release builds (the panic policy).
+    /// `start <= end` holds for every span by construction ([`new`](Span::new) asserts
+    /// it in all builds and the mutators preserve it), so this is simply `end - start`;
+    /// the saturating subtraction is defensive only.
     #[inline]
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
@@ -74,11 +76,11 @@ impl Span {
 
     /// Grow the span in place so it ends at `end` — the one sanctioned in-place
     /// mutation (accumulating a run of tokens into one node's span). Monotone:
-    /// `end >= self.end()` is the caller's contract (debug-asserted), so the
-    /// `start <= end` invariant is preserved.
+    /// `end >= self.end()` is the caller's contract — a violation panics, in all
+    /// builds — so the `start <= end` invariant is preserved.
     #[inline]
     pub fn extend_to(&mut self, end: usize) {
-        debug_assert!(
+        assert!(
             end >= self.end,
             "extend_to({}) would shrink the span ending at {}",
             end,
@@ -196,8 +198,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "is after end")]
+    fn new_rejects_an_inverted_span() {
+        let _ = Span::new(7, 3);
+    }
+
+    #[test]
     #[should_panic(expected = "would shrink")]
-    #[cfg(debug_assertions)]
     fn extend_to_rejects_shrinking() {
         let mut span = Span::new(2, 9);
         span.extend_to(4);
@@ -230,9 +237,9 @@ mod tests {
 
     #[test]
     fn inverted_span_has_len_zero() {
-        // An inverted span is a caller bug (`Span::new` debug-asserts; the mutators
-        // preserve the invariant), but release builds skip the assert; `len`/`is_empty`
-        // stay consistent and benign.
+        // Unrepresentable through the public API (`Span::new` asserts in all builds;
+        // the mutators preserve the invariant); this pins the defensive saturation
+        // for the private-field escape hatch only this module has.
         let inverted = Span { start: 7, end: 3 };
         assert_eq!(inverted.len(), 0);
         assert!(inverted.is_empty());

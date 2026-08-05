@@ -86,9 +86,9 @@ pub trait TokenReader<'s, L: Lang> {
 /// End position of the whitespace run starting at `pos` (= `pos` if none, or if
 /// whitespace handling is disabled).
 ///
-/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a caller
-/// bug (debug-asserted); the function then returns `pos` unchanged rather than panic
-/// (the panic policy).
+/// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
+/// caller-contract violation and panics, in all builds (an individually approved
+/// panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
 ///
 /// **The multi-newline rule** (`TokenRules::enable_multi_newline_paragraphs`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
@@ -100,13 +100,11 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
         return pos;
     }
     let Some(rest) = content.get(pos..) else {
-        debug_assert!(
-            false,
+        panic!(
             "pos {} is out of bounds or not a char boundary (content len {})",
             pos,
             content.len()
         );
-        return pos;
     };
     let ws = &rules.whitespace;
     let mut end = pos;
@@ -1793,13 +1791,20 @@ mod tests {
         assert_eq!(skip_whitespace("  x", 0, &no_ws), 0);
     }
 
-    /// An invalid `pos` is a caller bug: debug builds assert; release builds return
-    /// `pos` unchanged rather than panic (the panic policy).
+    /// An invalid `pos` is a caller-contract violation and panics in all builds
+    /// (the approved panic-policy exception).
     #[test]
-    #[cfg_attr(debug_assertions, should_panic(expected = "char boundary"))]
-    fn skip_whitespace_tolerates_invalid_pos() {
+    #[should_panic(expected = "char boundary")]
+    fn skip_whitespace_panics_on_an_out_of_bounds_pos() {
         let rules: TokenRules<TestLang> = latex_rules();
-        assert_eq!(skip_whitespace("ab", 5, &rules), 5); // out of bounds
-        assert_eq!(skip_whitespace("é!", 1, &rules), 1); // mid-char boundary
+        let _ = skip_whitespace("ab", 5, &rules);
+    }
+
+    /// A mid-character `pos` is the same contract violation (the boundary half).
+    #[test]
+    #[should_panic(expected = "char boundary")]
+    fn skip_whitespace_panics_on_a_mid_char_pos() {
+        let rules: TokenRules<TestLang> = latex_rules();
+        let _ = skip_whitespace("é!", 1, &rules);
     }
 }

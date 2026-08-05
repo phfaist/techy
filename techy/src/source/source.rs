@@ -228,18 +228,21 @@ impl<O: SourceOrigin> SourceSpan<O> {
     /// [`Span`] (the transient parsing type; this is the bridge from byte-range land
     /// into `Arc`-carrying land).
     ///
-    /// The range must lie within the source content and fall on `char` boundaries
-    /// (checked in debug builds; violating it makes [`content`](Self::content) panic).
+    /// The range must lie within the source content and fall on `char` boundaries —
+    /// the caller's contract: a violation panics here, in all builds (an individually
+    /// approved panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy]
+    /// rule 3). Every constructed `SourceSpan` is therefore valid for
+    /// [`content`](Self::content).
     pub fn new(source: &Arc<Source<O>>, range: impl Into<Range<usize>>) -> Self {
         let range = range.into();
-        debug_assert!(
+        assert!(
             range.start <= range.end && range.end <= source.content.len(),
             "SourceSpan range {}..{} out of bounds (source length {})",
             range.start,
             range.end,
             source.content.len(),
         );
-        debug_assert!(
+        assert!(
             source.content.is_char_boundary(range.start)
                 && source.content.is_char_boundary(range.end),
             "SourceSpan range {}..{} not on char boundaries",
@@ -338,8 +341,9 @@ impl<O: SourceOrigin> fmt::Debug for SourceSpan<O> {
 ///
 /// This is the query currency for position lookups over parsed trees (a span query
 /// uses [`SourceSpan`] itself). The offset is a byte position into the source
-/// content; like a span's offsets it is expected to fall on a `char` boundary
-/// (checked in debug builds). Equality is *identity-based* for the source (same
+/// content; like a span's offsets it must fall on a `char` boundary (asserted at
+/// construction — a violation panics, in all builds). Equality is *identity-based*
+/// for the source (same
 /// `Arc`) plus equal offset, exactly as for [`SourceSpan`].
 ///
 /// Line/column display goes through the source's lazy
@@ -365,16 +369,17 @@ impl<O: SourceOrigin> SourcePos<O> {
     /// A position at byte offset `pos` within `source`.
     ///
     /// The offset must lie within the source content (`0..=len`; the length itself is
-    /// a valid end-of-content position) and fall on a `char` boundary (checked in
-    /// debug builds).
+    /// a valid end-of-content position) and fall on a `char` boundary — the caller's
+    /// contract: a violation panics, in all builds (an individually approved
+    /// panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
     pub fn new(source: &Arc<Source<O>>, pos: usize) -> Self {
-        debug_assert!(
+        assert!(
             pos <= source.content.len(),
             "SourcePos {} out of bounds (source length {})",
             pos,
             source.content.len(),
         );
-        debug_assert!(
+        assert!(
             source.content.is_char_boundary(pos),
             "SourcePos {} not on a char boundary",
             pos,
@@ -473,6 +478,35 @@ impl<'a, O: SourceOrigin> Iterator for ProvenanceChain<'a, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn a_source_span_with_an_out_of_bounds_range_panics_in_all_builds() {
+        // The approved always-on precondition asserts ([§dd-dr:panic-policy] rule 3).
+        let source = arc_source("ab");
+        let _ = SourceSpan::new(&source, 0..9);
+    }
+
+    #[test]
+    #[should_panic(expected = "not on char boundaries")]
+    fn a_source_span_cutting_a_char_panics_in_all_builds() {
+        let source = arc_source("\u{e9}!"); // 'é' occupies bytes 0..2
+        let _ = SourceSpan::new(&source, 1..3);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn a_source_pos_out_of_bounds_panics_in_all_builds() {
+        let source = arc_source("ab");
+        let _ = SourcePos::new(&source, 9);
+    }
+
+    #[test]
+    #[should_panic(expected = "not on a char boundary")]
+    fn a_source_pos_inside_a_char_panics_in_all_builds() {
+        let source = arc_source("\u{e9}!");
+        let _ = SourcePos::new(&source, 1);
+    }
 
     fn arc_source(content: &str) -> Arc<Source> {
         Arc::new(Source::new(content))

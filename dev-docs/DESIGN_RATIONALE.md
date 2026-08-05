@@ -4901,12 +4901,22 @@ Four rules:
    `unreachable!`/`expect` with the invariant stated in the message.
 2. The violation of a documented input contract is **not by itself** a reason to panic — it
    returns an `Err` (translatable to, e.g., a Python exception by a wrapper).
-3. Individual indexing-style exceptions require explicit user approval. Approved:
-   `NodeTree::node`/`nodes_in`, `Span::slice`, `TextContent::resolve`, and
-   `ChildRegion`'s resolved-only accessors keep their documented panics **with
-   non-panicking companions** (`NodeTree::get`, `Span::get`) — the std `Index`-vs-`get`
-   convention: the panicking form for ids/spans the caller minted from this very
-   tree/source, the `Option` form for values of unknown provenance.
+3. Individual exceptions require explicit user approval (escalated case by case).
+   They stay few, concern deep, often-used code that primary users typically never
+   call directly, and follow a std-standard policy. Approved:
+   (a) *indexing-style accessors* — `NodeTree::node`/`nodes_in`, `Span::slice`,
+   `TextContent::resolve`, and `ChildRegion`'s resolved-only accessors keep their
+   documented panics **with non-panicking companions** (`NodeTree::get`, `Span::get`)
+   — the std `Index`-vs-`get` convention: the panicking form for ids/spans the caller
+   minted from this very tree/source, the `Option` form for values of unknown
+   provenance; (b) *always-on precondition asserts* (approved 2026-08-05) on the six
+   deep value functions `Span::new`, `Span::extend_to`, `Token::new`,
+   `SourceSpan::new`, `SourcePos::new`, and `skip_whitespace`: a documented-contract
+   violation panics in every build — these functions are deliberately infallible (no
+   `Err` channel exists to prefer), the checks are O(1), and the always-on panic keeps
+   invalid values unrepresentable where the release alternative was unspecified
+   misbehavior or a later cryptic panic far from the cause (the std str/slice-indexing
+   convention).
 4. Everything else returns an error.
 
 Consequences applied with the decision:
@@ -4927,9 +4937,11 @@ Consequences applied with the decision:
   node-stop test treats a missing id as "condition did not fire"; invocation/body span
   read-backs fall back to the trigger/body start). No silently-wrong tree results: the
   bogus id still lands in `builder.add`'s child list, where it is diagnosed.
-- `skip_whitespace` returns `pos` unchanged on an invalid `pos` (debug-asserted);
-  `Span::len` saturates on inverted spans, `is_empty` consistent with it;
-  `ParserSession::finish` returns `Result<ParseResult, NodeBuildError>`.
+- `skip_whitespace` panics on an invalid `pos` (rule-3(b); formerly a debug assert
+  with a return-unchanged release fallback — superseded 2026-08-05); `Span::len`'s
+  saturation is defensive only, since inverted spans are unrepresentable under
+  rule-3(b)'s asserted constructors; `ParserSession::finish` returns
+  `Result<ParseResult, NodeBuildError>`.
 - `check_tree_invariants` is exempt: a documented test utility whose *purpose* is
   asserting — panicking is its API. `debug_assert!` remains fine for crate-internal
   invariants but is not a substitute for boundary validation of outer-layer input.
@@ -4962,6 +4974,23 @@ debug asserts (`Span::new`, `SourceSpan::new`, `SourcePos::new`, `Token::new`,
 debug-checked author aid, release behavior degrades to a downstream-diagnosed
 state. Full site-by-site table: the review's S10 stage report (a process file;
 this note is the durable record).)*
+
+*(Amended — post-Phase-3 user ruling, 2026-08-05: the value-function debug asserts
+were upgraded to **always-on `assert!`s** — the "stay debug-asserted" clause of the
+S10 note above and the `skip_whitespace` return-unchanged fallback are superseded.
+Rule 3 now records the governing principle in the user's words (exceptions stay few,
+user-escalated, in deep code primary users rarely call, on a std-standard policy) and
+the approved six-site register as family (b). Grounds: these functions are
+deliberately infallible, so rule 2's "return an `Err` instead" has no channel to
+prefer — the real release-mode alternative was unspecified misbehavior or a later
+cryptic panic; the checks are O(1) (the `skip_whitespace` bounds check was already
+always-on). Consequence: invalid `Span`/`Token`/`SourceSpan`/`SourcePos` values are
+unrepresentable through the public API, and the previously flagged
+`SourceSpan::content` implicit-indexing-panic follow-up is closed — every span it can
+see is valid by construction. `TokenListReader::new` is `cfg(test)`-only test
+infrastructure and keeps its debug assert. Each of the six sites documents the
+all-builds panic in its rustdoc with a pointer to rule 3; `should_panic` pins cover
+every assert.)*
 
 #### Errors carry Arc-based `SourceSpan`, not `'src` lifetimes [§dd-dr:arc-error-spans]
 

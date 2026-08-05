@@ -150,10 +150,10 @@ pub struct Token<'s, L: Lang> {
 impl<'s, L: Lang> Token<'s, L> {
     /// Create a token. Span coherence — `pre_space` ending at `span`'s start, a
     /// command/comment `post_space` lying as a trailing sub-range of `span` — is the
-    /// caller's contract (debug-asserted; a violating token is not rejected here, and
-    /// downstream span bookkeeping diagnoses it where it breaks the parse).
+    /// caller's contract: a violation panics, in all builds (an individually approved
+    /// panic-policy exception — see DESIGN_RATIONALE [§dd-dr:panic-policy] rule 3).
     pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
-        debug_assert!(
+        assert!(
             pre_space.end() == span.start(),
             "pre_space {:?} must end exactly at span start {:?}",
             pre_space,
@@ -162,7 +162,7 @@ impl<'s, L: Lang> Token<'s, L> {
         if let TokenKind::Command { post_space, .. } | TokenKind::Comment { post_space, .. } =
             &kind
         {
-            debug_assert!(
+            assert!(
                 post_space.end() == span.end() && post_space.start() >= span.start(),
                 "post_space {:?} must be a trailing sub-range of span {:?}",
                 post_space,
@@ -170,7 +170,7 @@ impl<'s, L: Lang> Token<'s, L> {
             );
         }
         if let TokenKind::Comment { start, post_space, .. } = &kind {
-            debug_assert!(
+            assert!(
                 start.start() == span.start() && start.end() <= post_space.start(),
                 "comment start {:?} must be a leading sub-range of span {:?} ending before post_space {:?}",
                 start,
@@ -368,8 +368,21 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_for_display;
+    use super::{Token, TokenKind, truncate_for_display};
+    use crate::source::Span;
+    use crate::state::TrivialLang;
     use alloc::format;
+
+    #[derive(Debug, Clone, Copy)]
+    struct PlainLang;
+    impl TrivialLang for PlainLang {}
+
+    #[test]
+    #[should_panic(expected = "must end exactly at span start")]
+    fn a_token_with_incoherent_pre_space_panics_in_all_builds() {
+        // The approved always-on precondition assert ([§dd-dr:panic-policy] rule 3).
+        let _ = Token::<PlainLang>::new(TokenKind::Char('a'), Span::new(5, 6), Span::empty(3));
+    }
 
     #[test]
     fn truncate_for_display_stops_at_char_boundaries() {
