@@ -247,7 +247,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
 - Acceptance: argument-swap restage round-trip; annotation-flow tests; extract
   triples on all four producers.
 
-### S8 — Visit + recompose + oracle suite  [status: pending]
+### S8 — Visit + recompose + oracle suite  [status: DONE — merged 2026-08-05]
 
 - `techy::visit`: free `walk`; `NodeVisitor`; `VisitFlow`; `VisitContext` (engine
   bookkeeping only; walk role-blind). [§dd-dr:visit-engine].
@@ -594,3 +594,12 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   on Recomposer, the specials-arm Concat-over-children refinement.
   AWAITING USER SIGN-OFF of D-plan-1..10 before merge; no pre-sign-off
   should-fix edits required (all three notes are record-level).
+- 2026-08-05 (user): **S8 signed off** (D-plan-1..10 as shipped, incl. the
+  named D-plan-5 decision — `RecomposeError::Recomposer(E)` pattern-naming
+  confirmed over literal `Visitor(E)`; the D-plan-6/7 roster cluster and
+  the three note-level items accepted) **and merge authorized.** Merged
+  into api-review (7 stage commits rebased onto the process-log tip;
+  726 lib + 30 acceptance + 21 oracle + 8 + 1 + 33 doc tests green on the
+  merged tree). S8 COMPLETE. NEXT: launch **S9** per § S9 (preset
+  definitions + consumer polish, T1/T2 batch) — includes the A1(iv)
+  bound-where-used check fn + parse-init wiring routed from S4 (T3 §E2).
