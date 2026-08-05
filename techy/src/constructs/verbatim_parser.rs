@@ -476,8 +476,8 @@ impl<'p, L: Lang> VerbatimBodyParser<'p, L> {
     }
 
     /// Set whether a single newline at the body's very start is designated out of the
-    /// content (default: `true` — the `\begin{verbatim}`-line newline is scaffolding,
-    /// not verbatim text).
+    /// content (default: `true` — the `\begin{verbatim}`-line newline belongs to the
+    /// environment's begin/end syntax, not to the verbatim text).
     pub fn with_gobble_leading_newline(mut self, gobble: bool) -> Self {
         self.gobble_leading_newline = gobble;
         self

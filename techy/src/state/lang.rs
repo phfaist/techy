@@ -73,7 +73,7 @@ impl NodeExtTypes for () {
 /// The contract on a language's invocation-syntax payload type
 /// ([`Lang::InvocationSyntax`]): the recorded **trigger-spelling facts** of one
 /// callable invocation — what was written to invoke it (escape character,
-/// syntactic post-space, environment scaffolding), in the language's own logical
+/// syntactic post-space, an environment's begin/end syntax), in the language's own logical
 /// canonical form. `L`-parameterized like [`ParseDriver<L>`]: the payload's
 /// source-facing method speaks the language's own source-origin type.
 ///
@@ -180,7 +180,7 @@ pub trait Lang: Sized + 'static {
     /// computed from the ext at freeze time. Mutating an ext behind a shared
     /// `Arc<ParsingState>` would silently desynchronize those caches and break the
     /// readers' peek-idempotence contract. (The interior-mutable set-once idiom
-    /// sanctioned for *node* exts does not carry over here.)
+    /// permitted for *node* exts does not carry over here.)
     type StateExt: Clone + fmt::Debug + Default + Send + Sync;
 
     /// Semantic transition events (e.g. an `EnterMath`), carried on
@@ -248,7 +248,7 @@ pub trait Lang: Sized + 'static {
     /// [`ParseContext::driver`](crate::constructs::ParseContext::driver), **concretely
     /// typed** — preset parsers call preset helper methods on it with no downcasts.
     ///
-    /// Placement doctrine: `Lang` keeps the static hooks of layers callable outside a
+    /// Placement rule: `Lang` keeps the static hooks of layers callable outside a
     /// driven parse — [`initial_state_data`](Lang::initial_state_data)/
     /// [`finalize_transition`](Lang::finalize_transition) (state layer; `derived()` is
     /// out-of-parse-callable), [`scan_specials`](Lang::scan_specials)/

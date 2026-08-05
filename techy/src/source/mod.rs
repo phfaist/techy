@@ -27,7 +27,7 @@
 //!   owned when synthesized or normalized. Node payloads carry it.
 //! - [`LineIndex`] computes line/column information lazily, for display only — parsing works
 //!   purely in byte offsets. [`LineIndexCache`] is its persistent, per-source
-//!   consumer-held form, and [`LineColProvider`] the seam the rendering entry
+//!   consumer-held form, and [`LineColProvider`] the trait the rendering entry
 //!   points accept.
 //!
 //! # Cycle-prevention invariant

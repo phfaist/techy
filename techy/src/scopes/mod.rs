@@ -208,7 +208,8 @@ impl core::error::Error for ScopeStackError {
 /// One [`ScopeOp`] failed while a delta was applied — the per-op failure record
 /// collected by the fallible [`ParsingState::derived`](crate::state::ParsingState::derived)
 /// into a [`DeriveError`](crate::state::DeriveError). Mechanical, not classified: the *caller* decides what a failure means —
-/// the in-parse seam treats it as a recoverable condition through the recover funnel
+/// the in-parse derivation path treats it as a recoverable condition, reported
+/// through the recovery entry point
 /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)); an embedder applying a delta
 /// out of parse treats it as its own input error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -851,7 +852,7 @@ impl<L: Lang> Package<L> {
     /// `CallableSpec`'s declared arguments after `\begin{name}` and gives the body
     /// the default handling. The preset one-liners (`define_macro`/
     /// `define_environment` on latexlike packages) make the correct pairing
-    /// structural on the happy path.
+    /// structural in normal use.
     ///
     /// The spec passes through the sealed [`IntoCallableSpec`] conversion: by value
     /// (`insert(CallableType::Macro, "emph", MacroSpec::new(…))` — no `Arc::new`), or
@@ -1326,8 +1327,8 @@ impl fmt::Display for CallableDefinedAsError {
 /// entries *and* the fallback with this spec suppresses them purely by search order,
 /// with a better message than a mask could carry).
 ///
-/// Its invocation parser records a [`CallableDefinedAsError`] through the recover funnel
-/// (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
+/// Its invocation parser records a [`CallableDefinedAsError`] through the recovery
+/// entry point (strict: abort; tolerant: diagnostic) and stages the trigger as a span-backed chars
 /// fallback, consuming nothing further.
 #[derive(Debug, Clone, Default)]
 pub struct ErrorCallableSpec {

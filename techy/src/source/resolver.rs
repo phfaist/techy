@@ -160,7 +160,7 @@ pub fn resolve_source_reference<O: SourceOrigin, R: SourceResolver<O> + ?Sized>(
     ))
 }
 
-/// The canned include-cycle-plus-depth check a [`SourceResolver`] calls with `?`
+/// The ready-made include-cycle-plus-depth check a [`SourceResolver`] calls with `?`
 /// before answering an `\input`-like reference — recursion control stays **embedder
 /// policy** (the core never interprets references and performs no recursion
 /// checking; legitimate self-inclusion exists, e.g. `.dtx` self-documenting files),

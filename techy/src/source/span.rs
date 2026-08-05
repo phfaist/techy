@@ -74,7 +74,7 @@ impl Span {
         self.start..self.end
     }
 
-    /// Grow the span in place so it ends at `end` — the one sanctioned in-place
+    /// Grow the span in place so it ends at `end` — the one permitted in-place
     /// mutation (accumulating a run of tokens into one node's span). Monotone:
     /// `end >= self.end()` is the caller's contract — a violation panics, in all
     /// builds — so the `start <= end` invariant is preserved.

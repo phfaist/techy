@@ -74,7 +74,7 @@ techy is designed to be picked up at the level your project needs:
    token rules, modes, extension types, a parse driver — to specify a custom
    LaTeX-like language; or extend the preset itself: a language with its own
    vocabularies joins the `latexlike` family (the
-   [`LatexlikeLang`](crate::latexlike::LatexlikeLang) umbrella) instead of
+   [`LatexlikeLang`](crate::latexlike::LatexlikeLang) family trait) instead of
    forking it. See [Defining a custom language](crate::guide::custom_lang).
 
 At every level, the same tree-consumer toolkit (`extract`, `visit`,

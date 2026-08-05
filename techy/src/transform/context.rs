@@ -118,7 +118,7 @@ pub struct RestageContext<'t, L: Lang, A, B> {
 
 impl<'t, L: Lang, A, B> RestageContext<'t, L, A, B> {
     /// The raw staging builder of the output tree — arbitrary programmatic
-    /// staging underneath the canned ops (they are conveniences, not the power
+    /// staging underneath the ready-made ops (they are conveniences, not the power
     /// boundary). Newly synthesized nodes are minted with the explicit two-line
     /// recipe: call
     /// [`Lang::make_node_ext`](crate::core::Lang::make_node_ext) (over

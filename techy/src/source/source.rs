@@ -156,7 +156,7 @@ impl<O: SourceOrigin> Source<O> {
     /// [origins](Source::origin) carry the comparable names — making it the general
     /// primitive under include-chain policies (`.any(…)` for a cycle check,
     /// `.count()` for a depth bound, `.filter(…).count()` for a `.dtx`-style
-    /// bounded self-inclusion policy; the canned combination is
+    /// bounded self-inclusion policy; the ready-made combination is
     /// [`check_include_chain`](super::check_include_chain)). The chain is finite by
     /// construction: a triggering location always lies in an older source.
     pub fn including_sources(&self) -> IncludingSources<'_, O> {

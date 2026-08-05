@@ -57,8 +57,9 @@ impl<L: Lang> PrefixTable<L> {
     /// [`temporary_groups`](TokenRules::temporary_groups) first, then
     /// [`groups`](TokenRules::groups), so temporary rules win same-spelling ties (the
     /// minted-rule "prepended wins" semantics). Empty delimiter strings are ignored.
-    /// With [`TokenRules::enable_groups`] off the table is empty — the gate is baked in
-    /// here (per state, at freeze time) so the hot path never branches on it;
+    /// With [`TokenRules::enable_groups`] off the table is empty — the setting is
+    /// applied here (per state, at freeze time) so the token-scanning loop never
+    /// branches on it;
     /// `expecting_group_close` is checked separately by the reader and is *not* gated.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();

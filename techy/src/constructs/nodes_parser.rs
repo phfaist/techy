@@ -324,7 +324,7 @@ impl<L: Lang> Default for StopSpec<'_, L> {
 /// instead ([`UnclosedGroup`](super::UnclosedGroup) covers *that* family) — this condition is for the
 /// outermost level, where nobody claims it: the core
 /// [`Language::parse`](crate::engine::Language::parse) drive loop reports it through
-/// the recover funnel, consumes the token, and resumes (strict parses abort; the
+/// the recovery entry point, consumes the token, and resumes (strict parses abort; the
 /// skipped bytes are the accepted tolerant byte-accounting break).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
@@ -1119,7 +1119,7 @@ mod tests {
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
-    /// driver from the recovery knob alone (drivers carry the policy since 7.2).
+    /// driver from the recovery setting alone (drivers carry the policy).
     trait TestDriver {
         fn with_recovery(recovery: Recovery) -> Self;
     }

@@ -14,7 +14,7 @@ You rarely start from a blank `Lang`: there are two standard starting
 points — the all-defaults [`TrivialLang`](crate::core::TrivialLang) for
 experiments, and the `latexlike` language family for anything LaTeX-shaped
 — described [at the end of this chapter](#the-two-starting-points) once the
-pieces are on the table. This chapter builds on [The parsing model](crate::guide::parsing_model)
+pieces have been introduced. This chapter builds on [The parsing model](crate::guide::parsing_model)
 (what drivers, specs, and construct parsers do at parse time).
 
 ## Vocabularies: group classes and callable types
@@ -61,7 +61,7 @@ rules on entry, disabling features. Definition visibility may key on the
 mode (a math-only package), as may any content-interpretation decision. The
 family-side role trait is
 [`LatexlikeMode`](crate::latexlike::LatexlikeMode), deliberately minimal:
-the preset never conjures a "text mode" — leaving math restores an actual
+the preset never invents a "text mode" — leaving math restores an actual
 enclosing context.
 
 ## Token rules and specials recognition
@@ -85,7 +85,7 @@ silent trap: **the two hooks must be wired together**.
 at this position?" (recognition and resolution in one call), but it is
 *only consulted* when the current character is in the set returned by
 [`specials_trigger_chars`](crate::core::Lang::specials_trigger_chars) —
-computed once per frozen state, as the hot-path filter. A first character
+computed once per frozen state, as a fast pre-filter. A first character
 missing from that set means the trigger **silently never fires**: no error,
 no diagnostic. The scan hook's documentation adds the second quiet
 obligation: specials have the *lowest* recognition precedence, so a trigger
@@ -108,7 +108,7 @@ generic tooling. The attachment points:
   **population is initialization** — an ext value is minted exactly once,
   at creation, by the party with the knowledge, and there is no
   "default now, populate later" state anywhere.
-- **The node ext mint**:
+- **The node ext hook**:
   [`make_node_ext`](crate::core::Lang::make_node_ext) is the language's
   one chance to compute per-node data, with the node's parts in view — and
   it is the **only required `Lang` method** (a no-ext language writes the
@@ -123,7 +123,7 @@ generic tooling. The attachment points:
 - **Invocation spelling**: the
   [`InvocationSyntax`](crate::core::Lang::InvocationSyntax) payload records
   the trigger-spelling facts of each callable invocation (escape character,
-  post-space, environment scaffolding) in the language's own form. As its
+  post-space, an environment's begin/end syntax) in the language's own form. As its
   documentation puts it, this channel is what makes *recomposition
   accuracy the language's choice* — byte-exact re-emission is possible
   exactly to the extent the language records spelling facts here. `()`
@@ -191,7 +191,7 @@ complete driver; override what your language needs.
 
 **Command resolution** is the hook a command-bearing language cannot leave
 defaulted — the core cannot know which of your callable types commands
-resolve under. The canned driver
+resolve under. The ready-made driver
 ([`StdParseDriver`](crate::core::StdParseDriver)) makes it a plug-in
 strategy ([`CommandResolver`](crate::core::CommandResolver)): `()` resolves
 nothing (right for test languages and languages without commands — and its
@@ -245,7 +245,7 @@ joins the family instead of forking the preset. What joining requires: a
 [`LatexlikeEvent`](crate::latexlike::LatexlikeEvent),
 [`LatexlikeInvocationSyntax`](crate::latexlike::LatexlikeInvocationSyntax)),
 plus the explicit one-line opt-in — `impl LatexlikeLang for MyLang {}`
-([`LatexlikeLang`](crate::latexlike::LatexlikeLang)); the umbrella's
+([`LatexlikeLang`](crate::latexlike::LatexlikeLang)); the trait's
 defaulted methods (the math-delimiter table, the math-interior forbidden
 characters, the parse-initialization checks) are overridable per member.
 [`Latexlike`](crate::latexlike::Latexlike) itself is the worked example of
@@ -256,17 +256,17 @@ the canonical seed
 scope-stack specials scan; and it opts into its own family exactly the way
 a foreign member would.
 
-The reuse route for behavior is the preset's **pillar functions**: the
+The reuse route for behavior is the preset's **behavior functions**: the
 [`LatexlikeDriver`](crate::latexlike::LatexlikeDriver)'s whole behavior is
-published as family-generic building blocks —
+published as family-generic free functions —
 [`math_group_interior_delta`](crate::latexlike::math_group_interior_delta),
 [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta),
 [`make_paragraph_break_node`](crate::latexlike::make_paragraph_break_node)
-— with the driver as the canned assembly whose hook bodies are one-line
+— with the driver as the ready-made assembly whose hook bodies are one-line
 delegations to them. A struct cannot be partially overridden, so a family
 member wanting preset-behavior-plus-one-custom-hook writes its own
-[`ParseDriver`](crate::core::ParseDriver) composing the same pillars; the
-driver's documentation states that it contains no behavior the pillars do
+[`ParseDriver`](crate::core::ParseDriver) composing the same functions; the
+driver's documentation states that it contains no behavior these functions do
 not.
 
 ## Reusing the preset wholesale: the projection pattern
@@ -281,7 +281,7 @@ language built on techy (a semantic markup language that projects parsed
 documents into its own content model, say) can keep its own vocabularies,
 node extensions, and invocation-syntax payload while reusing the preset's
 driver behavior and declarative spec types unchanged: implement `Lang`
-with your types, play the roles, opt into
+with your types, implement the role traits, opt into
 [`LatexlikeLang`](crate::latexlike::LatexlikeLang), and instantiate the
 preset components over your language. Forking the preset is the
 alternative the family exists to avoid.

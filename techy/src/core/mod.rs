@@ -2,9 +2,9 @@
 //! the parse engine.
 //!
 //! The hub is deliberately **flat**. State, tokens, and the engine form one mutually
-//! recursive heart — token rules live in the parsing state, the state is derived
+//! recursive cluster — token rules live in the parsing state, the state is derived
 //! through the engine's session, the engine drives readers over rules — so the hub
-//! keeps the whole [`Language::parse()`](Language::parse) → [`ParseResult`] story on
+//! keeps the whole [`Language::parse()`](Language::parse) → [`ParseResult`] flow on
 //! one page:
 //!
 //! - **Language contract and state** — [`Lang`] (the compile-time customization
@@ -15,11 +15,11 @@
 //!   [`TokenReader`] trait and standard reader ([`StdTokenReader`]), specials
 //!   scanning ([`SpecialsMatch`], [`TriggerChars`]), and the token error family.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
-//!   [`ParserSession`], the [`ParseDriver`] behavior seam ([`StdParseDriver`]),
+//!   [`ParserSession`], the [`ParseDriver`] customization point ([`StdParseDriver`]),
 //!   [`ParseResult`], and the live parse-frame stack ([`Frame`], [`FrameTitle`],
 //!   [`FrameRole`]).
 //!
-//! Three satellite modules hold the subsets with crisp boundaries:
+//! Three submodules hold the subsets with clear boundaries:
 //!
 //! - [`specs`] — author-side: defining callables and organizing definitions
 //!   (callable specs, providers/packages/scopes, command resolution).

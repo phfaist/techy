@@ -34,7 +34,7 @@ use super::Latexlike;
 /// [`materialize`](crate::core::node::NodeTree::materialize)d tree the
 /// reconstruction touches no `Source` at all.
 ///
-/// **Accuracy is what the parse records** (the preset's accuracy doctrine,
+/// **Accuracy is what the parse records** (the preset's accuracy rule,
 /// [`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
 /// for trees the latexlike parse produces, reemission is byte-exact —
 /// including tolerant-recovery shapes, which reemit exactly what was

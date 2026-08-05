@@ -26,13 +26,13 @@ use super::parsing_state::ParsingState;
 ///   ([`ParseDriver::resolve_state_event`](crate::engine::ParseDriver::resolve_state_event)).
 ///   The engine retains exactly these states implicitly anyway (leaving a scope
 ///   structurally restores the outer `Arc`); the stack only materializes them, and
-///   it **dies with the session** — no ancestry residue survives into parsed
+///   it is **dropped with the session** — no ancestry data survives into parsed
 ///   material.
 /// - **Post-parse construction.** [`from_states`](ParsingStateStack::from_states)
 ///   assembles one from explicit states, and
 ///   [`from_node_ancestors`](ParsingStateStack::from_node_ancestors) recovers one
 ///   from a parsed node — so post-parse processing (transforms synthesizing nodes)
-///   can feed the same `LLL`-generic pillar functions the driver hook feeds, e.g.
+///   can feed the same `LLL`-generic behavior functions the driver hook feeds, e.g.
 ///   [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta), with
 ///   no session anywhere.
 ///

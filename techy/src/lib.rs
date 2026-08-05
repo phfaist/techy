@@ -91,7 +91,7 @@
 //!   [`source_recomposer`](latexlike::source_recomposer).
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
-//!   [`ParseResult`](core::ParseResult)), with three satellites:
+//!   [`ParseResult`](core::ParseResult)), with three submodules:
 //!   - [`core::specs`] — defining callables: callable specs, providers, packages
 //!     and scopes, command resolution.
 //!   - [`core::constructs`] — construct parsing: the

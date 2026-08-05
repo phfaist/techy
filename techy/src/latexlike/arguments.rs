@@ -131,7 +131,7 @@ impl core::error::Error for ArgumentCodeError {}
 ///
 /// **`m` keeps TeX's single-expression fallback — deliberately.** `\frac12` reads
 /// two one-token arguments; a missing group is *not* diagnosed as long as any
-/// expression follows, which silently swallows sibling content when the argument
+/// expression follows, which silently consumes sibling content when the argument
 /// was meant to be group-only. Where that trap matters (config-like payloads,
 /// machine-written arguments), use the word code **`BracedOnly`**: the same
 /// mandatory *content-class* group with the fallback off. "Braced" names the

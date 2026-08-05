@@ -328,6 +328,59 @@ documentation directly in code" naming the crate-level Panics section as the
 exhaustive user-facing list, to be updated with any public panicking-behavior
 change.
 
+## M4 — sweep applied
+
+All REPLACE clusters of the M1 table are APPLIED (rustdoc first, then the
+guide chapters, then the AI-guide same-term renames); all KEEP decisions
+stand unchanged. Verification is a rendered-HTML grep over every public page
+(AI-guide pages excluded): zero remaining hits for staging door / splice
+door / behavior door / recover funnel / the funnel / choke point / footgun /
+escape hatch / happy path / load-bearing / airtight / smuggle / scaffold /
+umbrella / hot path / cold path / doctrine / pillar / satellite / §dd- /
+conjure / swallow / wall off / baked in / knob / canned / residue / "dies
+with" (the only grep matches are the `Scanned` enum variant and
+"scanned position/noise" prose, which contain the letter sequences
+"canned"/"Scanned" — code identifiers and unrelated words, not the swept
+terms).
+
+Clusters ADDED to the M1 table during application (same classification
+process, found by the widened idiom grep): "doctrine" → "rule" (span-
+stability, accuracy, noise-ownership, placement); "canned" → "ready-made" /
+"standard"; "knob" → "setting" (except where "policy" was the accurate
+word); "cold path" / "hot success path" → plain descriptions ("only when a
+condition is recorded", "once per construct during normal parsing");
+"the math/data plug" (noun) → "the math-interior behavior function" /
+"the data channel" (the ordinary verb "plugs into" is kept); "conjure" →
+"invent"; "swallow" → "consume"; "baked in" → "applied at freeze time";
+"satellite modules" → "submodules"; "crisp" → "clear"; "mutually recursive
+heart" → "cluster"; "story on one page" → "flow on one page"; "structurally
+identical citizens" → "structurally identical to the library's own";
+"out of the box" / "on the table" / "cuts both ways" / "wall off" /
+"the trap bites" → plain restatements; "migrated parse-time hooks"
+(process residue on the ParseDriver trait) → the five-concern grouping.
+
+AI-guide consistency renames (minimal, same-term only): ai-guide-embedding.md
+(pillar functions → behavior functions; fallible seam → fallible operation),
+ai-guide-custom-lang.md (pillar functions/pillars → behavior functions ×3;
+"the one staging door" → "the single staging entry point"; "Two staging
+doors" → "Two staging calls"), ai-guide-trees.md ("the sanctioned splice
+door" → "the supported route").
+
+Meaning-preservation notes: every metaphor that carried a contract now
+states the contract plainly at its defining site — stage_node = "the single
+staging entry point: every parsed node enters the tree through it";
+recover = "the recovery entry point: every problem a construct parser
+detects in the source is reported through this one method, which applies the
+driver's recovery policy"; derived() = "the sole constructor of non-initial
+states: every state transition passes through this method";
+implementation_error "ignores the recovery policy" (the exact semantics of
+the old "bypasses the funnel"); restage_node/RestageContext ops = "accept
+nodes from any tree by contract — the supported route for cross-tree
+assembly, and a same-tree assertion may never be added".
+
+Gates after M4: cargo build 0 warnings; cargo test 758+30+8+21+1 pass, 66
+doctests + 2 ignored (counts unchanged); cargo docs zero warnings.
+
 ## M5 — closure
 
 (to be filled)

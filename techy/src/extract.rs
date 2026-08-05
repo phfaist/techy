@@ -726,7 +726,7 @@ impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
 /// **whitespace-trimmed** (a deliberate deviation from pylatexenc, which keeps `" a "`
 /// verbatim: LaTeX's keyval packages trim, and pylatexenc's untrimmed keys are a
 /// recurring source of user mistakes). Values are recorded **raw and in source order, duplicates
-/// preserved** — deliberately, with no aggregation knobs: pylatexenc's `repeated_key_aggregate_action`
+/// preserved** — deliberately, with no aggregation options: pylatexenc's `repeated_key_aggregate_action`
 /// policies are one-line derivations over [`iter`](KeyVals::iter), and
 /// [`get`](KeyVals::get) answers the common "effective value" question (last wins —
 /// LaTeX override semantics). A key with `=` and nothing after it gets an empty value;
@@ -1127,7 +1127,7 @@ impl<'k, L: Lang, B> KeyValEntry<'k, L, B> {
     /// The value with the documented LaTeX keyval convention applied: when the value is
     /// exactly one group node (`legend={a,b}`), its contents; otherwise the raw value.
     /// This is pylatexenc's `extract_value_group_contents=True` as an accessor instead
-    /// of a parse-time knob — [`value`](KeyValEntry::value) always keeps the raw shape.
+    /// of a parse-time setting — [`value`](KeyValEntry::value) always keeps the raw shape.
     pub fn value_content(&self) -> Option<NodeSlice<'k, L, B>> {
         let value = self.value?;
         if value.len() == 1 {

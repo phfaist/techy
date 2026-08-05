@@ -173,7 +173,7 @@ misspelled name from a merely absent argument.
 **The single-expression fallback — a documented trap.** The `m` code keeps
 TeX's fallback: if no `{…}` group follows, a single expression is taken
 instead (`\frac12` reads two one-character arguments). That also means a
-*missing* group is not diagnosed — the argument silently swallows whatever
+*missing* group is not diagnosed — the argument silently consumes whatever
 sibling content follows. Where arguments are machine-written or config-like
 and the fallback is unwanted, use the word code `BracedOnly`: the same
 mandatory group with the fallback off (see the code table on
@@ -245,11 +245,11 @@ Two silent traps and one non-check, all documented on the API items:
 - **Never include the escape character in a registered name.** Register
   `"emph"`, not `"\\emph"`: command tokens carry their name *without* the
   escape character, so an escape-prefixed registration can never match — the
-  definition is silently unreachable. techy defends where the trap bites: an
+  definition is silently unreachable. techy defends where the mistake happens: an
   unresolved command's diagnostic suggests escape-prefixed near-misses, and a
   parse-initialization check warns when all of a provider's commands are
   escape-shadowed. See [`Package::insert`](crate::core::specs::Package::insert).
-- **The `m` code's single-expression fallback** can silently swallow sibling
+- **The `m` code's single-expression fallback** can silently consume sibling
   content when a group was intended — see
   [the argument-codes section](#argument-codes) above.
 - **Registration performs no spec-type/callable-type cross-check —
@@ -258,7 +258,7 @@ Two silent traps and one non-check, all documented on the API items:
   the body takes the default handling. The one-liners
   ([`define_macro`](crate::core::specs::Package::define_macro) /
   [`define_environment`](crate::core::specs::Package::define_environment))
-  make the correct pairing structural on the happy path. See
+  make the correct pairing structural in the common case. See
   [`Package::insert`](crate::core::specs::Package::insert).
 
 ## Resolving external sources: `\input`-like inclusion

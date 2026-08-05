@@ -116,7 +116,7 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
     }
 
     /// The contents-restriction delta, built against `base` (the argument's state):
-    /// commands/specials off, comments per knob, groups per knob — the group-rule
+    /// commands/specials off, comments per setting, groups per setting — the group-rule
     /// list filtered to the entered class (the data-driven "math off"; module docs).
     fn contents_delta(
         &self,

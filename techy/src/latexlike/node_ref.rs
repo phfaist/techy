@@ -73,8 +73,8 @@ impl<'t, LLL: LatexlikeLang, A> NodeRef<'t, LLL, A> {
     /// (the name-terminating whitespace of a multi-character command; nothing
     /// beyond the token's own post-space is ever recorded — whitespace after a
     /// single-character command or a final argument is sibling/region content);
-    /// environment- and specials-formed invocations answer `Some("")` (an
-    /// environment's begin/end scaffolding whitespace is recorded per side in its
+    /// environment- and specials-formed invocations answer `Some("")` (the
+    /// whitespace of an environment's begin/end syntax is recorded per side in its
     /// [`environment_syntax`](LatexlikeInvocationSyntax::environment_syntax)
     /// record, and specials record no post-space). `None` for non-callables.
     pub fn post_space(&self) -> Option<&'t str> {

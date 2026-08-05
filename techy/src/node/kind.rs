@@ -216,8 +216,8 @@ pub struct CallableData<L: Lang> {
     /// The language's recorded **invocation syntax**
     /// ([`Lang::InvocationSyntax`](crate::state::Lang::InvocationSyntax)): the
     /// trigger-spelling facts of *this* invocation — what was written to invoke it
-    /// (escape character, the trigger token's syntactic post-space, environment
-    /// scaffolding), in the language's own payload type and logical canonical
+    /// (escape character, the trigger token's syntactic post-space, an
+    /// environment's begin/end syntax), in the language's own payload type and logical canonical
     /// form. A parse-level-syntax channel, distinct from the node ext
     /// (preset-logic data); minted by the invocation parser that staged the node
     /// (the standard sites via
@@ -231,7 +231,7 @@ pub struct CallableData<L: Lang> {
     /// `macro_post_space`), a sub-range of the node's span lying *outside* the
     /// argument/slot region tiling — in its
     /// [`Macro`](crate::latexlike::InvocationSyntaxData::Macro) arm, and the
-    /// begin/end scaffolding facts of environment-shaped callables in its
+    /// begin/end syntax facts of environment-shaped callables in its
     /// [`Environment`](crate::latexlike::InvocationSyntaxData::Environment) arm.
     pub invocation_syntax: L::InvocationSyntax,
 }

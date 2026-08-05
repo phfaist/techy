@@ -177,7 +177,7 @@ pub struct EnvironmentInvocation<'p> {
     pub name_group_close: &'p str,
 }
 
-/// The behavior of one environment, behind [`EnvironmentSpec`] — the funnel's inner
+/// The behavior of one environment, behind [`EnvironmentSpec`] — the wrapper's inner
 /// trait: third-party implementations override the
 /// defaulted methods; the composition reaches them through the concrete wrapper's
 /// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
@@ -185,7 +185,7 @@ pub struct EnvironmentInvocation<'p> {
 /// behind [`EnvironmentSpec::new`].
 pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>: fmt::Debug + Send + Sync {
     /// The declarative argument structure of the environment, in invocation order —
-    /// parsed right after the `\begin{name}` scaffolding, before the body. Default:
+    /// parsed right after `\begin{name}`, before the body. Default:
     /// no arguments.
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         &[]
@@ -262,7 +262,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
 /// [`VerbatimBodyParser`] up to the literal `\end{name}` terminator (composed per
 /// invocation with the preset's canonical `\` escape and `{…}` name group, the same
 /// spellings the `\begin` composition itself is built on). The single newline right
-/// after the begin scaffolding is staged but designated out of the body content
+/// after the begin syntax is staged but designated out of the body content
 /// (the gobble rule — see [`VerbatimBodyParser`]).
 ///
 /// One behavior instance serves any environment name (the terminator back-reference
@@ -391,9 +391,9 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 }
 
 /// The preset's environment spec: the registration type for
-/// [`CallableType::Environment`](super::CallableType::Environment) entries — the funnel wrapper through which the `\begin` composition reaches the environment's
+/// [`CallableType::Environment`](super::CallableType::Environment) entries — the concrete wrapper through which the `\begin` composition reaches the environment's
 /// [`EnvironmentBehavior`] (`Any` downcasts hit concrete types only, so the open set
-/// of behaviors funnels through this one concrete spec type).
+/// of behaviors is reached through this one concrete spec type).
 ///
 /// The composition — not this spec — parses the invocation:
 /// [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never
@@ -413,7 +413,7 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
         EnvironmentSpec::from_behavior(Arc::new(StdEnvironmentBehavior { arguments }))
     }
 
-    /// An environment driven by a custom [`EnvironmentBehavior`] — the funnel's
+    /// An environment driven by a custom [`EnvironmentBehavior`] — the wrapper's
     /// registration entry for behavior-shaped customization (verbatim-like bodies).
     pub fn from_behavior(behavior: Arc<dyn EnvironmentBehavior<LLL>>) -> EnvironmentSpec<LLL> {
         EnvironmentSpec { behavior }

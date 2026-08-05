@@ -88,14 +88,14 @@ group, which count as math, which plays the macro role, …) — plus the
 one-line opt-in `impl LatexlikeLang for MyLang {}`
 ([`LatexlikeLang`](crate::latexlike::LatexlikeLang); its defaulted methods
 — math-delimiter table, parse-initialization checks — are overridable per
-member). Behavior reuse goes through the preset's **pillar functions**
+member). Behavior reuse goes through the preset's **behavior functions**
 ([`math_group_interior_delta`](crate::latexlike::math_group_interior_delta),
 [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta),
 [`make_paragraph_break_node`](crate::latexlike::make_paragraph_break_node)):
 [`LatexlikeDriver`](crate::latexlike::LatexlikeDriver)'s hook bodies are
-one-line delegations to them and contain no behavior the pillars do not —
+one-line delegations to them and contain no behavior these functions do not —
 a member wanting preset-behavior-plus-one-custom-hook writes its own
-driver composing the same pillars (a struct cannot be partially
+driver composing the same functions (a struct cannot be partially
 overridden). **Projection pattern**: the preset's driver and spec types are
 generic over the family
 ([`LatexlikeDriver<LLL>`](crate::latexlike::LatexlikeDriver),
@@ -247,7 +247,7 @@ whole toolkit:
 | Need | Use |
 |---|---|
 | read tokens | `cx.tokens` ([`TokenReader`](crate::core::TokenReader)); prefer [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token) (maps tokenizer errors per recovery policy) |
-| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the one staging door; mints the node ext, returns a [`BuildId`](crate::core::node::BuildId); children staged first, bottom-up |
+| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns a [`BuildId`](crate::core::node::BuildId); children staged first, bottom-up |
 | derive/scope state | [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state); [`cx.with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state) / [`parse_scoped`](crate::core::constructs::ParseContext::parse_scoped) / [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state) scope with structural restore |
 | descend into child content | [`cx.parse_nodes(state, stop, child_states)`](crate::core::constructs::ParseContext::parse_nodes) / [`cx.parse_group(…)`](crate::core::constructs::ParseContext::parse_group) — never instantiate loop parsers yourself (driver factories must apply) |
 | report a source problem | [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover) — strict: hands back `Err` to propagate; tolerant: records the diagnostic, returns `Ok`, then **your parser performs its documented local recovery and continues** |
@@ -261,7 +261,7 @@ trigger token is already consumed, post-space included (reposition via
 `cx.state` is the invocation's base state; a spec that declares no
 arguments but consumes content must override
 [`requires_content`](crate::core::specs::CallableSpec::requires_content)
-to `true`. **Two staging doors** for the callable node:
+to `true`. **Two staging calls** for the callable node:
 [`cx.stage_invocation(…)`](crate::core::constructs::ParseContext::stage_invocation)
 — the transcription shorthand for macro-shaped takeovers (builds
 [`CallableData`](crate::core::node::CallableData) from the

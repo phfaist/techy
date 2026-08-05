@@ -29,9 +29,9 @@ thread, and their traits deliberately carry **no `Send`/`Sync` bounds** —
 [`NodeVisitor`](crate::visit::NodeVisitor),
 [`RestageVisitor`](crate::transform::RestageVisitor), and
 [`annotate`](crate::core::node::NodeTree::annotate) callbacks alike; the
-documented rationale is exactly the embedding case: a bound would wall off
-single-threaded foreign-function callbacks. For an embedder this cuts both
-ways: callback objects from a binding language need no thread-safety
+documented rationale is exactly the embedding case: a bound would exclude
+single-threaded foreign-function callbacks. For an embedder this has two
+consequences: callback objects from a binding language need no thread-safety
 wrapper, and a running walk is not something to hand to another thread.
 
 **Match `Severity` exhaustively.** [`Severity`](crate::error::Severity) is
@@ -44,11 +44,11 @@ and embedders, so map all three.
 **Synthesizing nodes after the parse.** Post-parse processing that
 fabricates nodes (a transform inserting material the source never had) must
 give them coherent recorded parsing states. The documented recipe: feed the
-preset's pillar functions the same inputs the parse-time driver feeds them
+preset's behavior functions the same inputs the parse-time driver feeds them
 — with
 [`ParsingStateStack::from_node_ancestors`](crate::core::ParsingStateStack::from_node_ancestors)
 recovering the enclosing-state stack from a parsed node, no parse session
-anywhere. The pillar documentation carries the details (for a synthesized
+anywhere. The behavior functions' documentation carries the details (for a synthesized
 math interior, [`math_group_interior_delta`](crate::latexlike::math_group_interior_delta)
 states the two components to apply;
 [`exit_math_context_delta`](crate::latexlike::exit_math_context_delta)
@@ -82,8 +82,8 @@ whoever needs it. The persistent form is the consumer-held
 table per source, keyed by source identity, never invalidated (content is
 immutable) — which is also the natural bindings-side handle for repeated
 line/column queries and diagnostic rendering (the `_with` rendering entry
-points accept it). The seam under it is
-[`LineColProvider`](crate::source::LineColProvider): editor tools with
+points accept it). Underneath it is the
+[`LineColProvider`](crate::source::LineColProvider) trait: editor tools with
 their own incremental line tables implement the trait and plug into the
 same rendering entry points without recomputation. One documented bound to
 know: content longer than the configured scan cap (default 500 000 bytes,
@@ -103,7 +103,7 @@ the text), so positions from two `parse` calls never correlate even on
 identical content. Holding the source also keeps a
 [`LineIndexCache`](crate::source::LineIndexCache) entry valid across
 attempts for free — its documentation calls this the span-stability
-doctrine.
+rule.
 
 Read next: [Migrating from pylatexenc](crate::guide::pylatexenc_migration)
 — the concept mappings for readers arriving from the Python library.

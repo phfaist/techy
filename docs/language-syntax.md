@@ -228,7 +228,7 @@ verbatim regions and math-mode rule changes work.
 
 ## No definitions ship by default
 
-Out of the box, the preset defines the *syntax* above but almost no
+As shipped, the preset defines the *syntax* above but almost no
 *vocabulary*: the only shipped definitions are `\begin` and `\end` (the
 builtin package's environment dispatch). `\emph` is an unresolvable command
 until you register it. This is deliberate: any shipped definition set would

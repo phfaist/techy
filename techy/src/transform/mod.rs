@@ -116,8 +116,8 @@
 //! The context ops (and the level-0
 //! [`NodeTreeBuilder::restage_node`](crate::core::node::NodeTreeBuilder::restage_node)
 //! primitive underneath them) accept nodes from **any** tree, not just the run's
-//! input — this is the sanctioned splice door for assembling a new tree out of
-//! pieces of several others.
+//! input — cross-tree input is supported by contract, for assembling a new tree
+//! out of pieces of several others.
 
 use core::fmt;
 
@@ -164,7 +164,8 @@ pub enum Restage<B> {
 /// Deliberately **no `Send`/`Sync` bounds** (here and on
 /// [`annotate`](crate::core::node::NodeTree::annotate) callbacks): the driver
 /// runs visitors synchronously on the calling thread, so such a bound would be a
-/// demand on callers buying nothing — and it would wall off single-threaded FFI
+/// demand on callers buying nothing — and it would exclude single-threaded
+/// foreign-function (FFI)
 /// callbacks. Parallel variants, if ever wanted, are new entry points with their
 /// own bounds (the `&mut self` contract is inherently serial).
 ///
@@ -290,7 +291,7 @@ pub enum RestageError<E> {
     },
     /// The root's replacement was not exactly one staged node ([`restage`]
     /// returns a tree, and a synthesized wrapper would need an annotation the
-    /// driver cannot conjure — wrap the root yourself via `Emit`).
+    /// driver cannot invent — wrap the root yourself via `Emit`).
     RootNotSingular {
         /// How many staged nodes the visitor produced for the root.
         count: usize,

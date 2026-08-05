@@ -47,7 +47,7 @@ use super::Latexlike;
 ///   (normalizing, collapsing, or dropping the whitespace) belongs to a
 ///   converter built on techy, not to techy.
 /// - [`Environment`](InvocationSyntaxData::Environment) — an environment-shaped
-///   invocation: the begin/end scaffolding facts, in the `Env` record (default
+///   invocation: the begin/end syntax facts, in the `Env` record (default
 ///   [`StdEnvironmentSyntax`]).
 /// - [`Specials`](InvocationSyntaxData::Specials) — a specials-formed invocation:
 ///   a **unit variant**, deliberately. The node's
@@ -65,8 +65,9 @@ use super::Latexlike;
 /// `InvocationSyntaxData<StdEnvironmentSyntax<Flm>>`); the default anchors at the
 /// preset lang ([`Latexlike`]). Scanning **tolerance** is a *parser* concern, not
 /// a record concern: a family member wanting looser begin/end syntax swaps the
-/// invocation/body parser through the behavior door — the record only records
-/// what its parser consumed.
+/// invocation/body parser through the parser-factory override
+/// ([`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser))
+/// — the record only records what its parser consumed.
 ///
 /// [`Lang::InvocationSyntax`]: crate::state::Lang::InvocationSyntax
 #[derive(Clone, Debug)]
@@ -81,7 +82,7 @@ pub enum InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>> {
         /// [`materialize`](crate::node::NodeTree::materialize).
         post_space: TextContent,
     },
-    /// An environment-shaped invocation's begin/end scaffolding facts.
+    /// An environment-shaped invocation's begin/end syntax facts.
     Environment(Env),
     /// A specials-formed invocation: nothing to record beyond the node's `name`,
     /// which is the spelling as written (see the enum docs).
@@ -111,8 +112,8 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 /// other trigger (a specials token, a paragraph-break token at the preset's
 /// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
 /// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
-/// environment-shaped composition stages through the canonical
-/// [`stage_node`](crate::constructs::ParseContext::stage_node) door with
+/// environment-shaped composition stages through
+/// [`stage_node`](crate::constructs::ParseContext::stage_node) itself with
 /// [`environment_form`](LatexlikeInvocationSyntax::environment_form).
 impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
     fn from_invocation(invocation: &Invocation<'_, '_, L>) -> Self {
@@ -166,7 +167,7 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
     }
 }
 
-/// One side of the **standard** environment record's scaffolding
+/// One side of the **standard** environment record's begin/end syntax
 /// ([`StdEnvironmentSyntax`]'s component type) — the spelling facts of a
 /// `\begin{name}`-shaped or `\end{name}`-shaped command-plus-name-group, as
 /// written:
@@ -257,7 +258,9 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// delegation would be illusory, and the accumulator shape would lock custom
 /// `Env` types into the standard flow's shape.) Scanning **tolerance** is
 /// likewise a parser concern: swap the invocation/body parser through the
-/// behavior door; the record records what its parser consumed.
+/// parser-factory override
+/// ([`make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser));
+/// the record records what its parser consumed.
 ///
 /// Re-emission stays a **writer pair** ([`write_begin`]/[`write_end`]) — the
 /// recompose stage's `Concat` head/tail and the parse-law checker's
@@ -289,7 +292,7 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// The begin-side spelling as recorded, resolved around `name` (the
     /// environment's name as written); `source` (the carrying node's own source)
     /// resolves span-backed fields. What a source recomposer emits for the begin
-    /// scaffolding.
+    /// syntax.
     fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 
     /// The end-side spelling as recorded — the empty string when the end side is

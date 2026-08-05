@@ -4,7 +4,7 @@ A tour of the `latexlike` preset — the familiar LaTeX behavior assembled from 
 generic core — in small, complete, runnable examples. Every code block on this page is
 compiled and executed as a doctest, so what you read here is what the library does.
 The examples use `unwrap()` for brevity; real embedders will want to keep the
-`Result`s (every fallible seam returns one — techy never panics on input). Where
+`Result`s (every fallible operation returns one — techy never panics on input). Where
 pylatexenc is mentioned, the repository's acceptance suite
 (`techy/tests/acceptance.rs`) pins the parity claim.
 
@@ -40,7 +40,7 @@ assert_eq!(shapes, ["chars(Hello )", "group(Content { })", "chars( world!)"]);
 ```
 
 No definitions are registered by default — techy deliberately ships no LaTeX
-definitions database — so `\emph` is an *unresolvable command* out of the box.
+definitions database — so `\emph` starts out as an *unresolvable command*.
 Everything below registers what it needs; that is the intended embedder workflow.
 For quick experiments,
 [`minidefs::minilatex_package()`](crate::latexlike::minidefs::minilatex_package)

@@ -103,7 +103,7 @@ impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
 /// argument-less instance for all its typography triggers).
 ///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
-/// [`Latexlike`]) — it is also what the paragraph-break pillar
+/// [`Latexlike`]) — it is also what the paragraph-break behavior function
 /// ([`make_paragraph_break_node`](super::make_paragraph_break_node)) stamps on
 /// `Specials`-style break nodes for any family member.
 pub struct SpecialsSpec<LLL: LatexlikeLang = Latexlike> {

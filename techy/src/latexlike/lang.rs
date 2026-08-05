@@ -51,11 +51,11 @@ use super::{CallableType, Event, GroupType, MathGroupForm, Mode};
 /// - `Self::math_group(f).math_form() == Some(f)` for every form `f`;
 /// - `content_group().math_form()` and `verbatim_group().math_form()` are `None`;
 /// - [`is_math`](LatexlikeGroupType::is_math) is `true` for every value the
-///   language wants parsed as a math interior (the driver's math plug keys on it).
+///   language wants parsed as a math interior (the driver's math-interior delta keys on it).
 ///
 /// # The `is_math` / `math_form` split
 ///
-/// The split is deliberate: the preset driver's math plug keys on **`is_math`**
+/// The split is deliberate: the preset's math-interior behavior function keys on **`is_math`**
 /// (parse behavior — enter math mode, drop the math openers), while readers key on
 /// **`math_form`** (presentation). An extending language with a math-*like* class
 /// that has no inline/display presentation overrides `is_math` to answer `true` for
@@ -128,7 +128,7 @@ pub trait LatexlikeCallableType: Copy + PartialEq {
 /// nothing more.
 ///
 /// There is **no text-mode constructor and no `is_text`**: the preset never
-/// *conjures* a non-math mode — leaving math restores an actual enclosing context
+/// *invents* a non-math mode — leaving math restores an actual enclosing context
 /// (its mode value included) found on the enclosing-state stack
 /// ([`exit_math_context_delta`](super::exit_math_context_delta)), so the only
 /// required vocabulary is "which mode do math interiors parse in" and "is this
@@ -222,8 +222,8 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
     fn is_specials(&self) -> bool;
 }
 
-/// The latexlike **language family** umbrella: a [`Lang`] whose vocabularies play
-/// the latexlike roles ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
+/// The latexlike **language-family** trait: a [`Lang`] whose vocabularies implement
+/// the latexlike role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
 /// [`LatexlikeMode`], [`LatexlikeEvent`], and — on the invocation-syntax
 /// payload — [`LatexlikeInvocationSyntax`] +
 /// [`FromInvocation`](crate::constructs::FromInvocation)) — the bound every

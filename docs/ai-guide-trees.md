@@ -183,7 +183,7 @@ designation is
 [`RestageError::ContentParentDropped`](crate::transform::RestageError) —
 the remedy is an explicit `Emit` takeover
 ([`restage_invocation`](crate::transform::RestageContext::restage_invocation)).
-Context ops accept nodes from **any** tree — the sanctioned splice door for
+Context ops accept nodes from **any** tree — the supported route for
 assembling a tree from pieces of several others. Descent is structural,
 never role-conditional.
 

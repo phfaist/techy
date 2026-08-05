@@ -153,7 +153,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         ParseContext { tokens, source, state, session, driver }
     }
 
-    /// Stage one parsed node — **the** staging door of parsing, and the one automatic
+    /// Stage one parsed node — **the single staging entry point** of parsing (every
+    /// parsed node enters the tree through it), and the one automatic
     /// [`Lang::make_node_ext`] site: the node's ext is minted here (with the
     /// descent-only [`StagedChildren`](crate::node::StagedChildren) view of
     /// `children`), then the node is staged with annotation `()` (parse output is the
@@ -194,11 +195,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Stage the resolved invocation's `Callable` node — the **transcription-case
-    /// shorthand** over the one staging door ([`stage_node`](ParseContext::stage_node)):
+    /// shorthand** over the single staging entry point ([`stage_node`](ParseContext::stage_node)):
     /// builds the [`CallableData`] by transcribing `callable_type`/`name`/`spec`
     /// from the bundle and minting the invocation-syntax payload from it
-    /// ([`FromInvocation`]), computes the node's span, stages (the door mints the
-    /// node ext), and returns the id. What [`StdInvocationParser`] does, packaged
+    /// ([`FromInvocation`]), computes the node's span, stages (minting the node
+    /// ext, as staging always does), and returns the id. What [`StdInvocationParser`] does, packaged
     /// for takeover parsers of the same macro shape.
     ///
     /// `arguments`/`slots` are **caller-tiled** records in staged child-list
@@ -216,8 +217,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// Deliberately **no `callable_type`/`name` overrides**: a composition that
     /// overrides both and whose span outruns its children (the environment shape)
-    /// stays on the canonical [`stage_node`](ParseContext::stage_node) door with
-    /// an explicit [`CallableData`]. No ext/annotation parameters — the door
+    /// stays on [`stage_node`](ParseContext::stage_node) itself with
+    /// an explicit [`CallableData`]. No ext/annotation parameters — staging
     /// mints the ext, and parse annotations are `()`.
     pub fn stage_invocation(
         &mut self,
@@ -333,9 +334,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Detection-site recovery — **the recover funnel**:
-    /// boxes the condition and hands it to [`ParseDriver::recover`], where the policy
-    /// is defined — the default driver path applies
+    /// Detection-site recovery — **the recovery entry point**: every problem a
+    /// construct parser detects in the source is reported through this one method,
+    /// which boxes the condition and hands it to [`ParseDriver::recover`], where the
+    /// policy is defined — the default driver path applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once (it needs
     /// this context's parsing state) and then records the condition as an
     /// error-severity diagnostic and returns `Ok(())` (tolerant — the caller continues
@@ -348,7 +350,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.recover_boxed(Box::new(condition), span)
     }
 
-    /// The funnel's boxed entry — for payloads that already live behind the dyn facade
+    /// The recovery entry point's boxed form — for payloads that already live behind the dyn facade
     /// (the token-error lift, where a `Custom` payload must not be double-boxed).
     pub(crate) fn recover_boxed(
         &mut self,
@@ -359,7 +361,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// The parser-facing state derivation, from the **current** state
-    /// ([`state`](ParseContext::state)) — the one choke point every construct
+    /// ([`state`](ParseContext::state)) — the one derivation point every construct
     /// parser derives through: lowers **context-dependent events**, then runs the
     /// session-mediated derivation ([`ParserSession::derived_state`] with this
     /// context's driver), so every transition reaches
@@ -384,7 +386,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// # Failures
     ///
-    /// **Failing scope ops** route through the recover funnel as
+    /// **Failing scope ops** are reported through the recovery entry point as
     /// [`ScopeOpFailed`] conditions at the current position: under
     /// [`Recovery::Strict`](crate::error::Recovery::Strict) the first failure aborts;
     /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) each failure is
@@ -415,11 +417,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// tolerant ops-skipped recovery), the delta actually handed to the derivation —
     /// context-dependent events already lowered into their override patches — is
     /// merged into `record` ([`ParsingStateDelta::merge_from`]: later field
-    /// overrides win, scope ops and events concatenate in application order). The
-    /// capture seam of the merged after-effect record
-    /// ([`NodesOutcome::after_effects`]).
+    /// overrides win, scope ops and events concatenate in application order). This
+    /// is where the merged after-effect record
+    /// ([`NodesOutcome::after_effects`]) is captured.
     ///
-    /// Recording the *effective* delta is load-bearing: context-dependent events
+    /// Recording the *effective* delta is essential: context-dependent events
     /// are positional (they mean something only at this context's position), so a
     /// record replayed elsewhere must carry their lowered patches, never the raw
     /// events. Context-free events that survive lowering are recorded as-is — by
@@ -553,10 +555,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// The shared recovery path of the two fallible derivation sugars: report every
-    /// failing op through the recover funnel (strict: the first one aborts); a
+    /// failing op through the recovery entry point (strict: the first one aborts); a
     /// finalize refusal aborts as an [`ImplementationError`] under any policy (a
-    /// context-requiring event survived to the bare choke point — the driver
-    /// failed to lower it: extension wiring, not source input). Otherwise commit
+    /// context-requiring event reached the underlying derivation point un-lowered —
+    /// the driver failed to lower it: extension wiring, not source input). Otherwise commit
     /// the ops-skipped transition — continue under the error's recovered state
     /// and observe it with the delta the derivation actually applied (which the
     /// error carries: for group interiors that is the *merged* descent delta this
@@ -610,7 +612,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///   silently rolls them back. A caller that re-anchors its ambient state first
     ///   (the root loop's `cx.state = outcome.state`) makes the two coincide.
     ///
-    /// - **Stand the reader where the next run should start.** The stop seam is
+    /// - **Stand the reader where the next run should start.** The stop contract is
     ///   defined ([`TokenStopCondition::consume`], [`StopCause`]'s per-variant docs): a
     ///   left stop token sits at its own `span.start`, pre-space already staged, and
     ///   re-peeks clean — but re-entering with the reader still on it and the same
@@ -631,13 +633,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///   argument restarts at zero in a resumed segment. A bridge that *propagates*
     ///   the runs' state effects likewise merges each run's
     ///   [`NodesOutcome::after_effects`] into one record in run order (the
-    ///   attached-source door's precedent,
+    ///   precedent of
     ///   [`parse_attached_source`](ParseContext::parse_attached_source)).
     ///
     /// Whether to resume at all is a per-construct policy question, not a default:
     /// the environment body deliberately **unwinds** on a terminator mismatch instead
     /// of resuming — a body that diagnosed `\end{A}` and kept going inside
-    /// `\begin{A}…\begin{B}…\end{A}` would swallow the enclosing environment's
+    /// `\begin{A}…\begin{B}…\end{A}` would consume the enclosing environment's
     /// terminator (see [`EnvironmentBodyParser`]).
     // The output-plus-delta pair is the decided ConstructParser signature ([§dd-dr:parsers-engine]).
     #[allow(clippy::type_complexity)]
@@ -679,8 +681,8 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point
-    /// primitive of the parse traceback: every condition the
-    /// recover funnel records while `f` runs carries the frame in its snapshot.
+    /// primitive of the parse traceback: every condition recorded through the
+    /// recovery entry point while `f` runs carries the frame in its snapshot.
     ///
     /// Closure-scoped rather than an RAII guard, deliberately: a guard would hold
     /// `&mut self` against the parser body. The pop after `f` returns covers the `Err`
@@ -697,7 +699,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// attached. `detail` is typically a [`NodeBuildError`](crate::node::NodeBuildError)
     /// or a literal contract description.
     ///
-    /// Deliberately **not** the recover funnel: an implementation bug is not a source
+    /// Deliberately **not** the recovery entry point: an implementation bug is not a source
     /// condition — it aborts even under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant), and no
     /// [`ParseDriver::refine_diagnostic`] pass applies.
     pub fn implementation_error(
@@ -717,7 +719,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 /// parser, a [`Lang`] hook, a spec factory — violated a library contract. An
 /// implementation bug to fix, not a source-input problem: it aborts the parse even
 /// under [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) (built through
-/// [`ParseContext::implementation_error`], which bypasses the recover funnel).
+/// [`ParseContext::implementation_error`], which ignores the recovery policy).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
@@ -731,7 +733,7 @@ pub struct ImplementationError {
 
 /// Condition: a scope op of an in-parse state delta failed
 /// ([`ScopeOpError`](crate::scopes::ScopeOpError), rendered into `detail`) — reported
-/// through the recover funnel by the [`ParseContext`] derivation sugars: strict parses abort on it; tolerant parses record it and
+/// through the recovery entry point by the [`ParseContext`] derivation sugars: strict parses abort on it; tolerant parses record it and
 /// continue under the ops-skipped state
 /// ([`DeriveError::recovered`](crate::state::DeriveError::recovered)).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
@@ -842,7 +844,7 @@ impl<L: Lang> fmt::Debug for Invocation<'_, '_, L> {
 ///
 /// Deliberately **separate from the required data bound**: a language whose
 /// payload cannot be built from an `Invocation` alone stages its callables through
-/// custom parsers (the [`stage_node`](ParseContext::stage_node) door) and never
+/// custom parsers (via [`stage_node`](ParseContext::stage_node)) and never
 /// implements this trait — but driving the standard engine requires it (the
 /// standard dispatch loop reaches [`StdInvocationParser`] through the defaulted
 /// spec factory). techy implements it for `()` (records nothing), and the

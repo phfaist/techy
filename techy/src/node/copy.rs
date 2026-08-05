@@ -48,8 +48,8 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
     /// it like any staged record. Nodes without such designations never consult the
     /// mapping (`|_| None` is fine for them).
     ///
-    /// **Cross-tree by contract**: `node` may come from *any* tree — this is the
-    /// sanctioned splice door for assembling a new tree out of pieces of several
+    /// **Cross-tree by contract**: `node` may come from *any* tree — this method is
+    /// the supported route for assembling a new tree out of pieces of several
     /// others, and a same-tree assertion may never be added here. The node's ext is
     /// **cloned verbatim, never re-minted**: restaged copies carry frozen parse
     /// facts ([`Lang::make_node_ext`](crate::state::Lang::make_node_ext) runs at

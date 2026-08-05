@@ -48,9 +48,10 @@ pub use language::Language;
 /// One live entry of the session's parse-frame stack:
 /// pushed at the descent points through
 /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
-/// snapshotted into `L`-free [`TraceFrame`]s by the recover funnel. Pushes run on the
-/// hot success path — once per construct — so a frame is **allocation-free to build**
-/// (`Arc` bumps only); its title is rendered only at snapshot time, on the cold path.
+/// snapshotted into `L`-free [`TraceFrame`]s by the recovery entry point. Pushes run
+/// once per construct during normal parsing, so a frame is **allocation-free to
+/// build** (`Arc` reference-count increments only); its title is rendered only at
+/// snapshot time, when a problem is being reported.
 pub struct Frame<L: Lang> {
     /// How the frame's traceback title is produced at snapshot time.
     pub title: FrameTitle<L>,
@@ -86,7 +87,8 @@ pub enum FrameTitle<L: Lang> {
 }
 
 impl<L: Lang> Frame<L> {
-    /// Render the live frame into a snapshot [`TraceFrame`] — the cold path: titles
+    /// Render the live frame into a snapshot [`TraceFrame`] — run only when a
+    /// condition is recorded: titles
     /// allocate here, never on push.
     fn render(&self) -> TraceFrame<L::SourceOrigin> {
         let title = match &self.title {
@@ -139,7 +141,8 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
 /// [`ParseContext::session`](crate::constructs::ParseContext) — the session *is* the
 /// shared mutable surface of a parse (trees stay immutable; this is the mutation
 /// boundary, consumed by [`finish`](ParserSession::finish)). The staging builder is
-/// deliberately **not** public: parse staging goes exclusively through the one door,
+/// deliberately **not** public: parse staging goes exclusively through the single
+/// staging entry point,
 /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node) (which
 /// mints the node ext — no parser can stage an unpopulated node); the read view is
 /// [`ParseContext::staged_nodes`](crate::constructs::ParseContext::staged_nodes).
@@ -183,7 +186,7 @@ pub struct ParserSession<L: Lang> {
     /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state).
     /// The engine retains exactly these states implicitly anyway (leaving a scope
     /// structurally restores the outer `Arc`) — the stack only materializes them,
-    /// and it dies with the session: no ancestry residue survives into parsed
+    /// and it is dropped with the session: no ancestry data survives into parsed
     /// material. Private: the push/pop balance is an invariant.
     state_stack: ParsingStateStack<L>,
 }
@@ -237,7 +240,7 @@ impl<L: Lang> ParserSession<L> {
     }
 
     /// Snapshot the live frame stack into `L`-free [`TraceFrame`]s, innermost first —
-    /// titles are rendered here, on the cold path. Public for
+    /// titles are rendered here, only when a condition is recorded. Public for
     /// custom parser code building its own [`ParseError`]s
     /// ([`ParseError::with_frames`](crate::error::ParseError::with_frames)); the
     /// stack itself is only mutated through
@@ -246,8 +249,9 @@ impl<L: Lang> ParserSession<L> {
         self.frames.iter().rev().map(Frame::render).collect()
     }
 
-    /// Session-mediated state derivation — the in-parse standard: within a parse frame, construct parsers derive states through this seam
-    /// (usually via the [`ParseContext::derive_state`] choke point, which supplies
+    /// Session-mediated state derivation — the in-parse standard: within a parse
+    /// frame, construct parsers derive states through this method
+    /// (usually via [`ParseContext::derive_state`], which supplies
     /// the driver **and lowers context-dependent events first** — this session
     /// method performs no event lowering) so every transition event reaches
     /// [`ParseDriver::observe_transition`] (with the session's
@@ -270,7 +274,7 @@ impl<L: Lang> ParserSession<L> {
     /// [`ParseDriver::observe_transition`] fires on **every** call, memo hits included;
     /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
-    /// **Fallibility**: scope ops can fail, so this seam is fallible like
+    /// **Fallibility**: scope ops can fail, so this method is fallible like
     /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
     /// also why the memo never caches a failure). On `Err`, no transition is committed:
     /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
@@ -377,7 +381,7 @@ impl<L: Lang> ParserSession<L> {
 
     /// The raw record-or-abort primitive of detection-site recovery. Construct parsers call
     /// [`ParseContext::recover`](crate::constructs::ParseContext::recover) instead —
-    /// the funnel that boxes the condition and hands it to
+    /// the recovery entry point, which boxes the condition and hands it to
     /// [`ParseDriver::recover`], which applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) (needing the context's
     /// state) and its recovery policy before ending up here.

@@ -180,7 +180,7 @@ Problems surface as structured conditions, not prose: a
 carries a typed condition payload plus span and traceback frames; the human
 message is derived from the payload, and machine consumers match the concrete
 condition type or its stable identifier string. Third-party condition types
-are structurally identical citizens — implement
+are structurally identical to the library's own — implement
 [`DiagnosticInfo`](crate::error::DiagnosticInfo) on a data struct and it flows
 through the same carriers. The strict/tolerant decision is the
 [`Recovery`](crate::error::Recovery) policy: tolerant parsing recovers where a
@@ -203,5 +203,5 @@ types ([`MacroSpec`](crate::latexlike::MacroSpec),
 [`SpecialsSpec`](crate::latexlike::SpecialsSpec)), and the opt-in
 [`minidefs`](crate::latexlike::minidefs) prototyping package (never
 preloaded). A framework language with its own vocabularies joins the language
-family (the [`LatexlikeLang`](crate::latexlike::LatexlikeLang) umbrella trait)
+family (the [`LatexlikeLang`](crate::latexlike::LatexlikeLang) family trait)
 instead of forking the preset.

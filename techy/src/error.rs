@@ -290,7 +290,8 @@ impl ToDiagnosticValue for crate::source::ResolveError {
 /// One frame of a parse traceback snapshot: a rendered title (`group ‘{’`,
 /// `argument #1 of ‘\frac’`) and the source location the parse descended at.
 ///
-/// Snapshots are taken from the session's live frame stack by the recover funnel
+/// Snapshots are taken from the session's live frame stack by the recovery entry
+/// point ([`ParseContext::recover`](crate::constructs::ParseContext::recover))
 /// and stored **innermost first** on [`Diagnostic`] and
 /// [`ParseError`]; unlike the live [`Frame`](crate::engine::Frame), a `TraceFrame` is
 /// `L`-free — generic over the source origin only — so errors aggregate across languages.
@@ -347,7 +348,8 @@ impl fmt::Display for Severity {
 ///
 /// Carries a structured condition payload — no message string; the human message is
 /// rendered from the payload on demand ([`message`](Diagnostic::message)) — plus a
-/// traceback snapshot ([`frames`](Diagnostic::frames), attached by the recover funnel).
+/// traceback snapshot ([`frames`](Diagnostic::frames), attached by the recovery
+/// entry point, [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
 /// No `PartialEq`: tests compare [`identifier()`](Diagnostic::identifier) and downcast
 /// fields.
 #[derive(Debug, Clone)]
@@ -361,7 +363,8 @@ pub struct Diagnostic<O: SourceOrigin = Option<String>> {
 
 impl<O: SourceOrigin> Diagnostic<O> {
     /// Create a diagnostic from a condition (no traceback frames; parses attach them
-    /// through the recover funnel).
+    /// through the recovery entry point,
+    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
     pub fn new(
         severity: Severity,
         condition: impl DiagnosticInfo,
@@ -681,7 +684,9 @@ pub enum Recovery {
 /// unrecoverable condition.
 ///
 /// **`Err` means abort**: recovery happens where a problem is
-/// detected (the recover funnel), abnormal endings of sub-parses travel as data
+/// detected (through the recovery entry point,
+/// [`ParseContext::recover`](crate::constructs::ParseContext::recover)),
+/// abnormal endings of sub-parses travel as data
 /// (`StopCause`), and nobody ever continues *past* a `ParseError` — it
 /// carries no recovery payload and bubbles freely. Like [`Diagnostic`], it holds an
 /// Arc-based [`SourceSpan`] plus the structured condition payload and the traceback
@@ -697,7 +702,8 @@ pub struct ParseError<O: SourceOrigin = Option<String>> {
 
 impl<O: SourceOrigin> ParseError<O> {
     /// Create a parse error from a condition (no traceback frames; parses attach them
-    /// through the recover funnel).
+    /// through the recovery entry point,
+    /// [`ParseContext::recover`](crate::constructs::ParseContext::recover)).
     pub fn new(condition: impl DiagnosticInfo, span: SourceSpan<O>) -> ParseError<O> {
         ParseError { data: Box::new(condition), span, frames: Vec::new() }
     }
@@ -719,7 +725,8 @@ impl<O: SourceOrigin> ParseError<O> {
         ParseError { data, span, frames }
     }
 
-    /// Attach a traceback snapshot (the direct-abort sites, where no funnel runs) —
+    /// Attach a traceback snapshot (for the direct-abort sites, which do not pass
+    /// through the recovery entry point) —
     /// typically [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames),
     /// its public companion for custom parser code.
     pub fn with_frames(mut self, frames: Vec<TraceFrame<O>>) -> ParseError<O> {

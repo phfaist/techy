@@ -168,7 +168,7 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
 /// whose included files carry definitions. techy therefore neither implements
 /// nor recommends input caching; resolvers may freely cache *content* (the
 /// [`SourceResolver`](crate::source::SourceResolver) contract), which is the
-/// part that costs I/O. A separate-parse-then-splice arrangement (caching
+/// part that costs input/output. A separate-parse-then-splice arrangement (caching
 /// parsed trees of included files) is sound only when the inclusion is known
 /// state-transparent — `persist_state: false` **and** no out-of-band state
 /// coupling — and is an embedder-level optimization, not something techy

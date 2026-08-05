@@ -68,7 +68,7 @@ protocol is documented on the method).
 
 **Node staging.**
 [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node)
-is the one staging door: it mints the node's language extension
+is the single staging entry point — every node is staged through it. It mints the node's language extension
 ([`Lang::make_node_ext`](crate::core::Lang::make_node_ext)) and stages the
 node, returning its [`BuildId`](crate::core::node::BuildId). Children are
 staged first, bottom-up, and claimed by the parent's own staging call.
@@ -78,7 +78,7 @@ is the read-only view over what has been staged so far.
 **State derivation and scoping.** `cx.state` is the parser's *input* state
 — the caller sets it.
 [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state)
-is the parser-facing derivation choke point (event lowering plus the
+is the parser-facing derivation entry point (event lowering plus the
 session-mediated derivation);
 [`cx.with_parsing_state(state, f)`](crate::core::constructs::ParseContext::with_parsing_state)
 scopes a derived state over a closure with structural restore, and
@@ -100,7 +100,7 @@ driver overrides apply uniformly. The stop conditions
 
 **Problem channels.**
 [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover)
-is the diagnostics funnel;
+is the recovery entry point for problems detected in the source;
 [`cx.implementation_error(detail, span)`](crate::core::constructs::ParseContext::implementation_error)
 builds the abort for extension-contract violations. Both are covered in
 [Raising conditions](#raising-conditions).
@@ -152,9 +152,9 @@ default factory's parser). The essentials:
   to `true` — it is the only channel telling the expression-position guard
   that a bare use (`\frac\mymacro 2`) would be malformed.
 
-### The two staging doors
+### The two staging calls
 
-A takeover parser stages its callable node through one of two doors:
+A takeover parser stages its callable node through one of two calls:
 
 - [`cx.stage_invocation(…)`](crate::core::constructs::ParseContext::stage_invocation)
   — the transcription shorthand for **macro-shaped** takeovers: it builds
@@ -166,10 +166,10 @@ A takeover parser stages its callable node through one of two doors:
   and stages. You supply the argument/slot records and the flat child list
   they tile.
 - [`cx.stage_node(…)`](crate::core::constructs::ParseContext::stage_node)
-  with an explicit `CallableData` — the canonical door, for **compositions**
+  with an explicit `CallableData` — the general form, for **compositions**
   the shorthand deliberately does not cover: a node whose recorded name or
   invocation form differs from the trigger's (an environment node records
-  `align`, not `begin`), or an environment-shaped span. The door's
+  `align`, not `begin`), or an environment-shaped span. Its
   documentation states the region-tiling expectations.
 
 ## Argument parsing
@@ -211,7 +211,7 @@ terminator) to your code.
 
 ## Raising conditions
 
-Problems your parser detects in the *source* go through the funnel:
+Problems your parser detects in the *source* go through the recovery entry point:
 [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover).
 Under strict recovery it hands you back an `Err` to propagate; under
 tolerant recovery it records the diagnostic and returns `Ok(())` — and then

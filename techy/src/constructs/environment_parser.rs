@@ -309,8 +309,8 @@ impl<L: Lang> fmt::Debug for EnvironmentTerminatorSyntaxData<L> {
 /// recovery (the argument-probe rule, [`ParseContext::probe_token`]).
 ///
 /// Public as a takeover-composition building block:
-/// a `\begin`-shaped `make_invocation_parser` override reads its scaffolding with this
-/// before resolving the environment and driving [`EnvironmentBodyParser`].
+/// a `\begin`-shaped `make_invocation_parser` override reads its rigid name group
+/// with this before resolving the environment and driving [`EnvironmentBodyParser`].
 pub fn read_rigid_name_group<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     name_group_type: L::GroupTypeId,

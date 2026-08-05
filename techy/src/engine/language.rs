@@ -34,7 +34,7 @@ use super::{ParseResult, ParserSession};
 /// [`ParsingState::lang_initial()`] is the `Lang`'s canonical seed, and
 /// [`ParsingState::lang_initial_with_packages`] is the everyday "seed plus these
 /// packages" form (infallible — see its docs). Any further customization derives
-/// *before* construction, through the transition choke point:
+/// *before* construction, through the single derivation point:
 /// `Language::new(driver, ParsingState::lang_initial().derived(&delta)?)` — so
 /// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition) holds its
 /// invariants over every customized seed.
@@ -118,8 +118,8 @@ impl<L: Lang> Language<L> {
     /// the session into a [`ParseResult`].
     ///
     /// **Recovery** follows the driver's policy. A stray group close at the root —
-    /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recover
-    /// funnel; tolerant parses consume the delimiter, stage it as a `Chars` node
+    /// nobody's to claim — is diagnosed as [`StrayGroupClose`] through the recovery
+    /// entry point; tolerant parses consume the delimiter, stage it as a `Chars` node
     /// (the markup-in-chars recovery artifact: the root span partition holds across the
     /// skip, so recovered parse trees keep the parse-tree byte accounting), and
     /// resume; strict parses abort. Diagnosis and resume both run under the state the content loop had

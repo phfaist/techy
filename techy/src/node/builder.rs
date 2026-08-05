@@ -68,9 +68,9 @@ struct Staged<L: Lang> {
 /// The builder is **hook-free and mode-free**: it runs no `Lang` hook and demands
 /// ready values — the one staging method, [`add`](NodeTreeBuilder::add), takes the
 /// already-minted [`NodeExt`] and the node's annotation
-/// ([`restage_node`](NodeTreeBuilder::restage_node), the copying door, is not a
+/// (the copying method [`restage_node`](NodeTreeBuilder::restage_node) is not a
 /// second staging path: it clones an existing node's data and lowers onto `add`). During parsing the ext is
-/// minted automatically by the one staging door,
+/// minted automatically by the single staging entry point,
 /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node); a
 /// transform author writes the explicit two-line recipe (call
 /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) — via

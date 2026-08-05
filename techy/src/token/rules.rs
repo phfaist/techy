@@ -147,8 +147,8 @@ pub struct TokenRules<L: Lang> {
     /// recursively); descending into any other group drops them for that whole subtree
     /// (see [`ParsingState::derived`](crate::state::ParsingState::derived)). This is how
     /// a construct parser mints delimiters "for the occasion" — an optional `[`…`]`
-    /// argument — with brace protection at any depth: the minted rule dies at the first
-    /// descent into a group that is not itself.
+    /// argument — with brace protection at any depth: the minted rule is dropped at
+    /// the first descent into a group that is not itself.
     pub temporary_groups: Vec<Arc<GroupRule<L>>>,
     /// Whether command syntax is recognized; disabled = escape characters are ordinary
     /// content characters.

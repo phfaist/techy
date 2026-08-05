@@ -1,15 +1,15 @@
-//! [`LatexlikeDriver`] and the preset's **pillar functions** — the driver's whole
-//! behavior as public `LLL`-generic building blocks
+//! [`LatexlikeDriver`] and the preset's **behavior functions** — the driver's whole
+//! behavior as public `LLL`-generic free functions
 //! ([`math_group_interior_delta`], [`exit_math_context_delta`],
-//! [`make_paragraph_break_node`]), with the driver as the canned assembly whose
-//! hook bodies are precisely the one-line pillar delegations.
+//! [`make_paragraph_break_node`]), with the driver as the ready-made assembly whose
+//! hook bodies are precisely the one-line delegations to them.
 //!
-//! The layering is deliberate (the same whole-type-plus-pillars shape as
-//! [`LatexlikeLang`] itself): a struct cannot be partially overridden, so a
+//! The layering is deliberate (the same whole-type-plus-behavior-functions layering
+//! as [`LatexlikeLang`] itself): a struct cannot be partially overridden, so a
 //! framework wanting preset-behavior-plus-one-custom-hook writes its own
 //! [`ParseDriver`] whose other hooks are the same one-line delegations — the
-//! struct contains no behavior the pillars don't. The pillars also serve
-//! **post-parse processing**: a transform synthesizing nodes that emulate "enter
+//! struct contains no behavior the functions don't. The behavior functions also
+//! serve **post-parse processing**: a transform synthesizing nodes that emulate "enter
 //! math" / "exit math" derives coherent recorded states by feeding them the same
 //! inputs the driver feeds ([`ParsingStateStack::from_node_ancestors`] supplies
 //! the stack with no session anywhere).
@@ -77,8 +77,8 @@ pub enum ParagraphBreakStyle {
 /// paragraph-break nodes by **spec identity**, which for this ZST is *type*
 /// identity — `Any`-downcast the node's [`spec`](crate::node::CallableData::spec)
 /// to `ParagraphBreakSpec` — never by a name spelling (the node's `name` is the
-/// actual whitespace run, [`ParagraphBreakStyle::Specials`]). The pillar never
-/// mints an anonymous per-break spec.
+/// actual whitespace run, [`ParagraphBreakStyle::Specials`]). The paragraph-break
+/// behavior function never mints an anonymous per-break spec.
 ///
 /// Argument-less and content-less (the trait defaults); frame titles speak the
 /// preset's specials vocabulary. It lives on no provider — paragraph breaks are a
@@ -94,8 +94,8 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
 
 // --- the pillar functions ------------------------------------------------------------
 
-/// The **math plug** pillar: the state delta a math-class group descent applies to
-/// its interior — the interior parses in the language's
+/// The **math-interior** behavior function: the state delta a math-class group
+/// descent applies to its interior — the interior parses in the language's
 /// [`math_mode`](LatexlikeMode::math_mode), and, since LaTeX-like languages forbid
 /// nested math, the math delimiters stop being *openers* inside it. `None` for
 /// non-math rules ([`is_math`](LatexlikeGroupType::is_math) decides — form-blind:
@@ -118,7 +118,7 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
 /// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) for
 /// the entered rule (via
 /// [`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state),
-/// where this pillar's delta merges in through the driver hook), which is what
+/// where this function's delta merges in through the driver hook), which is what
 /// keeps the group's own close delimiter recognizable after its opener class was
 /// removed. Post-parse synthesis reproducing a math interior must apply **both**:
 /// this delta *plus* an `expecting_group_close` override naming the entered rule.
@@ -161,7 +161,7 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
     )
 }
 
-/// The **exit-math** pillar: the state delta lowering the exit-math-context event
+/// The **exit-math** behavior function: the state delta lowering the exit-math-context event
 /// ([`LatexlikeEvent::exit_math_context`], the preset's
 /// [`Event::ExitMathContext`](super::Event::ExitMathContext)) — scan `stack`
 /// (innermost-first) for the **first non-math enclosing state**
@@ -224,7 +224,7 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
     })
 }
 
-/// The **paragraph-break** pillar: the node kind for a paragraph-break token in
+/// The **paragraph-break** behavior function: the node kind for a paragraph-break token in
 /// the given [`ParagraphBreakStyle`] — the core default whitespace `Chars` shape,
 /// or a `Specials`-formed `Callable` named by the actual whitespace run (see
 /// [`ParagraphBreakStyle::Specials`] for the exact contract; the stamped spec is
@@ -293,19 +293,20 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
 /// ([`with_source_resolver`](LatexlikeDriver::with_source_resolver); the default is
 /// none — the driver resolves nothing).
 ///
-/// **The canned assembly over the pillars**: every behavior-carrying hook body is
-/// precisely a one-line delegation to the matching public pillar
+/// **The ready-made assembly of the preset's behavior functions**: every
+/// behavior-carrying hook body is precisely a one-line delegation to the matching
+/// public behavior function
 /// ([`math_group_interior_delta`], [`exit_math_context_delta`],
 /// [`make_paragraph_break_node`];
 /// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes) + the
-/// macro role for resolution) — the struct contains no behavior the pillars
+/// macro role for resolution) — the struct contains no behavior those functions
 /// don't. A framework wanting different behavior for one hook writes its own
-/// [`ParseDriver`] composing the same pillars; the three knobs here
+/// [`ParseDriver`] composing the same functions; the three settings here
 /// ([`recovery`](LatexlikeDriver::recovery),
 /// [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style), the source
-/// resolver) are orthogonal *configuration*, deliberately not behavior seams.
+/// resolver) are orthogonal *configuration*, deliberately not behavior overrides.
 ///
-/// The recovery policy is the driver's one mandatory knob — strict vs. tolerant must
+/// The recovery policy is the driver's one mandatory setting — strict vs. tolerant must
 /// be an explicit [`new`](LatexlikeDriver::new) argument (there is deliberately no
 /// `Default`).
 ///
@@ -321,7 +322,7 @@ pub struct LatexlikeDriver<LLL: LatexlikeLang = Latexlike> {
     /// The [`SourceResolver`] behind
     /// [`ParseDriver::source_resolver`] (`None` — the default — resolves nothing);
     /// set via [`with_source_resolver`](LatexlikeDriver::with_source_resolver).
-    /// Private (the two policy knobs above stay `pub`); value-level `dyn`
+    /// Private (the two policy settings above stay `pub`); value-level `dyn`
     /// deliberately (an embedding-environment capability consumed on the cold
     /// path) — see the asymmetry note on
     /// [`StdParseDriver`](crate::engine::StdParseDriver).
@@ -427,8 +428,8 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         resolve_command_in_scopes(state, token, LLL::CallableTypeId::macro_callable())
     }
 
-    /// One-line delegation to the [`make_paragraph_break_node`] pillar with the
-    /// driver's [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style).
+    /// One-line delegation to the [`make_paragraph_break_node`] behavior function
+    /// with the driver's [`paragraph_break_style`](LatexlikeDriver::paragraph_break_style).
     fn make_paragraph_break_node(
         &self,
         state: &ParsingState<LLL>,
@@ -438,8 +439,8 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         make_paragraph_break_node(self.paragraph_break_style, state, token, source_content)
     }
 
-    /// One-line delegation to the [`math_group_interior_delta`] pillar (the math
-    /// plug; `None` for non-math classes — verbatim rules never reach a tokenizer
+    /// One-line delegation to the [`math_group_interior_delta`] behavior function
+    /// (`None` for non-math classes — verbatim rules never reach a tokenizer
     /// descent at all, see
     /// [`GroupType::Verbatim`](super::GroupType::Verbatim)).
     fn group_interior_delta(
@@ -450,7 +451,7 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
         math_group_interior_delta(base, rule)
     }
 
-    /// One-line delegation to the [`exit_math_context_delta`] pillar for the
+    /// One-line delegation to the [`exit_math_context_delta`] behavior function for the
     /// exit-math-context event
     /// ([`is_exit_math_context`](LatexlikeEvent::is_exit_math_context)); every
     /// other event is context-free (`None`) and stays for

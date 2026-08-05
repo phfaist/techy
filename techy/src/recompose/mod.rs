@@ -117,7 +117,7 @@
 //! public *consumer* affordance — the recomposer simply never uses it.
 //! Byte-exact reemission therefore rests entirely on payload completeness:
 //! what the parse records is what recomposition can reproduce (the preset's
-//! accuracy doctrine,
+//! accuracy rule,
 //! [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)).
 
 use core::fmt;
@@ -423,7 +423,7 @@ where
 ///   preset's [`SourceRecomposer`](crate::latexlike::SourceRecomposer) reads
 ///   its payload enum here).
 ///
-/// Per-node doctrine throughout: span-backed *payload* fields resolve against
+/// Per-node rule throughout: span-backed *payload* fields resolve against
 /// the node's own source (permitted — a storage detail); the node's span
 /// content is never consulted.
 pub fn core_source_instruction<'t, L, A, P, S>(node: NodeRef<'t, L, A>) -> Option<Recompose<P, S>>

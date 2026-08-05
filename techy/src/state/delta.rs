@@ -20,7 +20,7 @@ use super::parsing_state::StateData;
 /// Collections are replaced wholesale, not merged: a delta that wants "current group
 /// rules plus one more" is built by the party that can see the current state (typically
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
-/// override itself would smuggle policy into the choke point.
+/// override itself would put policy decisions inside the derivation point.
 pub struct TokenRulesOverrides<L: Lang> {
     /// Override the whitespace-handling gate.
     pub enable_whitespace: Option<bool>,

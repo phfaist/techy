@@ -236,7 +236,7 @@ pub(super) fn stage<L: Lang>(
 ///   callable** — the trigger alone, every declared argument absent, no slots —
 ///   consuming nothing beyond the trigger: exactly the single token the expression
 ///   position asked for, so a `\frac\sqrt2`-shaped source leaves `2` for `\frac`'s
-///   next argument rather than letting `\sqrt` swallow it. A callable all of whose
+///   next argument rather than letting `\sqrt` consume it. A callable all of whose
 ///   arguments can match empty (`\mymacro` taking one optional argument) dispatches in
 ///   full — pylatexenc parity.
 /// - An after-effect delta returned by the invocation parser is **dropped**: an
@@ -750,7 +750,7 @@ fn probe_minted_group<'s, L: Lang>(
 /// **only the pair actually encountered** (with one configured rule, the same state —
 /// the pylatexenc multi-delim contents subtlety comes for free; see
 /// [`GroupArgumentParser::any_of`]). Temporary rules win same-spelling ties, and the
-/// derivation choke point
+/// derivation point
 /// ([`ParsingState::derived`](crate::state::ParsingState::derived)) scopes their
 /// lifecycle:
 ///

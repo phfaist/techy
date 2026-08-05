@@ -39,7 +39,7 @@ use super::{
 ///
 /// Public as a takeover-composition building block:
 /// an environment-shaped `make_invocation_parser` override runs this same loop between
-/// its scaffolding read and its body parse.
+/// reading its `\begin{name}` name group and parsing its body.
 pub fn parse_declared_arguments<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     callable_spec: &Arc<dyn CallableSpec<L>>,

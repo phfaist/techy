@@ -85,7 +85,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     // --- policy -----------------------------------------------------------------
 
     /// The tolerant-parsing policy this driver drives under. The default is
-    /// [`Recovery::Strict`]; [`StdParseDriver`] carries the knob as a field.
+    /// [`Recovery::Strict`]; [`StdParseDriver`] carries the policy as a field.
     ///
     /// Consulted by the default [`recover`](ParseDriver::recover) and
     /// [`probe_token`](ParseDriver::probe_token) paths — a custom policy beyond the
@@ -94,8 +94,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Recovery::Strict
     }
 
-    /// Detection-site recovery — **the recover funnel**,
-    /// reached through [`ParseContext::recover`](crate::constructs::ParseContext::recover): applies
+    /// Detection-site recovery — **the recovery hook**, reached through the parsers'
+    /// recovery entry point
+    /// ([`ParseContext::recover`](crate::constructs::ParseContext::recover)): applies
     /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once, then
     /// records the condition as an error-severity diagnostic and returns `Ok(())`
     /// (tolerant — the caller continues with its site's local recovery) or returns it
@@ -224,7 +225,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// `DollarMathDisabled` whose `Display` explains the configuration option. The
     /// replacement is *structured*: tools see (and can attach quickfixes to) the
     /// refined condition, not just better prose. State-dependent information the
-    /// message needs is baked into the refined payload's fields here — conditions stay
+    /// message needs is stored in the refined payload's fields here — conditions stay
     /// self-contained after the parse (no state references inside errors, no lazy
     /// rendering).
     fn refine_diagnostic(
@@ -292,7 +293,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// patch, given the session's live enclosing-state stack — the driver half of
     /// the two-class event contract ([`Lang::Event`]), consulted by
     /// [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
-    /// once per event before the delta reaches the derivation choke point.
+    /// once per event before the delta reaches the derivation point
+    /// ([`ParsingState::derived`](crate::state::ParsingState::derived)).
     ///
     /// - Return `Some(patch)` to **lower** the event: the patch is merged into the
     ///   delta and the event is removed — it never reaches
@@ -340,8 +342,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     // --- the group descent-delta channel ------------------------------------------
 
     /// The extra state delta a group descent applies to its interior, keyed on the
-    /// entered rule — the data plug for "entering this group class changes the state"
-    /// (the latexlike math plug: a math-class rule returns
+    /// entered rule — the data channel for "entering this group class changes the state"
+    /// (the latexlike math-interior delta: a math-class rule returns
     /// `ParsingStateDelta::new().mode(Mode::Math)`, so the interior parses in math
     /// mode). `None` — the default — means the canonical descent derivation alone.
     ///
@@ -367,7 +369,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// interiors, environment bodies, the top-level drive) — a fresh boxed parser per
     /// descent, ownership moved to the caller. Reached through
     /// [`ParseContext::parse_nodes`](crate::constructs::ParseContext::parse_nodes), which every descent site routes through, so an
-    /// override applies uniformly (the supported seam for a custom dispatch loop).
+    /// override applies uniformly (the supported extension point for a custom
+    /// dispatch loop).
     ///
     /// The default is the standard [`NodesParser`] over the given stop conditions and
     /// descent-state policies. A custom parser must uphold the `NodesParser` output
@@ -406,7 +409,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Box::new(GroupParser::new(open_span, rule).with_child_states(child_states))
     }
 
-    /// Interception seam over
+    /// The interception point over
     /// [`CallableSpec::make_invocation_parser`]: the dispatch loops obtain every
     /// invocation parser through the driver, and the default delegates to the resolved
     /// spec's own factory — specs keep owning their invocation behavior; the driver
@@ -431,14 +434,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 }
 
 /// The pluggable body of [`ParseDriver::resolve_command`] — the strategy value
-/// carried by [`StdParseDriver`], so command resolution plugs into the one canned
+/// carried by [`StdParseDriver`], so command resolution plugs into the one ready-made
 /// driver instead of one driver struct existing per behavior.
 ///
 /// `resolve_command` is deliberately the **only** [`ParseDriver`] hook with a
-/// strategy seam: it is the sole hook that is both non-defaultable for a real
-/// command-bearing language (the core cannot conjure the language's command
-/// [`CallableTypeId`](Lang::CallableTypeId)) and has more than one canned behavior
-/// worth shipping. No other hook grows one; a language outgrowing the canned
+/// pluggable strategy: it is the sole hook that is both non-defaultable for a real
+/// command-bearing language (the core cannot invent the language's command
+/// [`CallableTypeId`](Lang::CallableTypeId)) and has more than one ready-made behavior
+/// worth shipping. No other hook grows one; a language outgrowing the ready-made
 /// strategies writes its own [`ParseDriver`] — the normal path.
 ///
 /// Shipped strategies: `()` resolves nothing (the [`StdParseDriver`] default —
@@ -481,7 +484,7 @@ impl<L: Lang> CommandResolver<L> for () {
 /// core cannot default — a language's command [`CallableTypeId`](Lang::CallableTypeId)
 /// (contrast specials, where the provider supplies the resolved type with the match);
 /// languages with several command-syntax callable types write their own resolver —
-/// the point of the seam.
+/// that is what the strategy point exists for.
 ///
 /// Public home: `techy::core::specs`, beside [`resolve_command_in_scopes`] and the
 /// resolution family it packages.
@@ -518,7 +521,7 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
     }
 }
 
-/// The one canned [`ParseDriver`]: the [`Recovery`] policy knob, a pluggable
+/// The one ready-made [`ParseDriver`]: the [`Recovery`] policy setting, a pluggable
 /// [`CommandResolver`] strategy, and an optional [`SourceResolver`] — everything else
 /// keeps the trait defaults. It implements the trait for **every** language whose
 /// [`SourceOrigin`](Lang::SourceOrigin) is `O` and whose commands `R` can resolve —
@@ -535,14 +538,16 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
 ///
 /// # The two resolvers are deliberately asymmetric
 ///
-/// Storage matches the consumption seam. The **command resolver** is part of the
+/// Storage matches how each part is consumed. The **command resolver** is part of the
 /// language *definition* — fixed when `type Driver = …` is written — and is consumed
 /// monomorphized through the concretely-typed
-/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) on the
-/// per-command-token hot path: a generic parameter is collected in full. The
+/// [`ParseContext::driver`](crate::constructs::ParseContext::driver) on every
+/// command token — a performance-critical path — so a generic parameter is
+/// collected in full. The
 /// **source resolver** is an *embedding-environment* capability — it varies per
 /// deployment or run — and is consumed only through the type-erased
-/// [`ParseDriver::source_resolver`] accessor on the once-per-`\input` cold path: a
+/// [`ParseDriver::source_resolver`] accessor once per `\input`-style inclusion —
+/// far off any performance-critical path: a
 /// generic parameter there would be erased at its only point of use, while costing a
 /// none-placeholder type and `None`-inference noise. Hence `R` by value,
 /// [`source_resolver`](StdParseDriver::source_resolver) behind `Option<Arc<dyn …>>`.

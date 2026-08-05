@@ -51,7 +51,7 @@ pub enum FrameRole {
 /// The behavioral surface is [`make_invocation_parser`](CallableSpec::make_invocation_parser):
 /// a factory returning a fresh boxed [`ConstructParser`] per resolved [`Invocation`],
 /// defaulting to the declarative [`StdInvocationParser`]. Overriding it is the
-/// full-takeover escape hatch for `\verb`-like constructs.
+/// full-takeover route for `\verb`-like constructs.
 ///
 /// **Thread safety is part of the contract** (`Send + Sync` supertraits): specs are
 /// stored in parsed trees, so `NodeTree: Send + Sync` requires it.
@@ -105,7 +105,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// post-space rule).
     ///
     /// The default returns the declarative [`StdInvocationParser`]. **Overriding this
-    /// factory is the full-takeover escape hatch**: a custom parser reads tokens
+    /// factory is the full-takeover route**: a custom parser reads tokens
     /// however it wants (`\verb` raw content, tabular preambles), stages its own node
     /// shape, and may return a state delta as the invocation's after-effect for
     /// subsequent siblings (`\newcommand`).
@@ -126,7 +126,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
         Box::new(StdInvocationParser::new(invocation))
     }
 
-    /// Title of a parse-traceback frame covering this callable: called at *snapshot* time — the cold path, when a condition is recorded —
+    /// Title of a parse-traceback frame covering this callable: called at *snapshot* time — only when a condition is recorded —
     /// never on push, so live frames stay allocation-free. `name` is the invocation
     /// spelling as written (`\frac`, `~`), sliced from the source at snapshot time; the
     /// spec itself is de-keyed and cannot know it.

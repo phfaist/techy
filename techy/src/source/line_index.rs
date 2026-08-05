@@ -224,7 +224,7 @@ fn compute_line_starts(content: &str) -> Vec<usize> {
     line_starts
 }
 
-/// Answers line/column queries for offsets into sources — the seam the rendering
+/// Answers line/column queries for offsets into sources — the trait the rendering
 /// entry points accept (`render_with`/`render_all_with`/
 /// [`format_position_with`](crate::error::format_position_with)/
 /// [`format_traceback_with`](crate::error::format_traceback_with); the no-argument
@@ -254,7 +254,7 @@ pub trait LineColProvider<O: SourceOrigin = Option<String>> {
 ///
 /// Because source content is immutable, an entry never invalidates: a tool that
 /// keeps its own `Arc<Source>` across parse attempts (the span-stability
-/// doctrine) keeps its cache valid for free, and one cache threaded through many
+/// rule) keeps its cache valid for free, and one cache threaded through many
 /// renders (`render_all_with`, repeated `render_with` calls) indexes each source
 /// once instead of once per call. Consumer-held means `&mut self` is the honest
 /// receiver; sharing across threads is the consumer's own lock (techy buys no
@@ -289,7 +289,7 @@ impl<O: SourceOrigin> LineIndexCache<O> {
 
     /// Set the maximum content length (in bytes) for which line information is
     /// computed (default: 500 000 bytes) — the [`LineIndex::set_max_scan_len`]
-    /// knob, cache-wide. A source previously skipped for exceeding the cap is
+    /// setting, cache-wide. A source previously skipped for exceeding the cap is
     /// re-admitted on its next query if the raised cap allows it.
     pub fn set_max_scan_len(&mut self, max_scan_len: usize) {
         self.max_scan_len = Some(max_scan_len);

@@ -7,7 +7,7 @@
 //!
 //! - [`Latexlike`] — the [`Lang`] ZST, with the preset's closed vocabularies
 //!   [`GroupType`], [`CallableType`], [`Mode`], and [`Event`];
-//! - the **language family**: the [`LatexlikeLang`] umbrella and the per-vocabulary
+//! - the **language family**: the [`LatexlikeLang`] family trait and the per-vocabulary
 //!   role traits ([`LatexlikeGroupType`], [`LatexlikeCallableType`],
 //!   [`LatexlikeMode`], [`LatexlikeEvent`]) — every generic preset component takes
 //!   an `LLL: LatexlikeLang`, and a framework language with its own vocabularies or
@@ -250,7 +250,7 @@ pub enum Event {
     /// rules-reset would. Lowered via
     /// [`exit_math_context_delta`]; deliberately **not**
     /// "restore text mode": the target is whatever the enclosing context is, never
-    /// a conjured mode value.
+    /// an invented mode value.
     ExitMathContext,
 }
 
@@ -281,7 +281,8 @@ impl ClosedVocabulary for Mode {
 /// ([`BodySlotExt`]). Minted by the preset's environment machinery via
 /// [`BodySlotExt::make_body`]; a non-body slot's value comes from
 /// [`not_body`](BodyMarker::not_body). Deliberately no `Default` — an ext value is
-/// minted, never conjured (population is initialization, [`NodeExtTypes`]).
+/// always minted by the party with the knowledge, never invented by a default
+/// (population is initialization, [`NodeExtTypes`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BodyMarker {
     body: bool,
@@ -442,7 +443,7 @@ impl LatexlikeLang for Latexlike {
 /// Whitespace is the **ASCII** set (space, tab, `\n`, `\r`, vertical tab, form feed) —
 /// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
 /// space (NBSP U+00A0, U+2028, …) is ordinary content here, so e.g. an NBSP after
-/// `\emph` becomes a content char rather than being swallowed as post-macro space
+/// `\emph` becomes a content char rather than being consumed as post-macro space
 /// (a deliberate choice, for determinism and a fixed char-set model).
 ///
 /// Each math rule declares its [`MathGroupForm`] as class payload

@@ -79,7 +79,7 @@ impl<L: Lang> Clone for AttachedSourceOutcome<L> {
 
 impl<L: Lang> ParseContext<'_, '_, L> {
     /// Parse `source` as **attached content** of the construct being parsed — the
-    /// sub-parse door of `\input`-style inclusion: a fresh inner context over its
+    /// sub-parse entry point of `\input`-style inclusion: a fresh inner context over its
     /// own reader (the outer reader stays untouched, pinned to the outer source),
     /// the **same session and builder** (the staged nodes belong to the running
     /// parse; `BuildId`s are session-global), and `state` as the sub-parse's input
@@ -90,16 +90,17 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// `\input`-style inclusion that is the root nodes-parse shape,
     /// `&mut *cx.driver.make_nodes_parser(StopSpec::none(),
     /// ChildStateSpec::inherit())`. The parser speaks the nodes-run vocabulary
-    /// ([`NodesOutcome`]) so the door can drive it like
+    /// ([`NodesOutcome`]) so this method can drive it like
     /// [`Language::parse_source`](crate::engine::Language::parse_source) drives the
     /// root loop, and it **must tolerate re-invocation**: after a recovered stop
-    /// the door calls `parse` again to resume (the standard
+    /// this method calls `parse` again to resume (the standard
     /// [`NodesParser`](super::NodesParser) does — its working state drains at every
     /// return).
     ///
     /// Returns an [`AttachedSourceOutcome`]: the staged **content nodes only** — no
     /// wrapper `List`, no slot record: slot assembly stays the invocation parser's
-    /// job (the one staging door, [`stage_node`](ParseContext::stage_node), holds) —
+    /// job (the single staging entry point, [`stage_node`](ParseContext::stage_node),
+    /// still holds) —
     /// plus the included run's merged after-effect record
     /// ([`AttachedSourceOutcome::after_effects`]), which the caller forwards or
     /// drops (the persist-vs-transparent choice of `\input`-style specs). The whole
@@ -111,14 +112,14 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// # Recovery
     ///
     /// A stray group close in the attached source is recovered **locally**: it is
-    /// diagnosed as [`StrayGroupClose`] through the recover funnel, consumed, and
+    /// diagnosed as [`StrayGroupClose`] through the recovery entry point, consumed, and
     /// staged as a span-backed `Chars` node (the markup-in-chars recovery
     /// artifact — per-source byte accounting stays exact), and the parser is
     /// re-invoked — an included file's stray `}` never unwinds the includer's own
     /// group structure. Under
-    /// [`Recovery::Strict`](crate::error::Recovery::Strict) the funnel aborts the
-    /// parse as usual (`Err` bubbles). A stop on the parser's **own** stop
-    /// conditions ends the sub-parse normally — unlike the root loop, the door
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict) recovery aborts the
+    /// parse as usual (the `Err` propagates). A stop on the parser's **own** stop
+    /// conditions ends the sub-parse normally — unlike the root loop, this method
     /// does not know the caller's stop spec, so a token/node-condition stop means
     /// "this run is complete" (content past it stays unparsed, the caller's
     /// choice). The sub-parse's pass-through state delta channel is discarded
@@ -217,21 +218,22 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// - the resolver returned an error → [`UnresolvableSourceReference`]
     ///   (reference + the live [`ResolveError`], cause chain included).
     ///
-    /// Both are raised through the recover funnel at `at` — the invocation span
+    /// Both are raised through the recovery entry point at `at` — the invocation span
     /// of the triggering construct, which is also what the minted source's
     /// provenance records as its
     /// [`triggered_at`](crate::source::SourceProvenance::triggered_at). Under
     /// [`Recovery::Tolerant`](crate::error::Recovery::Tolerant) the failure is
     /// recorded and `Ok(None)` is returned — nothing was attached, and the
     /// calling spec stages its callable without an attached slot; under
-    /// [`Recovery::Strict`](crate::error::Recovery::Strict) the funnel aborts.
+    /// [`Recovery::Strict`](crate::error::Recovery::Strict) recovery aborts.
     ///
     /// On success, delegates to
     /// [`parse_attached_source`](ParseContext::parse_attached_source) (whose
     /// parser/state/recovery contracts apply) and returns `Ok(Some(outcome))` —
     /// the staged nodes plus the included run's merged after-effect record
-    /// ([`AttachedSourceOutcome`]). Resolution itself stays outside the door — the
-    /// composition is accessor → [`resolve_source_reference`] → door, so a caching
+    /// ([`AttachedSourceOutcome`]). Resolution itself stays outside this method — the
+    /// composition is accessor → [`resolve_source_reference`] →
+    /// [`parse_attached_source`](ParseContext::parse_attached_source), so a caching
     /// framework can substitute either half by composing the pieces itself.
     pub fn attach_source_reference<P>(
         &mut self,

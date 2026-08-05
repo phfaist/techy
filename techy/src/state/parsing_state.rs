@@ -55,7 +55,8 @@ impl<L: Lang> StateData<L> {
 /// caches valid for this instance's lifetime.
 ///
 /// The **only** way a non-initial state comes into existence is
-/// [`derived()`](ParsingState::derived) — the transition choke point. States are cheaply
+/// [`derived()`](ParsingState::derived) — the single point through which every state
+/// transition passes. States are cheaply
 /// shareable; the engine wraps them in `Arc` and creates a new one only at transitions,
 /// so nodes can record their parse-time state.
 ///
@@ -116,7 +117,7 @@ impl<L: Lang> ParsingState<L> {
     /// seed never runs [`Lang::finalize_transition`] (it has no predecessor — see
     /// [`lang_initial`](ParsingState::lang_initial)), and pushing providers directly
     /// onto the seed's scope stack involves no by-name scope ops (the only failing
-    /// kind). The transition choke point is untouched — packages-at-seed is not a
+    /// kind). The derivation path is not involved — packages-at-seed is not a
     /// transition, and the freeze rebuilds the derived caches over the augmented
     /// data. Anything beyond packages — rules overrides, a mode, events — goes
     /// through the (fallible) delta idiom instead:
@@ -140,7 +141,8 @@ impl<L: Lang> ParsingState<L> {
         ParsingState::freeze(data)
     }
 
-    /// The sole constructor of non-initial states — the transition choke point.
+    /// The sole constructor of non-initial states: every state transition passes
+    /// through this method.
     ///
     /// Applies the delta's overrides to a copy of this state's data, strips temporary
     /// group rules when the delta ends their scope (below), runs
@@ -161,7 +163,7 @@ impl<L: Lang> ParsingState<L> {
     ///   Every failing op is skipped — the rest of the delta still applies.
     /// - [`Lang::finalize_transition`] can refuse the transition
     ///   ([`FinalizeError`]) — above all when a *context-dependent* event reaches
-    ///   this bare choke point (the two-class contract on [`Lang::Event`]): the
+    ///   this method un-lowered (the two-class contract on [`Lang::Event`]): the
     ///   enclosing-state context such an event needs exists only inside a driven
     ///   parse, where
     ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
@@ -172,15 +174,16 @@ impl<L: Lang> ParsingState<L> {
     /// failure records plus the fully derived **recovered state** (frozen like any
     /// other; on a finalize refusal, the data as the hook left it), so a tolerant
     /// caller can diagnose and continue while a strict caller aborts.
-    /// Classification is the caller's: the in-parse seam routes scope-op failures
-    /// through the recover funnel
+    /// Classification is the caller's: the in-parse derivation path
+    /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state))
+    /// routes scope-op failures through the recovery entry point
     /// ([`ScopeOpFailed`](crate::constructs::ScopeOpFailed)) and treats a finalize
     /// refusal as an implementation error (the driver failed to lower); an embedder
     /// deriving out of parse treats an `Err` as its own input error.
     ///
     /// # Temporary group rules
     ///
-    /// [`TokenRules::temporary_groups`] is scoped in state data, and this choke point
+    /// [`TokenRules::temporary_groups`] is scoped in state data, and this method
     /// enforces the scope — every group descent passes through here (installing the
     /// entered rule as `expecting_group_close`), including hand-built deltas that never
     /// touch the session helpers. A delta that overrides `expecting_group_close` ends
@@ -262,14 +265,14 @@ impl<L: Lang> ParsingState<L> {
     }
 
     /// The delimiter-matching table derived from [`rules().groups`](TokenRules) — empty
-    /// when [`TokenRules::enable_groups`] is off (the gate is baked in at freeze time).
+    /// when [`TokenRules::enable_groups`] is off (the setting is applied at freeze time).
     pub fn prefix_table(&self) -> &PrefixTable<L> {
         &self.prefix_table
     }
 
     /// The specials trigger-character filter derived via
     /// [`Lang::specials_trigger_chars`] — the empty filter when
-    /// [`TokenRules::enable_specials`] is off (the gate is baked in at freeze time).
+    /// [`TokenRules::enable_specials`] is off (the setting is applied at freeze time).
     pub fn trigger_chars(&self) -> &TriggerChars {
         &self.trigger_chars
     }
@@ -348,15 +351,15 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// - [`failures`](DeriveError::failures): one record per failing op, in delta order;
 /// - [`finalize_error`](DeriveError::finalize_error): the customizer's refusal, when
 ///   [`Lang::finalize_transition`] returned `Err` (typically a context-dependent
-///   event reaching the bare choke point — the two-class contract on
+///   event reaching [`ParsingState::derived`] un-lowered — the two-class contract on
 ///   [`Lang::Event`]);
 /// - [`recovered`](DeriveError::recovered): the fully derived state with exactly the
 ///   failing ops skipped — finalized and frozen like every state, ready to continue
 ///   under (on a finalize refusal: the data as the hook left it, best-effort);
-/// - [`delta`](DeriveError::delta): the delta as applied, so a recovering seam can
+/// - [`delta`](DeriveError::delta): the delta as applied, so a recovering caller can
 ///   still feed
 ///   [`ParseDriver::observe_transition`](crate::engine::ParseDriver::observe_transition)
-///   the true transition (needed because the group-interior seam derives with a
+///   the true transition (needed because the group-interior derivation applies a
 ///   *merged* delta its caller never sees).
 ///
 /// At least one of [`failures`](DeriveError::failures) (non-empty) and
@@ -417,8 +420,8 @@ impl<L: Lang> core::error::Error for DeriveError<L> {}
 
 /// [`Lang::finalize_transition`]'s refusal of a transition — the customizer's loud
 /// "this delta cannot be applied here". The canonical producer: a
-/// **context-dependent** event reaching the bare choke point (out of any driven
-/// parse, or under a driver that failed to lower it) — see the two-class contract
+/// **context-dependent** event reaching [`ParsingState::derived`] un-lowered
+/// (outside any driven parse, or under a driver that failed to lower it) — see the two-class contract
 /// on [`Lang::Event`]. Folded into [`DeriveError::finalize_error`] by
 /// [`derived()`](ParsingState::derived).
 #[derive(Debug, Clone, PartialEq, Eq)]

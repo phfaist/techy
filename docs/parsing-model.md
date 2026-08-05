@@ -56,8 +56,9 @@ diagnosed and skipped, is documented on
 [`Language::parse_source`](crate::core::Language::parse_source).
 
 "Staging" is the parse-side word for node creation: a construct parser
-stages a node into the session through the one staging door
-([`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node)),
+stages a node into the session through
+[`ParseContext::stage_node`](crate::core::constructs::ParseContext::stage_node)
+— the single entry point through which every node is staged —
 receiving a build-time id; the caller later claims staged nodes as children
 of the node it stages itself. The tree is assembled bottom-up and becomes a
 readable [`NodeTree`](crate::core::node::NodeTree) only at the final freeze.
@@ -131,7 +132,7 @@ the way down:
   [Custom construct parsers](crate::guide::construct_parsers) is the
   chapter on writing one.
 
-The driver sits between the loop and the spec as an interception seam: the
+The driver sits between the loop and the spec as an interception point: the
 dispatch arms obtain every invocation parser through
 [`ParseDriver::make_invocation_parser`](crate::core::ParseDriver::make_invocation_parser),
 whose default delegates to the spec's factory — a custom driver can wrap or
@@ -175,7 +176,7 @@ they derive through the context
 which routes through the session so the driver observes every transition
 and identical derivations are deduplicated
 ([`ParserSession::derived_state`](crate::core::ParserSession::derived_state)
-documents that seam).
+documents that mechanism).
 
 Two conventions govern where a state change *applies* — both pinned in the
 [`core::constructs`](crate::core::constructs) module documentation:
@@ -189,7 +190,7 @@ Two conventions govern where a state change *applies* — both pinned in the
   dedicated channel: the descent invariant (the interior always expects the
   entered rule's close delimiter) merged with the driver's
   [`group_interior_delta`](crate::core::ParseDriver::group_interior_delta)
-  hook — the data plug by which a group class changes its interior's state
+  hook — the data channel by which a group class changes its interior's state
   (the preset's math groups enter math mode this way).
 - **The after-effect channel.** A construct whose effect must *outlive* it
   — `\newcommand` defining a macro for the rest of the document — returns
@@ -210,9 +211,9 @@ Two conventions govern where a state change *applies* — both pinned in the
 Problems surface as **conditions** — typed values, one concrete type per
 kind of problem
 ([concepts](crate::guide::concepts_overview#diagnostics-and-tolerant-parsing)).
-The flow has one funnel: a construct parser that detects a problem calls
+The flow has one entry point: a construct parser that detects a problem calls
 [`ParseContext::recover`](crate::core::constructs::ParseContext::recover)
-with the condition and its span. The funnel hands the condition to the
+with the condition and its span. `recover` hands the condition to the
 driver ([`ParseDriver::recover`](crate::core::ParseDriver::recover)), which
 applies its policy:
 
@@ -240,13 +241,13 @@ than the strict/tolerant pair (per-condition decisions, budgets).
 **Implementation errors are a separate path.** When an *extension* violates
 a library contract — a custom parser stages children the builder rejects, a
 hook breaks its purity obligation — that is not a source-input problem, and
-it deliberately bypasses the funnel:
+it deliberately bypasses `recover` and the recovery policy:
 [`ParseContext::implementation_error`](crate::core::constructs::ParseContext::implementation_error)
 builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
-abort that no recovery policy can swallow. A bug in extension code fails
+abort that no recovery policy can absorb. A bug in extension code fails
 loudly even in tolerant parsing.
 
-## Where the extension seams are
+## Where the extension points are
 
 Reading the sections above as a checklist, from the least to the most
 invasive way of changing how parsing works:

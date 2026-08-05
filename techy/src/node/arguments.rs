@@ -389,7 +389,7 @@ impl BodySlotExt for () {
 ///
 /// Slots are pure **record-level** vocabulary: there
 /// is no spec-side slot declaration — the invocation parser that reads a callable's
-/// body (the spec's sanctioned `make_invocation_parser` composition) mints these
+/// body (the spec's supported `make_invocation_parser` composition) mints these
 /// records directly, with whatever parsers it drives internally. Self-description
 /// therefore means carrying the `name` on the record itself — a deliberate
 /// asymmetry with [`ParsedArgument`], which points at its `Arc<ArgumentSpec>`: an
