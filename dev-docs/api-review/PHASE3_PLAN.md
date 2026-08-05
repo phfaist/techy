@@ -620,3 +620,18 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   ordered on D-plan-3 — the NEW defaulted `ParseDriver::observe_parse_start`
   core hook as the A1(iv) wiring — and D-plan-2 ligature seed-mode
   visibility; brief-vs-records semantics to be re-verified against T1T2 §A1).
+- 2026-08-05: S9 review verdict: PASS, merge-ready after sign-off, 0
+  blockers, NO escalation candidates. D-plan-3 FORCED (E0276 reproduced —
+  per-method ClosedVocabulary bounds impossible on the generic impl; T3 §E2
+  bans the whole-impl bound; the wiring point was explicitly deferred to
+  application, so the defaulted observation-only core hook does not
+  contradict a ruled home); D-plan-8 FORCED; D-plan-1/2/4/5/6/7 DEFENSIBLE
+  (D-plan-2 verified bit-identical to the ruled Latexlike ligature
+  semantics via seed mode; the reviewer's own reader-order soundness check
+  confirms the per-type warning granularity has no false positive).
+  A1(iv) semantics dispute resolved FOR THE RECORDS (shipped =
+  "all provider definitions begin with the escape char"; identifier was
+  pre-reserved in the frozen slate). Coverage-move audit: nothing lost
+  (specials tests → minidefs; oracle byte-equality intact). One doc-only
+  should-fix ordered (guide lacks the registration one-liners) — being
+  applied pre-sign-off. AWAITING USER SIGN-OFF of D-plan-1..8.
