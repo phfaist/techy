@@ -148,12 +148,15 @@ decision incl. the specs-vs-hub author-side/run-side rule and rejected shapes:
 the top-level set by the recompose-session rulings, applied Phase 3 S8
 ([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).
 
-**Stability rubric (decided):** everything `pub` is one stability class under one
-semver discipline — no unstable tier; access tiers are expressed by placement and
-guides, not stability levels. The freeze has a soft onset: it starts when the
-API-review restructuring lands (cargo-semver-checks baseline), but important
-shortcomings may still be fixed breakingly until frameworks actually build on techy;
-from that adoption on, the freeze is hard. Full decision: [§dd-dr:stability-rubric].
+**Stability rubric (decided; guards in place):** everything `pub` is one stability
+class under one semver discipline — no unstable tier; access tiers are expressed by
+placement and guides, not stability levels. The freeze has a soft onset: it starts
+when the API-review restructuring lands, but important shortcomings may still be
+fixed breakingly until frameworks actually build on techy; from that adoption on,
+the freeze is hard. The guards (applied Phase 3 S10): `missing_docs` is a workspace
+`deny` lint, and `scripts/check_semver.sh` runs cargo-semver-checks against the
+`api-baseline` git tag (the Phase-3 landing commit; re-pinned at each version
+bump). Full decision: [§dd-dr:stability-rubric].
 
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +

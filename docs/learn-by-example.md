@@ -263,7 +263,7 @@ use techy::core::ParsingStateDelta;
 
 // A mandatory `{…}` argument whose interior parses back in the enclosing
 // non-math context — mode and rules restored, `$…$` (etc.) openers included.
-let text_mode_argument = Arc::new(
+let text_argument = Arc::new(
     ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
         .with_state_delta(ParsingStateDelta::new().event(Event::ExitMathContext)),
 );
@@ -272,7 +272,7 @@ let mut package = Package::new("mydefs");
 package.insert(
     CallableType::Macro,
     "text",
-    MacroSpec::new(vec![text_mode_argument]),
+    MacroSpec::new(vec![text_argument]),
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),

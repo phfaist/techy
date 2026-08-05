@@ -2,11 +2,25 @@
 
 Branch `phase3-s10-hardening` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a7cafe0b21311a57c`,
-branched from `api-review` @ c6cd171). Status: PLAN COMMITTED — implementation
-in progress.
+branched from `api-review` @ c6cd171). Status: **COMPLETE** — milestones M1–M7
+done, all gates green, audits clean; awaiting review + sign-off + merge.
 
 Baseline counts at branch point: 740 lib + 30 acceptance + 21 oracle +
 8 derive-conditions + 1 derive + 36 doctests (2 ignored pre-existing).
+Final counts: **750 lib** (+10 Err-path tests) + 30 + 21 + 8 + 1 + 36 (2
+ignored pre-existing) — all green.
+
+## Final gate table (run at stage tip)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS, 0 warnings (under `missing_docs = deny`) |
+| `cargo test` | PASS — 750 + 30 + 21 + 8 + 1 + 36 doctests (2 pre-existing ignored), 0 failed |
+| `rm -rf target/doc && cargo docs` | PASS — 0 warnings/errors under deny |
+| `BASELINE_REV=HEAD scripts/check_semver.sh` | PASS — 196 checks pass, 58 skip |
+| Surface audit | PASS — 283 pages, 0 duplicates, exact roster (E1) |
+| Rider sweep | PASS — 0 MISS (E2) |
+| Superseded names | CLEAN (E3; one guide-variable rename applied) |
 
 ## Governing inputs read
 
@@ -279,6 +293,171 @@ target/doc && cargo docs` clean.
   0.x version bump per the rubric's discipline. Procedure documented in the
   script header + the [§dd-dr:stability-rubric] applied note (added this
   stage).
+
+## M7 — full audit
+
+### E1. Public-surface audit vs the ruled roster — PASS (0 misses)
+
+Method = S1's: script over `target/doc/techy/**` real item pages (fresh build;
+redirect stubs filtered). Result: **283 item pages, zero duplicate public
+paths** (no ident+kind reachable at two module paths; the only same-name pairs
+are the two trait+derive-macro doublings in `error`, the std pattern).
+Per-module counts:
+
+| Module | Items | | Module | Items |
+|---|---|---|---|---|
+| root | 1 (`VERSION`) | | `latexlike` | 46 |
+| `core` | 41 | | `latexlike::minidefs` | 1 |
+| `core::constructs` | 60 | | `recompose` | 8 |
+| `core::node` | 33 | | `source` | 19 |
+| `core::specs` | 28 | | `transform` | 7 |
+| `error` | 16 (incl. 2 derive pages) | | `visit` | 4 |
+| `extract` | 19 | | | |
+
+Reconciliation against INVENTORY (202 expected after the S1 accounting) +
+rulings, by scripted diff then item-by-item review:
+
+- **Every INVENTORY item present at exactly its ruled home**, modulo exactly
+  the ruled removals/renames: `NodeData`/`check_tree_invariants` pub(crate)
+  (S1/S3), `NoResolver` removed (S2), the 5 per-kind node-ext aliases +
+  `NodeDataExt` removed (S3 ext-minting), `SimpleLang`→`TrivialLang`,
+  `resolve_source`→`resolve_source_reference`, `Split`→`SplitAtChars`,
+  `MathStyle`→`MathGroupForm`, `base_package`→`builtin_package`. Ruled
+  placement overrides verified in place: resolution family + `ScopesCommandResolver`
+  in `core::specs`; `ArgumentParser`+`ParsedArgumentNodes` in
+  `core::constructs`; `FrameRole` + `PrefixEntry` in the hub;
+  `ProvenanceChain`/`ResolvedContent` in `source`; extract helpers at
+  top-level `extract`.
+- **All 100 items beyond INVENTORY traced to ruled stage additions**, each at
+  its ruled home — S2 (sealed conversions `IntoSpecsProvider`/
+  `IntoCallableSpec`/`IntoSourceResolver`, `CommandResolver`,
+  `ScopesCommandResolver`, `resolve_command_in_scopes`), S3 (`TreeTag`,
+  `SourcePos`, `validate_tree` + `TreeViolation`/`TreeViolationKind`,
+  `StagedChildren`/`StagedChildView`, `BodySlotExt`, `SlotRole`,
+  `display_tree`, `IntoArgumentParser`), S4 (`LatexlikeLang` + the role
+  traits, `MathGroupForm`, `Event`, `FinalizeError`, `ParsingStateStack`, the
+  three pillars, `LatexlikeNodeExts`, `BodyMarker`), S5 (`InvocationSyntax`
+  trait at the hub, `FromInvocation`, `InvocationSyntaxData`,
+  `EnvironmentSyntax` + `StdEnvironmentSyntax`/`StdEnvironmentSideSyntax`,
+  `EnvironmentBeginSyntaxData`/`EnvironmentTerminatorSyntaxData`,
+  `ParagraphBreakSpec`, `LatexlikeInvocationSyntax`), S6 (`NoSourceResolver`/
+  `UnresolvableSourceReference`, `check_include_chain`, `IncludingSources`,
+  `LineIndexCache`/`LineColProvider`, `format_position_with`/
+  `format_traceback_with`, `input_macro_spec`/`InputMacroSpec`,
+  `AttachedSourceOutcome`), S7 (`techy::transform` ×7, the extract
+  producer triples + part contexts ×19-page module), S8 (`techy::visit` ×4,
+  `techy::recompose` ×8, `SourceRecomposer`/`source_recomposer`/
+  `SourceRecomposeError`), S9 (`builtin_package`, `minidefs::minilatex_package`,
+  `NamedAccessError`, `ProviderCommandsShadowedByEscape` +
+  `check_provider_commands_shadowed_by_escape`, `argument_specs_named`).
+  (`attach_source_reference`/`parse_attached_source`/`stage_invocation` are
+  `ParseContext` methods — no item pages, correctly.)
+- Module topology exactly the ruled set: `source`, `error`, `extract`,
+  `transform`, `visit`, `recompose`, `core`, `core::{constructs,specs,node}`,
+  `latexlike`, `latexlike::minidefs`, root `VERSION` + `__private` +
+  `guide` (the latter two excluded by design).
+
+### E2. Rider sweep — all DONE or ROUTED, 0 MISS
+
+Grep base: DESIGN_RATIONALE.md, all rulings files, PLAN.md's two checklist
+blocks + NEXT bullet, reports S1–S9, `TODO`-marker sweep over src (zero hits).
+
+| Obligation (source) | Status |
+|---|---|
+| Tier-C block: NodeData + check_tree_invariants pub(crate); NoResolver deleted; resolve_source_reference rename; StdParseDriver reshape; FrameRole hub; ParsedArgumentNodes constructs; PrefixEntry beside PrefixTable; VERSION rustdoc sentence | DONE (S1/S2/S3; re-verified in E1) |
+| Recompose block: driver.rs:127 canonical paragraph-break spec; `materialized` through the bound trait; stage_invocation bundle amendment; CallableData post_space→invocation_syntax; kind.rs invariant-3 rewording; Invocation trigger-token facts; parse-law callable arm reads the payload; RecomposeError mirrors RestageError; bound trait named at application | DONE (S5 + S5-M6 design revision; S8 for the mirror — user-signed D-plan-5) |
+| In-crate oracle suite (reemit == input, strict+tolerant, multi-source) | DONE (S8: 21 tests; multi-source rode S6 I-18) |
+| C2 driver-residue assertion (T5 §C2 + [§dd-dr:preset-driver-pillars]) | DONE (S10 M4: 25/7, within envelope; DR applied note updated) |
+| F5 parse-law checker `Attached`-scoping (T5 §F5) | DONE (S6, per-source byte accounting) |
+| I-18 multi-source reconstruction tests (T5 §I) | DONE (S6) |
+| A8 extract input-genericity rides annotation application (T5) | DONE (S7) |
+| Slice-contract wording without "honest" (T5 §F1) | DONE (S3; sweep re-run: no rustdoc use) |
+| `\text` recipe forbidden_chars fix (T1T2) | DONE (S4; guide recipe now event-based — re-verified this stage) |
+| S5 rider: pre-existing debug_assert siblings → S10 | DONE (S10 M2/M3, full table above) |
+| Wire-identifier slate incl. `core.sources.*` at S6 | DONE (S1 + S6; sweep below confirms no old areas) |
+| missing_docs → deny; cargo-semver-checks baseline (PLAN Phase-3 line) | DONE (S10 M5/M6) |
+| S1 note: module-header narratives → possible guide promotion | ROUTED (Phase 4 guides) |
+| T5 I-9 binding-guide chapter checklist; include-chapter challenges + conditional splice recipe (G); post_space re-emission paragraph (I-10) | ROUTED (Phase 4 — recorded in T5_RULINGS Handoffs) |
+| S6 reviewer note: custom-Lang finalize_transition replay granularity | ROUTED (Phase 4 custom-Lang chapter, per the S6 stage log) |
+| Migration guides, human/AI guides | ROUTED (Phase 4 — PLAN.md) |
+
+### E3. Superseded-names sweep — CLEAN (1 doc should-fix applied)
+
+Scripted sweep of the full [§dd-dr:superseded-names] register (60 pattern
+groups, word-boundary guards, false-positive filters) over techy/src,
+techy-derive/src, techy/tests, docs/, README.md, CLAUDE.md, ARCHITECTURE.md,
+scripts/. Findings:
+
+- All remaining hits are register-style **negative/historical references**
+  ("no `ConflictStrategy`", "not `LatexToken`", "there is no `SlotSpec`",
+  "`finalize_node` is replaced by", "replacing Phase 4's `push_libraries`",
+  the [§dd-arch:naming] rule statements) — these document the rejections and
+  are not reintroductions. Ordinary-English "ancestors" in tree.rs:313 is not
+  the rejected `Ancestors` API.
+- **One real should-fix, applied**: docs/learn-by-example.md's `\text` recipe
+  bound its argument spec to a local named `text_mode_argument` — re-teaching
+  the rejected factory spelling ([§dd-dr:argument-factory-additions]).
+  Renamed to `text_argument`.
+- No old wire-identifier areas (`core.nodes_parser.*` etc.), no
+  `core.scopes.*`, no removed constructors/Default impls, no
+  `Restage::Continue`, no bare `Split`/`StateStack`/`EnvironmentSideSyntax`,
+  no `with_provider`/`with_seed_delta`, no `ParsingState::initial()`.
+
+### Records touched this stage (M5–M7)
+
+- [§dd-dr:stability-rubric]: applied note (guards realized; script + tag
+  procedure).
+- [§dd-dr:panic-policy]: applied note (S10 sweep completion; the durable
+  summary of converted vs left classes).
+- [§dd-dr:preset-driver-pillars]: C2 amendment updated with the asserted
+  numbers.
+- [§dd-dr:transform] topic header: stale "None is applied yet" → applied
+  (S3–S8).
+- ARCHITECTURE.md stability-rubric passage: guards-in-place sentence
+  (labels untouched).
+- docs/learn-by-example.md: the superseded-name variable rename.
+- Cargo.toml: missing_docs deny; scripts/check_semver.sh: new.
+
+## DRAFT — PLAN.md decision-log entry (Phase 3 complete) [DO NOT APPLY HERE]
+
+> - 2026-08-05: **Phase 3 — apply + harden COMPLETE** (S1–S10 all merged; stage
+>   log + per-stage detail in PHASE3_PLAN.md / reports/S<N>_REPORT.md). S10
+>   (hardening, guards, audit) closed the phase: C2 residue assertion PASSED
+>   (25-line Lang delegation residue on the FLM projection, 7 driver delegation
+>   one-liners — within the ruled ~30/~12 envelopes); panic-policy sweep
+>   complete per [§dd-dr:panic-policy] + the S5 rider (all outer-layer-input
+>   guards now Err implementation-error paths, +10 Err-path tests; value-
+>   constructor debug asserts kept under the recorded skip_whitespace pattern
+>   — site table in S10_REPORT); `missing_docs` promoted to workspace deny;
+>   cargo-semver-checks baseline realized as scripts/check_semver.sh against
+>   the `api-baseline` git tag (**ACTION: tag the Phase-3 landing commit
+>   `api-baseline` at merge**); full public-surface audit exact (283 item
+>   pages, zero duplicate paths, every item at its ruled home; INVENTORY +
+>   all-stage reconciliation in S10_REPORT); all-riders grep sweep: every
+>   Phase 3 obligation DONE or consciously ROUTED to Phase 4 (table in
+>   S10_REPORT); superseded-names sweep clean. The soft freeze of
+>   [§dd-dr:stability-rubric] takes effect at this landing. NEXT: Phase 4 —
+>   guides.
+>
+> (Also check the Phase 3 checkbox in § Phases & status: `[x] Phase 3`.)
+
+## DRAFT — PHASE3_PLAN.md S10 closure [DO NOT APPLY HERE]
+
+> ### S10 — Hardening, guards, audit  [status: DONE — merged 2026-08-05]
+>
+> Stage-log entry:
+> - 2026-08-05: S10 implemented (worktree branch `phase3-s10-hardening` off
+>   api-review c6cd171; plan-first + per-milestone commits M1–M7). C2 residue
+>   audit PASS (25/7 vs ~30/~12); panic-policy sweep complete (12 converted
+>   site groups + full leave-table with justifications; 750 lib tests, +10);
+>   missing_docs deny green everywhere; cargo-semver-checks 0.50.0 installed,
+>   pipeline proven (196 checks pass on self-comparison), durable guard =
+>   scripts/check_semver.sh + `api-baseline` tag procedure (tag to be minted
+>   on the landing commit); surface audit 283 pages/zero dupes/exact roster;
+>   rider sweep 0 MISS; superseded-names sweep clean (one guide-variable
+>   rename applied). Deviations D-plan-1..4 (all delegated realizations /
+>   policy-grounded scope extensions — none touch ruled shapes). Reports:
+>   reports/S10_REPORT.md.
 
 ## Deviation log
 

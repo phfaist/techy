@@ -2392,8 +2392,8 @@ never lacks a checker. [§dd-dr:public-visibility-sweep].)*
 
 The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
 piece — the entries below cross-depend — plus the 2b T5 session's exact-type
-detailing and the recompose session's machinery/payload rulings. None is applied yet
-(application in the review's Phase 3, together with the P1 topology move). Working
+detailing and the recompose session's machinery/payload rulings. Applied in the
+review's Phase 3 (stages S3–S8, together with the P1 topology move). Working
 detail for the application sessions: `dev-docs/api-review/P4_RULING.md`,
 `T5_RULINGS.md`, and `RECOMPOSE_RULINGS.md` (process files, deleted when
 the review completes — these entries are the durable record).
@@ -4945,6 +4945,21 @@ misuse the `get` companions already cover.
 Revisit if: profiling shows the always-on builder validation measurably costs on the hot
 staging path (all checks are O(1) per region/payload today).
 
+*(Applied — API-review Phase 3 S10 full sweep (completing the S5 rider on
+pre-existing sibling asserts): every remaining guard on outer-layer input became an
+`Err` implementation-error path — the environment-terminator re-peek and
+reader-position guards, the driver-factory pass-through-delta and stop-cause
+guards, the spec-author emptiness/distinctness guards of the standard argument
+parsers (constructors stay infallible; the check runs where the parser runs), the
+`Lang::scan_specials` match-end guard and a single reader-position validation at
+`StdTokenReader::peek` (both as unrecoverable `TokenErrorKind::Custom`
+implementation errors), and the chars-run contiguity guards. Value-constructor
+debug asserts (`Span::new`, `SourceSpan::new`, `SourcePos::new`, `Token::new`,
+`TokenListReader::new`) stay under this entry's `skip_whitespace` pattern:
+debug-checked author aid, release behavior degrades to a downstream-diagnosed
+state. Full site-by-site table: the review's S10 stage report (a process file;
+this note is the durable record).)*
+
 #### Errors carry Arc-based `SourceSpan`, not `'src` lifetimes [§dd-dr:arc-error-spans]
 
 Status: DECIDED (implemented; formerly proposed).
@@ -6744,8 +6759,11 @@ behavior-carrying driver; the pillars compose in a custom driver — one doc
 sentence at the struct); resolver field private behind
 `with_resolver`/`source_resolver()`, the two policy knobs stay `pub`. The T5 FLM
 projection confirmed the pillar inventory covers every non-default hook body
-(~30-line Lang + ~12-line driver residue; the Phase 3 acceptance run asserts
-it); the [§dd-dr:latexlike-generalization] pillar list's "`finalize_node`
+(~30-line Lang + ~12-line driver residue; asserted by the Phase 3 S10
+acceptance audit — 25 code lines of Lang delegation residue on the FLM
+projection, 7 driver delegation one-liners, both within envelope; the shipped
+`LatexlikeDriver` itself carries exactly 7 one-line hook bodies); the
+[§dd-dr:latexlike-generalization] pillar list's "`finalize_node`
 spec-dispatch" is corrected there.)*
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
