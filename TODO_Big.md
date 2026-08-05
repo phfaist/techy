@@ -20,7 +20,8 @@
 - `techy::core::node::NodeKind::Comment` should hold a `CommentData` struct, mirroring `GroupData` and `CallableData`.
 
 - Need a significant clean-up of Claude-generated docs & guides.
-  - Ban word list: "door", "funnel"
+  - Ban word list in user and developer guides: "door", "funnel", "mint", "trigger token", "vocabulary"
+  - Very careful with the use of "contract" -- contract must be explicitly stated at that point exactly to justify the use of that word
   - References to dev-docs stages in API docs (e.g. "phase 7.8", "7.8 checkpoint") !!! Ban that.
 
 
