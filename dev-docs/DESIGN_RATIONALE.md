@@ -1572,11 +1572,21 @@ path, narrowly bounded at the generic-`LLL` wiring point, and gracefully absent
 for non-enumerable vocabularies (a best-effort diagnostics nicety, not
 semantics).)*
 
+*(A1(iv) amendment applied — Phase 3 S9:
+`core::specs::check_provider_commands_shadowed_by_escape` carries the bounds; the
+wiring realization is the defaulted core hook `ParseDriver::observe_parse_start`
+(once per root parse) + a defaulted no-op `LatexlikeLang::check_parse_start`
+behavior method that `Latexlike` overrides with the unconditional call — trait
+impls cannot state per-method bounds, so each family member opts in
+monomorphically, where its bound trivially holds; the default keeps the check
+gracefully absent.)*
+
 #### Registering callables: conversion idiom, one-liners, no insert-time validation [§dd-dr:registration-ergonomics]
 
 Status: DECIDED (user, API-review T1/T2 session; conversion idiom applied — the
 spec/provider side Phase 3 S2, the `IntoArgumentParser` sibling Phase 3 S3; the
-one-liners and the miss-path/init-warning/insert-callout measures ride S9).
+one-liners and the miss-path/init-warning/insert-callout measures applied Phase 3
+S9).
 
 Three rulings on the registration surface:
 
@@ -1647,6 +1657,16 @@ marker (its by-value impl is the concrete `Package<L>`). All ruled call shapes
 hold; no double-wrap. Rulings 2 (preset one-liners) and 3's did-you-mean /
 parse-init checks ride S9.)*
 
+*(Rulings 2–3 applied — Phase 3 S9: `Package<LLL>::define_macro` /
+`define_environment` (inherent preset methods, list-form codes, `Result`, no
+escape validation); the did-you-mean detail in `resolve_command_in_scopes`'s miss
+arm (escape-prefixed registration callout + capped small-edit-distance
+suggestions over the enumerable providers); the parse-init warning as
+`check_provider_commands_shadowed_by_escape` wired through the new
+`ParseDriver::observe_parse_start` hook + `LatexlikeLang::check_parse_start`
+default; the `Package::insert` normalized-name callout with the A4
+no-cross-check passage.)*
+
 #### Command resolution is a standalone `specs` function: `resolve_command_in_scopes` [§dd-dr:resolution-extraction]
 
 Status: DECIDED (user, API-review T3 session; completes the deferred resolver half
@@ -1689,8 +1709,14 @@ value `ScopesCommandResolver`, placed beside this function and the family;
 
 *(Applied — Phase 3 S2: `resolve_command_in_scopes` + `ScopesCommandResolver`
 live at `techy::core::specs`; `CommandResolution::resolve_via_scopes` removed.
-The did-you-mean miss detail is deliberately NOT included yet — it rides the S9
-consumer-polish stage.)*
+Phase 3 S9 landed the did-you-mean miss detail in the function's miss arm:
+after the searched-providers detail, the enumerable providers are scanned
+innermost-first for the escape-prefixed registration
+(`provider ‘p’ defines ‘\greet’ — command names are registered without the
+escape character`) and for capped small-edit-distance suggestions
+(`did you mean ‘…’ (provider ‘…’)?`); fallback-provider stacks never reach the
+miss arm — the accepted limitation, mitigated by the parse-init check of
+[§dd-dr:registration-ergonomics].)*
 
 #### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
 
@@ -2272,7 +2298,7 @@ carry three copies of the same formatter).
 
 #### `_named` argument accessors: unknown name is an error, absent argument is `None` [§dd-dr:named-argument-errors]
 
-Status: DECIDED (user, API-review T1/T2 session).
+Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S9).
 
 `argument_nodes_named`/`argument_content_nodes_named` return `Result<Option<…>, E>`:
 `Err` = category error (the node is not a callable, or the name is not among the
@@ -2287,6 +2313,15 @@ Rejected alternatives: `Result` on the indexed accessors too (forks the crate-wi
 Option idiom where `arguments().get(i)` + `is_provided()` already discriminates);
 panicking on unknown names (this family is the non-panicking companion shape by
 design).
+
+*(Applied — Phase 3 S9: error type `core::node::NamedAccessError`
+(`NotACallable` / `UnknownArgumentName` / `UnknownSlotName`). The sibling
+`slot_content_nodes_named` gets the same error contract but returns
+`Result<NodeSlice, E>` **without** the `Option` layer — a recorded slot has no
+"declared but absent" state, so an always-`Some` option would force a dead arm on
+every caller. `ParsedArguments::get_named`/`ParsedSlots::get_named` stay plain
+record lookups (their `None` is unambiguous), documented with pointers here;
+transform's `restage_argument_named` already carried the error contract from S7.)*
 
 #### `display_tree()`: a free debug renderer; `NodeKind::as_str()` [§dd-dr:display-tree]
 
@@ -5289,13 +5324,17 @@ Keeps: `core.token.end-of-stream-after-escape`, `core.token.forbidden-char`,
 `core.constructs.implementation-error`, `latexlike.environments.*` ×3. New:
 `core.sources.{no-resolver, unresolvable-reference}` ([§dd-dr:input-wiring]).
 Reserved: `core.specs.provider-commands-shadowed-by-escape` (the parse-init
-warning; wording at application). The preset→core re-homing rider was verified
-empty. Segment policy: keep segments unchanged (self-descriptive when quoted
-alone). The guide table prints exactly these.)*
+warning; wording at application — landed Phase 3 S9 with the condition type
+`ProviderCommandsShadowedByEscape` and its identifier-asserting test). The
+preset→core re-homing rider was verified empty. Segment policy: keep segments
+unchanged (self-descriptive when quoted alone). The guide table prints exactly
+these.)*
 
 #### `Diagnostics::sorted_by_position()` — narrow, source-major [§dd-dr:diagnostics-position-sort]
 
-Status: DECIDED (user, API-review T1/T2 session).
+Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S9: a
+borrowing view `-> Vec<&Diagnostic<O>>`, stable — equal positions keep recovery
+order; the collection itself keeps recovery order).
 
 Diagnostics arrive in recovery order, not source order; `sorted_by_position()`
 (returning-adjective form) sorts by (source in first-appearance order, span start),
@@ -6014,6 +6053,10 @@ pylatexenc default-shape parity for these triggers now requires loading minilate
 The fn follows the rename: `base_package()` → `builtin_package()`. The
 pylatexenc-parity rationale above is superseded to this extent.)*
 
+*(Amendment applied — Phase 3 S9: `builtin_package::<LLL>()` landed `LLL`-generic
+(the generalization routed from S4); specials/ligature tests moved to minidefs
+loading minilatex, and seed-default-shape pins assert the plain-chars behavior.)*
+
 #### Per-definition mode visibility on `Package` — the fine gate under `set_visible_modes` [§dd-dr:mode-visibility]
 
 Status: DECIDED (user).
@@ -6370,6 +6413,14 @@ body delta pushing the inner `"minilatex.item"` package defining `\item` (`"o"`)
 the body-scoped exemplar. Per the [§dd-dr:base-package] amendment, minilatex also
 carries `~` and the text-mode ligatures.)*
 
+*(Applied — Phase 3 S9, as ruled, with two application details: the fn carries the
+argument-code factory's `ArgumentExt<LLL>: Default` bound, and the ligatures'
+"text-mode-only" visibility is expressed generically as the language's **seed
+mode** (`LLL::initial_state_data().mode` — the mode role trait deliberately has no
+text-mode constructor, [§dd-dr:latexlike-generalization] amendment; for
+`Latexlike` the seed mode is `Mode::Text`, so the shipped visibility is exactly
+the ruled one).)*
+
 #### Argument-code and factory additions: `BracedOnly`, named factory, text-restore event [§dd-dr:argument-factory-additions]
 
 Status: DECIDED (user, API-review T1/T2 session).
@@ -6413,6 +6464,11 @@ enclosing context rather than seeking a text-mode state;
 *(Item 3 applied — Phase 3 S4: the preset event enum `latexlike::Event` with
 `ExitMathContext`, the `.event(…)` argument recipe, and the repaired guide
 chapter landed with the E4 machinery; items 1–2 land with the T1/T2 batch.)*
+
+*(Items 1–2 applied — Phase 3 S9: the `BracedOnly` word code (list-form only,
+with the loud fallback callout on `m`) and `argument_specs_named([(code,
+name), …])` — the scanning internals now yield parsers, and each entry point
+wraps them named (`ArgumentSpec::new`) or unnamed.)*
 
 #### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
 

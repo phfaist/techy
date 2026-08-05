@@ -26,7 +26,7 @@ modules are `pub(crate)` and invisible to public paths:
 - **techy::core::specs**: Defining callables (CallableSpec, StdCallableSpec, ArgumentSpec; SpecsProvider, Package, Scope, ScopeStack; the command-resolution family)
 - **techy::core::constructs**: Construct parsers (ConstructParser trait + standard parsers, ArgumentParser, their diagnostic conditions)
 - **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, NodeTreeBuilder)
-- **techy::latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs, the SourceRecomposer source re-emission)
+- **techy::latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs, the SourceRecomposer source re-emission; `latexlike::minidefs` = the opt-in toy `minilatex` package)
 
 Internal file layout (src/token, src/state, src/engine, src/spec, src/scopes, …) is
 organizational only — it never shows in public paths.
