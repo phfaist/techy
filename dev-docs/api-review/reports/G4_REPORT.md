@@ -199,7 +199,7 @@ pointers.
   invented), argument-spec strings (v2 aliases `*`/`{`/`[` explicit),
   behavior differences (6 rows: entry model, byte offsets, span
   identity, tolerant→Recovery+Diagnostics, unknown macros, `\input`
-  layer move). All 24 readthedocs URLs reused verbatim from
+  layer move). All 28 readthedocs URL definitions reused verbatim from (count corrected at review)
   docs/pylatexenc-migration.md's G3-verified link block (/en/latest/;
   zero new URLs).
 - M6 (root, LAST): docs/ai-guide.md, 16,420 bytes (HARD cap ~30 kB), 4

@@ -83,7 +83,7 @@ documentation):
 | `r<c1><c2>` | required group delimited `<c1>`…`<c2>` (no expression fallback) |
 | `d<c1><c2>` | optional group delimited `<c1>`…`<c2>` |
 | `v` / `v<c1><c2>` | delimited verbatim (`\verb`-style); auto-matched or prescribed delimiters |
-| `e{<chars>}` | embellishments: one marker per character, each followed by an expression, any order, each at most once |
+| `e{<chars>}` | embellishments: one marker per character, each followed immediately by an expression, any order, each at most once |
 | `AnyDelimited` / `AnyDelimitedOptional` | group delimited by any of `{}` `[]` `()` `<>` (list-form-only word codes) |
 | `BracedOnly` | mandatory content-class group with the expression fallback **off** (list-form-only word code) |
 

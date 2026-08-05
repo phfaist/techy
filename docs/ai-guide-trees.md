@@ -177,7 +177,9 @@ for an old-id → new-id map). Region edits are checked, never silently
 repaired: dropping every node of an argument's region restages it as
 provided-but-empty (true absence is the explicit
 [`RestagedArgument::absent`](crate::transform::RestagedArgument::absent));
-dropping a node that anchors an `InChildrenOf` content designation is
+dropping (or multiplying) a node that anchors an
+[`InChildrenOf`](crate::core::node::ContentNodes::InChildrenOf) content
+designation is
 [`RestageError::ContentParentDropped`](crate::transform::RestageError) —
 the remedy is an explicit `Emit` takeover
 ([`restage_invocation`](crate::transform::RestageContext::restage_invocation)).
