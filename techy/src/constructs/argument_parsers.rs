@@ -673,7 +673,7 @@ pub(super) fn missing_mandatory<L: Lang>(
 /// driver-factory parse, i.e. through outer-layer hands: a bogus id degrades to a
 /// zero-child answer rather than panicking — it still lands in the argument's node
 /// region, where `builder.add` diagnoses it ([§dd-dr:panic-policy] staged-id rule).
-fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32 {
+pub(super) fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: BuildId) -> u32 {
     let staged = cx.staged_nodes();
     let Some(view) = staged.get(id) else { return 0 };
     view.children().len() as u32
@@ -2332,5 +2332,49 @@ mod tests {
     fn empty_marker_is_an_implementation_error() {
         let st = state_with(&[("m", vec![marker_arg("")])]);
         expect_implementation_error(r"\m*", &st);
+    }
+
+    #[test]
+    fn staged_child_count_degrades_on_a_foreign_build_id() {
+        // A `BuildId` minted by a *different* session (`BuildId` is unbranded Copy —
+        // the outer-layer hazard the [§dd-dr:panic-policy] staged-id rule guards,
+        // e.g. a custom driver's factory parser returning an id it never staged
+        // here): the read-back shared by the group/optional/chars-group argument
+        // parsers degrades to a zero-child answer instead of panicking; the bogus
+        // id is diagnosed by `builder.add` when the region is staged.
+        let content = "x";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let st = state_with(&[]);
+        let driver = ArgDriver { recovery: Recovery::Strict };
+        let foreign = {
+            let mut other_session = ParserSession::new();
+            let mut reader = StdTokenReader::new(content);
+            let mut cx = ParseContext::new(
+                &mut reader,
+                Arc::clone(&source),
+                Arc::clone(&st),
+                &mut other_session,
+                &driver,
+            );
+            cx.stage_node(
+                NodeKind::chars(Span::new(0, 1)),
+                SourceSpan::new(&source, 0..1),
+                Arc::clone(&st),
+                vec![],
+            )
+            .unwrap()
+        };
+        // A fresh session that staged nothing: the foreign id resolves to no
+        // staged node.
+        let mut session = ParserSession::new();
+        let mut reader = StdTokenReader::new(content);
+        let cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
+        assert_eq!(staged_child_count(&cx, foreign), 0);
     }
 }

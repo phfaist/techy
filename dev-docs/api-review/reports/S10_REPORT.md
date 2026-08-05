@@ -7,15 +7,15 @@ done, all gates green, audits clean; awaiting review + sign-off + merge.
 
 Baseline counts at branch point: 740 lib + 30 acceptance + 21 oracle +
 8 derive-conditions + 1 derive + 36 doctests (2 ignored pre-existing).
-Final counts: **750 lib** (+10 Err-path tests) + 30 + 21 + 8 + 1 + 36 (2
-ignored pre-existing) — all green.
+Final counts: **751 lib** (+11: ten Err-path tests + the staged-id
+degradation pin) + 30 + 21 + 8 + 1 + 36 (2 ignored pre-existing) — all green.
 
 ## Final gate table (run at stage tip)
 
 | Gate | Result |
 |---|---|
 | `cargo build` | PASS, 0 warnings (under `missing_docs = deny`) |
-| `cargo test` | PASS — 750 + 30 + 21 + 8 + 1 + 36 doctests (2 pre-existing ignored), 0 failed |
+| `cargo test` | PASS — 751 + 30 + 21 + 8 + 1 + 36 doctests (2 pre-existing ignored), 0 failed |
 | `rm -rf target/doc && cargo docs` | PASS — 0 warnings/errors under deny |
 | `BASELINE_REV=HEAD scripts/check_semver.sh` | PASS — 196 checks pass, 58 skip |
 | Surface audit | PASS — 283 pages, 0 duplicates, exact roster (E1) |
@@ -163,20 +163,22 @@ tolerant recovery).
 | token/reader.rs:231 `scan_specials` match-end `debug_assert!` | `Lang::scan_specials` hook output (release hazard: zero-width match = infinite loop) | `Err(TokenError::new(Custom(ImplementationError), .., None))` — unrecoverable, aborts both modes; test `scan_specials_invalid_match_end_...` |
 | token/reader.rs:179–180 `move_to_pos` debug asserts | custom recoveries' `resume_pos` / caller-held tokens via `move_past` (release hazard: slice panic at next scan) | single-boundary validation at `peek_impl` entry → unrecoverable Custom ImplementationError; `move_to_pos` asserts removed (one validation regime); test `invalid_reader_position_...` |
 | constructs/nodes_parser.rs:484/501 chars-run contiguity `debug_assert!`s | custom reader token stream (release hazard: silently-wrong covering span) | `take_pre_space`/`extend_run` → `Result<(), String>`, lifted at the three cx-holding call sites into `cx.implementation_error` |
-| constructs/argument_parsers.rs:667(+849/852/862/870-block, chars_group_parser.rs:182) staged-id `.expect("just staged")` read-backs | driver-factory-returned `BuildId` | graceful degradation to zero-child/identity answers per the policy's recorded staged-id rule (bogus id still lands in the region and `builder.add` diagnoses it) |
+| constructs/argument_parsers.rs:667(+849/852/862/870-block) and chars_group_parser.rs:182 staged-id `.expect("just staged")` read-backs | driver-factory-returned `BuildId` (unbranded Copy) | graceful degradation to zero-child/identity answers per the policy's recorded staged-id rule (bogus id still lands in the region and `builder.add` diagnoses it); chars_group_parser routes through the shared `staged_child_count` helper (review-fix commit — the M2 commit had missed this one site); degradation pinned by test `staged_child_count_degrades_on_a_foreign_build_id` |
 
-Test delta: +10 lib tests (740 → 750). All conversions abort under BOTH
-recovery modes (implementation errors bypass the recover funnel — asserted by
-running the new tests under `Recovery::Tolerant`).
+Test delta: +11 lib tests (740 → 751; ten Err-path tests in M2 plus the
+staged-id degradation pin added with the review fix). All Err conversions
+abort under BOTH recovery modes (implementation errors bypass the recover
+funnel — asserted by running the new tests under `Recovery::Tolerant`).
 
 ### Sites consciously left (with justification)
 
 Rule-1 (verifiably unreachable crate-internal invariant, invariant stated):
 
 - extract.rs:507 (`split_pieces` mints parts only for Chars nodes — same-fn
-  minting), extract.rs:756 (`max_split=1` arithmetic), extract.rs:189/522/529
-  (`piece sub-ranges on char boundaries by construction`), extract.rs:1135
-  (`len 1` checked the line above).
+  minting), extract.rs:756 (`max_split=1` arithmetic), extract.rs:189/522
+  (`piece sub-ranges on char boundaries by construction`), extract.rs:247/529
+  (`chars kind resolves text` — pieces are minted for Chars nodes only, the
+  :507 invariant), extract.rs:1135 (`len 1` checked the line above).
 - token/reader.rs:215/364 (`pos < len checked above`), token/reader.rs:361
   (`PrefixEntry` fields private; `PrefixTable::for_rules` is the only
   constructor and always sets a direction).
@@ -371,7 +373,7 @@ blocks + NEXT bullet, reports S1–S9, `TODO`-marker sweep over src (zero hits).
 | F5 parse-law checker `Attached`-scoping (T5 §F5) | DONE (S6, per-source byte accounting) |
 | I-18 multi-source reconstruction tests (T5 §I) | DONE (S6) |
 | A8 extract input-genericity rides annotation application (T5) | DONE (S7) |
-| Slice-contract wording without "honest" (T5 §F1) | DONE (S3; sweep re-run: no rustdoc use) |
+| Slice-contract wording without "honest" (T5 §F1) | DONE (S3). Per the S3-stage supervisor resolution (confirmed by the S3 review, covered by the S3 sign-off), the ban is scoped to the session-coined slice-contract term: the slice contracts (`span()`/`source_text()`) use no "honest". Two pre-existing ordinary-English uses remain by that resolution and stay: node/kind.rs:20, source/line_index.rs:259 |
 | `\text` recipe forbidden_chars fix (T1T2) | DONE (S4; guide recipe now event-based — re-verified this stage) |
 | S5 rider: pre-existing debug_assert siblings → S10 | DONE (S10 M2/M3, full table above) |
 | Wire-identifier slate incl. `core.sources.*` at S6 | DONE (S1 + S6; sweep below confirms no old areas) |
@@ -426,9 +428,10 @@ scripts/. Findings:
 >   (25-line Lang delegation residue on the FLM projection, 7 driver delegation
 >   one-liners — within the ruled ~30/~12 envelopes); panic-policy sweep
 >   complete per [§dd-dr:panic-policy] + the S5 rider (all outer-layer-input
->   guards now Err implementation-error paths, +10 Err-path tests; value-
->   constructor debug asserts kept under the recorded skip_whitespace pattern
->   — site table in S10_REPORT); `missing_docs` promoted to workspace deny;
+>   guards now Err implementation-error paths or recorded staged-id
+>   degradations, +11 tests; value-constructor debug asserts kept under the
+>   recorded skip_whitespace pattern — site table in S10_REPORT);
+>   `missing_docs` promoted to workspace deny;
 >   cargo-semver-checks baseline realized as scripts/check_semver.sh against
 >   the `api-baseline` git tag (**ACTION: tag the Phase-3 landing commit
 >   `api-baseline` at merge**); full public-surface audit exact (283 item
@@ -449,7 +452,9 @@ scripts/. Findings:
 > - 2026-08-05: S10 implemented (worktree branch `phase3-s10-hardening` off
 >   api-review c6cd171; plan-first + per-milestone commits M1–M7). C2 residue
 >   audit PASS (25/7 vs ~30/~12); panic-policy sweep complete (12 converted
->   site groups + full leave-table with justifications; 750 lib tests, +10);
+>   site groups + full leave-table with justifications; 751 lib tests, +11;
+>   one review-fix: the chars_group_parser staged-id read-back had been
+>   missed and now shares the degradation helper);
 >   missing_docs deny green everywhere; cargo-semver-checks 0.50.0 installed,
 >   pipeline proven (196 checks pass on self-comparison), durable guard =
 >   scripts/check_semver.sh + `api-baseline` tag procedure (tag to be minted

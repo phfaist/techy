@@ -54,7 +54,9 @@ use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::TokenKind;
 
-use super::argument_parsers::{missing_mandatory, scan_argument_noise, stage_pre_space};
+use super::argument_parsers::{
+    missing_mandatory, scan_argument_noise, stage_pre_space, staged_child_count,
+};
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{ConstructParserResult, FromInvocation, ParseContext};
 
@@ -177,10 +179,11 @@ where
         };
         let (id, _delta) = cx.parse_group(contents_state, open.span, rule, child_states)?;
 
-        let child_count = {
-            let staged = cx.staged_nodes();
-            staged.get(id).expect("the group was just staged").children().len() as u32
-        };
+        // The id routes through the driver's group-parser factory: a bogus id from a
+        // misbehaving custom driver degrades to a zero-child region rather than
+        // panicking, and is diagnosed by `builder.add` when the region is staged
+        // ([§dd-dr:panic-policy] staged-id rule — `staged_child_count`'s contract).
+        let child_count = staged_child_count(cx, id);
         noise.nodes.push(id);
         Ok(Some(ParsedArgumentNodes::new(
             noise.nodes,

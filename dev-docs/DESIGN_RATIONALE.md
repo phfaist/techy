@@ -4953,7 +4953,10 @@ guards, the spec-author emptiness/distinctness guards of the standard argument
 parsers (constructors stay infallible; the check runs where the parser runs), the
 `Lang::scan_specials` match-end guard and a single reader-position validation at
 `StdTokenReader::peek` (both as unrecoverable `TokenErrorKind::Custom`
-implementation errors), and the chars-run contiguity guards. Value-constructor
+implementation errors), and the chars-run contiguity guards; the staged-id
+read-backs of the standard argument parsers (group, optional-group, chars-group)
+follow this entry's staged-id degradation rule through one shared
+zero-child-answer helper. Value-constructor
 debug asserts (`Span::new`, `SourceSpan::new`, `SourcePos::new`, `Token::new`,
 `TokenListReader::new`) stay under this entry's `skip_whitespace` pattern:
 debug-checked author aid, release behavior degrades to a downstream-diagnosed
