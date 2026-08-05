@@ -3,7 +3,7 @@
 Branch `phase4-g6-clarity` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a02801c5917c4b420`,
 branched from `api-review` @ bc412d3 = Phase 4 complete, G5 merged).
-Status: **M0 (plan)** — inventory and edits follow in M1–M5.
+Status: **M0–M5 COMPLETE** — all gates green; awaiting stage review + merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb); the branch was reset to the local `api-review` tip bc412d3 before
@@ -383,4 +383,67 @@ doctests + 2 ignored (counts unchanged); cargo docs zero warnings.
 
 ## M5 — closure
 
-(to be filled)
+**Gate run (final, after all edits):**
+
+- `cargo build` — 0 warnings.
+- `cargo test` — 758 + 30 + 8 + 21 + 1 pass; doctests 66 pass + 2 ignored
+  (both crates); all counts unchanged from the stage brief.
+- `rm -rf target/doc && cargo docs` — zero warnings (rustdoc runs with
+  `-D rustdoc::broken-intra-doc-links`, so every new intra-doc link is
+  verified).
+- `scripts/check_semver.sh` — green (196 checks pass, "no semver update
+  required"); no code semantics touched (doc text only).
+
+**Rendered-HTML verification** (all public pages, AI-guide pages excluded
+for sweep terms): zero hits for every swept term and zero `§dd-` references
+anywhere in the rendered documentation (including the AI-guide pages, which
+never had any). The only residual grep matches are the
+`EnvironmentTerminatorSyntaxData::Scanned` variant name and the words
+"scanned position"/"scanned noise" (letter-substring false positives).
+
+**Superseded-names sweep** over all changed text against
+[§dd-dr:superseded-names]: no dead name reintroduced. One near-miss found
+and fixed: the phrase "the copying method" beside `restage_node` (the
+register retires "copy" as transform vocabulary) — dropped; the sentence
+now describes the clone-and-lower behavior without the label. Replacement
+vocabulary introduced this stage (behavior functions, recovery entry point,
+single staging entry point, single derivation point, language-family trait,
+begin/end syntax, ready-made, span-stability rule / accuracy rule) collides
+with nothing in the register.
+
+**Deviations / notes for the reviewer:**
+
+- Scope discipline: `//!` docs of `pub(crate)` modules, `#[cfg(test)]` item
+  docs, and plain `//` comments were deliberately NOT swept (they do not
+  render; the stage scope is text that renders into public documentation).
+  Consequence: the old vocabulary (funnel, choke point, scaffolding, pillar
+  section markers, `§dd-` refs in three non-rendered doc comments) survives
+  in developer-facing internal text. A follow-up internal-consistency sweep
+  is possible but was not ordered.
+- The `gobble` vocabulary is kept in rustdoc where it explains the public
+  method name `with_gobble_leading_newline` (identifier rename = code
+  change, out of scope) and in one learn-by-example code comment; a future
+  API rename would remove the term entirely.
+- Two stale panic claims discovered and corrected (M3 findings): the
+  make_paragraph_break_node "assert panics" claim and the SpecialsMatch
+  "reader debug-asserts" claim — both verified against the code and the
+  panic-policy oracle before rewording.
+- The `core::constructs` facade docs grew three module-level contract
+  sections (M2a); this is new rendered text, not moved text — reviewers
+  should check it against the private `src/constructs/mod.rs` originals
+  (meaning was preserved; the "caller applies deltas" and "Err means abort"
+  wording follows the originals closely).
+- `StdInvocationParser`'s item docs now carry the full invocation contract
+  (moved verbatim from the private module docs, two link paths qualified).
+- engine/driver.rs `ParseDriver` trait docs now name all five concerns
+  (recovery policy, parse-time hooks, source resolution, group descent-delta
+  channel, construct provision) — this makes custom-lang.md's existing
+  "groups its five concerns" claim true; previously the trait doc listed
+  four and included the process-residue word "migrated".
+
+**Files changed:** 67 (979 insertions, 410 deletions) — techy/src rustdoc,
+docs/ guide chapters, three AI-guide files (minimal renames),
+Documentation_Structure.md (one note), this report.
+
+**Commits:** M0 ab9f40c · M1 341a3eb · M2 a7b46e5 · M3 ee8810e ·
+M4 a1a82c6 · M5 (this commit).
