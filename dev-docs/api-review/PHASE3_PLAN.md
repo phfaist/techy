@@ -665,3 +665,21 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   independent review launched (special scrutiny: every panic→Err
   conversion + the LEAVE table; audit spot-checks; the semver-guard
   procedure).
+- 2026-08-05: S10 review verdict: merge-ready after one small BLOCKER fix +
+  sign-off. Blocker (real catch): chars_group_parser.rs:182 staged-id
+  `.expect` claimed converted but untouched — outer-layer-reachable release
+  panic in exactly the class the stage closes; one-line degradation fix +
+  record-accuracy restoration ordered. Everything else independently
+  verified: gates reproduce exactly (750/30/21/8/1/36; semver script
+  196 pass); converted sites 12/13 PASS; LEAVE table PASS in full (site
+  roster re-derived); C2 recount within envelope (24–25 Lang lines /
+  7 driver one-liners, shipped driver exactly 7 one-line hooks); surface
+  audit reproduced exactly (283 pages / 0 duplicates; 14 path spot-checks);
+  rider sweep holds at 0 MISS (one wording inaccuracy: the F1 row's
+  "no rustdoc 'honest'" claim scoped per the S3 supervisor resolution —
+  ban targets the coined slice-contract term; kind.rs:20 +
+  line_index.rs:259 are pre-existing ordinary-English uses, they stay);
+  superseded-names clean; missing_docs deny genuine; semver guard sound
+  (api-baseline tag = supervisor ACTION at merge). D-plan-1..4:
+  3 FORCED/DEFENSIBLE-clean, D-plan-3 effectively ruled scope. No
+  escalation candidates. Fix round launched.
