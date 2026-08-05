@@ -25,3 +25,17 @@
 
 
 - Have driver/lang be able to specify what expression parser to use when we ask for mandatory args?  E.g. mandatory arg, embellishment arg, + other places we seek an expression? Study this possibility.
+
+
+## Smaller todo
+
+- Stack frame traceback in techy code/frames: accumulate/sort in the other order - innermost scope last.  Also, either (i) reduce the number of declared frame entries (e.g.: command->macro->argument-N->group  --> macro-arg-N ) or (ii) give "visibility" or "priority" tag/flag on frames so we can only report the meaningful frames to humans while keeping the other frames for diagnostic traceback, more refined error reporting/...
+
+- `Add .markdownlint.yaml` with content
+
+  ```yaml
+  # MD012/no-multiple-blanks : Multiple consecutive blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md012.md
+  MD012:
+    # Consecutive blank lines
+    maximum: 3
+  ```
