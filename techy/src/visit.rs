@@ -65,7 +65,7 @@
 //! any other child (reads show reality; `Hidden` is never read-invisibility).
 //! This is a deliberate contrast to recompose's
 //! [`Concat`](crate::recompose::Recompose::Concat) default scope, which skips
-//! both roles: the read/compose asymmetry is the ruled role semantics
+//! both roles: the read/compose asymmetry is part of the slot-role contract
 //! ([`SlotRole`]), not an accident of implementation.
 
 use core::fmt;

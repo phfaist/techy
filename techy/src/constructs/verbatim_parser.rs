@@ -102,9 +102,9 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
     }
 }
 
-/// The pinned verbatim recipe as a [`ParsingStateDelta`]: every tokenization feature
+/// The verbatim reading recipe as a [`ParsingStateDelta`]: every tokenization feature
 /// gate off and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
-/// **replaced** by `terminator` (see the module docs). Under the derived state the
+/// **replaced** by `terminator`. Under the derived state the
 /// content arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
 /// `terminator`'s `close` string, which must be non-empty to ever match — as one
 /// [`GroupClose`](TokenKind::GroupClose) token.
@@ -212,7 +212,8 @@ fn default_auto_delimiters() -> Vec<(char, char)> {
 /// `\verb{a{b}c}` reads `a{b}c` whole; with identical delimiters the first closer ends
 /// the region.
 ///
-/// The content is read per the pinned recipe (module docs) and staged as the decided
+/// The content is read as raw text, under the reading state derived through
+/// [`verbatim_state_delta`], and staged as a
 /// group + chars shape: a [`Group`](crate::node::NodeKind::Group) node of the
 /// configured class whose single `Chars` child (omitted when the content is empty) is
 /// the raw text, recorded under the verbatim state; the content designation is the

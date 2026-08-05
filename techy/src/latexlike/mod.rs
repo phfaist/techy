@@ -1,4 +1,4 @@
-//! The `latexlike` preset (S2): the familiar LaTeX behavior, assembled from the
+//! The `latexlike` preset: the familiar LaTeX behavior, assembled from the
 //! generic core.
 //!
 //! The core has no privileged language concepts (no built-in math mode, `{`/`}`, `%`,
@@ -52,7 +52,8 @@
 //! ```
 //!
 //! **What the preset does not ship yet:** macro and environment *definitions*. The
-//! standard spec database (pylatexenc's default-specs port) is a later phase; until
+//! standard spec database (pylatexenc's default-specs port) is planned but not yet
+//! shipped; until
 //! then embedders and tests register the specs they need in their own packages
 //! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
 //! as [`MacroSpec`]/[`EnvironmentSpec`]/[`SpecialsSpec`] entries (or any custom
@@ -436,14 +437,13 @@ impl LatexlikeLang for Latexlike {
 /// `[`/`]` are deliberately **not** group delimiters: in LaTeX they are plain
 /// characters outside optional-argument positions (`a [b] c` is plain text), and the
 /// optional-argument parser recognizes them through a temporary group rule
-/// ([`TokenRules::temporary_groups`]) exactly where an optional argument may sit
-/// (decided at the 7.5 checkpoint).
+/// ([`TokenRules::temporary_groups`]) exactly where an optional argument may sit.
 ///
 /// Whitespace is the **ASCII** set (space, tab, `\n`, `\r`, vertical tab, form feed) —
 /// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
 /// space (NBSP U+00A0, U+2028, …) is ordinary content here, so e.g. an NBSP after
 /// `\emph` becomes a content char rather than being swallowed as post-macro space
-/// (decided for determinism and a fixed char-set model).
+/// (a deliberate choice, for determinism and a fixed char-set model).
 ///
 /// Each math rule declares its [`MathGroupForm`] as class payload
 /// ([`GroupType::Math`]): `$…$`/`\(…\)` are [`Inline`](MathGroupForm::Inline),
@@ -490,7 +490,7 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 ///
 /// The [`Macro`](CallableType::Macro) entries `begin` ([`BeginSpec`] — the
 /// environment composition) and `end` ([`EndSpec`] — orphan-`\end` diagnostics) are
-/// ordinary definitions, decided at the 7.6 checkpoint — data in the scope stack,
+/// deliberately ordinary definitions — data in the scope stack,
 /// not driver code, so they are shadowable and unloadable like anything else. The
 /// internal-flavored name marks the package as parsing substrate rather than
 /// definitions content: typography specials (`~`, the `--`/`---`/quote ligatures)

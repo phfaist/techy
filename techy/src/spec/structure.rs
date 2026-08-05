@@ -153,8 +153,8 @@ pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
 
     /// Can this argument be satisfied consuming nothing — is reporting it absent a
     /// *valid* outcome rather than a diagnosed recovery? An optional group or `*`
-    /// marker: yes; a mandatory group or expression: no (slots
-    /// session; pylatexenc's `LatexParserBase.contents_can_be_empty`).
+    /// marker: yes; a mandatory group or expression: no
+    /// (pylatexenc's `LatexParserBase.contents_can_be_empty`).
     ///
     /// Consulted by [`CallableSpec::requires_content`](super::CallableSpec::requires_content)'s
     /// default, which the expression position's guard uses to decide whether a callable

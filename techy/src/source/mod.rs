@@ -1,6 +1,6 @@
-//! S0 — source management: content, spans, provenance, resolution, line/column analysis.
+//! Source management: content, spans, provenance, resolution, line/column analysis.
 //!
-//! This stratum provides:
+//! This module provides:
 //!
 //! - [`Source`] owns one unit of source content, its origin metadata, and its
 //!   [`SourceProvenance`]. Sources are shared as `Arc<Source>`.
@@ -41,8 +41,8 @@
 //!
 //! The origin metadata type is a plain type parameter `O: SourceOrigin` with the default
 //! `Option<String>` (conventionally the URL the content was obtained from, `None` when
-//! unknown or synthesized). The higher layers plug `L::SourceOrigin` into this parameter; S0 itself never
-//! depends on `Lang`, preserving the strict stratum layering.
+//! unknown or synthesized). The higher layers plug `L::SourceOrigin` into this parameter; the source
+//! layer itself never depends on `Lang`, preserving the strict layering.
 //!
 //! # no_std
 //!

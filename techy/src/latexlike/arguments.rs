@@ -281,8 +281,8 @@ fn any_delimited_rules<LLL: LatexlikeLang>() -> Vec<Arc<GroupRule<LLL>>> {
 }
 
 /// [`argument_specs`] from the compact form: all codes concatenated in one string
-/// (`"o{"`, `"mo s t! r() d<> v"`) — pylatexenc's default spec database (a later
-/// phase's porting target) and FLM's feature definitions are written in these
+/// (`"o{"`, `"mo s t! r() d<> v"`) — pylatexenc's default spec database (a planned
+/// porting target) and FLM's feature definitions are written in these
 /// strings, worth accepting verbatim. Codes may be separated by whitespace;
 /// parameters (the `t`/`r`/`d`/`v` characters) must follow their code immediately.
 ///

@@ -60,9 +60,9 @@ pub enum GroupChildState<'p, L: Lang> {
 
 /// The base state for a callable invocation descent (`Command`/`Specials` arms).
 ///
-/// Defined with the 6.3 policy struct; **consulted from 6.4** — the invocation arms
-/// dispatch through `make_invocation_parser` there, and the compute context is the
-/// resolved [`Invocation`] (per decided semantics, resolution precedes policy).
+/// Consulted by the invocation arms, which dispatch through
+/// `make_invocation_parser`; the compute context is the
+/// resolved [`Invocation`] — resolution precedes policy.
 pub enum InvocationChildState<'p, L: Lang> {
     /// Use the loop's current state (the default).
     Inherit,
@@ -79,10 +79,9 @@ pub enum InvocationChildState<'p, L: Lang> {
 /// policy per descent pathway. Same tier-2 borrowed-config role as
 /// [`StopSpec`](super::StopSpec); the default (`Inherit`/`Inherit`) is plain nesting.
 pub struct ChildStateSpec<'p, L: Lang> {
-    /// Base-state policy for group interiors (`GroupOpen` arm; active since 6.3).
+    /// Base-state policy for group interiors (`GroupOpen` arm).
     pub group: GroupChildState<'p, L>,
-    /// Base-state policy for callable invocations (`Command`/`Specials` arms; consulted
-    /// from 6.4).
+    /// Base-state policy for callable invocations (`Command`/`Specials` arms).
     pub invocation: InvocationChildState<'p, L>,
 }
 

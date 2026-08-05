@@ -397,7 +397,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 ///
 /// The composition — not this spec — parses the invocation:
 /// [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never
-/// consulted for environment entries (the decided permanent boundary; registering an
+/// consulted for environment entries (a deliberate, permanent boundary; registering an
 /// `EnvironmentSpec` under another callable type gets the macro-shaped default
 /// parse, which reads the arguments and no body). A generic non-`EnvironmentSpec`
 /// [`CallableSpec`] under [`CallableType::Environment`](super::CallableType::Environment) is legitimate too: its

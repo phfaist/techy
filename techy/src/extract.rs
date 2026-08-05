@@ -2,7 +2,7 @@
 //! package.
 //!
 //! Free functions over the node read API, deliberately **not** methods of the core node
-//! types (decided at the 7.8 checkpoint): the core stays "storage + access", and helpers
+//! types: the core stays "storage + access", and helpers
 //! are added here without touching what a node list *is*. Two input shapes:
 //!
 //! - **Readers** take any node sequence (`impl IntoIterator<Item = NodeRef>`):
@@ -13,7 +13,7 @@
 //!   (→ [`KeyVals`]). They need the slice's tree anchor (parsing state, source) even
 //!   when the slice is empty, which a bare iterator cannot provide.
 //!
-//! # Builders mint real trees (the 7.8 "builder route")
+//! # Builders mint real trees
 //!
 //! Splitting can cut *through* a chars node (`\cite{key1,my{x,y}z}`), and the source
 //! tree is frozen — so, exactly like pylatexenc (whose `split_at_chars` mints new
@@ -99,8 +99,7 @@ use crate::node::{
 // --- errors -----------------------------------------------------------------------------
 
 /// Error of the extraction helpers. These are read-time operations outside any parse
-/// run, so there is no tolerant mode: unsuitable content is always a plain `Err`
-/// (decided at the 7.8 checkpoint).
+/// run, so there is no tolerant mode: unsuitable content is always a plain `Err`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtractError {
@@ -727,7 +726,7 @@ impl<L: Lang, B> fmt::Debug for SplitAtChars<L, B> {
 /// **whitespace-trimmed** (a deliberate deviation from pylatexenc, which keeps `" a "`
 /// verbatim: LaTeX's keyval packages trim, and untrimmed keys are a recurring
 /// pylatexenc footgun). Values are recorded **raw and in source order, duplicates
-/// preserved** (the 7.8 no-knobs decision): pylatexenc's `repeated_key_aggregate_action`
+/// preserved** — deliberately, with no aggregation knobs: pylatexenc's `repeated_key_aggregate_action`
 /// policies are one-line derivations over [`iter`](KeyVals::iter), and
 /// [`get`](KeyVals::get) answers the common "effective value" question (last wins —
 /// LaTeX override semantics). A key with `=` and nothing after it gets an empty value;

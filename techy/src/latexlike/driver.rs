@@ -38,8 +38,8 @@ use super::{
 /// run containing two or more newlines,
 /// [`TokenRules::enable_multi_newline_paragraphs`](crate::token::TokenRules::enable_multi_newline_paragraphs)).
 ///
-/// This is a **driver emission policy**, deliberately not scope-stack data (decided
-/// with the 7.9 acceptance work): the tokenizer detects paragraph breaks within
+/// This is a **driver emission policy**, deliberately not scope-stack data: the
+/// tokenizer detects paragraph breaks within
 /// leading whitespace, *before* the specials scan ever runs, so a package-registered
 /// `"\n\n"` specials entry could never fire — correlating the node shape with package
 /// contents would be dead configuration. The flag is driver-global; per-scope

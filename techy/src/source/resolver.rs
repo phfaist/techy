@@ -19,7 +19,7 @@ use super::source::{Source, SourceSpan};
 /// `None` there — the default — is the canonical "resolves nothing" (no lookup,
 /// no I/O).
 ///
-/// **The resolver returns content, not a [`Source`]** (Action-05):
+/// **The resolver returns content, not a [`Source`]**:
 /// the caller mints the `Source` — see [`resolve_source_reference`] — stamping the include-site
 /// provenance (`SourceProvenance::Resolved { reference, triggered_at }`) itself. A
 /// twice-included file thereby gets a *distinct* `Source` per include site, each
@@ -41,8 +41,8 @@ use super::source::{Source, SourceSpan};
 /// [`Source::provenance_chain`] exposes every enclosing
 /// `Resolved { reference, triggered_at }` record for exactly this.
 ///
-/// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
-/// 2026, matching the other stored extension traits —
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits, matching the
+/// other stored extension traits —
 /// [`CallableSpec`](crate::spec::CallableSpec)'s note applies): resolvers are stored in
 /// long-lived, shareable language bundles. `resolve` takes `&self`, so a caching
 /// implementation needs interior mutability — under this contract that means locks or

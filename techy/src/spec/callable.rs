@@ -40,8 +40,8 @@ pub enum FrameRole {
 /// The declarative surface is the [`ArgumentSpec`] list (arguments *configure* an
 /// invocation), pylatexenc-`arguments_spec_list`-shaped: `Arc`-shared so parsed nodes
 /// can record which spec each argument was parsed against. Slots — a parsed callable's
-/// *content regions* — have no spec-side declaration (slots
-/// session): a body-bearing callable's takeover parser mints the
+/// *content regions* — have no spec-side declaration: a
+/// body-bearing callable's takeover parser mints the
 /// [`ParsedSlot`](crate::node::ParsedSlot) records directly, and announces that it
 /// takes material via [`requires_content`](CallableSpec::requires_content). The default
 /// method bodies describe the neutral callable — no arguments, no body — suitable for
@@ -53,8 +53,8 @@ pub enum FrameRole {
 /// defaulting to the declarative [`StdInvocationParser`]. Overriding it is the
 /// full-takeover escape hatch for `\verb`-like constructs.
 ///
-/// **Thread safety is part of the contract** (`Send + Sync` supertraits, decided July
-/// 2026): specs are stored in parsed trees, so `NodeTree: Send + Sync` requires it.
+/// **Thread safety is part of the contract** (`Send + Sync` supertraits): specs are
+/// stored in parsed trees, so `NodeTree: Send + Sync` requires it.
 /// Every method takes `&self`, so a stateful implementation needs interior mutability
 /// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
 /// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.

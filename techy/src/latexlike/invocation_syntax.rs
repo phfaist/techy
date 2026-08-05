@@ -252,9 +252,9 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// `\begin` invocation parser) owns all scanning — the begin trigger, the rigid
 /// name group, arguments, and the body whose parser consumes the terminator —
 /// and hands the collected facts to [`from_parsed`] exactly once, at staging
-/// time. (An earlier accumulator shape had the record "scan" its sides; it was
-/// superseded — the body parser is the terminator consumer, so end-side scanning
-/// delegation was illusory, and the mutate-in-place accumulator locked custom
+/// time. (A record that scanned its own sides — a mutate-in-place accumulator —
+/// would not work: the body parser is the terminator consumer, so end-side scanning
+/// delegation would be illusory, and the accumulator shape would lock custom
 /// `Env` types into the standard flow's shape.) Scanning **tolerance** is
 /// likewise a parser concern: swap the invocation/body parser through the
 /// behavior door; the record records what its parser consumed.

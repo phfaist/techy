@@ -306,8 +306,7 @@ impl<L: Lang> fmt::Debug for DefinitionOp<L> {
 }
 
 /// One scope-stack operation of a state delta
-/// ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta), replacing Phase
-/// 4's `push_libraries`): stack-shape ops plus definition ops routed to a named
+/// ([`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta)): stack-shape ops plus definition ops routed to a named
 /// provider. Ops apply in delta order, each on the result of the previous; failures are
 /// collected per op (the rest still apply) and surface through the fallible
 /// [`derived()`](crate::state::ParsingState::derived).

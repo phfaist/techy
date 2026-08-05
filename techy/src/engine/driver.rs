@@ -156,7 +156,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// state's libraries via a [`CallableQuery`](crate::scopes::CallableQuery) — the
     /// token carries the fired escape character for syntax disambiguation. `Specials`
     /// tokens need no hook: recognition = resolution, the token already carries its
-    /// spec (that asymmetry is decided — specials resolution is token-time and stays
+    /// spec (that asymmetry is deliberate — specials resolution is token-time and stays
     /// on [`Lang::scan_specials`](crate::state::Lang::scan_specials); command
     /// resolution is parse-time and lives here).
     ///

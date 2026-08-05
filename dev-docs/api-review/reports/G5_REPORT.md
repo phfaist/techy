@@ -236,7 +236,41 @@ Gates run at every milestone that touches techy/src or docs/.
   "CLAUDE.md panic policy" in a `///` — on a PRIVATE `macro_rules!`
   definition (not `#[macro_export]`; never rendered) → leave-list.
 
-## M3 — sweep execution (fills in after execution)
+## M3 — sweep execution: DONE
+
+All 32 planned public-rendering sites fixed exactly as listed in the M0
+plan (same numbering); no additional sites surfaced during execution
+beyond the M2 incidental (error.rs:197 CLAUDE.md reference — private
+macro, leave-list). Notable wording choices:
+
+- Site 6 (extract.rs heading): now `# Builders mint real trees` — anchor
+  change verified safe (zero inbound `#`-fragment links in rustdoc or
+  docs/; "builder route" occurs only in dev-docs).
+- Site 16 (`ScopeOp`): dropping "replacing Phase 4's `push_libraries`"
+  also removes a resurfaced superseded name.
+- Site 24 (`VerbatimArgumentParser`): the dangling "(module docs)" pointer
+  (private page) replaced by the PUBLIC [`verbatim_state_delta`] anchor,
+  whose own doc states that both verbatim parsers derive their reading
+  states through it — no behavior assumed.
+- Site 27 (`OptionalGroupArgumentParser`): the "(to be revisited …)"
+  roadmap note became a timeless "(subject to revision — …)" caveat,
+  keeping the documented divergence fact and the possible mechanism.
+- Site 28 (`EnvironmentSyntax`): the "earlier accumulator shape …
+  superseded" history became the equivalent timeless rationale ("A record
+  that scanned its own sides — a mutate-in-place accumulator — would not
+  work: …"), same three technical points.
+- Sites 18/29/30/31/32: internal stratum labels ("S0", "S2", "stratum")
+  removed from PUBLIC module/item docs (plain "module"/"layer"/"layering"
+  wording); internal-module uses of the stratum vocabulary left untouched.
+
+Post-fix verification: both sweep scripts re-run — every remaining hit is
+in the leave-list (private `//!` module docs, `#[cfg(test)]`/test-support
+items, private items/fields/methods, `//` code comments, dd-label
+pointers, false positives). Candidate left additionally noted:
+"footgun" (extract.rs `parse_keyval` doc, pre-existing informal metaphor
+in a sentence I edited for site 7) — left: metaphor cleanup in rustdoc
+beyond process wording is outside the M3 mandate; reported here for the
+supervisor.
 
 ## M4 — audit results (fills in after execution)
 

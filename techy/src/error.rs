@@ -269,8 +269,8 @@ impl ToDiagnosticValue for DiagnosticValue {
 /// [`Error::source`](core::error::Error::source) hop's `Display`, outermost
 /// first) — the serialization face of the
 /// [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
-/// condition's payload. The impl lives here, not in the source stratum: the error
-/// module may reach down to source types, never the reverse (stratum layering).
+/// condition's payload. The impl lives here, not in the source module: the error
+/// module may reach down to source types, never the reverse (strict layering).
 impl ToDiagnosticValue for crate::source::ResolveError {
     fn to_diagnostic_value(&self) -> DiagnosticValue {
         let mut chain: Vec<DiagnosticValue> = Vec::new();
