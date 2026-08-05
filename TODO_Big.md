@@ -17,10 +17,25 @@
 
 - Restage/recompose - sub-walk subtree with custom visitor should be able to provide a symbolic argument (`None`) to mean "use same visitor", so that utilities/helpers can recurse down into children with custom logic while still invoking the original visitor callback/trait object.
 
+- `techy::core::node::NodeKind::Comment` should hold a `CommentData` struct, mirroring `GroupData` and `CallableData`.
+
+- Need a significant clean-up of Claude-generated docs & guides.
+  - Ban word list: "door", "funnel"
+  - References to dev-docs stages in API docs (e.g. "phase 7.8", "7.8 checkpoint") !!! Ban that.
+
 
 ## Smaller todo
 
 - Stack frame traceback in techy code/frames: accumulate/sort in the other order - innermost scope last.  Also, either (i) reduce the number of declared frame entries (e.g.: command->macro->argument-N->group  --> macro-arg-N ) or (ii) give "visibility" or "priority" tag/flag on frames so we can only report the meaningful frames to humans while keeping the other frames for diagnostic traceback, more refined error reporting/...
+
+- DESIGN_RATIONALE/ARCHITECTURE pass - clean up, remove history ("Amended..." pollution)
+
+**Spotted in API docs:**
+
+- `callable_type == latexlike::CT_ENVIRONMENT` in `src/node/kind.rs`.
+- `techy::core::node` module doc should also mention transform/restage, recompose, visit.  And link to the user guide.
+
+**Misc:**
 
 - `Add .markdownlint.yaml` with content
 
