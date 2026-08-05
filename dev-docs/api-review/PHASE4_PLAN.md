@@ -78,7 +78,7 @@ stub page.)
 
 | File | Content |
 |---|---|
-| concepts-overview.md | KEPT (user; Documentation_Structure.md-mandated anchor page): the 14 concept sections each expanded to a compact, self-contained definition (a few sentences + links; headings frozen). Indexed under the Developer Guide. |
+| concepts-overview.md | KEPT (user; Documentation_Structure.md-mandated anchor page): the 12 concept sections (plan v3 miscounted 14; corrected after G1) each expanded to a compact, self-contained definition (a few sentences + links; headings frozen). New sections only via user escalation, if a later chapter needs an anchor with no home. Indexed under the Developer Guide. |
 | parsing-model.md | The parsing model: how parsing is executed and delegated (parsing entry points, custom construct parsers, spec traits, …). Replaces the stub. |
 | construct-parsers.md | How to define a custom construct parser — return types (argument parser? simple construct nodes? …); takeover parsing + `stage_invocation`. |
 | custom-lang.md | Specifying the aspects of a custom language: callable and group types, Ext types attaching custom information to nodes, etc. Knobs grouped by feature, pointing to `Lang`'s API doc (no duplication). What LatexlikeLang already implements and how to extend it. Hosts the finalize_transition replay-granularity note (S6) and the specials-wiring trap pointer. |
