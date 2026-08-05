@@ -2,9 +2,9 @@
 
 Branch `phase4-g3-dev-guide` (worktree
 `/Users/philippe/projects/techy/.claude/worktrees/agent-a7881e287c04a0cd7`,
-branched from `api-review` @ 52932b2). Status: **M0–M4 COMPLETE** — all
-gates green; M5 (pylatexenc-migration.md) awaits the SUCCESSOR agent, then
-review + merge.
+branched from `api-review` @ 52932b2). Status: **M0–M5 COMPLETE** — all
+gates green after M5 (successor agent; see the M5 section at the end of
+this report); awaiting stage review + merge.
 
 Note on branch point: the worktree's HEAD at agent start was a stale commit
 (2110bbb, predating the api-review series); the branch was reset to the local
@@ -348,3 +348,174 @@ milestone, commit handoff notes here, and stop for a successor.
   canonical paths (verify with `cargo docs`, never from memory).
 - External-link verification (readthedocs) is NOT covered by cargo docs —
   verify resolvability yourself and record how in the report.
+
+## M5 — docs/pylatexenc-migration.md (SUCCESSOR agent)
+
+Commit `6aa7ef0` (chapter), on top of the M0–M4 closure 7560690; worktree
+HEAD verified at 7560690 and clean before starting.
+
+### Milestone log
+
+- M5: docs/pylatexenc-migration.md written, **17,431 bytes**; 1
+  compile-checked doctest (tolerant `Language` construction + parse:
+  math-as-group asserts — `is_group()`, `is_math_group()`,
+  `span_content()` — and the diagnostics-as-data assert). Structure:
+  2-paragraph orientation (what carries over / what is deliberately
+  different; generation-coverage note), a 16-row concept-map table linking
+  BOTH sides of every row, then 7 short sections: entry model
+  (LatexWalker vs Language), node taxonomy (one Callable kind, no math
+  node), no default definitions database, spans vs pos/pos_end, tolerant
+  parsing → diagnostics, argument-spec strings, latex2text/latexencode +
+  the `\input` layer move. Covers pylatexenc 2 and 3 on one page, the
+  generation named where they differ.
+- pylatexenc-side facts verified in the sources at
+  `$HOME/Research/util/pylatexenc/` (3.0beta2 checkout, only this agent):
+  walker-holds-string + pos-taking methods and the
+  `(node, pos, len)`-tuple return of the `get_***()` interface
+  (latexwalker/_walker.py LatexWalker docstring); `tolerant_parsing`
+  default True (_walker.py:265); ignored errors logged at info level via
+  `_report_ignore_parse_error`, never returned (_walker.py:324–348);
+  unknown macro → LatexWalkerParseError raised-or-ignored
+  (latexnodes/_nodescollector.py:816ff); LatexMathNode as a dedicated
+  class with `displaytype`, math environments reported as
+  LatexEnvironmentNode (latexnodes/nodes.py:715ff); pos/pos_end/len
+  semantics (nodes.py LatexNode docstring); default-db categories incl.
+  'latex-base' (latexwalker/_get_defaultspecs.py:35ff); v2 argspec
+  `*`/`{`/`[` (macrospec/_spechelpers.py std_macro), v3 standard argument
+  types `m`/`o`/`s` accepting the v2 characters as alternates
+  (latexnodes/parsers/_stdarg.py:188–218); ParsingState attribute roster
+  incl. the tokenization knobs (latexnodes/_parsingstate.py);
+  ParsingStateDelta (v3); LatexContextDb + `unknown_macro_spec`;
+  latex2text `set_tex_input_directory`/`read_input_file`.
+- techy-side: every claim traced to public documentation — the shipped
+  chapters (parsing.md, node-trees.md, language-syntax.md, specs.md) and
+  rustdoc (SourceSpan struct docs: Arc-carrying + identity-based
+  equality; latexlike/arguments.rs: the code table incl. the "`m` or
+  `{`" aliases and the compact-string grammar of
+  `argument_specs_from_str`; Language/ParseResult docs) — or demonstrated
+  by the chapter's doctest.
+
+### External-link verification (28 unique URLs; rustdoc cannot check these)
+
+Method: WebFetch of every linked page — all returned HTTP 200 with the
+named item confirmed documented on the page — plus explicit
+anchor-fragment confirmation (the Sphinx "Link to this definition" href
+quoted back) for 14 of the 20 item anchors; the remaining 6 anchors
+follow the same Sphinx python-domain id scheme (`#pylatexenc.<dotted
+path>`) confirmed twice on the very pages that host them, with each
+item's presence on its page individually confirmed by fetch.
+
+| URL (under https://pylatexenc.readthedocs.io) | status |
+|---|---|
+| / (root) | PAGE OK (fetched; v3.0beta2 index) |
+| /en/latest/latexwalker/ | PAGE OK |
+| /en/latest/latexnodes/ | PAGE OK |
+| /en/latest/macrospec/ | PAGE OK |
+| /en/latest/latexnodes.nodes/ | PAGE OK (all linked classes confirmed present) |
+| /en/latest/latexnodes.parsers/ | PAGE OK |
+| /en/latest/latex2text/ | PAGE OK |
+| /en/latest/latexencode/ | PAGE OK |
+| …latexwalker/#…LatexWalker | ANCHOR CONFIRMED |
+| …latexwalker/#…LatexWalker.get_latex_nodes | ANCHOR CONFIRMED |
+| …latexwalker/#…LatexWalker.parse_content | ANCHOR CONFIRMED |
+| …latexwalker/#…get_default_latex_context_db | ANCHOR CONFIRMED |
+| …latexnodes/#…ParsingState | ANCHOR CONFIRMED |
+| …latexnodes/#…ParsingStateDelta | ANCHOR CONFIRMED |
+| …macrospec/#…MacroSpec | ANCHOR CONFIRMED |
+| …macrospec/#…EnvironmentSpec | ANCHOR CONFIRMED |
+| …macrospec/#…SpecialsSpec | ANCHOR CONFIRMED |
+| …macrospec/#…LatexContextDb | ANCHOR CONFIRMED |
+| …macrospec/#…std_macro | ANCHOR CONFIRMED (fetch echoed `%5F`-encoded underscores — same fragment) |
+| …latex2text/#…LatexNodes2Text | ANCHOR CONFIRMED |
+| …latex2text/#…LatexNodes2Text.set_tex_input_directory | ANCHOR CONFIRMED (`%5F` note as above) |
+| …latexnodes.nodes/#…LatexMathNode | ANCHOR CONFIRMED |
+| …latexnodes.nodes/#…LatexNode | scheme + page-presence |
+| …latexnodes.nodes/#…LatexMacroNode | scheme + page-presence |
+| …latexnodes.nodes/#…LatexEnvironmentNode | scheme + page-presence |
+| …latexnodes.nodes/#…LatexSpecialsNode | scheme + page-presence |
+| …latexnodes.nodes/#…LatexNodeList | scheme + page-presence |
+| …latexnodes.parsers/#…LatexStandardArgumentParser | scheme + page-presence |
+
+Also verified: the generated chapter page contains zero unresolved
+reference-link leftovers (grep for `pyl-` in the built HTML: 0) and the
+in-page fragment targets exist as generated heading ids (`concept-map`,
+`no-default-definitions-database`, `latex2text-latexencode-and-input`,
+`tolerant-parsing-produces-diagnostics`).
+
+### Gates (re-run after M5)
+
+| Gate | Result |
+|---|---|
+| `cargo build` | PASS (clean) |
+| `cargo test` (all suites) | PASS — 758 lib + 30 acceptance + 8 derive_conditions + 21 recompose_oracle + 1 techy-derive |
+| `cargo test --doc` | PASS — 52 doctests (2 ignored), incl. this chapter's 1 new doctest |
+| `rm -rf target/doc && cargo docs` | PASS — zero warnings |
+| `scripts/check_semver.sh` | PASS — "no semver update required" (196 checks pass) |
+| Four-step wiring | intact (docs/pylatexenc-migration.md; lib.rs guide block line 147; GUIDE_PAGES row; guide.md index entry — wired in G1, only file content changed) |
+| Superseded-names sweep | CLEAN — register regexes hit only pylatexenc-side class references (`LatexWalker`, `Latex*Node`, `LatexContextDb`) and the canonical `ParsingStateDelta`; zero occurrences as techy vocabulary |
+
+### DOC_GAPS delta
+
+None. No new entries: every techy-side claim resolved to a public
+documentation sentence or the doctest; no rustdoc gaps encountered.
+
+### Deviations / items for the supervisor
+
+1. **Size: 17,431 bytes vs the ~10–15 kB target.** Composition: the
+   reference-link URL block is ~3.4 kB (28 unique readthedocs URLs — the
+   fixed cost of the every-concept-linked rule) and the doctest ~0.85 kB;
+   prose + table ≈ 13.2 kB, inside the target band. REMOVE-rule cuts
+   already applied before settling: the paragraph-break default note; the
+   "Definitions, parsing state, and token rules" section (folded into two
+   concept-map notes); the direct node-class mapping sentence; the
+   `argument_specs_named` pointer; the What's-new-in-pylatexenc-3
+   orientation link; a second doctest (v2/v3 argspec equivalence — that
+   claim is rustdoc-traced instead). Deeper cuts would drop brief-listed
+   non-obvious mappings that verified as real; the supervisor can order
+   them.
+2. **One brief-ruled, non-doc-traceable sentence**: the latex2text
+   section says a comparable converter "is planned as a separate
+   companion project, and this guide makes no promises about it". No
+   public rustdoc mentions a companion; the sentence follows the stage
+   brief's ruled content for this chapter ("a planned companion; do not
+   promise features") and is hedged accordingly. Flagged here rather than
+   DOC_GAPS because it is a ruling, not a code-behavior uncertainty.
+3. **All links go to /en/latest/** (the pylatexenc 3 docs):
+   /en/stable/ returns 404 and readthedocs exposes no separately
+   reachable pylatexenc 2 version; /en/latest/ documents the
+   still-supported pylatexenc 2 interfaces, which the chapter states. The
+   generation labels live in the prose ("pylatexenc 2: `pos` / `len`",
+   etc.).
+4. **Six anchors verified by scheme + page-presence** rather than an
+   individually quoted fragment (table above).
+5. Candidates evaluated and DROPPED as obvious or out of scope (per the
+   brief's filter): `macro_post_space` → post-space (carries over
+   essentially unchanged; language-syntax.md documents techy's side); the
+   `m`-code single-expression fallback as a *difference* (identical
+   behavior both sides — kept only as a one-clause pointer to the code
+   table); verbatim environments (obvious given specs.md);
+   `LatexNodesLatexRecomposer` → `source_recomposer` (dropped for size;
+   node-trees.md covers techy's side).
+
+### Scrutiny pointers for the reviewer (M5)
+
+- The strongest pylatexenc-side claim is in the tolerant section: "an
+  ignored error leaves only a log message — the caller gets no record".
+  Trace: `_report_ignore_parse_error` is a bare `logger.info` call and
+  `check_tolerant_parsing_ignore_error` returns None to signal recovery;
+  the walker keeps no error list.
+- The byte-offsets bullet ("wrong on any non-ASCII document") composes
+  techy's documented "exact byte range" (node-trees.md) with Python's
+  character-counting string indexing — a synthesized consequence.
+- "Where pylatexenc fills in defaults … techy makes both choices explicit
+  constructor arguments": pylatexenc side traced to the tolerant default
+  (True) and the LatexWalker docstring ("If you don't specify this
+  argument … the default database is used"); techy side is the
+  `Language::new` signature itself.
+- The `\begin{equation}` sentence was deliberately worded to attribute
+  the math-mode body to the *definition* (specs.md's `with_body_delta`
+  one-liner) — techy ships no `equation` definition.
+- The doctest is the compiled evidence for the entry-model row,
+  math-as-group, and diagnostics-as-data; the concept-map table rows for
+  `get_latex_nodes`/`parse_content` return shapes are prose-only, traced
+  to the LatexWalker class docstring.
