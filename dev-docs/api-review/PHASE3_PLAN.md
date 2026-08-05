@@ -264,7 +264,7 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   multi-source rides S6's tests). R15.
 - Acceptance: oracle green across the matrices.
 
-### S9 — Preset definitions + consumer polish (T1/T2 batch)  [status: pending]
+### S9 — Preset definitions + consumer polish (T1/T2 batch)  [status: DONE — merged 2026-08-05]
 
 - Base package: slim to `\begin`/`\end`; rename `"base"` → `"_builtin"`,
   `base_package()` → `builtin_package()`; `&` removed entirely; `~` + ligatures →
@@ -635,3 +635,14 @@ Pure relocation/rename; zero behavior change; tests pass modulo paths/identifier
   (specials tests → minidefs; oracle byte-equality intact). One doc-only
   should-fix ordered (guide lacks the registration one-liners) — being
   applied pre-sign-off. AWAITING USER SIGN-OFF of D-plan-1..8.
+- 2026-08-05 (user): **S9 signed off** (D-plan-1..8: 3/8 forced, the rest
+  defensible; the A1(iv) records-over-brief semantics resolution and the
+  should-fix commit 4900187 included) **and merge authorized.** Merged into
+  api-review (8 stage commits rebased onto the process-log tip; 740 lib +
+  30 acceptance + 21 oracle + 8 + 1 + 36 doc tests green on the merged
+  tree). S9 COMPLETE. NEXT: launch **S10** per § S10 (hardening, guards,
+  audit — the final stage): C2 residue assertion, panic-policy sweep incl.
+  the S5 pre-existing-assert rider, missing_docs → deny,
+  cargo-semver-checks baseline, full public-surface audit vs the ruled
+  roster, the all-riders grep sweep, superseded-names sweep, PLAN.md
+  Phase 3 closure entry.
