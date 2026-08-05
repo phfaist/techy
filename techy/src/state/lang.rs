@@ -372,8 +372,8 @@ pub trait Lang: Sized + 'static {
         Ok(None)
     }
 
-    /// The characters that may start a specials trigger under `data` — the hot-path
-    /// filter for [`scan_specials`](Lang::scan_specials). Computed when a state is
+    /// The characters that may start a specials trigger under `data` — the fast
+    /// pre-check filter for [`scan_specials`](Lang::scan_specials). Computed when a state is
     /// frozen and cached on the state instance (rebuilt only at transitions, like the
     /// `PrefixTable`); receives [`StateData`] rather than [`ParsingState`] because it
     /// runs *while* the state is being built. Return [`TriggerChars::Any`] for fully

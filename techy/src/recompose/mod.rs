@@ -309,8 +309,7 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
 /// [`RestageError`](crate::transform::RestageError) — the recompose surface
 /// speaks the transform family's vocabulary; the variants beyond the
 /// recomposer's own report misuse of a [context op](RecomposeContext) (a
-/// documented-contract violation returns an `Err`, never panics — the panic
-/// policy).
+/// documented-contract violation returns an `Err`, never panics).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecomposeError<E> {

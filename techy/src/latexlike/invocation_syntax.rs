@@ -265,7 +265,7 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSideSyntax<L> {
 /// Re-emission stays a **writer pair** ([`write_begin`]/[`write_end`]) — the
 /// recompose stage's `Concat` head/tail and the parse-law checker's
 /// prefix/suffix pins each need the two sides separately — and is the accuracy
-/// doctrine made literal: what `from_parsed` recorded is exactly what the
+/// rule made concrete: what `from_parsed` recorded is exactly what the
 /// writers emit.
 ///
 /// The data bounds and materialization come from the core

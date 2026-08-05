@@ -77,7 +77,8 @@ impl Span {
     /// Grow the span in place so it ends at `end` — the one permitted in-place
     /// mutation (accumulating a run of tokens into one node's span). Monotone:
     /// `end >= self.end()` is the caller's contract — a violation panics, in all
-    /// builds — so the `start <= end` invariant is preserved.
+    /// builds (see the [crate-level Panics list](crate#panics)) — so the
+    /// `start <= end` invariant is preserved.
     #[inline]
     pub fn extend_to(&mut self, end: usize) {
         assert!(
