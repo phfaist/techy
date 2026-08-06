@@ -326,7 +326,10 @@ context; two-level event consumption, fallible `finalize_transition`),
 lifecycle enforced in `derived()`), [§dd-dr:trivial-lang] (`SimpleLang` renamed
 `TrivialLang`, repositioned as the test lang), [§dd-dr:on-ramp-defaults]
 (`TokenRules::empty()`/`StateData::empty()`; specials defaults stay
-recognize-nothing).
+recognize-nothing), [§dd-dr:lang-features] (the compile-time feature axis:
+`Lang::Features` declares per-feature presence — absent (compile-time) vs.
+disabled (scoped runtime) vs. empty (constitutive); per-feature `LangHas*`
+bounds with compiler-enforced dependency edges).
 
 ## Specs and scopes [§dd-arch:specs]
 
@@ -797,6 +800,15 @@ decision record is [§dd-dr:naming]):
    `to_uppercase` convention: a *transition* producing a new value, not a field copy.
 7. **`make_*` for factory hooks** — hooks that construct and hand over a fresh value:
    `CallableSpec::make_invocation_parser`, `ParseDriver::make_paragraph_break_node`.
+8. **Three spellings of "off", each with its own word** ([§dd-dr:lang-features]):
+   *absent* (compile-time — the language has no such feature; `Lang::Features`),
+   *disabled* (scoped runtime — the `enabled` flag is `false`, data preserved for
+   re-enabling), *empty* (constitutive — no rules data). The words are never
+   interchanged; "disable(d)" stays reserved for the runtime action family
+   (`TokenRulesOverrides::disable_all()`), "empty" for the all-empty constructors.
+   The compile-time vocabulary carries `Lang*`/`Feature*` prefixes (`LangFeatures`,
+   `FeaturePresent`/`FeatureAbsent`, `LangHas*`) — bare `Present`/`Absent`/`Has*`
+   are too generic for the flat `techy::core` hub (principles 3–4).
 
 The **terminology stack** is a naming discipline, not just a glossary — each term is
 scoped to its stratum, and using one at the wrong level is a naming bug: **command**

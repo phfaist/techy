@@ -1,5 +1,12 @@
 # Compile-time feature gates on `Lang` — study, plan, and a critical appraisal
 
+Status update: **adopted with modifications** — the decision record is
+DESIGN_RATIONALE.md [§dd-dr:lang-features], which governs wherever this file and
+that entry disagree (notably: the feature roster grew to eight, including
+Paragraphs and ForbiddenChars; the naming here was superseded, cf.
+[§dd-dr:superseded-names]; and the §2.3 measurements are the basis on which the
+memory argument was dropped as a motivation).
+
 Status: **exploration, not authoritative.** This file lives in `dev-docs/extra/`
 (per Documentation_Structure.md: "exploration of some wilder ideas"). It defines no
 `[§dd-*]` label, amends no pillar document, and decides nothing. If any of it is

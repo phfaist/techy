@@ -1225,6 +1225,177 @@ resolution, so no vocabulary conjuring is needed) and could be reconsidered.
 landed; the default `initial_state_data` body is the `StateData::empty()` call.
 Ruling 2's loud pairing docs/guide recipe ride the later guide stage.)*
 
+#### Compile-time language features: `Lang::Features` presence declarations [§dd-dr:lang-features]
+
+Status: DECIDED (user-ruled design spec, lang-features session; adopts, with
+modifications, the exploration in `dev-docs/extra/CompileTimeFeatureGates.md`).
+
+A language declares **at compile time which parsing features it has at all**: `Lang` gains
+`type Features: LangFeatures`, where the bundle trait `LangFeatures` carries one presence
+declaration per feature (`type Whitespace: FeaturePresence`, …,
+`type Scopes: FeaturePresence`). `FeaturePresence` is a sealed two-valued vocabulary
+(sealed: closed to outside implementations via a private supertrait) — its only
+implementors are the markers `FeaturePresent` and `FeatureAbsent`. It carries
+`const PRESENT: bool` (*code* gating: a compile-time-known `false` lets the compiler
+eliminate the feature's reader branches and dispatch arms) and the generic associated
+type `Store<T>` (*storage* gating: an absent feature's rules data collapses to a
+zero-sized type). Ready-made bundles: `AllLangFeatures` (every feature present),
+`NoLangFeatures` (every feature absent). Per feature, a subtrait — `LangHasWhitespace`,
+`LangHasParagraphs`, `LangHasGroups`, `LangHasCommands`, `LangHasComments`,
+`LangHasSpecials`, `LangHasForbiddenChars`, `LangHasScopes`, blanket-implemented for
+every `Lang` whose `Features` declares that feature present — is the bound vocabulary
+for feature-requiring code. `Latexlike` and the whole `LatexlikeLang` family pin
+`Features = AllLangFeatures` (user ruling: the latexlike family uses all features; it
+does not participate in gating), and `TrivialLang`'s blanket impl supplies
+`AllLangFeatures` for every test language.
+
+This does not reopen [§dd-dr:token-rules-data] or [§dd-dr:data-vs-traits]: rule *values*
+stay plain, delta-changeable state data. Only a feature's *presence* moves to compile
+time — and presence is exactly what no runtime delta may ever change, because a language
+either has a feature or does not.
+
+Three motivations carried the decision, and one explicitly did not:
+
+1. **Field organization.** `TokenRules`'s flat fields (`enable_groups`, `groups`,
+   `temporary_groups`, `expecting_group_close`, …) are related only by adjacency and
+   naming convention; regrouping them into one sub-struct per feature
+   (`WhitespaceRules`, `ParagraphRules`, `GroupRules<L>`, `CommandRules`,
+   `CommentRules`, `SpecialsRules`, `ForbiddenCharsRules`) names the relationship and
+   stands on its own merits even with no gating at all.
+2. **Unrepresentability of unsupported constructs.** A language without groups today
+   expresses that as a runtime `bool` plus an empty `Vec` that every layer keeps
+   checking; under compile-time absence, constructing group rules for that language is
+   a type error. This is the move the crate has already made with `ModeId = ()`,
+   `StateExt = ()`, and the closed `NodeKind`.
+3. **The soft-freeze window.** [§dd-dr:stability-rubric]: until a framework builds on
+   techy in earnest, an important discovered shortcoming may still be fixed breakingly.
+   `TokenRules`'s public field layout is exactly the kind of shape that cannot be
+   changed once dependents exist; the breaking change is cheap now and never again.
+
+The **memory argument was measured and dropped**
+(`dev-docs/extra/CompileTimeFeatureGates.md`): parsing states are 4–8 % of a parse's
+peak memory footprint, and the languages that would declare features absent are
+precisely those whose states are already cheapest — gating recovers mostly-empty struct
+headers. Smaller states are a side effect here, not a motivation.
+
+**Three spellings of "off", each with its own word.** The two-spellings narrative of
+[§dd-dr:enable-flags] extends by one; the three words are never interchanged:
+
+- **absent** — compile-time: the language *has no such feature*. Declared via
+  `FeatureAbsent`; the feature's storage is a zero-sized type and its code paths are
+  eliminated at compile time. Absent wins over any runtime data; an override for an
+  absent feature is unrepresentable (below), and a documented-contract violation that
+  reaches gated machinery anyway returns an `Err` through the standard recovery path,
+  never a panic ([§dd-dr:panic-policy] rule 3).
+- **disabled** — scoped runtime: the feature's `enabled` flag is `false` while the data
+  stays in place, so a later delta can re-enable it losslessly (the
+  [§dd-dr:enable-flags] restore argument, unchanged).
+- **empty** — constitutive: the rules data itself is empty (no group rules, empty
+  whitespace set); nothing is recognized even with the flag `true`.
+
+"Disable(d)" stays reserved for the runtime action family
+(`TokenRulesOverrides::disable_all()`), "empty" for the all-empty constructors
+([§dd-dr:on-ramp-defaults]) — hence the third axis needed its own word, "absent".
+
+**The roster is exhaustive over the parsing state**: every `TokenRules` block is a
+feature, plus the scope stack — **Whitespace, Paragraphs, Groups, Commands, Comments,
+Specials, ForbiddenChars, Scopes**. Two roster points pinned:
+
+- **ForbiddenChars: two independent axes.** [§dd-dr:enable-flags] deliberately gave
+  `forbidden_chars` no runtime `enabled` flag (one trivially restorable string needs no
+  scoped-off gate). That ruling concerns the runtime axis only and is **supplemented,
+  not reversed**, here: having no runtime gate does not make the feature
+  compile-time-present for every language. ForbiddenChars is a full roster member on
+  the compile-time axis while keeping no runtime flag.
+- **Paragraphs is a feature of its own**, not a whitespace sub-flag: it owns a token
+  kind (`ParagraphBreak`), a detection function, a dispatch arm, and a driver hook
+  (`make_paragraph_break_node`). Its dependence on whitespace — today a runtime check
+  in the reader's paragraph-break detection, which bails unless *both*
+  `enable_multi_newline_paragraphs` and `enable_whitespace` are on — is promoted to a
+  compiler-enforced supertrait edge: `LangHasParagraphs: LangHasWhitespace`.
+
+**Independent declarations; dependencies as compiler-enforced edges.** Each feature is
+declared independently. The genuine dependencies among features (the feature lattice — a
+partial order: some features are built out of others) are recorded as supertrait or
+bound relations, not by closing the combination space: `LangHasParagraphs:
+LangHasWhitespace` (above); the verbatim family (`verbatim_state_delta`,
+`VerbatimArgumentParser`, `VerbatimBodyParser`) and the argument parsers that mint
+temporary group rules require `LangHasGroups` — verbatim is built out of the group
+feature: its terminator is an `Arc<GroupRule<L>>` matched by group-close machinery;
+scope mutation (`ScopeStack::push`, `ParsingStateDelta::{push_provider, scope_op}`,
+`ScopeOp` construction) requires `LangHasScopes`. **Callables deliberately do not imply
+scopes**: a driver may resolve commands from a fixed table — a fixed command set with no
+`\newcommand` is the motivating case for that independence.
+
+**Reads are total, writes are bounded, the stores stay crate-owned.** The per-feature
+accessors on `TokenRules` are the one generic read path and answer for *every* language
+— for an absent feature they return the neutral answer (not enabled; empty rule list; no
+expected close) — so generic reading code (the reader, the node parsers, the derivation
+machinery) carries no feature bounds. Only constructors, setters, and feature-requiring
+entry points carry `LangHas*` bounds. And the rules data types behind `Store<T>` remain
+crate-defined: a language chooses a feature's *presence*, never a substitute
+*implementation*. This accessor discipline is also deliberate option value: if
+implementation substitution is ever wanted later, every reader already goes through the
+accessor surface, and only constructors and the override channel would move.
+
+**Overrides are gated the same way.** `TokenRulesOverrides` mirrors the per-feature
+blocks; an override for an absent feature is unrepresentable — writing one is a compile
+error at the site that wrote it.
+
+**The present store is transparent — a requirement, not an optimization.** For a present
+feature, `Store<T>` *is* `T`, not a wrapper: a concrete language with a feature present
+writes plain struct literals for its rules, exactly as today. A wrapper here would tax
+every language author for a mechanism only absent features need.
+
+**Documented pitfall: struct update is sub-struct-granular.** With one block per
+feature, a struct-update expression replaces *whole feature blocks*: in
+`TokenRulesOverrides { groups: GroupOverrides { … }, ..disable_all() }`-style code, the
+explicit `groups:` literal replaces the *entire* groups block that `disable_all()` set
+up — the inner literal must itself spread from the intended base (the verbatim recipe
+must use `..GroupOverrides::disable()` inside its groups literal). The two-level shape
+needs two-level care; sites that must notice every new field (the exit-math restore's
+deliberately exhaustive literal) stay exhaustive at both levels.
+
+**Naming.** The absent/disabled/empty word split is above. The item names carry
+`Lang*`/`Feature*` prefixes — `LangFeatures`, `FeaturePresence`, `FeaturePresent`,
+`FeatureAbsent`, `AllLangFeatures`, `NoLangFeatures`, `LangHasWhitespace` …
+`LangHasScopes` — because `techy::core` is the flat machinery hub where sibling
+vocabulary competes ([§dd-arch:naming] principles 3–4): a bare `Present`, `Absent`,
+`Features`, or `Has*` next to `Token`/`ParsingState`/`CallableSpec` answers neither
+"present *what*?" nor "features *of what*?". The exploration document's spellings (a
+`Gate` trait with `On`/`Off` markers) were rejected: "gate" already names the *runtime*
+`enable_*` flags in the crate's documentation, and reusing it for the compile-time axis
+would fuse the two axes the absent/disabled word split exists to keep apart
+([§dd-dr:superseded-names]).
+
+Rejected alternatives: **closed tiers** (one `type Syntax` choosing among a few fixed
+bundles — chars-only, +groups/comments, +callables, +scopes): kills the combinatorial
+surface but cannot express legitimate combinations — callables-without-scopes, the
+motivating fixed-command-table case, falls between tiers; independent declarations plus
+enforced edges record the actual dependency structure instead of an approximating
+ladder. **Open per-feature implementation substitution** (a language supplying its own
+rules type per feature): the derivation memo's soundness contract is the killing flaw —
+`state_memo`'s hash and equality walk overrides field by field with `Arc`-identity
+keying, and a memo hit substitutes a previous derivation's result, so a
+language-supplied comparison that conflates two semantically different overrides yields
+silently wrong parse states (no panic, no diagnostic); that hash/equality contract must
+stay crate-owned. **Silent no-ops for absent-feature overrides** (leaving
+`TokenRulesOverrides` ungated and having `apply` skip inapplicable overrides): a delta
+author who writes an override deserves a compile error, not a quietly inert field —
+against the crate's loud-failure grain. **Per-feature associated items directly on
+`Lang`** (no bundle): breaks every `Lang` impl by eight lines instead of one and
+forfeits the one place where the presence vocabulary is named (the `Lang::NodeExts`
+bundling precedent). **Cargo features**: global per build — two languages in one binary
+could not differ — and they would scatter conditional compilation through code the crate
+keeps clean.
+
+Revisit if: a language genuinely needs to substitute its own rules *implementation* per
+feature — reopen the substitution axis only with the memo comparison kept crate-owned
+(e.g. features exposing crate-compared identity tokens rather than their own hash and
+equality); or the independent-declaration test/documentation surface becomes a real
+maintenance burden (the remedy is more ready-made bundles next to
+`AllLangFeatures`/`NoLangFeatures`, not closed tiers).
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -5673,6 +5844,15 @@ re-opens a settled argument:
   Language<L>` / `LatexlikeDriver::default()` / `StdParseDriver::default()` —
   removed (an implicit seed by the back door, and the recovery knob — the
   driver's one mandatory policy input — must be an explicit `new` argument).
+- From the lang-features design session ([§dd-dr:lang-features]): `Gate` (trait)
+  with `On`/`Off` markers — the exploration document's spellings collide with the
+  runtime "feature gate" vocabulary (the `enable_*` flags), fusing the two axes
+  the absent/disabled word split keeps apart; bare `Present`/`Absent`/`Has*`/
+  `Features` spellings — too generic for the flat `techy::core` hub ("present
+  *what*? features *of what*?"); the adopted names are
+  `FeaturePresent`/`FeatureAbsent`/`LangHas*`/`LangFeatures`; and "facet" as
+  public vocabulary — banned from all public names and documentation (internal
+  shorthand only; user ruling).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
