@@ -319,3 +319,23 @@ exported via `techy::core` (additive).
 ## Hand-off notes
 
 (state a fresh supervisor needs beyond PLAN.md + this file + git log)
+
+- Stages D and M1 are DONE on branch `lang-features` (this worktree); all gates
+  green at commit d6054f9. Next stage: M2 per PLAN.md (`Lang::Features` + const
+  gating; normalization prototype first; subtrait supertrait-vs-direct-bound
+  spelling must be verified by compile prototype and the choice recorded).
+- Seams M1 deliberately left for M2/M3: (a) per-block `pub(crate)`
+  merge_from/apply methods in techy/src/state/delta.rs are the per-feature
+  gating hooks; (b) the single generic-core field-path mutate site is
+  parsing_state.rs `derived()` temporary-group `clear()` (commented in code);
+  (c) state_memo.rs hash_key/keys_eq carry the comment that gated-absent blocks
+  hash as nothing only at M3.
+- Path convention: PLAN.md's `src/...` = `techy/src/...` (cargo workspace with
+  `techy/` and `techy-derive/`).
+- Baseline test totals to preserve while features stay all-on: 884 passed /
+  0 failed / 4 ignored (758+30+8+21+1+66; 2+2 ignored).
+- `api-baseline` branch untouched (per rules); M1's expected-breaking list is
+  recorded above and will grow at M2 (`Lang` gains an associated type — every
+  hand-written `Lang` impl breaks by one line).
+- One-time environment note: `cargo fetch` had to run unsandboxed once to
+  populate ~/.cargo (clap dev-dep); everything since runs sandboxed.
