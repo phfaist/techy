@@ -147,7 +147,9 @@ mod tests {
     use crate::scopes::ScopeStack;
     use crate::state::{TrivialLang, StateData};
     use crate::token::{
-        CommandRule, CommentRule, GroupRule, StdTokenReader, TokenRules, WhitespaceRules,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+        GroupRules, ParagraphRules, SpecialsRules, StdTokenReader, TokenRules,
+        WhitespaceRules,
     };
     use alloc::sync::Arc;
     use alloc::vec;
@@ -159,26 +161,31 @@ mod tests {
 
     fn latex_rules() -> TokenRules<TestLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n\r".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: 0,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n\r".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: 0,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 

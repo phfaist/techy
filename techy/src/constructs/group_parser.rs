@@ -123,8 +123,8 @@ pub struct GroupParser<'p, L: Lang> {
     /// interior state sets it per use — e.g. the chars-except-groups argument pattern,
     /// whose group interiors revert to the outer, unrestricted state. (The 6.5
     /// motivating consumer, the optional-group argument parser's brace protection,
-    /// since detached in favor of the state-scoped
-    /// [`TokenRules::temporary_groups`](crate::token::TokenRules) lifecycle.)
+    /// since detached in favor of the state-scoped temporary-group-rules
+    /// ([`GroupRules::temporary`](crate::token::GroupRules::temporary)) lifecycle.)
     child_states: ChildStateSpec<'p, L>,
 }
 
@@ -258,7 +258,9 @@ mod tests {
     use crate::source::Source;
     use crate::state::{ParsingState, TrivialLang, StateData};
     use crate::token::{
-        StdTokenReader, Token, TokenKind, TokenReader, TokenRules, WhitespaceRules,
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        SpecialsRules, StdTokenReader, Token, TokenKind, TokenReader, TokenRules,
+        WhitespaceRules,
     };
     use alloc::vec;
     use alloc::vec::Vec;
@@ -269,23 +271,28 @@ mod tests {
 
     fn rules() -> TokenRules<TestLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: 0,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: Vec::new(),
-            enable_comments: true,
-            comments: Vec::new(),
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: 0,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 

@@ -22,7 +22,7 @@
 //! is **data-driven** — with nested groups on, the contents keep only the base
 //! state's group rules **of the entered class** (the latexlike `{…}` content class
 //! keeps `{}`; the math delimiter pairs, being another class, drop away and `$` reads
-//! as a plain character). With nested groups off, `enable_groups` is cleared
+//! as a plain character). With nested groups off, the groups gate is disabled
 //! entirely: interior `{`/`}` become plain characters — and the *outer* close still
 //! terminates the group, because the expected-close recognizer is ungated (the
 //! verbatim-recipe precedent) — so the first close ends the group, as in pylatexenc.
@@ -51,7 +51,10 @@ use core::fmt;
 
 use crate::node::{ArgumentExt, ContentNodes};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
-use crate::state::{Lang, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{
+    CommandOverrides, CommentOverrides, Lang, ParsingStateDelta, SpecialsOverrides,
+    TokenRulesOverrides,
+};
 use crate::token::TokenKind;
 
 use super::argument_parsers::{
@@ -123,22 +126,25 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
         base: &crate::state::ParsingState<L>,
     ) -> ParsingStateDelta<L> {
         let mut rules = TokenRulesOverrides {
-            enable_commands: Some(false),
-            enable_specials: Some(false),
-            enable_comments: Some(self.comments),
+            commands: CommandOverrides::disable(),
+            specials: SpecialsOverrides::disable(),
+            comments: CommentOverrides {
+                enabled: Some(self.comments),
+                ..CommentOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         };
         if self.nested_groups {
-            rules.groups = Some(
+            rules.groups.rules = Some(
                 base.rules()
-                    .groups
+                    .group_rules()
                     .iter()
                     .filter(|rule| rule.group_type == self.group_type)
                     .cloned()
                     .collect(),
             );
         } else {
-            rules.enable_groups = Some(false);
+            rules.groups.enabled = Some(false);
         }
         ParsingStateDelta::new().rules(rules)
     }

@@ -4,7 +4,8 @@
 //! *gated* subset of state derivations — deltas that carry only token-rules overrides
 //! and/or a mode override (no ext replacement, no events, no scope ops) — keyed on
 //! the base state's `Arc` identity plus the overrides, with every rule payload taken by
-//! `Arc` identity and the `enable_*` gates and the mode override by value (modes are
+//! `Arc` identity and the per-block `enabled` gates and the mode override by value
+//! (modes are
 //! `Copy + Eq` vocabulary — value keying is *exact* for them, not conservative).
 //! Pointer-equal inputs imply value-equal inputs, and `derived()` is a pure function of
 //! (base data, delta, events), so identity keying is conservatively correct: it can
@@ -141,6 +142,12 @@ fn str_addr(arc: &Arc<str>) -> usize {
     Arc::as_ptr(arc) as *const u8 as usize
 }
 
+// hash_key/keys_eq walk the override blocks field by field, in the original
+// (pre-regrouping) field order, so hash values and equality answers are unchanged by
+// the M1 regrouping: gates and the mode by value, every rule payload by `Arc`
+// identity. Every field of every block is covered — none skipped, none added. At M3,
+// a compile-time-absent feature's block collapses to a ZST and will hash as nothing;
+// until then every block hashes unconditionally.
 fn hash_key<L: Lang, H: Hasher>(
     base: &Arc<ParsingState<L>>,
     mode: Option<L::ModeId>,
@@ -149,31 +156,31 @@ fn hash_key<L: Lang, H: Hasher>(
 ) {
     arc_addr(base).hash(h);
     mode.hash(h);
-    rules.enable_whitespace.hash(h);
-    match &rules.whitespace {
-        None => h.write_u8(0),
-        Some(ws) => {
-            h.write_u8(1);
-            str_addr(&ws.chars).hash(h);
-        }
-    }
-    rules.enable_multi_newline_paragraphs.hash(h);
-    rules.enable_groups.hash(h);
-    hash_arc_slice(&rules.groups, h);
-    hash_arc_slice(&rules.temporary_groups, h);
-    rules.enable_commands.hash(h);
-    hash_arc_slice(&rules.commands, h);
-    rules.enable_comments.hash(h);
-    hash_arc_slice(&rules.comments, h);
-    rules.enable_specials.hash(h);
-    match &rules.forbidden_chars {
+    rules.whitespace.enabled.hash(h);
+    match &rules.whitespace.chars {
         None => h.write_u8(0),
         Some(chars) => {
             h.write_u8(1);
             str_addr(chars).hash(h);
         }
     }
-    match &rules.expecting_group_close {
+    rules.paragraphs.enabled.hash(h);
+    rules.groups.enabled.hash(h);
+    hash_arc_slice(&rules.groups.rules, h);
+    hash_arc_slice(&rules.groups.temporary, h);
+    rules.commands.enabled.hash(h);
+    hash_arc_slice(&rules.commands.rules, h);
+    rules.comments.enabled.hash(h);
+    hash_arc_slice(&rules.comments.rules, h);
+    rules.specials.enabled.hash(h);
+    match &rules.forbidden_chars.chars {
+        None => h.write_u8(0),
+        Some(chars) => {
+            h.write_u8(1);
+            str_addr(chars).hash(h);
+        }
+    }
+    match &rules.groups.expecting_close {
         None => h.write_u8(0),
         Some(None) => h.write_u8(1),
         Some(Some(rule)) => {
@@ -206,19 +213,19 @@ fn keys_eq<L: Lang>(
 ) -> bool {
     Arc::ptr_eq(a_base, b_base)
         && a_mode == b_mode
-        && a.enable_whitespace == b.enable_whitespace
-        && opt_eq_by(&a.whitespace, &b.whitespace, |x, y| Arc::ptr_eq(&x.chars, &y.chars))
-        && a.enable_multi_newline_paragraphs == b.enable_multi_newline_paragraphs
-        && a.enable_groups == b.enable_groups
-        && opt_eq_by(&a.groups, &b.groups, |x, y| arc_slices_eq(x, y))
-        && opt_eq_by(&a.temporary_groups, &b.temporary_groups, |x, y| arc_slices_eq(x, y))
-        && a.enable_commands == b.enable_commands
-        && opt_eq_by(&a.commands, &b.commands, |x, y| arc_slices_eq(x, y))
-        && a.enable_comments == b.enable_comments
-        && opt_eq_by(&a.comments, &b.comments, |x, y| arc_slices_eq(x, y))
-        && a.enable_specials == b.enable_specials
-        && opt_eq_by(&a.forbidden_chars, &b.forbidden_chars, Arc::ptr_eq)
-        && opt_eq_by(&a.expecting_group_close, &b.expecting_group_close, |x, y| {
+        && a.whitespace.enabled == b.whitespace.enabled
+        && opt_eq_by(&a.whitespace.chars, &b.whitespace.chars, Arc::ptr_eq)
+        && a.paragraphs.enabled == b.paragraphs.enabled
+        && a.groups.enabled == b.groups.enabled
+        && opt_eq_by(&a.groups.rules, &b.groups.rules, |x, y| arc_slices_eq(x, y))
+        && opt_eq_by(&a.groups.temporary, &b.groups.temporary, |x, y| arc_slices_eq(x, y))
+        && a.commands.enabled == b.commands.enabled
+        && opt_eq_by(&a.commands.rules, &b.commands.rules, |x, y| arc_slices_eq(x, y))
+        && a.comments.enabled == b.comments.enabled
+        && opt_eq_by(&a.comments.rules, &b.comments.rules, |x, y| arc_slices_eq(x, y))
+        && a.specials.enabled == b.specials.enabled
+        && opt_eq_by(&a.forbidden_chars.chars, &b.forbidden_chars.chars, Arc::ptr_eq)
+        && opt_eq_by(&a.groups.expecting_close, &b.groups.expecting_close, |x, y| {
             opt_eq_by(x, y, Arc::ptr_eq)
         })
 }

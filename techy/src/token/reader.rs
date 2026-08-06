@@ -4,14 +4,15 @@
 //! `StdTokenReader` follows pylatexenc's proven `LatexTokenReader` protocol: `peek` parses
 //! the token at the current position without advancing; `move_past`/`move_to` reposition
 //! relative to a token; `move_to_pos` repositions absolutely; `next` = peek + move-past. The scanning core is decomposed into
-//! private `detect_*`/`read_*` methods, each driven by one facet of the
+//! private `detect_*`/`read_*` methods, each driven by one feature block of the
 //! [`TokenRules`] — except specials recognition, which is delegated to
 //! [`Lang::scan_specials`] (gated by the state's cached
 //! [`TriggerChars`](super::TriggerChars) filter).
 //!
 //! The whitespace primitive [`skip_whitespace`] implements the multi-newline rule in one
 //! place for pre-space, command post-space, and comment post-space alike: when
-//! [`TokenRules::enable_multi_newline_paragraphs`] is set, skipped whitespace never consumes a
+//! paragraph-break detection ([`TokenRules::paragraphs_enabled`]) is on, skipped
+//! whitespace never consumes a
 //! newline belonging to a `\n\s*\n` sequence — such a sequence always surfaces as a
 //! [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
 
@@ -27,7 +28,7 @@ use super::error::{
     EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
     TokenResult,
 };
-use super::rules::{CommandRule, TokenRules, WhitespaceRules};
+use super::rules::{CommandRule, TokenRules};
 use super::token::{Token, TokenKind};
 
 /// The token-reading protocol — the behavior extension point for genuinely different
@@ -90,13 +91,13 @@ pub trait TokenReader<'s, L: Lang> {
 /// caller-contract violation and panics, in all builds — one of the crate's few
 /// deliberate panics (see the [crate-level Panics list](crate#panics)).
 ///
-/// **The multi-newline rule** (`TokenRules::enable_multi_newline_paragraphs`): skipped
+/// **The multi-newline rule** (`TokenRules::paragraphs_enabled`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —
 /// skipping stops right *before* the first newline of a paragraph break. This one
 /// primitive serves pre-space, command post-space, and comment post-space, which is what
 /// makes "post-space never crosses a paragraph break" hold everywhere by construction.
 pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>) -> usize {
-    if !rules.enable_whitespace {
+    if !rules.whitespace_enabled() {
         return pos;
     }
     let Some(rest) = content.get(pos..) else {
@@ -106,15 +107,15 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
             content.len()
         );
     };
-    let ws = &rules.whitespace;
+    let ws_chars = rules.whitespace_chars();
     let mut end = pos;
     for c in rest.chars() {
-        if !ws.chars.contains(c) {
+        if !ws_chars.contains(c) {
             break;
         }
         if c == '\n'
-            && rules.enable_multi_newline_paragraphs
-            && paragraph_continues(content, end + 1, ws)
+            && rules.paragraphs_enabled()
+            && paragraph_continues(content, end + 1, ws_chars)
         {
             break;
         }
@@ -125,12 +126,12 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
 
 /// Whether another newline follows within the whitespace run starting at `after_nl`
 /// (i.e. the newline just before `after_nl` opens a `\n\s*\n` paragraph sequence).
-fn paragraph_continues(content: &str, after_nl: usize, ws: &WhitespaceRules) -> bool {
+fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
     for c in content[after_nl..].chars() {
         if c == '\n' {
             return true;
         }
-        if !ws.chars.contains(c) {
+        if !ws_chars.contains(c) {
             return false;
         }
     }
@@ -234,8 +235,8 @@ impl<'s> StdTokenReader<'s> {
 
         let c = s[pos..].chars().next().expect("pos < len checked above");
 
-        if rules.enable_commands {
-            if let Some(rule) = rules.commands.iter().find(|r| c == r.escape_char) {
+        if rules.commands_enabled() {
+            if let Some(rule) = rules.command_rules().iter().find(|r| c == r.escape_char) {
                 return self.read_command(pos, pre_space, rules, rule);
             }
         }
@@ -278,7 +279,7 @@ impl<'s> StdTokenReader<'s> {
             }
         }
 
-        if rules.forbidden_chars.contains(c) {
+        if rules.forbidden_chars().contains(c) {
             let span = Span::new(pos, pos + c.len_utf8());
             let placeholder = Token::new(TokenKind::Char(c), span, pre_space);
             return Err(TokenError::new(
@@ -301,18 +302,18 @@ impl<'s> StdTokenReader<'s> {
         pre_space: Span,
         rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
-        if !rules.enable_multi_newline_paragraphs || !rules.enable_whitespace {
+        if !(rules.paragraphs_enabled() && rules.whitespace_enabled()) {
             return None;
         }
-        let ws = &rules.whitespace;
-        if !self.content[pos..].starts_with('\n') || !ws.chars.contains('\n') {
+        let ws_chars = rules.whitespace_chars();
+        if !self.content[pos..].starts_with('\n') || !ws_chars.contains('\n') {
             return None;
         }
         let mut newlines = 0usize;
         let mut end = pos;
         let mut last_nl_end = pos;
         for c in self.content[pos..].chars() {
-            if !ws.chars.contains(c) {
+            if !ws_chars.contains(c) {
                 break;
             }
             end += c.len_utf8();
@@ -328,7 +329,7 @@ impl<'s> StdTokenReader<'s> {
     }
 
     /// A `GroupOpen`/`GroupClose` token at `pos`, if a delimiter matches. The close
-    /// delimiter expected per `rules.expecting_group_close` takes precedence; otherwise
+    /// delimiter expected per `rules.expecting_group_close()` takes precedence; otherwise
     /// the longest table match wins, read as an opener when the string is ambiguous.
     fn detect_group_delimiter<L: Lang>(
         &self,
@@ -339,7 +340,7 @@ impl<'s> StdTokenReader<'s> {
         let rules = state.rules();
         let rest = &self.content[pos..];
 
-        if let Some(expected) = &rules.expecting_group_close {
+        if let Some(expected) = rules.expecting_group_close() {
             if !expected.close.is_empty() && rest.starts_with(expected.close.as_str()) {
                 let span = Span::new(pos, pos + expected.close.len());
                 return Some(Token::new(
@@ -435,13 +436,13 @@ impl<'s> StdTokenReader<'s> {
         pre_space: Span,
         rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
-        if !rules.enable_comments {
+        if !rules.comments_enabled() {
             return None;
         }
         let s = self.content;
         let rest = &s[pos..];
         let start = rules
-            .comments
+            .comment_rules()
             .iter()
             .map(|r| r.start.as_str())
             .filter(|d| !d.is_empty() && rest.starts_with(d))
@@ -508,7 +509,10 @@ mod tests {
     use crate::scopes::ScopeStack;
     use crate::spec::CallableSpec;
     use crate::state::StateData;
-    use crate::token::{CommentRule, GroupRule, SpecialsMatch, TriggerChars};
+    use crate::token::{
+        CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
+        ParagraphRules, SpecialsMatch, SpecialsRules, TriggerChars, WhitespaceRules,
+    };
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -551,29 +555,34 @@ mod tests {
     /// preset. Generic so the several test langs of this module can share it.
     fn latex_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![
-                group(BRACES, "{", "}"),
-                group(BRACKETS, "[", "]"),
-                group(MATH_INLINE, "$", "$"),
-                group(MATH_DISPLAY, "$$", "$$"),
-                group(MATH_INLINE_PAREN, r"\(", r"\)"),
-                group(MATH_DISPLAY_BRACKET, r"\[", r"\]"),
-            ],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n\r\u{000B}\u{000C}".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![
+                    group(BRACES, "{", "}"),
+                    group(BRACKETS, "[", "]"),
+                    group(MATH_INLINE, "$", "$"),
+                    group(MATH_DISPLAY, "$$", "$$"),
+                    group(MATH_INLINE_PAREN, r"\(", r"\)"),
+                    group(MATH_DISPLAY_BRACKET, r"\[", r"\]"),
+                ],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -593,6 +602,7 @@ mod tests {
     fn rule_of(group_type: u32) -> Arc<GroupRule<TestLang>> {
         latex_rules::<TestLang>()
             .groups
+            .rules
             .into_iter()
             .find(|g| g.group_type == group_type)
             .expect("class present in latex_rules")
@@ -601,7 +611,9 @@ mod tests {
     /// Rules with the given rule's close delimiter expected (as the group parser sets up
     /// when entering an ambiguously-delimited group).
     fn expecting_close(group_type: u32) -> Arc<ParsingState<TestLang>> {
-        state(TokenRules { expecting_group_close: Some(rule_of(group_type)), ..latex_rules() })
+        let mut rules = latex_rules();
+        rules.groups.expecting_close = Some(rule_of(group_type));
+        state(rules)
     }
 
     fn sp(start: usize, end: usize) -> Span {
@@ -769,15 +781,14 @@ mod tests {
     fn command_custom_name_chars() {
         let text = r"\zzz1234567890-haha_works! is a macro here";
         let mut tr = StdTokenReader::new(text);
-        let st = state(TokenRules {
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "0123456789abcdefghijklmnopqrstuvwxyz\
-                             ABCDEFGHIJKLMNOPQRSTUVWXYZ_+!-"
-                    .into(),
-            })],
-            ..latex_rules()
-        });
+        let mut rules = latex_rules();
+        rules.commands.rules = vec![Arc::new(CommandRule {
+            escape_char: '\\',
+            name_chars: "0123456789abcdefghijklmnopqrstuvwxyz\
+                         ABCDEFGHIJKLMNOPQRSTUVWXYZ_+!-"
+                .into(),
+        })];
+        let st = state(rules);
 
         let name = "zzz1234567890-haha_works!";
         assert_eq!(
@@ -799,13 +810,12 @@ mod tests {
         // Two coexisting command syntaxes: each token records which rule's escape
         // character fired (parse-time lookup disambiguates by it — DESIGN_RATIONALE [§dd-dr:tokens]).
         let names = "abcdefghijklmnopqrstuvwxyz";
-        let st = state(TokenRules {
-            commands: vec![
-                Arc::new(CommandRule { escape_char: '\\', name_chars: names.into() }),
-                Arc::new(CommandRule { escape_char: '@', name_chars: names.into() }),
-            ],
-            ..latex_rules()
-        });
+        let mut rules = latex_rules();
+        rules.commands.rules = vec![
+            Arc::new(CommandRule { escape_char: '\\', name_chars: names.into() }),
+            Arc::new(CommandRule { escape_char: '@', name_chars: names.into() }),
+        ];
+        let st = state(rules);
         let mut tr = StdTokenReader::new("\\foo @bar");
         assert_eq!(
             next(&mut tr, &st),
@@ -828,18 +838,22 @@ mod tests {
     #[test]
     fn commands_disabled_escape_is_plain_content() {
         let mut tr = StdTokenReader::new(r"\foo");
-        let st = state(TokenRules { commands: Vec::new(), ..latex_rules() });
+        let mut rules = latex_rules();
+        rules.commands.rules = Vec::new();
+        let st = state(rules);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('\\'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
     }
 
     #[test]
     fn enable_commands_off_is_the_scoped_disable() {
-        // The gate variant of the test above: the CommandRules stay in the data (a later
-        // enable_commands: Some(true) delta restores recognition without carrying them).
+        // The gate variant of the test above: the command rules stay in the data (a
+        // later enabled: Some(true) delta restores recognition without carrying them).
         let mut tr = StdTokenReader::new(r"\foo");
-        let st = state(TokenRules { enable_commands: false, ..latex_rules() });
-        assert!(!st.rules().commands.is_empty());
+        let mut rules = latex_rules();
+        rules.commands.enabled = false;
+        let st = state(rules);
+        assert!(!st.rules().command_rules().is_empty());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('\\'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
     }
@@ -1145,13 +1159,12 @@ mod tests {
     fn comment_alternative_start_string_longest_wins() {
         let text = "%!!COMMENT!! Comment here\nmore";
         let mut tr = StdTokenReader::new(text);
-        let st = state(TokenRules {
-            comments: vec![
-                Arc::new(CommentRule { start: "%".into() }),
-                Arc::new(CommentRule { start: "%!!COMMENT!!".into() }),
-            ],
-            ..latex_rules()
-        });
+        let mut rules = latex_rules();
+        rules.comments.rules = vec![
+            Arc::new(CommentRule { start: "%".into() }),
+            Arc::new(CommentRule { start: "%!!COMMENT!!".into() }),
+        ];
+        let st = state(rules);
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
@@ -1169,7 +1182,9 @@ mod tests {
     #[test]
     fn comments_disabled_percent_is_plain_content() {
         let mut tr = StdTokenReader::new("a %b");
-        let st = state(TokenRules { comments: Vec::new(), ..latex_rules() });
+        let mut rules = latex_rules();
+        rules.comments.rules = Vec::new();
+        let st = state(rules);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
         assert_eq!(next(&mut tr, &st), char_token('%', 2, sp(1, 2)));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('b'));
@@ -1178,8 +1193,10 @@ mod tests {
     #[test]
     fn enable_comments_off_is_the_scoped_disable() {
         let mut tr = StdTokenReader::new("a %b");
-        let st = state(TokenRules { enable_comments: false, ..latex_rules() });
-        assert!(!st.rules().comments.is_empty());
+        let mut rules = latex_rules();
+        rules.comments.enabled = false;
+        let st = state(rules);
+        assert!(!st.rules().comment_rules().is_empty());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
         assert_eq!(next(&mut tr, &st), char_token('%', 2, sp(1, 2)));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('b'));
@@ -1233,7 +1250,9 @@ mod tests {
     #[test]
     fn paragraph_breaks_disabled() {
         let mut tr = StdTokenReader::new("Abc\n\nNew");
-        let st = state(TokenRules { enable_multi_newline_paragraphs: false, ..latex_rules() });
+        let mut rules = latex_rules();
+        rules.paragraphs.enabled = false;
+        let st = state(rules);
         tr.move_to_pos(2);
         assert_eq!(next(&mut tr, &st), char_token('c', 2, Span::empty(2)));
         // The double newline is ordinary consumable whitespace now.
@@ -1430,7 +1449,9 @@ mod tests {
         // scan hook is unreachable and triggers read as plain content — this is what
         // makes "no specials here" delta-expressible (DESIGN_RATIONALE [§dd-dr:tokens], ex-[§dd-dr:open-questions]).
         let mut tr = StdTokenReader::new("a&b");
-        let st = specials_state(TokenRules { enable_specials: false, ..latex_rules() });
+        let mut rules = latex_rules();
+        rules.specials.enabled = false;
+        let st = specials_state(rules);
         assert_eq!(st.trigger_chars(), &TriggerChars::default());
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('&'));
@@ -1485,11 +1506,10 @@ mod tests {
     #[test]
     fn forbidden_char_error_with_recovery() {
         let mut tr = StdTokenReader::new("% forbidden here");
-        let st = state(TokenRules {
-            comments: Vec::new(),
-            forbidden_chars: "%$".into(),
-            ..latex_rules()
-        });
+        let mut rules = latex_rules();
+        rules.comments.rules = Vec::new();
+        rules.forbidden_chars.chars = "%$".into();
+        let st = state(rules);
 
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(
@@ -1567,7 +1587,9 @@ mod tests {
     #[test]
     fn whitespace_disabled_gives_character_level_content() {
         let mut tr = StdTokenReader::new("a b{");
-        let st = state(TokenRules { enable_whitespace: false, ..latex_rules() });
+        let mut rules = latex_rules();
+        rules.whitespace.enabled = false;
+        let st = state(rules);
         assert_eq!(next(&mut tr, &st), char_token('a', 0, Span::empty(0)));
         assert_eq!(next(&mut tr, &st), char_token(' ', 1, Span::empty(1)));
         assert_eq!(next(&mut tr, &st), char_token('b', 2, Span::empty(2)));
@@ -1577,13 +1599,15 @@ mod tests {
         );
     }
 
-    // --- enable_groups (the gate is baked into the prefix table) ---------------------------
+    // --- the groups gate (baked into the prefix table) -------------------------------------
 
     #[test]
     fn enable_groups_off_delimiters_are_plain_content() {
         let mut tr = StdTokenReader::new("{a}");
-        let st = state(TokenRules { enable_groups: false, ..latex_rules() });
-        assert!(!st.rules().groups.is_empty());
+        let mut rules = latex_rules();
+        rules.groups.enabled = false;
+        let st = state(rules);
+        assert!(!st.rules().group_rules().is_empty());
         assert!(st.prefix_table().match_at("{a}").is_none()); // baked-in empty table
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('{'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
@@ -1596,11 +1620,10 @@ mod tests {
         // positional data, not a feature — a group interior that disables groups
         // entirely still finds its own close, so the entered group always terminates.
         let mut tr = StdTokenReader::new("a{$");
-        let st = state(TokenRules {
-            enable_groups: false,
-            expecting_group_close: Some(rule_of(MATH_INLINE)),
-            ..latex_rules()
-        });
+        let mut rules = latex_rules();
+        rules.groups.enabled = false;
+        rules.groups.expecting_close = Some(rule_of(MATH_INLINE));
+        let st = state(rules);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
         // The table is off: `{` is plain content …
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('{'));
@@ -1782,12 +1805,12 @@ mod tests {
         assert_eq!(skip_whitespace("   \n  \n x", 0, &rules), 3);
         assert_eq!(skip_whitespace("\n\nx", 0, &rules), 0);
         // Flag off: everything is consumable.
-        let no_par: TokenRules<TestLang> =
-            TokenRules { enable_multi_newline_paragraphs: false, ..latex_rules() };
+        let mut no_par: TokenRules<TestLang> = latex_rules();
+        no_par.paragraphs.enabled = false;
         assert_eq!(skip_whitespace("   \n  \n x", 0, &no_par), 8);
         // Whitespace handling disabled: nothing is skipped.
-        let no_ws: TokenRules<TestLang> =
-            TokenRules { enable_whitespace: false, ..latex_rules() };
+        let mut no_ws: TokenRules<TestLang> = latex_rules();
+        no_ws.whitespace.enabled = false;
         assert_eq!(skip_whitespace("  x", 0, &no_ws), 0);
     }
 

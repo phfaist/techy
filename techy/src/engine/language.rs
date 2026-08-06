@@ -244,9 +244,11 @@ mod tests {
     use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeOp, ScopeStack};
     use crate::source::{MapResolver, SourceProvenance};
     use crate::spec::{CallableSpec, StdCallableSpec};
-    use crate::state::{ParsingStateDelta, StateData, TokenRulesOverrides};
+    use crate::state::{GroupOverrides, ParsingStateDelta, StateData, TokenRulesOverrides};
     use crate::token::{
-        CommandRule, CommentRule, GroupRule, Token, TokenKind, TokenRules, WhitespaceRules,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+        GroupRules, ParagraphRules, SpecialsRules, Token, TokenKind, TokenRules,
+        WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::vec;
@@ -270,23 +272,28 @@ mod tests {
         fn initial_state_data() -> StateData<Self> {
             StateData {
                 rules: TokenRules {
-                    enable_whitespace: true,
-                    whitespace: WhitespaceRules { chars: " \t\n".into() },
-                    enable_multi_newline_paragraphs: true,
-                    enable_groups: true,
-                    groups: vec![Arc::new(GroupRule {
-                        group_type: 0,
-                        open: "{".into(),
-                        close: "}".into(),
-                    })],
-                    temporary_groups: Vec::new(),
-                    enable_commands: false,
-                    commands: Vec::new(),
-                    enable_comments: true,
-                    comments: vec![Arc::new(CommentRule { start: "%".into() })],
-                    enable_specials: false,
-                    forbidden_chars: "".into(),
-                    expecting_group_close: None,
+                    whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                    paragraphs: ParagraphRules { enabled: true },
+                    groups: GroupRules {
+                        enabled: true,
+                        rules: vec![Arc::new(GroupRule {
+                            group_type: 0,
+                            open: "{".into(),
+                            close: "}".into(),
+                        })],
+                        temporary: Vec::new(),
+                        expecting_close: None,
+                    },
+                    commands: CommandRules {
+                        enabled: false,
+                        rules: Vec::new(),
+                    },
+                    comments: CommentRules {
+                        enabled: true,
+                        rules: vec![Arc::new(CommentRule { start: "%".into() })],
+                    },
+                    specials: SpecialsRules { enabled: false },
+                    forbidden_chars: ForbiddenCharsRules { chars: "".into() },
                 },
                 scopes: ScopeStack::new(),
                 mode: (),
@@ -397,12 +404,12 @@ mod tests {
         // construction: `Language::new(driver, lang_initial().derived(&delta)?)`.
         let seed = ParsingState::<DocLang>::lang_initial()
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                enable_comments: Some(false),
+                comments: crate::state::CommentOverrides::disable(),
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();
         let language = Language::new(StdParseDriver::new(Recovery::Strict, ()), seed);
-        assert!(!language.initial_state().rules().enable_comments);
+        assert!(!language.initial_state().rules().comments_enabled());
         let result = language.parse("a%b").unwrap();
         check_tree_invariants(&result.tree);
         assert_eq!(shapes(&result), ["chars(a%b)"]);
@@ -667,22 +674,27 @@ mod tests {
 
     fn macro_rules(groups: Vec<Arc<GroupRule<MacroLang>>>) -> TokenRules<MacroLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups,
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: false,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: groups,
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: false },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -707,10 +719,13 @@ mod tests {
         Arc::new(lib)
     }
 
-    /// A `groups` override keeping the seed's `{}`/`[]` and adding `extra`.
+    /// A group-rules override keeping the seed's `{}`/`[]` and adding `extra`.
     fn add_group(extra: Arc<GroupRule<MacroLang>>) -> ParsingStateDelta<MacroLang> {
         ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(vec![brace_rule(), bracket_rule(), extra]),
+            groups: GroupOverrides {
+                rules: Some(vec![brace_rule(), bracket_rule(), extra]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })
     }

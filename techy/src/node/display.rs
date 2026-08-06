@@ -144,7 +144,10 @@ mod tests {
     use crate::source::Span;
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TrivialLang};
-    use crate::token::{TokenRules, WhitespaceRules};
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        SpecialsRules, TokenRules, WhitespaceRules,
+    };
     use alloc::vec;
 
     #[derive(Debug, Clone, Copy)]
@@ -154,19 +157,24 @@ mod tests {
     fn state() -> Arc<ParsingState<PlainLang>> {
         Arc::new(ParsingState::new(StateData {
             rules: TokenRules {
-                enable_whitespace: true,
-                whitespace: WhitespaceRules { chars: " \t\n".into() },
-                enable_multi_newline_paragraphs: true,
-                enable_groups: true,
-                groups: Vec::new(),
-                temporary_groups: Vec::new(),
-                enable_commands: true,
-                commands: Vec::new(),
-                enable_comments: true,
-                comments: Vec::new(),
-                enable_specials: true,
-                forbidden_chars: "".into(),
-                expecting_group_close: None,
+                whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                paragraphs: ParagraphRules { enabled: true },
+                groups: GroupRules {
+                    enabled: true,
+                    rules: Vec::new(),
+                    temporary: Vec::new(),
+                    expecting_close: None,
+                },
+                commands: CommandRules {
+                    enabled: true,
+                    rules: Vec::new(),
+                },
+                comments: CommentRules {
+                    enabled: true,
+                    rules: Vec::new(),
+                },
+                specials: SpecialsRules { enabled: true },
+                forbidden_chars: ForbiddenCharsRules { chars: "".into() },
             },
             scopes: ScopeStack::new(),
             mode: (),

@@ -3,7 +3,9 @@
 //! a features-disabled derived state whose
 //! [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) is
 //! **replaced** by a rule whose close string is the verbatim terminator. The expected
-//! close is ungated by `enable_groups` and overrides any close expectation inherited
+//! close is ungated by the groups gate
+//! ([`GroupRules::enabled`](crate::token::GroupRules::enabled)) and overrides any
+//! close expectation inherited
 //! from an enclosing group, so it is the single recognizer left active: the body
 //! arrives as pure [`Char`](TokenKind::Char) tokens and the terminator — multi-character
 //! strings included — as one [`GroupClose`](TokenKind::GroupClose). No char-level
@@ -52,7 +54,10 @@ use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::engine::{Frame, FrameTitle};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
-use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{
+    CommandOverrides, CommentOverrides, GroupOverrides, Lang, ParagraphOverrides,
+    ParsingState, ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
+};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
@@ -114,8 +119,14 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 /// `forbidden_chars` is deliberately not touched: a character the language outlaws
 /// stays diagnosable inside verbatim content.
 pub fn verbatim_state_delta<L: Lang>(terminator: Arc<GroupRule<L>>) -> ParsingStateDelta<L> {
+    // The groups literal spreads from the *disabled* block, not from its default: a
+    // whole-block field literal replaces everything `disable_all()` set up for that
+    // block (the struct-update note on [`TokenRulesOverrides`]).
     ParsingStateDelta::new().rules(TokenRulesOverrides {
-        expecting_group_close: Some(Some(terminator)),
+        groups: GroupOverrides {
+            expecting_close: Some(Some(terminator)),
+            ..GroupOverrides::disable()
+        },
         ..TokenRulesOverrides::disable_all()
     })
 }
@@ -261,12 +272,14 @@ impl<L: Lang> VerbatimArgumentParser<L> {
     /// must be readable as a delimiter char even inside a braces group).
     fn delimiter_probe_delta(&self) -> ParsingStateDelta<L> {
         ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_multi_newline_paragraphs: Some(false),
-            enable_groups: Some(false),
-            enable_commands: Some(false),
-            enable_comments: Some(false),
-            enable_specials: Some(false),
-            expecting_group_close: Some(None),
+            paragraphs: ParagraphOverrides::disable(),
+            groups: GroupOverrides {
+                expecting_close: Some(None),
+                ..GroupOverrides::disable()
+            },
+            commands: CommandOverrides::disable(),
+            comments: CommentOverrides::disable(),
+            specials: SpecialsOverrides::disable(),
             ..TokenRulesOverrides::default()
         })
     }
@@ -625,7 +638,8 @@ mod tests {
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::StateData;
     use crate::token::{
-        CommandRule, CommentRule, StdTokenReader, TokenRules, WhitespaceRules,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenRules, WhitespaceRules,
     };
     use alloc::format;
     use alloc::string::ToString;
@@ -696,26 +710,31 @@ mod tests {
 
     fn rules() -> TokenRules<VerbLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: GT_BRACE,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: GT_BRACE,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -836,13 +855,13 @@ mod tests {
     /// pylatexenc `vps.enable_*` assertions).
     fn assert_verbatim_state(node: NodeRef<'_, VerbLang>) {
         let rules = node.parsing_state().rules();
-        assert!(!rules.enable_whitespace);
-        assert!(!rules.enable_multi_newline_paragraphs);
-        assert!(!rules.enable_groups);
-        assert!(!rules.enable_commands);
-        assert!(!rules.enable_comments);
-        assert!(!rules.enable_specials);
-        assert!(rules.expecting_group_close.is_some());
+        assert!(!rules.whitespace_enabled());
+        assert!(!rules.paragraphs_enabled());
+        assert!(!rules.groups_enabled());
+        assert!(!rules.commands_enabled());
+        assert!(!rules.comments_enabled());
+        assert!(!rules.specials_enabled());
+        assert!(rules.expecting_group_close().is_some());
     }
 
     // --- the delimited form (`\verb`) — pylatexenc test_latexnodes_parsers_verbatim
@@ -866,7 +885,7 @@ mod tests {
         assert_eq!(chars.span().range(), 6..14);
         assert_verbatim_state(chars);
         // The group wrapper records the surrounding (fully enabled) state.
-        assert!(group.parsing_state().rules().enable_commands);
+        assert!(group.parsing_state().rules().commands_enabled());
         assert_eq!(root_child(&result, 1).chars(), Some(" x"));
     }
 
@@ -1180,9 +1199,9 @@ mod tests {
             close: "@@end".into(),
         });
         let derived = state.derived(&verbatim_state_delta(Arc::clone(&rule))).unwrap();
-        assert!(!derived.rules().enable_commands);
+        assert!(!derived.rules().commands_enabled());
         assert_eq!(
-            derived.rules().expecting_group_close.as_ref().map(|r| r.close.as_str()),
+            derived.rules().expecting_group_close().map(|r| r.close.as_str()),
             Some("@@end")
         );
     }

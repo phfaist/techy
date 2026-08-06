@@ -86,7 +86,10 @@ mod tests {
     use crate::source::{Source, SourceSpan, Span, TextContent};
     use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{Lang, ParsingState, TrivialLang, StateData};
-    use crate::token::{GroupRule, TokenRules, WhitespaceRules};
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
+        ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
+    };
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -103,23 +106,28 @@ mod tests {
 
     fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: false,
             whitespace: WhitespaceRules::default(),
-            enable_multi_newline_paragraphs: false,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: GT_BRACE,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: Vec::new(),
-            enable_comments: true,
-            comments: Vec::new(),
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            paragraphs: ParagraphRules { enabled: false },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: GT_BRACE,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 

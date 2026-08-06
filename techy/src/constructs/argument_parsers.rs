@@ -54,7 +54,7 @@ use crate::node::{
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
-use crate::state::{Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{GroupOverrides, Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::ChildStateSpec;
@@ -707,7 +707,7 @@ fn probe_minted_group<'s, L: Lang>(
 ) -> ConstructParserResult<L, Option<MintedGroupMatch<'s, L>>> {
     let temporaries = |rules: Vec<Arc<GroupRule<L>>>| {
         ParsingStateDelta::new().rules(TokenRulesOverrides {
-            temporary_groups: Some(rules),
+            groups: GroupOverrides { temporary: Some(rules), ..GroupOverrides::default() },
             ..TokenRulesOverrides::default()
         })
     };
@@ -745,7 +745,7 @@ fn probe_minted_group<'s, L: Lang>(
 /// ([`any_of`](OptionalGroupArgumentParser::any_of); pylatexenc's
 /// `LatexDelimitedMultiDelimGroupParser` with `optional=True`, the
 /// `AnyDelimitedOptional` code) — installed as **temporary group rules**
-/// ([`TokenRules::temporary_groups`]) in a derived state covering the probing peek.
+/// ([`TokenRules::temporary_group_rules`]) in a derived state covering the probing peek.
 /// When the argument is present, the group's contents parse under a state keeping
 /// **only the pair actually encountered** (with one configured rule, the same state —
 /// the pylatexenc multi-delim contents subtlety comes for free; see
@@ -782,7 +782,7 @@ fn probe_minted_group<'s, L: Lang>(
 /// pylatexenc's post-hoc `unwrap_double_group` accessor hack.
 ///
 /// [`ChildStateSpec`]: super::ChildStateSpec
-/// [`TokenRules::temporary_groups`]: crate::token::TokenRules::temporary_groups
+/// [`TokenRules::temporary_group_rules`]: crate::token::TokenRules::temporary_group_rules
 pub struct OptionalGroupArgumentParser<L: Lang> {
     rules: Vec<Arc<GroupRule<L>>>,
     unwrap_lone_group: Option<L::GroupTypeId>,
@@ -1021,8 +1021,9 @@ mod tests {
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData};
     use crate::token::{
-        CommandRule, CommentRule, StdTokenReader, TokenListReader, TokenReader, TokenRules,
-        WhitespaceRules,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenListReader, TokenReader,
+        TokenRules, WhitespaceRules,
     };
     use alloc::string::ToString;
     use alloc::vec;
@@ -1093,26 +1094,31 @@ mod tests {
 
     fn rules() -> TokenRules<ArgLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: GT_BRACE,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: GT_BRACE,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -1796,7 +1802,7 @@ mod tests {
         // diagnostics), exactly like `{a]b}` anywhere else in that language.
         const GT_BRACKET: u32 = 3;
         let mut bracket_rules = rules();
-        bracket_rules.groups.push(Arc::new(GroupRule {
+        bracket_rules.groups.rules.push(Arc::new(GroupRule {
             group_type: GT_BRACKET,
             open: "[".into(),
             close: "]".into(),
@@ -2059,7 +2065,7 @@ mod tests {
         // `%b` inside the group is plain chars — and reverted after: ` %c` is a
         // comment again at the sibling level.
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_comments: Some(false),
+            comments: crate::state::CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         });
         let arg = Arc::new(
@@ -2113,7 +2119,7 @@ mod tests {
                             vec![],
                         ).unwrap();
                         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-                            enable_comments: Some(false),
+                            comments: crate::state::CommentOverrides::disable(),
                             ..TokenRulesOverrides::default()
                         });
                         Ok((id, Some(delta)))

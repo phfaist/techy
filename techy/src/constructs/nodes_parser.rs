@@ -1017,7 +1017,7 @@ where
 /// `detect_group_delimiter`), then the delimiter table. `None` when the delimiter
 /// belongs to no close rule in scope.
 fn group_close_type<L: Lang>(state: &ParsingState<L>, delim: &str) -> Option<L::GroupTypeId> {
-    if let Some(rule) = &state.rules().expecting_group_close {
+    if let Some(rule) = state.rules().expecting_group_close() {
         if rule.close == delim {
             return Some(rule.group_type);
         }
@@ -1089,9 +1089,12 @@ mod tests {
     use crate::source::{Source, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
-    use crate::state::{NodeExtTypes, TrivialLang, StateData, TokenRulesOverrides};
+    use crate::state::{
+        CommentOverrides, NodeExtTypes, TrivialLang, StateData, TokenRulesOverrides,
+    };
     use crate::token::{
-        CommandRule, CommentRule, GroupRule, SpecialsMatch, StdTokenReader, TokenError,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+        GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, StdTokenReader, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
         TriggerChars, WhitespaceRules,
     };
@@ -1248,26 +1251,31 @@ mod tests {
 
     fn rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: GT_BRACE,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: GT_BRACE,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -1716,8 +1724,8 @@ mod tests {
         // `$` closes only through `expecting_group_close` (ambiguous delimiter read as
         // an opener otherwise) — the 6.3 group parser's configuration, exercised here.
         let mut r = rules::<TestLang>();
-        r.groups.push(math_rule());
-        r.expecting_group_close = Some(math_rule());
+        r.groups.rules.push(math_rule());
+        r.groups.expecting_close = Some(math_rule());
         let st = state_with(r);
         let parsed = run_both(
             "a b$c",
@@ -1737,8 +1745,8 @@ mod tests {
         // does not match — reported as data, token unconsumed, no diagnostic (the caller
         // decides).
         let mut r = rules::<TestLang>();
-        r.groups.push(math_rule());
-        r.expecting_group_close = Some(math_rule());
+        r.groups.rules.push(math_rule());
+        r.groups.expecting_close = Some(math_rule());
         let st = state_with(r);
         let parsed = run_both(
             "ab}c",
@@ -1759,7 +1767,7 @@ mod tests {
         // be closed by a `]`: same class, different delimiter — the `close` field
         // disambiguates within a class.
         let mut r = rules::<TestLang>();
-        r.groups.push(Arc::new(GroupRule {
+        r.groups.rules.push(Arc::new(GroupRule {
             group_type: GT_BRACE,
             open: "[".into(),
             close: "]".into(),
@@ -1785,7 +1793,7 @@ mod tests {
         // GT_BRACE group: `group_type` disambiguates within a delimiter spelling. Modeled
         // by an `expecting_group_close` whose close is `}` but whose class is GT_MATH.
         let mut r = rules::<TestLang>();
-        r.expecting_group_close = Some(Arc::new(GroupRule {
+        r.groups.expecting_close = Some(Arc::new(GroupRule {
             group_type: GT_MATH,
             open: "{".into(),
             close: "}".into(),
@@ -2003,7 +2011,7 @@ mod tests {
     #[test]
     fn forbidden_char_tolerant_adopts_the_recovery_token() {
         let mut r = rules::<TestLang>();
-        r.forbidden_chars = "#".into();
+        r.forbidden_chars.chars = "#".into();
         let st = state_with(r);
         let mut reader = StdTokenReader::new("ab#cd");
         let parsed =
@@ -2026,7 +2034,7 @@ mod tests {
     #[test]
     fn forbidden_char_strict_aborts() {
         let mut r = rules::<TestLang>();
-        r.forbidden_chars = "#".into();
+        r.forbidden_chars.chars = "#".into();
         let st = state_with(r);
         let mut reader = StdTokenReader::new("ab#cd");
         let err =
@@ -2797,7 +2805,7 @@ mod tests {
                     vec![child],
                 ).unwrap();
                 let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-                    enable_comments: Some(false),
+                    comments: CommentOverrides::disable(),
                     ..TokenRulesOverrides::default()
                 });
                 Ok((id, Some(delta)))
@@ -3038,7 +3046,7 @@ mod tests {
         // token list is tokenized under the base state and cannot see the interior
         // state's reclassification.
         let mut r = rules::<TestLang>();
-        r.groups.push(math_rule());
+        r.groups.rules.push(math_rule());
         let st = state_with(r);
         let mut reader = StdTokenReader::new("a $x$ b");
         let parsed =
@@ -3134,7 +3142,7 @@ mod tests {
         // (unwinding — every level consumes or unwinds, [§dd-dr:parsers-engine]), and the stray close then
         // surfaces at this level, still unconsumed, for the root driver to adjudicate.
         let mut r = rules::<TestLang>();
-        r.groups.push(Arc::new(GroupRule {
+        r.groups.rules.push(Arc::new(GroupRule {
             group_type: GT_BRACE,
             open: "[".into(),
             close: "]".into(),
@@ -3158,7 +3166,7 @@ mod tests {
     #[test]
     fn mismatched_close_inside_a_group_strict_aborts() {
         let mut r = rules::<TestLang>();
-        r.groups.push(Arc::new(GroupRule {
+        r.groups.rules.push(Arc::new(GroupRule {
             group_type: GT_BRACE,
             open: "[".into(),
             close: "]".into(),
@@ -3255,7 +3263,7 @@ mod tests {
         // reader only: a pre-scanned list cannot see the interior reclassification.
         let full = state();
         let restricted = Arc::new(full.derived(&ParsingStateDelta::new().rules(
-            TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
+            TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
         let content = "%x{%y\n}z";
 
@@ -3300,14 +3308,14 @@ mod tests {
         // inside `[…]` (precomputed state selected by group class). Std reader only.
         const GT_OPT: u32 = 2;
         let mut r = rules::<TestLang>();
-        r.groups.push(Arc::new(GroupRule {
+        r.groups.rules.push(Arc::new(GroupRule {
             group_type: GT_OPT,
             open: "[".into(),
             close: "]".into(),
         }));
         let full = state_with(r);
         let no_comments = Arc::new(full.derived(&ParsingStateDelta::new().rules(
-            TokenRulesOverrides { enable_comments: Some(false), ..Default::default() },
+            TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
         let compute = |state: &Arc<ParsingState<TestLang>>, token: &Token<'_, TestLang>| {
             match &token.kind {
@@ -3364,8 +3372,7 @@ mod tests {
         assert_eq!(
             a.parsing_state()
                 .rules()
-                .expecting_group_close
-                .as_ref()
+                .expecting_group_close()
                 .map(|rule| rule.close.as_str()),
             Some("}")
         );
@@ -3605,7 +3612,7 @@ mod tests {
         // brace group — one root drive, three group descents, one invocation.
         let content = "{a}$m$\\m {y}";
         let mut rules = rules::<DriveLang>();
-        rules.groups.push(math_rule());
+        rules.groups.rules.push(math_rule());
         let mut scopes = ScopeStack::new();
         scopes.push(macro_library::<DriveLang>(&["m"]));
         let st = Arc::new(ParsingState::new(StateData {
@@ -3774,7 +3781,7 @@ mod tests {
         use crate::constructs::ScopeOpFailed;
 
         let mut math_rules = rules::<FailingMathLang>();
-        math_rules.groups.push(math_rule());
+        math_rules.groups.rules.push(math_rule());
         let st = state_with(math_rules);
 
         // Tolerant: the failure is reported through the recover funnel as a

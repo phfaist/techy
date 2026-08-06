@@ -387,7 +387,8 @@ pub trait Lang: Sized + 'static {
     ///   trigger silently never fires — no error, no diagnostic.
     /// - Must be a pure function of `data` — the result is cached on the frozen state
     ///   and never re-consulted.
-    /// - The `enable_specials` gate is applied by the core; the implementation need not
+    /// - The specials gate ([`SpecialsRules::enabled`](crate::token::SpecialsRules::enabled))
+    ///   is applied by the core; the implementation need not
     ///   check it.
     /// - "Rebuilt at transitions" means once per group descent, optional-argument probe,
     ///   and argument delta — keep it cheap (cache expensive derivations in an `Arc`

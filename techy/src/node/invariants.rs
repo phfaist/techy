@@ -803,7 +803,10 @@ mod tests {
     use crate::source::{Source, SourceSpan, Span};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TrivialLang};
-    use crate::token::{TokenRules, WhitespaceRules};
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        SpecialsRules, TokenRules, WhitespaceRules,
+    };
     use alloc::sync::Arc;
 
     #[derive(Debug, Clone, Copy)]
@@ -813,19 +816,24 @@ mod tests {
     fn state() -> Arc<ParsingState<PlainLang>> {
         Arc::new(ParsingState::new(StateData {
             rules: TokenRules {
-                enable_whitespace: true,
-                whitespace: WhitespaceRules { chars: " \t\n".into() },
-                enable_multi_newline_paragraphs: true,
-                enable_groups: true,
-                groups: alloc::vec::Vec::new(),
-                temporary_groups: alloc::vec::Vec::new(),
-                enable_commands: true,
-                commands: alloc::vec::Vec::new(),
-                enable_comments: true,
-                comments: alloc::vec::Vec::new(),
-                enable_specials: true,
-                forbidden_chars: "".into(),
-                expecting_group_close: None,
+                whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                paragraphs: ParagraphRules { enabled: true },
+                groups: GroupRules {
+                    enabled: true,
+                    rules: alloc::vec::Vec::new(),
+                    temporary: alloc::vec::Vec::new(),
+                    expecting_close: None,
+                },
+                commands: CommandRules {
+                    enabled: true,
+                    rules: alloc::vec::Vec::new(),
+                },
+                comments: CommentRules {
+                    enabled: true,
+                    rules: alloc::vec::Vec::new(),
+                },
+                specials: SpecialsRules { enabled: true },
+                forbidden_chars: ForbiddenCharsRules { chars: "".into() },
             },
             scopes: ScopeStack::new(),
             mode: (),

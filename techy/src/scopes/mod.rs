@@ -654,7 +654,7 @@ impl fmt::Display for ProviderCommandsShadowedByEscape {
 /// language's vocabulary, the provider's advertised names
 /// ([`SpecsProvider::iter_symbols`], unioned over every mode) are tested against
 /// the state's command escape characters
-/// ([`TokenRules::commands`](crate::token::TokenRules::commands)): when **all**
+/// ([`TokenRules::command_rules`](crate::token::TokenRules::command_rules)): when **all**
 /// (≥ 1) of them begin with an escape character, a warning is recorded at
 /// `source`'s start. Nothing is checked when commands are disabled, and providers
 /// that cannot enumerate (a [`FallbackProvider`]) are skipped — the check is a
@@ -678,11 +678,11 @@ pub fn check_provider_commands_shadowed_by_escape<L: Lang>(
     L::ModeId: ClosedVocabulary,
 {
     let rules = state.rules();
-    if !rules.enable_commands || rules.commands.is_empty() {
+    if !rules.commands_enabled() || rules.command_rules().is_empty() {
         return;
     }
     let escape_chars: Vec<char> =
-        rules.commands.iter().map(|rule| rule.escape_char).collect();
+        rules.command_rules().iter().map(|rule| rule.escape_char).collect();
 
     for provider in state.scopes().providers().iter().rev() {
         for &callable_type in L::CallableTypeId::ALL {
@@ -1686,7 +1686,10 @@ mod tests {
     use super::*;
     use crate::spec::StdCallableSpec;
     use crate::state::StateData;
-    use crate::token::{TokenError, TokenErrorKind, TokenRules, WhitespaceRules};
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        SpecialsRules, TokenError, TokenErrorKind, TokenRules, WhitespaceRules,
+    };
     use alloc::string::{String, ToString};
     use alloc::vec;
 
@@ -1699,19 +1702,24 @@ mod tests {
 
     fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: false,
             whitespace: WhitespaceRules::default(),
-            enable_multi_newline_paragraphs: false,
-            enable_groups: true,
-            groups: vec![],
-            temporary_groups: vec![],
-            enable_commands: true,
-            commands: vec![],
-            enable_comments: true,
-            comments: vec![],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            paragraphs: ParagraphRules { enabled: false },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![],
+                temporary: vec![],
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 

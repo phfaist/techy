@@ -11,7 +11,8 @@
 //! [`OptionalGroupArgumentParser`](super::OptionalGroupArgumentParser)'s
 //! bracket-balancing policy, since detached: its keep-or-revert semantics are
 //! per-level by design — decided semantics 3 below — and are now carried by the
-//! state-scoped [`TokenRules::temporary_groups`](crate::token::TokenRules) lifecycle,
+//! state-scoped temporary-group-rules
+//! ([`GroupRules::temporary`](crate::token::GroupRules::temporary)) lifecycle,
 //! which reaches every depth. The mechanism here remains for descent policies that are
 //! genuinely per-use and per-level, like the chars-except-groups motivating case.)
 //!

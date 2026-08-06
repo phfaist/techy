@@ -308,7 +308,8 @@ mod tests {
     use crate::source::MapResolver;
     use crate::state::{ParsingState, StateData, TrivialLang};
     use crate::token::{
-        CommandRule, GroupRule, TokenRules, WhitespaceRules,
+        CommandRule, CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
+        ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::vec;
@@ -333,27 +334,32 @@ mod tests {
         fn initial_state_data() -> StateData<Self> {
             StateData {
                 rules: TokenRules {
-                    enable_whitespace: true,
-                    whitespace: WhitespaceRules { chars: " \t\n".into() },
-                    enable_multi_newline_paragraphs: true,
-                    enable_groups: true,
-                    groups: vec![Arc::new(GroupRule {
-                        group_type: 0,
-                        open: "{".into(),
-                        close: "}".into(),
-                    })],
-                    temporary_groups: Vec::new(),
-                    enable_commands: true,
-                    commands: vec![Arc::new(CommandRule {
-                        escape_char: '\\',
-                        name_chars:
-                            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-                    })],
-                    enable_comments: false,
-                    comments: Vec::new(),
-                    enable_specials: false,
-                    forbidden_chars: "".into(),
-                    expecting_group_close: None,
+                    whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                    paragraphs: ParagraphRules { enabled: true },
+                    groups: GroupRules {
+                        enabled: true,
+                        rules: vec![Arc::new(GroupRule {
+                            group_type: 0,
+                            open: "{".into(),
+                            close: "}".into(),
+                        })],
+                        temporary: Vec::new(),
+                        expecting_close: None,
+                    },
+                    commands: CommandRules {
+                        enabled: true,
+                        rules: vec![Arc::new(CommandRule {
+                            escape_char: '\\',
+                            name_chars:
+                                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                        })],
+                    },
+                    comments: CommentRules {
+                        enabled: false,
+                        rules: Vec::new(),
+                    },
+                    specials: SpecialsRules { enabled: false },
+                    forbidden_chars: ForbiddenCharsRules { chars: "".into() },
                 },
                 scopes: ScopeStack::new(),
                 mode: (),

@@ -752,7 +752,8 @@ mod tests {
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TokenRulesOverrides};
     use crate::token::{
-        CommandRule, CommentRule, SpecialsMatch, StdTokenReader, Token, TokenListReader,
+        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
+        ParagraphRules, SpecialsMatch, SpecialsRules, StdTokenReader, Token, TokenListReader,
         TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
@@ -1091,7 +1092,7 @@ mod tests {
 
             // The verbatim state: every feature gate off, and the expected group close
             // *replaced* by the raw terminator. The expected close is ungated by
-            // `enable_groups` and overrides any close expectation inherited from an
+            // the groups gate and overrides any close expectation inherited from an
             // enclosing group, so it is the single recognizer left active: the body
             // arrives as pure `Char` tokens — whitespace and would-be markup included —
             // and the terminator as one `GroupClose`.
@@ -1101,13 +1102,15 @@ mod tests {
                 close: TERMINATOR.into(),
             });
             let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-                enable_whitespace: Some(false),
-                enable_multi_newline_paragraphs: Some(false),
-                enable_groups: Some(false),
-                enable_commands: Some(false),
-                enable_comments: Some(false),
-                enable_specials: Some(false),
-                expecting_group_close: Some(Some(raw_rule)),
+                whitespace: crate::state::WhitespaceOverrides::disable(),
+                paragraphs: crate::state::ParagraphOverrides::disable(),
+                groups: crate::state::GroupOverrides {
+                    expecting_close: Some(Some(raw_rule)),
+                    ..crate::state::GroupOverrides::disable()
+                },
+                commands: crate::state::CommandOverrides::disable(),
+                comments: crate::state::CommentOverrides::disable(),
+                specials: crate::state::SpecialsOverrides::disable(),
                 ..TokenRulesOverrides::default()
             });
             let verbatim_state = cx.derive_state(&delta)?;
@@ -1180,26 +1183,31 @@ mod tests {
 
     fn rules() -> TokenRules<EnvLang> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: GT_BRACE,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            })],
-            enable_comments: true,
-            comments: vec![Arc::new(CommentRule { start: "%".into() })],
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: GT_BRACE,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: vec![Arc::new(CommentRule { start: "%".into() })],
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -1273,7 +1281,7 @@ mod tests {
             env_spec(
                 vec![],
                 Some(ParsingStateDelta::new().rules(TokenRulesOverrides {
-                    enable_comments: Some(false),
+                    comments: crate::state::CommentOverrides::disable(),
                     ..TokenRulesOverrides::default()
                 })),
             ),
@@ -2048,7 +2056,7 @@ mod tests {
     #[test]
     fn verbatim_body_inside_a_group_overrides_the_inherited_close() {
         // The Action-02 pitfall: inside a braces group the interior state expects `}`
-        // (ungated by `enable_groups`), so a verbatim state that merely disabled the
+        // (ungated by the groups gate), so a verbatim state that merely disabled the
         // feature gates would still read the body's `}` as a GroupClose. The recipe
         // *replaces* the expectation with the raw terminator instead: the `}` stays
         // body content, and the enclosing group still finds its own close afterwards.

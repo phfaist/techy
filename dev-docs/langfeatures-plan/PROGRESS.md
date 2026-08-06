@@ -150,6 +150,52 @@
     `Default`" already being contradicted by WhitespaceRules's derive pre-change; left
     as-is for the reviewer's Default ruling.
 
+- **M1 implementer B** — core (non-latexlike) src migrated to the per-feature blocks.
+  THIS COMMIT IS INTERMEDIATE-RED: latexlike + integration tests pending (implementer
+  C); `cargo check` and `cargo check --tests` errors point ONLY into
+  techy/src/latexlike/** (98 at --tests, 37 lib-only); zero errors and zero warnings in
+  the migrated scope. rules.rs/delta.rs untouched (no minimal changes needed). Files
+  touched (lib + in-file unit tests): token/{reader,prefix_table,list_reader}.rs,
+  state/{parsing_state,lang}.rs, engine/{state_memo,language,mod}.rs, constructs/
+  {nodes_parser,argument_parsers,chars_group_parser,verbatim_parser,group_parser,
+  environment_parser,attached_source,child_state}.rs, scopes/mod.rs,
+  node/{mod,display,invariants}.rs. token/token.rs, state/stack.rs, engine/driver.rs
+  needed no code change (driver.rs's one doc link resolves to the accessor).
+  - Accessor-only rule: all generic-core TokenRules reads go through the accessors
+    (grep-verified: remaining `.<block>.<field>` paths in scope are #[cfg(test)]
+    construction/mutation, override-struct field paths — overrides have no accessors —
+    or the one item-d site below). reader.rs:304's dual check is now
+    `!(rules.paragraphs_enabled() && rules.whitespace_enabled())`; skip_whitespace kept
+    its `&TokenRules<L>` signature (private helper `paragraph_continues` now takes
+    `ws_chars: &str`).
+  - Item-d mutate/ownership sites kept (M2/M3 gating seams), exactly one:
+    state/parsing_state.rs `derived()` — `data.rules.groups.temporary.clear()` (the
+    temporary-group scope stripping; in-code comment added). Everything else that
+    writes rules blocks is delta application (delta.rs, not this scope) or test code.
+  - state_memo.rs hash_key/keys_eq: rewritten field-by-field in the ORIGINAL
+    (pre-regrouping) field order — same Arc-identity keying (arc_addr/str_addr/
+    Arc::ptr_eq), same coverage (old enable_whitespace ↦ whitespace.enabled, old
+    whitespace-chars payload ↦ whitespace.chars, …, expecting_close still hashed last),
+    no field dropped or added; comment added documenting order preservation and that
+    gated-absent blocks hash as nothing only at M3.
+  - Override construction updated to sub-override shapes; sites that were bare
+    `enable_X: Some(false)` now use the per-block `X::disable()` (identical values);
+    verbatim_state_delta uses the PLAN's `..GroupOverrides::disable()`-inside-groups
+    recipe verbatim (struct-update pitfall comment at the site).
+  - Behavior identity: pure reshaping; no assertion value changed (diff-audited: the
+    54 touched assert lines carry literal-for-literal identical expected values).
+  - Docs touched only where old field names appeared: stale intra-doc links/labels
+    retargeted (temporary_groups → temporary_group_rules / GroupRules::temporary;
+    TokenRules::commands → command_rules; enable_* prose → "the X gate" wording) in
+    reader/prefix_table/parsing_state/lang/scopes/child_state/group_parser/
+    argument_parsers/verbatim_parser/chars_group_parser/environment_parser. One
+    pre-existing "facet" in reader.rs module doc reworded to "feature block" (banned
+    word, was adjacent to a stale link being fixed anyway).
+  - Surprises: none structural. Test fn names still spell `enable_commands_off…` etc.
+    (names, not field paths; left for the reviewer to rule on). pylatexenc kwarg
+    mentions (`enable_comments`, `enable_groups=False`, …) kept where they name
+    pylatexenc's API, reworded where they described ours.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

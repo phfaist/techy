@@ -67,7 +67,7 @@ impl<L: Lang> StateData<L> {
 /// first use: the crate is `no_std` (`core` has no `OnceLock`, and `OnceCell` would make
 /// states non-`Sync`). Eager rebuilds are a real fraction of a transition's cost, so
 /// [`derived()`](ParsingState::derived) reuses the parent's `PrefixTable` (held behind
-/// `Arc`) whenever its inputs — `enable_groups` and the `groups` rules, by `Arc`
+/// `Arc`) whenever its inputs — the groups block's gate and rule lists, by `Arc`
 /// identity — are unchanged. No analogous generic reuse rule exists for
 /// `TriggerChars`: its inputs include `L::StateExt`, which carries no `Eq` bound (see
 /// [`Lang::specials_trigger_chars`]).
@@ -148,11 +148,11 @@ impl<L: Lang> ParsingState<L> {
     /// group rules when the delta ends their scope (below), runs
     /// [`Lang::finalize_transition`] exactly once, and freezes the result. Derived
     /// caches are rebuilt — except the [`PrefixTable`], which is reused from `self`
-    /// (an `Arc` clone) when its inputs are unchanged: same `enable_groups`, same
-    /// `groups` and `temporary_groups` rules by elementwise `Arc` identity. The
-    /// dominant transition — a group interior overriding only `expecting_group_close`,
-    /// which is deliberately not a table input — takes the reuse path. Functional
-    /// contract: `self` is never observably mutated.
+    /// (an `Arc` clone) when its inputs are unchanged: same groups gate, same `rules`
+    /// and `temporary` lists by elementwise `Arc` identity. The
+    /// dominant transition — a group interior overriding only the expected group
+    /// close, which is deliberately not a table input — takes the reuse path.
+    /// Functional contract: `self` is never observably mutated.
     ///
     /// # Fallibility
     ///
@@ -183,53 +183,60 @@ impl<L: Lang> ParsingState<L> {
     ///
     /// # Temporary group rules
     ///
-    /// [`TokenRules::temporary_groups`] is scoped in state data, and this method
+    /// [`GroupRules::temporary`](crate::token::GroupRules::temporary) is scoped in
+    /// state data, and this method
     /// enforces the scope — every group descent passes through here (installing the
-    /// entered rule as `expecting_group_close`), including hand-built deltas that never
-    /// touch the session helpers. A delta that overrides `expecting_group_close` ends
+    /// entered rule as the expected close), including hand-built deltas that never
+    /// touch the session helpers. A delta that overrides the expected close
+    /// (`expecting_close`) ends
     /// the temporaries' scope unless the installed close **is** one of the base's
     /// temporary rules (by `Arc` identity — the same-delimiter descent that keeps
     /// nested minted brackets balancing); installing any other rule, or clearing the
-    /// expectation, yields a derived state with `temporary_groups` emptied, and
+    /// expectation, yields a derived state with the `temporary` list emptied, and
     /// interior inheritance then keeps it empty for the whole subtree (brace protection
-    /// at any depth). A delta that explicitly overrides `temporary_groups` itself is
+    /// at any depth). A delta that explicitly overrides `temporary` itself is
     /// exempt — the delta author spoke. The rule is a pure function of `(base, delta)`,
     /// so identity-keyed derivation memos stay sound.
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> Result<ParsingState<L>, DeriveError<L>> {
         let mut data = self.data.clone();
         let failures = delta.apply_overrides(&mut data);
-        let ends_temporary_scope = match &delta.rules.expecting_group_close {
+        let ends_temporary_scope = match &delta.rules.groups.expecting_close {
             None => false,
             Some(installed) => !matches!(
                 installed,
                 Some(rule) if self
                     .data
                     .rules
-                    .temporary_groups
+                    .temporary_group_rules()
                     .iter()
                     .any(|temporary| Arc::ptr_eq(temporary, rule))
             ),
         };
-        if ends_temporary_scope && delta.rules.temporary_groups.is_none() {
-            data.rules.temporary_groups.clear();
+        if ends_temporary_scope && delta.rules.groups.temporary.is_none() {
+            // Scope enforcement mutates the derived data in place — one of the few
+            // by-field writes into a rules block outside delta application.
+            data.rules.groups.temporary.clear();
         }
         let finalize_error = L::finalize_transition(&mut data, self, &delta.events).err();
-        // Checked *after* finalize_transition: the customizer may rewrite `groups` too.
-        let table_inputs_unchanged = data.rules.enable_groups == self.data.rules.enable_groups
-            && data.rules.groups.len() == self.data.rules.groups.len()
+        // Checked *after* finalize_transition: the customizer may rewrite the group
+        // rules too.
+        let table_inputs_unchanged = data.rules.groups_enabled()
+            == self.data.rules.groups_enabled()
+            && data.rules.group_rules().len() == self.data.rules.group_rules().len()
             && data
                 .rules
-                .groups
+                .group_rules()
                 .iter()
-                .zip(&self.data.rules.groups)
+                .zip(self.data.rules.group_rules())
                 .all(|(new, old)| Arc::ptr_eq(new, old))
-            && data.rules.temporary_groups.len() == self.data.rules.temporary_groups.len()
+            && data.rules.temporary_group_rules().len()
+                == self.data.rules.temporary_group_rules().len()
             && data
                 .rules
-                .temporary_groups
+                .temporary_group_rules()
                 .iter()
-                .zip(&self.data.rules.temporary_groups)
+                .zip(self.data.rules.temporary_group_rules())
                 .all(|(new, old)| Arc::ptr_eq(new, old));
         let state = if table_inputs_unchanged {
             ParsingState::freeze_with_table(data, Arc::clone(&self.prefix_table))
@@ -264,15 +271,16 @@ impl<L: Lang> ParsingState<L> {
         &self.data.ext
     }
 
-    /// The delimiter-matching table derived from [`rules().groups`](TokenRules) — empty
-    /// when [`TokenRules::enable_groups`] is off (the setting is applied at freeze time).
+    /// The delimiter-matching table derived from [`rules().groups`](TokenRules::groups)
+    /// — empty
+    /// when [`TokenRules::groups_enabled`] is off (the setting is applied at freeze time).
     pub fn prefix_table(&self) -> &PrefixTable<L> {
         &self.prefix_table
     }
 
     /// The specials trigger-character filter derived via
     /// [`Lang::specials_trigger_chars`] — the empty filter when
-    /// [`TokenRules::enable_specials`] is off (the setting is applied at freeze time).
+    /// [`TokenRules::specials_enabled`] is off (the setting is applied at freeze time).
     pub fn trigger_chars(&self) -> &TriggerChars {
         &self.trigger_chars
     }
@@ -283,10 +291,10 @@ impl<L: Lang> ParsingState<L> {
     }
 
     fn freeze_with_table(data: StateData<L>, prefix_table: Arc<PrefixTable<L>>) -> ParsingState<L> {
-        // The enable_specials gate is baked in here: a disabled state stores the empty
+        // The specials gate is baked in here: a disabled state stores the empty
         // filter, so `Lang::scan_specials` is unreachable and the hot path never
-        // branches on the flag (same treatment as enable_groups in the prefix table).
-        let trigger_chars = if data.rules.enable_specials {
+        // branches on the gate (same treatment as the groups gate in the prefix table).
+        let trigger_chars = if data.rules.specials_enabled() {
             L::specials_trigger_chars(&data)
         } else {
             TriggerChars::default()
@@ -455,8 +463,14 @@ impl core::error::Error for FinalizeError {}
 mod tests {
     use super::*;
     use crate::scopes::ScopeStack;
-    use crate::state::TokenRulesOverrides;
-    use crate::token::{CommandRule, GroupRule, WhitespaceRules};
+    use crate::state::{
+        CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
+        ParagraphOverrides, TokenRulesOverrides, WhitespaceOverrides,
+    };
+    use crate::token::{
+        CommandRule, CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
+        ParagraphRules, SpecialsRules, WhitespaceRules,
+    };
     use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec;
@@ -464,26 +478,31 @@ mod tests {
 
     fn base_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: vec![Arc::new(GroupRule {
-                group_type: 0,
-                open: "{".into(),
-                close: "}".into(),
-            })],
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: vec![Arc::new(CommandRule {
-                escape_char: '\\',
-                name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
-            })],
-            enable_comments: true,
-            comments: Vec::new(),
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: vec![Arc::new(GroupRule {
+                    group_type: 0,
+                    open: "{".into(),
+                    close: "}".into(),
+                })],
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: vec![Arc::new(CommandRule {
+                    escape_char: '\\',
+                    name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
+                })],
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -499,17 +518,17 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_multi_newline_paragraphs: Some(false),
-            forbidden_chars: Some("$".into()),
+            paragraphs: ParagraphOverrides { enabled: Some(false) },
+            forbidden_chars: ForbiddenCharsOverrides { chars: Some("$".into()) },
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta).unwrap();
 
-        assert!(!derived.rules().enable_multi_newline_paragraphs);
-        assert_eq!(&*derived.rules().forbidden_chars, "$");
+        assert!(!derived.rules().paragraphs_enabled());
+        assert_eq!(derived.rules().forbidden_chars(), "$");
         // Unchanged fields kept; the original state is untouched.
-        assert_eq!(derived.rules().commands, state.rules().commands);
-        assert!(state.rules().enable_multi_newline_paragraphs);
+        assert_eq!(derived.rules().command_rules(), state.rules().command_rules());
+        assert!(state.rules().paragraphs_enabled());
     }
 
     #[test]
@@ -519,11 +538,14 @@ mod tests {
         assert!(state.prefix_table().match_at("[x").is_none());
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(vec![Arc::new(GroupRule {
-                group_type: 1,
-                open: "[".into(),
-                close: "]".into(),
-            })]),
+            groups: GroupOverrides {
+                rules: Some(vec![Arc::new(GroupRule {
+                    group_type: 1,
+                    open: "[".into(),
+                    close: "]".into(),
+                })]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta).unwrap();
@@ -536,32 +558,35 @@ mod tests {
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
 
-        // A transition that touches neither enable_groups nor groups (by Arc identity)
-        // shares the parent's table instance…
+        // A transition that touches neither the groups gate nor the group rules (by Arc
+        // identity) shares the parent's table instance…
         let same = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_comments: Some(false),
+            comments: CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(core::ptr::eq(state.prefix_table(), same.prefix_table()));
 
-        // …and so does the dominant group-interior transition (expecting_group_close is
+        // …and so does the dominant group-interior transition (the expected close is
         // deliberately not a table input)…
         let interior = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&state.rules().groups[0]))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&state.rules().group_rules()[0]))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(core::ptr::eq(state.prefix_table(), interior.prefix_table()));
 
-        // …while a groups override — even one value-equal to the current rules — builds
-        // a fresh table (reuse is keyed on Arc identity, not content).
+        // …while a group-rules override — even one value-equal to the current rules —
+        // builds a fresh table (reuse is keyed on Arc identity, not content).
         let equal_groups: Vec<Arc<GroupRule<PlainLang>>> = state
             .rules()
-            .groups
+            .group_rules()
             .iter()
             .map(|rule| Arc::new(GroupRule::clone(rule)))
             .collect();
         let rebuilt = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(equal_groups),
+            groups: GroupOverrides { rules: Some(equal_groups), ..GroupOverrides::default() },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(!core::ptr::eq(state.prefix_table(), rebuilt.prefix_table()));
@@ -574,51 +599,66 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
         let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
         let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            temporary_groups: Some(vec![Arc::clone(&temporary)]),
+            groups: GroupOverrides {
+                temporary: Some(vec![Arc::clone(&temporary)]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(with_temp.prefix_table().match_at("[x").is_some());
 
         // A delta that says nothing about the expected close carries them over…
         let untouched = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_comments: Some(false),
+            comments: CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert_eq!(untouched.rules().temporary_groups.len(), 1);
+        assert_eq!(untouched.rules().temporary_group_rules().len(), 1);
 
         // …and so does entering the temporary rule's own group (nested delimiters
         // keep balancing).
         let same_rule = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&temporary))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&temporary))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert_eq!(same_rule.rules().temporary_groups.len(), 1);
+        assert_eq!(same_rule.rules().temporary_group_rules().len(), 1);
 
         // Entering any other group ends the scope: the derived interior has no
         // temporaries (and inheritance keeps it that way for the whole subtree).
-        let brace = Arc::clone(&state.rules().groups[0]);
+        let brace = Arc::clone(&state.rules().group_rules()[0]);
         let stripped = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&brace))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&brace))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(stripped.rules().temporary_groups.is_empty());
+        assert!(stripped.rules().temporary_group_rules().is_empty());
         assert!(stripped.prefix_table().match_at("[x").is_none());
 
         // Clearing the expectation strips too.
         let cleared = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(None),
+            groups: GroupOverrides {
+                expecting_close: Some(None),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(cleared.rules().temporary_groups.is_empty());
+        assert!(cleared.rules().temporary_group_rules().is_empty());
 
         // An explicit temporaries override wins over stripping: the delta author spoke.
         let other = Arc::new(GroupRule { group_type: 8, open: "<".into(), close: ">".into() });
         let overridden = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(brace)),
-            temporary_groups: Some(vec![Arc::clone(&other)]),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(brace)),
+                temporary: Some(vec![Arc::clone(&other)]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert_eq!(overridden.rules().temporary_groups, vec![other]);
+        assert_eq!(overridden.rules().temporary_group_rules(), vec![other]);
     }
 
     #[test]
@@ -627,7 +667,10 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
         let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
         let with_temp = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            temporary_groups: Some(vec![Arc::clone(&temporary)]),
+            groups: GroupOverrides {
+                temporary: Some(vec![Arc::clone(&temporary)]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
         // Installing the temporaries rebuilt the table…
@@ -635,7 +678,10 @@ mod tests {
 
         // …the keep-path descent (into the temporary rule itself) reuses it…
         let same_rule = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&temporary))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&temporary))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(core::ptr::eq(with_temp.prefix_table(), same_rule.prefix_table()));
@@ -643,7 +689,10 @@ mod tests {
         // …and the strip-path descent rebuilds: a stale reuse here would keep
         // tokenizing the stripped delimiters.
         let stripped = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&state.rules().groups[0]))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&state.rules().group_rules()[0]))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(!core::ptr::eq(with_temp.prefix_table(), stripped.prefix_table()));
@@ -661,11 +710,11 @@ mod tests {
     fn default_initial_state_is_neutral() {
         // The default `Lang::initial_state_data`: every syntax gate off, no libraries.
         let state: ParsingState<PlainLang> = ParsingState::lang_initial();
-        assert!(!state.rules().enable_whitespace);
-        assert!(!state.rules().enable_groups);
-        assert!(!state.rules().enable_commands);
-        assert!(!state.rules().enable_comments);
-        assert!(!state.rules().enable_specials);
+        assert!(!state.rules().whitespace_enabled());
+        assert!(!state.rules().groups_enabled());
+        assert!(!state.rules().commands_enabled());
+        assert!(!state.rules().comments_enabled());
+        assert!(!state.rules().specials_enabled());
         assert!(state.scopes().is_empty());
         assert!(state.prefix_table().match_at("{x").is_none());
     }
@@ -744,7 +793,7 @@ mod tests {
     #[test]
     fn initial_freezes_the_langs_seed_data() {
         let state: ParsingState<SeededLang> = ParsingState::lang_initial();
-        assert!(state.rules().enable_groups);
+        assert!(state.rules().groups_enabled());
         // The caches are built from the seed data at freeze:
         assert!(state.prefix_table().match_at("{x").is_some());
         // Customizing the starting point goes through derived() — the finalize choke
@@ -762,18 +811,18 @@ mod tests {
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
 
         let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_commands: Some(false),
+            commands: CommandOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(!disabled.rules().enable_commands);
-        assert_eq!(disabled.rules().commands, state.rules().commands);
+        assert!(!disabled.rules().commands_enabled());
+        assert_eq!(disabled.rules().command_rules(), state.rules().command_rules());
 
         let reenabled = disabled.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_commands: Some(true),
+            commands: CommandOverrides { enabled: Some(true), ..CommandOverrides::default() },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(reenabled.rules().enable_commands);
-        assert_eq!(reenabled.rules().commands, state.rules().commands);
+        assert!(reenabled.rules().commands_enabled());
+        assert_eq!(reenabled.rules().command_rules(), state.rules().command_rules());
     }
 
     #[test]
@@ -785,14 +834,14 @@ mod tests {
         assert!(state.prefix_table().match_at("{x").is_some());
 
         let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_groups: Some(false),
+            groups: GroupOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(disabled.prefix_table().match_at("{x").is_none());
-        assert_eq!(disabled.rules().groups, state.rules().groups);
+        assert_eq!(disabled.rules().group_rules(), state.rules().group_rules());
 
         let reenabled = disabled.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_groups: Some(true),
+            groups: GroupOverrides { enabled: Some(true), ..GroupOverrides::default() },
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(reenabled.prefix_table().match_at("{x").is_some());
@@ -843,7 +892,7 @@ mod tests {
             }
             // Pure normalization: the escape char is a function of the mode. Rules are
             // Arc-shared; rewriting one is clone-on-write.
-            for rule in &mut new.rules.commands {
+            for rule in &mut new.rules.commands.rules {
                 Arc::make_mut(rule).escape_char = if new.ext.in_math { '#' } else { '\\' };
             }
             Ok(())
@@ -864,15 +913,15 @@ mod tests {
 
         let in_math = state.derived(&ParsingStateDelta::new().event(MathEvent::EnterMath)).unwrap();
         assert!(in_math.ext().in_math);
-        assert_eq!(in_math.rules().commands[0].escape_char, '#');
+        assert_eq!(in_math.rules().command_rules()[0].escape_char, '#');
 
         let out_again = in_math.derived(&ParsingStateDelta::new().event(MathEvent::LeaveMath)).unwrap();
         assert!(!out_again.ext().in_math);
-        assert_eq!(out_again.rules().commands[0].escape_char, '\\');
+        assert_eq!(out_again.rules().command_rules()[0].escape_char, '\\');
 
         // The intermediate states are untouched (functional contract).
-        assert_eq!(state.rules().commands[0].escape_char, '\\');
-        assert_eq!(in_math.rules().commands[0].escape_char, '#');
+        assert_eq!(state.rules().command_rules()[0].escape_char, '\\');
+        assert_eq!(in_math.rules().command_rules()[0].escape_char, '#');
     }
 
     #[test]
@@ -883,14 +932,14 @@ mod tests {
         let state: ParsingState<MathLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: MathState::default() });
 
-        let mut custom = base_rules::<MathLang>().commands;
+        let mut custom = base_rules::<MathLang>().commands.rules;
         Arc::make_mut(&mut custom[0]).escape_char = '@';
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            commands: Some(custom),
+            commands: CommandOverrides { rules: Some(custom), ..CommandOverrides::default() },
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta).unwrap();
-        assert_eq!(derived.rules().commands[0].escape_char, '\\');
+        assert_eq!(derived.rules().command_rules()[0].escape_char, '\\');
     }
 
     #[test]
@@ -900,7 +949,7 @@ mod tests {
         let derived = state.derived(&ParsingStateDelta::new().ext(MathState { in_math: true })).unwrap();
         assert!(derived.ext().in_math);
         // finalize also ran on the replaced ext:
-        assert_eq!(derived.rules().commands[0].escape_char, '#');
+        assert_eq!(derived.rules().command_rules()[0].escape_char, '#');
     }
 
     // --- a lang with a first-class parsing mode (Phase 7.1, DESIGN_RATIONALE [§dd-dr:parsing-state]) -----
@@ -955,7 +1004,7 @@ mod tests {
         ) -> Result<(), FinalizeError> {
             // Level normalization: comments are a text-mode feature in this toy
             // language — a pure function of the incoming mode.
-            new.rules.enable_comments = new.mode == Mode::Text;
+            new.rules.comments.enabled = new.mode == Mode::Text;
             // Edge visibility: the hook compares prev.mode() with the applied override.
             new.ext =
                 SeenEdge { entered_math: prev.mode() == Mode::Text && new.mode == Mode::Math };
@@ -1007,7 +1056,7 @@ mod tests {
         // The mechanical pin of the coherence contract, mode included.
         let seed: ParsingState<ModedLang> = ParsingState::lang_initial();
         assert_eq!(seed.mode(), Mode::Text);
-        assert!(seed.rules().enable_comments);
+        assert!(seed.rules().comments_enabled());
         let derived = seed.derived(&ParsingStateDelta::new()).unwrap();
         assert_eq!(derived.rules(), seed.rules());
         assert_eq!(derived.mode(), seed.mode());
@@ -1024,7 +1073,7 @@ mod tests {
 
         // A delta that says nothing about the mode carries it over…
         let inherited = math.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_whitespace: Some(false),
+            whitespace: WhitespaceOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert_eq!(inherited.mode(), Mode::Math);
@@ -1033,12 +1082,12 @@ mod tests {
         // transition, one finalize run.
         let combo =
             state.derived(&ParsingStateDelta::new().mode(Mode::Math).rules(TokenRulesOverrides {
-                enable_whitespace: Some(false),
+                whitespace: WhitespaceOverrides::disable(),
                 ..TokenRulesOverrides::default()
             })).unwrap();
         assert_eq!(combo.mode(), Mode::Math);
-        assert!(!combo.rules().enable_whitespace);
-        assert!(!combo.rules().enable_comments); // finalize interpreted the mode too
+        assert!(!combo.rules().whitespace_enabled());
+        assert!(!combo.rules().comments_enabled()); // finalize interpreted the mode too
     }
 
     #[test]
@@ -1048,21 +1097,21 @@ mod tests {
         // Entering math: level normalization applies (comments off), and the hook saw
         // the Text→Math edge.
         let math = state.derived(&ParsingStateDelta::new().mode(Mode::Math)).unwrap();
-        assert!(!math.rules().enable_comments);
+        assert!(!math.rules().comments_enabled());
         assert!(math.ext().entered_math);
 
         // A mode-silent transition inside math: still normalized (level, not edge)…
         let still_math = math.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_whitespace: Some(false),
+            whitespace: WhitespaceOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(!still_math.rules().enable_comments);
+        assert!(!still_math.rules().comments_enabled());
         // …and no Text→Math edge was seen (prev is already Math).
         assert!(!still_math.ext().entered_math);
 
         // Leaving math re-enables the text-mode feature (recomputed, not restored).
         let text_again = still_math.derived(&ParsingStateDelta::new().mode(Mode::Text)).unwrap();
-        assert!(text_again.rules().enable_comments);
+        assert!(text_again.rules().comments_enabled());
         assert!(!text_again.ext().entered_math);
     }
 
@@ -1159,7 +1208,7 @@ mod tests {
             .scope_op(ScopeOp::Unload { name: "nope".into() })
             .push_provider(Arc::new(Package::new("b")))
             .rules(TokenRulesOverrides {
-                enable_comments: Some(false),
+                comments: CommentOverrides::disable(),
                 ..TokenRulesOverrides::default()
             });
         let error = base.derived(&delta).unwrap_err();
@@ -1171,11 +1220,11 @@ mod tests {
             error.recovered.scopes().provider_names().collect::<Vec<_>>(),
             vec!["b", "a"]
         );
-        assert!(!error.recovered.rules().enable_comments);
+        assert!(!error.recovered.rules().comments_enabled());
         // …the carried delta is the one that was applied…
         assert_eq!(error.delta.scope_ops.len(), 3);
         // …and the base is untouched (functional contract holds on the Err path too).
         assert_eq!(base.scopes().len(), 0);
-        assert!(base.rules().enable_comments);
+        assert!(base.rules().comments_enabled());
     }
 }

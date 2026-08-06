@@ -368,7 +368,7 @@ impl<L: Lang> ParserSession<L> {
         let mut delta = driver.group_interior_delta(base, rule).unwrap_or_default();
         // The descent invariant, forced last: the interior always expects exactly the
         // entered rule's close — a driver delta cannot displace it.
-        delta.rules.expecting_group_close = Some(Some(Arc::clone(rule)));
+        delta.rules.groups.expecting_close = Some(Some(Arc::clone(rule)));
         let delta = Arc::new(delta);
         let new = Arc::new(base.derived(&delta)?);
         self.group_interior_memo.insert(
@@ -466,10 +466,13 @@ mod tests {
     use crate::node::NodeKind;
     use crate::source::{Source, Span};
     use crate::state::{
-        Lang, ParsingState, ParsingStateDelta, TrivialLang, StateData, TokenRulesOverrides,
+        CommentOverrides, GroupOverrides, Lang, ParsingState, ParsingStateDelta, TrivialLang,
+        StateData, TokenRulesOverrides,
     };
     use crate::token::{
-        GroupRule, Token, TokenKind, TokenListReader, TokenRules, WhitespaceRules,
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
+        ParagraphRules, SpecialsRules, Token, TokenKind, TokenListReader, TokenRules,
+        WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -500,19 +503,24 @@ mod tests {
 
     fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
         TokenRules {
-            enable_whitespace: true,
-            whitespace: WhitespaceRules { chars: " \t\n".into() },
-            enable_multi_newline_paragraphs: true,
-            enable_groups: true,
-            groups: Vec::new(),
-            temporary_groups: Vec::new(),
-            enable_commands: true,
-            commands: Vec::new(),
-            enable_comments: true,
-            comments: Vec::new(),
-            enable_specials: true,
-            forbidden_chars: "".into(),
-            expecting_group_close: None,
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: Vec::new(),
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            comments: CommentRules {
+                enabled: true,
+                rules: Vec::new(),
+            },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
         }
     }
 
@@ -893,7 +901,7 @@ mod tests {
     fn derived_state_is_data_equivalent_observed_and_memoizes_rules_only_deltas() {
         let base: Arc<ParsingState<ObserverLang>> = state();
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            enable_comments: Some(false),
+            comments: CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         });
         let mut session: ParserSession<ObserverLang> = ParserSession::new();
@@ -926,11 +934,17 @@ mod tests {
         // The optional-argument shape: a groups override whose Vec is rebuilt per call
         // but whose *elements* are the same Arcs — hits (elementwise identity keying).
         let delta_a = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(vec![Arc::clone(&rule)]),
+            groups: GroupOverrides {
+                rules: Some(vec![Arc::clone(&rule)]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         });
         let delta_b = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(vec![Arc::clone(&rule)]),
+            groups: GroupOverrides {
+                rules: Some(vec![Arc::clone(&rule)]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         });
         let first = session.derived_state(&ObserverDriver, &base, &delta_a).unwrap();
@@ -942,7 +956,10 @@ mod tests {
         let equal_rule: Arc<GroupRule<ObserverLang>> =
             Arc::new(GroupRule { group_type: 5, open: "[".into(), close: "]".into() });
         let delta_c = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: Some(vec![equal_rule]),
+            groups: GroupOverrides {
+                rules: Some(vec![equal_rule]),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         });
         let third = session.derived_state(&ObserverDriver, &base, &delta_c).unwrap();
@@ -971,7 +988,7 @@ mod tests {
 
         // Mode and rules overrides combine into one keyed derivation.
         let overrides = || TokenRulesOverrides {
-            enable_comments: Some(false),
+            comments: CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         };
         let combo = session.derived_state(
@@ -980,7 +997,7 @@ mod tests {
             &ParsingStateDelta::new().mode(TestMode::Math).rules(overrides()),
         ).unwrap();
         assert_eq!(combo.mode(), TestMode::Math);
-        assert!(!combo.rules().enable_comments);
+        assert!(!combo.rules().comments_enabled());
         assert!(!Arc::ptr_eq(&math, &combo)); // differs from the mode-only entry
         let combo_again = session.derived_state(
             &ObserverDriver,
@@ -1028,8 +1045,7 @@ mod tests {
         let first = session.group_interior_state(&ObserverDriver, &base, &rule).unwrap();
         assert!(first
             .rules()
-            .expecting_group_close
-            .as_ref()
+            .expecting_group_close()
             .is_some_and(|expected| Arc::ptr_eq(expected, &rule)));
 
         // Memo hit: the same interior Arc, and the transition event still observed.
@@ -1102,7 +1118,10 @@ mod tests {
                 // The delta also tries to clear the expected close — the descent
                 // invariant must win over it.
                 ParsingStateDelta::new().mode(TestMode::Math).rules(TokenRulesOverrides {
-                    expecting_group_close: Some(None),
+                    groups: GroupOverrides {
+                        expecting_close: Some(None),
+                        ..GroupOverrides::default()
+                    },
                     ..TokenRulesOverrides::default()
                 })
             })
@@ -1127,8 +1146,7 @@ mod tests {
         assert_eq!(interior.mode(), TestMode::Math);
         assert!(interior
             .rules()
-            .expecting_group_close
-            .as_ref()
+            .expecting_group_close()
             .is_some_and(|expected| Arc::ptr_eq(expected, &math_rule)));
         assert_eq!(driver.hook_runs.load(Ordering::Relaxed), 1);
 
@@ -1148,7 +1166,10 @@ mod tests {
         // delta through derived_state yields the *undecorated* interior — the two
         // maps key different operations.
         let hand_built = ParsingStateDelta::new().rules(TokenRulesOverrides {
-            expecting_group_close: Some(Some(Arc::clone(&math_rule))),
+            groups: GroupOverrides {
+                expecting_close: Some(Some(Arc::clone(&math_rule))),
+                ..GroupOverrides::default()
+            },
             ..TokenRulesOverrides::default()
         });
         let undriven = session.derived_state(&driver, &base, &hand_built).unwrap();
@@ -1359,12 +1380,11 @@ mod tests {
         assert!(error
             .recovered
             .rules()
-            .expecting_group_close
-            .as_ref()
+            .expecting_group_close()
             .is_some_and(|expected| Arc::ptr_eq(expected, &bad)));
         // The carried delta is the *merged* descent delta (op + forced close).
         assert_eq!(error.delta.scope_ops.len(), 1);
-        assert!(error.delta.rules.expecting_group_close.is_some());
+        assert!(error.delta.rules.groups.expecting_close.is_some());
         assert_eq!(session.ext.transitions, 0);
 
         // Failures are not cached: the identical descent fails afresh…
@@ -1461,7 +1481,9 @@ mod tests {
             let depth_marker: String = core::iter::repeat('d').take(stack.len()).collect();
             Some(ParsingStateDelta::new().rules(
                 crate::state::TokenRulesOverrides {
-                    forbidden_chars: Some(depth_marker.into()),
+                    forbidden_chars: crate::state::ForbiddenCharsOverrides {
+                        chars: Some(depth_marker.into()),
+                    },
                     ..Default::default()
                 },
             ))
@@ -1518,7 +1540,7 @@ mod tests {
         let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
         // Outside any scope: the lend pushes the current state (depth 1).
         let derived = cx.derive_state(&delta).unwrap();
-        assert_eq!(&*derived.rules().forbidden_chars, "d");
+        assert_eq!(derived.rules().forbidden_chars(), "d");
         // The event was removed before finalize (no refusal, no Plain count).
         assert_eq!(derived.ext().plain_events, 0);
 
@@ -1527,7 +1549,7 @@ mod tests {
         let scoped = cx.with_parsing_state(Arc::clone(&base), |cx| {
             cx.with_parsing_state(Arc::clone(&base), |cx| cx.derive_state(&delta))
         });
-        assert_eq!(&*scoped.unwrap().rules().forbidden_chars, "dd");
+        assert_eq!(scoped.unwrap().rules().forbidden_chars(), "dd");
 
         // A current state that evolved past the innermost entry is lent on top.
         let evolved = Arc::new(base.derived(&ParsingStateDelta::new()).unwrap());
@@ -1535,7 +1557,7 @@ mod tests {
             cx.state = Arc::clone(&evolved); // a sibling after-effect
             cx.derive_state(&delta)
         });
-        assert_eq!(&*lent.unwrap().rules().forbidden_chars, "dd");
+        assert_eq!(lent.unwrap().rules().forbidden_chars(), "dd");
         assert_eq!(session.state_stack().len(), 0);
     }
 
@@ -1562,7 +1584,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mixed.ext().plain_events, 1);
-        assert_eq!(&*mixed.rules().forbidden_chars, "d");
+        assert_eq!(mixed.rules().forbidden_chars(), "d");
 
         // …and the delta's own explicit override wins over the event's patch
         // (the delta author spoke).
@@ -1570,13 +1592,15 @@ mod tests {
             .derive_state(
                 &ParsingStateDelta::new().event(CtxEvent::NeedsContext).rules(
                     crate::state::TokenRulesOverrides {
-                        forbidden_chars: Some("A".into()),
+                        forbidden_chars: crate::state::ForbiddenCharsOverrides {
+                            chars: Some("A".into()),
+                        },
                         ..Default::default()
                     },
                 ),
             )
             .unwrap();
-        assert_eq!(&*authored.rules().forbidden_chars, "A");
+        assert_eq!(authored.rules().forbidden_chars(), "A");
     }
 
     #[test]
