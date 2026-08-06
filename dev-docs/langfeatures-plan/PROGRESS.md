@@ -88,6 +88,68 @@
   (`Lang::Features` excluded); Gate/On/Off rejection scoped to item names, prose
   "gating" unaffected.
 
+- **M1 implementer A** — rules.rs + delta.rs regrouped per PLAN M1. THIS COMMIT IS
+  INTERMEDIATE-RED: core migration pending (implementers B and C); all `cargo check`
+  primary errors point into their files (state_memo, parsing_state, reader,
+  prefix_table, list_reader, constructs/*, scopes, engine, latexlike); zero primary
+  errors/warnings in rules.rs or delta.rs. Files touched: techy/src/token/rules.rs,
+  techy/src/state/delta.rs, plus minimal facade re-export lines only in
+  techy/src/token/mod.rs, techy/src/state/mod.rs, techy/src/core/mod.rs (new types
+  mirror the existing WhitespaceRules/TokenRulesOverrides paths; one canonical public
+  path each, via techy::core).
+  - Rules sub-structs (rules.rs): `WhitespaceRules { enabled, chars }` (kept its
+    existing `Default` derive — reviewer to rule keep-or-drop), `ParagraphRules
+    { enabled }`, `GroupRules<L> { enabled, rules, temporary, expecting_close }`
+    (manual Clone/Debug/PartialEq/Eq like TokenRules, to avoid `L:` bounds),
+    `CommandRules { enabled, rules }`, `CommentRules { enabled, rules }`,
+    `SpecialsRules { enabled }`, `ForbiddenCharsRules { chars }` (no `enabled`,
+    per [§dd-dr:enable-flags]). Each has `empty()`; `TokenRules::empty()` now composes
+    them (same value as before). TokenRules fields: whitespace, paragraphs, groups,
+    commands, comments, specials, forbidden_chars — all pub.
+  - Accessors on TokenRules, names exactly as spec'd (checked against
+    [§dd-arch:naming]; no deviations): whitespace_enabled() -> bool,
+    whitespace_chars() -> &str, paragraphs_enabled() -> bool, groups_enabled() -> bool,
+    group_rules() -> &[Arc<GroupRule<L>>], temporary_group_rules() ->
+    &[Arc<GroupRule<L>>], expecting_group_close() -> Option<&Arc<GroupRule<L>>>,
+    commands_enabled() -> bool, command_rules() -> &[Arc<CommandRule>],
+    comments_enabled() -> bool, comment_rules() -> &[Arc<CommentRule>],
+    specials_enabled() -> bool, forbidden_chars() -> &str. Return-type choices: `&str`
+    (not `&Arc<str>`) for whitespace_chars/forbidden_chars — generic read sites use
+    `.contains(c)`/deref-to-str only; Arc-cloning sites are construction sites
+    (latexlike), which use field paths per the plan's accessor rule, and `&str` has a
+    trivial neutral answer for M3. Note: `forbidden_chars` is both a field (the block)
+    and a method (the chars) — spec-mandated names; Rust namespaces keep them apart.
+  - Overrides (delta.rs — TokenRulesOverrides lives there, so the seven sub-override
+    structs do too): WhitespaceOverrides { enabled, chars }, ParagraphOverrides
+    { enabled }, GroupOverrides<L> { enabled, rules, temporary, expecting_close }
+    (manual impls incl. Default, no `L:` bounds), CommandOverrides/CommentOverrides
+    { enabled, rules }, SpecialsOverrides { enabled }, ForbiddenCharsOverrides
+    { chars }. All-None Default on each; `disable()` on the six gated blocks
+    (ForbiddenCharsOverrides excepted). `disable_all()` = the six `disable()`s +
+    ForbiddenCharsOverrides::default() — exact old semantics (same six gates, nothing
+    else). merge_from/apply stay on TokenRulesOverrides (same visibility as before) and
+    now delegate to pub(crate) per-block merge_from/apply — leaf-level semantics
+    identical, and the per-block methods give M2 a natural per-feature gating seam.
+  - Doc redistribution: every old per-field rustdoc moved verbatim-modulo-links onto
+    the sub-struct fields (expecting_close keeps its "positional data, not gated"
+    contract; temporary keeps the full scoped-lifecycle narrative). TokenRules keeps
+    the detection-priority contract and the two-spellings-of-off narrative (renamed
+    section "Per-feature `enabled` gates"); third spelling referenced only in a non-doc
+    `//` comment pointing at [§dd-dr:lang-features] (public rustdoc never cites dd-dr
+    labels — matches existing crate practice). Struct-update pitfall documented on
+    TokenRulesOverrides (own section) with the `..GroupOverrides::disable()` recipe,
+    and cross-referenced from disable_all()'s doc. Two glosses updated to the amended
+    [§dd-dr:enable-flags] vocabulary: constitutive off now glossed "(no rules data)",
+    not "(the language has no such feature)" — that wording now defines *absent*.
+    CommandRule/CommentRule docs: "an empty [rules list] disables recognition" reworded
+    to "means no … recognition" (word discipline: "disabled" = flag off only).
+  - Tests: delta.rs's disable_all test updated to the new field paths — assertion
+    values unchanged (Some(false) x6, default+flips equality). rules.rs had no unit
+    tests before and has none now.
+  - Surprises: none beyond the module-doc sentence "none of these types implement
+    `Default`" already being contradicted by WhitespaceRules's derive pre-change; left
+    as-is for the reviewer's Default ruling.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

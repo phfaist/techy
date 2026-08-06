@@ -5,77 +5,317 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::scopes::{ScopeOp, ScopeOpError, SpecsProvider};
-use crate::token::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};
+use crate::token::{
+    CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+    GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
+};
 
 use super::lang::Lang;
 use super::parsing_state::StateData;
 
+/// Optional overrides of the whitespace block ([`WhitespaceRules`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WhitespaceOverrides {
+    /// Override the whitespace-handling gate.
+    pub enabled: Option<bool>,
+    /// Replace the whitespace character set.
+    pub chars: Option<Arc<str>>,
+}
+
+impl WhitespaceOverrides {
+    /// The whitespace block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`, everything else untouched.
+    pub fn disable() -> WhitespaceOverrides {
+        WhitespaceOverrides { enabled: Some(false), ..WhitespaceOverrides::default() }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: WhitespaceOverrides) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+        if let Some(v) = stronger.chars {
+            self.chars = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut WhitespaceRules) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+        if let Some(v) = &self.chars {
+            rules.chars = v.clone();
+        }
+    }
+}
+
+/// Optional overrides of the paragraphs block ([`ParagraphRules`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParagraphOverrides {
+    /// Override the paragraph-break gate.
+    pub enabled: Option<bool>,
+}
+
+impl ParagraphOverrides {
+    /// The paragraphs block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`.
+    pub fn disable() -> ParagraphOverrides {
+        ParagraphOverrides { enabled: Some(false) }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: ParagraphOverrides) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut ParagraphRules) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+    }
+}
+
+/// Optional overrides of the groups block ([`GroupRules`]).
+pub struct GroupOverrides<L: Lang> {
+    /// Override the group-delimiter gate.
+    pub enabled: Option<bool>,
+    /// Replace the recognizable group delimiter rules.
+    pub rules: Option<Vec<Arc<GroupRule<L>>>>,
+    /// Replace the temporary (scoped-lifecycle) group rules
+    /// ([`GroupRules::temporary`]). An explicit override wins over the
+    /// derivation-path stripping rule: a delta that sets this field *and* installs an
+    /// [`expecting_close`](GroupRules::expecting_close) keeps exactly the
+    /// list it names (see [`ParsingState::derived`](super::ParsingState::derived)).
+    pub temporary: Option<Vec<Arc<GroupRule<L>>>>,
+    /// Override the expected group close (`Some(None)` clears it).
+    pub expecting_close: Option<Option<Arc<GroupRule<L>>>>,
+}
+
+impl<L: Lang> GroupOverrides<L> {
+    /// The groups block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`, everything else untouched — the base a
+    /// takeover parser's groups literal spreads from (see the struct-update note on
+    /// [`TokenRulesOverrides`]).
+    pub fn disable() -> GroupOverrides<L> {
+        GroupOverrides { enabled: Some(false), ..GroupOverrides::default() }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: GroupOverrides<L>) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+        if let Some(v) = stronger.rules {
+            self.rules = Some(v);
+        }
+        if let Some(v) = stronger.temporary {
+            self.temporary = Some(v);
+        }
+        if let Some(v) = stronger.expecting_close {
+            self.expecting_close = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut GroupRules<L>) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+        if let Some(v) = &self.rules {
+            rules.rules = v.clone();
+        }
+        if let Some(v) = &self.temporary {
+            rules.temporary = v.clone();
+        }
+        if let Some(v) = &self.expecting_close {
+            rules.expecting_close = v.clone();
+        }
+    }
+}
+
+/// Optional overrides of the commands block ([`CommandRules`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandOverrides {
+    /// Override the command-syntax gate.
+    pub enabled: Option<bool>,
+    /// Replace the command syntaxes.
+    pub rules: Option<Vec<Arc<CommandRule>>>,
+}
+
+impl CommandOverrides {
+    /// The commands block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`, everything else untouched.
+    pub fn disable() -> CommandOverrides {
+        CommandOverrides { enabled: Some(false), ..CommandOverrides::default() }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: CommandOverrides) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+        if let Some(v) = stronger.rules {
+            self.rules = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut CommandRules) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+        if let Some(v) = &self.rules {
+            rules.rules = v.clone();
+        }
+    }
+}
+
+/// Optional overrides of the comments block ([`CommentRules`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommentOverrides {
+    /// Override the comment-syntax gate.
+    pub enabled: Option<bool>,
+    /// Replace the comment syntaxes.
+    pub rules: Option<Vec<Arc<CommentRule>>>,
+}
+
+impl CommentOverrides {
+    /// The comments block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`, everything else untouched.
+    pub fn disable() -> CommentOverrides {
+        CommentOverrides { enabled: Some(false), ..CommentOverrides::default() }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: CommentOverrides) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+        if let Some(v) = stronger.rules {
+            self.rules = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut CommentRules) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+        if let Some(v) = &self.rules {
+            rules.rules = v.clone();
+        }
+    }
+}
+
+/// Optional overrides of the specials block ([`SpecialsRules`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpecialsOverrides {
+    /// Override the specials-scan gate.
+    pub enabled: Option<bool>,
+}
+
+impl SpecialsOverrides {
+    /// The specials block of [`TokenRulesOverrides::disable_all`]:
+    /// `enabled: Some(false)`.
+    pub fn disable() -> SpecialsOverrides {
+        SpecialsOverrides { enabled: Some(false) }
+    }
+
+    pub(crate) fn merge_from(&mut self, stronger: SpecialsOverrides) {
+        if let Some(v) = stronger.enabled {
+            self.enabled = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut SpecialsRules) {
+        if let Some(v) = self.enabled {
+            rules.enabled = v;
+        }
+    }
+}
+
+/// Optional overrides of the forbidden-characters block ([`ForbiddenCharsRules`]).
+/// No `enabled` override — the block has no gate (one trivially restorable string).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForbiddenCharsOverrides {
+    /// Replace the forbidden-character set.
+    pub chars: Option<Arc<str>>,
+}
+
+impl ForbiddenCharsOverrides {
+    pub(crate) fn merge_from(&mut self, stronger: ForbiddenCharsOverrides) {
+        if let Some(v) = stronger.chars {
+            self.chars = Some(v);
+        }
+    }
+
+    pub(crate) fn apply(&self, rules: &mut ForbiddenCharsRules) {
+        if let Some(v) = &self.chars {
+            rules.chars = v.clone();
+        }
+    }
+}
+
 /// Typed optional overrides of [`TokenRules`] — pylatexenc's "changed kwargs", reified.
+/// One override block per feature block, each a struct of `Option` fields:
 /// `None` = leave unchanged; `Some(value)` = replace the whole field.
 ///
-/// The `enable_*` gates override independently of their data: disabling a feature for a
-/// scope is `enable_commands: Some(false)`, and a later `Some(true)` re-enables it with
-/// the *original* rules intact — no party has to carry them.
+/// The `enabled` gates override independently of their data: disabling a feature for a
+/// scope is `commands: CommandOverrides::disable()`, and a later
+/// `enabled: Some(true)` re-enables it with the *original* rules intact — no party has
+/// to carry them.
 ///
 /// Collections are replaced wholesale, not merged: a delta that wants "current group
 /// rules plus one more" is built by the party that can see the current state (typically
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
 /// override itself would put policy decisions inside the derivation point.
+///
+/// # Struct update replaces whole feature blocks
+///
+/// A struct-update expression works at field granularity, and here every field is a
+/// whole feature block: in
+/// `TokenRulesOverrides { groups: GroupOverrides { … }, ..TokenRulesOverrides::disable_all() }`
+/// the explicit `groups:` literal replaces the *entire* groups block that
+/// [`disable_all`](Self::disable_all) set up — including its `enabled: Some(false)`.
+/// An inner literal must itself spread from the intended base: a takeover parser that
+/// wants "everything disabled, plus an expected close" writes
+/// `groups: GroupOverrides { expecting_close: Some(Some(rule)), ..GroupOverrides::disable() }`
+/// inside the outer literal.
 pub struct TokenRulesOverrides<L: Lang> {
-    /// Override the whitespace-handling gate.
-    pub enable_whitespace: Option<bool>,
-    /// Replace the whitespace rules.
-    pub whitespace: Option<WhitespaceRules>,
-    /// Override the paragraph-break gate.
-    pub enable_multi_newline_paragraphs: Option<bool>,
-    /// Override the group-delimiter gate.
-    pub enable_groups: Option<bool>,
-    /// Replace the recognizable group delimiter rules.
-    pub groups: Option<Vec<Arc<GroupRule<L>>>>,
-    /// Replace the temporary (scoped-lifecycle) group rules
-    /// ([`TokenRules::temporary_groups`]). An explicit override wins over the
-    /// derivation-path stripping rule: a delta that sets this field *and* installs an
-    /// [`expecting_group_close`](TokenRules::expecting_group_close) keeps exactly the
-    /// list it names (see [`ParsingState::derived`](super::ParsingState::derived)).
-    pub temporary_groups: Option<Vec<Arc<GroupRule<L>>>>,
-    /// Override the command-syntax gate.
-    pub enable_commands: Option<bool>,
-    /// Replace the command syntaxes.
-    pub commands: Option<Vec<Arc<CommandRule>>>,
-    /// Override the comment-syntax gate.
-    pub enable_comments: Option<bool>,
-    /// Replace the comment syntaxes.
-    pub comments: Option<Vec<Arc<CommentRule>>>,
-    /// Override the specials-scan gate.
-    pub enable_specials: Option<bool>,
-    /// Replace the forbidden-character set.
-    pub forbidden_chars: Option<Arc<str>>,
-    /// Override the expected group close (`Some(None)` clears it).
-    pub expecting_group_close: Option<Option<Arc<GroupRule<L>>>>,
+    /// Overrides of the whitespace block.
+    pub whitespace: WhitespaceOverrides,
+    /// Overrides of the paragraphs block.
+    pub paragraphs: ParagraphOverrides,
+    /// Overrides of the groups block.
+    pub groups: GroupOverrides<L>,
+    /// Overrides of the commands block.
+    pub commands: CommandOverrides,
+    /// Overrides of the comments block.
+    pub comments: CommentOverrides,
+    /// Overrides of the specials block.
+    pub specials: SpecialsOverrides,
+    /// Overrides of the forbidden-characters block.
+    pub forbidden_chars: ForbiddenCharsOverrides,
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
-    /// The overrides value with all six `enable_*` gates `Some(false)` (whitespace,
+    /// The overrides value with all six `enabled` gates `Some(false)` (whitespace,
     /// multi-newline paragraphs, groups, commands, comments, specials) and every other
     /// field untouched — the raw-state block a rest-of-line or verbatim-like takeover
     /// parser starts from. It composes: tweak fields afterwards, e.g. install the
     /// terminator that ends the raw region
     /// ([`verbatim_state_delta`](crate::constructs::verbatim_state_delta) is exactly
-    /// this plus its [`expecting_group_close`](TokenRules::expecting_group_close)).
+    /// this plus its [`expecting_close`](GroupRules::expecting_close)) — minding the
+    /// whole-block struct-update note above: the tweak spreads from the block's
+    /// [`disable()`](GroupOverrides::disable), not from its default.
     ///
     /// This is the *scoped* off — the gates flip while the rules data stays in place,
     /// so a later delta can re-enable a feature with its original rules. The
-    /// *constitutive* off (a language without the features at all) is
+    /// *constitutive* off (no rules data at all) is
     /// [`TokenRules::empty`](crate::token::TokenRules::empty).
     pub fn disable_all() -> TokenRulesOverrides<L> {
         TokenRulesOverrides {
-            enable_whitespace: Some(false),
-            enable_multi_newline_paragraphs: Some(false),
-            enable_groups: Some(false),
-            enable_commands: Some(false),
-            enable_comments: Some(false),
-            enable_specials: Some(false),
-            ..TokenRulesOverrides::default()
+            whitespace: WhitespaceOverrides::disable(),
+            paragraphs: ParagraphOverrides::disable(),
+            groups: GroupOverrides::disable(),
+            commands: CommandOverrides::disable(),
+            comments: CommentOverrides::disable(),
+            specials: SpecialsOverrides::disable(),
+            forbidden_chars: ForbiddenCharsOverrides::default(),
         }
     }
 
@@ -84,71 +324,24 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// composition used by event lowering
     /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)).
     pub(crate) fn merge_from(&mut self, stronger: TokenRulesOverrides<L>) {
-        macro_rules! take_stronger {
-            ($($field:ident),* $(,)?) => {
-                $(if let Some(value) = stronger.$field {
-                    self.$field = Some(value);
-                })*
-            };
-        }
-        take_stronger!(
-            enable_whitespace,
-            whitespace,
-            enable_multi_newline_paragraphs,
-            enable_groups,
-            groups,
-            temporary_groups,
-            enable_commands,
-            commands,
-            enable_comments,
-            comments,
-            enable_specials,
-            forbidden_chars,
-            expecting_group_close,
-        );
+        self.whitespace.merge_from(stronger.whitespace);
+        self.paragraphs.merge_from(stronger.paragraphs);
+        self.groups.merge_from(stronger.groups);
+        self.commands.merge_from(stronger.commands);
+        self.comments.merge_from(stronger.comments);
+        self.specials.merge_from(stronger.specials);
+        self.forbidden_chars.merge_from(stronger.forbidden_chars);
     }
 
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
     pub fn apply(&self, rules: &mut TokenRules<L>) {
-        if let Some(v) = self.enable_whitespace {
-            rules.enable_whitespace = v;
-        }
-        if let Some(v) = &self.whitespace {
-            rules.whitespace = v.clone();
-        }
-        if let Some(v) = self.enable_multi_newline_paragraphs {
-            rules.enable_multi_newline_paragraphs = v;
-        }
-        if let Some(v) = self.enable_groups {
-            rules.enable_groups = v;
-        }
-        if let Some(v) = &self.groups {
-            rules.groups = v.clone();
-        }
-        if let Some(v) = &self.temporary_groups {
-            rules.temporary_groups = v.clone();
-        }
-        if let Some(v) = self.enable_commands {
-            rules.enable_commands = v;
-        }
-        if let Some(v) = &self.commands {
-            rules.commands = v.clone();
-        }
-        if let Some(v) = self.enable_comments {
-            rules.enable_comments = v;
-        }
-        if let Some(v) = &self.comments {
-            rules.comments = v.clone();
-        }
-        if let Some(v) = self.enable_specials {
-            rules.enable_specials = v;
-        }
-        if let Some(v) = &self.forbidden_chars {
-            rules.forbidden_chars = v.clone();
-        }
-        if let Some(v) = &self.expecting_group_close {
-            rules.expecting_group_close = v.clone();
-        }
+        self.whitespace.apply(&mut rules.whitespace);
+        self.paragraphs.apply(&mut rules.paragraphs);
+        self.groups.apply(&mut rules.groups);
+        self.commands.apply(&mut rules.commands);
+        self.comments.apply(&mut rules.comments);
+        self.specials.apply(&mut rules.specials);
+        self.forbidden_chars.apply(&mut rules.forbidden_chars);
     }
 }
 
@@ -306,22 +499,60 @@ impl<L: Lang> Default for ParsingStateDelta<L> {
 
 // Manual impls to avoid spurious `L:` bounds (associated types are bounded in `Lang`).
 
+impl<L: Lang> Default for GroupOverrides<L> {
+    fn default() -> Self {
+        GroupOverrides {
+            enabled: None,
+            rules: None,
+            temporary: None,
+            expecting_close: None,
+        }
+    }
+}
+
+impl<L: Lang> Clone for GroupOverrides<L> {
+    fn clone(&self) -> Self {
+        GroupOverrides {
+            enabled: self.enabled,
+            rules: self.rules.clone(),
+            temporary: self.temporary.clone(),
+            expecting_close: self.expecting_close.clone(),
+        }
+    }
+}
+
+impl<L: Lang> fmt::Debug for GroupOverrides<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GroupOverrides")
+            .field("enabled", &self.enabled)
+            .field("rules", &self.rules)
+            .field("temporary", &self.temporary)
+            .field("expecting_close", &self.expecting_close)
+            .finish()
+    }
+}
+
+impl<L: Lang> PartialEq for GroupOverrides<L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.rules == other.rules
+            && self.temporary == other.temporary
+            && self.expecting_close == other.expecting_close
+    }
+}
+
+impl<L: Lang> Eq for GroupOverrides<L> {}
+
 impl<L: Lang> Default for TokenRulesOverrides<L> {
     fn default() -> Self {
         TokenRulesOverrides {
-            enable_whitespace: None,
-            whitespace: None,
-            enable_multi_newline_paragraphs: None,
-            enable_groups: None,
-            groups: None,
-            temporary_groups: None,
-            enable_commands: None,
-            commands: None,
-            enable_comments: None,
-            comments: None,
-            enable_specials: None,
-            forbidden_chars: None,
-            expecting_group_close: None,
+            whitespace: WhitespaceOverrides::default(),
+            paragraphs: ParagraphOverrides::default(),
+            groups: GroupOverrides::default(),
+            commands: CommandOverrides::default(),
+            comments: CommentOverrides::default(),
+            specials: SpecialsOverrides::default(),
+            forbidden_chars: ForbiddenCharsOverrides::default(),
         }
     }
 }
@@ -329,19 +560,13 @@ impl<L: Lang> Default for TokenRulesOverrides<L> {
 impl<L: Lang> Clone for TokenRulesOverrides<L> {
     fn clone(&self) -> Self {
         TokenRulesOverrides {
-            enable_whitespace: self.enable_whitespace,
             whitespace: self.whitespace.clone(),
-            enable_multi_newline_paragraphs: self.enable_multi_newline_paragraphs,
-            enable_groups: self.enable_groups,
+            paragraphs: self.paragraphs.clone(),
             groups: self.groups.clone(),
-            temporary_groups: self.temporary_groups.clone(),
-            enable_commands: self.enable_commands,
             commands: self.commands.clone(),
-            enable_comments: self.enable_comments,
             comments: self.comments.clone(),
-            enable_specials: self.enable_specials,
+            specials: self.specials.clone(),
             forbidden_chars: self.forbidden_chars.clone(),
-            expecting_group_close: self.expecting_group_close.clone(),
         }
     }
 }
@@ -349,38 +574,26 @@ impl<L: Lang> Clone for TokenRulesOverrides<L> {
 impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRulesOverrides")
-            .field("enable_whitespace", &self.enable_whitespace)
             .field("whitespace", &self.whitespace)
-            .field("enable_multi_newline_paragraphs", &self.enable_multi_newline_paragraphs)
-            .field("enable_groups", &self.enable_groups)
+            .field("paragraphs", &self.paragraphs)
             .field("groups", &self.groups)
-            .field("temporary_groups", &self.temporary_groups)
-            .field("enable_commands", &self.enable_commands)
             .field("commands", &self.commands)
-            .field("enable_comments", &self.enable_comments)
             .field("comments", &self.comments)
-            .field("enable_specials", &self.enable_specials)
+            .field("specials", &self.specials)
             .field("forbidden_chars", &self.forbidden_chars)
-            .field("expecting_group_close", &self.expecting_group_close)
             .finish()
     }
 }
 
 impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
     fn eq(&self, other: &Self) -> bool {
-        self.enable_whitespace == other.enable_whitespace
-            && self.whitespace == other.whitespace
-            && self.enable_multi_newline_paragraphs == other.enable_multi_newline_paragraphs
-            && self.enable_groups == other.enable_groups
+        self.whitespace == other.whitespace
+            && self.paragraphs == other.paragraphs
             && self.groups == other.groups
-            && self.temporary_groups == other.temporary_groups
-            && self.enable_commands == other.enable_commands
             && self.commands == other.commands
-            && self.enable_comments == other.enable_comments
             && self.comments == other.comments
-            && self.enable_specials == other.enable_specials
+            && self.specials == other.specials
             && self.forbidden_chars == other.forbidden_chars
-            && self.expecting_group_close == other.expecting_group_close
     }
 }
 
@@ -422,21 +635,21 @@ mod tests {
     fn disable_all_flips_exactly_the_six_gates() {
         let overrides: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::disable_all();
         // All six gates off…
-        assert_eq!(overrides.enable_whitespace, Some(false));
-        assert_eq!(overrides.enable_multi_newline_paragraphs, Some(false));
-        assert_eq!(overrides.enable_groups, Some(false));
-        assert_eq!(overrides.enable_commands, Some(false));
-        assert_eq!(overrides.enable_comments, Some(false));
-        assert_eq!(overrides.enable_specials, Some(false));
+        assert_eq!(overrides.whitespace.enabled, Some(false));
+        assert_eq!(overrides.paragraphs.enabled, Some(false));
+        assert_eq!(overrides.groups.enabled, Some(false));
+        assert_eq!(overrides.commands.enabled, Some(false));
+        assert_eq!(overrides.comments.enabled, Some(false));
+        assert_eq!(overrides.specials.enabled, Some(false));
         // …and nothing else touched: the value is the default plus the gate flips, so
         // rules data (and the expected close) survives for later re-enabling.
         let mut expected: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::default();
-        expected.enable_whitespace = Some(false);
-        expected.enable_multi_newline_paragraphs = Some(false);
-        expected.enable_groups = Some(false);
-        expected.enable_commands = Some(false);
-        expected.enable_comments = Some(false);
-        expected.enable_specials = Some(false);
+        expected.whitespace.enabled = Some(false);
+        expected.paragraphs.enabled = Some(false);
+        expected.groups.enabled = Some(false);
+        expected.commands.enabled = Some(false);
+        expected.comments.enabled = Some(false);
+        expected.specials.enabled = Some(false);
         assert_eq!(overrides, expected);
     }
 }

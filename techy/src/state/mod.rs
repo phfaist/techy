@@ -41,7 +41,11 @@ mod lang;
 mod parsing_state;
 mod stack;
 
-pub use delta::{ParsingStateDelta, TokenRulesOverrides};
+pub use delta::{
+    CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
+    ParagraphOverrides, ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
+    WhitespaceOverrides,
+};
 pub use lang::{ClosedVocabulary, InvocationSyntax, Lang, NodeExtTypes, TrivialLang};
 pub use parsing_state::{DeriveError, FinalizeError, ParsingState, StateData};
 pub use stack::ParsingStateStack;

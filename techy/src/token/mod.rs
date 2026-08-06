@@ -59,6 +59,9 @@ pub use error::{
 pub(crate) use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
 pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
-pub use rules::{CommandRule, CommentRule, GroupRule, TokenRules, WhitespaceRules};
+pub use rules::{
+    CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+    GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
+};
 pub use specials::{SpecialsMatch, TriggerChars};
 pub use token::{Token, TokenKind};
