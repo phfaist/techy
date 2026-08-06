@@ -8,8 +8,8 @@
 
 | Stage | Description | Status |
 |-------|-------------|--------|
-| D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | in-progress (awaiting review) |
-| M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | pending |
+| D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
+| M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | in-progress |
 | M2 | `Lang::Features` + const gating | pending |
 | M3 | Uniform storage gating (FeaturePresence::Store) | pending |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
@@ -17,6 +17,19 @@
 ## Log
 
 (compact completion notes appended by each subagent: what was done, files touched, anything surprising)
+
+- **Supervisor: baseline + sizing** — pre-M1 baseline on the `todo` base commit
+  432c1a9 is green: `cargo build` ok, `cargo test --workspace` 884 passed / 0
+  failed / 4 ignored. NOTE for all agents: workspace layout — every `src/...`
+  path in PLAN.md means `techy/src/...` (crates: `techy/`, `techy-derive/`).
+  Integration tests: techy/tests/{acceptance,recompose_oracle,derive_conditions}.rs.
+  Field-access migration sites (grep of the old TokenRules/Overrides field names):
+  ~290 hits; heaviest files: state/delta.rs (~72), state/parsing_state.rs (~54),
+  token/rules.rs (~36), engine/state_memo.rs (~24), latexlike/driver.rs (~29),
+  engine/mod.rs (~11), constructs/nodes_parser.rs (~18), constructs/verbatim_parser.rs
+  (~10), token/reader.rs (~14); the rest scattered. One-time unsandboxed
+  `cargo fetch` was needed to populate ~/.cargo registry (clap for a dev-dep);
+  builds/tests are sandboxed since.
 
 - **Stage D implementer** — decision record written. New entry
   `[§dd-dr:lang-features]` added at the end of the "Parsing state and deltas"
