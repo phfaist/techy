@@ -89,7 +89,7 @@ pub struct CommentRule {
 /// [`enabled`](Self::enabled) `false` (or an empty `chars` set), whitespace characters
 /// are ordinary content characters, `pre_space` is always empty, and paragraph breaks
 /// are never detected (character-level access mode).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhitespaceRules {
     /// Whether whitespace handling is on; disabled = whitespace characters are ordinary
     /// content characters, `pre_space` is always empty, and paragraph breaks are never

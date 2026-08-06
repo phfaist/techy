@@ -40,7 +40,7 @@ pub struct EndOfStreamAfterEscape {
     pub escape_char: char,
 }
 
-/// Condition: a character listed in `TokenRules::forbidden_chars` appeared as content.
+/// Condition: a character listed in `ForbiddenCharsRules::chars` appeared as content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "core.token.forbidden-char")]
@@ -75,7 +75,7 @@ impl fmt::Display for ForbiddenChar {
 pub enum TokenErrorKind {
     /// The input ended immediately after a command escape character, before any name.
     EndOfStreamAfterEscape(EndOfStreamAfterEscape),
-    /// A character listed in `TokenRules::forbidden_chars` appeared as content.
+    /// A character listed in `ForbiddenCharsRules::chars` appeared as content.
     ForbiddenChar(ForbiddenChar),
     /// A language-defined condition, reported by an extension point participating in
     /// the recovery protocol (`Lang::scan_specials`, a custom

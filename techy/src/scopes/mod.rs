@@ -1702,7 +1702,7 @@ mod tests {
 
     fn min_rules<L: Lang>() -> TokenRules<L> {
         TokenRules {
-            whitespace: WhitespaceRules::default(),
+            whitespace: WhitespaceRules::empty(),
             paragraphs: ParagraphRules { enabled: false },
             groups: GroupRules {
                 enabled: true,

@@ -9,7 +9,7 @@
 | Stage | Description | Status |
 |-------|-------------|--------|
 | D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
-| M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | in-progress |
+| M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
 | M2 | `Lang::Features` + const gating | pending |
 | M3 | Uniform storage gating (FeaturePresence::Store) | pending |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
@@ -236,6 +236,81 @@
   - No changes outside scope: rules.rs/delta.rs and all implementer-B files
     untouched. Surprises: none; no compile blocker required touching
     earlier-migrated files.
+
+- **M1 reviewer** — full-diff review of 88079cd..286edf2 against PLAN M1. Findings:
+  0 blocker, 1 should-fix (resolved by the item-8 ruling below), 2 nit. Gates re-run
+  independently: `cargo test --workspace` 884/0/4 (exactly baseline), fresh
+  `cargo docs` zero warnings.
+  - should-fix (techy/src/token/rules.rs:9): module doc claims "none of these types
+    implement `Default`" while WhitespaceRules still derives it — pre-existing
+    contradiction, spec-delegated to the reviewer; resolved by the ruling (drop the
+    derive; the sentence then becomes true with no edit).
+  - nit (reader.rs:849,1194,1447,1605,1618; parsing_state.rs:665,829): test fn names
+    still spell old vocabulary (`enable_commands_off_…`, `temporary_groups_are_…`,
+    `enable_groups_flag_…`). Names, not field paths — but rename in the fix pass
+    (e.g. `commands_gate_off_…`, `temporary_group_rules_are_…`) so M4's
+    old-name grep comes back clean.
+  - nit (token/error.rs:43,78): plain-text `` `TokenRules::forbidden_chars` `` — not
+    stale (the spelling now names the accessor), optionally sharpen to
+    `ForbiddenCharsRules::chars`.
+  - **RULING (item 8, WhitespaceRules `Default`): DROP the derive.** Rationale:
+    (a) consistency — the six sibling rules sub-structs deliberately have none, and
+    `default()` == `empty()` is a second spelling of the same value, contra the
+    one-canonical-path discipline; (b) crate doctrine — `TokenRules::empty` rustdoc
+    rejects `Default` by name (silent zeroing of future fields via `..Default`), and
+    the superseded-names register already records removing `Default` back doors
+    (`Default for Language<L>`); (c) the hazard is now real: the struct has two
+    fields and gains a gated store at M3; (d) usage is exactly three call sites, all
+    `#[cfg(test)]` (token/prefix_table.rs:182, node/mod.rs:109, scopes/mod.rs:1705)
+    — replace with `WhitespaceRules::empty()`, identical value; (e) semver: the type
+    already breaks in M1 (new pub field), so keeping the derive buys nothing — add
+    "`Default` removed from `WhitespaceRules`" to the expected-breaking list.
+  - Everything else verified clean: sub-struct/override shapes, empty()/disable()/
+    disable_all() semantics, the 13 accessors (spec names exactly),
+    skip_whitespace signature, expecting_close placement + positional-data doc;
+    old-field sweep — no code survivors (residual text = accessor names,
+    pylatexenc API mentions, the fn-name nit); accessor-only rule holds in generic
+    core (exceptions are #[cfg(test)], construction sites, override field paths, and
+    the one commented parsing_state.rs:219 seam); state_memo hash_key/keys_eq
+    field-by-field identical to pre-regrouping (same coverage, original order,
+    expecting_close last, same Arc-identity keying, M3 comment present); exit-math
+    literal exhaustive at both levels with the same eleven restores and two
+    transient `None`s as before; no test assertion literal changed anywhere in the
+    diff; doc redistribution content-preserved (checked against 88079cd), pitfall
+    section + recipe in place, no dd-dr labels in public rustdoc, no banned names,
+    no "facet"; facade exports exactly one canonical path per new type via
+    techy::core, no extra surface; no undocumented behavior change (only equivalent
+    rewrites: De Morgan in detect_paragraph_break, private `paragraph_continues`
+    takes `&str`, override constructions value-identical).
+
+- **Supervisor: M1 fix pass + gates** — applied the reviewer's ruling and both nits
+  directly (small mechanical changes): `Default` derive dropped from
+  `WhitespaceRules` (rules.rs), its three `#[cfg(test)]` call sites switched to
+  `WhitespaceRules::empty()` (prefix_table.rs, node/mod.rs, scopes/mod.rs); seven
+  test fns renamed off the old vocabulary (reader.rs: commands/comments/specials/
+  groups `*_gate_off_*`, parsing_state.rs: `temporary_group_rules_are_prefix_table_inputs`,
+  `groups_gate_rebakes_the_prefix_table`); token/error.rs docs sharpened to
+  `ForbiddenCharsRules::chars`. Gates, all green: `cargo build` ok; `cargo test
+  --workspace` 884 passed / 0 failed / 4 ignored (exact baseline); fresh
+  `rm -rf target/doc && cargo docs` zero warnings, new-type pages generated;
+  `scripts/check_semver.sh` — see expected-breaking list below.
+
+### M1 expected-breaking list (vs `api-baseline`; do NOT move the baseline)
+
+`check_semver.sh` reports exactly two failed major categories, both the spec'd
+M1 reshaping surface:
+1. `constructible_struct_adds_field`: `WhitespaceRules.enabled`,
+   `TokenRules.paragraphs`, `TokenRules.specials`, `TokenRulesOverrides.paragraphs`,
+   `TokenRulesOverrides.specials`.
+2. `struct_pub_field_missing`: the eight old `TokenRules` fields
+   (enable_whitespace, enable_multi_newline_paragraphs, enable_groups,
+   temporary_groups, enable_commands, enable_comments, enable_specials,
+   expecting_group_close) and the mirrored eight on `TokenRulesOverrides`.
+Additionally (not surfaced by the tool's lints): `Default` removed from
+`WhitespaceRules` (reviewer ruling, M1 fix pass); `TokenRules`/`TokenRulesOverrides`
+field types changed to the new sub-structs; new public types
+{Whitespace,Paragraph,Group,Command,Comment,Specials,ForbiddenChars}Rules/-Overrides
+exported via `techy::core` (additive).
 
 ## Questions for user
 

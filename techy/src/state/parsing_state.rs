@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn temporary_groups_are_prefix_table_inputs() {
+    fn temporary_group_rules_are_prefix_table_inputs() {
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
         let temporary = Arc::new(GroupRule { group_type: 9, open: "[".into(), close: "]".into() });
@@ -826,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_groups_flag_rebakes_the_prefix_table() {
+    fn groups_gate_rebakes_the_prefix_table() {
         // The gate is baked into the per-state table at freeze time; toggling it through
         // deltas empties and rebuilds the table with the (untouched) group rules.
         let state: ParsingState<PlainLang> =

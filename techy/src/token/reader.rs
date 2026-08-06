@@ -846,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_commands_off_is_the_scoped_disable() {
+    fn commands_gate_off_is_the_scoped_disable() {
         // The gate variant of the test above: the command rules stay in the data (a
         // later enabled: Some(true) delta restores recognition without carrying them).
         let mut tr = StdTokenReader::new(r"\foo");
@@ -1191,7 +1191,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_comments_off_is_the_scoped_disable() {
+    fn comments_gate_off_is_the_scoped_disable() {
         let mut tr = StdTokenReader::new("a %b");
         let mut rules = latex_rules();
         rules.comments.enabled = false;
@@ -1444,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_specials_off_freezes_the_empty_filter() {
+    fn specials_gate_off_freezes_the_empty_filter() {
         // The gate is baked at freeze: the state stores the empty TriggerChars, so the
         // scan hook is unreachable and triggers read as plain content — this is what
         // makes "no specials here" delta-expressible (DESIGN_RATIONALE [§dd-dr:tokens], ex-[§dd-dr:open-questions]).
@@ -1602,7 +1602,7 @@ mod tests {
     // --- the groups gate (baked into the prefix table) -------------------------------------
 
     #[test]
-    fn enable_groups_off_delimiters_are_plain_content() {
+    fn groups_gate_off_delimiters_are_plain_content() {
         let mut tr = StdTokenReader::new("{a}");
         let mut rules = latex_rules();
         rules.groups.enabled = false;
@@ -1615,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_groups_off_does_not_gate_the_expected_close() {
+    fn groups_gate_off_does_not_gate_the_expected_close() {
         // The decided interaction (DESIGN_RATIONALE [§dd-dr:tokens]): expecting_group_close is
         // positional data, not a feature — a group interior that disables groups
         // entirely still finds its own close, so the entered group always terminates.
