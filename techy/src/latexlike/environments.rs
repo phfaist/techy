@@ -855,7 +855,7 @@ mod tests {
     use crate::latexlike::check_latexlike_tree_invariants;
     use crate::node::NodeRef;
     use crate::scopes::{Package, ScopeOp};
-    use crate::state::{ParsingState, TokenRulesOverrides};
+    use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
     use crate::token::GroupRule;
     use alloc::string::ToString;
 
@@ -891,7 +891,7 @@ mod tests {
             "nocomments",
             Arc::new(EnvironmentSpec::new(vec![]).with_body_delta(
                 ParsingStateDelta::new().rules(TokenRulesOverrides {
-                    enable_comments: Some(false),
+                    comments: CommentOverrides::disable(),
                     ..TokenRulesOverrides::default()
                 }),
             )),
@@ -1453,8 +1453,8 @@ mod tests {
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some(&content[17..evpos]));
         // The raw chars node records the features-off verbatim state.
-        assert!(!body[0].parsing_state().rules().enable_commands);
-        assert!(!body[0].parsing_state().rules().enable_comments);
+        assert!(!body[0].parsing_state().rules().commands_enabled());
+        assert!(!body[0].parsing_state().rules().comments_enabled());
 
         // The gobbled newline is kept as the body list's first child — every byte
         // stays in the tree — but designated out of the content.

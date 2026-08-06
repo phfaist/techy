@@ -196,6 +196,47 @@
     mentions (`enable_comments`, `enable_groups=False`, …) kept where they name
     pylatexenc's API, reworded where they described ours.
 
+- **M1 implementer C** — latexlike preset + integration tests migrated; workspace
+  GREEN (closes the M1 code phase). `cargo build` clean, `cargo test --workspace`
+  totals exactly the baseline: 884 passed / 0 failed / 4 ignored (per-target
+  758+30+8+21+1+66 passed, 2+2 ignored); zero warnings (forced full rebuild of
+  lib+tests); `cargo docs` clean (fresh target/doc, no link warnings). Files
+  touched: src/latexlike/{driver,mod,environments,input,invocation_syntax,
+  arguments,node_ref}.rs, tests/{acceptance,recompose_oracle}.rs (test_support,
+  lang, spec, minidefs, recompose, invariants needed nothing; tests/
+  derive_conditions.rs untouched).
+  - Exhaustive-literal site (driver.rs exit_math_context_delta): rewritten
+    exhaustive at BOTH levels — the TokenRulesOverrides literal spells all seven
+    block fields, each sub-override literal spells all of its fields, no
+    `..Default::default()`/`..disable()` anywhere in it; the comment now states
+    the both-levels intent. Field-by-field audit against the old literal: the
+    same eleven restores land (gates + data + forbidden chars), the same two
+    transients stay `None` (groups.temporary, groups.expecting_close — old
+    temporary_groups/expecting_group_close), transient-gate comments kept with
+    the 2026-08-04 user-ruling citation.
+  - Construction sites use struct literals/field paths per the preset's pinned
+    convention (default_token_rules is a full two-level literal); non-construction
+    reads use accessors where clearest (forbidden_chars(), commands_enabled(),
+    group_rules()); test override literals spread from the sub-override bases
+    (`..GroupOverrides::default()` etc.); bare `enable_comments: Some(false)`
+    sites became `CommentOverrides::disable()` (identical values), the one
+    `Some(true)` site an explicit literal over `..CommentOverrides::default()`.
+  - Behavior identity: no assertion value changed (diff-audited — all changed
+    assert lines are access-syntax only). The one judgment call:
+    driver.rs's `restored.rules().groups == text_context.rules().groups` (old
+    Vec-vs-Vec compare) migrated to `.groups.rules` on both sides, NOT a
+    whole-block compare, to keep the assertion's scope bit-for-bit.
+  - Docs touched only where old names appeared: paragraph-gate links →
+    `ParagraphRules::enabled`; `TokenRules::forbidden_chars` link retargeted to
+    `ForbiddenCharsRules::chars` (the name is now field+method on TokenRules —
+    ambiguous as a rustdoc link); temporary_groups links/prose →
+    temporary_group_rules / GroupRules::temporary; the math-interior doc's
+    override-field mention now names the groups-block
+    `GroupOverrides::expecting_close`.
+  - No changes outside scope: rules.rs/delta.rs and all implementer-B files
+    untouched. Surprises: none; no compile blocker required touching
+    earlier-migrated files.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

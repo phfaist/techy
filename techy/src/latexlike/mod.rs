@@ -116,7 +116,8 @@ use crate::state::{
     ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState, StateData,
 };
 use crate::token::{
-    CommandRule, CommentRule, GroupRule, SpecialsMatch, TokenResult, TokenRules,
+    CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+    GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, TokenResult, TokenRules,
     TriggerChars, WhitespaceRules,
 };
 
@@ -240,7 +241,7 @@ pub enum Mode {
 pub enum Event {
     /// **Exit the math context** (context-dependent): restore the innermost
     /// enclosing *non-math* context — its [`TokenRules`] minus the transient
-    /// gates (`expecting_group_close`/`temporary_groups`, in-flight structural
+    /// gates (`expecting_group_close`/`temporary_group_rules`, in-flight structural
     /// expectations that are never restored) and its mode — found on the
     /// enclosing-state stack (else the outermost, seed context). The `\text{…}`
     /// recipe: an [`ArgumentSpec`](crate::spec::ArgumentSpec) state delta carrying
@@ -438,7 +439,7 @@ impl LatexlikeLang for Latexlike {
 /// `[`/`]` are deliberately **not** group delimiters: in LaTeX they are plain
 /// characters outside optional-argument positions (`a [b] c` is plain text), and the
 /// optional-argument parser recognizes them through a temporary group rule
-/// ([`TokenRules::temporary_groups`]) exactly where an optional argument may sit.
+/// ([`GroupRules::temporary`]) exactly where an optional argument may sit.
 ///
 /// Whitespace is the **ASCII** set (space, tab, `\n`, `\r`, vertical tab, form feed) —
 /// deliberately *not* Unicode-aware (unlike pylatexenc's `str.isspace()`). A Unicode
@@ -467,22 +468,27 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
     groups.extend(LLL::math_group_rules());
 
     TokenRules {
-        enable_whitespace: true,
-        whitespace: WhitespaceRules { chars: " \t\n\r\u{000B}\u{000C}".into() },
-        enable_multi_newline_paragraphs: true,
-        enable_groups: true,
-        groups,
-        temporary_groups: Vec::new(),
-        enable_commands: true,
-        commands: vec![Arc::new(CommandRule {
-            escape_char: '\\',
-            name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-        })],
-        enable_comments: true,
-        comments: vec![Arc::new(CommentRule { start: "%".into() })],
-        enable_specials: true,
-        forbidden_chars: "".into(),
-        expecting_group_close: None,
+        whitespace: WhitespaceRules { enabled: true, chars: " \t\n\r\u{000B}\u{000C}".into() },
+        paragraphs: ParagraphRules { enabled: true },
+        groups: GroupRules {
+            enabled: true,
+            rules: groups,
+            temporary: Vec::new(),
+            expecting_close: None,
+        },
+        commands: CommandRules {
+            enabled: true,
+            rules: vec![Arc::new(CommandRule {
+                escape_char: '\\',
+                name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+            })],
+        },
+        comments: CommentRules {
+            enabled: true,
+            rules: vec![Arc::new(CommentRule { start: "%".into() })],
+        },
+        specials: SpecialsRules { enabled: true },
+        forbidden_chars: ForbiddenCharsRules { chars: "".into() },
     }
 }
 
@@ -500,8 +506,7 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 ///
 /// pylatexenc's default context also ships a `\n\n` paragraph-break special; the
 /// preset deliberately omits it — a multi-newline break is a whitespace chars node
-/// here (via
-/// [`enable_multi_newline_paragraphs`](TokenRules::enable_multi_newline_paragraphs)),
+/// here (via the paragraphs gate, [`ParagraphRules::enabled`]),
 /// not a specials node.
 ///
 /// Seeded onto the stack by [`Latexlike::initial_state_data`]; drop it with an
@@ -959,14 +964,19 @@ mod tests {
             open: "«".into(),
             close: "»".into(),
         });
-        let mut wrap_groups = default_token_rules::<Latexlike>().groups;
+        let mut wrap_groups = default_token_rules::<Latexlike>().groups.rules;
         wrap_groups.push(Arc::clone(&custom_group));
         let wrap_argument = Arc::new(
             ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
                 .with_state_delta(ParsingStateDelta::new().rules(
                     crate::state::TokenRulesOverrides {
-                        groups: Some(wrap_groups),
-                        forbidden_chars: Some("!".into()),
+                        groups: crate::state::GroupOverrides {
+                            rules: Some(wrap_groups),
+                            ..crate::state::GroupOverrides::default()
+                        },
+                        forbidden_chars: crate::state::ForbiddenCharsOverrides {
+                            chars: Some("!".into()),
+                        },
                         ..crate::state::TokenRulesOverrides::default()
                     },
                 )),
@@ -993,7 +1003,7 @@ mod tests {
         // Math entry merged the derived chars into the *embedder's* forbidden set.
         let in_math = math.child(0).unwrap();
         assert_eq!(in_math.chars(), Some("a"));
-        let math_forbidden = &*in_math.parsing_state().rules().forbidden_chars;
+        let math_forbidden = in_math.parsing_state().rules().forbidden_chars();
         assert!(math_forbidden.contains('!') && math_forbidden.contains('$'));
 
         // The \text argument came back to the wrap-argument context: text mode,
@@ -1005,7 +1015,7 @@ mod tests {
         assert_eq!(restored_group.group_delimiters(), Some(("«", "»")));
         let restored_state = restored_group.parsing_state();
         assert_eq!(restored_state.mode(), Mode::Text);
-        assert_eq!(&*restored_state.rules().forbidden_chars, "!");
+        assert_eq!(restored_state.rules().forbidden_chars(), "!");
 
         // After the argument, the math context resumes untouched.
         let after = math.child(2).unwrap();
@@ -1042,11 +1052,14 @@ mod tests {
             Arc::new(super::MacroSpec::new(vec![text_argument()])),
         );
 
-        let mut groups = default_token_rules::<Latexlike>().groups;
+        let mut groups = default_token_rules::<Latexlike>().groups.rules;
         groups.push(Arc::clone(&custom_group));
         let seed = ParsingState::lang_initial_with_packages([package])
             .derived(&ParsingStateDelta::new().rules(crate::state::TokenRulesOverrides {
-                groups: Some(groups),
+                groups: crate::state::GroupOverrides {
+                    rules: Some(groups),
+                    ..crate::state::GroupOverrides::default()
+                },
                 ..crate::state::TokenRulesOverrides::default()
             }))
             .unwrap();
@@ -1079,8 +1092,7 @@ mod tests {
         assert_ne!(
             restored_state
                 .rules()
-                .expecting_group_close
-                .as_ref()
+                .expecting_group_close()
                 .map(|rule| &*rule.close),
             Some("»")
         );

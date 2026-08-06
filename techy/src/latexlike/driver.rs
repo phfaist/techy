@@ -26,7 +26,11 @@ use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
 use crate::source::{IntoSourceResolver, SourceResolver};
 use crate::spec::{CallableSpec, FrameRole};
-use crate::state::{ParsingState, ParsingStateDelta, ParsingStateStack, TokenRulesOverrides};
+use crate::state::{
+    CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
+    ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
+    TokenRulesOverrides, WhitespaceOverrides,
+};
 use crate::token::{GroupRule, Token};
 
 use super::{
@@ -36,15 +40,15 @@ use super::{
 
 /// How [`LatexlikeDriver`] emits the node for a paragraph-break token (a whitespace
 /// run containing two or more newlines,
-/// [`TokenRules::enable_multi_newline_paragraphs`](crate::token::TokenRules::enable_multi_newline_paragraphs)).
+/// [`ParagraphRules::enabled`](crate::token::ParagraphRules::enabled)).
 ///
 /// This is a **driver emission policy**, deliberately not scope-stack data: the
 /// tokenizer detects paragraph breaks within
 /// leading whitespace, *before* the specials scan ever runs, so a package-registered
 /// `"\n\n"` specials entry could never fire — correlating the node shape with package
 /// contents would be dead configuration. The flag is driver-global; per-scope
-/// suppression stays orthogonal (a state delta clearing the
-/// `enable_multi_newline_paragraphs` gate, as verbatim's features-off state does).
+/// suppression stays orthogonal (a state delta clearing the paragraphs gate, as
+/// verbatim's features-off state does).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ParagraphBreakStyle {
@@ -107,7 +111,7 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
 /// forbidden characters derived from those *removed* rules
 /// ([`LatexlikeLang::math_interior_forbidden_chars`] — no `'$'` literal anywhere)
 /// are **merged into** `base`'s existing
-/// [`forbidden_chars`](crate::token::TokenRules::forbidden_chars), so an
+/// [`forbidden_chars`](crate::token::ForbiddenCharsRules::chars), so an
 /// embedder's own forbidden set survives into math and a stray `$` becomes a
 /// diagnostic rather than the opener of an unclosed nested group.
 ///
@@ -121,7 +125,9 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
 /// where this function's delta merges in through the driver hook), which is what
 /// keeps the group's own close delimiter recognizable after its opener class was
 /// removed. Post-parse synthesis reproducing a math interior must apply **both**:
-/// this delta *plus* an `expecting_group_close` override naming the entered rule.
+/// this delta *plus* a groups-block
+/// [`expecting_close`](crate::state::GroupOverrides::expecting_close) override
+/// naming the entered rule.
 ///
 /// Pure in `(base, rule)` — the
 /// [`group_interior_delta`](ParseDriver::group_interior_delta) memoization
@@ -134,9 +140,9 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
         return None;
     }
     let rules = base.rules();
-    let mut kept: Vec<Arc<GroupRule<LLL>>> = Vec::with_capacity(rules.groups.len());
+    let mut kept: Vec<Arc<GroupRule<LLL>>> = Vec::with_capacity(rules.group_rules().len());
     let mut removed: Vec<Arc<GroupRule<LLL>>> = Vec::new();
-    for group_rule in &rules.groups {
+    for group_rule in rules.group_rules() {
         if group_rule.group_type.is_math() {
             removed.push(Arc::clone(group_rule));
         } else {
@@ -146,7 +152,7 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
     // Merge the derived set into the *current* forbidden chars (at the
     // transition), never a fresh set — an embedder's forbidden chars must survive
     // into math.
-    let mut forbidden = String::from(&*rules.forbidden_chars);
+    let mut forbidden = String::from(rules.forbidden_chars());
     for c in LLL::math_interior_forbidden_chars(&removed).chars() {
         if !forbidden.contains(c) {
             forbidden.push(c);
@@ -154,8 +160,8 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
     }
     Some(
         ParsingStateDelta::new().mode(LLL::ModeId::math_mode()).rules(TokenRulesOverrides {
-            groups: Some(kept),
-            forbidden_chars: Some(forbidden.into()),
+            groups: GroupOverrides { rules: Some(kept), ..GroupOverrides::default() },
+            forbidden_chars: ForbiddenCharsOverrides { chars: Some(forbidden.into()) },
             ..TokenRulesOverrides::default()
         }),
     )
@@ -180,7 +186,7 @@ pub fn math_group_interior_delta<LLL: LatexlikeLang>(
 ///
 /// **Excluded from the restore** (never `Some` in the returned overrides):
 /// [`expecting_group_close`](crate::token::TokenRules::expecting_group_close) and
-/// [`temporary_groups`](crate::token::TokenRules::temporary_groups) — they
+/// [`temporary_group_rules`](crate::token::TokenRules::temporary_group_rules) — they
 /// describe *in-flight structural expectations* of the abandoned context (which
 /// close the found state's own group descent was waiting for; which
 /// scoped-lifecycle delimiters were live there), not lexical context; restoring
@@ -202,25 +208,38 @@ pub fn exit_math_context_delta<LLL: LatexlikeLang>(
         return ParsingStateDelta::new();
     };
     let rules = target.rules();
-    // Exhaustive literal on purpose: a new TokenRulesOverrides field breaks this
-    // build until the restore-or-exclude decision is made for it.
+    // Exhaustive literal on purpose, at BOTH levels: every TokenRulesOverrides
+    // block is spelled out, and every field inside each block override is spelled
+    // out (no `..Default::default()`/`..disable()` anywhere) — a new field at
+    // either level breaks this build until the restore-or-exclude decision is
+    // made for it.
     ParsingStateDelta::new().mode(target.mode()).rules(TokenRulesOverrides {
-        enable_whitespace: Some(rules.enable_whitespace),
-        whitespace: Some(rules.whitespace.clone()),
-        enable_multi_newline_paragraphs: Some(rules.enable_multi_newline_paragraphs),
-        enable_groups: Some(rules.enable_groups),
-        groups: Some(rules.groups.clone()),
-        // Transient gate — in-flight structural expectation, never restored
-        // (user ruling amendment, 2026-08-04).
-        temporary_groups: None,
-        enable_commands: Some(rules.enable_commands),
-        commands: Some(rules.commands.clone()),
-        enable_comments: Some(rules.enable_comments),
-        comments: Some(rules.comments.clone()),
-        enable_specials: Some(rules.enable_specials),
-        forbidden_chars: Some(rules.forbidden_chars.clone()),
-        // Transient gate — see above.
-        expecting_group_close: None,
+        whitespace: WhitespaceOverrides {
+            enabled: Some(rules.whitespace.enabled),
+            chars: Some(rules.whitespace.chars.clone()),
+        },
+        paragraphs: ParagraphOverrides { enabled: Some(rules.paragraphs.enabled) },
+        groups: GroupOverrides {
+            enabled: Some(rules.groups.enabled),
+            rules: Some(rules.groups.rules.clone()),
+            // Transient gate — in-flight structural expectation, never restored
+            // (user ruling amendment, 2026-08-04).
+            temporary: None,
+            // Transient gate — see above.
+            expecting_close: None,
+        },
+        commands: CommandOverrides {
+            enabled: Some(rules.commands.enabled),
+            rules: Some(rules.commands.rules.clone()),
+        },
+        comments: CommentOverrides {
+            enabled: Some(rules.comments.enabled),
+            rules: Some(rules.comments.rules.clone()),
+        },
+        specials: SpecialsOverrides { enabled: Some(rules.specials.enabled) },
+        forbidden_chars: ForbiddenCharsOverrides {
+            chars: Some(rules.forbidden_chars.chars.clone()),
+        },
     })
 }
 
@@ -534,7 +553,7 @@ mod tests {
         // pair's delimiters (derived, not a '$' literal) merged into the outer
         // set, and every math rule is removed while content rules stay.
         let seed = ParsingState::<Latexlike>::lang_initial();
-        let mut groups = seed.rules().groups.clone();
+        let mut groups = seed.rules().groups.rules.clone();
         let custom = Arc::new(GroupRule {
             group_type: GroupType::Math(MathGroupForm::Display),
             open: "«".into(),
@@ -543,8 +562,8 @@ mod tests {
         groups.push(Arc::clone(&custom));
         let outer = seed
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                groups: Some(groups),
-                forbidden_chars: Some("!".into()),
+                groups: GroupOverrides { rules: Some(groups), ..GroupOverrides::default() },
+                forbidden_chars: ForbiddenCharsOverrides { chars: Some("!".into()) },
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();
@@ -553,13 +572,13 @@ mod tests {
         let interior = outer.derived(&delta).unwrap();
         assert_eq!(interior.mode(), Mode::Math);
         // The embedder's forbidden set survives; the derived chars merge in.
-        let forbidden = &*interior.rules().forbidden_chars;
+        let forbidden = interior.rules().forbidden_chars();
         for c in ['!', '$', '«', '»'] {
             assert!(forbidden.contains(c), "missing {c:?} in {forbidden:?}");
         }
         // Every math rule removed; the content rule kept.
-        assert!(interior.rules().groups.iter().all(|rule| !rule.group_type.is_math()));
-        assert!(interior.rules().groups.iter().any(|rule| &*rule.open == "{"));
+        assert!(interior.rules().groups.rules.iter().all(|rule| !rule.group_type.is_math()));
+        assert!(interior.rules().groups.rules.iter().any(|rule| &*rule.open == "{"));
     }
 
     #[test]
@@ -568,7 +587,7 @@ mod tests {
         // A distinguishable enclosing text context: custom forbidden chars, plus
         // in-flight transients (an expected close and a temporary rule) that the
         // restore must NOT carry over (user ruling amendment, 2026-08-04).
-        let brace_rule = Arc::clone(&seed.rules().groups[0]);
+        let brace_rule = Arc::clone(&seed.rules().groups.rules[0]);
         let temporary = Arc::new(GroupRule {
             group_type: GroupType::Content,
             open: "[".into(),
@@ -576,14 +595,17 @@ mod tests {
         });
         let text_context = Arc::new(
             seed.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                forbidden_chars: Some("!".into()),
-                temporary_groups: Some(alloc::vec![Arc::clone(&temporary)]),
-                expecting_group_close: Some(Some(Arc::clone(&brace_rule))),
+                forbidden_chars: ForbiddenCharsOverrides { chars: Some("!".into()) },
+                groups: GroupOverrides {
+                    temporary: Some(alloc::vec![Arc::clone(&temporary)]),
+                    expecting_close: Some(Some(Arc::clone(&brace_rule))),
+                    ..GroupOverrides::default()
+                },
                 ..TokenRulesOverrides::default()
             }))
             .unwrap(),
         );
-        let math_rule = Arc::clone(&text_context.rules().groups[1]);
+        let math_rule = Arc::clone(&text_context.rules().groups.rules[1]);
         assert!(math_rule.group_type.is_math());
         let math_interior = Arc::new(
             text_context
@@ -600,25 +622,25 @@ mod tests {
         ]);
         let delta = exit_math_context_delta(&stack);
         // The transient gates are excluded from the restore — never `Some`.
-        assert!(delta.rules.expecting_group_close.is_none());
-        assert!(delta.rules.temporary_groups.is_none());
+        assert!(delta.rules.groups.expecting_close.is_none());
+        assert!(delta.rules.groups.temporary.is_none());
         // Every lexical field IS restored.
-        assert!(delta.rules.groups.is_some());
-        assert!(delta.rules.forbidden_chars.is_some());
+        assert!(delta.rules.groups.rules.is_some());
+        assert!(delta.rules.forbidden_chars.chars.is_some());
         let restored = math_interior.derived(&delta).unwrap();
         assert_eq!(restored.mode(), Mode::Text);
-        assert_eq!(&*restored.rules().forbidden_chars, "!");
-        assert_eq!(restored.rules().groups, text_context.rules().groups);
+        assert_eq!(restored.rules().forbidden_chars(), "!");
+        assert_eq!(restored.rules().groups.rules, text_context.rules().groups.rules);
         // The found context's in-flight expectations did not come back: the
         // derived state keeps its base's transients as usual (the base inherited
         // the text context's expectation structurally; nothing was *restored*).
         assert_eq!(
-            restored.rules().expecting_group_close,
-            math_interior.rules().expecting_group_close
+            restored.rules().groups.expecting_close,
+            math_interior.rules().groups.expecting_close
         );
         assert_eq!(
-            restored.rules().temporary_groups,
-            math_interior.rules().temporary_groups
+            restored.rules().groups.temporary,
+            math_interior.rules().groups.temporary
         );
 
         // All-math stack: the outermost entry is the fallback.

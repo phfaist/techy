@@ -402,7 +402,7 @@ mod tests {
         check_include_chain, MapResolver, ResolveError, ResolvedContent,
         SourceProvenance, SourceResolver,
     };
-    use crate::state::{ParsingState, TokenRulesOverrides};
+    use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
 
     /// The **shipped registration recipe**: `\input` state-transparent, the attached
     /// slot carrying the preset's not-body marker (Ruling A: the preset never
@@ -910,14 +910,17 @@ mod tests {
                 defining_package(
                     "con",
                     ParsingStateDelta::new().rules(TokenRulesOverrides {
-                        enable_comments: Some(true),
+                        comments: CommentOverrides {
+                            enabled: Some(true),
+                            ..CommentOverrides::default()
+                        },
                         ..TokenRulesOverrides::default()
                     }),
                 ),
                 defining_package(
                     "coff",
                     ParsingStateDelta::new().rules(TokenRulesOverrides {
-                        enable_comments: Some(false),
+                        comments: CommentOverrides::disable(),
                         ..TokenRulesOverrides::default()
                     }),
                 ),

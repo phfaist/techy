@@ -43,7 +43,10 @@ mod support {
     use techy::core::node::{validate_tree, NodeRef};
     use techy::core::specs::{FallbackProvider, Package, ScopeOp};
     use techy::core::specs::ArgumentSpec;
-    use techy::core::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+    use techy::core::{
+        ForbiddenCharsOverrides, GroupOverrides, ParsingState, ParsingStateDelta,
+        TokenRulesOverrides,
+    };
 
     /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
     pub fn args(codes: &[&str]) -> Vec<Arc<ArgumentSpec<Latexlike>>> {
@@ -60,8 +63,11 @@ mod support {
             ArgumentSpec::new_unnamed(GroupArgumentParser::new(GroupType::Content))
                 .with_state_delta(
                     ParsingStateDelta::new().mode(Mode::Text).rules(TokenRulesOverrides {
-                        groups: Some(default_token_rules().groups),
-                        forbidden_chars: Some("".into()),
+                        groups: GroupOverrides {
+                            rules: Some(default_token_rules().groups.rules),
+                            ..GroupOverrides::default()
+                        },
+                        forbidden_chars: ForbiddenCharsOverrides { chars: Some("".into()) },
                         ..TokenRulesOverrides::default()
                     }),
                 ),

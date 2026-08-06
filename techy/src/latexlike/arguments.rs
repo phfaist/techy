@@ -1018,7 +1018,7 @@ mod tests {
         // "Braced" names the content *class*, not literal `{}`: with `«…»` declared
         // as a content pair in the parsing state, a `«…»` group satisfies it.
         use super::super::default_token_rules;
-        use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+        use crate::state::{GroupOverrides, ParsingState, ParsingStateDelta, TokenRulesOverrides};
 
         let mut package = Package::new("factory-tests");
         package.insert(
@@ -1026,7 +1026,7 @@ mod tests {
             "m",
             Arc::new(MacroSpec::new(argument_specs(["BracedOnly"]).unwrap())),
         );
-        let mut groups = default_token_rules::<Latexlike>().groups;
+        let mut groups = default_token_rules::<Latexlike>().groups.rules;
         groups.push(Arc::new(GroupRule {
             group_type: GroupType::Content,
             open: "«".into(),
@@ -1034,7 +1034,7 @@ mod tests {
         }));
         let seed = ParsingState::<Latexlike>::lang_initial_with_packages([package])
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                groups: Some(groups),
+                groups: GroupOverrides { rules: Some(groups), ..GroupOverrides::default() },
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();

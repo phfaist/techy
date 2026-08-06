@@ -438,7 +438,7 @@ mod tests {
     use crate::latexlike::check_latexlike_tree_invariants;
     use crate::scopes::Package;
     use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
-    use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+    use crate::state::{CommandOverrides, ParsingState, ParsingStateDelta, TokenRulesOverrides};
     use crate::token::CommandRule;
 
     fn parse_ok(language: &Language<Latexlike>, input: &str) -> ParseResult<Latexlike> {
@@ -494,14 +494,17 @@ mod tests {
         let seed = ParsingState::<Latexlike>::lang_initial_with_packages([macro_package(
             "t", "emph", None,
         )]);
-        let mut commands = seed.rules().commands.clone();
+        let mut commands = seed.rules().commands.rules.clone();
         commands.push(Arc::new(CommandRule {
             escape_char: '@',
             name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
         }));
         let seed = seed
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                commands: Some(commands),
+                commands: CommandOverrides {
+                    rules: Some(commands),
+                    ..CommandOverrides::default()
+                },
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();

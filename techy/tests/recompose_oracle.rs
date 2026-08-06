@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use techy::core::node::NodeRef;
 use techy::core::{
-    CommandRule, Language, ParsingState, ParsingStateDelta, TokenRulesOverrides,
+    CommandOverrides, CommandRule, Language, ParsingState, ParsingStateDelta,
+    TokenRulesOverrides,
 };
 use techy::error::Recovery;
 use techy::latexlike::minidefs::minilatex_package;
@@ -146,14 +147,14 @@ fn strict_a_second_escape_character_reemits_as_written() {
     // A language with an additional `@` command rule: the payload records
     // whichever escape fired, and reemission reproduces it.
     let seed = ParsingState::<Latexlike>::lang_initial_with_packages([testdb()]);
-    let mut commands = seed.rules().commands.clone();
+    let mut commands = seed.rules().commands.rules.clone();
     commands.push(Arc::new(CommandRule {
         escape_char: '@',
         name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
     }));
     let seed = seed
         .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-            commands: Some(commands),
+            commands: CommandOverrides { rules: Some(commands), ..CommandOverrides::default() },
             ..TokenRulesOverrides::default()
         }))
         .unwrap();

@@ -136,12 +136,12 @@ mod tests {
         // registration, so an embedder-registered delimiter pair answers without any
         // preset table (the superseded delimiter-table sugar answered `None` here).
         use crate::latexlike::{default_token_rules, LatexlikeDriver};
-        use crate::state::{ParsingState, ParsingStateDelta, TokenRulesOverrides};
+        use crate::state::{GroupOverrides, ParsingState, ParsingStateDelta, TokenRulesOverrides};
         use crate::token::GroupRule;
         use alloc::sync::Arc;
         use alloc::vec::Vec;
 
-        let mut groups: Vec<Arc<GroupRule<Latexlike>>> = default_token_rules().groups;
+        let mut groups: Vec<Arc<GroupRule<Latexlike>>> = default_token_rules().groups.rules;
         groups.push(Arc::new(GroupRule {
             group_type: GroupType::Math(MathGroupForm::Display),
             open: "«".into(),
@@ -149,7 +149,7 @@ mod tests {
         }));
         let seed = ParsingState::<Latexlike>::lang_initial()
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                groups: Some(groups),
+                groups: GroupOverrides { rules: Some(groups), ..GroupOverrides::default() },
                 ..TokenRulesOverrides::default()
             }))
             .unwrap();
