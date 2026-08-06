@@ -852,7 +852,7 @@ original rules — the restore problem wholesale collection overrides cannot sol
 the re-enabling party (applying a returned delta, or a `ChildStateSpec` policy) typically
 never saw the state that held the original `CommandRule`s. Two spellings of "off" are
 accepted deliberately: flag `false` is the *scoped* off (data preserved for re-enabling),
-empty data is the *constitutive* off (the language has no such feature) — pylatexenc
+empty data is the *constitutive* off (no rules data) — pylatexenc
 precedent. Uniformization rider: `whitespace` loses its `Option` (plain `WhitespaceRules` +
 `enable_whitespace`), which also removes the `Option<Option<…>>` override wart in
 `TokenRulesOverrides`; every flag overrides as a plain `Option<bool>`.
@@ -874,6 +874,11 @@ reversible feature disabling, and field-wise wholesale replacement can express "
 not "off, remembering what on meant".
 Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
 "off"); `enable_forbidden_chars` (uniformity for its own sake).
+
+*(Gloss amended — lang-features session: the constitutive parenthetical originally
+read "the language has no such feature", wording that now defines the compile-time
+**absent** spelling; "empty" means no rules data. The third spelling of "off" is
+[§dd-dr:lang-features].)*
 
 ## Parsing state and deltas [§dd-dr:parsing-state]
 
@@ -1366,7 +1371,8 @@ vocabulary competes ([§dd-arch:naming] principles 3–4): a bare `Present`, `Ab
 `Gate` trait with `On`/`Off` markers) were rejected: "gate" already names the *runtime*
 `enable_*` flags in the crate's documentation, and reusing it for the compile-time axis
 would fuse the two axes the absent/disabled word split exists to keep apart
-([§dd-dr:superseded-names]).
+([§dd-dr:superseded-names]). The rejection concerns item *names* — `Gate`/`On`/`Off` as
+public identifiers; "gating" as ordinary prose for either mechanism is unaffected.
 
 Rejected alternatives: **closed tiers** (one `type Syntax` choosing among a few fixed
 bundles — chars-only, +groups/comments, +callables, +scopes): kills the combinatorial
@@ -5849,7 +5855,9 @@ re-opens a settled argument:
   runtime "feature gate" vocabulary (the `enable_*` flags), fusing the two axes
   the absent/disabled word split keeps apart; bare `Present`/`Absent`/`Has*`/
   `Features` spellings — too generic for the flat `techy::core` hub ("present
-  *what*? features *of what*?"); the adopted names are
+  *what*? features *of what*?"; the ban covers *standalone item names* in the
+  hub — trait-scoped associated types like `Lang::Features`, already qualified
+  by their trait, are excluded); the adopted names are
   `FeaturePresent`/`FeatureAbsent`/`LangHas*`/`LangFeatures`; and "facet" as
   public vocabulary — banned from all public names and documentation (internal
   shorthand only; user ruling).

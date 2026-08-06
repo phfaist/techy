@@ -44,6 +44,37 @@
   describes present-day structure and the M1–M3 code does not exist yet —
   M2/M4 should promote it into body text when it does.
 
+- **Stage D reviewer** — reviewed commit 7a113e8 against PLAN.md Stage D, the
+  DR entry template, Documentation_Structure.md, and the source tree. Findings:
+  0 blocker, 1 should-fix, 2 nit.
+  - should-fix (DESIGN_RATIONALE.md, [§dd-dr:enable-flags] ~line 855): the old
+    entry glosses the constitutive/empty off as "(the language has no such
+    feature)" — now the definition of *absent*; conflicts with the new entry's
+    "the three words are never interchanged". Needs an amendment note.
+  - nit (DESIGN_RATIONALE.md, superseded-names row): bare `Features` ban reads
+    as covering the spec-mandated `Lang::Features` associated type; clarify
+    scope (standalone item names in the hub).
+  - nit (DESIGN_RATIONALE.md, [§dd-dr:lang-features] naming paragraph): the
+    "gate would fuse the two axes" rejection sits next to the entry's own
+    compile-time "code/storage gating" prose; scope the rejection to item
+    names (`Gate`/`On`/`Off`).
+  All content points of PLAN Stage D item 1 present; names match the spec
+  exactly; no invented API; label spelled consistently everywhere; "facet"
+  only in the ban row; no pre-existing banned name reintroduced; both
+  ARCHITECTURE references present in matching style; CompileTimeFeatureGates.md
+  status line accurate. Facts verified against source: reader.rs:303-305 dual
+  flag check, state_memo.rs:144/199 Arc-identity field walk, driver.rs:205-207
+  exhaustive literal, lang.rs:455 TrivialLang blanket, verbatim terminator
+  Arc<GroupRule<L>>, temporary-group-minting parsers, rules.rs "enable_*
+  feature gates" rustdoc, exploration doc Gate/On/Off + 4-8 % measurements +
+  six-feature original roster.
+
+- **Stage D implementer** — review fixes applied (3 findings): [§dd-dr:enable-flags]
+  constitutive gloss corrected to "no rules data" + amendment note pointing at
+  [§dd-dr:lang-features]; superseded-names ban scoped to standalone item names
+  (`Lang::Features` excluded); Gate/On/Off rejection scoped to item names, prose
+  "gating" unaffected.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
