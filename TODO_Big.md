@@ -24,6 +24,8 @@
   - Very careful with the use of "contract" -- contract must be explicitly stated at that point exactly to justify the use of that word
   - References to dev-docs stages in API docs (e.g. "phase 7.8", "7.8 checkpoint") !!! Ban that.
 
+- TokenRulesOverrides - disable_all() does not disable forbidden chars???  Rationale & revisit if necessary.
+
 
 ## Smaller todo
 
