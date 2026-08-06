@@ -16,7 +16,9 @@ Related prior work: `dev-docs/extra/GateFeaturesOptimizedLangs.md` (2026-07-19)
 studied the same question on the pre-API-review tree. This report re-measures on
 the current tree, adds a verified prototype of the storage-gating mechanism, adds
 one correction to that document, and — the part it did not cover — argues both
-sides of whether the work is worth doing at all.
+sides of whether the work is worth doing at all. The two analyses are kept
+separate: the appendix audits the older one (what still holds, what is stale, what
+it had that this study missed) rather than merging them.
 
 ---
 
@@ -107,6 +109,17 @@ The instructive part is *what a language with no callables at all still links*:
 A `Lang` that can never define a callable pays 9 KB for `Scope`'s insert and
 copy-on-write machinery, because `derived()` → `apply_op` → lazy scope creation is
 reachable from a runtime `Vec` of ops. That is the shape of the whole problem.
+
+**Drop glue is a measurable slice of it.** techy types account for 12 692 B of
+`drop_in_place` in the minimal build, of which **4 026 B** is attributable to
+gate-able data (`TokenRulesOverrides` 479, `TokenRules` 377,
+`Vec<ParsingStateDelta>` 352, `ScopeOp` 270, `Vec<Arc<dyn SpecsProvider>>` 215,
+`Scope` 207, …). This matters for the phasing: drop glue is generated from *field
+types*, so const gating alone does not remove it — it is one of the few binary
+wins that genuinely requires Phase 2. (The predecessor put this at ~7 KB "in the
+delta types alone" on arm64; on x86-64 against this tree the whole gate-able-data
+family is 4 KB. Worth re-measuring on the real target before it is used as an
+argument.)
 
 **Unused *presets* already cost zero.** No byte of `latexlike` appears in the
 minimal build — the crate is generic over `L`, so monomorphization is already lazy.
@@ -443,3 +456,79 @@ documenting regardless of whether any of the above happens.
    consulted for these.
 5. Does the `GroupRules<L>` / `CommandRules<L>` sub-struct regrouping stand on its
    own merits, independent of gating? If yes, it can land first and cheaply.
+6. Independent facets, or **closed tiers**? The predecessor's Option C — one
+   `type Syntax: SyntaxTier` with three or four closed bundles (chars-only;
+   +groups/comments; +callables; +scopes) — kills the combinatorial surface of
+   §6.1 point 4 and fits the crate's closed-vocabulary doctrine, at the price of
+   users wanting an unanticipated combination. See appendix item A4.
+7. Should `Lang` gain a `type Reader`? Orthogonal to gating, but it is the other
+   half of TODO_Big.md's swap-out-default-parsers item. See appendix item A5.
+
+---
+
+## Appendix — audit of the 2026-07-19 exploration
+
+Re-checked against this tree, since that document predates the API review. Its
+analysis is kept separate; this is only a delta.
+
+**Still exactly right (verified).**
+
+- Every size it reports reproduces on this tree, to the byte: `ParsingState` 200,
+  `TokenRules` 144, `ScopeStack` 24, `TriggerChars` 24, `ParsingStateDelta` 208,
+  `TokenRulesOverrides` 152. (arm64 vs x86-64 makes no difference here — the
+  contents are pointers and `bool`s.)
+- "Unused presets already cost zero" — confirmed; no `latexlike` symbol appears in
+  the minimal build.
+- The reachability mechanism (§5.2 above): gating storage does not strip code
+  because the `TokenKind` dispatch arms stay live. This remains the central
+  insight and is why Phase 1 targets sites, not fields.
+- Its site inventory is still accurate as a *list* — the reader's command,
+  comment, whitespace/paragraph and specials branches; `PrefixTable::for_rules`;
+  the `nodes_parser` dispatch arms; `derived()`'s temporary-group and scope-op
+  paths; `apply_overrides`; the stray-group-close arm. **The line numbers in it are
+  stale** (the tree has moved substantially); use the list, re-find the lines.
+- Its recommendation (const gating first, facets only for `Scopes` and `Groups`,
+  ~4 representative test languages, size-tuned profile documented regardless)
+  matches the plan in §7, reached independently.
+- It already flagged memory as "the secondary win… nice, not transformative". §2.3
+  does not contradict that — it measures it and sharpens it into an argument for
+  dropping the memory motivation outright.
+
+**Points it makes that §§1–8 above missed, and that survive re-checking.**
+
+- **A1 — the specials gate is the least valuable one.** `L::scan_specials` is
+  statically dispatched from exactly one site (`reader.rs:248` today), so a
+  language keeping the default hook already pays almost nothing for specials
+  *code*. Gating specials is about the 24 B `TriggerChars` cache and one call
+  site — corroborating §7's decision to leave specials const-only.
+- **A2 — the feature lattice can be enforced, not just documented.** Under storage
+  gating, the standard argument parsers that mint temporary group rules can carry
+  `where …: Enabled` bounds, so a groups-off language *cannot name them* — the
+  violation becomes a compile error at driver-assembly time, which is the right
+  place for it. Under const gating it stays a documented contract whose violation
+  must return `Err` through the recovery funnel.
+- **A3 — gating cannot destabilize the derivation memo.** The gate is a constant of
+  `L`, so it cannot vary within one parse; the memo's `Arc`-identity keying is
+  untouched, and gated-off delta fields simply hash as nothing.
+- **A4 — Option C, coarse closed tiers**, as an alternative to independent facets.
+  Not carried into the plan above; now open question 6.
+- **A5 — a per-`Lang` `type Reader`.** `Language::parse_source` still hardcodes
+  `StdTokenReader` (`language.rs:142`). Not worth doing *for size* — the tokenizer
+  is a small share — but it is the natural hook for a chars-only language and
+  overlaps TODO_Big.md's swap-out-default-parsers item; now open question 7.
+
+**Where the two studies disagree, and which to believe.**
+
+Its per-symbol module breakdown (token ~29 KB, constructs ~23, engine ~22, state
+~18, spec ~14, node ~13, scopes ~9, error ~9) does not match §2.2's (constructs
+34.5, scopes 13.3, state 11.7, token 9.3, engine 7.3, error 6.4, node 3.2, spec
+0.7). Different architecture, a year of tree movement, and probably a different
+minimal-`Lang` shape and attribution method. **Neither should be trusted as a
+budget until Phase 0 re-measures on the actual target.** The disagreement matters:
+its numbers say the tokenizer dominates, mine say the construct layer does, and
+that changes where Phase 1's guards pay off most.
+
+Its wasm figures (minimal pipeline ~101 KB of techy, `Latexlike` ~125 KB, and the
+~40 % cut from the size-tuned profile) are the only measurements of the actual
+motivating case that either study has. They are a year old and are exactly what
+Phase 0 exists to redo.
