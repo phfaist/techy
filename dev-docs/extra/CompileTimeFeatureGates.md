@@ -14,9 +14,9 @@ smaller parsing states, *without* a drastic public-API change?
 
 Related prior work: `dev-docs/extra/GateFeaturesOptimizedLangs.md` (2026-07-19)
 studied the same question on the pre-API-review tree. This report re-measures on
-the current tree, adds a verified prototype of the storage-gating mechanism, adds
-one correction to that document, and — the part it did not cover — argues both
-sides of whether the work is worth doing at all. The two analyses are kept
+the current tree, adds a verified prototype of the storage-gating mechanism, and
+— the part it did not cover — argues both sides of whether the work is worth doing
+at all, plus the public-API delta of doing it. The two analyses are kept
 separate: the appendix audits the older one (what still holds, what is stale, what
 it had that this study missed) rather than merging them.
 
@@ -187,8 +187,9 @@ impl absorbs it for every test language.
 pub trait LangFeatures: 'static {
     type Whitespace: Gate;  type Groups: Gate;    type Commands: Gate;
     type Comments: Gate;    type Specials: Gate;  type Scopes: Gate;
-    type GroupCloseExpectation: Gate;      // see §5.1 — not part of Groups
 }
+// `Groups` owns the whole group block: rules, temporary rules, and the
+// expected-close slot — see §5.1.
 pub trait Lang { type Features: LangFeatures; /* … */ }
 ```
 
@@ -258,11 +259,15 @@ collateral damage.
 
 ## 5. Gotchas found while tracing
 
-### 5.1 `expecting_group_close` must not live inside the groups gate
+### 5.1 `expecting_group_close` is inside the groups gate — and verbatim implies groups
 
-The predecessor document puts `expecting_group_close` in the `Groups` facet. That
-is wrong, and it would break verbatim. `verbatim_state_delta` installs a
-`GroupRule` terminator with all six runtime gates off:
+RULED (user, 2026-08-06): **groups are either enabled or disabled; there is no
+third state.** `expecting_group_close` belongs to the `Groups` facet, and a
+language that gates groups off cannot use verbatim.
+
+This overturns an earlier draft of this report, which proposed a separate
+`GroupCloseExpectation` gate on the grounds that `verbatim_state_delta` installs
+an expected close with all six *runtime* gates off:
 
 ```rust
 pub fn verbatim_state_delta<L: Lang>(terminator: Arc<GroupRule<L>>) -> ParsingStateDelta<L> {
@@ -273,9 +278,24 @@ pub fn verbatim_state_delta<L: Lang>(terminator: Arc<GroupRule<L>>) -> ParsingSt
 }
 ```
 
-The field is positional data, deliberately *not* gated by `enable_groups` (its own
-doc comment says so). A language with groups compile-gated off but verbatim on
-still needs it. It needs a separate gate.
+That observation is true and irrelevant. The runtime gate being off inside a
+verbatim region says nothing about whether the *language* has groups: the
+terminator is an `Arc<GroupRule<L>>`, it is matched by group-close machinery, and
+the delimited form stages a `Group` node carrying a `Lang::GroupTypeId`. Verbatim
+is built out of the group feature, so verbatim ⇒ groups is a lattice edge
+(§5.3), not an argument for splitting the facet. The predecessor document's
+placement was right.
+
+The consequence is visible in the public API and is a feature, not a cost:
+`verbatim_state_delta`, `VerbatimArgumentParser` and `VerbatimBodyParser` carry an
+`Enabled` bound on groups, so a groups-off language cannot name them — the
+lattice edge is enforced by the compiler at driver-assembly time rather than
+documented and hoped for (appendix item A2).
+
+This also removes a gate from the bundle (§3) and a bullet from Phase 2 (§7): the
+facet count drops from seven to six, and `TokenRules`'s entire 56-byte group block
+— `groups`, `temporary_groups`, `expecting_group_close` — collapses or survives as
+one unit.
 
 ### 5.2 Gating the data does not strip the code — gating the dispatch arm does
 
@@ -293,10 +313,12 @@ memory; only site gating buys binary.
 - `derived()`'s 6.7 KB is dominated by the temporary-group stripping rule and the
   prefix-table `Arc`-identity reuse check — the largest single beneficiary of a
   groups gate.
-- The feature lattice is real but not total: optional-argument parsers mint
-  temporary groups, so callables-with-optional-arguments ⇒ groups; but **callables
-  do not imply scopes** (a driver can resolve from a fixed table). Keep those gates
-  independent.
+- The feature lattice is real but not total. Known edges: optional-argument
+  parsers mint temporary groups, so callables-with-optional-arguments ⇒ groups;
+  **verbatim ⇒ groups** (§5.1); environments ⇒ commands. But **callables do not
+  imply scopes** (a driver can resolve from a fixed table — the motivating web
+  case: a fixed command set, no `\newcommand`). Keep *those* two gates
+  independent; enforce the edges with bounds (appendix item A2).
 - `TokenRulesOverrides` is the one genuine trade-off. Its memory benefit is ≈ 0
   (deltas are transient). But leaving it ungated means `apply()` silently drops an
   override for an absent feature — against the crate's grain. Gating it via the
@@ -427,7 +449,8 @@ data is a few dozen bytes, and the const already strips their code).
   `CommentRules<L>` / `WhitespaceRules<L>` sub-structs — worth doing even if gating
   stops here.
 - Gate contents via `Gate::Store<T>`; total reads, bounded writes (§4).
-- `expecting_group_close` gets its **own** gate (§5.1) — not `Groups`.
+- `Groups` owns the whole group block including `expecting_group_close`, and the
+  verbatim surface carries an `Enabled` bound on it (§5.1).
 - Gate `ScopeStack`'s inner `Vec` (no signature changes).
 - Mirror the gating in `TokenRulesOverrides` and `ParsingStateDelta::scope_ops`, or
   accept documented silent no-ops. *Decide before starting; it drives the churn.*
@@ -443,7 +466,98 @@ documenting regardless of whether any of the above happens.
 
 ---
 
-## 8. Open questions
+## 8. Publicly visible API changes
+
+What an embedder, an extension author, and a language author would actually see.
+Semver classes are against the `api-baseline` branch used by
+`scripts/check_semver.sh`.
+
+### 8.1 Phase 1 (const gating) — one breaking line, everything else additive
+
+| change | class | who is affected |
+|---|---|---|
+| `Lang` gains `type Features: LangFeatures` | **breaking** | anyone with a hand-written `impl Lang` — one line each (`Latexlike`, `Flavored`, ~6 test langs) |
+| new public items in `techy::core`: `LangFeatures`, `Gate` (with `const ENABLED`), the `On`/`Off` markers, and ready-made bundles (`AllFeatures`, `NoCallables`, `CharsOnly`) | additive | language authors only |
+| `TrivialLang`'s blanket impl supplies the all-on bundle | none | every `TrivialLang` user compiles unchanged |
+
+Nothing else moves. No signature changes, no field changes, no behavior change for
+any language that keeps all features. The runtime `enable_*` gates keep their
+current meaning; the const gate is a stronger statement layered above them.
+
+### 8.2 Phase 2 (storage gating) — the real surface change
+
+**Field regrouping on `TokenRules<L>`** (breaking; the largest single item). Four
+flat groups of fields become one sub-struct each:
+
+| today | after |
+|---|---|
+| `enable_whitespace`, `whitespace`, `enable_multi_newline_paragraphs` | `whitespace: WhitespaceRules<L>` |
+| `enable_groups`, `groups`, `temporary_groups`, `expecting_group_close` | `groups: GroupRules<L>` |
+| `enable_commands`, `commands` | `commands: CommandRules<L>` |
+| `enable_comments`, `comments` | `comments: CommentRules<L>` |
+| `enable_specials` | `specials: SpecialsGate<L>` |
+| `forbidden_chars` | unchanged (not gated) |
+
+- `WhitespaceRules` **already exists publicly** and would change shape (it holds
+  only `chars` today) — breaking for anyone constructing one.
+- `GroupRules<L>`, `CommandRules<L>`, `CommentRules<L>`, `SpecialsGate<L>` are new
+  public types, each with total getters (`rules()`, `is_enabled()`,
+  `temporary()`, `expecting_close()`, …), `Enabled`-bounded setters, and a
+  `none()` constructor that works for both gated states.
+- `GroupRule` / `CommandRule` / `CommentRule` themselves are **unchanged**.
+- `TokenRules::empty()` is unchanged.
+- **`..base_rules()` struct-update syntax keeps working.** Only code that names a
+  regrouped field by its old path breaks — mechanical and greppable (~300 sites,
+  mostly in test helpers).
+
+**`TokenRulesOverrides<L>`** mirrors the regrouping if we gate it (open question
+3). `..TokenRulesOverrides::default()` and `disable_all()` keep working; explicit
+field mentions change. If we *don't* gate it, its public shape is untouched and
+the cost is documented silent no-ops.
+
+**`StateData<L>`** keeps its four public fields (`rules`, `scopes`, `mode`, `ext`)
+with unchanged names. But `finalize_transition` implementors mutating rules
+directly — `new.rules.enable_comments = …` — switch to
+`new.rules.comments.set_enabled(…)`. Breaking for language authors, invisible to
+everyone else.
+
+**Unchanged signatures** (worth stating, because this is where the churn was
+expected and does not happen):
+
+- `ParsingState::{rules, scopes, mode, ext, prefix_table, trigger_chars}` — all
+  identical, including `scopes()` returning `&ScopeStack<L>`, because
+  `ScopeStack`'s inner `Vec` is what gets gated.
+- `ParsingState::{lang_initial, lang_initial_with_packages, derived}`.
+- `PrefixTable`, `TriggerChars`, `Package`, `Scope`, `SpecsProvider`,
+  `CallableSpec` — no signature change.
+- The whole `techy::{node, visit, transform, recompose, extract, error, source}`
+  surface — untouched.
+
+**New compile errors instead of runtime no-ops** (breaking only for languages that
+gate something off — i.e. nobody today):
+
+- `ScopeStack::push`, `ParsingStateDelta::{push_provider, scope_op}`, and
+  `ScopeOp` construction require `Scopes: Enabled`.
+- `verbatim_state_delta`, `VerbatimArgumentParser`, `VerbatimBodyParser` require
+  `Groups: Enabled` (§5.1).
+- `GroupArgumentParser`, `OptionalGroupArgumentParser` and the other parsers that
+  mint temporary group rules require `Groups: Enabled`.
+- Setters on any gated-off feature's rules sub-struct.
+
+### 8.3 Net assessment
+
+Phase 1 costs external `Lang` implementors one line and nobody else anything.
+Phase 2's blast radius is confined to three types — `TokenRules`,
+`TokenRulesOverrides`, `StateData` — plus `Enabled` bounds on the verbatim and
+scope-mutating entry points. The read surface that ordinary embedders touch
+(`parse`, the node tree, extraction, diagnostics) does not move at all. That is
+the strongest practical argument for doing it inside the soft-freeze window rather
+than after: the breaking surface is small, well-bounded, and entirely
+compiler-detected.
+
+---
+
+## 9. Open questions
 
 1. Is a wasm/browser embedding a real target on a real timeline? Everything in §6.3
    turns on this.
@@ -493,8 +607,12 @@ analysis is kept separate; this is only a delta.
 - It already flagged memory as "the secondary win… nice, not transformative". §2.3
   does not contradict that — it measures it and sharpens it into an argument for
   dropping the memory motivation outright.
+- **Its placement of `expecting_group_close` in the `Groups` facet was right**, and
+  an earlier draft of this report wrongly called it an error. Ruled by the user
+  2026-08-06 and rewritten as §5.1: the group feature is all-or-nothing, and
+  verbatim is built out of it.
 
-**Points it makes that §§1–8 above missed, and that survive re-checking.**
+**Points it makes that §§1–9 above missed, and that survive re-checking.**
 
 - **A1 — the specials gate is the least valuable one.** `L::scan_specials` is
   statically dispatched from exactly one site (`reader.rs:248` today), so a
