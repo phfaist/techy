@@ -255,6 +255,81 @@ And because gated stores are `Default`, `..base_rules()` and
 mention of a disabled feature fails to compile — which is the desired refusal, not
 collateral damage.
 
+### 4.1 The adjacent axis: open facets instead of a two-valued gate
+
+Question raised 2026-08-06: does this shape also let a language substitute an
+*entirely custom* rules type — say a whitespace facet that stores no character set
+and always answers `" \t\n"`?
+
+**Not as written.** `Gate::Store<T>` is a two-valued selector over a crate-owned
+data type: the language chooses *presence*, not *implementation*. Getting the third
+option means replacing the generic `Store<T>` with **per-feature facet traits** —
+the crate defines what it needs from a whitespace facet, ships the standard impls,
+and the language names any implementor. `Present`/`Absent` then stop being a
+separate mechanism and become two impls among N, with `const ENABLED` still driving
+the code gating. Prototyped and confirmed to monomorphize:
+
+| facet impl | facet size | `TokenRules` | `Overrides` |
+|---|---|---|---|
+| `DynamicWhitespace` (today's `Arc<str>` rules) | 24 B | 40 B | 24 B |
+| `StaticWhitespace` (chars hardcoded) | **1 B** | 24 B | 1 B |
+| `NoWhitespace` (feature absent) | 0 B | 16 B | 0 B |
+
+One machinery function (`skip_whitespace`) compiled once, correct for all three;
+`disable_all()` worked for all three through the facet. So the axis is real and the
+generalization is small. Four things stand in the way, in rising order of
+seriousness:
+
+1. **Scoped disable is not optional, so "static" is 1 byte, not 0.**
+   `TokenRulesOverrides::disable_all()` — used by `verbatim_state_delta` and every
+   raw-region parser — must be able to switch a feature off for a scope. A facet
+   may hardcode its *data* but must still carry the enable bit; one that no-ops
+   `set_enabled` would silently keep tokenizing whitespace inside verbatim. (The
+   escape hatch is the §5.1 move: bound the raw-region surface on a `Disableable`
+   facet marker. That works, but `disable_all` touches six features, so it means
+   six bounds on every raw-region entry point.)
+
+2. **The override channel becomes language-parameterized.** `TokenRulesOverrides`'s
+   field types turn into associated types, so
+   `TokenRulesOverrides { enable_whitespace: Some(false), .. }` stops being
+   writable by generic code — it becomes `<Whitespace<L>>::disable_override()`.
+   That is a materially bigger public change than §8.2, because it pushes
+   projections into the crate's most-used delta type rather than keeping it a
+   concrete crate-owned struct.
+
+3. **Cache-invalidation correctness moves to the facet.** `derived()`'s
+   prefix-table reuse keys on `Arc::ptr_eq` over `groups`/`temporary_groups`; a
+   custom groups facet must answer "are my table inputs unchanged?" itself. Its own
+   docs already warn that "a stale reuse here would keep tokenizing the stripped
+   delimiters", and there is a test pinning exactly that.
+
+4. **The memo's soundness contract moves to the language author — this is the real
+   cost.** `state_memo::{hash_key, keys_eq}` hash and compare overrides *field by
+   field, by `Arc` address*, and a memo hit **substitutes a previous derivation's
+   result**. With open facets the facet supplies that hash and equality, so a facet
+   that conflates two semantically different overrides silently produces wrong
+   parse states — not a panic, not a diagnostic. Today that failure is structurally
+   impossible because the crate owns every comparison. The crate already treats
+   this contract as load-bearing (`finalize_transition` must be pure precisely
+   because "that purity is also what makes the memo sound"); handing a piece of it
+   to extension authors is a doctrine-level decision, not a refactor.
+
+Also note where the payoff is *not*: memory. 24 B → 1 B per state is noise by §2.3.
+The value of this axis is expressiveness — const-folded whitespace tests, a `const`
+prefix table, a perfect-hash specials scanner, group rules fixed at compile time —
+and the collapse of two mechanisms into one. It is doctrinally consistent
+(`Lang::Driver`, `Lang::InvocationSyntax` and `TokenReader` are already
+language-chosen types), which is an argument for keeping the door open, not for
+walking through it now.
+
+**Actionable consequence for Phase 2, at zero cost:** define the per-feature
+accessors (`chars()`, `rules()`, `is_enabled()`, `temporary()`, `expecting_close()`)
+as the *only* read path from the start, and treat that set as the facet contract in
+embryo. If the concrete `GroupRules<L>` later becomes an associated type, no reader
+in the crate or downstream changes — only the constructors and the override
+channel. That is the cheap option value; taking the axis itself should be a
+separate, later decision (open question 8).
+
 ---
 
 ## 5. Gotchas found while tracing
@@ -577,6 +652,14 @@ compiler-detected.
    users wanting an unanticipated combination. See appendix item A4.
 7. Should `Lang` gain a `type Reader`? Orthogonal to gating, but it is the other
    half of TODO_Big.md's swap-out-default-parsers item. See appendix item A5.
+8. **Open facets (§4.1) — worth the memo contract?** Substituting a custom rules
+   implementation per feature is a strictly more general design and costs nothing
+   to keep possible, but taking it hands the derivation memo's hash/equality
+   contract to language authors, where a mistake is a silent wrong parse. My
+   recommendation: build Phase 2's accessors as the facet contract in embryo,
+   decide the axis itself separately, and if it is ever taken, keep the memo's
+   comparison crate-owned by having facets expose *identity tokens* rather than
+   their own `Hash` impls.
 
 ---
 
