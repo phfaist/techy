@@ -18,24 +18,28 @@ stack in release and 35–48 KB in debug**, against a `walk()` of the same tree 
 **96 B/level**. The parser spends 45–80× more stack per level than a plain traversal of
 what it produces.
 
-| Per nesting level | release (`opt-level=3`) | debug |
-|---|---|---|
-| `{…}` group | **4.31 KB** | 34.95 KB |
-| `\emph{…}` macro argument | **7.55 KB** | 47.66 KB |
-| `\cite[…]` optional argument | **7.50 KB** | 45.59 KB |
-| `\begin{itemize}…\end{itemize}` | **7.94 KB** | 47.66 KB |
-| — `walk()` over the parsed tree | 0.096 KB | — |
-| — `recompose()` over the parsed tree | 0.290 KB | — |
-| — `validate_tree()` / `Debug` / `drop` | *iterative, 0* | — |
+| Per nesting level | x86-64 release | x86-64 debug | wasm32 release |
+|---|---|---|---|
+| `{…}` group | **4.31 KB** | 34.95 KB | **2.14 KB** |
+| `\emph{…}` macro argument | **7.55 KB** | 47.66 KB | — |
+| `\cite[…]` optional argument | **7.50 KB** | 45.59 KB | — |
+| `\begin{itemize}…\end{itemize}` | **7.94 KB** | 47.66 KB | **3.67 KB** |
+| — `walk()` over the parsed tree | 0.096 KB | — | — |
+| — `recompose()` over the parsed tree | 0.290 KB | — | — |
+| — `validate_tree()` / `Debug` / `drop` | *iterative, 0* | — | — |
+
+wasm32 costs about half of x86-64 per level: the shadow stack only holds *address-taken*
+locals, and the dominant aggregates are themselves half-size there (§6.5).
 
 Maximum nesting depth before abort:
 
-| stack | `{…}` | `\begin{itemize}` |
+| target / stack | `{…}` | `\begin{itemize}` |
 |---|---|---|
-| debug, libtest thread (`cargo test`) | **61** | **46** |
-| release, 1 MiB (wasm32 default) | 241 | 131 |
-| release, 2 MiB | 484 | 263 |
-| release, 8 MiB (Linux main thread) | 1 946 | 1 057 |
+| x86-64 debug, libtest thread (`cargo test`) | **61** | **46** |
+| x86-64 release, 1 MiB | 241 | 131 |
+| x86-64 release, 2 MiB | 484 | 263 |
+| x86-64 release, 8 MiB (Linux main thread) | 1 946 | 1 057 |
+| **wasm32 release, 1 MiB (the wasm default)** | **491** | **286** |
 
 Four findings:
 
@@ -69,11 +73,18 @@ touched.
 
 Measured remedy experiments (each applied alone to the pristine tree, then reverted):
 
-| change | release | debug |
-|---|---|---|
-| `NodesOutcome::after_effects` → `Option<Box<…>>` | **−22 %** (241 → 309 levels) | **−25 %** (30 → 40) |
-| `ParseError` payload boxed | ~0 % | −17 % |
-| `#[cold] #[inline(never)]` on the recovery entry points | none (241 → 239) | — |
+| change | x86-64 release | x86-64 debug | wasm32 release |
+|---|---|---|---|
+| `NodesOutcome::after_effects` → `Option<Box<…>>` | −22 % (241 → 309) | −25 % (30 → 40) | **−38 %** (491 → 797) |
+| **+ return-pair delta boxed** | **−42 %** (241 → 416) | — | **−52 %** (491 → **1 022**) |
+| `ParseError` payload boxed | ~0 % | −17 % | — |
+| `#[cold] #[inline(never)]` on the recovery entry points | none (241 → 239) | — | — |
+
+**Boxing the delta roughly doubles the available depth on wasm32** — 491 → 1 022 nested
+groups, 286 → 579 environments — at no fixed-stack cost, which is the lever that matters
+where the stack is a link-time constant. It pays off more there than on x86-64 for the
+reason in §6.5. The `+ return-pair` row is a mechanical
+`Option<ParsingStateDelta<L>>` → `Option<Box<…>>` sweep: 17 files, 9 hand-fixes.
 
 *(An earlier draft of this report concluded "no single type is to blame". That was wrong:
 it was based on release-build slot counts before the DWARF and debug-slot census in §3.)*
@@ -110,6 +121,12 @@ it was based on release-build slot counts before the DWARF and debug-slot census
   were reachable). Reverted after measurement.
 - **`cargo test` thresholds**: separate `#[test]` fns at fixed depths, run one at a time
   (an overflow kills the binary, so a bisection cannot share a process).
+- **wasm32**: a `cdylib` exporting `try_depth(kind, depth)`, built with
+  `RUSTFLAGS="-C link-arg=-zstack-size=1048576"` and driven from Node 22 with the same
+  binary search. Each trial needs a **fresh `WebAssembly.Instance`** — a trap leaves the
+  module's memory unusable, so reusing one silently poisons every later trial. Type sizes
+  for wasm32 come from `const _: [(); 0] = [(); size_of::<T>()];`, read out of the
+  resulting type error (no runtime needed). Both harnesses live outside the repository.
 - gdb was not usable in the measurement container (ptrace restrictions); the census
   instrumentation replaced it.
 
@@ -235,10 +252,15 @@ funnel — and it must be measured, not assumed. There are currently **zero** `#
 
 - **The test suite.** Any acceptance test that nests past ~46 environments or ~61 groups
   kills the whole binary. This is what the original report hit.
-- **wasm32.** The default linear-memory stack is 1 MiB → ~131 environment levels in
-  release. wasm32 is not installed in this container, so the *behaviour* on overflow
-  there is unverified and should be checked before relying on it — a trap and a silent
-  write past the shadow stack are very different failure modes.
+- **wasm32.** The default linear-memory stack is 1 MiB → **286 environment levels / 491
+  group levels**, measured. Overflow **traps cleanly** (`RuntimeError: memory access out
+  of bounds`, on every trial under Node 22) rather than writing past the shadow stack —
+  so being near the edge is safe, and a budget check (§5 A) has a real fault to sit in
+  front of rather than racing silent corruption. Worth re-confirming on another runtime
+  before depending on it. Unlike a native thread, the wasm stack is a **link-time
+  constant** (`-C link-arg=-zstack-size=N`) reserved outright in linear memory, so
+  raising it is a permanent cost — which is exactly why the per-level constant (§5 B)
+  matters most here.
 - **`no_std` embedders**, who typically have far less than 1 MiB.
 - **Untrusted input.** `{{{{…}}}}` ×2 000 is 4 KB of input and aborts an 8 MiB-stack
   process. There is no way for an embedder to defend against this today, because the
@@ -340,10 +362,11 @@ makes deep documents actually *parse*. In payoff order:
    `#[inline(never)]` helpers — the condition-construction and formatting bodies, not
    the recovery funnel (§3's negative result).
 
-Projection for 1 + 2 on `NodesParser::parse`'s debug frame: `NodesOutcome` 264 → 56, the
-return pair 472 → 56, so the 15 424 B of §3 becomes ~1 900 B and the frame ~11 900 B —
-roughly 1.8× the depth for a given stack. Worthwhile, but note that raising the stack
-buys far more (§5 C′): shaving 8 KB/level to 2 KB is 4×, while 8 MiB → 256 MiB is 32×.
+**Measured**, boxing both deltas (B.2 extended to the return pair, in lieu of B.1's
+channel): x86-64 release −42 % per level (241 → 416 group levels), **wasm32 release −52 %
+(491 → 1 022)**. See §6.5 for why wasm gains more. On a native target, raising the stack
+still buys more than any of this (§5 C′) — 8 KB → 2 KB is 4×, while 8 MiB → 256 MiB is
+32× — but where the stack is a link-time constant, B is the only lever there is.
 
 **C. Grow the stack on demand (`stacker`-style).** Rejected as a library dependency:
 needs `std` and per-architecture assembly, does not work on wasm or `no_std`, and adds a
@@ -519,6 +542,42 @@ imbalance — not a panic); and `stage_node(kind, span, state, children: Vec<Bui
 That API change is the bulk of the work, not the arena. It barely moves the stack needle
 on its own (24 → 8 B against a ~33 KB level) — these stay two independent changes.
 
+### 6.5 Why boxing pays off more on wasm32
+
+Measured sizes on both targets (wasm32 via the `size_of` const-assert trick, §1):
+
+| type | wasm32 | x86-64 |
+|---|---:|---:|
+| `TokenRulesOverrides<L>` | 80 | — |
+| `ParsingStateDelta<L>` | 108 | 208 |
+| `Option<ParsingStateDelta<L>>` | 108 | 208 *(niche-optimised — same size as the payload on both)* |
+| `NodesOutcome<L>` | 136 | 264 |
+| — of which `after_effects` | **108 (79 %)** | 208 (79 %) |
+| `(NodesOutcome, Option<Delta>)` | 244 | 472 |
+| `Result<(…), ParseError>` | 244 | 472 *(the `Err` arm fits inside)* |
+| `Option<Box<ParsingStateDelta<L>>>` | **4** | 8 |
+| `(NodesOutcome, Option<Box<Delta>>)` | 140 | — |
+
+Two effects compound. The aggregates are roughly half-size on wasm32 (4-byte pointers),
+but the *proportion* the delta occupies is identical — 79 % of `NodesOutcome` on both. And
+the wasm shadow stack holds only **address-taken** locals, where x86-64 frames also carry
+spilled scalars and register-pressure temporaries. So the same objects make up a larger
+share of what a wasm frame actually costs, and removing them helps more: −52 % per level
+on wasm32 against −42 % on x86-64, for the identical change.
+
+Boxing both takes `NodesOutcome` 136 → 32 and the return pair 244 → ~36 on wasm32.
+
+**Takeaway for a small wasm build**: boxing is not merely the *simplest* option, it is the
+best-value one — a mechanical diff with no semantic change, doubling available depth at no
+fixed-stack cost. The §6.1 channel remains better in principle (it removes the `None`s
+rather than shrinking them) but it is an extension-API change against a decided signature,
+so it is a later refinement, not a prerequisite.
+
+One caveat to record with the change: boxing trades a rare heap allocation for the stack
+saving, and today that allocation *never happens* (§3 — no production parser returns
+`Some`). A future preset that produces pass-through deltas on a hot path would change that
+arithmetic.
+
 ---
 
 ## 7. Open questions
@@ -537,8 +596,8 @@ on its own (24 → 8 B against a ~33 KB level) — these stay two independent ch
 - Is `B.1` — removing the pass-through delta from the return pair in favour of the §6.1
   session channel — acceptable against the decided [§dd-dr:parsers-engine] signature? And
   is the runtime consume-obligation an acceptable trade for the compile-time destructuring?
-- Verify wasm32 overflow behaviour before quoting the 1 MiB numbers as safe — and before
-  relying on the budget check being reached *before* the shadow stack runs out.
+- wasm32 overflow was measured to trap cleanly under Node 22 (§4); confirm on the
+  runtimes you actually ship against before the budget check depends on it.
 - Is the §6.4 `Vec<BuildId>` scratch+arena worth its extension-API change on allocation
   grounds alone, given it barely affects stack depth?
 
@@ -558,3 +617,11 @@ cargo run           --example stack_probe -- 1024   # the debug figures
 The probe covers both axes: `PARSE` binary-searches input nesting depth per construct,
 `CONSUME` parses a deep tree on a 512 MiB stack and then runs `walk` / `recompose` /
 `validate_tree` / `Debug` / `drop` on the constrained stack.
+
+The wasm32 figures need an out-of-tree `cdylib` (≈40 lines: a `try_depth(kind, depth)`
+export plus a Node driver that instantiates fresh per trial), built with
+
+```bash
+RUSTFLAGS="-C link-arg=-zstack-size=1048576" \
+  cargo build --release --target wasm32-unknown-unknown
+```
