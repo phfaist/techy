@@ -39,7 +39,7 @@ Maximum nesting depth before abort:
 
 Four findings:
 
-1. **There is no nesting-depth limit anywhere in the engine.** The only `max_depth` in
+1. **Nothing bounds the recursion.** No stack budget, no depth limit. The only `max_depth` in
    the crate is `resolve_source_reference`'s *inclusion* depth — a different axis, and
    explicitly documented as embedder policy. Input nesting is unbounded, so overflow is
    reachable from any untrusted input.
@@ -53,11 +53,19 @@ Four findings:
    `NodesParser::parse`'s debug frame those three account for **15 424 B of 25 376 —
    61 %** — and nearly every one of those slots carries `None`: every `Some(delta)`
    return site in the crate is inside a `mod tests` (§3).
-4. **A depth limit alone is not sufficient.** A limit low enough to be safe in a debug
-   build on a 2 MiB test thread is ~40 levels — low enough to reject legitimate
-   documents. Either the limit is generous and debug builds still abort, or it is safe
-   and it rejects real input. Getting both requires bringing the per-level constant down
-   as well (§5).
+4. **Bound the stack by measuring it, not by counting levels.** The only hard requirement
+   is *never abort the process; always return an `Err`*, and a stack-consumption check at
+   the descent funnel delivers exactly that — in pure `core`, so it works on wasm and
+   `no_std` too. A nesting-depth limit cannot: to be reproducible across builds it would
+   have to bind at ≤46 (the debug/libtest figure above), which no LaTeX parser can ship,
+   and set anywhere sane it rejects valid documents in production without protecting the
+   debug case. It is optional language policy, not the mechanism (§5 A, A′).
+
+Separately, and larger than anything the library can do: **an embedder can simply give
+the parse a bigger stack**. Measured on today's unmodified code — 2 000 nested
+environments on a 16 MiB thread, 8 000 on 64 MiB, 30 000 on 256 MiB, 60 000 nested groups
+on 256 MiB (§5 C′). `stack_size` reserves address space, so the pages only commit if
+touched.
 
 Measured remedy experiments (each applied alone to the pristine tree, then reverted):
 
@@ -234,7 +242,7 @@ funnel — and it must be measured, not assumed. There are currently **zero** `#
 - **`no_std` embedders**, who typically have far less than 1 MiB.
 - **Untrusted input.** `{{{{…}}}}` ×2 000 is 4 KB of input and aborts an 8 MiB-stack
   process. There is no way for an embedder to defend against this today, because the
-  library exposes no limit and the failure is not catchable.
+  library bounds the recursion in no way at all and the failure is not catchable.
 
 Legitimate LaTeX does nest — `document` > `figure` > `center` > `tabular` > `{}` >
 `\textbf{}` is depth 6 before any content — so a real document reaching depth 20–30 is
@@ -244,36 +252,83 @@ unremarkable. Depth 46 in a debug build is not a comfortable margin.
 
 ## 5. Options
 
-**A. Add a nesting-depth limit. (Recommended, and needed regardless of the rest.)**
+The hard requirement is narrow: **never abort the process; always return an `Err`.**
+Everything past that is policy.
 
-The engine already counts descent depth: `ParserSession` maintains the enclosing-state
-stack (`ParsingStateStack`), pushed and popped by `ParseContext::with_parsing_state` —
-the single funnel every descent passes through (`parse_scoped` → `with_parsing_state`;
-argument parsing calls it directly). `.len()` is the counter; the session is shared with
-nested `parse_attached_source` contexts, so the same counter covers include recursion for
-free. Enforcement is a check in one place.
+**A. Bound the stack by measuring it. (Recommended — the mechanism.)**
 
-Shape, following existing precedent:
+Stash the stack anchor at parse entry; at each descent, compare against a local's address
+and refuse when the consumed span exceeds the budget:
 
-- a condition (`NestingTooDeep`, modelled on `UnclosedGroup`) reported through the
-  recovery entry point — tolerant parses stage the over-deep content as `Chars` (the
-  existing markup-in-chars recovery artifact) and unwind; strict parses abort with the
-  traceback. A `Result`, never a panic — rule 4 satisfied;
-- the limit configured on the driver, alongside `Recovery`.
+```rust
+// parse entry, into the session
+let anchor = &0u8 as *const u8 as usize;
+// each descent (with_parsing_state — the one funnel every descent passes through:
+// parse_scoped → with_parsing_state, and argument parsing calls it directly)
+let here = &0u8 as *const u8 as usize;
+if anchor.abs_diff(here) > budget {
+    return Err(/* StackBudgetExhausted, through the recovery entry point */);
+}
+```
 
-Two design questions for you:
+Pure `core` — no libc, no `std` — so it works on wasm and `no_std`, where a
+`stacker`-style platform query cannot go. `abs_diff` keeps it growth-direction-agnostic.
+The session is shared with nested `parse_attached_source` contexts, so `\input` recursion
+is covered for free. Cost is an address-of, a subtract and a compare per descent — noise
+against 4–8 KB of frame setup.
 
-1. **Units.** The state-stack counter is in *engine-descent* steps, not user-visible
-   nesting: a `{}` level costs two pushes, an environment more. Either the limit is
-   documented in descent units (cheap, but the number means little to an embedder), or
-   it is counted at `parse_nodes`/`parse_group` only, for a number that matches what a
-   user would call "nesting depth".
-2. **Default value.** This is the uncomfortable part — see below.
+This technique is already validated at the needed precision: it is exactly the
+`stackmark!` instrumentation of §1, which produced every per-level figure in this report
+and agreed with the independent end-to-end measurements across a 500× scale change.
+
+Two implementation questions, neither of them a reason to prefer something else:
+
+1. **Headroom.** The check runs *after* the frame is pushed, so the budget must sit far
+   enough below the real limit to absorb the deepest unchecked stretch — including
+   whatever a third-party `ConstructParser` burns between two descents. The margin is a
+   guess; a conservative one is nearly free when the stack is large.
+2. **Who supplies the number.** `core` cannot portably discover a thread's stack size.
+   Either the embedder passes it (natural — they chose the stack size), or a `std`-gated
+   path derives it from the platform (`pthread_getattr_np`,
+   `GetCurrentThreadStackLimits`, as `stacker::remaining_stack` does).
+
+**A′. A nesting-depth limit — optional policy, not the mechanism.**
+
+*Superseded position.* An earlier draft of this report recommended a depth limit as the
+primary fix, "needed regardless of the rest", on the grounds that it gives a
+build-independent accept/reject boundary. **That argument is wrong and should not be
+re-litigated.** With both mechanisms present the real boundary is
+`min(depth_limit, budget)`, so the limit delivers reproducibility only if it binds in
+*every* build — including debug on a 2 MiB libtest thread, which tops out at **46 nested
+environments** (§0). A reproducible limit would therefore have to be ≤46, which no LaTeX
+parser can ship. Set it somewhere sane instead (say 256) and debug builds still fail at 46
+via the budget: reproducibility is gone, and all that has been added is a ceiling *tighter
+than the machine's* where everything was already fine, and *looser than the machine's*
+where it was not. It rejects valid documents in production without protecting the case it
+was introduced for.
+
+The near-universal precedent (serde_json's `recursion_limit`, XML entity-depth caps,
+CPython's `sys.setrecursionlimit`) counts levels because those implementations **could not
+portably measure the stack** — not because depth is the right resource to bound; CPython
+has been moving toward real C-stack checks for exactly this reason. That constraint does
+not apply here, so neither does the precedent.
+
+A depth limit remains defensible in one narrow role: when a *language definition* wants a
+depth cap as a semantic property, so a conforming document gets the same answer from every
+tool. That belongs to a preset or an embedder, not to the engine. If offered at all, it
+should be **off by default**.
+
+| | depth limit | stack budget |
+|---|---|---|
+| bounds | nesting levels | bytes actually consumed |
+| reproducible across builds | only if ≤ the worst build's capacity (~46) | no |
+| adapts to per-construct cost (group 4.3 KB, environment 8 KB) | no | **yes** |
+| covers a third-party parser's own frames | no | **yes** |
+| role | optional language policy | **the mechanism** |
 
 **B. Get the big objects off the return path** (§6 works through the storage strategies).
-Because a limit safe for a debug build on a 2 MiB test thread is ~40 levels, and one
-generous enough for real documents (say 256) still overflows in debug, A alone does not
-close the hole. In payoff order:
+Independent of A: the budget stops the abort, but a smaller per-level constant is what
+makes deep documents actually *parse*. In payoff order:
 
 1. **Take `Option<ParsingStateDelta<L>>` out of the construct-parser return pair** — not
    shrink it, remove it. It is `None` at every production site (§3), so the slots exist
@@ -286,30 +341,52 @@ close the hole. In payoff order:
    the recovery funnel (§3's negative result).
 
 Projection for 1 + 2 on `NodesParser::parse`'s debug frame: `NodesOutcome` 264 → 56, the
-return pair 472 → 56, so the 15 424 B of §3 becomes ~1 900 B and the frame ~11 900 B.
-Not enough to make the limit unnecessary.
+return pair 472 → 56, so the 15 424 B of §3 becomes ~1 900 B and the frame ~11 900 B —
+roughly 1.8× the depth for a given stack. Worthwhile, but note that raising the stack
+buys far more (§5 C′): shaving 8 KB/level to 2 KB is 4×, while 8 MiB → 256 MiB is 32×.
 
-**C. Grow the stack on demand (`stacker`-style).** Rejected: needs `std` and
-per-platform support, does not work on wasm or `no_std`, and adds a dependency against
-[§dd-dr:dependencies]. Mentioned only for completeness.
+**C. Grow the stack on demand (`stacker`-style).** Rejected as a library dependency:
+needs `std` and per-architecture assembly, does not work on wasm or `no_std`, and adds a
+dependency against [§dd-dr:dependencies].
+
+**C′. Give the parse a bigger stack — the embedder's lever, and the most effective one.**
+Not a library change at all, and it dominates everything the library can do:
+
+```rust
+std::thread::Builder::new().stack_size(256 << 20)
+    .spawn(move || lang.parse(source))?.join().unwrap()?
+```
+
+`stack_size` *reserves address space*; pages commit lazily on first touch, so a 256 MiB
+reservation costs a few pages for a document that nests 30 deep. Measured on today's
+unmodified code: **2 000 nested environments on 16 MiB, 8 000 on 64 MiB, 30 000 on
+256 MiB, 60 000 nested groups on 256 MiB** — all `ok`. On wasm the equivalent is
+link-time, not runtime: `-C link-arg=-zstack-size=N` raises the 1 MiB default, but it is
+linear memory reserved outright, not lazily committed.
+
+This is the right first answer for an embedder parsing input they control. It does *not*
+substitute for A: a bigger stack turns "abort at 300" into "abort at 30 000" without ever
+producing a handleable error, which is why A is still the mechanism for untrusted input.
 
 **D. Eliminate the recursion (explicit descent stack).** Rejected as impractical, not
 merely expensive: the recursion *is* the extension contract (§2). Trampolining would
 require every outer-layer `ConstructParser` to become a resumable state machine, which
-trades the library's stated extensibility pillar for a bound that option A already
-provides.
+trades the library's stated extensibility pillar for a bound that A already provides at
+a fraction of the cost.
 
 **E. Consumer-side traversals.** `walk` (96 B/level) and `recompose` (290 B/level) also
 recurse without limits, and are public entry points that accept *any* `NodeTree` —
 including one built through `NodeTreeBuilder` rather than produced by a bounded parse.
 `validate_tree`, `Debug` and `Drop` are already iterative. `restage` was not measured; it
 is structurally recursive like `recompose`. Low priority — the constants are 15–45×
-smaller — but worth a note in the docs that a parse-side limit does not bound a
+smaller — but worth a note in the docs that a parse-side budget does not bound a
 hand-built tree.
 
-**Suggested order: A first** (it converts an uncatchable abort into a diagnostic, which
-is the correctness fix), **then B.1–B.2 measured incrementally**, then re-tune A's
-default upward with the headroom that buys.
+**Suggested order: A first** — it is the correctness fix, and the only item that turns an
+uncatchable abort into an `Err`. **C′ is what an embedder should reach for today**, and
+costs nothing to document. **B.1–B.2 measured incrementally** after that, for the
+platforms where C′ is unavailable (wasm, `no_std`) and to widen the margin everywhere
+else.
 
 ---
 
@@ -446,17 +523,22 @@ on its own (24 → 8 B against a ~33 KB level) — these stay two independent ch
 
 ## 7. Open questions
 
-- Limit in descent units or user-visible nesting depth (§5, A.1)?
-- Default limit, given that debug and release differ by 8× and wasm has 1/8 the stack of
-  a Linux main thread? A single constant cannot be right everywhere — is the default
-  chosen for release-on-desktop, with embedders expected to lower it, or for the worst
-  case, with embedders expected to raise it?
+- **Where does the budget value come from?** Embedder-supplied (they chose the stack
+  size), a conservative built-in default, or a `std`-gated platform query? A default that
+  is wrong in either direction is worse than requiring the number.
+- **How much headroom** below the real limit, given the check runs after the frame is
+  pushed and a third-party `ConstructParser` can burn an unbounded amount between two
+  descents?
+- **Does the budget check belong on by default?** It costs an address-of and a compare per
+  descent, but it turns a hard abort into an `Err` — the argument for opt-out rather than
+  opt-in.
+- Should a depth limit be offered *at all* alongside it, as off-by-default language policy
+  (§5 A′), or left entirely to presets and embedders?
 - Is `B.1` — removing the pass-through delta from the return pair in favour of the §6.1
   session channel — acceptable against the decided [§dd-dr:parsers-engine] signature? And
   is the runtime consume-obligation an acceptable trade for the compile-time destructuring?
-- Should the same limit cover `\input` recursion, or does that stay embedder policy as
-  documented? (The shared session makes covering it nearly free.)
-- Verify wasm32 overflow behaviour before quoting the 1 MiB numbers as safe.
+- Verify wasm32 overflow behaviour before quoting the 1 MiB numbers as safe — and before
+  relying on the budget check being reached *before* the shadow stack runs out.
 - Is the §6.4 `Vec<BuildId>` scratch+arena worth its extension-API change on allocation
   grounds alone, given it barely affects stack depth?
 
