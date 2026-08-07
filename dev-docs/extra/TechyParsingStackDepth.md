@@ -47,14 +47,28 @@ Four findings:
    `catch_unwind`, no diagnostic. This is a strictly worse outcome than the panics
    CLAUDE.md rule 4 / [§dd-dr:panic-policy] already forbid on input, and it is a DoS
    vector for any embedder parsing untrusted `.tex`.
-3. **No single type is to blame.** The largest value in the cycle is 472 B; the frames
-   are 1.5–1.8 KB because 13–27 *distinct* medium-sized values are live at once
-   (§3). There is no one-line fix.
+3. **One object family dominates: the pass-through delta.** Every object over 100 B on
+   the cycle is `Option<ParsingStateDelta<L>>` (208 B), `NodesOutcome<L>` (264 B, of
+   which 208 *is* that delta), or the return pair built from both (472 B). In
+   `NodesParser::parse`'s debug frame those three account for **15 424 B of 25 376 —
+   61 %** — and nearly every one of those slots carries `None`: every `Some(delta)`
+   return site in the crate is inside a `mod tests` (§3).
 4. **A depth limit alone is not sufficient.** A limit low enough to be safe in a debug
    build on a 2 MiB test thread is ~40 levels — low enough to reject legitimate
    documents. Either the limit is generous and debug builds still abort, or it is safe
    and it rejects real input. Getting both requires bringing the per-level constant down
    as well (§5).
+
+Measured remedy experiments (each applied alone to the pristine tree, then reverted):
+
+| change | release | debug |
+|---|---|---|
+| `NodesOutcome::after_effects` → `Option<Box<…>>` | **−22 %** (241 → 309 levels) | **−25 %** (30 → 40) |
+| `ParseError` payload boxed | ~0 % | −17 % |
+| `#[cold] #[inline(never)]` on the recovery entry points | none (241 → 239) | — |
+
+*(An earlier draft of this report concluded "no single type is to blame". That was wrong:
+it was based on release-build slot counts before the DWARF and debug-slot census in §3.)*
 
 ---
 
@@ -70,8 +84,20 @@ Four findings:
 - **Frame census**: temporary `stackmark!` instrumentation recorded the stack pointer at
   the top of each function in the descent cycle; deltas between consecutive marks give
   the per-level frame chain. Reverted after measurement.
-- **Frame sizes**: `sub $N,%rsp` in each prologue, read from `objdump -d` of the release
-  binary, plus callee-saved pushes and the return address.
+- **Frame sizes**: `sub $N,%rsp` in each prologue, read from `objdump -d`, plus
+  callee-saved pushes and the return address. **Debug frames need care**: functions with
+  large frames get LLVM's inline stack-probe prologue (`sub $0x1000,%rsp; movq
+  $0x0,(%rsp)` repeated, then a final `sub $rem,%rsp`), so the frame is the *sum* of the
+  probes plus the remainder — reading only the first `sub` under-reports
+  `NodesParser::parse` as 4 104 B instead of 25 376 B.
+- **Named stack objects**: parsed out of DWARF (`llvm-dwarfdump --debug-info` on the debug
+  build) — every `DW_TAG_variable` / `formal_parameter` with a `DW_OP_fbreg` location,
+  joined to its type's `DW_AT_byte_size`. Concrete instantiations of generic functions
+  carry no `DW_AT_linkage_name`; they point back to the abstract DIE via
+  `DW_AT_specification`, which must be followed or the function looks empty.
+- **Unnamed slots**: all distinct `lea off(%rsp)` offsets in a function body, histogrammed
+  by the gaps between consecutive offsets — this is what exposes the repeated 472/264/208 B
+  temporaries that DWARF does not name.
 - **Type sizes**: `size_of` from a temporary in-crate test module (so `pub(crate)` types
   were reachable). Reverted after measurement.
 - **`cargo test` thresholds**: separate `#[test]` fns at fixed depths, run one at a time
@@ -102,6 +128,27 @@ argument parser (`GroupArgumentParser::parse_argument`, 944 B) or an
 `EnvironmentInvocationParser::parse` (1 744 B) + `EnvironmentBodyParser::parse`
 (2 064 B) to the same cycle — hence 7.5–8.0 KB instead of 4.3 KB.
 
+In **debug** nothing inlines, so the chain has more distinct frames — and one of them
+dominates:
+
+| frame | debug | (release) |
+|---|---:|---:|
+| `ParseContext::parse_nodes` | 224 | 528 |
+| `ParseContext::parse_scoped` + closure | 96 | *inlined* |
+| `ParseContext::with_parsing_state` | 368 | *inlined* |
+| **`NodesParser::parse`** | **25 376** | 1 552 |
+| `ParseContext::parse_group` | 224 | ~370 |
+| `ParseContext::parse_scoped` + closure | 96 | *inlined* |
+| `ParseContext::with_parsing_state` | 368 | *inlined* |
+| **`GroupParser::parse`** | **5 136** | 1 840 |
+| `ParseContext::with_frame` | 752 | *inlined* |
+| `GroupParser::parse::{{closure}}` | 160 | *inlined* |
+| **total** | **32 800** | 4 288 |
+
+against 33.8–35.0 KB/level measured end-to-end (the binary search brackets depth 30/31),
+so the table accounts for essentially all of it. **`NodesParser::parse` alone is 77 % of a
+nesting level in debug.**
+
 Two notes on scope:
 
 - **The recursion is a public extension point.** `ConstructParser::parse(&mut self, cx)`
@@ -115,30 +162,56 @@ Two notes on scope:
 
 ---
 
-## 3. Why the frames are 1.5–1.8 KB
+## 3. What is actually on the frames
 
-Not one big value. The largest type in the cycle is the construct-parser return itself:
+Every object over ~100 B on the cycle is one of three, and they nest:
 
-| type | size |
-|---|---|
-| `Result<(NodesOutcome<L>, Option<ParsingStateDelta<L>>), ParseError>` | **472** |
-| `NodesParser<'_, L>` | 352 |
-| `NodesOutcome<L>` | 264 |
-| `Result<(BuildId, Option<ParsingStateDelta<L>>), ParseError>` | 216 |
-| `ParsingStateDelta<L>` / `ParsingState<L>` | 208 |
-| `Token<'_, L>` | 88 |
-| `Frame<L>` | 80 |
-| `ParseError` | 64 |
-| `StopSpec<'_, L>` / `ChildStateSpec<'_, L>` | 48 each |
+| object | size | of which |
+|---|---:|---|
+| `Option<ParsingStateDelta<L>>` | **208** | `TokenRulesOverrides<L>` — ~15 all-`Option` fields (`Option<Vec<Arc<GroupRule<L>>>>`, `Option<Vec<Arc<CommandRule>>>`, `Option<Arc<str>>`, `Option<Option<Arc<GroupRule<L>>>>`, …) plus two `Vec`s |
+| `NodesOutcome<L>` | **264** | `Vec<BuildId>` 24 + `StopCause` 24 + `Arc<ParsingState>` 8 + **`after_effects: Option<ParsingStateDelta<L>>` 208** |
+| `(Output, Option<ParsingStateDelta<L>>)` return pair | **472** | 264 + 208 |
 
-Counting address-taken stack slots in the disassembly: **`GroupParser::parse` holds 13
-distinct slots** (largest gaps 240, 208, 192, 120, 112, 80, 80, 80 B) and
-**`NodesParser::parse` holds 27** across 2 907 instructions. Both functions are large
-and branch-heavy — `NodesParser::parse` alone has 20 call sites to `outcome`, 18 to
-`flush_through`, and inlines the condition-building and message-formatting paths
-(`alloc::fmt::format::format_inner` ×6, `snapshot_frames` ×4) into arms that are cold in
-every real parse. LLVM's stack colouring does not merge those slots, so every level pays
-for every arm.
+Everything else on the path is below the threshold: `NodesParser<'_, L>` 352 (heap — it is
+a `Box<dyn ConstructParser>`), `TokenRecovery` 96, `Token<'_, L>` 88, `Frame<L>` 80,
+`NodeKind<L>` 72, `ParseError` 64, `StopSpec` / `ChildStateSpec` 48 each.
+
+**Named locals (DWARF, debug build).** `ParseContext::parse_nodes` has 4 locals totalling
+40 B and `parse_group` 6 totalling 64 B — nothing over 100 B; their frames are almost
+entirely the sret slot for the 472 B return value. `GroupParser::parse` has 21 locals
+(1 140 B): `outcome` 264, `delta` 208, `frame` 80, five 64 B `residual`s
+(`Result<Infallible, ParseError>`, one per `?`), `data` 56, `stop` 48, `child_states` 48.
+`NodesParser::parse` has 62 locals (2 504 B), topped by `_delta` 208, `recovery` 96, two
+`token` 88, two `kind` 72, and eight 64 B `residual`s.
+
+**Unnamed slots are where the mass is.** `NodesParser::parse`'s debug frame holds **178
+distinct address-taken slots spanning 24 872 B**, and the gap histogram is unambiguous:
+
+```
+   472 B × 16     the (NodesOutcome, Option<Delta>) return value      7 552 B
+   264 B × 18     NodesOutcome                                        4 752 B
+   208 B × 15     Option<ParsingStateDelta>                           3 120 B
+                                                          15 424 B = 61 % of the frame
+```
+
+They come from one expression repeated 17 times in the function body:
+
+```rust
+return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
+//         ◄── 264 B  NodesOutcome        (own slot, ×18)
+//    ◄────── 472 B  the Ok tuple/Result  (own slot, ×16)
+```
+
+**Nearly every one of those slots carries `None`.** Seventeen sites spell `return
+Ok((self.outcome(…), None))`; `NodesParser` binds the group descent's delta as `_delta`
+and drops it (`// groups have no after-effect`); `GroupParser` returns an
+`ImplementationError` if it is `Some`; and **every `Some(delta)` return site in the crate
+is inside a `mod tests`** (`nodes_parser.rs` 2690/2803, `argument_parsers.rs` 2119,
+`latexlike/input.rs` 798). No production parser has ever produced one.
+
+Debug is ~8× worse than release only because `-C opt-level=0` gives each of those 49
+occurrences its own slot instead of colouring them into a handful. The *object* is the
+same in both profiles, which is why the one measured fix helped both (§0).
 
 **Negative result worth recording**: marking the recovery *entry points*
 (`ParseContext::recover`, `recover_boxed`, `implementation_error`) `#[cold]
@@ -197,24 +270,24 @@ Two design questions for you:
    user would call "nesting depth".
 2. **Default value.** This is the uncomfortable part — see below.
 
-**B. Bring the per-level constant down.** Because a limit safe for a debug build on a
-2 MiB test thread is ~40 levels, and one generous enough for real documents (say 256)
-still overflows in debug, A alone does not close the hole. Candidates, roughly in
-payoff order — all of them need measuring with the probe, not assuming:
+**B. Get the big objects off the return path** (§6 works through the storage strategies).
+Because a limit safe for a debug build on a 2 MiB test thread is ~40 levels, and one
+generous enough for real documents (say 256) still overflows in debug, A alone does not
+close the hole. In payoff order:
 
-1. **Box the pass-through delta** in the construct-parser return pair:
-   `Option<ParsingStateDelta<L>>` (216 B) → `Option<Box<…>>` (8 B). It rides *every*
-   construct-parser return at every level and is `None` on the overwhelming majority of
-   them, so the allocation is rare. This changes a **decided** public signature
-   ([§dd-dr:parsers-engine]) — your call.
-2. **Shrink or box `NodesOutcome<L>`** (264 B), returned by value through every
-   content-loop level.
+1. **Take `Option<ParsingStateDelta<L>>` out of the construct-parser return pair** — not
+   shrink it, remove it. It is `None` at every production site (§3), so the slots exist
+   only to carry nothing. This changes a **decided** public signature
+   ([§dd-dr:parsers-engine]) — the user's call.
+2. **`NodesOutcome::after_effects` → `Option<Box<…>>`** — genuinely owned data a caller
+   may propagate, so it cannot become a borrow. Measured alone: −22 % release, −25 % debug.
 3. **Outline the cold arms** of `NodesParser::parse` and `GroupParser::parse` into
    `#[inline(never)]` helpers — the condition-construction and formatting bodies, not
    the recovery funnel (§3's negative result).
 
-Realistic expectation: 2×, maybe 3× — enough to make a generous limit safe in release
-and a modest one safe in debug. Not enough to make the limit unnecessary.
+Projection for 1 + 2 on `NodesParser::parse`'s debug frame: `NodesOutcome` 264 → 56, the
+return pair 472 → 56, so the 15 424 B of §3 becomes ~1 900 B and the frame ~11 900 B.
+Not enough to make the limit unnecessary.
 
 **C. Grow the stack on demand (`stacker`-style).** Rejected: needs `std` and
 per-platform support, does not work on wasm or `no_std`, and adds a dependency against
@@ -240,18 +313,152 @@ default upward with the headroom that buys.
 
 ---
 
-## 6. Open questions
+## 6. Storage strategies for the big objects
+
+Four ways to get the 208/264/472 B family off the frames were worked through. Summary
+first, argument after:
+
+| strategy | slot on the frame | alloc per `Some` | verdict |
+|---|---:|---|---|
+| today | 208 B | — | — |
+| `Option<Box<Delta>>` | 8 B | 1 malloc+free | **works**; measured on `after_effects` |
+| session channel, `Option<&Delta>` | 0–8 B | 0 (reused buffer) | **best for the return pair** |
+| session `Vec` pool + handles | 4–8 B | 0 (amortised) | equivalent to boxing; buys nothing here |
+| session bump allocator, `Box<T, A>` | **16 B** | 0 (amortised) | rejected |
+
+### 6.1 The session channel (recommended for the return pair)
+
+Drop the delta from `(Output, Option<ParsingStateDelta<L>>)`; the producer reports it
+through the session, the caller reads it back:
+
+```rust
+// producer (rare):   cx.report_after_effect(delta);
+// caller (every level):
+if let Some(d) = cx.pending_after_effect() {      // -> Option<&ParsingStateDelta<L>>, 8 B
+    cx.state = cx.derive_state_recording(d, &mut self.after_effects)?;
+}
+```
+
+The accessor **must hand out a reference**. An earlier sketch of this used
+`take_after_effect() -> Option<ParsingStateDelta<L>>`, which gives the caller ownership
+and re-materialises the 208 B on its frame — defeating the point entirely.
+
+A reference suffices because every consumer in the crate is already reference-based:
+`ParseContext::derive_state(&mut self, delta: &ParsingStateDelta<L>)` and
+`derive_state_recording(&mut self, delta: &…, record: &mut Option<…>)`. The one owned copy
+lands in `record` = `&mut self.after_effects`, a field of `NodesParser` — which the driver
+factory hands out as `Box<dyn ConstructParser>`, so that accumulator is **already on the
+heap**.
+
+**Main takeaway:** the win is not relocating the caller's local. It is that a channel has
+no `None` to construct and no `None` to receive, and the ~32 delta-sized slots per level
+that carry `None` (§3) simply cease to exist. The rare genuine `Some` was never on a frame
+to begin with.
+
+Semantics are preserved: [§dd-dr:immutable-state-deltas]'s caller-decides-scope law still
+holds, because the caller still decides — it reads a channel instead of destructuring a
+tuple. The cost is that "did the caller consume it?" becomes a runtime invariant rather
+than a destructuring, so it wants the closure-scoped-guard treatment the frame and
+enclosing-state stacks already get, with an `ImplementationError` on imbalance (the
+existing `delta.is_some()` check, relocated).
+
+### 6.2 Session `Vec` pool with handles
+
+Architecturally the most consistent option — `ParserSession` already hosts exactly this
+shape in `frames: Vec<Frame<L>>` and `state_stack: ParsingStateStack<L>`, both private,
+both closure-scoped push/pop with a documented balance invariant. And the general argument
+is sound and worth recording: **a session-hosted `Vec` moves depth-proportional growth off
+the guard-page-limited stack onto the heap**, where the bound is RAM rather than a
+SIGSEGV. That reasoning applies to any object whose count scales with nesting depth.
+
+For *this* object, though, it is equivalent to boxing on the stack axis, and its only extra
+benefit — skipping the malloc — is worth nothing, because `Some` never occurs in
+production code (§3). It would buy a handle-validity/LIFO invariant in exchange for
+eliminating an allocation that does not happen.
+
+### 6.3 Session bump allocator with `Box<T, A>` — rejected
+
+The API is available: `allocator_api` is still unstable (verified on rustc 1.94.1, issue
+#32838), but **`allocator-api2` v0.2.21 is already in techy's runtime dependency graph**
+via `hashbrown 0.15.5` and ships a stable `Box<T, A>` / `Vec<T, A>`. So the mechanism
+would cost no new crate for the API itself. It still fails, for four independent reasons:
+
+- **`Box<T, A>` stores the allocator handle inline**, so it grows 8 B (`Global`, a ZST) to
+  16 B (`&'s Bump`) — working against the stack goal. `Arc<Bump>` keeps 8 B at the cost of
+  refcount traffic.
+- **The lifetime infects the public API**: `Box<Delta, &'s Bump>` ⇒ `NodesOutcome<'s, L>`
+  ⇒ `ConstructParser` gains `'s` ⇒ every extension-point signature, which is exactly what
+  [§dd-dr:one-generic-param] guards against.
+- **"Repackage surviving boxes into global-allocator boxes when the root parser returns"
+  is the tell.** On this path it is a **no-op**: nothing survives — deltas are applied via
+  `derive_state` and dropped mid-parse, and `NodesOutcome::nodes` is flattened into the
+  tree's own storage by `NodeTreeBuilder::finish()`. Extending the arena to where the
+  allocation volume actually is — `NodeKind::Group(Box<GroupData<L>>)` and
+  `Callable(Box<CallableData<L>>)`, one box per node — makes it an **O(nodes) deep copy
+  with both representations live**, on top of the ~1.9× parse-time peak from
+  `TechyParsingMemoryFootprint.md`. There is no middle case where it pays.
+- **Destructors.** A bump arena's appeal is dropping the region wholesale, but
+  `ParsingStateDelta` owns global allocations and refcounts (§3's field list). Resetting
+  without running each box's `Drop` leaks every one of those `Vec`s and `Arc`s — and a leak
+  is a failure mode [§dd-dr:panic-policy] cannot surface as an `Err`. Tracking them to
+  drop them individually is a pool with extra steps.
+
+The one place the instinct would be right is a different library shape: parse into one
+contiguous arena and return a self-contained blob with no global-allocator interior. That
+is a ground-up decision about `NodeTree`'s representation — and it would trade away the
+`Arc<ParsingState>` sharing that nodes rely on — not a retrofit.
+
+### 6.4 The `Vec<BuildId>` arena — a real win, but on the *allocation* axis
+
+Separate from the stack question. Per `{…}` level the parse allocates:
+
+| allocation | per level |
+|---|---:|
+| `Box<dyn ConstructParser<…> + 'p>` from `make_nodes_parser` / `make_group_parser` | 2 |
+| `Vec<BuildId>` per node with children (moved into `Staged`, retained until `finish()`) | 1 |
+| the pass-through delta | 0 |
+
+The `Vec` wants a session-hosted arena — but **a naive append-only arena is wrong**,
+because a parent's children are not contiguous: in `{a{b}c}` the outer loop pushes `a`,
+then the nested descent stages `{b}` and appends *its* children, then the outer pushes `c`.
+Two regions are needed:
+
+- `session.child_scratch: Vec<BuildId>` — LIFO scratch. Each descent records a watermark;
+  a nested descent always drains back to *its* watermark before the parent pushes again, so
+  each descent's children genuinely are contiguous here.
+- `builder.child_arena: Vec<BuildId>` — append-only. At stage time, copy
+  `child_scratch[watermark..]` in, store a `Range<u32>` in `Staged`, truncate the scratch.
+
+Two plain `Vec`s — no allocator API, no lifetimes in public types. It removes the
+per-descent malloc *and* the per-staged-node `Staged::children` malloc (the one
+`TechyParsingMemoryFootprint.md` §0.4 flagged), takes `NodesOutcome::nodes` and
+`Staged::children` from 24 B to 8 B, and converges on the representation `finish()`
+already computes — it currently *derives* `ranges: Vec<Range<u32>>` from the per-node
+vecs, so staging in ranges removes a conversion rather than adding one.
+
+Costs: the watermark balance becomes a runtime invariant (closure-scoped guard, `Err` on
+imbalance — not a panic); and `stage_node(kind, span, state, children: Vec<BuildId>)` is a
+*public* extension affordance today, so extension parsers would move to a scratch handle.
+That API change is the bulk of the work, not the arena. It barely moves the stack needle
+on its own (24 → 8 B against a ~33 KB level) — these stay two independent changes.
+
+---
+
+## 7. Open questions
 
 - Limit in descent units or user-visible nesting depth (§5, A.1)?
 - Default limit, given that debug and release differ by 8× and wasm has 1/8 the stack of
   a Linux main thread? A single constant cannot be right everywhere — is the default
   chosen for release-on-desktop, with embedders expected to lower it, or for the worst
   case, with embedders expected to raise it?
-- Is `B.1` (boxing the pass-through delta) acceptable against the decided
-  [§dd-dr:parsers-engine] signature?
+- Is `B.1` — removing the pass-through delta from the return pair in favour of the §6.1
+  session channel — acceptable against the decided [§dd-dr:parsers-engine] signature? And
+  is the runtime consume-obligation an acceptable trade for the compile-time destructuring?
 - Should the same limit cover `\input` recursion, or does that stay embedder policy as
   documented? (The shared session makes covering it nearly free.)
 - Verify wasm32 overflow behaviour before quoting the 1 MiB numbers as safe.
+- Is the §6.4 `Vec<BuildId>` scratch+arena worth its extension-API change on allocation
+  grounds alone, given it barely affects stack depth?
 
 Once a direction is chosen, this warrants a `DESIGN_RATIONALE.md` entry with an
 `ARCHITECTURE.md` reference (CLAUDE.md rule 7); as an exploration report it follows the
@@ -259,7 +466,7 @@ Once a direction is chosen, this warrants a `DESIGN_RATIONALE.md` entry with an
 
 ---
 
-## 7. Reproducing
+## 8. Reproducing
 
 ```bash
 cargo run --release --example stack_probe -- 1024   # per-level cost at a 1 MiB stack
