@@ -94,7 +94,7 @@ pub trait TokenReader<'s, L: Lang> {
 
 /// End position of the whitespace run starting at `pos` (= `pos` if none, if
 /// whitespace handling is disabled, or if the language declares it absent —
-/// [`LangFeatures::Whitespace`] wins over whatever the rules data says).
+/// [`LangFeatures::Whitespace`], whose absent store holds no whitespace data at all).
 ///
 /// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
 /// caller-contract violation and panics, in all builds — one of the crate's few
@@ -155,8 +155,9 @@ fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
 /// comes from the state passed to [`peek`](TokenReader::peek) — which is what lets the
 /// rules change mid-parse through state transitions.
 ///
-/// A feature the language declares absent ([`Lang::Features`]) is never detected,
-/// whatever the rules data says: its detection branch is eliminated at compile time.
+/// A feature the language declares absent ([`Lang::Features`]) is never detected:
+/// its detection branch is eliminated at compile time, and its rules block stores no
+/// data to consult in the first place.
 #[derive(Debug, Clone)]
 pub struct StdTokenReader<'s> {
     content: &'s str,
@@ -455,7 +456,8 @@ impl<'s> StdTokenReader<'s> {
     /// terminating newline plus following indentation is the token's post-space — unless
     /// that whitespace forms a paragraph break, in which case the comment takes no
     /// post-space and the break surfaces as its own token. Returns `None` when the
-    /// language declares the comments feature absent, whatever the rules data says.
+    /// language declares the comments feature absent (such a language stores no
+    /// comment rules data at all).
     fn read_comment<L: Lang>(
         &self,
         pos: usize,

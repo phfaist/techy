@@ -63,8 +63,8 @@ impl<L: Lang> PrefixTable<L> {
     /// branches on it;
     /// the expected group close is checked separately by the reader and is *not* gated.
     /// A language that declares the groups feature absent
-    /// ([`LangFeatures::Groups`]) gets the empty table too, whatever the rules data
-    /// says: group rules contribute nothing.
+    /// ([`LangFeatures::Groups`]) gets the empty table too: no group rules data
+    /// exists for it that could contribute entries.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
         if !<L::Features as LangFeatures>::Groups::PRESENT || !rules.groups_enabled() {

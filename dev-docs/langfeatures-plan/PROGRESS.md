@@ -1000,9 +1000,100 @@ semver output is unexplained.
     plus one E0282 (a projected field no longer drives inference in
     `chars_group_parser` — turbofish, same class as task A's fallout).
 
+- **M3 implementer C** — ScopeStack storage gating + `LangHasScopes` on the mutating
+  entry points + flagged-site sweep. Crate GREEN. Task D untouched (size regression
+  tests still pending).
+  - **scopes/mod.rs**: `ScopeStack<L>`'s private `stack` field is now the fully
+    spelled `Scopes::Store<Vec<Arc<dyn SpecsProvider<L>>>>` projection;
+    `new()`/`Default` build via `store_with(Vec::new)` (unbounded — every language
+    constructs the empty stack inside `StateData`). One private read helper
+    `entries() -> &[Arc<dyn SpecsProvider<L>>]`
+    (`store_get(...).map_or(&[], ...)`) routes every read-only method —
+    `providers`, `provider_names`, `SearchedProviders`' Display (via
+    `provider_names`/`is_empty`), `len`, `is_empty`, `retrieve_spec`,
+    `scan_specials`, `specials_trigger_chars`, `iter_symbols` — so absent = the
+    permanently empty stack, every fold/search giving its empty-stack answer
+    (`check_provider_commands_shadowed_by_escape` already reads via `providers()`,
+    no change needed). Clone unchanged (store clone); Debug keeps the "providers"
+    field label (absent prints the zero-sized marker). `push()` gained
+    `where L: LangHasScopes` (body unchanged — the store is transparent under the
+    bound), one plain rustdoc sentence; struct-level rustdoc paragraph states the
+    storage gating. Private helpers `route_definition`/`innermost_position` now take
+    the projected `&mut [..]`/`&[..]` (borrow-friendly under `apply_op`'s
+    projection).
+  - **`apply_op` stays unbounded** (PLAN's bound list is exhaustive; the generic
+    delta path in delta.rs calls it under bare `L: Lang`): body projects via
+    `store_get_mut`; `None` (scopes absent) returns the NEW
+    `ScopeOpError::ScopesAbsent` (unit variant, additive under `#[non_exhaustive]`;
+    Display: "the language declares the scope stack absent; no scope operation can
+    apply"; variant rustdoc records it is reachable only by direct `apply_op` calls
+    — a delta can never carry scope ops for such a language). Supervisor-decided
+    loud failure, recorded under Questions below.
+  - **FORCED BOUND (review me): `ParsingState::lang_initial_with_packages` gained
+    `where L: LangHasScopes`** — it pushes providers onto the seed's stack under a
+    bare `L: Lang`, which no longer compiles with `push` bounded; a scope-mutating
+    entry point per PLAN M3's bound line. Silent package drop and a runtime error in
+    the documented-infallible constructor were both ruled out by the design entry.
+    Every existing caller is a concrete all-present language (latexlike, tests,
+    extract doctest); doc sentence added pointing scopes-absent languages at
+    `lang_initial()`. Joins the expected-breaking list with `push`.
+  - **Flagged-site sweep** (all closed, little code): `Lang::finalize_transition` —
+    nothing in src assumes it can touch an absent block (the fields are zero-sized
+    stores since M3a/b); its rustdoc carries no M2-era claim. reader.rs
+    `detect_group_delimiter` — no stale caveat comment existed; the expecting-close
+    read goes through `expecting_group_close()` (accessor answers `None` under
+    absent Groups) and the prefix-table comment is already M3-accurate.
+    `group_interior_state` — verified B's projection + comment in place. Retired
+    transitional channel: grep of techy/src + techy/tests for
+    `absent_overrides`/`AbsentFeatureOverrideError`/"hash as nothing only at
+    M3"/"at M3" promises is CLEAN (B got them all). No direct `.scopes.<field>`
+    paths outside scopes/mod.rs (all access via stack methods; `StateData.scopes`
+    stays a plain `ScopeStack<L>` field, correct). Fixed four M2-era "whatever the
+    rules data says" doc phrasings that now describe unrepresentable data:
+    `skip_whitespace` doc, `StdTokenReader` struct doc, `read_comment` doc
+    (reader.rs), `PrefixTable::for_rules` doc — reworded to "no rules data exists
+    for it" (state_memo.rs's since-M2/since-M3 history comment is present-tense
+    accurate and kept).
+  - **tests/lang_features.rs**: `feature_composition` gained the positive
+    `ScopeStack::push` compile fact (`push_onto_scope_stack<L: LangHasScopes>`,
+    instantiated with the all-present language). Two new runtime pins in
+    `commands_without_scopes`:
+    `the_scope_stack_of_a_scopes_absent_language_is_permanently_empty`
+    (`scopes()` answers `is_empty()`, `providers().is_empty()`, `len() == 0`) and
+    `apply_op_on_a_scopes_absent_stack_reports_scopes_absent_without_panicking`
+    (fresh stack + `ScopeOp::Push` → `Err(ScopeOpError::ScopesAbsent)`, stack still
+    empty). Module doc extended by one sentence (the stack itself is storage-gated).
+    Existing assertion values untouched; support module needed no construction
+    changes (`ScopeStack::new()` stayed unbounded).
+  - **Expected-breaking additions for the M3 gate run**: `ScopeStack::push` and
+    `ParsingState::lang_initial_with_packages` bounded `LangHasScopes`;
+    `ScopeOpError::ScopesAbsent` is additive (`#[non_exhaustive]`).
+  - **Gates**: `cargo build` clean; `cargo test --workspace` **897 passed / 0
+    failed / 4 ignored** (per-target 758+30+8+12+21+1+67; 2+2 ignored — task B's 895
+    plus exactly the 2 new runtime pins); `cargo check --workspace --tests` zero
+    warnings on a forced rebuild; fresh `rm -rf target/doc && cargo docs` zero
+    warnings, the `ScopeOpError` page carries the new variant.
+  - **Surprises**: only the `lang_initial_with_packages` forced bound (above);
+    the store projections, the transparent `push` body, and the borrow-driven
+    helper re-shaping all behaved as B's delta.rs patterns predicted.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
+
+- **`ScopeOpError` gained the unit variant `ScopesAbsent` (M3c).**
+  `ScopeStack::apply_op` must stay unbounded — the generic delta-application path
+  (delta.rs `apply_overrides`) calls it under a projection over bare `L: Lang`,
+  where a `LangHasScopes` bound cannot be proven — so when its store projection
+  answers `None` (the language declares the scope stack absent) it needs a runtime
+  answer. A silent no-op is ruled out by [§dd-dr:lang-features] (loud failure for
+  authored absent-feature data); a panic is ruled out by [§dd-dr:panic-policy]
+  rule 3. The conservative option taken: a new error variant — additive, the enum
+  is `#[non_exhaustive]` — reachable only by calling `apply_op` directly on such a
+  stack (a delta can never carry scope ops for one; the scope-op list is
+  storage-gated). Display: "the language declares the scope stack absent; no scope
+  operation can apply". Flagged for review; pinned by
+  `apply_op_on_a_scopes_absent_stack_reports_scopes_absent_without_panicking`.
 
 - **Should nodes_parser's Comment arm get an absent-feature guard?** PLAN M2's
   dispatch-arm list is exhaustive (Command, GroupOpen, specials, paragraph) and

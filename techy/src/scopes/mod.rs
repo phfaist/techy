@@ -57,7 +57,10 @@ use crate::error::{Diagnostic, DiagnosticInfo, Diagnostics};
 use crate::node::{BuildId, NodeKind};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, IntoCallableSpec};
-use crate::state::{ClosedVocabulary, Lang, ParsingState, ParsingStateDelta};
+use crate::state::{
+    ClosedVocabulary, FeaturePresence, Lang, LangFeatures, LangHasScopes, ParsingState,
+    ParsingStateDelta,
+};
 use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
 
 /// The syntax through which a callable invocation was recognized.
@@ -224,6 +227,12 @@ pub enum ScopeOpError {
     },
     /// The targeted provider rejected or failed the op.
     Provider(ScopeStackError),
+    /// The stack belongs to a language that declares the scope stack absent
+    /// ([`Lang::Features`]): no scope operation can apply. Reachable only by calling
+    /// [`ScopeStack::apply_op`] directly on such a stack — a state delta can never
+    /// carry scope ops for one, because the delta's scope-op list is stored through
+    /// the same declaration and holds nothing for it.
+    ScopesAbsent,
 }
 
 impl fmt::Display for ScopeOpError {
@@ -233,6 +242,10 @@ impl fmt::Display for ScopeOpError {
                 write!(f, "no provider named ‘{name}’ on the scope stack")
             }
             ScopeOpError::Provider(error) => fmt::Display::fmt(error, f),
+            ScopeOpError::ScopesAbsent => write!(
+                f,
+                "the language declares the scope stack absent; no scope operation can apply"
+            ),
         }
     }
 }
@@ -242,6 +255,7 @@ impl core::error::Error for ScopeOpError {
         match self {
             ScopeOpError::UnknownProvider { .. } => None,
             ScopeOpError::Provider(error) => Some(error),
+            ScopeOpError::ScopesAbsent => None,
         }
     }
 }
@@ -1411,31 +1425,60 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
 /// Mid-parse changes go through [`ScopeOp`]s in a state delta; [`apply_op`](ScopeStack::apply_op)
 /// is the primitive behind them (also usable directly on an owned stack, e.g. while
 /// seeding an initial state).
+///
+/// **Storage follows the language's feature declarations.** Like the token-rules
+/// blocks, the provider list is stored through the scopes presence declaration of
+/// [`Lang::Features`] ([`FeaturePresence::Store`]): for a language that declares the
+/// scope stack absent, the list is replaced by the zero-sized store and the stack is
+/// permanently empty — every lookup gives the empty-stack answer,
+/// [`push`](ScopeStack::push) requires a language with the feature
+/// ([`LangHasScopes`]), and [`apply_op`](ScopeStack::apply_op) reports
+/// [`ScopeOpError::ScopesAbsent`].
 pub struct ScopeStack<L: Lang> {
-    /// Outermost first; folds iterate in reverse.
-    stack: Vec<Arc<dyn SpecsProvider<L>>>,
+    /// Outermost first; folds iterate in reverse. For a language that declares the
+    /// scope stack absent, this is the zero-sized store — no list exists.
+    stack: <<L::Features as LangFeatures>::Scopes as FeaturePresence>::Store<
+        Vec<Arc<dyn SpecsProvider<L>>>,
+    >,
 }
 
 impl<L: Lang> ScopeStack<L> {
-    /// An empty stack: no definitions at all.
+    /// An empty stack: no definitions at all. Every language constructs one (the
+    /// parsing state stores a stack unconditionally); for a language that declares
+    /// the scope stack absent, the empty stack is the only value the stack ever has.
     pub fn new() -> ScopeStack<L> {
-        ScopeStack { stack: Vec::new() }
+        ScopeStack { stack: <L::Features as LangFeatures>::Scopes::store_with(Vec::new) }
     }
 
-    /// Push a provider as the new innermost entry.
-    pub fn push(&mut self, provider: Arc<dyn SpecsProvider<L>>) {
+    /// The provider list through the storage projection: the stored entries, or the
+    /// empty slice when the language declares the scope stack absent (the stack is
+    /// then permanently empty). Every read-only method routes through this, so each
+    /// gives its empty-stack answer under an absent declaration.
+    fn entries(&self) -> &[Arc<dyn SpecsProvider<L>>] {
+        <L::Features as LangFeatures>::Scopes::store_get(&self.stack)
+            .map_or(&[], |providers| providers.as_slice())
+    }
+
+    /// Push a provider as the new innermost entry. Requires a language whose
+    /// features declare the scope stack present ([`LangHasScopes`]).
+    pub fn push(&mut self, provider: Arc<dyn SpecsProvider<L>>)
+    where
+        L: LangHasScopes,
+    {
+        // Under the bound the store is transparent: the field is the list itself.
         self.stack.push(provider);
     }
 
     /// The providers, outermost first (the storage order; folds run innermost-first).
+    /// The empty slice when the language declares the scope stack absent.
     pub fn providers(&self) -> &[Arc<dyn SpecsProvider<L>>] {
-        &self.stack
+        self.entries()
     }
 
     /// The provider names, **innermost first** (the search order — the order the miss
     /// detail reports).
     pub fn provider_names(&self) -> impl Iterator<Item = &str> + '_ {
-        self.stack.iter().rev().map(|provider| provider.name())
+        self.entries().iter().rev().map(|provider| provider.name())
     }
 
     /// A [`Display`](fmt::Display) adapter rendering the searched-provider detail for
@@ -1448,12 +1491,12 @@ impl<L: Lang> ScopeStack<L> {
 
     /// Number of providers on the stack.
     pub fn len(&self) -> usize {
-        self.stack.len()
+        self.entries().len()
     }
 
     /// Whether the stack holds no providers.
     pub fn is_empty(&self) -> bool {
-        self.stack.is_empty()
+        self.entries().is_empty()
     }
 
     /// Resolve `query`: fold over the providers innermost-first; the first hit wins.
@@ -1466,7 +1509,7 @@ impl<L: Lang> ScopeStack<L> {
         query: &CallableQuery<'_, '_, L>,
         state: &ParsingState<L>,
     ) -> Result<Option<Arc<dyn CallableSpec<L>>>, ScopeStackError> {
-        for provider in self.stack.iter().rev() {
+        for provider in self.entries().iter().rev() {
             match provider.retrieve_spec(query, state) {
                 Ok(Some(spec)) => return Ok(Some(spec)),
                 Ok(None) => {}
@@ -1491,7 +1534,7 @@ impl<L: Lang> ScopeStack<L> {
         pos: usize,
     ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
         let mut best: Option<SpecialsMatch<'s, L>> = None;
-        for provider in self.stack.iter().rev() {
+        for provider in self.entries().iter().rev() {
             if let Some(matched) = provider.scan_specials(state, content, pos)? {
                 // Strictly longer wins; an equal-length later (outer) match loses.
                 if best.as_ref().is_none_or(|current| matched.end > current.end) {
@@ -1507,7 +1550,7 @@ impl<L: Lang> ScopeStack<L> {
     /// computed at state freeze and cached on the state, like every trigger filter.
     pub fn specials_trigger_chars(&self) -> TriggerChars {
         let mut union = TriggerChars::default();
-        for provider in &self.stack {
+        for provider in self.entries() {
             union = union.union(&provider.specials_trigger_chars());
         }
         union
@@ -1536,7 +1579,7 @@ impl<L: Lang> ScopeStack<L> {
     ) -> Vec<SymbolEntry<'_, L>> {
         let mut seen: hashbrown::HashSet<&str> = hashbrown::HashSet::new();
         let mut symbols = Vec::new();
-        for provider in self.stack.iter().rev() {
+        for provider in self.entries().iter().rev() {
             let Some(entries) = provider.iter_symbols(callable_type, mode) else {
                 continue;
             };
@@ -1552,29 +1595,37 @@ impl<L: Lang> ScopeStack<L> {
     /// Apply one [`ScopeOp`] — the primitive behind
     /// [`ParsingStateDelta::scope_ops`](crate::state::ParsingStateDelta). Name-targeted
     /// ops address the innermost provider with that name; failures are reported, never
-    /// silent (see the per-variant docs on [`ScopeOp`]).
+    /// silent (see the per-variant docs on [`ScopeOp`]). On a stack of a language that
+    /// declares the scope stack absent, every op fails with
+    /// [`ScopeOpError::ScopesAbsent`] — such a call can only be direct: a state delta
+    /// cannot carry scope ops for that language.
     pub fn apply_op(&mut self, op: &ScopeOp<L>) -> Result<(), ScopeOpError> {
+        let Some(stack) =
+            <L::Features as LangFeatures>::Scopes::store_get_mut(&mut self.stack)
+        else {
+            return Err(ScopeOpError::ScopesAbsent);
+        };
         match op {
             ScopeOp::Push(provider) => {
-                self.stack.push(Arc::clone(provider));
+                stack.push(Arc::clone(provider));
                 Ok(())
             }
             ScopeOp::Unload { name } => {
-                let index = self.innermost_position(name).ok_or_else(|| {
+                let index = Self::innermost_position(stack, name).ok_or_else(|| {
                     ScopeOpError::UnknownProvider { name: name.clone() }
                 })?;
-                self.stack.remove(index);
+                stack.remove(index);
                 Ok(())
             }
             ScopeOp::Replace { name, provider } => {
-                let index = self.innermost_position(name).ok_or_else(|| {
+                let index = Self::innermost_position(stack, name).ok_or_else(|| {
                     ScopeOpError::UnknownProvider { name: name.clone() }
                 })?;
-                self.stack[index] = Arc::clone(provider);
+                stack[index] = Arc::clone(provider);
                 Ok(())
             }
             ScopeOp::ReplaceStack(providers) => {
-                self.stack = providers.clone();
+                *stack = providers.clone();
                 Ok(())
             }
             ScopeOp::Define { scope, callable_type, name, spec } => {
@@ -1583,14 +1634,14 @@ impl<L: Lang> ScopeStack<L> {
                     name: name.clone(),
                     spec: Arc::clone(spec),
                 };
-                match self.innermost_position(scope) {
-                    Some(index) => self.route_definition(index, scope, op),
+                match Self::innermost_position(stack, scope) {
+                    Some(index) => Self::route_definition(stack, index, scope, op),
                     None => {
                         // Lazy creation: the first Define into an absent scope name
                         // creates it, innermost (DESIGN_RATIONALE.md [§dd-dr:specs]).
                         let mut fresh = Scope::new(scope.clone());
                         fresh.insert(*callable_type, name.clone(), Arc::clone(spec));
-                        self.stack.push(Arc::new(fresh));
+                        stack.push(Arc::new(fresh));
                         Ok(())
                     }
                 }
@@ -1600,24 +1651,24 @@ impl<L: Lang> ScopeStack<L> {
                     callable_type: *callable_type,
                     name: name.clone(),
                 };
-                let index = self.innermost_position(scope).ok_or_else(|| {
+                let index = Self::innermost_position(stack, scope).ok_or_else(|| {
                     ScopeOpError::UnknownProvider { name: scope.clone() }
                 })?;
-                self.route_definition(index, scope, op)
+                Self::route_definition(stack, index, scope, op)
             }
         }
     }
 
     /// Route one definition op to the provider at `index` (copy-on-write entry swap).
     fn route_definition(
-        &mut self,
+        stack: &mut [Arc<dyn SpecsProvider<L>>],
         index: usize,
         scope: &str,
         op: DefinitionOp<L>,
     ) -> Result<(), ScopeOpError> {
-        match self.stack[index].with_definitions(&[op]) {
+        match stack[index].with_definitions(&[op]) {
             Ok(fresh) => {
-                self.stack[index] = fresh;
+                stack[index] = fresh;
                 Ok(())
             }
             Err(error) => Err(ScopeOpError::Provider(ScopeStackError {
@@ -1628,8 +1679,11 @@ impl<L: Lang> ScopeStack<L> {
     }
 
     /// Index of the innermost provider named `name`, if any.
-    fn innermost_position(&self, name: &str) -> Option<usize> {
-        self.stack.iter().rposition(|provider| provider.name() == name)
+    fn innermost_position(
+        stack: &[Arc<dyn SpecsProvider<L>>],
+        name: &str,
+    ) -> Option<usize> {
+        stack.iter().rposition(|provider| provider.name() == name)
     }
 }
 

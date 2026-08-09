@@ -10,7 +10,7 @@ use crate::scopes::{IntoSpecsProvider, ScopeOpError, ScopeStack};
 use crate::token::{PrefixTable, TokenRules, TriggerChars};
 
 use super::delta::ParsingStateDelta;
-use super::features::{FeaturePresence, LangFeatures};
+use super::features::{FeaturePresence, LangFeatures, LangHasScopes};
 use super::lang::Lang;
 
 /// The plain stored settings of a parsing state — the data that deltas override and
@@ -102,8 +102,11 @@ impl<L: Lang> ParsingState<L> {
     /// The *Lang's* seed state with `packages` pushed onto its scope stack (in
     /// iteration order — the last pushed is innermost and shadows the ones below):
     /// the everyday "define a package, add it to the language" construction,
-    /// **infallible** where the delta path is not. Packages pass by value through the
-    /// sealed [`IntoSpecsProvider`] conversion (pre-shared `Arc`s pass through):
+    /// **infallible** where the delta path is not. Requires a language whose
+    /// features declare the scope stack present ([`LangHasScopes`]) — pushing
+    /// providers is scope mutation; a language without the feature seeds via
+    /// [`lang_initial`](ParsingState::lang_initial). Packages pass by value through
+    /// the sealed [`IntoSpecsProvider`] conversion (pre-shared `Arc`s pass through):
     ///
     /// ```
     /// # use techy::core::{Language, ParsingState, StdParseDriver};
@@ -132,7 +135,10 @@ impl<L: Lang> ParsingState<L> {
     /// `ParsingState::lang_initial().derived(&delta)?`.
     pub fn lang_initial_with_packages(
         packages: impl IntoIterator<Item: IntoSpecsProvider<L>>,
-    ) -> ParsingState<L> {
+    ) -> ParsingState<L>
+    where
+        L: LangHasScopes,
+    {
         let mut data = L::initial_state_data();
         for package in packages {
             data.scopes.push(package.into_specs_provider());
@@ -291,7 +297,9 @@ impl<L: Lang> ParsingState<L> {
         &self.data.rules
     }
 
-    /// The definitions visible in this state: the provider stack.
+    /// The definitions visible in this state: the provider stack. For a language
+    /// that declares the scope stack absent ([`Lang::Features`]), the returned stack
+    /// is permanently empty.
     pub fn scopes(&self) -> &ScopeStack<L> {
         &self.data.scopes
     }

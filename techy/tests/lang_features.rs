@@ -24,7 +24,9 @@
 //!   delta's scope-op list are zero-sized stores for absent features, and the
 //!   scope-op builders and the verbatim recipe carry feature bounds — writing such
 //!   a delta is a compile-time error, not a runtime report (the positive halves of
-//!   those compile facts are pinned in `feature_composition`).
+//!   those compile facts are pinned in `feature_composition`). The scope stack
+//!   itself is stored the same way: with the feature absent it is permanently
+//!   empty, and applying a scope op to it directly reports `ScopesAbsent`.
 //!
 //! Composition note for the commands language: whitespace is present because command
 //! tokenization consumes post-space through `skip_whitespace`; groups stay absent
@@ -514,6 +516,8 @@ mod groups_only {
 
 mod commands_without_scopes {
     use super::support::*;
+    use std::sync::Arc;
+    use techy::core::specs::{Package, ScopeOp, ScopeOpError, ScopeStack, SpecsProvider};
     use techy::core::{
         Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
         WhitespaceOverrides,
@@ -603,6 +607,32 @@ mod commands_without_scopes {
     // `verbatim_state_delta::<CommandsWithoutScopesLang>` does not compile at all —
     // the application-time error it pinned has no delta left to trigger it. The
     // positive half of the compile fact is pinned in `feature_composition`.)
+
+    // Scopes absent: the state still stores a scope stack — the field exists for
+    // every language — but its storage is the zero-sized store, so the stack is
+    // permanently empty and every read gives the empty-stack answer.
+    #[test]
+    fn the_scope_stack_of_a_scopes_absent_language_is_permanently_empty() {
+        let state = ParsingState::<CommandsWithoutScopesLang>::lang_initial();
+        assert!(state.scopes().is_empty());
+        assert!(state.scopes().providers().is_empty());
+        assert_eq!(state.scopes().len(), 0);
+    }
+
+    // The one remaining runtime answer of the scope feature: `apply_op` called
+    // directly on a stack of a scopes-absent language reports `ScopesAbsent` — loud,
+    // no panic, nothing applied. A state delta can never trigger this (its scope-op
+    // list is storage-gated and the builders carry the `LangHasScopes` bound); only
+    // a direct call reaches it.
+    #[test]
+    fn apply_op_on_a_scopes_absent_stack_reports_scopes_absent_without_panicking() {
+        let mut stack: ScopeStack<CommandsWithoutScopesLang> = ScopeStack::new();
+        let provider: Arc<dyn SpecsProvider<CommandsWithoutScopesLang>> =
+            Arc::new(Package::new("late"));
+        let error = stack.apply_op(&ScopeOp::Push(provider)).unwrap_err();
+        assert_eq!(error, ScopeOpError::ScopesAbsent);
+        assert!(stack.is_empty());
+    }
 }
 
 // -------------------------------------------------------------------------------------
@@ -613,7 +643,7 @@ mod feature_composition {
     use super::support::{CommandsWithoutScopesLang, GroupsOnlyLang};
     use std::sync::Arc;
     use techy::core::constructs::verbatim_state_delta;
-    use techy::core::specs::ScopeOp;
+    use techy::core::specs::{ScopeOp, ScopeStack, SpecsProvider};
     use techy::core::{
         FeaturePresence, GroupRule, Lang, LangFeatures, LangHasCommands, LangHasGroups,
         LangHasScopes, LangHasWhitespace, ParsingStateDelta, TrivialLang,
@@ -658,6 +688,22 @@ mod feature_composition {
         ParsingStateDelta<AllPresentLang>,
         ScopeOp<AllPresentLang>,
     ) -> ParsingStateDelta<AllPresentLang> = add_scope_op::<AllPresentLang>;
+
+    // `ScopeStack::push` — direct stack mutation — requires the scopes feature the
+    // same way; under the bound the stack's storage is transparent and the push is a
+    // plain list push. (The negative half — pushing onto a scopes-absent language's
+    // stack — does not compile, which is the fact itself.)
+    fn push_onto_scope_stack<L: LangHasScopes>(
+        mut stack: ScopeStack<L>,
+        provider: Arc<dyn SpecsProvider<L>>,
+    ) -> ScopeStack<L> {
+        stack.push(provider);
+        stack
+    }
+    const _: fn(
+        ScopeStack<AllPresentLang>,
+        Arc<dyn SpecsProvider<AllPresentLang>>,
+    ) -> ScopeStack<AllPresentLang> = push_onto_scope_stack::<AllPresentLang>;
 
     type GroupsOnlyDecl = <GroupsOnlyLang as Lang>::Features;
     const _: () =
