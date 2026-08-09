@@ -2,6 +2,8 @@
 
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/agent-a01480fa109b19cef`
 - **Branch**: `lang-features`
+- **M3 worktree**: `/Users/philippe/projects/techy/.claude/worktrees/agent-abcf5ade530ed3cd0`
+  (branch `lang-features-m3`, off `lang-features`; fast-forwards into the chain at merge time)
 - **Plan**: see `dev-docs/langfeatures-plan/PLAN.md` (Design Spec is user-ruled; do not relitigate)
 
 ## Status
@@ -11,7 +13,7 @@
 | D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
 | M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
 | M2 | `Lang::Features` + const gating | done (d5d6aa8 + d673edf + c955741 + a0bf306 + 54cbe7d + final fix/gate commit) |
-| M3 | Uniform storage gating (FeaturePresence::Store) | pending |
+| M3 | Uniform storage gating (FeaturePresence::Store) | in progress (worktree agent-abcf5ade530ed3cd0, branch lang-features-m3) |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
 
 ## Log
