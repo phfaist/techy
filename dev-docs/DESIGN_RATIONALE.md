@@ -1410,7 +1410,10 @@ all-`None`). It is the scoped off for every feature the language has and must ne
 be able to fail: applying a `disable_all()`-based delta never reports an
 absent-feature violation. This supplements, not softens, the loud-failure stance on
 gated overrides — explicitly *authored* data on an absent feature's block still
-errors; only the crate's own constructor consults the declarations. Under an
+errors; of the crate's own constructors, only `disable_all()` consults the
+declarations (the six per-block `disable()` constructors stay presence-blind —
+authored use of one on an absent feature is exactly the explicit data the error
+exists for). Under an
 all-features-present language the returned value is unchanged: all six gates
 `Some(false)`.)*
 

@@ -10,7 +10,7 @@
 |-------|-------------|--------|
 | D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
 | M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
-| M2 | `Lang::Features` + const gating | in-progress |
+| M2 | `Lang::Features` + const gating | done (d5d6aa8 + d673edf + c955741 + a0bf306 + 54cbe7d + final fix/gate commit) |
 | M3 | Uniform storage gating (FeaturePresence::Store) | pending |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
 
@@ -627,13 +627,163 @@ exported via `techy::core` (additive).
     purely constructor-side, and no production file other than delta.rs (code) and
     verbatim_parser.rs (doc sentence) needed touching.
 
+- **M2 reviewer** — full-diff review of c1d8a62..54cbe7d (five commits: prototype
+  verdict, M2a, M2b, M2c, M2d) against PLAN M2, [§dd-dr:lang-features] as amended,
+  [§dd-dr:superseded-names], [§dd-dr:panic-policy] rule 3, [§dd-arch:naming], and the
+  2026-08-10 disable_all ruling. Findings: **0 blocker, 1 should-fix, 2 nit**. Gates
+  re-run independently, all green.
+  - should-fix (techy/src/token/reader.rs, `TokenReader` trait contract bullet):
+    the new "Absent features yield no tokens" bullet claims the parsing machinery
+    "reports an implementation error instead of processing it" for every absent
+    feature's token kind and names `Comment` among them — but the nodes_parser
+    `Comment` arm is deliberately unguarded (PLAN's arm list is exhaustive:
+    Command/GroupOpen/Specials/ParagraphBreak only, per implementer E's log), so a
+    contract-violating `Comment` token would be processed into a comment node, not
+    reported. Public-contract overclaim: either soften the bullet to the four
+    funneled kinds (+ stray GroupClose via the language.rs arm), or a user ruling
+    adds a fifth guard beyond the PLAN list.
+  - nit (dev-docs/ARCHITECTURE.md:697, PRE-EXISTING, outside this diff): the
+    Phase-3 prose "`disable_all` and the collection constructors remain pending
+    their stage" contradicts [§dd-dr:takeover-staging-sugar]'s applied notes (item 1
+    at S2, item 2 at S3). Adjacent to the newly amended entry; M4-sweep candidate.
+  - nit (dev-docs/DESIGN_RATIONALE.md [§dd-dr:lang-features] amendment): "only the
+    crate's own constructor consults the declarations" — singular means
+    disable_all(), but the six per-block `disable()` constructors are also crate
+    constructors and stay presence-blind (correctly so, G's judgment call); one word
+    ("the crate's own `disable_all()` constructor") would remove the misreading.
+    The delta.rs rustdoc already says it precisely.
+  - Everything else verified clean: public inventory exactly PLAN + E's plumbing
+    (14 feature items + AbsentFeatureOverrideError + apply→Result +
+    DeriveError.absent_overrides; F/G bundles test-local, nothing else new-public,
+    one canonical path each via techy::core); FeaturePresence genuinely sealed
+    (private-supertrait), LangFeatures open; all eight LangHas* in the ADOPTED
+    ATB-supertrait spelling with blanket impls, Paragraphs→Whitespace the only
+    edge; GAT bounds Clone+Debug+Default with the PartialEq/Eq drop justified
+    (dyn SpecsProvider payload — pinned by the 13-payload compile_checks roster);
+    const guards at every PLAN site (reader ×7 incl. skip_whitespace in-loop,
+    PrefixTable::for_rules, four nodes_parser arms via implementation_error,
+    derived() temporary-strip, delta apply/apply_overrides incl. scope_ops,
+    state_memo hash/eq in verified lockstep with original field order + updated M1
+    comment, language.rs stray-close) — absent wins over populated runtime data,
+    const-foldable `if X::PRESENT` style throughout, zero new
+    panic/unwrap/expect/unreachable in lib code (only `const _` asserts in
+    cfg(test)); E's unguarded list all genuinely M3-scope (verbatim probe,
+    ScopeStack::push, freeze-time trigger cache, group_interior_state — the Comment
+    arm is the should-fix's doc side only; also noted for M3: finalize_transition
+    can still mutate an absent block directly, same Store-collapse category as
+    push); 2026-08-10 ruling implemented faithfully (disable_all feature-aware by
+    construction, never fails, ruled rustdoc wording, per-block disable()
+    presence-blind without contradicting the ruling, dated DR amendments in both
+    entries, disable_all sweep clean of old-behavior claims); test languages match
+    PLAN (populated-seed absent-wins, in-parse violations → ImplementationError
+    both policies no panic, gated overrides both directions, verbatim transitional
+    pin robust to the rework, compositions pinned at type level); rustdoc complete
+    (three spellings on TokenRules each defined; subtraits say never-hand-implemented;
+    no dd-dr labels in public rustdoc, no banned names, no "facet", spec names
+    exact); behavior identity holds (pre-M2 tests changed only by `type Features`
+    one-liners; delta.rs disable_all test values untouched).
+  - **Gates**: `cargo build` clean; `cargo test --workspace` 899 passed / 0 failed /
+    4 ignored (758+30+8+15+21+1+66; 2+2 ignored — baseline 884 + F's 12 + G's 3);
+    fresh `rm -rf target/doc && cargo docs` zero warnings;
+    `scripts/check_semver.sh` = exactly the M1 two categories plus ONE new row.
+
+### M2 expected-breaking list (vs `api-baseline`; supersedes-extends the M1 list)
+
+Surfaced by the tool (2 failed categories, 194 pass / 58 skip):
+1. `constructible_struct_adds_field`: **`DeriveError.absent_overrides` (new at M2)**
+   plus M1's five rows (`WhitespaceRules.enabled`, `TokenRules.paragraphs`,
+   `TokenRules.specials`, `TokenRulesOverrides.paragraphs`,
+   `TokenRulesOverrides.specials`).
+2. `struct_pub_field_missing`: unchanged from M1 (the 8 old `TokenRules` fields +
+   the mirrored 8 on `TokenRulesOverrides`).
+
+Breaking but NOT surfaced by the tool (v0.50 has no lint row for either):
+- `Lang` gains the required associated type `Features` — every hand-written
+  external `Lang` impl breaks by one line (the M2 headline break);
+- `TokenRulesOverrides::apply` returns `Result<(), AbsentFeatureOverrideError>`
+  (was `()`);
+- carried over from M1 (recorded there): `Default` removed from `WhitespaceRules`;
+  `TokenRules`/`TokenRulesOverrides` field types changed to the sub-structs.
+Additive (non-breaking): the 14 feature items (`FeaturePresence`, `FeaturePresent`,
+`FeatureAbsent`, `LangFeatures`, `AllLangFeatures`, `NoLangFeatures`, eight
+`LangHas*`) + `AbsentFeatureOverrideError`, all via `techy::core`. Nothing in the
+semver output is unexplained.
+
+- **Supervisor: M2 fix pass + closure** — applied the M2 reviewer's findings
+  directly (doc-only): TokenReader "Absent features yield no tokens" bullet
+  softened to the actually-funneled kinds (Command, GroupOpen, stray
+  GroupClose, Specials, ParagraphBreak; Comment not intercepted — see
+  Questions for user); DR [§dd-dr:lang-features] amendment's
+  singular-"constructor" phrasing sharpened (only `disable_all()` consults
+  the declarations; the per-block `disable()` constructors stay
+  presence-blind). ARCHITECTURE.md:697 stale-line nit deferred to the M4
+  sweep (pre-existing, outside the M2 diff). Final gates re-run after the
+  fixes — results in the hand-off section (build/test/docs; semver unchanged
+  by doc-only fixes, reviewer's run stands).
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
 
+- **Should nodes_parser's Comment arm get an absent-feature guard?** PLAN M2's
+  dispatch-arm list is exhaustive (Command, GroupOpen, specials, paragraph) and
+  deliberately omits Comment; the M2 reviewer found the TokenReader rustdoc
+  overclaimed ("reports an implementation error" for *every* absent feature's
+  token kind, naming Comment). Conservative option taken: the DOC was softened
+  to match the code (Comment tokens from a contract-violating reader are not
+  intercepted at M2); no fifth guard added beyond the PLAN list. If a Comment
+  guard is wanted, it is a one-arm addition mirroring the other four
+  (implementation-error condition), best decided before/at M3.
+
 ## Hand-off notes
 
 (state a fresh supervisor needs beyond PLAN.md + this file + git log)
+
+### M2 → M3 hand-off (supervisor, M2 closure)
+
+- Stages D, M1, M2 are DONE on branch `lang-features`; all gates green at the
+  final M2 commit. The M3 successor should work from a FRESH worktree with a
+  branch off this one (e.g. `git switch -c lang-features-m3 lang-features`) —
+  do not reuse this worktree.
+- M3 scope: PLAN.md "Stage M3" + the ruled M3 bullet below (revert `apply()`
+  to infallible, remove `AbsentFeatureOverrideError` once ZST stores +
+  `LangHasScopes` bound make the channel unreachable).
+- M3 sites flagged during M2 (all logged in the M2 entries above): the
+  verbatim family + `VerbatimArgumentParser` delimiter-probe delta
+  (LangHasGroups bound moots the transitional application-time error F
+  pinned); `ScopeStack::push` direct mutation (Store collapse + LangHasScopes
+  bound); `finalize_transition` can still mutate an absent block directly
+  (same Store-collapse category); freeze-time `specials_trigger_chars` cache
+  populates under absent Specials (collapses with the Specials feature per
+  PLAN M3 "derived caches collapse with their features");
+  `group_interior_state` (E's list). GAT note: rules sub-structs' manual
+  PartialEq impls will need per-impl `Store<…>: PartialEq` where-clauses
+  (both markers satisfy them) — the GAT itself is Clone+Debug+Default only.
+- M4-sweep candidates: dev-docs/ARCHITECTURE.md:697 pre-existing stale line
+  ("`disable_all` and the collection constructors remain pending their
+  stage" — contradicts [§dd-dr:takeover-staging-sugar] applied notes); the
+  Stage-D judgment call that [§dd-arch:state]'s reference to
+  [§dd-dr:lang-features] should be promoted from the decisions list into body
+  prose once the code exists (it now does).
+- Open user question (see "Questions for user"): optional Comment-arm guard.
+- Test totals after M2: 899 passed / 0 failed / 4 ignored
+  (baseline 884 + 12 M2c + 3 M2d).
+
+### M2 expected-breaking list (vs `api-baseline`; baseline NOT moved)
+
+`check_semver.sh` after M2: 196 checks, 194 pass, 2 fail — the same two M1
+categories, with one new row:
+1. `constructible_struct_adds_field`: M1's five rows + NEW
+   `DeriveError.absent_overrides`.
+2. `struct_pub_field_missing`: M1's 8+8 old field names (unchanged).
+Breaking but not surfaced by the tool: `Lang` gains required associated type
+`Features` (every hand-written external `Lang` impl breaks by one line — the
+M2 headline); `TokenRulesOverrides::apply` now returns `Result`; carried from
+M1: `Default` removed from `WhitespaceRules`, field types changed to
+sub-structs. Additive: the 14 feature items (LangFeatures, FeaturePresence,
+FeaturePresent, FeatureAbsent, AllLangFeatures, NoLangFeatures, eight
+LangHas*) + `AbsentFeatureOverrideError`, all via `techy::core`. Nothing in
+the semver output is unexplained.
 
 - Stages D and M1 are DONE on branch `lang-features` (this worktree); all gates
   green at commit d6054f9. Next stage: M2 per PLAN.md (`Lang::Features` + const
