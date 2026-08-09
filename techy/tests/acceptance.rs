@@ -64,7 +64,10 @@ mod support {
                 .with_state_delta(
                     ParsingStateDelta::new().mode(Mode::Text).rules(TokenRulesOverrides {
                         groups: GroupOverrides {
-                            rules: Some(default_token_rules().groups.rules),
+                            // Turbofish: the gated `groups` field is a projection
+                            // through the language's feature declarations, so it no
+                            // longer drives type inference on its own.
+                            rules: Some(default_token_rules::<Latexlike>().groups.rules),
                             ..GroupOverrides::default()
                         },
                         forbidden_chars: ForbiddenCharsOverrides { chars: Some("".into()) },

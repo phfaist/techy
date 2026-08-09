@@ -776,6 +776,93 @@ semver output is unexplained.
     review, fixes, gates. Sequenced strictly A → B → C → D (overlapping files:
     parsing_state.rs, tests/lang_features.rs).
 
+- **M3 implementer A** — projection surface + TokenRules storage gating landed
+  (crate GREEN; tasks B/C/D untouched: overrides, scope_ops, ScopeStack, state_memo,
+  derived caches, size tests all as before).
+  - **features.rs**: `Store` GAT bound relaxed to `Clone + fmt::Debug` on BOTH sides
+    (forced: the M3 payloads include the seven rules sub-structs — deliberately no
+    `Default`, M1 reviewer ruling — and `Arc<PrefixTable<L>>`); the four supervisor-
+    named projection fns added to the sealed `FeaturePresence` (`store_with`,
+    `store_get`, `store_get_mut`, `store_into_inner`), implemented on both markers,
+    each with plain present/absent rustdoc. `Store` rustdoc: reservation paragraph
+    removed, the M3 storage roster stated (seven rules blocks, override blocks,
+    scope-op list + scope stack, two derived caches), equality-not-promised kept,
+    Default-not-promised added. compile_checks: 18-payload roster (the seven blocks,
+    the seven override blocks imported via crate::state, `Vec<ScopeOp<FeatLang>>`,
+    `Vec<Arc<dyn SpecsProvider<FeatLang>>>`, `Arc<PrefixTable<FeatLang>>`,
+    `TriggerChars`) + a `projection_round_trip::<P>` probe instantiated for both
+    markers — all const/type-level, no new `#[test]`.
+  - **rules.rs**: the seven `TokenRules<L>` fields are the fully spelled
+    `<<L::Features as LangFeatures>::X as FeaturePresence>::Store<XRules>` projections
+    (no public alias); `empty()` builds every field via `store_with` and its doc says
+    it answers for every language (present → block `empty()`, absent → zero-sized
+    store); all 13 accessors keep exact signatures and project via
+    `store_get`/`.and_then`/`.map_or` with the spec'd neutral answers; `Clone`/`Debug`
+    unchanged and bound-free (the GAT carries them); `PartialEq`/`Eq` gained the
+    recorded per-impl `Store<…>: PartialEq/Eq` where-clauses (×7 each). Docs: one
+    absent-storage sentence per field; TokenRules narrative extended with the storage
+    fact + a "constructing rules for a language with absent features" section whose
+    example is a compiled doctest — **test totals therefore 900, not 899** (the one
+    count change; the doctest is the recipe made checkable).
+  - **derived() seam** (parsing_state.rs): the temporary-strip
+    `data.rules.groups.temporary.clear()` now goes through `store_get_mut` if-let
+    INSIDE the kept `if Groups::PRESENT` guard — kept, not folded: the guard
+    compile-eliminates the whole enforcement block (incl. the `ends_temporary_scope`
+    computation), which the if-let alone would not.
+  - **delta.rs `apply_to_present_features`**: each PRESENT branch routes
+    `&mut rules.X` through a `store_get_mut` if-let (no unwrap/expect — comment notes
+    the branch guarantees `Some`); the else-carries-data structure and absent-name
+    collection byte-identical (task B retires that channel).
+  - **JUDGMENT CALL (review me): `LatexlikeLang` now pins
+    `Features = AllLangFeatures` in its supertrait `Lang<…>` bound**
+    (latexlike/lang.rs, + one doc sentence). Forced by transparency:
+    `default_token_rules` and `exit_math_context_delta` are generic over
+    `LLL: LatexlikeLang` and write plain literals/field paths, and the impl-level
+    pins (Latexlike, Flavored) do not normalize stores under a generic `LLL`. This is
+    the ruled "the LatexlikeLang family pins AllLangFeatures" made load-bearing at
+    the trait; both existing impls already comply. Semver: a hypothetical external
+    `LatexlikeLang` impl with different Features (nonsensical under the ruling) now
+    breaks — add to the expected-breaking list at the M3 gate run.
+  - **Generic bare-L test helpers** constructing full TokenRules literals got
+    `Features = crate::state::AllLangFeatures` equality bounds (their languages all
+    declare it): reader.rs `latex_rules`, parsing_state.rs `base_rules`,
+    nodes_parser.rs `rules`, scopes/engine/node `min_rules`, plus the engine/node
+    `state` helpers that call them. Concrete-language literals everywhere else
+    compile UNCHANGED (transparency held — no stop condition hit).
+  - **Inference fallout** (expected, access-syntax only): a gated field is an
+    associated-type projection and no longer drives type inference — 14 reader.rs
+    test locals annotated (`TokenRules<TestLang>`, one `TokenRules<SpecialsLang>`)
+    and two turbofishes `default_token_rules::<Latexlike>()` (tests/acceptance.rs,
+    latexlike/node_ref.rs). Zero assertion-value changes at those sites. Task B
+    heads-up: gating the override blocks will hit the same inference sites in
+    override-construction code.
+  - **tests/lang_features.rs seed rework**: `support::fully_populated_rules()`
+    DELETED (helper, not a test — unwritable by design now); PlainCharsLang seeds
+    `TokenRules::empty()`, GroupsOnlyLang a populated groups literal (same values as
+    before, `[`…`]` temporary rule included) + `..TokenRules::empty()`,
+    CommandsWithoutScopesLang populated whitespace + commands + `..empty()`. Module
+    doc and comments now say: carrying data for an absent feature is a compile-time
+    error; the runtime pins remain as the behavior record. One test renamed
+    (`fully_populated_rules_still_parse…` →
+    `every_construct_spelling_parses_as_plain_character_content`); no test deleted;
+    transitional error-channel tests untouched beyond what compiles.
+  - **Assertion-value deviation, forced and flagged**: five assertions read
+    absent-feature SEED data through accessors — such data is now unrepresentable
+    (the point of M3), so they flip to the documented neutral answers:
+    `commands_enabled()` true→false (×2, plain_chars), `comments_enabled()`
+    true→false (commands disable_all test), `forbidden_chars()` "@"→"",
+    `whitespace_chars()` " \t\n"→"" (plain_chars). Every parse-outcome assertion
+    (outlines, spans, tokens, error identifiers/messages, feature reports) is
+    value-identical.
+  - **Gates**: `cargo build` clean; `cargo test --workspace` **900 passed / 0
+    failed / 4 ignored** (per-target 758+30+8+15+21+1+67; 2+2 ignored — the 899
+    baseline + the one new rules.rs doctest above, no other count change);
+    `cargo check --workspace --tests` zero warnings on a forced full rebuild; fresh
+    `rm -rf target/doc && cargo docs` zero warnings.
+  - **Surprises**: only the inference fallout (projections don't unify backward);
+    everything else — including `X::store_with(XRules::empty)` fn-item inference and
+    the where-claused equality impls — behaved as the M2 prototype predicted.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

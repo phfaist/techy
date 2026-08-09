@@ -1,26 +1,30 @@
-//! M2 representative absent-feature test languages, through the public API only.
+//! Representative absent-feature test languages, through the public API only.
 //!
-//! Stage M2 of the lang-features plan calls for four representative languages. The
+//! The lang-features plan calls for four representative languages. The
 //! all-features-present language is the existing suite (every test language uses
 //! `TrivialLang`'s `AllLangFeatures`, and the latexlike preset pins it); this file
 //! adds the other three, each implementing [`Lang`] by hand with a partial or empty
 //! feature declaration:
 //!
-//! - [`support::PlainCharsLang`] — `NoLangFeatures`: every feature absent, with a
-//!   **fully populated** `TokenRules` seed. Pins "absent wins over runtime data": the
-//!   populated rules data changes nothing, and every construct reads as plain
-//!   character content.
+//! - [`support::PlainCharsLang`] — `NoLangFeatures`: every feature absent. Its seed
+//!   rules are `TokenRules::empty()` — with per-feature storage gating, that is the
+//!   only writable value: carrying rules data for an absent feature is a
+//!   compile-time error, not a runtime no-op. The parses pin the behavior record:
+//!   every construct reads as plain character content.
 //! - [`support::GroupsOnlyLang`] — groups present, the seven other features absent:
-//!   braces parse as `Group` nodes while every other feature's populated rules data
-//!   is inert, and whitespace characters are ordinary content tokens (never folded
-//!   into a token's pre-space).
+//!   the seed populates exactly the groups block (the rest spreads from
+//!   `TokenRules::empty()`), braces parse as `Group` nodes, and whitespace
+//!   characters are ordinary content tokens (never folded into a token's
+//!   pre-space).
 //! - [`support::CommandsWithoutScopesLang`] — commands and whitespace present,
 //!   everything else absent (the PLAN's lattice ruling: callables do **not** imply
-//!   scopes). Commands resolve through a fixed table on the driver — no scope stack —
-//!   and any state change carrying data for an absent feature (a scope op, a
-//!   comments override, the verbatim recipe's group data) errors through the
-//!   standard recovery funnel as an implementation error, never a panic
-//!   (out of parse: a `DeriveError` carrying [`AbsentFeatureOverrideError`]).
+//!   scopes). The seed populates exactly those two blocks. Commands resolve through
+//!   a fixed table on the driver — no scope stack — and a state change carrying
+//!   *override* data for an absent feature (a scope op, a comments override, the
+//!   verbatim recipe's group data — the override structs are not storage-gated)
+//!   errors through the standard recovery funnel as an implementation error, never
+//!   a panic (out of parse: a `DeriveError` carrying
+//!   [`AbsentFeatureOverrideError`]).
 //!
 //! Composition note for the commands language: whitespace is present because command
 //! tokenization consumes post-space through `skip_whitespace`; groups stay absent
@@ -45,11 +49,10 @@ mod support {
     };
     use techy::core::{
         CommandResolver, CommandRule, CommandRules, CommentOverrides, CommentRule,
-        CommentRules, FeatureAbsent, FeaturePresent, ForbiddenCharsRules, GroupRule,
-        GroupRules, Lang, LangFeatures, Language, NoLangFeatures, ParagraphRules,
-        ParseResult, ParsingState, ParsingStateDelta, SpecialsMatch, SpecialsRules,
-        StateData, StdParseDriver, Token, TokenKind, TokenResult, TokenRules,
-        TokenRulesOverrides, TriggerChars, WhitespaceRules,
+        FeatureAbsent, FeaturePresent, GroupRule, GroupRules, Lang, LangFeatures,
+        Language, NoLangFeatures, ParseResult, ParsingState, ParsingStateDelta,
+        SpecialsMatch, StateData, StdParseDriver, Token, TokenKind, TokenResult,
+        TokenRules, TokenRulesOverrides, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -58,44 +61,12 @@ mod support {
     /// value; `u32` is the test default).
     pub const CT_COMMAND: u32 = 1;
 
-    /// Token rules with **every** feature block populated and every runtime gate on:
-    /// the "runtime data says everything is on" seed that the absent-feature
-    /// languages parse under, proving that compile-time absence wins over whatever
-    /// the rules data says.
-    pub fn fully_populated_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
-        TokenRules {
-            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
-            paragraphs: ParagraphRules { enabled: true },
-            groups: GroupRules {
-                enabled: true,
-                rules: vec![Arc::new(GroupRule {
-                    group_type: 0,
-                    open: "{".into(),
-                    close: "}".into(),
-                })],
-                temporary: vec![Arc::new(GroupRule {
-                    group_type: 0,
-                    open: "[".into(),
-                    close: "]".into(),
-                })],
-                expecting_close: None,
-            },
-            commands: CommandRules {
-                enabled: true,
-                rules: vec![Arc::new(CommandRule {
-                    escape_char: '\\',
-                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                        .into(),
-                })],
-            },
-            comments: CommentRules {
-                enabled: true,
-                rules: vec![Arc::new(CommentRule { start: "%".into() })],
-            },
-            specials: SpecialsRules { enabled: true },
-            forbidden_chars: ForbiddenCharsRules { chars: "@".into() },
-        }
-    }
+    // Seed note: each language's `initial_state_data` writes plain literals for its
+    // *present* feature blocks and spreads the rest from `TokenRules::empty()`. With
+    // per-feature storage gating, that is the only shape that compiles — an absent
+    // feature's field is the zero-sized store, so a rules literal for it is a type
+    // error (the fully-populated seeds these languages used before the gating are
+    // unwritable by design).
 
     /// The shared specials scan of the test languages that declare specials absent
     /// while implementing the hooks anyway: `~` would trigger a zero-argument
@@ -114,8 +85,9 @@ mod support {
 
     // --- PlainCharsLang: NoLangFeatures ---------------------------------------------
 
-    /// Every feature absent (`NoLangFeatures`), yet the seed rules are fully
-    /// populated and the specials hooks are implemented: none of it may have any
+    /// Every feature absent (`NoLangFeatures`). The seed rules are
+    /// `TokenRules::empty()` — the only writable value, since every field is the
+    /// zero-sized store — yet the specials hooks are implemented: they may have no
     /// effect.
     #[derive(Debug, Clone, Copy)]
     pub struct PlainCharsLang;
@@ -135,7 +107,7 @@ mod support {
 
         fn initial_state_data() -> StateData<Self> {
             StateData {
-                rules: fully_populated_rules(),
+                rules: TokenRules::empty(),
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
@@ -180,8 +152,8 @@ mod support {
         type Scopes = FeatureAbsent;
     }
 
-    /// Group delimiters are the language's only feature; the populated whitespace /
-    /// command / comment / specials / forbidden-chars data is inert.
+    /// Group delimiters are the language's only feature; only the groups block can
+    /// carry data (every other rules field is the zero-sized store).
     #[derive(Debug, Clone, Copy)]
     pub struct GroupsOnlyLang;
 
@@ -200,7 +172,23 @@ mod support {
 
         fn initial_state_data() -> StateData<Self> {
             StateData {
-                rules: fully_populated_rules(),
+                rules: TokenRules {
+                    groups: GroupRules {
+                        enabled: true,
+                        rules: vec![Arc::new(GroupRule {
+                            group_type: 0,
+                            open: "{".into(),
+                            close: "}".into(),
+                        })],
+                        temporary: vec![Arc::new(GroupRule {
+                            group_type: 0,
+                            open: "[".into(),
+                            close: "]".into(),
+                        })],
+                        expecting_close: None,
+                    },
+                    ..TokenRules::empty()
+                },
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
@@ -267,7 +255,19 @@ mod support {
 
         fn initial_state_data() -> StateData<Self> {
             StateData {
-                rules: fully_populated_rules(),
+                rules: TokenRules {
+                    whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                    commands: CommandRules {
+                        enabled: true,
+                        rules: vec![Arc::new(CommandRule {
+                            escape_char: '\\',
+                            name_chars:
+                                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                    .into(),
+                        })],
+                    },
+                    ..TokenRules::empty()
+                },
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
@@ -285,8 +285,9 @@ mod support {
 
     /// The fixed command table: every name maps to a compile-time-known spec — no
     /// scope stack consulted. `\def`, `\raw`, and `\verb` deliberately return
-    /// after-effect deltas that carry data for absent features, so tests can drive
-    /// those violations through the in-parse recovery funnel.
+    /// after-effect deltas that carry *override* data for absent features (the
+    /// override structs are not storage-gated), so tests can drive those violations
+    /// through the in-parse recovery funnel.
     #[derive(Debug, Clone, Copy)]
     pub struct FixedTableResolver;
 
@@ -428,7 +429,7 @@ mod support {
 }
 
 // -------------------------------------------------------------------------------------
-// NoLangFeatures: absent wins over fully populated runtime data
+// NoLangFeatures: no feature exists, no rules data is even representable
 // -------------------------------------------------------------------------------------
 
 mod plain_chars {
@@ -446,12 +447,15 @@ mod plain_chars {
         Language::new(StdParseDriver::new(recovery, ()), ParsingState::lang_initial())
     }
 
-    // The seed's rules data names every construct — command escapes, brace groups,
-    // `%` comments, whitespace, specials (`~` scans via the implemented hooks), a
-    // forbidden `@` — and all gates are on; with every feature absent, the whole
-    // input is one plain chars node.
+    // The input spells every construct — a command escape, a brace group, a `%`
+    // comment start, whitespace, the `~` the implemented specials hooks would scan,
+    // an `@` — and the language has no features (nor can its rules carry any data:
+    // every field of its `TokenRules` is the zero-sized store), so the whole input
+    // is one plain chars node. This is the behavior record the populated-seed
+    // variant of this test pinned before storage gating made such a seed a
+    // compile-time error.
     #[test]
-    fn fully_populated_rules_still_parse_as_plain_character_content() {
+    fn every_construct_spelling_parses_as_plain_character_content() {
         let input = "a\\cmd{b} %c\n\nd~e @f";
         let result = parse_ok_in(language, input);
 
@@ -504,22 +508,24 @@ mod plain_chars {
             ]
         );
         // The scope op was never attempted (it is the "scopes" violation, not an op
-        // failure), and nothing of the delta was applied to the recovered state.
+        // failure), and nothing of the delta was applied to the recovered state:
+        // with every field the zero-sized store there is nowhere for override data
+        // to land, and every accessor keeps the absent feature's neutral answer.
         assert!(err.failures.is_empty());
         assert!(err.finalize_error.is_none());
-        assert!(err.recovered.rules().commands_enabled());
-        assert_eq!(err.recovered.rules().forbidden_chars(), "@");
+        assert!(!err.recovered.rules().commands_enabled());
+        assert_eq!(err.recovered.rules().forbidden_chars(), "");
         assert!(err.recovered.scopes().providers().is_empty());
     }
 
     // All-`None` blocks carry nothing: the empty delta derives cleanly even with
-    // every feature absent.
+    // every feature absent, and the accessors keep answering neutrally.
     #[test]
     fn an_empty_delta_derives_cleanly() {
         let derived = ParsingState::<PlainCharsLang>::lang_initial()
             .derived(&ParsingStateDelta::new())
             .unwrap();
-        assert_eq!(derived.rules().whitespace_chars(), " \t\n");
+        assert_eq!(derived.rules().whitespace_chars(), "");
     }
 
     // Ruled 2026-08-10: `disable_all()` is the scoped off for every feature the
@@ -534,8 +540,9 @@ mod plain_chars {
         let derived = ParsingState::<PlainCharsLang>::lang_initial()
             .derived(&ParsingStateDelta::new().rules(overrides))
             .expect("disable_all() applies cleanly whatever the language declares");
-        // Nothing was flipped: the (inert) seed data is untouched.
-        assert!(derived.rules().commands_enabled());
+        // Nothing was flipped — there is nothing to flip: absent features store no
+        // data, and the accessor keeps the neutral answer.
+        assert!(!derived.rules().commands_enabled());
     }
 }
 
@@ -634,8 +641,9 @@ mod commands_without_scopes {
     }
 
     // `\mark` resolves through the driver's fixed table into a `Callable` node — no
-    // scope stack anywhere. The populated groups / comments / forbidden-chars data
-    // stays inert; whitespace is live (the command consumes its post-space).
+    // scope stack anywhere. Groups, comments, and forbidden chars are absent (their
+    // rules fields cannot carry data), so `{h}`, `%i`, and `@` read as ordinary
+    // characters; whitespace is live (the command consumes its post-space).
     #[test]
     fn commands_parse_into_callable_nodes_from_a_fixed_table() {
         let input = r"\mark {h} %i @";
@@ -745,8 +753,8 @@ mod commands_without_scopes {
             .expect("disable_all() applies cleanly under a partially-absent language");
         assert!(!derived.rules().whitespace_enabled());
         assert!(!derived.rules().commands_enabled());
-        // The absent blocks' (inert) seed data was left alone.
-        assert!(derived.rules().comments_enabled());
+        // The absent blocks store no data; their accessors answer neutrally.
+        assert!(!derived.rules().comments_enabled());
     }
 
     // M2-transitional behavior (user-accepted 2026-08-10): `verbatim_state_delta`

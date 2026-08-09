@@ -239,8 +239,15 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
 ///
 /// [`ClosedVocabulary`](crate::state::ClosedVocabulary) is *not* a supertrait —
 /// it stays the opt-in tooling bound, stated where enumeration is actually used.
+///
+/// Every latexlike language has **every parsing feature**: the bound pins
+/// [`Features`](Lang::Features) to
+/// [`AllLangFeatures`](crate::state::AllLangFeatures), so the preset's rules data
+/// is stored plainly and none of the per-feature storage machinery is visible
+/// anywhere in the family.
 pub trait LatexlikeLang:
     Lang<
+        Features = crate::state::AllLangFeatures,
         GroupTypeId: LatexlikeGroupType,
         CallableTypeId: LatexlikeCallableType,
         ModeId: LatexlikeMode,

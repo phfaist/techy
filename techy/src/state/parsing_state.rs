@@ -225,8 +225,15 @@ impl<L: Lang> ParsingState<L> {
             };
             if ends_temporary_scope && delta.rules.groups.temporary.is_none() {
                 // Scope enforcement mutates the derived data in place — one of the few
-                // by-field writes into a rules block outside delta application.
-                data.rules.groups.temporary.clear();
+                // by-field writes into a rules block outside delta application. The
+                // write goes through the store projection; the surrounding `PRESENT`
+                // guard already guarantees `Some`, but the projection is what makes
+                // the field reachable at all under an unbounded `L`.
+                if let Some(groups) =
+                    <L::Features as LangFeatures>::Groups::store_get_mut(&mut data.rules.groups)
+                {
+                    groups.temporary.clear();
+                }
             }
         }
         let finalize_error = L::finalize_transition(&mut data, self, &delta.events).err();
@@ -510,7 +517,11 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    fn base_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
+    // `Features = AllLangFeatures` (all test languages here declare it): the plain
+    // block literals below only typecheck once the per-feature stores normalize to
+    // the blocks themselves.
+    fn base_rules<L: Lang<GroupTypeId = u32, Features = crate::state::AllLangFeatures>>(
+    ) -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
             paragraphs: ParagraphRules { enabled: true },

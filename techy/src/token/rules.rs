@@ -27,7 +27,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::state::Lang;
+use crate::state::{FeaturePresence, Lang, LangFeatures};
 
 /// One group syntax usable in the current parsing state: a delimiter pair and the
 /// language-native class ([`Lang::GroupTypeId`]) of the groups it delimits.
@@ -270,7 +270,7 @@ impl ForbiddenCharsRules {
 /// → comment starts → specials scan → forbidden-character check → single content
 /// character.
 ///
-/// Each feature block is a plain public field (construction sites write struct literals
+/// Each feature block is a public field (construction sites write struct literals
 /// over the blocks); reading code uses the per-feature accessor methods
 /// ([`whitespace_enabled`](Self::whitespace_enabled), [`group_rules`](Self::group_rules),
 /// …).
@@ -290,23 +290,71 @@ impl ForbiddenCharsRules {
 /// [`Lang::Features`](crate::state::Lang::Features): the language has no such feature
 /// at all, and no runtime data can say otherwise (the
 /// [`LangFeatures`](crate::state::LangFeatures) docs define the full vocabulary).
+/// Absence goes all the way to storage: an absent feature's field holds the
+/// zero-sized store
+/// ([`FeaturePresence::Store`](crate::state::FeaturePresence::Store)) instead of
+/// its rules block, so rules data for that feature cannot even be written, and the
+/// field occupies no space. For a language with every feature present the fields
+/// *are* the blocks, and nothing here is visible.
+///
+/// # Constructing rules for a language with absent features
+///
+/// Write the present features' blocks as plain literals and take every other field
+/// from [`empty()`](Self::empty) with struct-update syntax:
+///
+/// ```
+/// # use techy::core::{TokenRules, CommandRule, CommandRules, TrivialLang};
+/// # use std::sync::Arc;
+/// # #[derive(Debug, Clone, Copy)]
+/// # struct MyLang;
+/// # impl TrivialLang for MyLang {}
+/// let rules: TokenRules<MyLang> = TokenRules {
+///     commands: CommandRules {
+///         enabled: true,
+///         rules: vec![Arc::new(CommandRule { escape_char: '\\', name_chars: "".into() })],
+///     },
+///     ..TokenRules::empty()
+/// };
+/// ```
+///
+/// (Writing a literal for an *absent* feature's field is a type error — the field
+/// is the zero-sized store, not the block.)
 pub struct TokenRules<L: Lang> {
     /// Whitespace handling: the whitespace character set and its gate
-    /// ([`WhitespaceRules`]).
-    pub whitespace: WhitespaceRules,
-    /// Paragraph-break detection ([`ParagraphRules`]).
-    pub paragraphs: ParagraphRules,
+    /// ([`WhitespaceRules`]). For a language that declares the whitespace feature
+    /// absent, this field holds the zero-sized store and cannot carry data.
+    pub whitespace:
+        <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceRules>,
+    /// Paragraph-break detection ([`ParagraphRules`]). For a language that declares
+    /// the paragraphs feature absent, this field holds the zero-sized store and
+    /// cannot carry data.
+    pub paragraphs:
+        <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphRules>,
     /// Group delimiters: the delimiter table, its gate, and the expected close
-    /// ([`GroupRules`]).
-    pub groups: GroupRules<L>,
-    /// Command syntaxes and their gate ([`CommandRules`]).
-    pub commands: CommandRules,
-    /// Comment syntaxes and their gate ([`CommentRules`]).
-    pub comments: CommentRules,
-    /// The specials-scan gate ([`SpecialsRules`]).
-    pub specials: SpecialsRules,
-    /// The forbidden-character set ([`ForbiddenCharsRules`]).
-    pub forbidden_chars: ForbiddenCharsRules,
+    /// ([`GroupRules`]). For a language that declares the groups feature absent,
+    /// this field holds the zero-sized store and cannot carry data.
+    pub groups: <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupRules<L>>,
+    /// Command syntaxes and their gate ([`CommandRules`]). For a language that
+    /// declares the commands feature absent, this field holds the zero-sized store
+    /// and cannot carry data.
+    pub commands:
+        <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandRules>,
+    /// Comment syntaxes and their gate ([`CommentRules`]). For a language that
+    /// declares the comments feature absent, this field holds the zero-sized store
+    /// and cannot carry data.
+    pub comments:
+        <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentRules>,
+    /// The specials-scan gate ([`SpecialsRules`]). For a language that declares the
+    /// specials feature absent, this field holds the zero-sized store and cannot
+    /// carry data.
+    pub specials:
+        <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsRules>,
+    /// The forbidden-character set ([`ForbiddenCharsRules`]). For a language that
+    /// declares the forbidden-characters feature absent, this field holds the
+    /// zero-sized store and cannot carry data.
+    pub forbidden_chars: <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsRules,
+    >,
 }
 
 impl<L: Lang> TokenRules<L> {
@@ -328,83 +376,120 @@ impl<L: Lang> TokenRules<L> {
     /// `..Default::default()` would silently zero future fields where the named
     /// constructor documents the all-empty intent. Each feature block has a matching
     /// `empty()` constructor ([`WhitespaceRules::empty`], [`GroupRules::empty`], …).
+    ///
+    /// This constructor answers for *every* language: a present feature's field gets
+    /// its block's `empty()` value, an absent feature's field the zero-sized store.
+    /// It is therefore also the struct-update base for a language with absent
+    /// features (see the construction section on [`TokenRules`]).
     pub fn empty() -> TokenRules<L> {
         TokenRules {
-            whitespace: WhitespaceRules::empty(),
-            paragraphs: ParagraphRules::empty(),
-            groups: GroupRules::empty(),
-            commands: CommandRules::empty(),
-            comments: CommentRules::empty(),
-            specials: SpecialsRules::empty(),
-            forbidden_chars: ForbiddenCharsRules::empty(),
+            whitespace: <L::Features as LangFeatures>::Whitespace::store_with(
+                WhitespaceRules::empty,
+            ),
+            paragraphs: <L::Features as LangFeatures>::Paragraphs::store_with(
+                ParagraphRules::empty,
+            ),
+            groups: <L::Features as LangFeatures>::Groups::store_with(GroupRules::empty),
+            commands: <L::Features as LangFeatures>::Commands::store_with(CommandRules::empty),
+            comments: <L::Features as LangFeatures>::Comments::store_with(CommentRules::empty),
+            specials: <L::Features as LangFeatures>::Specials::store_with(SpecialsRules::empty),
+            forbidden_chars: <L::Features as LangFeatures>::ForbiddenChars::store_with(
+                ForbiddenCharsRules::empty,
+            ),
         }
     }
 
-    /// Whether whitespace handling is on ([`WhitespaceRules::enabled`]).
+    /// Whether whitespace handling is on ([`WhitespaceRules::enabled`]); `false`
+    /// when the language declares the whitespace feature absent.
     pub fn whitespace_enabled(&self) -> bool {
-        self.whitespace.enabled
+        <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// The characters treated as whitespace ([`WhitespaceRules::chars`]).
+    /// The characters treated as whitespace ([`WhitespaceRules::chars`]); empty
+    /// when the language declares the whitespace feature absent.
     pub fn whitespace_chars(&self) -> &str {
-        &self.whitespace.chars
+        <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace)
+            .map_or("", |block| &block.chars)
     }
 
     /// Whether a multi-newline whitespace run forms a paragraph break
-    /// ([`ParagraphRules::enabled`]).
+    /// ([`ParagraphRules::enabled`]); `false` when the language declares the
+    /// paragraphs feature absent.
     pub fn paragraphs_enabled(&self) -> bool {
-        self.paragraphs.enabled
+        <L::Features as LangFeatures>::Paragraphs::store_get(&self.paragraphs)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// Whether group delimiters are recognized ([`GroupRules::enabled`]).
+    /// Whether group delimiters are recognized ([`GroupRules::enabled`]); `false`
+    /// when the language declares the groups feature absent.
     pub fn groups_enabled(&self) -> bool {
-        self.groups.enabled
+        <L::Features as LangFeatures>::Groups::store_get(&self.groups)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// The group delimiter rules recognizable here ([`GroupRules::rules`]).
+    /// The group delimiter rules recognizable here ([`GroupRules::rules`]); empty
+    /// when the language declares the groups feature absent.
     pub fn group_rules(&self) -> &[Arc<GroupRule<L>>] {
-        &self.groups.rules
+        <L::Features as LangFeatures>::Groups::store_get(&self.groups)
+            .map_or(&[], |block| &block.rules)
     }
 
-    /// The scoped-lifecycle group rules ([`GroupRules::temporary`]).
+    /// The scoped-lifecycle group rules ([`GroupRules::temporary`]); empty when the
+    /// language declares the groups feature absent.
     pub fn temporary_group_rules(&self) -> &[Arc<GroupRule<L>>] {
-        &self.groups.temporary
+        <L::Features as LangFeatures>::Groups::store_get(&self.groups)
+            .map_or(&[], |block| &block.temporary)
     }
 
     /// The group rule whose close delimiter takes precedence over all other delimiter
-    /// matches ([`GroupRules::expecting_close`]).
+    /// matches ([`GroupRules::expecting_close`]); `None` when the language declares
+    /// the groups feature absent.
     pub fn expecting_group_close(&self) -> Option<&Arc<GroupRule<L>>> {
-        self.groups.expecting_close.as_ref()
+        <L::Features as LangFeatures>::Groups::store_get(&self.groups)
+            .and_then(|block| block.expecting_close.as_ref())
     }
 
-    /// Whether command syntax is recognized ([`CommandRules::enabled`]).
+    /// Whether command syntax is recognized ([`CommandRules::enabled`]); `false`
+    /// when the language declares the commands feature absent.
     pub fn commands_enabled(&self) -> bool {
-        self.commands.enabled
+        <L::Features as LangFeatures>::Commands::store_get(&self.commands)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// The command syntaxes ([`CommandRules::rules`]).
+    /// The command syntaxes ([`CommandRules::rules`]); empty when the language
+    /// declares the commands feature absent.
     pub fn command_rules(&self) -> &[Arc<CommandRule>] {
-        &self.commands.rules
+        <L::Features as LangFeatures>::Commands::store_get(&self.commands)
+            .map_or(&[], |block| &block.rules)
     }
 
-    /// Whether comment syntax is recognized ([`CommentRules::enabled`]).
+    /// Whether comment syntax is recognized ([`CommentRules::enabled`]); `false`
+    /// when the language declares the comments feature absent.
     pub fn comments_enabled(&self) -> bool {
-        self.comments.enabled
+        <L::Features as LangFeatures>::Comments::store_get(&self.comments)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// The comment syntaxes ([`CommentRules::rules`]).
+    /// The comment syntaxes ([`CommentRules::rules`]); empty when the language
+    /// declares the comments feature absent.
     pub fn comment_rules(&self) -> &[Arc<CommentRule>] {
-        &self.comments.rules
+        <L::Features as LangFeatures>::Comments::store_get(&self.comments)
+            .map_or(&[], |block| &block.rules)
     }
 
-    /// Whether the specials scan runs ([`SpecialsRules::enabled`]).
+    /// Whether the specials scan runs ([`SpecialsRules::enabled`]); `false` when
+    /// the language declares the specials feature absent.
     pub fn specials_enabled(&self) -> bool {
-        self.specials.enabled
+        <L::Features as LangFeatures>::Specials::store_get(&self.specials)
+            .is_some_and(|block| block.enabled)
     }
 
-    /// The characters that may not appear as content ([`ForbiddenCharsRules::chars`]).
+    /// The characters that may not appear as content ([`ForbiddenCharsRules::chars`]);
+    /// empty when the language declares the forbidden-characters feature absent.
     pub fn forbidden_chars(&self) -> &str {
-        &self.forbidden_chars.chars
+        <L::Features as LangFeatures>::ForbiddenChars::store_get(&self.forbidden_chars)
+            .map_or("", |block| &block.chars)
     }
 }
 
@@ -502,7 +587,25 @@ impl<L: Lang> fmt::Debug for TokenRules<L> {
     }
 }
 
-impl<L: Lang> PartialEq for TokenRules<L> {
+// The equality impls carry one where-clause per store: the `Store` GAT itself
+// promises only `Clone`/`Debug`, but both markers' stores satisfy `PartialEq`/`Eq`
+// whenever the stored block does (and every rules block does), so the bounds hold at
+// every concrete language.
+
+impl<L: Lang> PartialEq for TokenRules<L>
+where
+    <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceRules>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphRules>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupRules<L>>: PartialEq,
+    <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandRules>: PartialEq,
+    <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentRules>: PartialEq,
+    <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsRules>: PartialEq,
+    <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsRules,
+    >: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
             && self.paragraphs == other.paragraphs
@@ -514,4 +617,16 @@ impl<L: Lang> PartialEq for TokenRules<L> {
     }
 }
 
-impl<L: Lang> Eq for TokenRules<L> {}
+impl<L: Lang> Eq for TokenRules<L>
+where
+    <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceRules>: Eq,
+    <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphRules>: Eq,
+    <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupRules<L>>: Eq,
+    <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandRules>: Eq,
+    <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentRules>: Eq,
+    <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsRules>: Eq,
+    <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsRules,
+    >: Eq,
+{
+}

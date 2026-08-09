@@ -141,7 +141,10 @@ mod tests {
         use alloc::sync::Arc;
         use alloc::vec::Vec;
 
-        let mut groups: Vec<Arc<GroupRule<Latexlike>>> = default_token_rules().groups.rules;
+        // Turbofish: the gated `groups` field is a projection through the language's
+        // feature declarations, so it no longer drives type inference on its own.
+        let mut groups: Vec<Arc<GroupRule<Latexlike>>> =
+            default_token_rules::<Latexlike>().groups.rules;
         groups.push(Arc::new(GroupRule {
             group_type: GroupType::Math(MathGroupForm::Display),
             open: "«".into(),

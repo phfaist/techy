@@ -504,7 +504,11 @@ mod tests {
         const IDENTIFIER: &'static str = "test.engine.unresolvable-command";
     }
 
-    fn min_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
+    // `Features = AllLangFeatures` (all test languages here declare it): the plain
+    // block literals below only typecheck once the per-feature stores normalize to
+    // the blocks themselves.
+    fn min_rules<L: Lang<GroupTypeId = u32, Features = crate::state::AllLangFeatures>>(
+    ) -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
             paragraphs: ParagraphRules { enabled: true },
@@ -527,7 +531,9 @@ mod tests {
         }
     }
 
-    fn state<L: Lang<GroupTypeId = u32, StateExt = ()>>() -> Arc<ParsingState<L>> {
+    fn state<
+        L: Lang<GroupTypeId = u32, StateExt = (), Features = crate::state::AllLangFeatures>,
+    >() -> Arc<ParsingState<L>> {
         Arc::new(ParsingState::new(StateData {
             rules: min_rules(),
             scopes: ScopeStack::new(),

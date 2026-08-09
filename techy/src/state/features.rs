@@ -40,16 +40,42 @@ pub trait FeaturePresence: sealed::Sealed + 'static {
     /// itself when the feature is present ([`FeaturePresent`]), the zero-sized
     /// `PhantomData<T>` when it is absent ([`FeatureAbsent`]).
     ///
-    /// **Not yet used by any field**: this type is reserved for per-feature storage —
-    /// routing the token-rules blocks and the scope stack through it is planned but
-    /// not implemented yet.
+    /// This is how an absent feature's data takes no storage: the seven
+    /// [`TokenRules`](crate::token::TokenRules) feature blocks, their override
+    /// blocks, the scope-op list and the scope stack, and the two derived caches
+    /// (the delimiter prefix table and the specials trigger-character filter) are
+    /// all stored through it.
     ///
-    /// The bounds are what generic code may do with any store: clone it, format it
-    /// for debugging, and construct the default value (for the crate's rules data the
-    /// default is the natural empty value — `false`, an empty string, an empty list,
-    /// `None`). Equality is deliberately **not** promised: not every stored type has
-    /// it (a list of scope providers, for example, has no equality comparison).
-    type Store<T: Clone + fmt::Debug + Default>: Clone + fmt::Debug + Default;
+    /// The bounds are what generic code may do with any store directly: clone it
+    /// and format it for debugging. Everything else goes through the four
+    /// projection functions ([`store_with`](Self::store_with),
+    /// [`store_get`](Self::store_get), [`store_get_mut`](Self::store_get_mut),
+    /// [`store_into_inner`](Self::store_into_inner)). Equality is deliberately
+    /// **not** promised: not every stored type has it (a list of scope providers,
+    /// for example, has no equality comparison). `Default` is likewise not
+    /// promised — construction goes through [`store_with`](Self::store_with) with
+    /// an explicit constructor.
+    type Store<T: Clone + fmt::Debug>: Clone + fmt::Debug;
+
+    /// Builds a store around the value `make` returns. For a present feature, this
+    /// calls `make` and returns its value (the store *is* the value); for an
+    /// absent feature, it returns the zero-sized store — `make` is never called,
+    /// and no value exists.
+    fn store_with<T: Clone + fmt::Debug>(make: impl FnOnce() -> T) -> Self::Store<T>;
+
+    /// The stored value, by reference: `Some` for a present feature, `None` for an
+    /// absent one (an absent feature's store holds nothing).
+    fn store_get<T: Clone + fmt::Debug>(store: &Self::Store<T>) -> Option<&T>;
+
+    /// The stored value, by mutable reference: `Some` for a present feature,
+    /// `None` for an absent one (an absent feature's store holds nothing to
+    /// change).
+    fn store_get_mut<T: Clone + fmt::Debug>(store: &mut Self::Store<T>) -> Option<&mut T>;
+
+    /// The stored value, by value, consuming the store: `Some` for a present
+    /// feature, `None` for an absent one (an absent feature's store holds
+    /// nothing).
+    fn store_into_inner<T: Clone + fmt::Debug>(store: Self::Store<T>) -> Option<T>;
 }
 
 /// The "feature is present" marker ([`FeaturePresence`]): the language has the
@@ -64,7 +90,23 @@ pub struct FeaturePresent;
 
 impl FeaturePresence for FeaturePresent {
     const PRESENT: bool = true;
-    type Store<T: Clone + fmt::Debug + Default> = T;
+    type Store<T: Clone + fmt::Debug> = T;
+
+    fn store_with<T: Clone + fmt::Debug>(make: impl FnOnce() -> T) -> Self::Store<T> {
+        make()
+    }
+
+    fn store_get<T: Clone + fmt::Debug>(store: &Self::Store<T>) -> Option<&T> {
+        Some(store)
+    }
+
+    fn store_get_mut<T: Clone + fmt::Debug>(store: &mut Self::Store<T>) -> Option<&mut T> {
+        Some(store)
+    }
+
+    fn store_into_inner<T: Clone + fmt::Debug>(store: Self::Store<T>) -> Option<T> {
+        Some(store)
+    }
 }
 
 /// The "feature is absent" marker ([`FeaturePresence`]): the language has no such
@@ -78,7 +120,23 @@ pub struct FeatureAbsent;
 
 impl FeaturePresence for FeatureAbsent {
     const PRESENT: bool = false;
-    type Store<T: Clone + fmt::Debug + Default> = PhantomData<T>;
+    type Store<T: Clone + fmt::Debug> = PhantomData<T>;
+
+    fn store_with<T: Clone + fmt::Debug>(_make: impl FnOnce() -> T) -> Self::Store<T> {
+        PhantomData
+    }
+
+    fn store_get<T: Clone + fmt::Debug>(_store: &Self::Store<T>) -> Option<&T> {
+        None
+    }
+
+    fn store_get_mut<T: Clone + fmt::Debug>(_store: &mut Self::Store<T>) -> Option<&mut T> {
+        None
+    }
+
+    fn store_into_inner<T: Clone + fmt::Debug>(_store: Self::Store<T>) -> Option<T> {
+        None
+    }
 }
 
 /// A language's per-feature presence declarations: one member per parsing feature,
@@ -306,9 +364,15 @@ impl<L: Lang> LangHasScopes for L where L::Features: LangFeatures<Scopes = Featu
 #[cfg(test)]
 mod compile_checks {
     use super::*;
-    use crate::scopes::SpecsProvider;
-    use crate::state::TrivialLang;
-    use crate::token::{CommandRule, CommentRule, GroupRule};
+    use crate::scopes::{ScopeOp, SpecsProvider};
+    use crate::state::{
+        CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
+        ParagraphOverrides, SpecialsOverrides, TrivialLang, WhitespaceOverrides,
+    };
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        PrefixTable, SpecialsRules, TriggerChars, WhitespaceRules,
+    };
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
@@ -316,32 +380,55 @@ mod compile_checks {
     struct FeatLang;
     impl TrivialLang for FeatLang {}
 
-    /// The chosen `Store` GAT bounds; every planned per-feature storage payload type
-    /// must satisfy them.
-    fn assert_store_payload<T: Clone + fmt::Debug + Default>() {}
+    /// The chosen `Store` GAT bounds; every per-feature storage payload type must
+    /// satisfy them.
+    fn assert_store_payload<T: Clone + fmt::Debug>() {}
 
-    // One instantiation per payload the per-feature storage will route through
-    // `Store<T>`: the rules-block field types, their override (`Option<…>`) mirrors,
-    // and the scope stack's provider list.
+    // One instantiation per payload the per-feature storage routes through
+    // `Store<T>`: the seven rules blocks, their seven override blocks, the delta's
+    // scope-op list, the scope stack's provider list, and the two derived caches.
     const _: &[fn()] = &[
-        // Rules-block payloads.
-        assert_store_payload::<bool>,
-        assert_store_payload::<Arc<str>>,
-        assert_store_payload::<Vec<Arc<GroupRule<FeatLang>>>>,
-        assert_store_payload::<Vec<Arc<CommandRule>>>,
-        assert_store_payload::<Vec<Arc<CommentRule>>>,
-        assert_store_payload::<Option<Arc<GroupRule<FeatLang>>>>,
-        // Override payloads (`Option<…>` of each block field).
-        assert_store_payload::<Option<bool>>,
-        assert_store_payload::<Option<Arc<str>>>,
-        assert_store_payload::<Option<Vec<Arc<GroupRule<FeatLang>>>>>,
-        assert_store_payload::<Option<Vec<Arc<CommandRule>>>>,
-        assert_store_payload::<Option<Vec<Arc<CommentRule>>>>,
-        assert_store_payload::<Option<Option<Arc<GroupRule<FeatLang>>>>>,
-        // The scope stack's provider list — the payload that rules `PartialEq`/`Eq`
-        // out of the GAT bounds: `dyn SpecsProvider` has no equality.
+        // The seven rules blocks. Deliberately without `Default` (their
+        // constructors are the named `empty()` family), which is why the GAT
+        // cannot promise it.
+        assert_store_payload::<WhitespaceRules>,
+        assert_store_payload::<ParagraphRules>,
+        assert_store_payload::<GroupRules<FeatLang>>,
+        assert_store_payload::<CommandRules>,
+        assert_store_payload::<CommentRules>,
+        assert_store_payload::<SpecialsRules>,
+        assert_store_payload::<ForbiddenCharsRules>,
+        // The seven override blocks.
+        assert_store_payload::<WhitespaceOverrides>,
+        assert_store_payload::<ParagraphOverrides>,
+        assert_store_payload::<GroupOverrides<FeatLang>>,
+        assert_store_payload::<CommandOverrides>,
+        assert_store_payload::<CommentOverrides>,
+        assert_store_payload::<SpecialsOverrides>,
+        assert_store_payload::<ForbiddenCharsOverrides>,
+        // The delta's scope-op list and the scope stack's provider list — the
+        // latter is the payload that rules `PartialEq`/`Eq` out of the GAT bounds:
+        // `dyn SpecsProvider` has no equality.
+        assert_store_payload::<Vec<ScopeOp<FeatLang>>>,
         assert_store_payload::<Vec<Arc<dyn SpecsProvider<FeatLang>>>>,
+        // The two derived caches (no `Default` on `PrefixTable`).
+        assert_store_payload::<Arc<PrefixTable<FeatLang>>>,
+        assert_store_payload::<TriggerChars>,
     ];
+
+    /// The four projection functions compose for either marker, without knowing
+    /// which one `P` is: construct with `store_with`, read with `store_get`,
+    /// change through `store_get_mut`, consume with `store_into_inner`.
+    fn projection_round_trip<P: FeaturePresence>() -> Option<CommandRules> {
+        let mut store = P::store_with(CommandRules::empty);
+        let _: Option<&CommandRules> = P::store_get(&store);
+        if let Some(rules) = P::store_get_mut(&mut store) {
+            rules.enabled = true;
+        }
+        P::store_into_inner(store)
+    }
+    const _: fn() -> Option<CommandRules> = projection_round_trip::<FeaturePresent>;
+    const _: fn() -> Option<CommandRules> = projection_round_trip::<FeatureAbsent>;
 
     // The presence constants, marker by marker…
     const _: () = assert!(FeaturePresent::PRESENT);
@@ -374,8 +461,7 @@ mod compile_checks {
     // The absent store is zero-sized; the present store is the payload itself
     // (`size_of` equality is the storage half; the literal below is the type half).
     const _: () = assert!(
-        core::mem::size_of::<<FeatureAbsent as FeaturePresence>::Store<Vec<Arc<CommandRule>>>>()
-            == 0
+        core::mem::size_of::<<FeatureAbsent as FeaturePresence>::Store<CommandRules>>() == 0
     );
     const _: () = assert!(
         core::mem::size_of::<<FeaturePresent as FeaturePresence>::Store<u64>>()

@@ -1700,7 +1700,10 @@ mod tests {
     struct PlainLang;
     impl crate::state::TrivialLang for PlainLang {}
 
-    fn min_rules<L: Lang>() -> TokenRules<L> {
+    // `Features = AllLangFeatures` (all test languages here declare it): the plain
+    // block literals below only typecheck once the per-feature stores normalize to
+    // the blocks themselves.
+    fn min_rules<L: Lang<Features = crate::state::AllLangFeatures>>() -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules::empty(),
             paragraphs: ParagraphRules { enabled: false },

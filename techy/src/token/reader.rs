@@ -577,7 +577,11 @@ mod tests {
 
     /// Hardcoded LaTeX-flavored rules; the real defaults arrive with the latexlike
     /// preset. Generic so the several test langs of this module can share it.
-    fn latex_rules<L: Lang<GroupTypeId = u32>>() -> TokenRules<L> {
+    // `Features = AllLangFeatures` (all test languages here declare it): the plain
+    // block literals below only typecheck once the per-feature stores normalize to
+    // the blocks themselves.
+    fn latex_rules<L: Lang<GroupTypeId = u32, Features = crate::state::AllLangFeatures>>(
+    ) -> TokenRules<L> {
         TokenRules {
             whitespace: WhitespaceRules { enabled: true, chars: " \t\n\r\u{000B}\u{000C}".into() },
             paragraphs: ParagraphRules { enabled: true },
@@ -635,7 +639,7 @@ mod tests {
     /// Rules with the given rule's close delimiter expected (as the group parser sets up
     /// when entering an ambiguously-delimited group).
     fn expecting_close(group_type: u32) -> Arc<ParsingState<TestLang>> {
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.groups.expecting_close = Some(rule_of(group_type));
         state(rules)
     }
@@ -805,7 +809,7 @@ mod tests {
     fn command_custom_name_chars() {
         let text = r"\zzz1234567890-haha_works! is a macro here";
         let mut tr = StdTokenReader::new(text);
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = vec![Arc::new(CommandRule {
             escape_char: '\\',
             name_chars: "0123456789abcdefghijklmnopqrstuvwxyz\
@@ -834,7 +838,7 @@ mod tests {
         // Two coexisting command syntaxes: each token records which rule's escape
         // character fired (parse-time lookup disambiguates by it — DESIGN_RATIONALE [§dd-dr:tokens]).
         let names = "abcdefghijklmnopqrstuvwxyz";
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = vec![
             Arc::new(CommandRule { escape_char: '\\', name_chars: names.into() }),
             Arc::new(CommandRule { escape_char: '@', name_chars: names.into() }),
@@ -862,7 +866,7 @@ mod tests {
     #[test]
     fn commands_disabled_escape_is_plain_content() {
         let mut tr = StdTokenReader::new(r"\foo");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = Vec::new();
         let st = state(rules);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('\\'));
@@ -874,7 +878,7 @@ mod tests {
         // The gate variant of the test above: the command rules stay in the data (a
         // later enabled: Some(true) delta restores recognition without carrying them).
         let mut tr = StdTokenReader::new(r"\foo");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.enabled = false;
         let st = state(rules);
         assert!(!st.rules().command_rules().is_empty());
@@ -1183,7 +1187,7 @@ mod tests {
     fn comment_alternative_start_string_longest_wins() {
         let text = "%!!COMMENT!! Comment here\nmore";
         let mut tr = StdTokenReader::new(text);
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = vec![
             Arc::new(CommentRule { start: "%".into() }),
             Arc::new(CommentRule { start: "%!!COMMENT!!".into() }),
@@ -1206,7 +1210,7 @@ mod tests {
     #[test]
     fn comments_disabled_percent_is_plain_content() {
         let mut tr = StdTokenReader::new("a %b");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = Vec::new();
         let st = state(rules);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
@@ -1217,7 +1221,7 @@ mod tests {
     #[test]
     fn comments_gate_off_is_the_scoped_disable() {
         let mut tr = StdTokenReader::new("a %b");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.enabled = false;
         let st = state(rules);
         assert!(!st.rules().comment_rules().is_empty());
@@ -1274,7 +1278,7 @@ mod tests {
     #[test]
     fn paragraph_breaks_disabled() {
         let mut tr = StdTokenReader::new("Abc\n\nNew");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.paragraphs.enabled = false;
         let st = state(rules);
         tr.move_to_pos(2);
@@ -1475,7 +1479,7 @@ mod tests {
         // scan hook is unreachable and triggers read as plain content — this is what
         // makes "no specials here" delta-expressible (DESIGN_RATIONALE [§dd-dr:tokens], ex-[§dd-dr:open-questions]).
         let mut tr = StdTokenReader::new("a&b");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<SpecialsLang> = latex_rules();
         rules.specials.enabled = false;
         let st = specials_state(rules);
         assert_eq!(st.trigger_chars(), &TriggerChars::default());
@@ -1533,7 +1537,7 @@ mod tests {
     #[test]
     fn forbidden_char_error_with_recovery() {
         let mut tr = StdTokenReader::new("% forbidden here");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = Vec::new();
         rules.forbidden_chars.chars = "%$".into();
         let st = state(rules);
@@ -1614,7 +1618,7 @@ mod tests {
     #[test]
     fn whitespace_disabled_gives_character_level_content() {
         let mut tr = StdTokenReader::new("a b{");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.whitespace.enabled = false;
         let st = state(rules);
         assert_eq!(next(&mut tr, &st), char_token('a', 0, Span::empty(0)));
@@ -1631,7 +1635,7 @@ mod tests {
     #[test]
     fn groups_gate_off_delimiters_are_plain_content() {
         let mut tr = StdTokenReader::new("{a}");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.groups.enabled = false;
         let st = state(rules);
         assert!(!st.rules().group_rules().is_empty());
@@ -1647,7 +1651,7 @@ mod tests {
         // positional data, not a feature — a group interior that disables groups
         // entirely still finds its own close, so the entered group always terminates.
         let mut tr = StdTokenReader::new("a{$");
-        let mut rules = latex_rules();
+        let mut rules: TokenRules<TestLang> = latex_rules();
         rules.groups.enabled = false;
         rules.groups.expecting_close = Some(rule_of(MATH_INLINE));
         let st = state(rules);

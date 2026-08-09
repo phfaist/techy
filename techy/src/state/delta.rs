@@ -395,39 +395,70 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// declares present; for absent features, apply nothing (absent wins over runtime
     /// data) and collect the block names that carried data — the violation report.
     fn apply_to_present_features(&self, rules: &mut TokenRules<L>) -> Vec<&'static str> {
+        // In every `PRESENT` branch the store projection (`store_get_mut`) is `Some`
+        // by construction; the `if let` is the type-level access path, not a runtime
+        // question.
         let mut absent: Vec<&'static str> = Vec::new();
         if <L::Features as LangFeatures>::Whitespace::PRESENT {
-            self.whitespace.apply(&mut rules.whitespace);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Whitespace::store_get_mut(&mut rules.whitespace)
+            {
+                self.whitespace.apply(block);
+            }
         } else if self.whitespace != WhitespaceOverrides::default() {
             absent.push("whitespace");
         }
         if <L::Features as LangFeatures>::Paragraphs::PRESENT {
-            self.paragraphs.apply(&mut rules.paragraphs);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Paragraphs::store_get_mut(&mut rules.paragraphs)
+            {
+                self.paragraphs.apply(block);
+            }
         } else if self.paragraphs != ParagraphOverrides::default() {
             absent.push("paragraphs");
         }
         if <L::Features as LangFeatures>::Groups::PRESENT {
-            self.groups.apply(&mut rules.groups);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Groups::store_get_mut(&mut rules.groups)
+            {
+                self.groups.apply(block);
+            }
         } else if self.groups != GroupOverrides::default() {
             absent.push("groups");
         }
         if <L::Features as LangFeatures>::Commands::PRESENT {
-            self.commands.apply(&mut rules.commands);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Commands::store_get_mut(&mut rules.commands)
+            {
+                self.commands.apply(block);
+            }
         } else if self.commands != CommandOverrides::default() {
             absent.push("commands");
         }
         if <L::Features as LangFeatures>::Comments::PRESENT {
-            self.comments.apply(&mut rules.comments);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Comments::store_get_mut(&mut rules.comments)
+            {
+                self.comments.apply(block);
+            }
         } else if self.comments != CommentOverrides::default() {
             absent.push("comments");
         }
         if <L::Features as LangFeatures>::Specials::PRESENT {
-            self.specials.apply(&mut rules.specials);
+            if let Some(block) =
+                <L::Features as LangFeatures>::Specials::store_get_mut(&mut rules.specials)
+            {
+                self.specials.apply(block);
+            }
         } else if self.specials != SpecialsOverrides::default() {
             absent.push("specials");
         }
         if <L::Features as LangFeatures>::ForbiddenChars::PRESENT {
-            self.forbidden_chars.apply(&mut rules.forbidden_chars);
+            if let Some(block) = <L::Features as LangFeatures>::ForbiddenChars::store_get_mut(
+                &mut rules.forbidden_chars,
+            ) {
+                self.forbidden_chars.apply(block);
+            }
         } else if self.forbidden_chars != ForbiddenCharsOverrides::default() {
             absent.push("forbidden_chars");
         }
