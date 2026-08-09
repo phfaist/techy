@@ -506,6 +506,83 @@ exported via `techy::core` (additive).
     through the trait, but the trait must be imported); the M2a compile_checks probe
     masked this via `use super::*`.
 
+- **M2 implementer F** — M2 step 3: representative absent-feature test languages
+  (crate GREEN; worked under the **2026-08-10 disable_all user ruling**, course-corrected
+  mid-task: no test asserts that `disable_all()` errors on absent-feature languages —
+  that behavior is being reworked to feature-aware-by-construction by a follow-up
+  implementer; absent-feature test code uses per-feature `disable()` constructors and
+  explicit literals only).
+  - **Bundle compositions chosen**: NoLangFeatures = the existing public bundle
+    (language `PlainCharsLang`). groups-only = test-local `GroupsOnlyLangFeatures`
+    (Groups present, seven absent; language `GroupsOnlyLang`). callables-without-scopes
+    = test-local `CommandsWithoutScopesLangFeatures` (Commands + Whitespace present,
+    six absent; language `CommandsWithoutScopesLang`). Whitespace is present because
+    command tokenization consumes post-space through `skip_whitespace`; Groups is
+    ABSENT because zero-argument callables genuinely need no group machinery — the
+    argument parsers that mint temporary group rules are the ones that would (their
+    deltas would violate at application under absent Groups today; M3 gives them the
+    `LangHasGroups` bound). Both custom bundles are test-local: **no new public API**.
+  - **Layout**: one new integration test, techy/tests/lang_features.rs, public facade
+    only, mirroring acceptance.rs idioms: `mod support` (the three langs, a
+    `FixedTableResolver: CommandResolver` fixed command table, an `AfterEffectSpec`
+    that routes a chosen delta through the in-parse funnel, generic
+    outline/fingerprint/parse_ok_in helpers), test mods `plain_chars` / `groups_only` /
+    `commands_without_scopes`, plus `feature_composition` (const asserts of the
+    presence declarations + positive `LangHas*` bound instantiations; "callables do
+    not imply scopes" pinned as a compile-time fact). No state_memo unit test added:
+    state_memo.rs has no existing test module to follow, and absent-block key data is
+    unreachable there by construction (violating deltas fail derivation; failures are
+    never cached).
+  - **Behaviors pinned** (all langs seeded with FULLY POPULATED TokenRules — every
+    gate on, command/group/comment rules, whitespace chars, forbidden `@`, specials
+    hooks scanning `~` where declared absent):
+    - PlainCharsLang: the whole input (`a\cmd{b} %c\n\nd~e @f`) is ONE chars node —
+      no Command/Group/Comment nodes, no paragraph split, no forbidden-char error,
+      strict==tolerant, zero diagnostics; a delta carrying data for every block + a
+      scope op errors with all EIGHT feature names in declaration order, nothing
+      applied (recovered state unchanged, no providers); the empty delta derives
+      cleanly.
+    - GroupsOnlyLang: braces → Group nodes (span-exact outline, delimiters, interior);
+      `\ % ~ @ \n\n` all inert inside chars runs; whitespace-absent reader contract
+      pinned at token level: whitespace chars are ordinary `Char` tokens and every
+      token's `pre_space` is EMPTY (never folded).
+    - CommandsWithoutScopesLang: `\mark` → Callable node from the fixed table
+      (span-exact, name, callable_type; no scope stack anywhere); `a\n\nb` = one chars
+      run (Paragraphs absent under Whitespace present — the skip_whitespace in-loop
+      guard); in-parse scope op (`\def` after-effect `push_provider`) aborts as
+      ImplementationError under BOTH policies, message names "scopes", no panic; same
+      funnel for comments-data override (`\raw`); out-of-parse `derived()` reports
+      `features() == ["scopes"]` with `failures` empty and the present-feature parts
+      of the delta still applied to `recovered`; explicit comments data errs
+      (`["comments"]`) while an all-None absent block stays silent (whitespace
+      override applies).
+    - **Course-correction test**: `verbatim_state_delta` under absent Groups errs at
+      application time — out-of-parse via `derived()` and in-parse through the funnel
+      (`\verb` after-effect; ImplementationError, both policies, no panic). Asserts
+      `features().contains("groups")` ONLY: the delta today also flips absent gates
+      via `disable_all()` (report is currently paragraphs/groups/comments/specials),
+      and that part disappears under the ruled disable_all rework — the assertion is
+      deliberately robust to it. M2-transitional per the ruling; M3 replaces this
+      with the `LangHasGroups` compile bound.
+  - **Production fixes: NONE.** No guard bug surfaced — all 12 tests passed against
+    the unmodified M2a/M2b code on the first run.
+  - **Gates / totals**: `cargo build` clean; `cargo test --workspace` **896 passed /
+    0 failed / 4 ignored** (758+30+8+21+1+66+12 per target; 2+2 ignored) — the 884
+    baseline intact plus the 12 new tests; `cargo check --workspace --tests` zero
+    warnings; fresh `rm -rf target/doc && cargo docs` zero warnings.
+  - **Flags for the reviewer**: (a) `VerbatimArgumentParser` itself errors even
+    *earlier* than `verbatim_state_delta` under a groups-absent language — its
+    delimiter-probe delta carries paragraphs/groups/commands/comments/specials data;
+    not pinned (the M3 bound moots it), the in-parse test routes the exact
+    `verbatim_state_delta` value via an after-effect instead. (b) `ScopeStack::push`
+    direct mutation stays unguarded at M2 (PLAN lists the delta seams only; M3's
+    Store collapse makes it unrepresentable) — tests assert the scope_op/push_provider
+    delta paths. (c) The `~` specials hooks are implemented on the specials-absent
+    langs and the freeze-time `specials_trigger_chars` call does populate the trigger
+    cache (implementer E's unlisted-site flag) — the reader guard makes it
+    unreachable, which the `~`-inert assertions confirm.
+  - **Surprising**: nothing — every expected span/outline held on first run.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
