@@ -8,7 +8,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::state::Lang;
+use crate::state::{FeaturePresence, Lang, LangFeatures};
 
 use super::rules::{GroupRule, TokenRules};
 
@@ -62,9 +62,12 @@ impl<L: Lang> PrefixTable<L> {
     /// applied here (per state, at freeze time) so the token-scanning loop never
     /// branches on it;
     /// the expected group close is checked separately by the reader and is *not* gated.
+    /// A language that declares the groups feature absent
+    /// ([`LangFeatures::Groups`]) gets the empty table too, whatever the rules data
+    /// says: group rules contribute nothing.
     pub fn for_rules(rules: &TokenRules<L>) -> PrefixTable<L> {
         let mut entries: Vec<PrefixEntry<L>> = Vec::new();
-        if !rules.groups_enabled() {
+        if !<L::Features as LangFeatures>::Groups::PRESENT || !rules.groups_enabled() {
             return PrefixTable { entries };
         }
 

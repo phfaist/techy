@@ -396,7 +396,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// A **finalize refusal** ([`FinalizeError`](crate::state::FinalizeError) — a
     /// context-requiring event the driver did not lower) is an extension wiring
     /// bug, not a source condition: it aborts as an
-    /// [`ImplementationError`] under any recovery policy.
+    /// [`ImplementationError`] under any recovery policy. A delta carrying **data for
+    /// a feature the language declares absent**
+    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError)) is
+    /// the same class of bug and aborts the same way.
     pub fn derive_state(
         &mut self,
         delta: &ParsingStateDelta<L>,
@@ -558,7 +561,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// failing op through the recovery entry point (strict: the first one aborts); a
     /// finalize refusal aborts as an [`ImplementationError`] under any policy (a
     /// context-requiring event reached the underlying derivation point un-lowered —
-    /// the driver failed to lower it: extension wiring, not source input). Otherwise commit
+    /// the driver failed to lower it: extension wiring, not source input), and so does
+    /// a delta carrying data for a feature the language declares absent
+    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError) — a
+    /// delta-author bug, not source input). Otherwise commit
     /// the ops-skipped transition — continue under the error's recovered state
     /// and observe it with the delta the derivation actually applied (which the
     /// error carries: for group interiors that is the *merged* descent delta this
@@ -570,12 +576,21 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
         let pos = self.tokens.pos();
         let span = SourceSpan::new(&self.source, Span::new(pos, pos));
-        let crate::state::DeriveError { failures, finalize_error, recovered, delta } = failure;
+        let crate::state::DeriveError {
+            failures,
+            absent_overrides,
+            finalize_error,
+            recovered,
+            delta,
+        } = failure;
         for failed_op in &failures {
             self.recover(ScopeOpFailed::new(failed_op.to_string()), span.clone())?;
         }
         if let Some(finalize_error) = finalize_error {
             return Err(self.implementation_error(finalize_error, Span::new(pos, pos)));
+        }
+        if let Some(absent_overrides) = absent_overrides {
+            return Err(self.implementation_error(absent_overrides, Span::new(pos, pos)));
         }
         // Tolerant continuation: commit the recovered transition — the session seam
         // observed nothing on the Err path (no transition had been committed).

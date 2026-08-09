@@ -9,7 +9,8 @@ use core::fmt;
 use crate::scopes::{IntoSpecsProvider, ScopeOpError, ScopeStack};
 use crate::token::{PrefixTable, TokenRules, TriggerChars};
 
-use super::delta::ParsingStateDelta;
+use super::delta::{AbsentFeatureOverrideError, ParsingStateDelta};
+use super::features::{FeaturePresence, LangFeatures};
 use super::lang::Lang;
 
 /// The plain stored settings of a parsing state — the data that deltas override and
@@ -156,11 +157,15 @@ impl<L: Lang> ParsingState<L> {
     ///
     /// # Fallibility
     ///
-    /// Two failure sources, both folded into [`DeriveError`]:
+    /// Three failure sources, all folded into [`DeriveError`]:
     ///
     /// - A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets
     ///   an absent provider name; a definition op routed to an immutable provider).
     ///   Every failing op is skipped — the rest of the delta still applies.
+    /// - The delta can carry data for a feature the language declares absent
+    ///   ([`AbsentFeatureOverrideError`]) — a violated contract of the delta's
+    ///   author. The violating data is skipped (absent wins over runtime data), the
+    ///   rest of the delta still applies.
     /// - [`Lang::finalize_transition`] can refuse the transition
     ///   ([`FinalizeError`]) — above all when a *context-dependent* event reaches
     ///   this method un-lowered (the two-class contract on [`Lang::Event`]): the
@@ -169,7 +174,8 @@ impl<L: Lang> ParsingState<L> {
     ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
     ///   lowers the event before the delta ever gets here.
     ///
-    /// A delta without scope ops and without events **cannot fail** under a `Lang`
+    /// A delta without scope ops and without events, whose overrides carry data only
+    /// for features the language declares present, **cannot fail** under a `Lang`
     /// whose customizer only refuses events. The error carries the mechanical
     /// failure records plus the fully derived **recovered state** (frozen like any
     /// other; on a finalize refusal, the data as the hook left it), so a tolerant
@@ -200,23 +206,28 @@ impl<L: Lang> ParsingState<L> {
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> Result<ParsingState<L>, DeriveError<L>> {
         let mut data = self.data.clone();
-        let failures = delta.apply_overrides(&mut data);
-        let ends_temporary_scope = match &delta.rules.groups.expecting_close {
-            None => false,
-            Some(installed) => !matches!(
-                installed,
-                Some(rule) if self
-                    .data
-                    .rules
-                    .temporary_group_rules()
-                    .iter()
-                    .any(|temporary| Arc::ptr_eq(temporary, rule))
-            ),
-        };
-        if ends_temporary_scope && delta.rules.groups.temporary.is_none() {
-            // Scope enforcement mutates the derived data in place — one of the few
-            // by-field writes into a rules block outside delta application.
-            data.rules.groups.temporary.clear();
+        let (failures, absent_overrides) = delta.apply_overrides(&mut data);
+        // Temporary group rules exist only with the groups feature: a language that
+        // declares groups absent has nothing to strip, so the whole enforcement
+        // block is compile-time eliminated for it.
+        if <L::Features as LangFeatures>::Groups::PRESENT {
+            let ends_temporary_scope = match &delta.rules.groups.expecting_close {
+                None => false,
+                Some(installed) => !matches!(
+                    installed,
+                    Some(rule) if self
+                        .data
+                        .rules
+                        .temporary_group_rules()
+                        .iter()
+                        .any(|temporary| Arc::ptr_eq(temporary, rule))
+                ),
+            };
+            if ends_temporary_scope && delta.rules.groups.temporary.is_none() {
+                // Scope enforcement mutates the derived data in place — one of the few
+                // by-field writes into a rules block outside delta application.
+                data.rules.groups.temporary.clear();
+            }
         }
         let finalize_error = L::finalize_transition(&mut data, self, &delta.events).err();
         // Checked *after* finalize_transition: the customizer may rewrite the group
@@ -243,10 +254,16 @@ impl<L: Lang> ParsingState<L> {
         } else {
             ParsingState::freeze(data)
         };
-        if failures.is_empty() && finalize_error.is_none() {
+        if failures.is_empty() && finalize_error.is_none() && absent_overrides.is_none() {
             Ok(state)
         } else {
-            Err(DeriveError { failures, finalize_error, recovered: state, delta: delta.clone() })
+            Err(DeriveError {
+                failures,
+                finalize_error,
+                absent_overrides,
+                recovered: state,
+                delta: delta.clone(),
+            })
         }
     }
 
@@ -348,8 +365,8 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 }
 
 /// A [`derived()`](ParsingState::derived) transition that failed: the delta carried
-/// failing [`scope ops`](ParsingStateDelta::scope_ops), and/or
-/// [`Lang::finalize_transition`] refused the transition.
+/// failing [`scope ops`](ParsingStateDelta::scope_ops) or data for an absent feature,
+/// and/or [`Lang::finalize_transition`] refused the transition.
 ///
 /// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
 /// embedder input error is the *caller's* context. The error carries everything a
@@ -357,12 +374,16 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// material rides in the error):
 ///
 /// - [`failures`](DeriveError::failures): one record per failing op, in delta order;
+/// - [`absent_overrides`](DeriveError::absent_overrides): the delta carried data for
+///   features the language declares absent ([`AbsentFeatureOverrideError`]) — that
+///   data was skipped, never applied;
 /// - [`finalize_error`](DeriveError::finalize_error): the customizer's refusal, when
 ///   [`Lang::finalize_transition`] returned `Err` (typically a context-dependent
 ///   event reaching [`ParsingState::derived`] un-lowered — the two-class contract on
 ///   [`Lang::Event`]);
 /// - [`recovered`](DeriveError::recovered): the fully derived state with exactly the
-///   failing ops skipped — finalized and frozen like every state, ready to continue
+///   failing ops and the absent-feature data skipped — finalized and frozen like
+///   every state, ready to continue
 ///   under (on a finalize refusal: the data as the hook left it, best-effort);
 /// - [`delta`](DeriveError::delta): the delta as applied, so a recovering caller can
 ///   still feed
@@ -370,7 +391,8 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 ///   the true transition (needed because the group-interior derivation applies a
 ///   *merged* delta its caller never sees).
 ///
-/// At least one of [`failures`](DeriveError::failures) (non-empty) and
+/// At least one of [`failures`](DeriveError::failures) (non-empty),
+/// [`absent_overrides`](DeriveError::absent_overrides) (`Some`), and
 /// [`finalize_error`](DeriveError::finalize_error) (`Some`) is always present.
 ///
 /// Not `Clone`: states are identity-bearing (deliberately non-`Clone`), and the
@@ -382,8 +404,12 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// signatures were judged worth the bigger `Result` return slot.
 pub struct DeriveError<L: Lang> {
     /// One record per failing op, in delta order (may be empty only when
+    /// [`absent_overrides`](DeriveError::absent_overrides) or
     /// [`finalize_error`](DeriveError::finalize_error) is `Some`).
     pub failures: Vec<ScopeOpError>,
+    /// The delta carried data for features the language declares absent — a violated
+    /// contract of the delta's author; the data was skipped, never applied.
+    pub absent_overrides: Option<AbsentFeatureOverrideError>,
     /// [`Lang::finalize_transition`]'s refusal, if the customizer returned `Err`.
     pub finalize_error: Option<FinalizeError>,
     /// The derived state with the failing ops skipped (everything else applied).
@@ -403,6 +429,13 @@ impl<L: Lang> fmt::Display for DeriveError<L> {
             first = false;
             write!(f, "scope op failed: {failure}")?;
         }
+        if let Some(absent_overrides) = &self.absent_overrides {
+            if !first {
+                write!(f, "; ")?;
+            }
+            first = false;
+            write!(f, "{absent_overrides}")?;
+        }
         if let Some(finalize_error) = &self.finalize_error {
             if !first {
                 write!(f, "; ")?;
@@ -417,6 +450,7 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeriveError")
             .field("failures", &self.failures)
+            .field("absent_overrides", &self.absent_overrides)
             .field("finalize_error", &self.finalize_error)
             .field("recovered", &self.recovered)
             .field("delta", &self.delta)

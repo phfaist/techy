@@ -275,8 +275,11 @@ impl<L: Lang> ParserSession<L> {
     /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
     /// **Fallibility**: scope ops can fail, so this method is fallible like
-    /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
-    /// also why the memo never caches a failure). On `Err`, no transition is committed:
+    /// [`ParsingState::derived`] under it. Overrides-only deltas fail only by carrying
+    /// data for a feature the language declares absent
+    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError), a
+    /// delta-author contract violation); failures are never cached, so nothing wrong
+    /// ever enters the memo. On `Err`, no transition is committed:
     /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
     /// has **not** fired — a caller that recovers tolerantly and continues under
     /// [`DeriveError::recovered`](crate::state::DeriveError) observes that transition

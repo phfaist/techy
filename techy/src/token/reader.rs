@@ -22,7 +22,7 @@ use alloc::sync::Arc;
 
 use crate::constructs::ImplementationError;
 use crate::source::Span;
-use crate::state::{Lang, ParsingState};
+use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
 use super::error::{
     EndOfStreamAfterEscape, ForbiddenChar, TokenError, TokenErrorKind, TokenRecovery,
@@ -48,6 +48,12 @@ use super::token::{Token, TokenKind};
 /// - At the end of the stream `peek` returns the terminal, idempotent
 ///   [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
 ///   carries the final whitespace.
+/// - **Absent features yield no tokens:** a token kind belonging to a feature the
+///   language declares absent ([`Lang::Features`]) must never be produced — no
+///   `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
+///   `Specials`, or `ParagraphBreak` without theirs. The parsing machinery treats
+///   such a token as a violated contract and reports an implementation error instead
+///   of processing it.
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
@@ -84,8 +90,9 @@ pub trait TokenReader<'s, L: Lang> {
     }
 }
 
-/// End position of the whitespace run starting at `pos` (= `pos` if none, or if
-/// whitespace handling is disabled).
+/// End position of the whitespace run starting at `pos` (= `pos` if none, if
+/// whitespace handling is disabled, or if the language declares it absent —
+/// [`LangFeatures::Whitespace`] wins over whatever the rules data says).
 ///
 /// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
 /// caller-contract violation and panics, in all builds — one of the crate's few
@@ -97,7 +104,7 @@ pub trait TokenReader<'s, L: Lang> {
 /// primitive serves pre-space, command post-space, and comment post-space, which is what
 /// makes "post-space never crosses a paragraph break" hold everywhere by construction.
 pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>) -> usize {
-    if !rules.whitespace_enabled() {
+    if !<L::Features as LangFeatures>::Whitespace::PRESENT || !rules.whitespace_enabled() {
         return pos;
     }
     let Some(rest) = content.get(pos..) else {
@@ -114,6 +121,7 @@ pub fn skip_whitespace<L: Lang>(content: &str, pos: usize, rules: &TokenRules<L>
             break;
         }
         if c == '\n'
+            && <L::Features as LangFeatures>::Paragraphs::PRESENT
             && rules.paragraphs_enabled()
             && paragraph_continues(content, end + 1, ws_chars)
         {
@@ -144,6 +152,9 @@ fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
 /// The reader holds only the content borrow and a position; all tokenization behavior
 /// comes from the state passed to [`peek`](TokenReader::peek) — which is what lets the
 /// rules change mid-parse through state transitions.
+///
+/// A feature the language declares absent ([`Lang::Features`]) is never detected,
+/// whatever the rules data says: its detection branch is eliminated at compile time.
 #[derive(Debug, Clone)]
 pub struct StdTokenReader<'s> {
     content: &'s str,
@@ -235,7 +246,7 @@ impl<'s> StdTokenReader<'s> {
 
         let c = s[pos..].chars().next().expect("pos < len checked above");
 
-        if rules.commands_enabled() {
+        if <L::Features as LangFeatures>::Commands::PRESENT && rules.commands_enabled() {
             if let Some(rule) = rules.command_rules().iter().find(|r| c == r.escape_char) {
                 return self.read_command(pos, pre_space, rules, rule);
             }
@@ -245,7 +256,8 @@ impl<'s> StdTokenReader<'s> {
             return Ok(token);
         }
 
-        if state.trigger_chars().may_start(c) {
+        if <L::Features as LangFeatures>::Specials::PRESENT && state.trigger_chars().may_start(c)
+        {
             if let Some(m) = L::scan_specials(state, s, pos)? {
                 // A malformed `end` from the hook would yield a zero-width token (the
                 // dispatch loop would never advance) or a span that panics when
@@ -279,7 +291,9 @@ impl<'s> StdTokenReader<'s> {
             }
         }
 
-        if rules.forbidden_chars().contains(c) {
+        if <L::Features as LangFeatures>::ForbiddenChars::PRESENT
+            && rules.forbidden_chars().contains(c)
+        {
             let span = Span::new(pos, pos + c.len_utf8());
             let placeholder = Token::new(TokenKind::Char(c), span, pre_space);
             return Err(TokenError::new(
@@ -296,13 +310,19 @@ impl<'s> StdTokenReader<'s> {
     /// `skip_whitespace` guarantees whenever it stopped at a consumable-whitespace
     /// newline). The token spans from the first through the last newline of the run;
     /// whitespace after the last newline is left for the next token's pre-space.
+    /// Requires the paragraphs *and* whitespace features, each declared present and
+    /// enabled at runtime: a language that declares either absent never yields a break.
     fn detect_paragraph_break<L: Lang>(
         &self,
         pos: usize,
         pre_space: Span,
         rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
-        if !(rules.paragraphs_enabled() && rules.whitespace_enabled()) {
+        if !(<L::Features as LangFeatures>::Paragraphs::PRESENT
+            && <L::Features as LangFeatures>::Whitespace::PRESENT
+            && rules.paragraphs_enabled()
+            && rules.whitespace_enabled())
+        {
             return None;
         }
         let ws_chars = rules.whitespace_chars();
@@ -429,14 +449,15 @@ impl<'s> StdTokenReader<'s> {
     /// (longest-first across the rules). The content runs to the end of the line; the
     /// terminating newline plus following indentation is the token's post-space — unless
     /// that whitespace forms a paragraph break, in which case the comment takes no
-    /// post-space and the break surfaces as its own token.
+    /// post-space and the break surfaces as its own token. Returns `None` when the
+    /// language declares the comments feature absent, whatever the rules data says.
     fn read_comment<L: Lang>(
         &self,
         pos: usize,
         pre_space: Span,
         rules: &TokenRules<L>,
     ) -> Option<Token<'s, L>> {
-        if !rules.comments_enabled() {
+        if !<L::Features as LangFeatures>::Comments::PRESENT || !rules.comments_enabled() {
             return None;
         }
         let s = self.content;

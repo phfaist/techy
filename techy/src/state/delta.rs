@@ -10,6 +10,7 @@ use crate::token::{
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
 
+use super::features::{FeaturePresence, LangFeatures};
 use super::lang::Lang;
 use super::parsing_state::StateData;
 
@@ -334,16 +335,102 @@ impl<L: Lang> TokenRulesOverrides<L> {
     }
 
     /// Apply these overrides to `rules`, leaving `None` fields untouched.
-    pub fn apply(&self, rules: &mut TokenRules<L>) {
-        self.whitespace.apply(&mut rules.whitespace);
-        self.paragraphs.apply(&mut rules.paragraphs);
-        self.groups.apply(&mut rules.groups);
-        self.commands.apply(&mut rules.commands);
-        self.comments.apply(&mut rules.comments);
-        self.specials.apply(&mut rules.specials);
-        self.forbidden_chars.apply(&mut rules.forbidden_chars);
+    ///
+    /// # Errors
+    ///
+    /// An override block that carries data — any non-`None` field — for a feature the
+    /// language declares absent ([`Lang::Features`]) is a violated contract of the
+    /// override's author: an absent feature has no runtime data to change. Nothing of
+    /// such a block is applied, and the violation is reported as an
+    /// [`AbsentFeatureOverrideError`]. Blocks of present features apply as documented
+    /// above regardless.
+    pub fn apply(&self, rules: &mut TokenRules<L>) -> Result<(), AbsentFeatureOverrideError> {
+        let absent = self.apply_to_present_features(rules);
+        if absent.is_empty() {
+            Ok(())
+        } else {
+            Err(AbsentFeatureOverrideError { features: absent })
+        }
+    }
+
+    /// The gated application core shared by [`apply`](Self::apply) and
+    /// [`ParsingStateDelta::apply_overrides`]: apply each feature block the language
+    /// declares present; for absent features, apply nothing (absent wins over runtime
+    /// data) and collect the block names that carried data — the violation report.
+    fn apply_to_present_features(&self, rules: &mut TokenRules<L>) -> Vec<&'static str> {
+        let mut absent: Vec<&'static str> = Vec::new();
+        if <L::Features as LangFeatures>::Whitespace::PRESENT {
+            self.whitespace.apply(&mut rules.whitespace);
+        } else if self.whitespace != WhitespaceOverrides::default() {
+            absent.push("whitespace");
+        }
+        if <L::Features as LangFeatures>::Paragraphs::PRESENT {
+            self.paragraphs.apply(&mut rules.paragraphs);
+        } else if self.paragraphs != ParagraphOverrides::default() {
+            absent.push("paragraphs");
+        }
+        if <L::Features as LangFeatures>::Groups::PRESENT {
+            self.groups.apply(&mut rules.groups);
+        } else if self.groups != GroupOverrides::default() {
+            absent.push("groups");
+        }
+        if <L::Features as LangFeatures>::Commands::PRESENT {
+            self.commands.apply(&mut rules.commands);
+        } else if self.commands != CommandOverrides::default() {
+            absent.push("commands");
+        }
+        if <L::Features as LangFeatures>::Comments::PRESENT {
+            self.comments.apply(&mut rules.comments);
+        } else if self.comments != CommentOverrides::default() {
+            absent.push("comments");
+        }
+        if <L::Features as LangFeatures>::Specials::PRESENT {
+            self.specials.apply(&mut rules.specials);
+        } else if self.specials != SpecialsOverrides::default() {
+            absent.push("specials");
+        }
+        if <L::Features as LangFeatures>::ForbiddenChars::PRESENT {
+            self.forbidden_chars.apply(&mut rules.forbidden_chars);
+        } else if self.forbidden_chars != ForbiddenCharsOverrides::default() {
+            absent.push("forbidden_chars");
+        }
+        absent
     }
 }
+
+/// A state change carried data for a feature the language declares absent
+/// ([`Lang::Features`]): a rules-override block with a non-`None` field, or scope ops
+/// under a language without the scope stack. This is a violated contract of the
+/// change's author — an absent feature has no runtime data to change — so the
+/// violating data is never applied (absent wins over runtime data) and this error is
+/// reported instead, never a panic.
+/// [`ParsingState::derived`](super::ParsingState::derived) folds it into its
+/// [`DeriveError`](super::DeriveError).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsentFeatureOverrideError {
+    features: Vec<&'static str>,
+}
+
+impl AbsentFeatureOverrideError {
+    /// The affected features, by feature-block name (`"whitespace"`, `"paragraphs"`,
+    /// `"groups"`, `"commands"`, `"comments"`, `"specials"`, `"forbidden_chars"`,
+    /// `"scopes"`), each listed once, in declaration order.
+    pub fn features(&self) -> &[&'static str] {
+        &self.features
+    }
+}
+
+impl fmt::Display for AbsentFeatureOverrideError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the state change carries data for features the language declares absent: {}",
+            self.features.join(", ")
+        )
+    }
+}
+
+impl core::error::Error for AbsentFeatureOverrideError {}
 
 /// A reified state change: the argument of [`ParsingState::derived()`](super::ParsingState::derived).
 ///
@@ -472,14 +559,28 @@ impl<L: Lang> ParsingStateDelta<L> {
     /// Apply overrides (rules + scope ops + mode + ext) to `data`. Internal, pre-freeze:
     /// called only from `derived()`, before `finalize_transition` runs. Scope-op
     /// failures are collected (the failing op is skipped, the rest still apply) and
-    /// returned for `derived()` to report — an empty vec is full success.
-    pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) -> Vec<ScopeOpError> {
-        self.rules.apply(&mut data.rules);
+    /// returned for `derived()` to report — an empty vec is full success. The second
+    /// element reports absent-feature contract violations ([`AbsentFeatureOverrideError`]):
+    /// rules overrides carrying data for an absent feature, or scope ops under a
+    /// language that declares the scope stack absent. The violating data is skipped
+    /// (absent wins over runtime data), the rest of the delta still applies, and
+    /// `derived()` folds the report into its error.
+    pub(crate) fn apply_overrides(
+        &self,
+        data: &mut StateData<L>,
+    ) -> (Vec<ScopeOpError>, Option<AbsentFeatureOverrideError>) {
+        let mut absent = self.rules.apply_to_present_features(&mut data.rules);
         let mut failures = Vec::new();
-        for op in &self.scope_ops {
-            if let Err(failure) = data.scopes.apply_op(op) {
-                failures.push(failure);
+        if <L::Features as LangFeatures>::Scopes::PRESENT {
+            for op in &self.scope_ops {
+                if let Err(failure) = data.scopes.apply_op(op) {
+                    failures.push(failure);
+                }
             }
+        } else if !self.scope_ops.is_empty() {
+            // Scope ops address the scope stack — a feature like any other on the
+            // compile-time axis: with the stack absent, none of them applies.
+            absent.push("scopes");
         }
         if let Some(mode) = self.mode {
             data.mode = mode;
@@ -487,7 +588,9 @@ impl<L: Lang> ParsingStateDelta<L> {
         if let Some(ext) = &self.ext {
             data.ext = ext.clone();
         }
-        failures
+        let absent_overrides =
+            (!absent.is_empty()).then(|| AbsentFeatureOverrideError { features: absent });
+        (failures, absent_overrides)
     }
 }
 

@@ -21,7 +21,7 @@ use crate::error::ParseError;
 use crate::node::NodeKind;
 use super::driver::ParseDriver;
 use crate::source::{Source, SourceSpan, Span};
-use crate::state::{Lang, ParsingState};
+use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 use crate::token::StdTokenReader;
 
 use super::{ParseResult, ParserSession};
@@ -172,6 +172,18 @@ impl<L: Lang> Language<L> {
             match outcome.stop {
                 StopCause::EndOfInput => break,
                 StopCause::UnexpectedGroupClose { span } => {
+                    // Impossible under a language that declares groups absent: a
+                    // group close cannot be tokenized, so reaching this arm means the
+                    // token source violated its contract (`TokenReader` docs) — an
+                    // implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Groups::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a stray group close surfaced at the root although the \
+                             language declares the groups feature absent \
+                             (token-source contract violation)",
+                            span,
+                        ));
+                    }
                     // Diagnose-and-skip at the root (DESIGN_RATIONALE.md [§dd-dr:errors]): the
                     // loop left the close unconsumed at `span.start`, and the span is
                     // the delimiter exactly as matched (`StopCause`'s contract) —

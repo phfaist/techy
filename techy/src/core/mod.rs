@@ -45,7 +45,8 @@ pub use crate::engine::{
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
-    AllLangFeatures, ClosedVocabulary, CommandOverrides, CommentOverrides, DeriveError,
+    AbsentFeatureOverrideError, AllLangFeatures, ClosedVocabulary, CommandOverrides,
+    CommentOverrides, DeriveError,
     FeatureAbsent, FeaturePresence, FeaturePresent, FinalizeError,
     ForbiddenCharsOverrides, GroupOverrides, InvocationSyntax, Lang, LangFeatures,
     LangHasCommands, LangHasComments, LangHasForbiddenChars, LangHasGroups,

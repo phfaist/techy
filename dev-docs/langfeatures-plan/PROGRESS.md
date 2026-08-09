@@ -396,6 +396,116 @@ exported via `techy::core` (additive).
     `const _: …` or the assertion fn warns as unused. Everything else behaved
     exactly as the supervisor's prototype predicted.
 
+- **M2 implementer E** — M2 step 2: const feature guards at every listed reachability
+  site (crate GREEN; all guards fold to the old behavior under AllLangFeatures).
+  Guard style everywhere: `<L::Features as LangFeatures>::X::PRESENT` in plain `if`s
+  (`FeaturePresence` must be imported for `::PRESENT` to resolve — added alongside
+  `LangFeatures` in each touched file).
+  - **Guard sites, one line each**:
+    - token/reader.rs — skip_whitespace early-out (Whitespace), its in-loop paragraph
+      check (Paragraphs), detect_paragraph_break (Paragraphs AND Whitespace, atop the
+      existing dual runtime check), commands branch (Commands), read_comment
+      (Comments), specials branch (Specials, before `trigger_chars().may_start`),
+      forbidden-chars branch (ForbiddenChars). Plus a new TokenReader contract bullet:
+      absent features' token kinds must never be produced (this documents the contract
+      whose violation the dispatch guards report).
+    - token/prefix_table.rs — for_rules returns the empty table when Groups is absent
+      (same early-out as the runtime gate; rules data contributes nothing).
+    - constructs/nodes_parser.rs — Command / Specials / GroupOpen / ParagraphBreak
+      arms each return `cx.implementation_error(…)` when their feature is absent
+      (guard first thing in the arm, so recovery placeholders of impossible kinds are
+      covered too). Funnel choice: with the reader guarded, an arm firing for an
+      absent feature means the *token source* (custom reader / recovery token)
+      violated its contract — mirrored the file's implementation-bug treatment
+      (`cx.implementation_error`, aborts under any policy, never a panic), not
+      `recover_as_chars` (which is for source conditions).
+    - state/parsing_state.rs — derived()'s temporary-group stripping seam wrapped in
+      `if Groups::PRESENT`; the scope-op apply path guarded via delta.rs (below).
+    - state/delta.rs — gated-overrides contract (below).
+    - engine/state_memo.rs — hash_key and keys_eq skip absent features' blocks, in
+      lockstep (same consts guard the same fields in both fns; original field order
+      kept, expecting_close still hashed last); M1 comment updated (hash gating now,
+      storage collapse still M3). Soundness note recorded in the comment: violating
+      deltas fail derivation and failures are never cached, so no absent-block data
+      can enter the memo and collide.
+    - engine/language.rs — the root stray-close arm (StopCause::UnexpectedGroupClose)
+      returns implementation_error when Groups is absent (same funnel as item 3).
+  - **Gated-overrides semantics as implemented** ([§dd-dr:lang-features] "gated
+    overrides" + "absent wins over runtime data"): "carries data" = the override
+    block has any non-`None` field (all-`None` carries nothing — checked as
+    `block != Default::default()`). On application (`TokenRulesOverrides::apply` /
+    `ParsingStateDelta::apply_overrides`): present features apply as before; an
+    absent feature's block is NEVER applied (absent wins), and if it carries data the
+    violation is collected into the new error `AbsentFeatureOverrideError`
+    (state/delta.rs; `features()` lists the block names). Scope ops count as the
+    Scopes feature's data: with Scopes absent, a non-empty `scope_ops` list is the
+    same violation ("scopes") and no op applies. The rest of the delta (mode, ext,
+    other blocks) still applies; `derived()` folds the report into `DeriveError`
+    alongside scope-op failures, with the recovered state carried as usual. In-parse
+    (`ParseContext::recover_derive_failure`), the violation aborts as an
+    `ImplementationError` under ANY recovery policy — same class as a finalize
+    refusal (delta-author wiring bug, not a source condition). What does NOT error:
+    all-`None` blocks for absent features; mode/ext overrides; events.
+  - **Error-plumbing signature changes** (join the M2 expected-breaking list):
+    (1) `TokenRulesOverrides::apply` now returns
+    `Result<(), AbsentFeatureOverrideError>` (was `()`); sole caller was
+    apply_overrides. (2) `DeriveError` gains pub field
+    `absent_overrides: Option<AbsentFeatureOverrideError>` (semver:
+    constructible_struct_adds_field now also lists DeriveError.absent_overrides —
+    the only new row vs the M1 list); its "at least one of" invariant now spans
+    three fields. (3) New public type `AbsentFeatureOverrideError`
+    (Debug/Clone/PartialEq/Eq + Display + Error, FinalizeError-style), one canonical
+    path via techy::core (additive). Internal: `apply_overrides` returns
+    `(Vec<ScopeOpError>, Option<AbsentFeatureOverrideError>)`; private helper
+    `TokenRulesOverrides::apply_to_present_features` is the shared gated core.
+  - **merge_from choice**: [§dd-dr:lang-features] is silent about delta-to-delta
+    merging, so ALL merge_from seams (per-block, TokenRulesOverrides,
+    ParsingStateDelta) stay ungated — merging is data plumbing; application is the
+    single enforcement point (a merged violating block still errs when applied).
+  - **Consequence worth flagging**: `TokenRulesOverrides::disable_all()` carries
+    `enabled: Some(false)` for six blocks, so applying it under a partially-absent
+    language errors on the absent ones — intended per the entry (an override is an
+    override), but the M2 test-language implementer should construct per-feature
+    disables, not disable_all(), for partial languages.
+  - **Unlisted candidate sites flagged for the reviewer** (deliberately NOT guarded —
+    PLAN lists guards exhaustively):
+    - reader.rs detect_group_delimiter's expecting-close check: not gated on Groups;
+      unreachable via deltas now (they error) but a Lang seed/customizer violating
+      its contract could still plant expecting_close data under absent Groups; M3's
+      Store collapse makes that unrepresentable.
+    - nodes_parser Comment arm (PLAN lists only Command/GroupOpen/specials/
+      paragraph): an impossible Comment token would be processed as content instead
+      of erroring.
+    - nodes_parser token_stop conditions (GroupClose/ParagraphBreak stop kinds) and
+      group_close_type: consult group/paragraph machinery unguarded — harmless (the
+      kinds cannot be tokenized) but reviewable.
+    - parsing_state freeze_with_table: `L::specials_trigger_chars` is still consulted
+      when runtime data says enabled even under absent Specials (the reader's guarded
+      specials branch makes the result unreachable); a Specials::PRESENT guard there
+      would also spare the hook call.
+    - engine/mod.rs group_interior_state force-sets groups.expecting_close — under
+      absent Groups that delta now errs loudly at derivation (reachable only through
+      the guarded GroupOpen arm, so effectively dead); no change made.
+  - **Docs touched** (absent behavior stated in one plain sentence each, no dd-dr
+    labels in rustdoc): TokenReader contract bullet, StdTokenReader, skip_whitespace,
+    detect_paragraph_break, read_comment, PrefixTable::for_rules,
+    TokenRulesOverrides::apply (# Errors), ParsingState::derived (three failure
+    sources; the "cannot fail" sentence qualified), DeriveError (+ field),
+    ParseContext::derive_state # Failures + recover_derive_failure,
+    ParserSession::derived_state ("overrides-only deltas cannot fail" corrected —
+    they now fail exactly on the absent-feature violation; failures still never
+    cached).
+  - **Gates**: `cargo build` clean; `cargo test --workspace` 884 passed / 0 failed /
+    4 ignored (exact baseline: 758+30+8+21+1+66; 2+2 ignored), zero warnings
+    (`cargo check --workspace --tests` warning-free); fresh `rm -rf target/doc &&
+    cargo docs` zero warnings, AbsentFeatureOverrideError page generated under
+    techy/core/; `scripts/check_semver.sh` = the M1 two categories plus the one
+    expected DeriveError row (above).
+  - **Surprises**: only that `X::PRESENT` needs `FeaturePresence` in scope after all
+    (E0599 with only `LangFeatures` imported — associated-const shorthand resolves
+    through the trait, but the trait must be imported); the M2a compile_checks probe
+    masked this via `use super::*`.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

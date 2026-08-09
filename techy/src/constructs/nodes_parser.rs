@@ -87,7 +87,7 @@ use crate::error::{DiagnosticInfo, ParseError, ToDiagnosticValue};
 use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::{SourceSpan, Span};
 use crate::engine::{CommandResolution, ParseDriver};
-use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
 use crate::token::{Token, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
@@ -831,6 +831,17 @@ where
                 }
 
                 TokenKind::ParagraphBreak => {
+                    // Impossible under a language that declares paragraphs absent:
+                    // the token source violated its contract (`TokenReader` docs) —
+                    // an implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Paragraphs::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a ParagraphBreak token reached content dispatch although \
+                             the language declares the paragraphs feature absent \
+                             (token-source contract violation)",
+                            token.span,
+                        ));
+                    }
                     if self.flush_through(cx, token.pre_space)? {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
@@ -875,6 +886,17 @@ where
                 }
 
                 TokenKind::Command { name, escape_char, .. } => {
+                    // Impossible under a language that declares commands absent: the
+                    // token source violated its contract (`TokenReader` docs) — an
+                    // implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Commands::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a Command token reached content dispatch although the \
+                             language declares the commands feature absent \
+                             (token-source contract violation)",
+                            token.span,
+                        ));
+                    }
                     // Resolution runs under the loop's own state — coherent with the
                     // state that tokenized the token (resolution precedes policy,
                     // [§dd-dr:parsers-engine]). A recovery placeholder is never dispatched: its site
@@ -935,6 +957,17 @@ where
                 }
 
                 TokenKind::Specials { callable_type, name, spec } => {
+                    // Impossible under a language that declares specials absent: the
+                    // token source violated its contract (`TokenReader` docs) — an
+                    // implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Specials::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a Specials token reached content dispatch although the \
+                             language declares the specials feature absent \
+                             (token-source contract violation)",
+                            token.span,
+                        ));
+                    }
                     // Recognition = resolution: the token carries the full resolution
                     // (callable type + spec). Recovery placeholders are never
                     // dispatched, as for commands.
@@ -964,6 +997,17 @@ where
                 }
 
                 TokenKind::GroupOpen { delim, rule } => {
+                    // Impossible under a language that declares groups absent: the
+                    // token source violated its contract (`TokenReader` docs) — an
+                    // implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Groups::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a GroupOpen token reached content dispatch although the \
+                             language declares the groups feature absent \
+                             (token-source contract violation)",
+                            token.span,
+                        ));
+                    }
                     // A recovery placeholder GroupOpen (no current TokenRecovery emits
                     // one) has no real bytes behind it and cannot be parsed as a group:
                     // chars fallback, reader untouched.
