@@ -107,8 +107,10 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
     }
 }
 
-/// The verbatim reading recipe as a [`ParsingStateDelta`]: every tokenization feature
-/// gate off and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
+/// The verbatim reading recipe as a [`ParsingStateDelta`]: the gate of every
+/// tokenization feature the language has off
+/// ([`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all))
+/// and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
 /// **replaced** by `terminator`. Under the derived state the
 /// content arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
 /// `terminator`'s `close` string, which must be non-empty to ever match — as one

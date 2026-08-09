@@ -24,8 +24,9 @@ pub struct WhitespaceOverrides {
 }
 
 impl WhitespaceOverrides {
-    /// The whitespace block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`, everything else untouched.
+    /// The whitespace block's scoped off: `enabled: Some(false)`, everything else
+    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
+    /// language has the whitespace feature.
     pub fn disable() -> WhitespaceOverrides {
         WhitespaceOverrides { enabled: Some(false), ..WhitespaceOverrides::default() }
     }
@@ -57,8 +58,9 @@ pub struct ParagraphOverrides {
 }
 
 impl ParagraphOverrides {
-    /// The paragraphs block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`.
+    /// The paragraphs block's scoped off: `enabled: Some(false)` — the block
+    /// [`TokenRulesOverrides::disable_all`] sets up when the language has the
+    /// paragraphs feature.
     pub fn disable() -> ParagraphOverrides {
         ParagraphOverrides { enabled: Some(false) }
     }
@@ -93,10 +95,10 @@ pub struct GroupOverrides<L: Lang> {
 }
 
 impl<L: Lang> GroupOverrides<L> {
-    /// The groups block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`, everything else untouched — the base a
-    /// takeover parser's groups literal spreads from (see the struct-update note on
-    /// [`TokenRulesOverrides`]).
+    /// The groups block's scoped off: `enabled: Some(false)`, everything else
+    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
+    /// language has the groups feature, and the base a takeover parser's groups
+    /// literal spreads from (see the struct-update note on [`TokenRulesOverrides`]).
     pub fn disable() -> GroupOverrides<L> {
         GroupOverrides { enabled: Some(false), ..GroupOverrides::default() }
     }
@@ -142,8 +144,9 @@ pub struct CommandOverrides {
 }
 
 impl CommandOverrides {
-    /// The commands block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`, everything else untouched.
+    /// The commands block's scoped off: `enabled: Some(false)`, everything else
+    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
+    /// language has the commands feature.
     pub fn disable() -> CommandOverrides {
         CommandOverrides { enabled: Some(false), ..CommandOverrides::default() }
     }
@@ -177,8 +180,9 @@ pub struct CommentOverrides {
 }
 
 impl CommentOverrides {
-    /// The comments block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`, everything else untouched.
+    /// The comments block's scoped off: `enabled: Some(false)`, everything else
+    /// untouched — the block [`TokenRulesOverrides::disable_all`] sets up when the
+    /// language has the comments feature.
     pub fn disable() -> CommentOverrides {
         CommentOverrides { enabled: Some(false), ..CommentOverrides::default() }
     }
@@ -210,8 +214,9 @@ pub struct SpecialsOverrides {
 }
 
 impl SpecialsOverrides {
-    /// The specials block of [`TokenRulesOverrides::disable_all`]:
-    /// `enabled: Some(false)`.
+    /// The specials block's scoped off: `enabled: Some(false)` — the block
+    /// [`TokenRulesOverrides::disable_all`] sets up when the language has the
+    /// specials feature.
     pub fn disable() -> SpecialsOverrides {
         SpecialsOverrides { enabled: Some(false) }
     }
@@ -294,28 +299,58 @@ pub struct TokenRulesOverrides<L: Lang> {
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
-    /// The overrides value with all six `enabled` gates `Some(false)` (whitespace,
-    /// multi-newline paragraphs, groups, commands, comments, specials) and every other
-    /// field untouched — the raw-state block a rest-of-line or verbatim-like takeover
-    /// parser starts from. It composes: tweak fields afterwards, e.g. install the
-    /// terminator that ends the raw region
+    /// The scoped off for every feature the language has: each gate-carrying block
+    /// (whitespace, multi-newline paragraphs, groups, commands, comments, specials)
+    /// whose feature `L` declares present ([`Lang::Features`]) is set to its
+    /// `disable()` value — `enabled: Some(false)`, every other field untouched.
+    /// Features the language declares absent are simply not mentioned by the returned
+    /// value: their blocks stay all-`None`, so applying a `disable_all()`-based delta
+    /// can never produce an [`AbsentFeatureOverrideError`]. (`forbidden_chars` has no
+    /// gate and is never touched.)
+    ///
+    /// This is the raw-state block a rest-of-line or verbatim-like takeover parser
+    /// starts from. It composes: tweak fields afterwards, e.g. install the terminator
+    /// that ends the raw region
     /// ([`verbatim_state_delta`](crate::constructs::verbatim_state_delta) is exactly
     /// this plus its [`expecting_close`](GroupRules::expecting_close)) — minding the
     /// whole-block struct-update note above: the tweak spreads from the block's
     /// [`disable()`](GroupOverrides::disable), not from its default.
     ///
-    /// This is the *scoped* off — the gates flip while the rules data stays in place,
-    /// so a later delta can re-enable a feature with its original rules. The
-    /// *constitutive* off (no rules data at all) is
-    /// [`TokenRules::empty`](crate::token::TokenRules::empty).
+    /// The gates flip while the rules data stays in place, so a later delta can
+    /// re-enable a feature with its original rules. The *constitutive* off (no rules
+    /// data at all) is [`TokenRules::empty`](crate::token::TokenRules::empty).
     pub fn disable_all() -> TokenRulesOverrides<L> {
         TokenRulesOverrides {
-            whitespace: WhitespaceOverrides::disable(),
-            paragraphs: ParagraphOverrides::disable(),
-            groups: GroupOverrides::disable(),
-            commands: CommandOverrides::disable(),
-            comments: CommentOverrides::disable(),
-            specials: SpecialsOverrides::disable(),
+            whitespace: if <L::Features as LangFeatures>::Whitespace::PRESENT {
+                WhitespaceOverrides::disable()
+            } else {
+                WhitespaceOverrides::default()
+            },
+            paragraphs: if <L::Features as LangFeatures>::Paragraphs::PRESENT {
+                ParagraphOverrides::disable()
+            } else {
+                ParagraphOverrides::default()
+            },
+            groups: if <L::Features as LangFeatures>::Groups::PRESENT {
+                GroupOverrides::disable()
+            } else {
+                GroupOverrides::default()
+            },
+            commands: if <L::Features as LangFeatures>::Commands::PRESENT {
+                CommandOverrides::disable()
+            } else {
+                CommandOverrides::default()
+            },
+            comments: if <L::Features as LangFeatures>::Comments::PRESENT {
+                CommentOverrides::disable()
+            } else {
+                CommentOverrides::default()
+            },
+            specials: if <L::Features as LangFeatures>::Specials::PRESENT {
+                SpecialsOverrides::disable()
+            } else {
+                SpecialsOverrides::default()
+            },
             forbidden_chars: ForbiddenCharsOverrides::default(),
         }
     }
@@ -343,7 +378,9 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// override's author: an absent feature has no runtime data to change. Nothing of
     /// such a block is applied, and the violation is reported as an
     /// [`AbsentFeatureOverrideError`]. Blocks of present features apply as documented
-    /// above regardless.
+    /// above regardless. Only explicitly authored data can violate this: the crate's
+    /// own [`disable_all`](Self::disable_all) consults the declarations and never
+    /// errors here.
     pub fn apply(&self, rules: &mut TokenRules<L>) -> Result<(), AbsentFeatureOverrideError> {
         let absent = self.apply_to_present_features(rules);
         if absent.is_empty() {
@@ -403,7 +440,10 @@ impl<L: Lang> TokenRulesOverrides<L> {
 /// under a language without the scope stack. This is a violated contract of the
 /// change's author — an absent feature has no runtime data to change — so the
 /// violating data is never applied (absent wins over runtime data) and this error is
-/// reported instead, never a panic.
+/// reported instead, never a panic. Only explicitly authored data triggers it: the
+/// crate's own constructors consult the declarations —
+/// [`TokenRulesOverrides::disable_all`] names only the features the language has and
+/// never produces this error.
 /// [`ParsingState::derived`](super::ParsingState::derived) folds it into its
 /// [`DeriveError`](super::DeriveError).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -734,6 +774,11 @@ mod tests {
     struct PlainLang;
     impl crate::state::TrivialLang for PlainLang {}
 
+    // Under an all-features-present language (`PlainLang` is a `TrivialLang`, so
+    // `AllLangFeatures`), the feature-aware `disable_all()` (user ruling 2026-08-10:
+    // flip only the gates of features the language has) sets up all six gated blocks
+    // — exactly the value it always produced here. The partially-absent languages
+    // are pinned in tests/lang_features.rs.
     #[test]
     fn disable_all_flips_exactly_the_six_gates() {
         let overrides: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::disable_all();

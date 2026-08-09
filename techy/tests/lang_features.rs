@@ -521,6 +521,22 @@ mod plain_chars {
             .unwrap();
         assert_eq!(derived.rules().whitespace_chars(), " \t\n");
     }
+
+    // Ruled 2026-08-10: `disable_all()` is the scoped off for every feature the
+    // language *has* — it consults the compile-time declarations. With every feature
+    // absent there is nothing for it to mention: the value is the all-`None` default,
+    // and deriving with it succeeds like the empty delta does.
+    #[test]
+    fn disable_all_mentions_nothing_under_an_all_absent_language() {
+        let overrides = TokenRulesOverrides::<PlainCharsLang>::disable_all();
+        assert_eq!(overrides, TokenRulesOverrides::default());
+
+        let derived = ParsingState::<PlainCharsLang>::lang_initial()
+            .derived(&ParsingStateDelta::new().rules(overrides))
+            .expect("disable_all() applies cleanly whatever the language declares");
+        // Nothing was flipped: the (inert) seed data is untouched.
+        assert!(derived.rules().commands_enabled());
+    }
 }
 
 // -------------------------------------------------------------------------------------
@@ -531,8 +547,8 @@ mod groups_only {
     use super::support::*;
     use std::sync::Arc;
     use techy::core::{
-        Language, ParsingState, StdParseDriver, StdTokenReader, Token, TokenKind,
-        TokenReader,
+        Language, ParsingState, ParsingStateDelta, StdParseDriver, StdTokenReader, Token,
+        TokenKind, TokenReader, TokenRulesOverrides,
     };
     use techy::error::Recovery;
     use techy::source::Span;
@@ -576,6 +592,22 @@ mod groups_only {
         let token = reader.peek(&state).unwrap();
         assert!(matches!(&token.kind, TokenKind::GroupOpen { delim: "{", .. }));
         assert_eq!(token.pre_space, Span::empty(1));
+    }
+
+    // Ruled 2026-08-10: `disable_all()` flips exactly the present features' gates —
+    // here just groups — and leaves absent features' blocks all-`None`, so applying
+    // it cannot report an absent-feature violation.
+    #[test]
+    fn disable_all_flips_only_the_groups_gate_and_applies_cleanly() {
+        let overrides = TokenRulesOverrides::<GroupsOnlyLang>::disable_all();
+        let mut expected = TokenRulesOverrides::<GroupsOnlyLang>::default();
+        expected.groups.enabled = Some(false);
+        assert_eq!(overrides, expected);
+
+        let derived = ParsingState::<GroupsOnlyLang>::lang_initial()
+            .derived(&ParsingStateDelta::new().rules(overrides))
+            .expect("disable_all() applies cleanly under a partially-absent language");
+        assert!(!derived.rules().groups_enabled());
     }
 }
 
@@ -697,13 +729,33 @@ mod commands_without_scopes {
         assert_eq!(derived.rules().whitespace_chars(), "Z");
     }
 
+    // Ruled 2026-08-10: under this two-present-features language, `disable_all()`
+    // names exactly whitespace and commands — the absent features' blocks stay
+    // all-`None` — and the delta it seeds applies without any absent-feature report.
+    #[test]
+    fn disable_all_names_only_the_present_features_and_applies_cleanly() {
+        let overrides = TokenRulesOverrides::<CommandsWithoutScopesLang>::disable_all();
+        let mut expected = TokenRulesOverrides::<CommandsWithoutScopesLang>::default();
+        expected.whitespace.enabled = Some(false);
+        expected.commands.enabled = Some(false);
+        assert_eq!(overrides, expected);
+
+        let derived = ParsingState::<CommandsWithoutScopesLang>::lang_initial()
+            .derived(&ParsingStateDelta::new().rules(overrides))
+            .expect("disable_all() applies cleanly under a partially-absent language");
+        assert!(!derived.rules().whitespace_enabled());
+        assert!(!derived.rules().commands_enabled());
+        // The absent blocks' (inert) seed data was left alone.
+        assert!(derived.rules().comments_enabled());
+    }
+
     // M2-transitional behavior (user-accepted 2026-08-10): `verbatim_state_delta`
     // installs its terminator as `expecting_close` — groups data — so under a
     // groups-absent language it errors at application time; M3 replaces this with a
     // `LangHasGroups` compile bound on the verbatim family. Only membership of
-    // "groups" is asserted: the delta currently also flips absent features' gates
-    // through `disable_all()`, and that part of the report goes away when
-    // `disable_all()` becomes feature-aware (ruled 2026-08-10).
+    // "groups" is asserted — written before the feature-aware `disable_all()` rework
+    // (ruled 2026-08-10, since landed): the report is now exactly ["groups"], the
+    // delta's explicitly authored groups literal.
     #[test]
     fn verbatim_state_delta_errors_at_application_under_absent_groups() {
         let terminator = || {

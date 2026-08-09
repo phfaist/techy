@@ -1402,6 +1402,18 @@ equality); or the independent-declaration test/documentation surface becomes a r
 maintenance burden (the remedy is more ready-made bundles next to
 `AllLangFeatures`/`NoLangFeatures`, not closed tiers).
 
+*(Amendment — user ruling 2026-08-10: `TokenRulesOverrides::disable_all()` is
+feature-aware **by construction** — it consults the `Lang::Features` presence
+declarations and flips the `enabled` gate of exactly the features the language has;
+absent features are simply not mentioned by the returned value (their blocks stay
+all-`None`). It is the scoped off for every feature the language has and must never
+be able to fail: applying a `disable_all()`-based delta never reports an
+absent-feature violation. This supplements, not softens, the loud-failure stance on
+gated overrides — explicitly *authored* data on an absent feature's block still
+errors; only the crate's own constructor consults the declarations. Under an
+all-features-present language the returned value is unchanged: all six gates
+`Some(false)`.)*
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -4735,6 +4747,12 @@ S5: `ParseContext::stage_invocation` per the T5 amendment below, minting the
 invocation-syntax payload via `FromInvocation`; in-crate `StdInvocationParser`
 and the expression-position tack-on site collapsed onto it, environment
 compositions staying on the canonical `stage_node` door.)*
+
+*(Item 1 amended — user ruling 2026-08-10, lang-features session: `disable_all()`
+is feature-aware by construction — it flips the gates of exactly the features the
+language declares present, and can never fail ([§dd-dr:lang-features] amendment).
+Under an all-features-present language, item 1's description is unchanged: all six
+gates `Some(false)`.)*
 
 *(Amended — API-review T5 session, the committed helper's signature ruled:
 `cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:

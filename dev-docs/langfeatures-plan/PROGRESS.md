@@ -583,6 +583,50 @@ exported via `techy::core` (additive).
     unreachable, which the `~`-inert assertions confirm.
   - **Surprising**: nothing — every expected span/outline held on first run.
 
+- **M2 implementer G** — M2d: `disable_all()` feature-aware by construction (dated
+  USER RULING 2026-08-10, verbatim: "TokenRulesOverrides::disable_all() must disable
+  all *available* features and must never be able to fail" — overrides implementer
+  E's flagged judgment call that disable_all() errors under partially-absent
+  languages).
+  - **Rework** (techy/src/state/delta.rs): `disable_all()` consults
+    `<L::Features as LangFeatures>::X::PRESENT` per gated block and sets
+    `enabled: Some(false)` only for features the language declares present; absent
+    features' blocks stay at their all-`None` default (`forbidden_chars` untouched,
+    as before). Consequence, stated in rustdoc: applying a `disable_all()`-based
+    delta can NEVER produce `AbsentFeatureOverrideError`. Under `AllLangFeatures`
+    the returned value is bit-for-bit the old one (six `Some(false)` gates) — the
+    existing delta.rs unit test pins it (comment extended to say so). No signature
+    change, no new public API, no new panics.
+  - **Doc sweep**: disable_all() rustdoc rewritten to the ruled contract ("the
+    scoped off for every feature the language has"; absent features simply not
+    mentioned by the returned value); the six per-block `disable()` docs now say
+    disable_all() sets them up "when the language has the feature";
+    `TokenRulesOverrides::apply` # Errors and the `AbsentFeatureOverrideError` docs
+    note the error is triggered only by explicitly authored data — disable_all()
+    never produces it (the error type itself REMAINS at M2, unweakened);
+    verbatim_state_delta's "every tokenization feature gate off" now reads "every
+    feature the language has". DR amendments (dated, per the [§dd-dr:enable-flags]
+    precedent): [§dd-dr:lang-features] gains the 2026-08-10 ruling note (by
+    construction; never fails; loud-failure stance for authored data unchanged);
+    [§dd-dr:takeover-staging-sugar] item 1's "all six gates" description amended to
+    presence-conditional. F's verbatim-test comment updated (the rework landed; the
+    report under CommandsWithoutScopesLang is now exactly ["groups"] — the assertion
+    was already robust to this and is untouched). E's "consequence worth flagging"
+    log bullet above is superseded by this entry.
+  - **Tests** (techy/tests/lang_features.rs, +3, F's 12 untouched): PlainCharsLang —
+    disable_all() equals the all-`None` default and derives cleanly; GroupsOnlyLang
+    — flips exactly the groups gate, applies cleanly; CommandsWithoutScopesLang —
+    flips exactly whitespace+commands, absent blocks all-`None`, applies cleanly
+    with absent-data seed untouched (constructed value AND application asserted in
+    each).
+  - **Gates**: `cargo build` clean; `cargo test --workspace` **899 passed / 0
+    failed / 4 ignored** (758+30+8+21+1+66+15 per target; 2+2 ignored — the 896
+    baseline intact plus the 3 new tests); `cargo check --workspace --tests` zero
+    warnings; fresh `rm -rf target/doc && cargo docs` zero warnings.
+  - **Surprises**: none — all guards were already in place from M2b; the rework is
+    purely constructor-side, and no production file other than delta.rs (code) and
+    verbatim_parser.rs (doc sentence) needed touching.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
@@ -610,3 +654,12 @@ exported via `techy::core` (additive).
   hand-written `Lang` impl breaks by one line).
 - One-time environment note: `cargo fetch` had to run unsandboxed once to
   populate ~/.cargo (clap dev-dep); everything since runs sandboxed.
+- **M3 instruction (part of the 2026-08-10 user ruling)**: once M3's storage
+  gating makes a data-carrying absent block unconstructible (ZST stores) and
+  `scope_ops` is compile-bounded by `LangHasScopes`, the runtime error channel
+  becomes unreachable — M3 must then revert `TokenRulesOverrides::apply()` to
+  infallible and remove `AbsentFeatureOverrideError` from the public surface. The
+  transitional plumbing must not outlive its milestone; the error type is NOT
+  load-bearing. Related, pinned by test (implementer F):
+  `verbatim_state_delta` under a groups-absent language errors at application
+  until M3's `LangHasGroups` bound lands — accepted transitional behavior.
