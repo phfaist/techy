@@ -723,6 +723,59 @@ semver output is unexplained.
   fixes — results in the hand-off section (build/test/docs; semver unchanged
   by doc-only fixes, reviewer's run stands).
 
+- **Supervisor: M3 prep (design mechanics + baseline numbers)** — decisions taken
+  before dispatching implementers (conservative, PLAN- and DR-consistent; all are
+  implementation mechanics under the ruled spec, recorded here for review):
+  - **M2-tree size baseline** (bytes, 64-bit, measured at 351c95b via a temporary
+    probe test, then deleted; identical for all-present and NoLangFeatures — nothing
+    collapses at M2): TokenRules 176, TokenRulesOverrides 184, ParsingStateDelta 240,
+    StateData 200, ParsingState 232, ScopeStack 24. M3 gates: all-present sizes must
+    stay exactly these; NoLangFeatures gated blocks collapse to 0.
+  - **GAT payload bound relaxed**: `Store<T: Clone + Debug>: Clone + Debug` —
+    `Default` dropped from both sides. Forced: the M3 payloads are the seven rules
+    sub-structs (deliberately no `Default`, M1 reviewer ruling) and
+    `Arc<PrefixTable<L>>` (no `Default`). Construction moves to `store_with` (below).
+    `Clone`/`Debug` stay ON the GAT: generic code (state clones in `derived()`)
+    must clone stores without feature bounds.
+  - **Projection surface on `FeaturePresence`** (new trait fns — the only way generic
+    unbounded code can read/write through a store, since `if X::PRESENT` does not
+    narrow types): `store_with(impl FnOnce() -> T) -> Self::Store<T>` (present:
+    calls it; absent: `PhantomData`, closure unused), `store_get(&Store<T>) ->
+    Option<&T>`, `store_get_mut(&mut Store<T>) -> Option<&mut T>`,
+    `store_into_inner(Store<T>) -> Option<T>` (for by-value merge paths). Public
+    (they must be callable through the public `FeaturePresence` bound; the trait
+    stays sealed so the two markers remain the only impls). Names checked against
+    [§dd-arch:naming]: `store_` prefix answers "get *what*?" next to the sibling
+    `Store` GAT; `get`/`get_mut` = the crate's non-panicking-Option convention.
+  - **`ParsingStateDelta::scope_ops` is store-gated** (`Scopes::Store<Vec<ScopeOp<L>>>`),
+    not merely method-bounded: the field is `pub`, so bounding only
+    `scope_op`/`push_provider` would leave literal construction as a reachable
+    violating path and the ruled error-channel retirement could not proceed
+    (`ScopeOp` is an enum with public variants — its *construction* cannot itself
+    be bounded without an unspec'd shape break; a free-floating `ScopeOp` value for
+    a scopes-absent language stays representable but unusable: every place that
+    could hold or apply one is gated or bounded).
+  - **Derived-cache accessors return `Option`**: `ParsingState::prefix_table() ->
+    Option<&PrefixTable<L>>`, `trigger_chars() -> Option<&TriggerChars>` (`None` iff
+    the feature is absent; a present-but-disabled state still returns `Some` of the
+    empty table/filter, as frozen). Reason: the fields collapse per PLAN, and no
+    generic `'static` empty `PrefixTable<L>` can exist to back an unchanged `&`
+    return (generic statics are impossible; `Vec`/`String` payloads bar promotion).
+    Consistent with the accessor doctrine's "absent → false/empty/None". Public
+    breaking change — joins the expected-breaking list.
+  - **Task decomposition**: (A) features.rs projection surface + TokenRules storage
+    gating + accessor internals + generic-read/mutate fallout + lang_features.rs
+    seed rework; (B) delta.rs overrides + scope_ops gating + error-channel
+    retirement (incl. DeriveError field removal) + state_memo + derived-cache
+    collapse + engine fallout + verbatim-family LangHasGroups bounds (forced
+    immediately by the override gating) + temporary-group-minting argument parsers;
+    (C) ScopeStack inner-Vec gating + LangHasScopes bounds on mutating entry points
+    + flagged-site sweep (finalize_transition, detect_group_delimiter,
+    group_interior_state) + lang_features.rs scope-test rework + compile-fact
+    additions; (D) size regression tests + numbers into PROGRESS. Then full-diff
+    review, fixes, gates. Sequenced strictly A → B → C → D (overlapping files:
+    parsing_state.rs, tests/lang_features.rs).
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
