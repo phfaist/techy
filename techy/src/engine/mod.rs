@@ -25,7 +25,10 @@ use crate::error::{
 use crate::node::{BuildId, NodeBuildError, NodeTree, NodeTreeBuilder};
 use crate::source::SourceSpan;
 use crate::spec::{CallableSpec, FrameRole};
-use crate::state::{DeriveError, Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
+use crate::state::{
+    DeriveError, FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta,
+    ParsingStateStack,
+};
 use crate::token::GroupRule;
 
 use alloc::boxed::Box;
@@ -275,11 +278,8 @@ impl<L: Lang> ParserSession<L> {
     /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
     /// **Fallibility**: scope ops can fail, so this method is fallible like
-    /// [`ParsingState::derived`] under it. Overrides-only deltas fail only by carrying
-    /// data for a feature the language declares absent
-    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError), a
-    /// delta-author contract violation); failures are never cached, so nothing wrong
-    /// ever enters the memo. On `Err`, no transition is committed:
+    /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
+    /// also why the memo never caches a failure). On `Err`, no transition is committed:
     /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
     /// has **not** fired — a caller that recovers tolerantly and continues under
     /// [`DeriveError::recovered`](crate::state::DeriveError) observes that transition
@@ -295,8 +295,13 @@ impl<L: Lang> ParserSession<L> {
         base: &Arc<ParsingState<L>>,
         delta: &ParsingStateDelta<L>,
     ) -> Result<Arc<ParsingState<L>>, DeriveError<L>> {
-        let memoizable =
-            delta.ext.is_none() && delta.events.is_empty() && delta.scope_ops.is_empty();
+        // The scope-op list is read through its store projection: absent scopes
+        // (`None`) hold no ops, so such a delta is memoizable like any other
+        // overrides-only delta.
+        let memoizable = delta.ext.is_none()
+            && delta.events.is_empty()
+            && <L::Features as LangFeatures>::Scopes::store_get(&delta.scope_ops)
+                .map_or(true, |ops| ops.is_empty());
         if memoizable {
             if let Some(hit) = self.state_memo.get(&StateMemoProbe {
                 base,
@@ -370,8 +375,16 @@ impl<L: Lang> ParserSession<L> {
         }
         let mut delta = driver.group_interior_delta(base, rule).unwrap_or_default();
         // The descent invariant, forced last: the interior always expects exactly the
-        // entered rule's close — a driver delta cannot displace it.
-        delta.rules.groups.expecting_close = Some(Some(Arc::clone(rule)));
+        // entered rule's close — a driver delta cannot displace it. The write goes
+        // through the store projection (this method is total engine machinery under
+        // an unbounded `L`); it is reachable only through the guarded GroupOpen
+        // dispatch, so for a groups-present language the projection is always `Some`
+        // and the behavior is unchanged.
+        if let Some(groups) =
+            <L::Features as LangFeatures>::Groups::store_get_mut(&mut delta.rules.groups)
+        {
+            groups.expecting_close = Some(Some(Arc::clone(rule)));
+        }
         let delta = Arc::new(delta);
         let new = Arc::new(base.derived(&delta)?);
         self.group_interior_memo.insert(

@@ -17,42 +17,36 @@
 //!   characters are ordinary content tokens (never folded into a token's
 //!   pre-space).
 //! - [`support::CommandsWithoutScopesLang`] — commands and whitespace present,
-//!   everything else absent (the PLAN's lattice ruling: callables do **not** imply
+//!   everything else absent (the lattice ruling: callables do **not** imply
 //!   scopes). The seed populates exactly those two blocks. Commands resolve through
-//!   a fixed table on the driver — no scope stack — and a state change carrying
-//!   *override* data for an absent feature (a scope op, a comments override, the
-//!   verbatim recipe's group data — the override structs are not storage-gated)
-//!   errors through the standard recovery funnel as an implementation error, never
-//!   a panic (out of parse: a `DeriveError` carrying
-//!   [`AbsentFeatureOverrideError`]).
+//!   a fixed table on the driver — no scope stack. A state change carrying data for
+//!   an absent feature is not representable at all: the override fields and the
+//!   delta's scope-op list are zero-sized stores for absent features, and the
+//!   scope-op builders and the verbatim recipe carry feature bounds — writing such
+//!   a delta is a compile-time error, not a runtime report (the positive halves of
+//!   those compile facts are pinned in `feature_composition`).
 //!
 //! Composition note for the commands language: whitespace is present because command
 //! tokenization consumes post-space through `skip_whitespace`; groups stay absent
 //! because zero-argument callables need no group machinery (the argument parsers
-//! that mint temporary group rules are exactly the ones that do — they gain a
-//! `LangHasGroups` bound at M3).
+//! that mint temporary group rules are exactly the ones that do — they carry a
+//! `LangHasGroups` bound).
 //!
 //! [`Lang`]: techy::core::Lang
-//! [`AbsentFeatureOverrideError`]: techy::core::AbsentFeatureOverrideError
 
 mod support {
     use std::sync::Arc;
 
-    use techy::core::constructs::{
-        ConstructParser, ConstructParserResult, FromInvocation, Invocation, ParseContext,
-        StdInvocationParser,
-    };
-    use techy::core::node::{validate_tree, BuildId, NodeKind, NodeRef, StagedChildren};
+    use techy::core::constructs::FromInvocation;
+    use techy::core::node::{validate_tree, NodeKind, NodeRef, StagedChildren};
     use techy::core::specs::{
-        CallableSpec, CommandResolution, Package, ResolvedCallable, ScopeStack,
-        StdCallableSpec,
+        CallableSpec, CommandResolution, ResolvedCallable, ScopeStack, StdCallableSpec,
     };
     use techy::core::{
-        CommandResolver, CommandRule, CommandRules, CommentOverrides, CommentRule,
-        FeatureAbsent, FeaturePresent, GroupRule, GroupRules, Lang, LangFeatures,
-        Language, NoLangFeatures, ParseResult, ParsingState, ParsingStateDelta,
-        SpecialsMatch, StateData, StdParseDriver, Token, TokenKind, TokenResult,
-        TokenRules, TokenRulesOverrides, TriggerChars, WhitespaceRules,
+        CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
+        GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures, ParseResult,
+        ParsingState, SpecialsMatch, StateData, StdParseDriver, Token, TokenKind,
+        TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -284,10 +278,10 @@ mod support {
     }
 
     /// The fixed command table: every name maps to a compile-time-known spec — no
-    /// scope stack consulted. `\def`, `\raw`, and `\verb` deliberately return
-    /// after-effect deltas that carry *override* data for absent features (the
-    /// override structs are not storage-gated), so tests can drive those violations
-    /// through the in-parse recovery funnel.
+    /// scope stack consulted. (The M2-transitional `\def`/`\raw`/`\verb` entries,
+    /// whose after-effect deltas carried data for absent features, are gone: such
+    /// deltas are no longer representable — the M3 storage gating made writing them
+    /// a compile-time error.)
     #[derive(Debug, Clone, Copy)]
     pub struct FixedTableResolver;
 
@@ -303,77 +297,12 @@ mod support {
             let spec: Arc<dyn CallableSpec<CommandsWithoutScopesLang>> = match *name {
                 // A plain zero-argument callable.
                 "mark" => Arc::new(StdCallableSpec::default()),
-                // After-effect: a scope op under a language without the scope stack.
-                "def" => Arc::new(AfterEffectSpec {
-                    delta: ParsingStateDelta::new()
-                        .push_provider(Arc::new(Package::new("defs"))),
-                }),
-                // After-effect: comment rules data under absent comments.
-                "raw" => Arc::new(AfterEffectSpec {
-                    delta: ParsingStateDelta::new().rules(TokenRulesOverrides {
-                        comments: CommentOverrides {
-                            enabled: None,
-                            rules: Some(vec![Arc::new(CommentRule { start: "#".into() })]),
-                        },
-                        ..TokenRulesOverrides::default()
-                    }),
-                }),
-                // After-effect: the verbatim reading recipe, whose expected-close
-                // terminator is groups data — absent here.
-                "verb" => Arc::new(AfterEffectSpec {
-                    delta: techy::core::constructs::verbatim_state_delta(Arc::new(
-                        GroupRule { group_type: 0, open: "|".into(), close: "|".into() },
-                    )),
-                }),
                 _ => return CommandResolution::Unresolved { detail: None },
             };
             CommandResolution::Resolved(ResolvedCallable {
                 callable_type: CT_COMMAND,
                 spec,
             })
-        }
-    }
-
-    /// A zero-argument callable that stages the standard invocation node and then
-    /// returns `delta` as its after-effect for subsequent siblings (the
-    /// `\newcommand` shape) — the channel that routes a delta through the in-parse
-    /// derivation funnel.
-    #[derive(Debug)]
-    pub struct AfterEffectSpec {
-        pub delta: ParsingStateDelta<CommandsWithoutScopesLang>,
-    }
-
-    impl CallableSpec<CommandsWithoutScopesLang> for AfterEffectSpec {
-        fn make_invocation_parser<'a, 's>(
-            &'a self,
-            invocation: Invocation<'a, 's, CommandsWithoutScopesLang>,
-        ) -> Box<dyn ConstructParser<CommandsWithoutScopesLang, Output = BuildId> + 'a>
-        where
-            's: 'a,
-        {
-            Box::new(AfterEffectParser {
-                inner: StdInvocationParser::new(invocation),
-                delta: self.delta.clone(),
-            })
-        }
-    }
-
-    struct AfterEffectParser<'a, 's> {
-        inner: StdInvocationParser<'a, 's, CommandsWithoutScopesLang>,
-        delta: ParsingStateDelta<CommandsWithoutScopesLang>,
-    }
-
-    impl ConstructParser<CommandsWithoutScopesLang> for AfterEffectParser<'_, '_> {
-        type Output = BuildId;
-        fn parse(
-            &mut self,
-            cx: &mut ParseContext<'_, '_, CommandsWithoutScopesLang>,
-        ) -> ConstructParserResult<
-            CommandsWithoutScopesLang,
-            (BuildId, Option<ParsingStateDelta<CommandsWithoutScopesLang>>),
-        > {
-            let (id, _) = self.inner.parse(cx)?;
-            Ok((id, Some(self.delta.clone())))
         }
     }
 
@@ -434,12 +363,8 @@ mod support {
 
 mod plain_chars {
     use super::support::*;
-    use std::sync::Arc;
-    use techy::core::specs::{Package, ScopeOp};
     use techy::core::{
-        CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
-        Language, ParagraphOverrides, ParsingState, ParsingStateDelta, SpecialsOverrides,
-        StdParseDriver, TokenRulesOverrides, WhitespaceOverrides,
+        Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
     };
     use techy::error::Recovery;
 
@@ -476,50 +401,15 @@ mod plain_chars {
         }
     }
 
-    // A delta carrying data for every feature block plus a scope op reports all
-    // eight features, in declaration order, and applies none of it.
-    #[test]
-    fn override_data_for_every_feature_is_reported_in_declaration_order() {
-        let delta = ParsingStateDelta::<PlainCharsLang>::new()
-            .rules(TokenRulesOverrides {
-                whitespace: WhitespaceOverrides { enabled: Some(false), chars: None },
-                paragraphs: ParagraphOverrides::disable(),
-                groups: GroupOverrides { enabled: Some(false), ..GroupOverrides::default() },
-                commands: CommandOverrides::disable(),
-                comments: CommentOverrides::disable(),
-                specials: SpecialsOverrides::disable(),
-                forbidden_chars: ForbiddenCharsOverrides { chars: Some("!".into()) },
-            })
-            .scope_op(ScopeOp::Push(Arc::new(Package::new("pkg"))));
+    // (The M2-transitional pin "override data for every feature is reported in
+    // declaration order" is gone: the delta it built — override data on all eight
+    // absent features plus a scope op — is no longer representable. The override
+    // fields and the scope-op list of a `ParsingStateDelta<PlainCharsLang>` are
+    // zero-sized stores, and the scope-op builders require `LangHasScopes`; writing
+    // that delta is now a compile-time error, which is the ruled M3 outcome.)
 
-        let err = ParsingState::<PlainCharsLang>::lang_initial().derived(&delta).unwrap_err();
-        let report = err.absent_overrides.as_ref().expect("absent-feature report");
-        assert_eq!(
-            report.features(),
-            [
-                "whitespace",
-                "paragraphs",
-                "groups",
-                "commands",
-                "comments",
-                "specials",
-                "forbidden_chars",
-                "scopes",
-            ]
-        );
-        // The scope op was never attempted (it is the "scopes" violation, not an op
-        // failure), and nothing of the delta was applied to the recovered state:
-        // with every field the zero-sized store there is nowhere for override data
-        // to land, and every accessor keeps the absent feature's neutral answer.
-        assert!(err.failures.is_empty());
-        assert!(err.finalize_error.is_none());
-        assert!(!err.recovered.rules().commands_enabled());
-        assert_eq!(err.recovered.rules().forbidden_chars(), "");
-        assert!(err.recovered.scopes().providers().is_empty());
-    }
-
-    // All-`None` blocks carry nothing: the empty delta derives cleanly even with
-    // every feature absent, and the accessors keep answering neutrally.
+    // The empty delta derives cleanly even with every feature absent, and the
+    // accessors keep answering neutrally.
     #[test]
     fn an_empty_delta_derives_cleanly() {
         let derived = ParsingState::<PlainCharsLang>::lang_initial()
@@ -624,14 +514,11 @@ mod groups_only {
 
 mod commands_without_scopes {
     use super::support::*;
-    use std::sync::Arc;
-    use techy::core::constructs::{verbatim_state_delta, ImplementationError};
-    use techy::core::specs::{Package, ScopeOp};
     use techy::core::{
-        CommentOverrides, GroupRule, Language, ParsingState, ParsingStateDelta,
-        StdParseDriver, TokenRulesOverrides, WhitespaceOverrides,
+        Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
+        WhitespaceOverrides,
     };
-    use techy::error::{DiagnosticInfo, Recovery};
+    use techy::error::Recovery;
 
     fn language(recovery: Recovery) -> Language<CommandsWithoutScopesLang> {
         Language::new(
@@ -667,67 +554,21 @@ mod commands_without_scopes {
         assert_eq!(outline(result.tree.root().children()), ["0..4 chars(a\n\nb)"]);
     }
 
-    // A spec's after-effect delta pushes a provider — a scope op under a language
-    // that declares the scope stack absent. The violation surfaces through the
-    // in-parse derivation funnel as an implementation error, under *both* recovery
-    // policies, never a panic.
-    #[test]
-    fn an_in_parse_scope_op_aborts_as_an_implementation_error_not_a_panic() {
-        for recovery in [Recovery::Strict, Recovery::Tolerant] {
-            let err = language(recovery).parse(r"\def x").unwrap_err();
-            assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
-            assert!(err.to_string().contains("scopes"), "{err}");
-        }
-    }
+    // (Four M2-transitional pins are gone, all made unwritable by the M3 storage
+    // gating — the ruled outcome: a scope-op after-effect (`\def`) and a
+    // comments-override after-effect (`\raw`) no longer have a representable delta
+    // to route through the in-parse funnel; the out-of-parse scope-op `DeriveError`
+    // report needed `.scope_op(…)`, which now requires `LangHasScopes`; and the
+    // explicit comments-data override was a `comments:` field literal on a
+    // zero-sized store. Their M3 replacements are the compile facts in
+    // `feature_composition` and the positive application tests kept here.)
 
-    // The same funnel for a rules override: an after-effect delta carrying comment
-    // rules data under absent comments.
+    // A delta touching only present features applies cleanly — and data for an
+    // absent feature cannot ride along: a `comments:` (or any other absent-feature)
+    // literal on this language's `TokenRulesOverrides` is a compile-time type error.
     #[test]
-    fn an_in_parse_override_carrying_comments_data_aborts_the_same_way() {
-        for recovery in [Recovery::Strict, Recovery::Tolerant] {
-            let err = language(recovery).parse(r"\raw x").unwrap_err();
-            assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
-            assert!(err.to_string().contains("comments"), "{err}");
-        }
-    }
-
-    // Out of parse, the same violation is a `DeriveError`: the scope op is reported
-    // as the "scopes" feature violation (not an op failure), it never applies, and
-    // the delta's present-feature parts still apply to the recovered state.
-    #[test]
-    fn scope_ops_error_out_of_parse_and_the_rest_of_the_delta_still_applies() {
-        let delta = ParsingStateDelta::<CommandsWithoutScopesLang>::new()
-            .rules(TokenRulesOverrides {
-                whitespace: WhitespaceOverrides { enabled: None, chars: Some("XY".into()) },
-                ..TokenRulesOverrides::default()
-            })
-            .scope_op(ScopeOp::Push(Arc::new(Package::new("late"))));
-
-        let err =
-            ParsingState::<CommandsWithoutScopesLang>::lang_initial().derived(&delta).unwrap_err();
-        assert_eq!(err.absent_overrides.as_ref().unwrap().features(), ["scopes"]);
-        assert!(err.failures.is_empty());
-        assert_eq!(err.recovered.rules().whitespace_chars(), "XY");
-        assert!(err.recovered.scopes().providers().is_empty());
-    }
-
-    // The gated-overrides contract, block by block: explicitly authored data on an
-    // absent feature's block errors; an all-`None` block for an absent feature stays
-    // silent.
-    #[test]
-    fn explicit_data_for_an_absent_feature_errors_while_an_all_none_block_stays_silent() {
+    fn overrides_for_present_features_apply_cleanly() {
         let seed = ParsingState::<CommandsWithoutScopesLang>::lang_initial();
-
-        let err = seed
-            .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
-                comments: CommentOverrides::disable(),
-                ..TokenRulesOverrides::default()
-            }))
-            .unwrap_err();
-        assert_eq!(err.absent_overrides.unwrap().features(), ["comments"]);
-
-        // Same delta shape minus the comments data: the absent blocks are all-`None`
-        // and stay silent; the whitespace override (present feature) applies.
         let derived = seed
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 whitespace: WhitespaceOverrides { enabled: None, chars: Some("Z".into()) },
@@ -757,38 +598,11 @@ mod commands_without_scopes {
         assert!(!derived.rules().comments_enabled());
     }
 
-    // M2-transitional behavior (user-accepted 2026-08-10): `verbatim_state_delta`
-    // installs its terminator as `expecting_close` — groups data — so under a
-    // groups-absent language it errors at application time; M3 replaces this with a
-    // `LangHasGroups` compile bound on the verbatim family. Only membership of
-    // "groups" is asserted — written before the feature-aware `disable_all()` rework
-    // (ruled 2026-08-10, since landed): the report is now exactly ["groups"], the
-    // delta's explicitly authored groups literal.
-    #[test]
-    fn verbatim_state_delta_errors_at_application_under_absent_groups() {
-        let terminator = || {
-            Arc::new(GroupRule::<CommandsWithoutScopesLang> {
-                group_type: 0,
-                open: "|".into(),
-                close: "|".into(),
-            })
-        };
-
-        // Out of parse: application via `derived()`.
-        let err = ParsingState::<CommandsWithoutScopesLang>::lang_initial()
-            .derived(&verbatim_state_delta(terminator()))
-            .unwrap_err();
-        let report = err.absent_overrides.expect("absent-feature report");
-        assert!(report.features().contains(&"groups"), "{:?}", report.features());
-
-        // In parse: `\verb`'s after-effect carries the same delta through the
-        // recovery funnel — an implementation error under both policies, no panic.
-        for recovery in [Recovery::Strict, Recovery::Tolerant] {
-            let err = language(recovery).parse(r"\verb|x|").unwrap_err();
-            assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
-            assert!(err.to_string().contains("groups"), "{err}");
-        }
-    }
+    // (The M2-transitional verbatim pin is gone the same way: `verbatim_state_delta`
+    // now carries the `LangHasGroups` bound the plan promised, so
+    // `verbatim_state_delta::<CommandsWithoutScopesLang>` does not compile at all —
+    // the application-time error it pinned has no delta left to trigger it. The
+    // positive half of the compile fact is pinned in `feature_composition`.)
 }
 
 // -------------------------------------------------------------------------------------
@@ -797,9 +611,12 @@ mod commands_without_scopes {
 
 mod feature_composition {
     use super::support::{CommandsWithoutScopesLang, GroupsOnlyLang};
+    use std::sync::Arc;
+    use techy::core::constructs::verbatim_state_delta;
+    use techy::core::specs::ScopeOp;
     use techy::core::{
-        FeaturePresence, Lang, LangFeatures, LangHasCommands, LangHasGroups,
-        LangHasWhitespace,
+        FeaturePresence, GroupRule, Lang, LangFeatures, LangHasCommands, LangHasGroups,
+        LangHasScopes, LangHasWhitespace, ParsingStateDelta, TrivialLang,
     };
 
     fn requires_groups<L: LangHasGroups>() {}
@@ -811,6 +628,36 @@ mod feature_composition {
     const _: fn() = requires_groups::<GroupsOnlyLang>;
     const _: fn() = requires_commands::<CommandsWithoutScopesLang>;
     const _: fn() = requires_whitespace::<CommandsWithoutScopesLang>;
+
+    // The positive halves of the M3 compile facts that retired the transitional
+    // runtime pins (the negative halves — a groups-absent or scopes-absent language
+    // in these positions — do not compile, which is the fact itself):
+    //
+    // `verbatim_state_delta` requires the groups feature (its terminator is groups
+    // data); a groups-present language satisfies the bound.
+    fn mint_verbatim_delta<L: LangHasGroups>(
+        terminator: Arc<GroupRule<L>>,
+    ) -> ParsingStateDelta<L> {
+        verbatim_state_delta(terminator)
+    }
+    const _: fn(Arc<GroupRule<GroupsOnlyLang>>) -> ParsingStateDelta<GroupsOnlyLang> =
+        mint_verbatim_delta::<GroupsOnlyLang>;
+
+    // The delta's scope-op builders require the scopes feature; a scopes-present
+    // language (every `TrivialLang` declares all features) satisfies the bound.
+    #[derive(Debug, Clone, Copy)]
+    struct AllPresentLang;
+    impl TrivialLang for AllPresentLang {}
+    fn add_scope_op<L: LangHasScopes>(
+        delta: ParsingStateDelta<L>,
+        op: ScopeOp<L>,
+    ) -> ParsingStateDelta<L> {
+        delta.scope_op(op)
+    }
+    const _: fn(
+        ParsingStateDelta<AllPresentLang>,
+        ScopeOp<AllPresentLang>,
+    ) -> ParsingStateDelta<AllPresentLang> = add_scope_op::<AllPresentLang>;
 
     type GroupsOnlyDecl = <GroupsOnlyLang as Lang>::Features;
     const _: () =

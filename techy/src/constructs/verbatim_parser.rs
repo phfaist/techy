@@ -55,8 +55,9 @@ use crate::engine::{Frame, FrameTitle};
 use crate::source::{SourceSpan, Span, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{
-    CommandOverrides, CommentOverrides, GroupOverrides, Lang, ParagraphOverrides,
-    ParsingState, ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
+    CommandOverrides, CommentOverrides, FeaturePresence, GroupOverrides, Lang,
+    LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
+    SpecialsOverrides, TokenRulesOverrides,
 };
 use crate::token::{GroupRule, Token, TokenKind};
 
@@ -120,7 +121,12 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 /// and [`VerbatimBodyParser`] derive their reading states through it.
 /// `forbidden_chars` is deliberately not touched: a character the language outlaws
 /// stays diagnosable inside verbatim content.
-pub fn verbatim_state_delta<L: Lang>(terminator: Arc<GroupRule<L>>) -> ParsingStateDelta<L> {
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
+/// installed as the expected group close, which is groups data.
+pub fn verbatim_state_delta<L: LangHasGroups>(
+    terminator: Arc<GroupRule<L>>,
+) -> ParsingStateDelta<L> {
     // The groups literal spreads from the *disabled* block, not from its default: a
     // whole-block field literal replaces everything `disable_all()` set up for that
     // block (the struct-update note on [`TokenRulesOverrides`]).
@@ -233,13 +239,16 @@ fn default_auto_delimiters() -> Vec<(char, char)> {
 /// group's children. At end of input before the closing delimiter,
 /// [`UnterminatedVerbatim`] is diagnosed (strict: abort) and the group records an
 /// empty close.
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the parser
+/// installs its closing delimiter as an expected group close and stages a group node.
 pub struct VerbatimArgumentParser<L: Lang> {
     group_type: L::GroupTypeId,
     delimiters: Option<(char, char)>,
     auto_delimiters: Vec<(char, char)>,
 }
 
-impl<L: Lang> VerbatimArgumentParser<L> {
+impl<L: LangHasGroups> VerbatimArgumentParser<L> {
     /// An auto-delimited verbatim argument staging groups of class `group_type`
     /// (`\verb|…|`, `\verb+…+`, …; the bare `v` code).
     pub fn new(group_type: L::GroupTypeId) -> VerbatimArgumentParser<L> {
@@ -273,21 +282,32 @@ impl<L: Lang> VerbatimArgumentParser<L> {
     /// recognizer is off, and an inherited close expectation is **cleared** (a `}`
     /// must be readable as a delimiter char even inside a braces group).
     fn delimiter_probe_delta(&self) -> ParsingStateDelta<L> {
+        // Only the groups store is known transparent under `L: LangHasGroups`; the
+        // other blocks are built through their store projections — a feature the
+        // language does not have needs no disabling (nothing exists to recognize).
         ParsingStateDelta::new().rules(TokenRulesOverrides {
-            paragraphs: ParagraphOverrides::disable(),
+            paragraphs: <L::Features as LangFeatures>::Paragraphs::store_with(
+                ParagraphOverrides::disable,
+            ),
             groups: GroupOverrides {
                 expecting_close: Some(None),
                 ..GroupOverrides::disable()
             },
-            commands: CommandOverrides::disable(),
-            comments: CommentOverrides::disable(),
-            specials: SpecialsOverrides::disable(),
+            commands: <L::Features as LangFeatures>::Commands::store_with(
+                CommandOverrides::disable,
+            ),
+            comments: <L::Features as LangFeatures>::Comments::store_with(
+                CommentOverrides::disable,
+            ),
+            specials: <L::Features as LangFeatures>::Specials::store_with(
+                SpecialsOverrides::disable,
+            ),
             ..TokenRulesOverrides::default()
         })
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for VerbatimArgumentParser<L>
+impl<L: LangHasGroups> ArgumentParser<L> for VerbatimArgumentParser<L>
 where
     ArgumentExt<L>: Default,
 {
@@ -451,6 +471,9 @@ impl<L: Lang> fmt::Debug for VerbatimArgumentParser<L> {
 /// At end of input before the terminator, [`MissingEnvironmentTerminator`] is
 /// diagnosed (anchored at the invocation trigger, like the tokenized body parser) and
 /// the body closes at the input's end.
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
+/// carried by a minted group rule installed as the expected group close.
 pub struct VerbatimBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{verbatim}`'s command token), anchoring
     /// the missing-terminator diagnostic.
@@ -470,7 +493,7 @@ pub struct VerbatimBodyParser<'p, L: Lang> {
     invocation_name_span: Option<Span>,
 }
 
-impl<'p, L: Lang> VerbatimBodyParser<'p, L> {
+impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
     /// A verbatim body parser for the environment invoked as `invocation_name`
     /// (trigger token span `trigger_span`), terminated by the literal `terminator`
     /// text, minting its expected-close rule under `group_type`.
@@ -506,7 +529,7 @@ impl<'p, L: Lang> VerbatimBodyParser<'p, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for VerbatimBodyParser<'_, L> {
+impl<L: LangHasGroups> ConstructParser<L> for VerbatimBodyParser<'_, L> {
     type Output = EnvironmentBody<L>;
 
     fn parse(
@@ -526,7 +549,7 @@ impl<L: Lang> ConstructParser<L> for VerbatimBodyParser<'_, L> {
     }
 }
 
-impl<L: Lang> VerbatimBodyParser<'_, L> {
+impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
     /// The body parse proper, run under the environment's traceback frame.
     fn parse_body(
         &mut self,

@@ -25,11 +25,6 @@ impl sealed::Sealed for FeatureAbsent {}
 /// **Sealed**: a private supertrait keeps other implementations out. The vocabulary is
 /// deliberately closed — a feature is present or absent, nothing else — so generic
 /// machinery may rely on every presence answer being one of the two markers.
-///
-/// Deliberately **no** explicit `Send`/`Sync` requirements anywhere here: the two
-/// possible [`Store`](FeaturePresence::Store) types are the stored type `T` itself and
-/// a marker type containing nothing, so a store is `Send`/`Sync` exactly when `T` is —
-/// the usual automatic rules apply unchanged.
 pub trait FeaturePresence: sealed::Sealed + 'static {
     /// Whether the feature is present. A compile-time constant: generic code can
     /// branch on it, and the compiler removes the untaken arm when the language's
@@ -46,8 +41,13 @@ pub trait FeaturePresence: sealed::Sealed + 'static {
     /// (the delimiter prefix table and the specials trigger-character filter) are
     /// all stored through it.
     ///
-    /// The bounds are what generic code may do with any store directly: clone it
-    /// and format it for debugging. Everything else goes through the four
+    /// The bounds are what generic code may do with any store directly: clone it,
+    /// format it for debugging, and share or move it across threads (containers of
+    /// state-changing values — a spec carrying a prepared delta, for example — must
+    /// stay thread-safe for every language, which only a promise on the store
+    /// itself can guarantee under a generic `L`; both markers' stores are
+    /// `Send`/`Sync` whenever `T` is, so the promise costs nothing). Everything
+    /// else goes through the four
     /// projection functions ([`store_with`](Self::store_with),
     /// [`store_get`](Self::store_get), [`store_get_mut`](Self::store_get_mut),
     /// [`store_into_inner`](Self::store_into_inner)). Equality is deliberately
@@ -55,27 +55,32 @@ pub trait FeaturePresence: sealed::Sealed + 'static {
     /// for example, has no equality comparison). `Default` is likewise not
     /// promised — construction goes through [`store_with`](Self::store_with) with
     /// an explicit constructor.
-    type Store<T: Clone + fmt::Debug>: Clone + fmt::Debug;
+    type Store<T: Clone + fmt::Debug + Send + Sync>: Clone + fmt::Debug + Send + Sync;
 
     /// Builds a store around the value `make` returns. For a present feature, this
     /// calls `make` and returns its value (the store *is* the value); for an
     /// absent feature, it returns the zero-sized store — `make` is never called,
     /// and no value exists.
-    fn store_with<T: Clone + fmt::Debug>(make: impl FnOnce() -> T) -> Self::Store<T>;
+    fn store_with<T: Clone + fmt::Debug + Send + Sync>(
+        make: impl FnOnce() -> T,
+    ) -> Self::Store<T>;
 
     /// The stored value, by reference: `Some` for a present feature, `None` for an
     /// absent one (an absent feature's store holds nothing).
-    fn store_get<T: Clone + fmt::Debug>(store: &Self::Store<T>) -> Option<&T>;
+    fn store_get<T: Clone + fmt::Debug + Send + Sync>(store: &Self::Store<T>) -> Option<&T>;
 
     /// The stored value, by mutable reference: `Some` for a present feature,
     /// `None` for an absent one (an absent feature's store holds nothing to
     /// change).
-    fn store_get_mut<T: Clone + fmt::Debug>(store: &mut Self::Store<T>) -> Option<&mut T>;
+    fn store_get_mut<T: Clone + fmt::Debug + Send + Sync>(
+        store: &mut Self::Store<T>,
+    ) -> Option<&mut T>;
 
     /// The stored value, by value, consuming the store: `Some` for a present
     /// feature, `None` for an absent one (an absent feature's store holds
     /// nothing).
-    fn store_into_inner<T: Clone + fmt::Debug>(store: Self::Store<T>) -> Option<T>;
+    fn store_into_inner<T: Clone + fmt::Debug + Send + Sync>(store: Self::Store<T>)
+        -> Option<T>;
 }
 
 /// The "feature is present" marker ([`FeaturePresence`]): the language has the
@@ -90,21 +95,27 @@ pub struct FeaturePresent;
 
 impl FeaturePresence for FeaturePresent {
     const PRESENT: bool = true;
-    type Store<T: Clone + fmt::Debug> = T;
+    type Store<T: Clone + fmt::Debug + Send + Sync> = T;
 
-    fn store_with<T: Clone + fmt::Debug>(make: impl FnOnce() -> T) -> Self::Store<T> {
+    fn store_with<T: Clone + fmt::Debug + Send + Sync>(
+        make: impl FnOnce() -> T,
+    ) -> Self::Store<T> {
         make()
     }
 
-    fn store_get<T: Clone + fmt::Debug>(store: &Self::Store<T>) -> Option<&T> {
+    fn store_get<T: Clone + fmt::Debug + Send + Sync>(store: &Self::Store<T>) -> Option<&T> {
         Some(store)
     }
 
-    fn store_get_mut<T: Clone + fmt::Debug>(store: &mut Self::Store<T>) -> Option<&mut T> {
+    fn store_get_mut<T: Clone + fmt::Debug + Send + Sync>(
+        store: &mut Self::Store<T>,
+    ) -> Option<&mut T> {
         Some(store)
     }
 
-    fn store_into_inner<T: Clone + fmt::Debug>(store: Self::Store<T>) -> Option<T> {
+    fn store_into_inner<T: Clone + fmt::Debug + Send + Sync>(
+        store: Self::Store<T>,
+    ) -> Option<T> {
         Some(store)
     }
 }
@@ -120,21 +131,27 @@ pub struct FeatureAbsent;
 
 impl FeaturePresence for FeatureAbsent {
     const PRESENT: bool = false;
-    type Store<T: Clone + fmt::Debug> = PhantomData<T>;
+    type Store<T: Clone + fmt::Debug + Send + Sync> = PhantomData<T>;
 
-    fn store_with<T: Clone + fmt::Debug>(_make: impl FnOnce() -> T) -> Self::Store<T> {
+    fn store_with<T: Clone + fmt::Debug + Send + Sync>(
+        _make: impl FnOnce() -> T,
+    ) -> Self::Store<T> {
         PhantomData
     }
 
-    fn store_get<T: Clone + fmt::Debug>(_store: &Self::Store<T>) -> Option<&T> {
+    fn store_get<T: Clone + fmt::Debug + Send + Sync>(_store: &Self::Store<T>) -> Option<&T> {
         None
     }
 
-    fn store_get_mut<T: Clone + fmt::Debug>(_store: &mut Self::Store<T>) -> Option<&mut T> {
+    fn store_get_mut<T: Clone + fmt::Debug + Send + Sync>(
+        _store: &mut Self::Store<T>,
+    ) -> Option<&mut T> {
         None
     }
 
-    fn store_into_inner<T: Clone + fmt::Debug>(_store: Self::Store<T>) -> Option<T> {
+    fn store_into_inner<T: Clone + fmt::Debug + Send + Sync>(
+        _store: Self::Store<T>,
+    ) -> Option<T> {
         None
     }
 }
@@ -382,7 +399,7 @@ mod compile_checks {
 
     /// The chosen `Store` GAT bounds; every per-feature storage payload type must
     /// satisfy them.
-    fn assert_store_payload<T: Clone + fmt::Debug>() {}
+    fn assert_store_payload<T: Clone + fmt::Debug + Send + Sync>() {}
 
     // One instantiation per payload the per-feature storage routes through
     // `Store<T>`: the seven rules blocks, their seven override blocks, the delta's

@@ -863,6 +863,143 @@ semver output is unexplained.
     everything else — including `X::store_with(XRules::empty)` fn-item inference and
     the where-claused equality impls — behaved as the M2 prototype predicted.
 
+- **M3 implementer B** — overrides/scope_ops storage gating landed; transitional error
+  channel retired (user ruling 2026-08-10, M3 instruction). Crate GREEN. Tasks C/D
+  untouched (ScopeStack inner Vec, finalize_transition/detect_group_delimiter flagged
+  sites, size tests all as before).
+  - **delta.rs**: the seven `TokenRulesOverrides<L>` fields and
+    `ParsingStateDelta::scope_ops` are the fully spelled `Store<…>` projections (no
+    public alias). `Default`/`disable_all()` build per field via
+    `store_with(XOverrides::default/disable)` (disable_all value bit-for-bit under
+    all-present languages — the delta.rs unit test passes untouched);
+    `merge_from` (per-struct + delta) and `apply` use matched projections
+    (`store_get_mut` on self, `store_into_inner` on the owned side; both stores share
+    the presence marker, no unwrap/expect anywhere); `PartialEq`/`Eq` carry the
+    per-impl `Store<…>: PartialEq/Eq` where-clauses ×7 (rules.rs pattern);
+    `is_empty()` reworked per block under `store_get` (new pub(crate)
+    `TokenRulesOverrides::is_empty`); `scope_op`/`push_provider` gained
+    `where L: LangHasScopes` (transparent store under the bound — plain push);
+    `apply_overrides` returns `Vec<ScopeOpError>` again, scope ops applied under the
+    `store_get` projection (absent: no arm). The seven per-block override structs are
+    UNCHANGED as types; their `disable()` constructors stay presence-blind.
+  - **Unreachability verification (precondition for the retirement)**: with the
+    gating in place, absent-feature override data and scope ops for a scopes-absent
+    language are unrepresentable — checked every path: (a) public field literals —
+    the fields are typed as the store projections; for an absent feature that is
+    `PhantomData<XOverrides>`/`PhantomData<Vec<ScopeOp<L>>>`, which carries no data;
+    (b) crate constructors — `Default`/`disable_all()`/`new()` go through
+    `store_with`, which never fabricates a value for an absent feature; (c) merge
+    paths (`merge_from` ×2, `lower_state_events`) — matched projections, absent
+    merges nothing; (d) builders — `scope_op`/`push_provider` bounded by
+    `LangHasScopes`; (e) deserialization — none (no serde anywhere in techy);
+    (f) `ScopeOp` values themselves stay constructible but nothing generic can hold
+    or apply one for a scopes-absent language (the supervisor-recorded stance). No
+    remaining reachable path found → the channel was retired in full:
+    `TokenRulesOverrides::apply` infallible again (`# Errors` gone,
+    `apply_to_present_features` deleted), `AbsentFeatureOverrideError` removed
+    (type + impls + facade re-exports + every doc mention — grep of techy/ and
+    dev-docs/ is clean), `DeriveError.absent_overrides` field removed ("at least one
+    of" invariant back to two sources; Display/Debug/docs updated),
+    `recover_derive_failure`/`derive_state`/`derived()`/`derived_state` docs restored
+    to the two-source story (engine/mod.rs "Overrides-only deltas cannot fail"
+    restored verbatim from the pre-M2 text).
+  - **Derived caches collapsed** (parsing_state.rs): `prefix_table` →
+    `Groups::Store<Arc<PrefixTable<L>>>`, `trigger_chars` →
+    `Specials::Store<TriggerChars>`; `freeze`/`freeze_with_table` build via
+    `store_with` (the internal `freeze_with_table` signature now takes the store);
+    the E-flagged freeze-time `L::specials_trigger_chars` call under absent Specials
+    is retired — `store_with` never runs the closure for an absent feature (comment
+    at the site); the `derived()` table-reuse path clones the store. Public
+    accessors now `prefix_table() -> Option<&PrefixTable<L>>` /
+    `trigger_chars() -> Option<&TriggerChars>`: `None` iff the feature is absent,
+    present-but-disabled still `Some` of the frozen empty table/filter (rustdoc says
+    exactly that) — joins the expected-breaking list. Call sites: reader.rs specials
+    branch (`is_some_and` under the kept const guard), prefix-table match
+    (`state.prefix_table()?.match_at(rest)?`), nodes_parser `group_close_type`
+    (`and_then`); test sites use `.unwrap()`/`.expect("all-present test language")`,
+    assertion VALUES untouched.
+  - **engine + memo**: state_memo `hash_key`/`keys_eq` walk each block under
+    `store_get` in lockstep, original field order, expecting_close still last
+    (keys_eq via a local `stores_eq` helper whose impossible mixed arm answers
+    `false` — conservative miss); M1/M2 comment updated (the absent block "does not
+    even exist" now); Arc-identity keying byte-for-byte for present features;
+    scope_ops is not hashed (the memoizable guard now projects it —
+    `store_get(...).map_or(true, is_empty)`). `group_interior_state` force-sets
+    expecting_close through `store_get_mut` (reachable only under the guarded
+    GroupOpen arm — identical behavior for groups-present languages).
+  - **Lattice bounds (the PLAN's exhaustive list, nothing beyond)**: LangHasGroups on
+    `verbatim_state_delta`, `VerbatimArgumentParser` (inherent + ArgumentParser
+    impls), `VerbatimBodyParser` (inherent + ConstructParser impls),
+    `GroupArgumentParser` (inherent + ArgumentParser impls — judgment call: the type
+    carries the bound as a whole; its rule form mints temporaries via
+    `probe_minted_group`, also bounded, and the class form is a group argument
+    either way), `OptionalGroupArgumentParser` (inherent + ArgumentParser impls).
+    One plain rustdoc sentence on each. NOT bounded (projection instead, per the
+    exhaustive-list rule): `CharsGroupArgumentParser::contents_delta` (writes
+    groups-override data but the type is not in the ruled list — groups writes via
+    `store_get_mut`, the commands/specials/comments blocks via `store_with`;
+    one turbofish `store_get_mut::<GroupOverrides<L>>` for inference),
+    `VerbatimArgumentParser::delimiter_probe_delta`'s non-groups blocks
+    (`store_with` — only the groups store is transparent under LangHasGroups),
+    `group_interior_state` (above). `ExpressionParser`/`MarkerArgumentParser`/
+    embellishments/tack-on parsers carry no group data → unbounded.
+  - **FORCED GAT AMENDMENT (task-A surface, review me)**: `FeaturePresence::Store`
+    bounds tightened to `T: Clone + Debug + Send + Sync` on both sides (M2a had
+    deliberately no explicit Send/Sync). Forced by the delta gating:
+    `CallableSpec: Send + Sync` holds `ArgumentSpec<L>` which holds
+    `Option<ParsingStateDelta<L>>`; under a bare `L: Lang` the auto-trait derivation
+    cannot see through the GAT, so without the promise `StdCallableSpec`'s blanket
+    impl (and every generic spec) fails E0277 ×16. All 18 roster payloads satisfy
+    the bounds (compile_checks' `assert_store_payload` now requires them);
+    both markers' stores are Send/Sync whenever `T` is, so the promise is free.
+    FeaturePresence rustdoc's "no explicit Send/Sync" paragraph replaced by the
+    reasoned bound sentence on `Store`.
+  - **tests/lang_features.rs accounting (15 → 10 `#[test]` fns; every retirement is
+    the ruled unrepresentability)**:
+    `plain_chars::override_data_for_every_feature_is_reported_in_declaration_order`
+    → DELETED (the all-eight-violations delta is a type error now; positive record
+    kept by `an_empty_delta_derives_cleanly` + the M2d disable_all test);
+    `an_in_parse_scope_op_aborts_as_an_implementation_error_not_a_panic` → DELETED
+    (the `\def` after-effect delta needs `push_provider` under absent Scopes;
+    replacement: `feature_composition::add_scope_op` positive LangHasScopes fact);
+    `an_in_parse_override_carrying_comments_data_aborts_the_same_way` → DELETED
+    (the `\raw` comments literal is a type error; replacement:
+    `overrides_for_present_features_apply_cleanly` + module comment);
+    `scope_ops_error_out_of_parse_and_the_rest_of_the_delta_still_applies` →
+    DELETED (`.scope_op` bounded; its positive half lives on in the rework below,
+    value "Z" unchanged);
+    `explicit_data_for_an_absent_feature_errors_while_an_all_none_block_stays_silent`
+    → REWORKED into `overrides_for_present_features_apply_cleanly` (the error half
+    is unrepresentable; the apply half kept, assertion values identical);
+    `verbatim_state_delta_errors_at_application_under_absent_groups` → DELETED
+    (`verbatim_state_delta::<CommandsWithoutScopesLang>` no longer compiles;
+    replacement: `feature_composition::mint_verbatim_delta` positive LangHasGroups
+    fact). Support module: `AfterEffectSpec`/`AfterEffectParser` and the
+    `\def`/`\raw`/`\verb` resolver arms removed (no test routes deltas through them
+    anymore); `FixedTableResolver` keeps `\mark`. All M2d disable_all tests and
+    every all-present behavior test keep exact assertion values.
+  - **dev-docs**: dated M3 follow-through amendment appended to
+    [§dd-dr:lang-features]'s 2026-08-10 amendment (channel unreachable → removed per
+    the ruling's M3 instruction); no other dev-docs sentence presents the error type
+    as current (grep clean).
+  - **Expected-breaking additions for the M3 gate run** (semver deferred to closure
+    per prep): `prefix_table`/`trigger_chars` return `Option`;
+    `TokenRulesOverrides` field types + `ParsingStateDelta.scope_ops` type are now
+    store projections; `scope_op`/`push_provider` bounded `LangHasScopes`; verbatim
+    family + `GroupArgumentParser`/`OptionalGroupArgumentParser` bounded
+    `LangHasGroups`; `TokenRulesOverrides::apply` returns `()` again;
+    `AbsentFeatureOverrideError` + `DeriveError.absent_overrides` removed;
+    `FeaturePresence::Store` GAT bounds gained `Send + Sync`.
+  - **Gates**: `cargo build` clean; `cargo test --workspace` **895 passed / 0
+    failed / 4 ignored** (per-target 758+30+8+10+21+1+67; 2+2 ignored — task A's 900
+    minus exactly the 5 lang_features retirements above, no other count change);
+    `cargo check --workspace --tests` zero warnings on a forced rebuild; fresh
+    `rm -rf target/doc && cargo docs` zero warnings (no dangling links to the
+    removed type).
+  - **Surprises**: the Send/Sync GAT amendment (above) was the only structural one;
+    plus one E0282 (a projected field no longer drives inference in
+    `chars_group_parser` — turbofish, same class as task A's fallout).
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

@@ -1417,6 +1417,13 @@ exists for). Under an
 all-features-present language the returned value is unchanged: all six gates
 `Some(false)`.)*
 
+*(Amendment — same 2026-08-10 ruling, M3 follow-through: M3's zero-sized stores on
+the override blocks and the gated `scope_ops` list made the transitional runtime
+error channel unreachable — a violating delta can no longer be written — so
+`TokenRulesOverrides::apply()` is infallible again and `AbsentFeatureOverrideError`
+was removed, per the ruling's instruction that the transitional plumbing must not
+outlive its milestone.)*
+
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]

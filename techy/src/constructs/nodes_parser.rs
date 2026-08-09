@@ -1067,8 +1067,8 @@ fn group_close_type<L: Lang>(state: &ParsingState<L>, delim: &str) -> Option<L::
         }
     }
     state
-        .prefix_table()
-        .match_at(delim)
+        .prefix_table() // `None` when the language declares the groups feature absent
+        .and_then(|table| table.match_at(delim))
         .filter(|entry| entry.delim() == delim)
         .and_then(|entry| entry.close())
         .map(|rule| rule.group_type)

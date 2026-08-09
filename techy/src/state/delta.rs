@@ -10,7 +10,7 @@ use crate::token::{
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
 
-use super::features::{FeaturePresence, LangFeatures};
+use super::features::{FeaturePresence, LangFeatures, LangHasScopes};
 use super::lang::Lang;
 use super::parsing_state::StateData;
 
@@ -270,6 +270,14 @@ impl ForbiddenCharsOverrides {
 /// via [`ParsingState::rules()`](super::ParsingState::rules)); merge semantics in the
 /// override itself would put policy decisions inside the derivation point.
 ///
+/// Like [`TokenRules`], the override blocks are stored through the language's
+/// per-feature presence declarations ([`Lang::Features`]): for a feature the language
+/// declares absent, the field holds the zero-sized store
+/// ([`FeaturePresence::Store`]) instead of its override block, so override data for
+/// that feature cannot even be written — a delta can never carry it. For a language
+/// with every feature present the fields *are* the override blocks, and nothing here
+/// is visible.
+///
 /// # Struct update replaces whole feature blocks
 ///
 /// A struct-update expression works at field granularity, and here every field is a
@@ -282,20 +290,42 @@ impl ForbiddenCharsOverrides {
 /// `groups: GroupOverrides { expecting_close: Some(Some(rule)), ..GroupOverrides::disable() }`
 /// inside the outer literal.
 pub struct TokenRulesOverrides<L: Lang> {
-    /// Overrides of the whitespace block.
-    pub whitespace: WhitespaceOverrides,
-    /// Overrides of the paragraphs block.
-    pub paragraphs: ParagraphOverrides,
-    /// Overrides of the groups block.
-    pub groups: GroupOverrides<L>,
-    /// Overrides of the commands block.
-    pub commands: CommandOverrides,
-    /// Overrides of the comments block.
-    pub comments: CommentOverrides,
-    /// Overrides of the specials block.
-    pub specials: SpecialsOverrides,
-    /// Overrides of the forbidden-characters block.
-    pub forbidden_chars: ForbiddenCharsOverrides,
+    /// Overrides of the whitespace block. For a language that declares the
+    /// whitespace feature absent, this field holds the zero-sized store and cannot
+    /// carry overrides.
+    pub whitespace:
+        <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceOverrides>,
+    /// Overrides of the paragraphs block. For a language that declares the
+    /// paragraphs feature absent, this field holds the zero-sized store and cannot
+    /// carry overrides.
+    pub paragraphs:
+        <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphOverrides>,
+    /// Overrides of the groups block. For a language that declares the groups
+    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// overrides.
+    pub groups:
+        <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupOverrides<L>>,
+    /// Overrides of the commands block. For a language that declares the commands
+    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// overrides.
+    pub commands:
+        <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandOverrides>,
+    /// Overrides of the comments block. For a language that declares the comments
+    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// overrides.
+    pub comments:
+        <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentOverrides>,
+    /// Overrides of the specials block. For a language that declares the specials
+    /// feature absent, this field holds the zero-sized store and cannot carry
+    /// overrides.
+    pub specials:
+        <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsOverrides>,
+    /// Overrides of the forbidden-characters block. For a language that declares the
+    /// forbidden-characters feature absent, this field holds the zero-sized store and
+    /// cannot carry overrides.
+    pub forbidden_chars: <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsOverrides,
+    >,
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
@@ -304,9 +334,8 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// whose feature `L` declares present ([`Lang::Features`]) is set to its
     /// `disable()` value — `enabled: Some(false)`, every other field untouched.
     /// Features the language declares absent are simply not mentioned by the returned
-    /// value: their blocks stay all-`None`, so applying a `disable_all()`-based delta
-    /// can never produce an [`AbsentFeatureOverrideError`]. (`forbidden_chars` has no
-    /// gate and is never touched.)
+    /// value: their fields hold the zero-sized store, which carries nothing.
+    /// (`forbidden_chars` has no gate and is never touched.)
     ///
     /// This is the raw-state block a rest-of-line or verbatim-like takeover parser
     /// starts from. It composes: tweak fields afterwards, e.g. install the terminator
@@ -320,38 +349,29 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// re-enable a feature with its original rules. The *constitutive* off (no rules
     /// data at all) is [`TokenRules::empty`](crate::token::TokenRules::empty).
     pub fn disable_all() -> TokenRulesOverrides<L> {
+        // `store_with` consults the presence declaration: a present feature's field
+        // gets the block's `disable()` value; an absent feature's field is the
+        // zero-sized store (the constructor is never called).
         TokenRulesOverrides {
-            whitespace: if <L::Features as LangFeatures>::Whitespace::PRESENT {
-                WhitespaceOverrides::disable()
-            } else {
-                WhitespaceOverrides::default()
-            },
-            paragraphs: if <L::Features as LangFeatures>::Paragraphs::PRESENT {
-                ParagraphOverrides::disable()
-            } else {
-                ParagraphOverrides::default()
-            },
-            groups: if <L::Features as LangFeatures>::Groups::PRESENT {
-                GroupOverrides::disable()
-            } else {
-                GroupOverrides::default()
-            },
-            commands: if <L::Features as LangFeatures>::Commands::PRESENT {
-                CommandOverrides::disable()
-            } else {
-                CommandOverrides::default()
-            },
-            comments: if <L::Features as LangFeatures>::Comments::PRESENT {
-                CommentOverrides::disable()
-            } else {
-                CommentOverrides::default()
-            },
-            specials: if <L::Features as LangFeatures>::Specials::PRESENT {
-                SpecialsOverrides::disable()
-            } else {
-                SpecialsOverrides::default()
-            },
-            forbidden_chars: ForbiddenCharsOverrides::default(),
+            whitespace: <L::Features as LangFeatures>::Whitespace::store_with(
+                WhitespaceOverrides::disable,
+            ),
+            paragraphs: <L::Features as LangFeatures>::Paragraphs::store_with(
+                ParagraphOverrides::disable,
+            ),
+            groups: <L::Features as LangFeatures>::Groups::store_with(GroupOverrides::disable),
+            commands: <L::Features as LangFeatures>::Commands::store_with(
+                CommandOverrides::disable,
+            ),
+            comments: <L::Features as LangFeatures>::Comments::store_with(
+                CommentOverrides::disable,
+            ),
+            specials: <L::Features as LangFeatures>::Specials::store_with(
+                SpecialsOverrides::disable,
+            ),
+            forbidden_chars: <L::Features as LangFeatures>::ForbiddenChars::store_with(
+                ForbiddenCharsOverrides::default,
+            ),
         }
     }
 
@@ -360,148 +380,135 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// composition used by event lowering
     /// ([`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)).
     pub(crate) fn merge_from(&mut self, stronger: TokenRulesOverrides<L>) {
-        self.whitespace.merge_from(stronger.whitespace);
-        self.paragraphs.merge_from(stronger.paragraphs);
-        self.groups.merge_from(stronger.groups);
-        self.commands.merge_from(stronger.commands);
-        self.comments.merge_from(stronger.comments);
-        self.specials.merge_from(stronger.specials);
-        self.forbidden_chars.merge_from(stronger.forbidden_chars);
-    }
-
-    /// Apply these overrides to `rules`, leaving `None` fields untouched.
-    ///
-    /// # Errors
-    ///
-    /// An override block that carries data — any non-`None` field — for a feature the
-    /// language declares absent ([`Lang::Features`]) is a violated contract of the
-    /// override's author: an absent feature has no runtime data to change. Nothing of
-    /// such a block is applied, and the violation is reported as an
-    /// [`AbsentFeatureOverrideError`]. Blocks of present features apply as documented
-    /// above regardless. Only explicitly authored data can violate this: the crate's
-    /// own [`disable_all`](Self::disable_all) consults the declarations and never
-    /// errors here.
-    pub fn apply(&self, rules: &mut TokenRules<L>) -> Result<(), AbsentFeatureOverrideError> {
-        let absent = self.apply_to_present_features(rules);
-        if absent.is_empty() {
-            Ok(())
-        } else {
-            Err(AbsentFeatureOverrideError { features: absent })
+        // Matched projections per feature: both sides' stores carry the same
+        // presence marker, so either both project `Some` (present — merge the
+        // blocks) or both project `None` (absent — the zero-sized stores hold
+        // nothing to merge).
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Whitespace::store_get_mut(&mut self.whitespace),
+            <L::Features as LangFeatures>::Whitespace::store_into_inner(stronger.whitespace),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Paragraphs::store_get_mut(&mut self.paragraphs),
+            <L::Features as LangFeatures>::Paragraphs::store_into_inner(stronger.paragraphs),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Groups::store_get_mut(&mut self.groups),
+            <L::Features as LangFeatures>::Groups::store_into_inner(stronger.groups),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Commands::store_get_mut(&mut self.commands),
+            <L::Features as LangFeatures>::Commands::store_into_inner(stronger.commands),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Comments::store_get_mut(&mut self.comments),
+            <L::Features as LangFeatures>::Comments::store_into_inner(stronger.comments),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::Specials::store_get_mut(&mut self.specials),
+            <L::Features as LangFeatures>::Specials::store_into_inner(stronger.specials),
+        ) {
+            mine.merge_from(stronger);
+        }
+        if let (Some(mine), Some(stronger)) = (
+            <L::Features as LangFeatures>::ForbiddenChars::store_get_mut(
+                &mut self.forbidden_chars,
+            ),
+            <L::Features as LangFeatures>::ForbiddenChars::store_into_inner(
+                stronger.forbidden_chars,
+            ),
+        ) {
+            mine.merge_from(stronger);
         }
     }
 
-    /// The gated application core shared by [`apply`](Self::apply) and
-    /// [`ParsingStateDelta::apply_overrides`]: apply each feature block the language
-    /// declares present; for absent features, apply nothing (absent wins over runtime
-    /// data) and collect the block names that carried data — the violation report.
-    fn apply_to_present_features(&self, rules: &mut TokenRules<L>) -> Vec<&'static str> {
-        // In every `PRESENT` branch the store projection (`store_get_mut`) is `Some`
-        // by construction; the `if let` is the type-level access path, not a runtime
-        // question.
-        let mut absent: Vec<&'static str> = Vec::new();
-        if <L::Features as LangFeatures>::Whitespace::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Whitespace::store_get_mut(&mut rules.whitespace)
-            {
-                self.whitespace.apply(block);
-            }
-        } else if self.whitespace != WhitespaceOverrides::default() {
-            absent.push("whitespace");
+    /// Apply these overrides to `rules`, leaving `None` fields untouched. Cannot
+    /// fail: override data for a feature the language declares absent is
+    /// unrepresentable (the field is the zero-sized store), so every override block
+    /// that exists has a rules block to apply to.
+    pub fn apply(&self, rules: &mut TokenRules<L>) {
+        // Matched projections per feature: the override store and the rules store
+        // carry the same presence marker, so either both project `Some` (present —
+        // apply the block) or both project `None` (absent — nothing exists on either
+        // side).
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace),
+            <L::Features as LangFeatures>::Whitespace::store_get_mut(&mut rules.whitespace),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::Paragraphs::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Paragraphs::store_get_mut(&mut rules.paragraphs)
-            {
-                self.paragraphs.apply(block);
-            }
-        } else if self.paragraphs != ParagraphOverrides::default() {
-            absent.push("paragraphs");
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Paragraphs::store_get(&self.paragraphs),
+            <L::Features as LangFeatures>::Paragraphs::store_get_mut(&mut rules.paragraphs),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::Groups::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Groups::store_get_mut(&mut rules.groups)
-            {
-                self.groups.apply(block);
-            }
-        } else if self.groups != GroupOverrides::default() {
-            absent.push("groups");
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Groups::store_get(&self.groups),
+            <L::Features as LangFeatures>::Groups::store_get_mut(&mut rules.groups),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::Commands::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Commands::store_get_mut(&mut rules.commands)
-            {
-                self.commands.apply(block);
-            }
-        } else if self.commands != CommandOverrides::default() {
-            absent.push("commands");
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Commands::store_get(&self.commands),
+            <L::Features as LangFeatures>::Commands::store_get_mut(&mut rules.commands),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::Comments::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Comments::store_get_mut(&mut rules.comments)
-            {
-                self.comments.apply(block);
-            }
-        } else if self.comments != CommentOverrides::default() {
-            absent.push("comments");
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Comments::store_get(&self.comments),
+            <L::Features as LangFeatures>::Comments::store_get_mut(&mut rules.comments),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::Specials::PRESENT {
-            if let Some(block) =
-                <L::Features as LangFeatures>::Specials::store_get_mut(&mut rules.specials)
-            {
-                self.specials.apply(block);
-            }
-        } else if self.specials != SpecialsOverrides::default() {
-            absent.push("specials");
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::Specials::store_get(&self.specials),
+            <L::Features as LangFeatures>::Specials::store_get_mut(&mut rules.specials),
+        ) {
+            overrides.apply(block);
         }
-        if <L::Features as LangFeatures>::ForbiddenChars::PRESENT {
-            if let Some(block) = <L::Features as LangFeatures>::ForbiddenChars::store_get_mut(
+        if let (Some(overrides), Some(block)) = (
+            <L::Features as LangFeatures>::ForbiddenChars::store_get(&self.forbidden_chars),
+            <L::Features as LangFeatures>::ForbiddenChars::store_get_mut(
                 &mut rules.forbidden_chars,
-            ) {
-                self.forbidden_chars.apply(block);
-            }
-        } else if self.forbidden_chars != ForbiddenCharsOverrides::default() {
-            absent.push("forbidden_chars");
+            ),
+        ) {
+            overrides.apply(block);
         }
-        absent
+    }
+
+    /// Whether every stored override block leaves the rules unchanged: each present
+    /// feature's block equals its all-`None` default (an absent feature's store
+    /// holds nothing and is trivially unchanged). Internal — the whole-value `==`
+    /// spelling needs per-store equality bounds a bare `L: Lang` cannot supply
+    /// (see [`ParsingStateDelta::is_empty`]).
+    pub(crate) fn is_empty(&self) -> bool {
+        <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace)
+            .map_or(true, |block| *block == WhitespaceOverrides::default())
+            && <L::Features as LangFeatures>::Paragraphs::store_get(&self.paragraphs)
+                .map_or(true, |block| *block == ParagraphOverrides::default())
+            && <L::Features as LangFeatures>::Groups::store_get(&self.groups)
+                .map_or(true, |block| *block == GroupOverrides::default())
+            && <L::Features as LangFeatures>::Commands::store_get(&self.commands)
+                .map_or(true, |block| *block == CommandOverrides::default())
+            && <L::Features as LangFeatures>::Comments::store_get(&self.comments)
+                .map_or(true, |block| *block == CommentOverrides::default())
+            && <L::Features as LangFeatures>::Specials::store_get(&self.specials)
+                .map_or(true, |block| *block == SpecialsOverrides::default())
+            && <L::Features as LangFeatures>::ForbiddenChars::store_get(&self.forbidden_chars)
+                .map_or(true, |block| *block == ForbiddenCharsOverrides::default())
     }
 }
-
-/// A state change carried data for a feature the language declares absent
-/// ([`Lang::Features`]): a rules-override block with a non-`None` field, or scope ops
-/// under a language without the scope stack. This is a violated contract of the
-/// change's author — an absent feature has no runtime data to change — so the
-/// violating data is never applied (absent wins over runtime data) and this error is
-/// reported instead, never a panic. Only explicitly authored data triggers it: the
-/// crate's own constructors consult the declarations —
-/// [`TokenRulesOverrides::disable_all`] names only the features the language has and
-/// never produces this error.
-/// [`ParsingState::derived`](super::ParsingState::derived) folds it into its
-/// [`DeriveError`](super::DeriveError).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AbsentFeatureOverrideError {
-    features: Vec<&'static str>,
-}
-
-impl AbsentFeatureOverrideError {
-    /// The affected features, by feature-block name (`"whitespace"`, `"paragraphs"`,
-    /// `"groups"`, `"commands"`, `"comments"`, `"specials"`, `"forbidden_chars"`,
-    /// `"scopes"`), each listed once, in declaration order.
-    pub fn features(&self) -> &[&'static str] {
-        &self.features
-    }
-}
-
-impl fmt::Display for AbsentFeatureOverrideError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "the state change carries data for features the language declares absent: {}",
-            self.features.join(", ")
-        )
-    }
-}
-
-impl core::error::Error for AbsentFeatureOverrideError {}
 
 /// A reified state change: the argument of [`ParsingState::derived()`](super::ParsingState::derived).
 ///
@@ -520,8 +527,11 @@ pub struct ParsingStateDelta<L: Lang> {
     /// `Arc<ParsingState>`. Ops can **fail** (absent target
     /// name, immutable provider): failures are collected per op — the rest still
     /// apply — and surface through the fallible
-    /// [`derived()`](super::ParsingState::derived).
-    pub scope_ops: Vec<ScopeOp<L>>,
+    /// [`derived()`](super::ParsingState::derived). For a language that declares the
+    /// scopes feature absent ([`Lang::Features`]), this field holds the zero-sized
+    /// store and cannot carry ops; the [`scope_op`](Self::scope_op) and
+    /// [`push_provider`](Self::push_provider) builders require the feature.
+    pub scope_ops: <<L::Features as LangFeatures>::Scopes as FeaturePresence>::Store<Vec<ScopeOp<L>>>,
     /// Override the parsing mode ([`StateData::mode`]); `None` = leave unchanged.
     /// The override *is* the mode-change signal:
     /// [`Lang::finalize_transition`] sees it applied on the new data and interprets it
@@ -549,7 +559,7 @@ impl<L: Lang> ParsingStateDelta<L> {
     pub fn new() -> ParsingStateDelta<L> {
         ParsingStateDelta {
             rules: TokenRulesOverrides::default(),
-            scope_ops: Vec::new(),
+            scope_ops: <L::Features as LangFeatures>::Scopes::store_with(Vec::new),
             mode: None,
             ext: None,
             events: Vec::new(),
@@ -562,15 +572,24 @@ impl<L: Lang> ParsingStateDelta<L> {
         self
     }
 
-    /// Add a scope-stack operation (ops apply in the order added).
-    pub fn scope_op(mut self, op: ScopeOp<L>) -> Self {
+    /// Add a scope-stack operation (ops apply in the order added). Requires a
+    /// language with the scopes feature: the ops address the scope stack, which a
+    /// language without the feature does not have.
+    pub fn scope_op(mut self, op: ScopeOp<L>) -> Self
+    where
+        L: LangHasScopes,
+    {
         self.scope_ops.push(op);
         self
     }
 
     /// Push a provider onto the state's scope stack (innermost = pushed last) — sugar
-    /// for the dominant [`ScopeOp::Push`] shape.
-    pub fn push_provider(mut self, provider: Arc<dyn SpecsProvider<L>>) -> Self {
+    /// for the dominant [`ScopeOp::Push`] shape. Requires a language with the scopes
+    /// feature, like [`scope_op`](Self::scope_op).
+    pub fn push_provider(mut self, provider: Arc<dyn SpecsProvider<L>>) -> Self
+    where
+        L: LangHasScopes,
+    {
         self.scope_ops.push(ScopeOp::Push(provider));
         self
     }
@@ -596,10 +615,13 @@ impl<L: Lang> ParsingStateDelta<L> {
     /// Whether this delta changes nothing: no rules overrides, no scope ops, no
     /// mode/ext override, no events. Internal — the merged after-effect record
     /// ([`NodesOutcome::after_effects`](crate::constructs::NodesOutcome::after_effects))
-    /// spells "no after-effects" as `None`, never as an empty delta.
+    /// spells "no after-effects" as `None`, never as an empty delta. Per-block
+    /// comparisons rather than a whole-value `==`: the store-level equality bounds
+    /// do not resolve under a bare `L: Lang`.
     pub(crate) fn is_empty(&self) -> bool {
-        self.rules == TokenRulesOverrides::default()
-            && self.scope_ops.is_empty()
+        self.rules.is_empty()
+            && <L::Features as LangFeatures>::Scopes::store_get(&self.scope_ops)
+                .map_or(true, |ops| ops.is_empty())
             && self.mode.is_none()
             && self.ext.is_none()
             && self.events.is_empty()
@@ -617,7 +639,14 @@ impl<L: Lang> ParsingStateDelta<L> {
     /// transition as a whole, [`Lang::finalize_transition`]).
     pub(crate) fn merge_from(&mut self, later: ParsingStateDelta<L>) {
         self.rules.merge_from(later.rules);
-        self.scope_ops.extend(later.scope_ops);
+        // Matched projections: both scope-op stores carry the same presence marker
+        // (present — concatenate; absent — the zero-sized stores hold no ops).
+        if let (Some(ops), Some(later_ops)) = (
+            <L::Features as LangFeatures>::Scopes::store_get_mut(&mut self.scope_ops),
+            <L::Features as LangFeatures>::Scopes::store_into_inner(later.scope_ops),
+        ) {
+            ops.extend(later_ops);
+        }
         if later.mode.is_some() {
             self.mode = later.mode;
         }
@@ -630,28 +659,19 @@ impl<L: Lang> ParsingStateDelta<L> {
     /// Apply overrides (rules + scope ops + mode + ext) to `data`. Internal, pre-freeze:
     /// called only from `derived()`, before `finalize_transition` runs. Scope-op
     /// failures are collected (the failing op is skipped, the rest still apply) and
-    /// returned for `derived()` to report — an empty vec is full success. The second
-    /// element reports absent-feature contract violations ([`AbsentFeatureOverrideError`]):
-    /// rules overrides carrying data for an absent feature, or scope ops under a
-    /// language that declares the scope stack absent. The violating data is skipped
-    /// (absent wins over runtime data), the rest of the delta still applies, and
-    /// `derived()` folds the report into its error.
-    pub(crate) fn apply_overrides(
-        &self,
-        data: &mut StateData<L>,
-    ) -> (Vec<ScopeOpError>, Option<AbsentFeatureOverrideError>) {
-        let mut absent = self.rules.apply_to_present_features(&mut data.rules);
+    /// returned for `derived()` to report — an empty vec is full success. For a
+    /// language that declares the scope stack absent, no scope ops exist to apply
+    /// (the list is the zero-sized store), just as no override data exists for any
+    /// other absent feature.
+    pub(crate) fn apply_overrides(&self, data: &mut StateData<L>) -> Vec<ScopeOpError> {
+        self.rules.apply(&mut data.rules);
         let mut failures = Vec::new();
-        if <L::Features as LangFeatures>::Scopes::PRESENT {
-            for op in &self.scope_ops {
+        if let Some(ops) = <L::Features as LangFeatures>::Scopes::store_get(&self.scope_ops) {
+            for op in ops {
                 if let Err(failure) = data.scopes.apply_op(op) {
                     failures.push(failure);
                 }
             }
-        } else if !self.scope_ops.is_empty() {
-            // Scope ops address the scope stack — a feature like any other on the
-            // compile-time axis: with the stack absent, none of them applies.
-            absent.push("scopes");
         }
         if let Some(mode) = self.mode {
             data.mode = mode;
@@ -659,9 +679,7 @@ impl<L: Lang> ParsingStateDelta<L> {
         if let Some(ext) = &self.ext {
             data.ext = ext.clone();
         }
-        let absent_overrides =
-            (!absent.is_empty()).then(|| AbsentFeatureOverrideError { features: absent });
-        (failures, absent_overrides)
+        failures
     }
 }
 
@@ -719,14 +737,28 @@ impl<L: Lang> Eq for GroupOverrides<L> {}
 
 impl<L: Lang> Default for TokenRulesOverrides<L> {
     fn default() -> Self {
+        // A present feature's field gets its block's all-`None` default; an absent
+        // feature's field is the zero-sized store.
         TokenRulesOverrides {
-            whitespace: WhitespaceOverrides::default(),
-            paragraphs: ParagraphOverrides::default(),
-            groups: GroupOverrides::default(),
-            commands: CommandOverrides::default(),
-            comments: CommentOverrides::default(),
-            specials: SpecialsOverrides::default(),
-            forbidden_chars: ForbiddenCharsOverrides::default(),
+            whitespace: <L::Features as LangFeatures>::Whitespace::store_with(
+                WhitespaceOverrides::default,
+            ),
+            paragraphs: <L::Features as LangFeatures>::Paragraphs::store_with(
+                ParagraphOverrides::default,
+            ),
+            groups: <L::Features as LangFeatures>::Groups::store_with(GroupOverrides::default),
+            commands: <L::Features as LangFeatures>::Commands::store_with(
+                CommandOverrides::default,
+            ),
+            comments: <L::Features as LangFeatures>::Comments::store_with(
+                CommentOverrides::default,
+            ),
+            specials: <L::Features as LangFeatures>::Specials::store_with(
+                SpecialsOverrides::default,
+            ),
+            forbidden_chars: <L::Features as LangFeatures>::ForbiddenChars::store_with(
+                ForbiddenCharsOverrides::default,
+            ),
         }
     }
 }
@@ -759,7 +791,29 @@ impl<L: Lang> fmt::Debug for TokenRulesOverrides<L> {
     }
 }
 
-impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
+// The equality impls carry one where-clause per store: the `Store` GAT itself
+// promises only `Clone`/`Debug`, but both markers' stores satisfy `PartialEq`/`Eq`
+// whenever the stored block does (and every override block does), so the bounds hold
+// at every concrete language.
+
+impl<L: Lang> PartialEq for TokenRulesOverrides<L>
+where
+    <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceOverrides>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphOverrides>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupOverrides<L>>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandOverrides>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentOverrides>:
+        PartialEq,
+    <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsOverrides>:
+        PartialEq,
+    <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsOverrides,
+    >: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         self.whitespace == other.whitespace
             && self.paragraphs == other.paragraphs
@@ -771,7 +825,21 @@ impl<L: Lang> PartialEq for TokenRulesOverrides<L> {
     }
 }
 
-impl<L: Lang> Eq for TokenRulesOverrides<L> {}
+impl<L: Lang> Eq for TokenRulesOverrides<L>
+where
+    <<L::Features as LangFeatures>::Whitespace as FeaturePresence>::Store<WhitespaceOverrides>:
+        Eq,
+    <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphOverrides>:
+        Eq,
+    <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupOverrides<L>>: Eq,
+    <<L::Features as LangFeatures>::Commands as FeaturePresence>::Store<CommandOverrides>: Eq,
+    <<L::Features as LangFeatures>::Comments as FeaturePresence>::Store<CommentOverrides>: Eq,
+    <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<SpecialsOverrides>: Eq,
+    <<L::Features as LangFeatures>::ForbiddenChars as FeaturePresence>::Store<
+        ForbiddenCharsOverrides,
+    >: Eq,
+{
+}
 
 impl<L: Lang> Clone for ParsingStateDelta<L> {
     fn clone(&self) -> Self {

@@ -258,7 +258,8 @@ impl<'s> StdTokenReader<'s> {
             return Ok(token);
         }
 
-        if <L::Features as LangFeatures>::Specials::PRESENT && state.trigger_chars().may_start(c)
+        if <L::Features as LangFeatures>::Specials::PRESENT
+            && state.trigger_chars().is_some_and(|trigger_chars| trigger_chars.may_start(c))
         {
             if let Some(m) = L::scan_specials(state, s, pos)? {
                 // A malformed `end` from the hook would yield a zero-width token (the
@@ -373,7 +374,9 @@ impl<'s> StdTokenReader<'s> {
             }
         }
 
-        let entry = state.prefix_table().match_at(rest)?;
+        // `None` when the language declares the groups feature absent — no table
+        // exists, and no delimiter can match.
+        let entry = state.prefix_table()?.match_at(rest)?;
         let span = Span::new(pos, pos + entry.delim().len());
         let delim = span.slice(self.content);
         let kind = match (entry.open(), entry.close()) {
@@ -1482,7 +1485,10 @@ mod tests {
         let mut rules: TokenRules<SpecialsLang> = latex_rules();
         rules.specials.enabled = false;
         let st = specials_state(rules);
-        assert_eq!(st.trigger_chars(), &TriggerChars::default());
+        assert_eq!(
+            st.trigger_chars().expect("all-present test language"),
+            &TriggerChars::default()
+        );
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('&'));
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('b'));
@@ -1639,7 +1645,12 @@ mod tests {
         rules.groups.enabled = false;
         let st = state(rules);
         assert!(!st.rules().group_rules().is_empty());
-        assert!(st.prefix_table().match_at("{a}").is_none()); // baked-in empty table
+        // Baked-in empty table (present feature, disabled at runtime: `Some`).
+        assert!(st
+            .prefix_table()
+            .expect("all-present test language")
+            .match_at("{a}")
+            .is_none());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('{'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('}'));

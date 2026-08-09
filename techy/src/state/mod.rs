@@ -46,9 +46,9 @@ mod parsing_state;
 mod stack;
 
 pub use delta::{
-    AbsentFeatureOverrideError, CommandOverrides, CommentOverrides,
-    ForbiddenCharsOverrides, GroupOverrides, ParagraphOverrides, ParsingStateDelta,
-    SpecialsOverrides, TokenRulesOverrides, WhitespaceOverrides,
+    CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
+    ParagraphOverrides, ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
+    WhitespaceOverrides,
 };
 pub use features::{
     AllLangFeatures, FeatureAbsent, FeaturePresence, FeaturePresent, LangFeatures,

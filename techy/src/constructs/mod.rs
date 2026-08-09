@@ -89,7 +89,7 @@ use crate::node::{
     BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
     StagedNodes,
 };
-use crate::state::{Lang, ParsingState, ParsingStateDelta};
+use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
 use crate::token::{GroupRule, Token, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
@@ -396,10 +396,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// A **finalize refusal** ([`FinalizeError`](crate::state::FinalizeError) — a
     /// context-requiring event the driver did not lower) is an extension wiring
     /// bug, not a source condition: it aborts as an
-    /// [`ImplementationError`] under any recovery policy. A delta carrying **data for
-    /// a feature the language declares absent**
-    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError)) is
-    /// the same class of bug and aborts the same way.
+    /// [`ImplementationError`] under any recovery policy.
     pub fn derive_state(
         &mut self,
         delta: &ParsingStateDelta<L>,
@@ -515,7 +512,14 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let mut effective = ParsingStateDelta::new();
         for patch in patches {
             effective.rules.merge_from(patch.rules);
-            effective.scope_ops.extend(patch.scope_ops);
+            // Matched store projections: with the scopes feature absent, neither
+            // side's zero-sized scope-op store holds anything to concatenate.
+            if let (Some(ops), Some(patch_ops)) = (
+                <L::Features as LangFeatures>::Scopes::store_get_mut(&mut effective.scope_ops),
+                <L::Features as LangFeatures>::Scopes::store_into_inner(patch.scope_ops),
+            ) {
+                ops.extend(patch_ops);
+            }
             if patch.mode.is_some() {
                 effective.mode = patch.mode;
             }
@@ -527,7 +531,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             effective.events.extend(patch.events);
         }
         effective.rules.merge_from(delta.rules.clone());
-        effective.scope_ops.extend(delta.scope_ops.iter().cloned());
+        if let (Some(ops), Some(delta_ops)) = (
+            <L::Features as LangFeatures>::Scopes::store_get_mut(&mut effective.scope_ops),
+            <L::Features as LangFeatures>::Scopes::store_get(&delta.scope_ops),
+        ) {
+            ops.extend(delta_ops.iter().cloned());
+        }
         if delta.mode.is_some() {
             effective.mode = delta.mode;
         }
@@ -561,10 +570,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// failing op through the recovery entry point (strict: the first one aborts); a
     /// finalize refusal aborts as an [`ImplementationError`] under any policy (a
     /// context-requiring event reached the underlying derivation point un-lowered —
-    /// the driver failed to lower it: extension wiring, not source input), and so does
-    /// a delta carrying data for a feature the language declares absent
-    /// ([`AbsentFeatureOverrideError`](crate::state::AbsentFeatureOverrideError) — a
-    /// delta-author bug, not source input). Otherwise commit
+    /// the driver failed to lower it: extension wiring, not source input). Otherwise commit
     /// the ops-skipped transition — continue under the error's recovered state
     /// and observe it with the delta the derivation actually applied (which the
     /// error carries: for group interiors that is the *merged* descent delta this
@@ -578,7 +584,6 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let span = SourceSpan::new(&self.source, Span::new(pos, pos));
         let crate::state::DeriveError {
             failures,
-            absent_overrides,
             finalize_error,
             recovered,
             delta,
@@ -588,9 +593,6 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         }
         if let Some(finalize_error) = finalize_error {
             return Err(self.implementation_error(finalize_error, Span::new(pos, pos)));
-        }
-        if let Some(absent_overrides) = absent_overrides {
-            return Err(self.implementation_error(absent_overrides, Span::new(pos, pos)));
         }
         // Tolerant continuation: commit the recovered transition — the session seam
         // observed nothing on the Err path (no transition had been committed).

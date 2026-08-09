@@ -54,7 +54,9 @@ use crate::node::{
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::engine::{CommandResolution, ParseDriver};
-use crate::state::{GroupOverrides, Lang, ParsingState, ParsingStateDelta, TokenRulesOverrides};
+use crate::state::{
+    GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
+};
 use crate::token::{GroupRule, Token, TokenKind};
 
 use super::child_state::ChildStateSpec;
@@ -515,6 +517,10 @@ where
 /// expression can start (end of input, a paragraph break, an enclosing group close):
 /// diagnosed here as missing-mandatory (tolerant) or abort (strict), argument absent,
 /// nothing consumed. The condition is the same with the fallback on or off.
+///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the rule form
+/// installs its minted delimiters as temporary group rules, and the delimited form of
+/// either flavor is a group.
 pub struct GroupArgumentParser<L: Lang> {
     form: GroupArgumentForm<L>,
     expression_fallback: bool,
@@ -528,7 +534,7 @@ enum GroupArgumentForm<L: Lang> {
     Rules(Vec<Arc<GroupRule<L>>>),
 }
 
-impl<L: Lang> GroupArgumentParser<L> {
+impl<L: LangHasGroups> GroupArgumentParser<L> {
     /// A mandatory argument delimited by any group rule of class `group_type`, with
     /// the single-expression fallback on (pylatexenc's `'{'`).
     pub fn new(group_type: L::GroupTypeId) -> GroupArgumentParser<L> {
@@ -563,7 +569,7 @@ impl<L: Lang> GroupArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for GroupArgumentParser<L>
+impl<L: LangHasGroups> ArgumentParser<L> for GroupArgumentParser<L>
 where
     ArgumentExt<L>: Default,
     L::InvocationSyntax: FromInvocation<L>,
@@ -700,8 +706,9 @@ struct MintedGroupMatch<'s, L: Lang> {
 /// matched `<…>`, an unmatched alternative like `[` reads as an ordinary character,
 /// while the base state's own rules stay live). With a single configured rule the
 /// probe state already *is* that state — one derivation, the single-rule
-/// behavior unchanged.
-fn probe_minted_group<'s, L: Lang>(
+/// behavior unchanged. The `LangHasGroups` bound makes the minted-temporaries delta
+/// writable as a plain literal.
+fn probe_minted_group<'s, L: LangHasGroups>(
     cx: &mut ParseContext<'_, 's, L>,
     rules: &[Arc<GroupRule<L>>],
 ) -> ConstructParserResult<L, Option<MintedGroupMatch<'s, L>>> {
@@ -781,6 +788,9 @@ fn probe_minted_group<'s, L: Lang>(
 /// designates *that* group's children instead, the parse-time resolution of
 /// pylatexenc's post-hoc `unwrap_double_group` accessor hack.
 ///
+/// Requires a language with the groups feature ([`LangHasGroups`]): the parser
+/// installs its minted delimiters as temporary group rules.
+///
 /// [`ChildStateSpec`]: super::ChildStateSpec
 /// [`TokenRules::temporary_group_rules`]: crate::token::TokenRules::temporary_group_rules
 pub struct OptionalGroupArgumentParser<L: Lang> {
@@ -788,7 +798,7 @@ pub struct OptionalGroupArgumentParser<L: Lang> {
     unwrap_lone_group: Option<L::GroupTypeId>,
 }
 
-impl<L: Lang> OptionalGroupArgumentParser<L> {
+impl<L: LangHasGroups> OptionalGroupArgumentParser<L> {
     /// An optional argument delimited by `rule` (e.g. `[`…`]` under a preset's option
     /// class), with no protective-group unwrapping.
     pub fn new(rule: Arc<GroupRule<L>>) -> OptionalGroupArgumentParser<L> {
@@ -814,7 +824,7 @@ impl<L: Lang> OptionalGroupArgumentParser<L> {
     }
 }
 
-impl<L: Lang> ArgumentParser<L> for OptionalGroupArgumentParser<L>
+impl<L: LangHasGroups> ArgumentParser<L> for OptionalGroupArgumentParser<L>
 where
     ArgumentExt<L>: Default,
     L::InvocationSyntax: FromInvocation<L>,

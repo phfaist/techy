@@ -52,8 +52,8 @@ use core::fmt;
 use crate::node::{ArgumentExt, ContentNodes};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{
-    CommandOverrides, CommentOverrides, Lang, ParsingStateDelta, SpecialsOverrides,
-    TokenRulesOverrides,
+    CommandOverrides, CommentOverrides, FeaturePresence, Lang, LangFeatures,
+    ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
 };
 use crate::token::TokenKind;
 
@@ -125,26 +125,40 @@ impl<L: Lang> CharsGroupArgumentParser<L> {
         &self,
         base: &crate::state::ParsingState<L>,
     ) -> ParsingStateDelta<L> {
+        // Built through the store projections (`L` carries no feature bounds here):
+        // a feature the language does not have needs no disabling — nothing exists
+        // to recognize — and its override field is the zero-sized store.
         let mut rules = TokenRulesOverrides {
-            commands: CommandOverrides::disable(),
-            specials: SpecialsOverrides::disable(),
-            comments: CommentOverrides {
-                enabled: Some(self.comments),
-                ..CommentOverrides::default()
-            },
+            commands: <L::Features as LangFeatures>::Commands::store_with(
+                CommandOverrides::disable,
+            ),
+            specials: <L::Features as LangFeatures>::Specials::store_with(
+                SpecialsOverrides::disable,
+            ),
+            comments: <L::Features as LangFeatures>::Comments::store_with(|| {
+                CommentOverrides {
+                    enabled: Some(self.comments),
+                    ..CommentOverrides::default()
+                }
+            }),
             ..TokenRulesOverrides::default()
         };
-        if self.nested_groups {
-            rules.groups.rules = Some(
-                base.rules()
-                    .group_rules()
-                    .iter()
-                    .filter(|rule| rule.group_type == self.group_type)
-                    .cloned()
-                    .collect(),
-            );
-        } else {
-            rules.groups.enabled = Some(false);
+        if let Some(groups) = <L::Features as LangFeatures>::Groups::store_get_mut::<
+            crate::state::GroupOverrides<L>,
+        >(&mut rules.groups)
+        {
+            if self.nested_groups {
+                groups.rules = Some(
+                    base.rules()
+                        .group_rules()
+                        .iter()
+                        .filter(|rule| rule.group_type == self.group_type)
+                        .cloned()
+                        .collect(),
+                );
+            } else {
+                groups.enabled = Some(false);
+            }
         }
         ParsingStateDelta::new().rules(rules)
     }

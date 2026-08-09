@@ -9,7 +9,7 @@ use core::fmt;
 use crate::scopes::{IntoSpecsProvider, ScopeOpError, ScopeStack};
 use crate::token::{PrefixTable, TokenRules, TriggerChars};
 
-use super::delta::{AbsentFeatureOverrideError, ParsingStateDelta};
+use super::delta::ParsingStateDelta;
 use super::features::{FeaturePresence, LangFeatures};
 use super::lang::Lang;
 
@@ -72,10 +72,17 @@ impl<L: Lang> StateData<L> {
 /// identity — are unchanged. No analogous generic reuse rule exists for
 /// `TriggerChars`: its inputs include `L::StateExt`, which carries no `Eq` bound (see
 /// [`Lang::specials_trigger_chars`]).
+///
+/// Each cache is stored through the presence declaration of the feature it derives
+/// from ([`Lang::Features`]): the prefix table with groups, the trigger filter with
+/// specials. For a language that declares the feature absent, the cache is the
+/// zero-sized store and its accessor answers `None`.
 pub struct ParsingState<L: Lang> {
     data: StateData<L>,
-    prefix_table: Arc<PrefixTable<L>>,
-    trigger_chars: TriggerChars,
+    prefix_table:
+        <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<Arc<PrefixTable<L>>>,
+    trigger_chars:
+        <<L::Features as LangFeatures>::Specials as FeaturePresence>::Store<TriggerChars>,
 }
 
 impl<L: Lang> ParsingState<L> {
@@ -157,15 +164,11 @@ impl<L: Lang> ParsingState<L> {
     ///
     /// # Fallibility
     ///
-    /// Three failure sources, all folded into [`DeriveError`]:
+    /// Two failure sources, both folded into [`DeriveError`]:
     ///
     /// - A delta's [`scope_ops`](ParsingStateDelta::scope_ops) can fail (op targets
     ///   an absent provider name; a definition op routed to an immutable provider).
     ///   Every failing op is skipped — the rest of the delta still applies.
-    /// - The delta can carry data for a feature the language declares absent
-    ///   ([`AbsentFeatureOverrideError`]) — a violated contract of the delta's
-    ///   author. The violating data is skipped (absent wins over runtime data), the
-    ///   rest of the delta still applies.
     /// - [`Lang::finalize_transition`] can refuse the transition
     ///   ([`FinalizeError`]) — above all when a *context-dependent* event reaches
     ///   this method un-lowered (the two-class contract on [`Lang::Event`]): the
@@ -174,9 +177,11 @@ impl<L: Lang> ParsingState<L> {
     ///   [`ParseContext::derive_state`](crate::constructs::ParseContext::derive_state)
     ///   lowers the event before the delta ever gets here.
     ///
-    /// A delta without scope ops and without events, whose overrides carry data only
-    /// for features the language declares present, **cannot fail** under a `Lang`
-    /// whose customizer only refuses events. The error carries the mechanical
+    /// A delta without scope ops and without events **cannot fail** under a `Lang`
+    /// whose customizer only refuses events. (Override data for a feature the
+    /// language declares absent is not a failure source: it is unrepresentable —
+    /// the delta's per-feature fields are stored through [`Lang::Features`], and an
+    /// absent feature's field cannot carry data.) The error carries the mechanical
     /// failure records plus the fully derived **recovered state** (frozen like any
     /// other; on a finalize refusal, the data as the hook left it), so a tolerant
     /// caller can diagnose and continue while a strict caller aborts.
@@ -206,29 +211,35 @@ impl<L: Lang> ParsingState<L> {
     #[allow(clippy::result_large_err)] // large `Err` by design — see `DeriveError`
     pub fn derived(&self, delta: &ParsingStateDelta<L>) -> Result<ParsingState<L>, DeriveError<L>> {
         let mut data = self.data.clone();
-        let (failures, absent_overrides) = delta.apply_overrides(&mut data);
+        let failures = delta.apply_overrides(&mut data);
         // Temporary group rules exist only with the groups feature: a language that
         // declares groups absent has nothing to strip, so the whole enforcement
         // block is compile-time eliminated for it.
         if <L::Features as LangFeatures>::Groups::PRESENT {
-            let ends_temporary_scope = match &delta.rules.groups.expecting_close {
-                None => false,
-                Some(installed) => !matches!(
-                    installed,
-                    Some(rule) if self
-                        .data
-                        .rules
-                        .temporary_group_rules()
-                        .iter()
-                        .any(|temporary| Arc::ptr_eq(temporary, rule))
-                ),
-            };
-            if ends_temporary_scope && delta.rules.groups.temporary.is_none() {
+            // The delta's groups block is read through the store projection (the
+            // `PRESENT` guard already guarantees `Some`, but the projection is what
+            // makes the field reachable at all under an unbounded `L`).
+            let delta_groups =
+                <L::Features as LangFeatures>::Groups::store_get(&delta.rules.groups);
+            let ends_temporary_scope =
+                match delta_groups.and_then(|groups| groups.expecting_close.as_ref()) {
+                    None => false,
+                    Some(installed) => !matches!(
+                        installed,
+                        Some(rule) if self
+                            .data
+                            .rules
+                            .temporary_group_rules()
+                            .iter()
+                            .any(|temporary| Arc::ptr_eq(temporary, rule))
+                    ),
+                };
+            if ends_temporary_scope
+                && delta_groups.map_or(true, |groups| groups.temporary.is_none())
+            {
                 // Scope enforcement mutates the derived data in place — one of the few
-                // by-field writes into a rules block outside delta application. The
-                // write goes through the store projection; the surrounding `PRESENT`
-                // guard already guarantees `Some`, but the projection is what makes
-                // the field reachable at all under an unbounded `L`.
+                // by-field writes into a rules block outside delta application; the
+                // same projection story as the read above.
                 if let Some(groups) =
                     <L::Features as LangFeatures>::Groups::store_get_mut(&mut data.rules.groups)
                 {
@@ -257,17 +268,18 @@ impl<L: Lang> ParsingState<L> {
                 .zip(self.data.rules.temporary_group_rules())
                 .all(|(new, old)| Arc::ptr_eq(new, old));
         let state = if table_inputs_unchanged {
-            ParsingState::freeze_with_table(data, Arc::clone(&self.prefix_table))
+            // Cloning the store clones the `Arc` when the groups feature is present
+            // (the table-reuse path) and is a no-op zero-sized copy when it is absent.
+            ParsingState::freeze_with_table(data, self.prefix_table.clone())
         } else {
             ParsingState::freeze(data)
         };
-        if failures.is_empty() && finalize_error.is_none() && absent_overrides.is_none() {
+        if failures.is_empty() && finalize_error.is_none() {
             Ok(state)
         } else {
             Err(DeriveError {
                 failures,
                 finalize_error,
-                absent_overrides,
                 recovered: state,
                 delta: delta.clone(),
             })
@@ -295,34 +307,54 @@ impl<L: Lang> ParsingState<L> {
         &self.data.ext
     }
 
-    /// The delimiter-matching table derived from [`rules().groups`](TokenRules::groups)
-    /// — empty
-    /// when [`TokenRules::groups_enabled`] is off (the setting is applied at freeze time).
-    pub fn prefix_table(&self) -> &PrefixTable<L> {
-        &self.prefix_table
+    /// The delimiter-matching table derived from the rules' groups block. `None`
+    /// exactly when the language declares the groups feature absent
+    /// ([`Lang::Features`]); a state whose groups are merely disabled at runtime
+    /// ([`TokenRules::groups_enabled`] off) still answers `Some` of the **empty**
+    /// table (the setting is applied at freeze time).
+    pub fn prefix_table(&self) -> Option<&PrefixTable<L>> {
+        <L::Features as LangFeatures>::Groups::store_get(&self.prefix_table)
+            .map(|table| &**table)
     }
 
     /// The specials trigger-character filter derived via
-    /// [`Lang::specials_trigger_chars`] — the empty filter when
-    /// [`TokenRules::specials_enabled`] is off (the setting is applied at freeze time).
-    pub fn trigger_chars(&self) -> &TriggerChars {
-        &self.trigger_chars
+    /// [`Lang::specials_trigger_chars`]. `None` exactly when the language declares
+    /// the specials feature absent ([`Lang::Features`]); a state whose specials scan
+    /// is merely disabled at runtime ([`TokenRules::specials_enabled`] off) still
+    /// answers `Some` of the **empty** filter (the setting is applied at freeze
+    /// time).
+    pub fn trigger_chars(&self) -> Option<&TriggerChars> {
+        <L::Features as LangFeatures>::Specials::store_get(&self.trigger_chars)
     }
 
     fn freeze(data: StateData<L>) -> ParsingState<L> {
-        let prefix_table = Arc::new(PrefixTable::for_rules(&data.rules));
+        // With the groups feature absent there is no table to build — the store is
+        // zero-sized and `PrefixTable::for_rules` is never called.
+        let prefix_table = <L::Features as LangFeatures>::Groups::store_with(|| {
+            Arc::new(PrefixTable::for_rules(&data.rules))
+        });
         ParsingState::freeze_with_table(data, prefix_table)
     }
 
-    fn freeze_with_table(data: StateData<L>, prefix_table: Arc<PrefixTable<L>>) -> ParsingState<L> {
+    fn freeze_with_table(
+        data: StateData<L>,
+        prefix_table: <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<
+            Arc<PrefixTable<L>>,
+        >,
+    ) -> ParsingState<L> {
         // The specials gate is baked in here: a disabled state stores the empty
         // filter, so `Lang::scan_specials` is unreachable and the hot path never
-        // branches on the gate (same treatment as the groups gate in the prefix table).
-        let trigger_chars = if data.rules.specials_enabled() {
-            L::specials_trigger_chars(&data)
-        } else {
-            TriggerChars::default()
-        };
+        // branches on the gate (same treatment as the groups gate in the prefix
+        // table). With the specials feature absent, the whole computation collapses
+        // with the store — `Lang::specials_trigger_chars` is never called at freeze
+        // time for such a language.
+        let trigger_chars = <L::Features as LangFeatures>::Specials::store_with(|| {
+            if data.rules.specials_enabled() {
+                L::specials_trigger_chars(&data)
+            } else {
+                TriggerChars::default()
+            }
+        });
         ParsingState { data, prefix_table, trigger_chars }
     }
 }
@@ -372,8 +404,8 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 }
 
 /// A [`derived()`](ParsingState::derived) transition that failed: the delta carried
-/// failing [`scope ops`](ParsingStateDelta::scope_ops) or data for an absent feature,
-/// and/or [`Lang::finalize_transition`] refused the transition.
+/// failing [`scope ops`](ParsingStateDelta::scope_ops), and/or
+/// [`Lang::finalize_transition`] refused the transition.
 ///
 /// Mechanical, deliberately unclassified — whether a failure is an extension bug or an
 /// embedder input error is the *caller's* context. The error carries everything a
@@ -381,16 +413,12 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// material rides in the error):
 ///
 /// - [`failures`](DeriveError::failures): one record per failing op, in delta order;
-/// - [`absent_overrides`](DeriveError::absent_overrides): the delta carried data for
-///   features the language declares absent ([`AbsentFeatureOverrideError`]) — that
-///   data was skipped, never applied;
 /// - [`finalize_error`](DeriveError::finalize_error): the customizer's refusal, when
 ///   [`Lang::finalize_transition`] returned `Err` (typically a context-dependent
 ///   event reaching [`ParsingState::derived`] un-lowered — the two-class contract on
 ///   [`Lang::Event`]);
 /// - [`recovered`](DeriveError::recovered): the fully derived state with exactly the
-///   failing ops and the absent-feature data skipped — finalized and frozen like
-///   every state, ready to continue
+///   failing ops skipped — finalized and frozen like every state, ready to continue
 ///   under (on a finalize refusal: the data as the hook left it, best-effort);
 /// - [`delta`](DeriveError::delta): the delta as applied, so a recovering caller can
 ///   still feed
@@ -398,8 +426,7 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 ///   the true transition (needed because the group-interior derivation applies a
 ///   *merged* delta its caller never sees).
 ///
-/// At least one of [`failures`](DeriveError::failures) (non-empty),
-/// [`absent_overrides`](DeriveError::absent_overrides) (`Some`), and
+/// At least one of [`failures`](DeriveError::failures) (non-empty) and
 /// [`finalize_error`](DeriveError::finalize_error) (`Some`) is always present.
 ///
 /// Not `Clone`: states are identity-bearing (deliberately non-`Clone`), and the
@@ -411,12 +438,8 @@ impl<L: Lang> fmt::Debug for ParsingState<L> {
 /// signatures were judged worth the bigger `Result` return slot.
 pub struct DeriveError<L: Lang> {
     /// One record per failing op, in delta order (may be empty only when
-    /// [`absent_overrides`](DeriveError::absent_overrides) or
     /// [`finalize_error`](DeriveError::finalize_error) is `Some`).
     pub failures: Vec<ScopeOpError>,
-    /// The delta carried data for features the language declares absent — a violated
-    /// contract of the delta's author; the data was skipped, never applied.
-    pub absent_overrides: Option<AbsentFeatureOverrideError>,
     /// [`Lang::finalize_transition`]'s refusal, if the customizer returned `Err`.
     pub finalize_error: Option<FinalizeError>,
     /// The derived state with the failing ops skipped (everything else applied).
@@ -436,13 +459,6 @@ impl<L: Lang> fmt::Display for DeriveError<L> {
             first = false;
             write!(f, "scope op failed: {failure}")?;
         }
-        if let Some(absent_overrides) = &self.absent_overrides {
-            if !first {
-                write!(f, "; ")?;
-            }
-            first = false;
-            write!(f, "{absent_overrides}")?;
-        }
         if let Some(finalize_error) = &self.finalize_error {
             if !first {
                 write!(f, "; ")?;
@@ -457,7 +473,6 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeriveError")
             .field("failures", &self.failures)
-            .field("absent_overrides", &self.absent_overrides)
             .field("finalize_error", &self.finalize_error)
             .field("recovered", &self.recovered)
             .field("delta", &self.delta)
@@ -580,7 +595,7 @@ mod tests {
     fn derived_rebuilds_prefix_table() {
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
-        assert!(state.prefix_table().match_at("[x").is_none());
+        assert!(state.prefix_table().unwrap().match_at("[x").is_none());
 
         let delta = ParsingStateDelta::new().rules(TokenRulesOverrides {
             groups: GroupOverrides {
@@ -594,8 +609,8 @@ mod tests {
             ..TokenRulesOverrides::default()
         });
         let derived = state.derived(&delta).unwrap();
-        assert!(derived.prefix_table().match_at("[x").is_some());
-        assert!(derived.prefix_table().match_at("{x").is_none()); // whole-value override
+        assert!(derived.prefix_table().unwrap().match_at("[x").is_some());
+        assert!(derived.prefix_table().unwrap().match_at("{x").is_none()); // whole-value override
     }
 
     #[test]
@@ -609,7 +624,7 @@ mod tests {
             comments: CommentOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(core::ptr::eq(state.prefix_table(), same.prefix_table()));
+        assert!(core::ptr::eq(state.prefix_table().unwrap(), same.prefix_table().unwrap()));
 
         // …and so does the dominant group-interior transition (the expected close is
         // deliberately not a table input)…
@@ -620,7 +635,7 @@ mod tests {
             },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(core::ptr::eq(state.prefix_table(), interior.prefix_table()));
+        assert!(core::ptr::eq(state.prefix_table().unwrap(), interior.prefix_table().unwrap()));
 
         // …while a group-rules override — even one value-equal to the current rules —
         // builds a fresh table (reuse is keyed on Arc identity, not content).
@@ -634,8 +649,8 @@ mod tests {
             groups: GroupOverrides { rules: Some(equal_groups), ..GroupOverrides::default() },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(!core::ptr::eq(state.prefix_table(), rebuilt.prefix_table()));
-        assert_eq!(state.prefix_table(), rebuilt.prefix_table()); // same contents
+        assert!(!core::ptr::eq(state.prefix_table().unwrap(), rebuilt.prefix_table().unwrap()));
+        assert_eq!(state.prefix_table().unwrap(), rebuilt.prefix_table().unwrap()); // same contents
     }
 
     #[test]
@@ -650,7 +665,7 @@ mod tests {
             },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(with_temp.prefix_table().match_at("[x").is_some());
+        assert!(with_temp.prefix_table().unwrap().match_at("[x").is_some());
 
         // A delta that says nothing about the expected close carries them over…
         let untouched = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -681,7 +696,7 @@ mod tests {
             ..TokenRulesOverrides::default()
         })).unwrap();
         assert!(stripped.rules().temporary_group_rules().is_empty());
-        assert!(stripped.prefix_table().match_at("[x").is_none());
+        assert!(stripped.prefix_table().unwrap().match_at("[x").is_none());
 
         // Clearing the expectation strips too.
         let cleared = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -719,7 +734,7 @@ mod tests {
             ..TokenRulesOverrides::default()
         })).unwrap();
         // Installing the temporaries rebuilt the table…
-        assert!(!core::ptr::eq(state.prefix_table(), with_temp.prefix_table()));
+        assert!(!core::ptr::eq(state.prefix_table().unwrap(), with_temp.prefix_table().unwrap()));
 
         // …the keep-path descent (into the temporary rule itself) reuses it…
         let same_rule = with_temp.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
@@ -729,7 +744,7 @@ mod tests {
             },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(core::ptr::eq(with_temp.prefix_table(), same_rule.prefix_table()));
+        assert!(core::ptr::eq(with_temp.prefix_table().unwrap(), same_rule.prefix_table().unwrap()));
 
         // …and the strip-path descent rebuilds: a stale reuse here would keep
         // tokenizing the stripped delimiters.
@@ -740,7 +755,7 @@ mod tests {
             },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(!core::ptr::eq(with_temp.prefix_table(), stripped.prefix_table()));
+        assert!(!core::ptr::eq(with_temp.prefix_table().unwrap(), stripped.prefix_table().unwrap()));
     }
 
     #[test]
@@ -761,7 +776,7 @@ mod tests {
         assert!(!state.rules().comments_enabled());
         assert!(!state.rules().specials_enabled());
         assert!(state.scopes().is_empty());
-        assert!(state.prefix_table().match_at("{x").is_none());
+        assert!(state.prefix_table().unwrap().match_at("{x").is_none());
     }
 
     #[test]
@@ -841,7 +856,7 @@ mod tests {
         let state: ParsingState<SeededLang> = ParsingState::lang_initial();
         assert!(state.rules().groups_enabled());
         // The caches are built from the seed data at freeze:
-        assert!(state.prefix_table().match_at("{x").is_some());
+        assert!(state.prefix_table().unwrap().match_at("{x").is_some());
         // Customizing the starting point goes through derived() — the finalize choke
         // point — and an empty delta reproduces the seed (the coherence contract's
         // mechanical check, trivial here since SeededLang has no normalizer):
@@ -877,20 +892,20 @@ mod tests {
         // deltas empties and rebuilds the table with the (untouched) group rules.
         let state: ParsingState<PlainLang> =
             ParsingState::new(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () });
-        assert!(state.prefix_table().match_at("{x").is_some());
+        assert!(state.prefix_table().unwrap().match_at("{x").is_some());
 
         let disabled = state.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
             groups: GroupOverrides::disable(),
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(disabled.prefix_table().match_at("{x").is_none());
+        assert!(disabled.prefix_table().unwrap().match_at("{x").is_none());
         assert_eq!(disabled.rules().group_rules(), state.rules().group_rules());
 
         let reenabled = disabled.derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
             groups: GroupOverrides { enabled: Some(true), ..GroupOverrides::default() },
             ..TokenRulesOverrides::default()
         })).unwrap();
-        assert!(reenabled.prefix_table().match_at("{x").is_some());
+        assert!(reenabled.prefix_table().unwrap().match_at("{x").is_some());
     }
 
     // --- a lang exercising events + the finalize customizer ---------------------------
