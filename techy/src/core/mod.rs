@@ -8,7 +8,8 @@
 //! one page:
 //!
 //! - **Language contract and state** — [`Lang`] (the compile-time customization
-//!   bundle), [`ParsingState`] and its reified [`ParsingStateDelta`]s, [`StateData`],
+//!   bundle) and its [`LangFeatures`] feature-presence declarations,
+//!   [`ParsingState`] and its reified [`ParsingStateDelta`]s, [`StateData`],
 //!   [`TokenRulesOverrides`], the [`NodeExtTypes`] ext bundle, and the
 //!   [`TrivialLang`] test lang.
 //! - **Tokens** — zero-copy [`Token`]s, data-driven [`TokenRules`], the
@@ -44,10 +45,14 @@ pub use crate::engine::{
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
-    ClosedVocabulary, CommandOverrides, CommentOverrides, DeriveError, FinalizeError,
-    ForbiddenCharsOverrides, GroupOverrides, InvocationSyntax, Lang, NodeExtTypes,
-    ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack,
-    SpecialsOverrides, StateData, TokenRulesOverrides, TrivialLang, WhitespaceOverrides,
+    AllLangFeatures, ClosedVocabulary, CommandOverrides, CommentOverrides, DeriveError,
+    FeatureAbsent, FeaturePresence, FeaturePresent, FinalizeError,
+    ForbiddenCharsOverrides, GroupOverrides, InvocationSyntax, Lang, LangFeatures,
+    LangHasCommands, LangHasComments, LangHasForbiddenChars, LangHasGroups,
+    LangHasParagraphs, LangHasScopes, LangHasSpecials, LangHasWhitespace, NodeExtTypes,
+    NoLangFeatures, ParagraphOverrides, ParsingState, ParsingStateDelta,
+    ParsingStateStack, SpecialsOverrides, StateData, TokenRulesOverrides, TrivialLang,
+    WhitespaceOverrides,
 };
 pub use crate::token::{
     skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,

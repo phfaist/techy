@@ -15,6 +15,7 @@ use crate::node::{NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
+use super::features::{AllLangFeatures, LangFeatures};
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
 
 /// The bundle of node extension types of a language — per-instance language data
@@ -130,6 +131,23 @@ impl<L: Lang> InvocationSyntax<L> for () {
 // practice) and `CallableSpec<L>: Any` (the downcast contract) requires every spec
 // type — including generic ones like `StdCallableSpec<L>` — to be `'static`.
 pub trait Lang: Sized + 'static {
+    /// The language's compile-time feature declarations ([`LangFeatures`]): one
+    /// presence answer per parsing feature, from whitespace handling to the
+    /// definition scope stack. Declaring a feature absent means the language has no
+    /// such feature at all — stated once, at the type level, where no runtime data
+    /// can contradict it (the [`LangFeatures`] docs define the absent / disabled /
+    /// empty vocabulary).
+    ///
+    /// Full-syntax languages declare [`AllLangFeatures`] — what [`TrivialLang`]'s
+    /// blanket impl supplies, and what the [`latexlike`](crate::latexlike) preset
+    /// uses; [`NoLangFeatures`](super::NoLangFeatures) declares every feature absent;
+    /// any other combination is a custom [`LangFeatures`] type. Code that requires a
+    /// feature bounds on the matching per-feature trait
+    /// ([`LangHasWhitespace`](super::LangHasWhitespace),
+    /// [`LangHasGroups`](super::LangHasGroups), …) rather than spelling the
+    /// declaration out.
+    type Features: LangFeatures;
+
     /// Identifier of a group *class* — the language-native taxonomy of "a delimited
     /// region viewed as one object" (the latexlike preset: content group vs. math
     /// group), **fully detached from delimiter spellings**. **Closed per language**: a language's group
@@ -443,8 +461,9 @@ pub trait Lang: Sized + 'static {
 
 /// The trivial language — for tests and machinery experiments: `impl TrivialLang for
 /// MyLang {}` yields a [`Lang`] with every associated type defaulted
-/// (`ModeId`/`StateExt`/`Event`/`SessionExt`/`NodeExts` = `()`, `SourceOrigin` =
-/// `Option<String>`, `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
+/// (`Features` = [`AllLangFeatures`], `ModeId`/`StateExt`/`Event`/`SessionExt`/
+/// `NodeExts` = `()`, `SourceOrigin` = `Option<String>`,
+/// `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
 /// behavior — the workaround for associated-type defaults being unstable. The default
 /// driver resolves nothing.
 ///
@@ -454,6 +473,7 @@ pub trait Lang: Sized + 'static {
 pub trait TrivialLang: Sized + 'static {}
 
 impl<T: TrivialLang> Lang for T {
+    type Features = AllLangFeatures;
     type GroupTypeId = u32;
     type CallableTypeId = u32;
     type ModeId = ();

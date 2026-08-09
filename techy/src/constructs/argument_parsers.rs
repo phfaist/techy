@@ -1038,6 +1038,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct ArgLang;
     impl Lang for ArgLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

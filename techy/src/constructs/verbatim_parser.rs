@@ -654,6 +654,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct VerbLang;
     impl Lang for VerbLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

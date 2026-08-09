@@ -258,6 +258,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct DocLang;
     impl Lang for DocLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -479,6 +480,7 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct BogusLang;
         impl Lang for BogusLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = ();
@@ -557,6 +559,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct MacroLang;
     impl Lang for MacroLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

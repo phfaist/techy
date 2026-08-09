@@ -44,6 +44,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
     impl Lang for PlainLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

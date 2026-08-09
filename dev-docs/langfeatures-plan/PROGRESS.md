@@ -333,6 +333,69 @@ exported via `techy::core` (additive).
   site) is NOT needed. Prototype source preserved at
   dev-docs/langfeatures-plan/normalization_proto.rs.
 
+- **M2 implementer D** — M2 step 1: new public items landed, all-present everywhere
+  (crate GREEN throughout).
+  - **Placement**: new internal module `techy/src/state/features.rs` (sibling of
+    lang.rs), `mod features;` in state/mod.rs, exported via state/mod.rs → the core
+    facade — one canonical path each under `techy::core` (flat), 14 items:
+    `FeaturePresence` (sealed via the private-supertrait pattern, matching the
+    error.rs `mod sealed { pub trait Sealed {} }` precedent; impls for the two
+    markers only), `FeaturePresent`, `FeatureAbsent`, `LangFeatures` (not sealed),
+    `AllLangFeatures`, `NoLangFeatures`, and the eight `LangHas*` subtraits in the
+    ADOPTED ATB-supertrait spelling with blanket impls. `LangHasParagraphs` carries
+    the `LangHasWhitespace` supertrait edge; its blanket impl requires both
+    equalities in one bound
+    (`LangFeatures<Whitespace = FeaturePresent, Paragraphs = FeaturePresent>`). The
+    double Lang mention in `LangHasParagraphs: LangHasWhitespace + Lang<Features: …>`
+    compiles fine (rustc 1.97), as the prototype predicted.
+  - **GAT bounds chosen**: `type Store<T: Clone + Debug + Default>: Clone + Debug +
+    Default`. `PartialEq`/`Eq` DROPPED from the spec's target composition: the Scopes
+    payload — ScopeStack's inner Vec, element type `Arc<dyn SpecsProvider<L>>`
+    (scopes/mod.rs) — genuinely lacks them (`SpecsProvider` is only
+    `fmt::Debug + Send + Sync`; trait objects have no equality; ScopeStack itself
+    implements only Clone/Debug/Default, and the derivation memo keys scope data by
+    Arc identity, never by `==`). Every other payload (bool, Arc<str>, the three
+    `Vec<Arc<…Rule>>`, `Option<Arc<GroupRule>>`, all `Option<…>` override mirrors)
+    also satisfies PartialEq+Eq — the drop is solely the scopes payload's doing.
+    M3 note: the rules sub-structs' manual PartialEq impls will need per-impl
+    `Store<…>: PartialEq` where-clauses (both markers' stores satisfy them —
+    `PhantomData` is unconditionally Eq — the GAT just can't promise it).
+    `Arc<str>: Default` needs Rust ≥ 1.80; workspace rust-version is 1.86, fine.
+    No explicit Send/Sync bounds (both stores track `T`'s auto traits; stated in
+    rustdoc). `FeatureAbsent::Store<T> = PhantomData<T>` (composes; no dedicated ZST
+    needed). Store carries the not-yet-used-by-any-field reservation note in rustdoc.
+  - **Payload verification**: `#[cfg(test)] mod compile_checks` in features.rs —
+    `assert_store_payload::<T>` instantiated once per payload (13 types, the
+    dyn-provider Vec included) via a fn-pointer `const _`; presence consts, bundle
+    members, absent-store ZST + present-store transparency (size_of), and the
+    normalization probes (plain struct literal + plain read under
+    `L: LangHasGroups`, const guard under bare `L: Lang`, an all-eight-subtraits
+    bound satisfied by a TrivialLang) are all `const`/type-level checks —
+    deliberately NO new `#[test]` fns, so the 884 baseline stays exact.
+  - **`impl Lang for` sites touched (all 40)**: `type Features = AllLangFeatures;`
+    on the TrivialLang blanket (state/lang.rs) and on `Latexlike`
+    (latexlike/mod.rs, pinned per user ruling, one-line doc on the impl); the 38
+    hand-written test impls got the fully-qualified one-liner — token/reader.rs ×4,
+    spec/mod.rs ×1, state/parsing_state.rs ×4, constructs/{verbatim_parser,
+    argument_parsers, environment_parser, attached_source}.rs ×1 each,
+    constructs/nodes_parser.rs ×11, latexlike/mod.rs (`Flavored`) ×1,
+    engine/language.rs ×3, engine/mod.rs ×6, node/mod.rs ×3, scopes/mod.rs ×1.
+    No `impl Lang` exists in techy/tests or techy-derive (grep-verified); guide
+    doctests define languages only via TrivialLang, so nothing else breaks.
+  - **Docs**: rules.rs TokenRules narrative extended from two to three spellings of
+    "off" (the M1 non-doc `//` pointer replaced with real doc text; absent /
+    disabled / empty each defined in place; no dd-dr labels in public rustdoc).
+    `Lang::Features` doc'd as the first associated type; TrivialLang's defaults
+    parenthetical, state/mod.rs and core/mod.rs module docs extended minimally.
+  - **Gates**: `cargo build` clean; `cargo test --workspace` 884 passed / 0 failed /
+    4 ignored (exact baseline; 758+30+8+21+1+66; 2+2 ignored), zero warnings;
+    fresh `rm -rf target/doc && cargo docs` zero warnings, all 14 new pages
+    generated under target/doc/techy/core/.
+  - **Surprises**: one — an underscore-*named* const (`const _FOO: …`) does not root
+    dead-code liveness, so the payload instantiation list must be an anonymous
+    `const _: …` or the assertion fn warns as unused. Everything else behaved
+    exactly as the supervisor's prototype predicted.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

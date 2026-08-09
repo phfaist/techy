@@ -281,12 +281,15 @@ impl ForbiddenCharsRules {
 /// `enable_macros`/`enable_comments`/… pattern). A disabled
 /// feature's syntax reads as ordinary content characters while its data **stays in
 /// place** — so a state delta can disable a feature and a later delta re-enable it,
-/// without any party having to carry the original rules. Two spellings of "off" are
-/// deliberate: gate `false` is the *scoped* off (data preserved for re-enabling), empty
-/// data is the *constitutive* off (no rules data).
-//
-// A third spelling of "off" — compile-time *absence*, declared on `Lang` — arrives with
-// the lang-features work; see DESIGN_RATIONALE [§dd-dr:lang-features].
+/// without any party having to carry the original rules. Three spellings of "off" are
+/// deliberate, each with its own word: gate `false` is the *scoped* off (**disabled** —
+/// data preserved for re-enabling); empty data is the *constitutive* off (**empty** —
+/// no rules data, so nothing is recognized even with the gate `true`); and beyond both
+/// runtime spellings, a feature can be **absent** — the *compile-time* off, declared
+/// per feature on the language via
+/// [`Lang::Features`](crate::state::Lang::Features): the language has no such feature
+/// at all, and no runtime data can say otherwise (the
+/// [`LangFeatures`](crate::state::LangFeatures) docs define the full vocabulary).
 pub struct TokenRules<L: Lang> {
     /// Whitespace handling: the whitespace character set and its gate
     /// ([`WhitespaceRules`]).

@@ -1103,6 +1103,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct ExtLang;
     impl Lang for ExtLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1193,6 +1194,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct RoleLang;
     impl Lang for RoleLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1357,6 +1359,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct MintLang;
     impl Lang for MintLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

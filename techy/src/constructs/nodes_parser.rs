@@ -1138,6 +1138,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct CmdLang;
     impl Lang for CmdLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1187,6 +1188,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct TildeLang;
     impl Lang for TildeLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1549,6 +1551,7 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct MarkLang;
         impl Lang for MarkLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = ();
@@ -2124,6 +2127,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct TabooLang;
     impl Lang for TabooLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -2400,6 +2404,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct HintLang;
     impl Lang for HintLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -2477,6 +2482,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct RefineLang;
     impl Lang for RefineLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -2886,6 +2892,7 @@ mod tests {
         }
 
         impl Lang for ExtLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = ();
@@ -3394,6 +3401,7 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct CountLang;
         impl Lang for CountLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = ();
@@ -3532,6 +3540,7 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct DriveLang;
         impl Lang for DriveLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = Mode;
@@ -3729,6 +3738,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct FailingMathLang;
     impl Lang for FailingMathLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -3816,6 +3826,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct StackSpecialsLang;
     impl Lang for StackSpecialsLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

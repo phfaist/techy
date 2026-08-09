@@ -774,6 +774,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct EnvLang;
     impl Lang for EnvLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();

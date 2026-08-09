@@ -113,7 +113,8 @@ use alloc::vec::Vec;
 use crate::node::BodySlotExt;
 use crate::scopes::{Package, ScopeStack};
 use crate::state::{
-    ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState, StateData,
+    AllLangFeatures, ClosedVocabulary, FinalizeError, Lang, NodeExtTypes, ParsingState,
+    StateData,
 };
 use crate::token::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
@@ -328,6 +329,9 @@ impl NodeExtTypes for LatexlikeNodeExts {
 pub struct Latexlike;
 
 impl Lang for Latexlike {
+    /// The preset uses every parsing feature ([`AllLangFeatures`]) — it does not
+    /// participate in compile-time feature gating.
+    type Features = AllLangFeatures;
     type GroupTypeId = GroupType;
     type CallableTypeId = CallableType;
     type ModeId = Mode;
@@ -1128,6 +1132,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct Flavored;
     impl Lang for Flavored {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = GroupType;
         type CallableTypeId = CallableType;
         type ModeId = Mode;

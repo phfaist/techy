@@ -20,7 +20,10 @@
 //!   canonical [`Lang::initial_state_data`] — the data→state step is crate-owned, so no
 //!   caller can assemble a state that bypasses the choke point (seed coherence itself is
 //!   the `Lang` author's contract; see the hook's docs).
-//! - [`Lang`] is the compile-time bundle (one generic parameter everywhere). It also
+//! - [`Lang`] is the compile-time bundle (one generic parameter everywhere). Its
+//!   [`Lang::Features`] member declares, per parsing feature, whether the language
+//!   has the feature at all ([`LangFeatures`], the [`FeaturePresence`] vocabulary,
+//!   the per-feature `LangHas*` bound traits). It also
 //!   carries the two token-level hooks, [`Lang::scan_specials`] and
 //!   [`Lang::specials_trigger_chars`] — specials recognition is the one part of
 //!   tokenization delegated to the language rather than enumerated as rules data.
@@ -37,6 +40,7 @@
 //! [`TrivialLang`] is the all-defaults trivial language for tests and machinery experiments.
 
 mod delta;
+mod features;
 mod lang;
 mod parsing_state;
 mod stack;
@@ -45,6 +49,11 @@ pub use delta::{
     CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
     ParagraphOverrides, ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
     WhitespaceOverrides,
+};
+pub use features::{
+    AllLangFeatures, FeatureAbsent, FeaturePresence, FeaturePresent, LangFeatures,
+    LangHasCommands, LangHasComments, LangHasForbiddenChars, LangHasGroups,
+    LangHasParagraphs, LangHasScopes, LangHasSpecials, LangHasWhitespace, NoLangFeatures,
 };
 pub use lang::{ClosedVocabulary, InvocationSyntax, Lang, NodeExtTypes, TrivialLang};
 pub use parsing_state::{DeriveError, FinalizeError, ParsingState, StateData};

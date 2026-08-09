@@ -532,6 +532,7 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct TestLang;
     impl Lang for TestLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1268,6 +1269,7 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct SpecialsLang;
     impl Lang for SpecialsLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1362,6 +1364,7 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct BadEndLang;
     impl Lang for BadEndLang {
+        type Features = crate::state::AllLangFeatures;
         type GroupTypeId = u32;
         type CallableTypeId = u32;
         type ModeId = ();
@@ -1463,6 +1466,7 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct PanickyLang;
         impl Lang for PanickyLang {
+            type Features = crate::state::AllLangFeatures;
             type GroupTypeId = u32;
             type CallableTypeId = u32;
             type ModeId = ();
