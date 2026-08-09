@@ -10,7 +10,7 @@
 |-------|-------------|--------|
 | D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
 | M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
-| M2 | `Lang::Features` + const gating | pending |
+| M2 | `Lang::Features` + const gating | in-progress |
 | M3 | Uniform storage gating (FeaturePresence::Store) | pending |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
 
@@ -311,6 +311,27 @@ Additionally (not surfaced by the tool's lints): `Default` removed from
 field types changed to the new sub-structs; new public types
 {Whitespace,Paragraph,Group,Command,Comment,Specials,ForbiddenChars}Rules/-Overrides
 exported via `techy::core` (additive).
+
+- **Supervisor: M2 normalization prototype (PLAN M2 step "prototype first")** —
+  RESULT: the spec's preferred subtrait spelling
+  `trait LangHasGroups: Lang where Self::Features: LangFeatures<Groups = FeaturePresent> {}`
+  does NOT propagate the equality to users (rustc 1.97.0, E0271 at every
+  `L: LangHasGroups` use site: trait where-clauses are obligations on
+  implementors, not implied bounds for users). The associated-type-bounds
+  spelling in SUPERTRAIT position propagates fully:
+  `trait LangHasGroups: Lang<Features: LangFeatures<Groups = FeaturePresent>> {}`
+  with blanket impl
+  `impl<L: Lang> LangHasGroups for L where L::Features: LangFeatures<Groups = FeaturePresent> {}`.
+  Verified by standalone compile+run prototype: under `L: LangHasGroups`,
+  generic code (a) writes PLAIN struct literals for a field typed
+  `<<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<Vec<u32>>`,
+  (b) reads through the equality (`.len()` on the store), and (c) unbounded
+  `L: Lang` code can use `<L::Features as LangFeatures>::Groups::PRESENT` as a
+  const guard. ADOPTED: the ATB-supertrait spelling — it delivers the preferred
+  shape's outcome (single-name `L: LangHasGroups` bounds); the use-site
+  fallback (`where L::Features: LangFeatures<Groups = FeaturePresent>` at each
+  site) is NOT needed. Prototype source preserved at
+  dev-docs/langfeatures-plan/normalization_proto.rs.
 
 ## Questions for user
 
