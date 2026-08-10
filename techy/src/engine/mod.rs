@@ -13,6 +13,7 @@
 //! convenience entry driving reader → root content loop → root list → `finish()`.
 //! `ParseResult` deliberately carries no `'env` lifetime and no `Language` reference: nodes are self-contained, results outlive their bundle.
 
+mod descent_guard;
 mod driver;
 mod language;
 mod state_memo;
@@ -42,6 +43,9 @@ use state_memo::{
     StateMemoKey, StateMemoProbe,
 };
 
+pub use descent_guard::{
+    DescentGuard, DescentRefusal, DescentWarning, StdDescentGuard, StdDescentGuardInit,
+};
 pub use driver::{
     resolve_command_in_scopes, CommandResolution, CommandResolver, ParseDriver,
     ResolvedCallable, ScopesCommandResolver, StdParseDriver,

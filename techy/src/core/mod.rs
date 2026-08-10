@@ -17,8 +17,9 @@
 //!   scanning ([`SpecialsMatch`], [`TriggerChars`]), and the token error family.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
 //!   [`ParserSession`], the [`ParseDriver`] customization point ([`StdParseDriver`]),
-//!   [`ParseResult`], and the live parse-frame stack ([`Frame`], [`FrameTitle`],
-//!   [`FrameRole`]).
+//!   [`ParseResult`], the live parse-frame stack ([`Frame`], [`FrameTitle`],
+//!   [`FrameRole`]), and the parsing-depth limiter ([`DescentGuard`],
+//!   [`StdDescentGuard`] with its [`StdDescentGuardInit`] configuration).
 //!
 //! Three submodules hold the subsets with clear boundaries:
 //!
@@ -40,8 +41,9 @@ pub mod node;
 pub mod specs;
 
 pub use crate::engine::{
-    CommandResolver, Frame, FrameTitle, Language, ParseDriver, ParseResult, ParserSession,
-    StdParseDriver,
+    CommandResolver, DescentGuard, DescentRefusal, DescentWarning, Frame, FrameTitle,
+    Language, ParseDriver, ParseResult, ParserSession, StdDescentGuard,
+    StdDescentGuardInit, StdParseDriver,
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{
