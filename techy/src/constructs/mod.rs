@@ -286,6 +286,69 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.driver.probe_token(self.tokens, &self.source, self.session, state)
     }
 
+    /// Run `parser` as one **sub-parse** — the single entry point that every descent
+    /// (a construct parser running another [`ConstructParser`] over the same input)
+    /// MUST go through; the pylatexenc
+    /// `walker.parse_content(parser, …, parsing_state)` analog.
+    ///
+    /// The contract is **normative**: a `ConstructParser` runs only through this
+    /// method — called directly, or through the thin wrappers
+    /// [`parse_nodes`](ParseContext::parse_nodes) and
+    /// [`parse_group`](ParseContext::parse_group), which delegate here. One shared
+    /// entry point is what lets the engine attach its per-descent bookkeeping (the
+    /// enclosing-state stack, the optional traceback frame) uniformly, with no
+    /// per-site cooperation. The contract's limit: plain Rust recursion that
+    /// bypasses it — code calling another parser's
+    /// [`parse`](ConstructParser::parse) method directly — cannot be detected by
+    /// the library. The rule is documented, not enforceable.
+    ///
+    /// `state` is the sub-parse's input state, scoped structurally for the duration
+    /// of the run — swapped in, restored afterwards, with the session's
+    /// enclosing-state stack maintained alongside (the
+    /// [`with_parsing_state`](ParseContext::with_parsing_state) discipline):
+    ///
+    /// - `Some(state)`: the sub-parse runs under `state`.
+    /// - `None`: the sub-parse runs under the **current** state — exactly as if
+    ///   `Some(Arc::clone(&cx.state))` had been passed: the same swap/restore
+    ///   scoping runs and the same enclosing-state stack entry is pushed. `None`
+    ///   never means "skip the scoping".
+    ///
+    /// `frame`, when `Some`, is pushed on the session's live frame stack around the
+    /// whole sub-parse (the [`with_frame`](ParseContext::with_frame) discipline):
+    /// every condition recorded while `parser` runs carries the frame in its
+    /// traceback snapshot. The frame is popped before this method returns, on the
+    /// `Ok` and `Err` paths alike (errors are values, not unwinds).
+    ///
+    /// The returned [`ParsingStateDelta`] is the construct's after-effect for the
+    /// caller, passed through **unapplied** — whether and where it applies is
+    /// caller business (the "caller applies deltas" law).
+    pub fn parse_construct<P>(
+        &mut self,
+        parser: &mut P,
+        state: Option<Arc<ParsingState<L>>>,
+        frame: Option<Frame<L>>,
+    ) -> ConstructParserResult<L, (P::Output, Option<ParsingStateDelta<L>>)>
+    where
+        P: ConstructParser<L> + ?Sized,
+    {
+        // `None` = the current state; the scoping below runs identically either way.
+        let state = match state {
+            Some(state) => state,
+            None => Arc::clone(&self.state),
+        };
+        let framed = frame.is_some();
+        if let Some(frame) = frame {
+            self.session.push_frame(frame);
+        }
+        // descent-guard slot (Part 2)
+        let result = self.with_parsing_state(state, |cx| parser.parse(cx));
+        // The pop covers the `Err` path too — errors are values, not unwinds.
+        if framed {
+            self.session.pop_frame();
+        }
+        result
+    }
+
     /// Run `parser` with [`state`](ParseContext::state) scoped to `state` for the
     /// duration of the sub-parse, restoring the outer state afterwards — the **descent
     /// primitive** for every construct that parses child content under a derived state
