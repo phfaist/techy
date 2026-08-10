@@ -11,7 +11,7 @@ use core::fmt;
 use core::hash::Hash;
 
 use crate::engine::{ParseDriver, StdParseDriver};
-use crate::node::{NodeExt, NodeKind, StagedChildren};
+use crate::node::{NodeBuildError, NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
 use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
 
@@ -443,8 +443,8 @@ pub trait Lang: Sized + 'static {
     /// **The only required [`Lang`] method** (every other method has a working
     /// default): [`NodeExt`] carries no `Default` bound, so a lang that declares a
     /// real ext type must say how it is initialized — and a lang without one returns
-    /// `()` (what [`TrivialLang`]'s blanket impl does; a `Lang` written directly
-    /// spells the empty one-liner).
+    /// `Ok(())` (what [`TrivialLang`]'s blanket impl does; a `Lang` written directly
+    /// spells the `Ok(())` one-liner).
     ///
     /// **Who runs it, when**: `make_node_ext` runs inside
     /// [`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node)
@@ -465,12 +465,27 @@ pub trait Lang: Sized + 'static {
     /// unrelated staged nodes are exposed. There is deliberately no parent access:
     /// staging is bottom-up, the parent does not exist yet; downward context is
     /// [`StateExt`](Lang::StateExt)'s job.
+    ///
+    /// # Errors
+    ///
+    /// `Err` means the ext could not be computed — typically
+    /// [`NodeBuildError::ExtMintFailed`], the variant that exists as this hook's
+    /// error channel. The error type is the **builder-level** [`NodeBuildError`],
+    /// not a parse error, because the mint also runs for consumer-built trees
+    /// (the explicit transform-side recipe), where no parse or span context
+    /// exists. Inside a parse, the staging entry point
+    /// ([`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node))
+    /// reports it like every other builder error, and its callers lift it via
+    /// [`implementation_error`](crate::constructs::ParseContext::implementation_error)
+    /// — an abort under any recovery policy, with the live traceback attached.
+    /// An infallible implementation wraps its ext in `Ok(...)` and that is the
+    /// only change.
     fn make_node_ext(
         kind: &NodeKind<Self>,
         span: &SourceSpan<Self::SourceOrigin>,
         state: &Arc<ParsingState<Self>>,
         children: StagedChildren<'_, Self>,
-    ) -> NodeExt<Self>;
+    ) -> Result<NodeExt<Self>, NodeBuildError>;
 }
 
 /// The trivial language — for tests and machinery experiments: `impl TrivialLang for
@@ -499,13 +514,14 @@ impl<T: TrivialLang> Lang for T {
     type InvocationSyntax = ();
     type Driver = StdParseDriver;
 
-    /// The trivial mint: no ext data (`NodeExt = ()`).
+    /// The trivial mint: no ext data (`NodeExt = ()`), infallibly.
     fn make_node_ext(
         _kind: &NodeKind<Self>,
         _span: &SourceSpan<Self::SourceOrigin>,
         _state: &Arc<ParsingState<Self>>,
         _children: StagedChildren<'_, Self>,
-    ) {
+    ) -> Result<(), NodeBuildError> {
+        Ok(())
     }
 }
 

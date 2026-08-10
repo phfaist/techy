@@ -174,7 +174,8 @@ fn emit_replaces_without_descending() {
                     &span,
                     &state,
                     builder.staged_children(&[]),
-                );
+                )
+                .expect("mint node ext");
                 let id = builder
                     .add(kind, span, state, Vec::new(), ext, ())
                     .map_err(RestageError::<Infallible>::Build)?;
@@ -327,8 +328,13 @@ fn three_slot_fixture() -> NodeTree<Latexlike> {
     let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
     let chars = |builder: &mut NodeTreeBuilder<Latexlike>, text: &str| {
         let kind = NodeKind::chars(TextContent::Owned(text.into()));
-        let ext =
-            <Latexlike as Lang>::make_node_ext(&kind, &span(), &state, builder.staged_children(&[]));
+        let ext = <Latexlike as Lang>::make_node_ext(
+            &kind,
+            &span(),
+            &state,
+            builder.staged_children(&[]),
+        )
+        .expect("mint node ext");
         builder.add(kind, span(), state.clone(), Vec::new(), ext, ()).unwrap()
     };
     let content_child = chars(&mut builder, "content");
@@ -363,7 +369,8 @@ fn three_slot_fixture() -> NodeTree<Latexlike> {
         &span(),
         &state,
         builder.staged_children(&children),
-    );
+    )
+    .expect("mint node ext");
     let root = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
     builder.finish(root).unwrap()
 }
@@ -668,7 +675,8 @@ fn hand_built_bundles_are_first_class() {
                 &span,
                 &state,
                 builder.staged_children(&[]),
-            );
+            )
+            .expect("mint node ext");
             let fresh = builder
                 .add(kind, span, state, Vec::new(), ext, ())
                 .map_err(RestageError::<OpError>::Build)?;
@@ -715,7 +723,8 @@ where
     let state = at.parsing_state().clone();
     let builder = cx.builder();
     let ext =
-        <Latexlike as Lang>::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+        <Latexlike as Lang>::make_node_ext(&kind, &span, &state, builder.staged_children(&[]))
+            .expect("mint node ext");
     builder.add(kind, span, state, Vec::new(), ext, annotation).map_err(RestageError::Build)
 }
 
@@ -982,7 +991,8 @@ fn single_node_takeover_of_a_content_parent_carries_the_designation() {
                     &span,
                     &state,
                     builder.staged_children(&[child]),
-                );
+                )
+                .expect("mint node ext");
                 let id = builder
                     .add(kind, span, state, vec![child], ext, ())
                     .map_err(RestageError::<OpError>::Build)?;

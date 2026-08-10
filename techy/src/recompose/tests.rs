@@ -171,7 +171,8 @@ fn three_slot_fixture() -> NodeTree<Latexlike> {
             &span(),
             &state,
             builder.staged_children(&[]),
-        );
+        )
+        .expect("mint node ext");
         builder.add(kind, span(), state.clone(), Vec::new(), ext, ()).unwrap()
     };
     let content_child = chars(&mut builder, "content");
@@ -206,7 +207,8 @@ fn three_slot_fixture() -> NodeTree<Latexlike> {
         &span(),
         &state,
         builder.staged_children(&children),
-    );
+    )
+    .expect("mint node ext");
     let root = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
     builder.finish(root).unwrap()
 }

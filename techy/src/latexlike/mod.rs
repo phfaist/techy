@@ -408,13 +408,14 @@ impl Lang for Latexlike {
     }
 
     /// The preset carries no per-node ext data (`NodeExt = ()`): the mint is the
-    /// empty one-liner.
+    /// infallible `Ok(())` one-liner.
     fn make_node_ext(
         _kind: &crate::node::NodeKind<Self>,
         _span: &crate::source::SourceSpan<Self::SourceOrigin>,
         _state: &Arc<ParsingState<Self>>,
         _children: crate::node::StagedChildren<'_, Self>,
-    ) {
+    ) -> Result<(), crate::node::NodeBuildError> {
+        Ok(())
     }
 }
 
@@ -1201,7 +1202,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &Arc<ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
     impl super::LatexlikeLang for Flavored {}

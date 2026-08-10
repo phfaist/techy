@@ -235,7 +235,8 @@ impl Lang for BracesOnlyLang {
 #         _span: &SourceSpan<Option<String>>,
 #         _state: &Arc<ParsingState<Self>>,
 #         _children: StagedChildren<'_, Self>,
-#     ) {
+#     ) -> Result<(), techy::core::node::NodeBuildError> {
+#         Ok(())
 #     }
 }
 

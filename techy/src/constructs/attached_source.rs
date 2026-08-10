@@ -91,7 +91,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
     /// The caller supplies the construct parser driving the sub-parse; for
     /// `\input`-style inclusion that is the root nodes-parse shape,
     /// `&mut *cx.driver.make_nodes_parser(StopSpec::none(),
-    /// ChildStateSpec::inherit())`. The parser speaks the nodes-run vocabulary
+    /// ChildStateSpec::inherit())?`. The parser speaks the nodes-run vocabulary
     /// ([`NodesOutcome`]) so this method can drive it like
     /// [`Language::parse_source`](crate::engine::Language::parse_source) drives the
     /// root loop, and it **must tolerate re-invocation**: after a recovered stop
@@ -397,7 +397,8 @@ mod tests {
             _span: &SourceSpan<Self::SourceOrigin>,
             _state: &Arc<ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 

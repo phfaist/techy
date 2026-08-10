@@ -21,6 +21,7 @@
 //! one `add()` — the record's phase is a runtime invariant, contained by
 //! resolving at exactly this one point, so a finished tree never holds staged regions.
 
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -234,7 +235,7 @@ impl<L: Lang, A> NodeTreeBuilder<L, A> {
     /// transform-side minting recipe builds it here before calling the hook:
     ///
     /// ```ignore
-    /// let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children));
+    /// let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children))?;
     /// let id = builder.add(kind, span, state, children, ext, annotation)?;
     /// ```
     pub fn staged_children<'b>(
@@ -661,11 +662,27 @@ fn check_spanned_contents<L: Lang>(
 /// This reports an **implementation bug** in an extension, not a source-input
 /// condition: parse layers lift it into a `ParseError` that aborts even under tolerant
 /// recovery, and a builder that returned one is poisoned (the build must be abandoned).
+///
+/// One variant carries a reported failure rather than a violated contract:
+/// [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is
+/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)'s own error channel —
+/// minting is part of staging, and the hook also runs for consumer-built trees,
+/// where no parse-side error type exists. Parse layers lift it like every other
+/// value of this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NodeBuildError {
     /// Staging would exceed the `u32` id space.
     TooManyNodes,
+    /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext) reported a
+    /// failure while minting a node's ext. `detail` is the implementation's own
+    /// description of what went wrong; an implementation with an underlying error
+    /// chain renders it into the string (this variant stays plain data so the
+    /// enum keeps its derived `PartialEq`/`Eq`).
+    ExtMintFailed {
+        /// The mint's description of the failure.
+        detail: String,
+    },
     /// A child id was never staged in this builder.
     ChildNotStaged {
         /// The offending child id.
@@ -768,6 +785,9 @@ impl fmt::Display for NodeBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NodeBuildError::TooManyNodes => write!(f, "node tree too large"),
+            NodeBuildError::ExtMintFailed { detail } => {
+                write!(f, "the node-ext mint (Lang::make_node_ext) reported a failure: {}", detail)
+            }
             NodeBuildError::ChildNotStaged { child } => {
                 write!(f, "child {:?} has not been staged", child)
             }

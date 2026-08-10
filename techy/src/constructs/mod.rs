@@ -172,7 +172,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// `Err` reports a staging-contract violation
     /// ([`NodeBuildError`](crate::node::NodeBuildError)) — an implementation bug in an
-    /// extension, not a source condition; lift it with
+    /// extension, not a source condition — or the ext mint's own reported failure
+    /// ([`ExtMintFailed`](crate::node::NodeBuildError::ExtMintFailed),
+    /// [`Lang::make_node_ext`]'s error channel); lift either with
     /// [`implementation_error`](ParseContext::implementation_error).
     pub fn stage_node(
         &mut self,
@@ -186,7 +188,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             &span,
             &state,
             self.session.builder.staged_children(&children),
-        );
+        )?;
         self.session.builder.add(kind, span, state, children, ext, ())
     }
 

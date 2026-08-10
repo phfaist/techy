@@ -954,7 +954,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1166,7 +1167,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1279,7 +1281,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -1335,7 +1338,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -1423,7 +1427,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1540,7 +1545,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 

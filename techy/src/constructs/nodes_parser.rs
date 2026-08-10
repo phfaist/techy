@@ -1270,7 +1270,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1342,7 +1343,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1496,7 +1498,8 @@ mod tests {
                 &span,
                 state,
                 session.builder.staged_children(&outcome.nodes),
-            );
+            )
+            .expect("mint node ext");
             session.builder.add(kind, span, Arc::clone(state), outcome.nodes, ext, ()).unwrap()
         };
         let result = session.finish(root).unwrap();
@@ -1688,7 +1691,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -2375,7 +2379,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -2628,7 +2633,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -2694,7 +2700,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -2784,7 +2791,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -3197,14 +3205,14 @@ mod tests {
                 _span: &SourceSpan<Self::SourceOrigin>,
                 _state: &Arc<ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) -> Option<Box<str>> {
-                let NodeKind::Callable(data) = kind else { return None };
+            ) -> Result<Option<Box<str>>, crate::node::NodeBuildError> {
+                let NodeKind::Callable(data) = kind else { return Ok(None) };
                 // The downcast: trait-upcast the stored spec to `&dyn Any`, then
                 // recover the concrete type — field access included.
                 let spec = (&*data.spec as &dyn core::any::Any)
                     .downcast_ref::<StdCallableSpec<ExtLang>>()
                     .expect("the test library registers StdCallableSpec");
-                Some(format!("{}#{}", data.name, spec.arguments.len()).into_boxed_str())
+                Ok(Some(format!("{}#{}", data.name, spec.arguments.len()).into_boxed_str()))
             }
         }
 
@@ -3762,7 +3770,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -3893,7 +3902,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -4100,7 +4110,8 @@ mod tests {
                 _span: &crate::source::SourceSpan<Self::SourceOrigin>,
                 _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
                 _children: crate::node::StagedChildren<'_, Self>,
-            ) {
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
             }
         }
 
@@ -4141,6 +4152,62 @@ mod tests {
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert!(!error.frames().is_empty());
+    }
+
+    #[test]
+    fn a_failing_make_node_ext_aborts_as_an_implementation_error() {
+        // The mint's error channel inside a parse: `Lang::make_node_ext` errs with
+        // the builder-level `NodeBuildError::ExtMintFailed`; the staging entry
+        // point reports it like any other builder error and the staging caller
+        // lifts it via `implementation_error` — an abort under any recovery
+        // policy, with the live traceback attached.
+        #[derive(Debug, Clone, Copy)]
+        struct MintFailLang;
+        impl Lang for MintFailLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = StdParseDriver;
+            fn make_node_ext(
+                kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) -> Result<(), crate::node::NodeBuildError> {
+                if matches!(kind, NodeKind::Chars { .. }) {
+                    return Err(crate::node::NodeBuildError::ExtMintFailed {
+                        detail: "ext backend unavailable".into(),
+                    });
+                }
+                Ok(())
+            }
+        }
+
+        // The first chars node is staged inside the group, so the group frame is
+        // live when the mint fails.
+        let st = state_with(rules::<MintFailLang>());
+        let content = "{a}";
+        let mut reader = StdTokenReader::new(content);
+        let error =
+            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.identifier(), "core.constructs.implementation-error");
+        assert!(
+            error.message().contains(
+                "the node-ext mint (Lang::make_node_ext) reported a failure: \
+                 ext backend unavailable"
+            ),
+            "{}",
+            error.message()
+        );
         assert!(!error.frames().is_empty());
     }
 
@@ -4211,7 +4278,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -4312,7 +4380,8 @@ mod tests {
             _span: &crate::source::SourceSpan<Self::SourceOrigin>,
             _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
             _children: crate::node::StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 

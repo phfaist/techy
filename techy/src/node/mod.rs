@@ -1210,8 +1210,8 @@ mod tests {
             _span: &SourceSpan,
             _state: &Arc<ParsingState<Self>>,
             _children: StagedChildren<'_, Self>,
-        ) -> u16 {
-            42
+        ) -> Result<u16, NodeBuildError> {
+            Ok(42)
         }
     }
 
@@ -1225,7 +1225,8 @@ mod tests {
         let kind: NodeKind<ExtLang> = NodeKind::chars(Span::new(0, 1));
         let span = spanned(&source, 0..1);
         // The explicit two-line transform-side recipe: mint, then add.
-        let ext = ExtLang::make_node_ext(&kind, &span, &st, b.staged_children(&[]));
+        let ext =
+            ExtLang::make_node_ext(&kind, &span, &st, b.staged_children(&[])).unwrap();
         let y = b.add(kind, span, st.clone(), vec![], ext, ()).unwrap();
         // A bespoke value is equally legal on the transform side:
         let root = b
@@ -1300,7 +1301,8 @@ mod tests {
             _span: &SourceSpan,
             _state: &Arc<ParsingState<Self>>,
             _children: StagedChildren<'_, Self>,
-        ) {
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
         }
     }
 
@@ -1465,11 +1467,11 @@ mod tests {
             _span: &SourceSpan,
             _state: &Arc<ParsingState<Self>>,
             children: StagedChildren<'_, Self>,
-        ) -> MintExt {
-            MintExt {
+        ) -> Result<MintExt, NodeBuildError> {
+            Ok(MintExt {
                 descendants: children.iter().map(|child| child.ext().descendants + 1).sum(),
                 chars_below: chars_below(children),
-            }
+            })
         }
     }
 
@@ -1486,7 +1488,8 @@ mod tests {
                          kind: NodeKind<MintLang>,
                          span: SourceSpan,
                          children: Vec<BuildId>| {
-            let ext = MintLang::make_node_ext(&kind, &span, &st, b.staged_children(&children));
+            let ext = MintLang::make_node_ext(&kind, &span, &st, b.staged_children(&children))
+                .unwrap();
             b.add(kind, span, st.clone(), children, ext, ()).unwrap()
         };
         let x = stage(&mut b, NodeKind::chars(Span::new(0, 1)), spanned(&source, 0..1), vec![]);
@@ -1503,6 +1506,59 @@ mod tests {
         assert_eq!(
             *tree.root().child(0).unwrap().ext(),
             MintExt { descendants: 0, chars_below: 0 }
+        );
+    }
+
+    /// The mint's error channel at the builder level: `make_node_ext` also runs
+    /// for consumer-built trees (the explicit two-line recipe), where no parse or
+    /// span context exists — the failure is an ordinary `NodeBuildError` value,
+    /// matchable and rendered by `Display`.
+    #[test]
+    fn a_failing_make_node_ext_surfaces_at_the_builder_level() {
+        #[derive(Debug, Clone, Copy)]
+        struct MintFailLang;
+        impl Lang for MintFailLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = crate::engine::StdParseDriver;
+
+            fn make_node_ext(
+                _kind: &NodeKind<Self>,
+                _span: &SourceSpan,
+                _state: &Arc<ParsingState<Self>>,
+                _children: StagedChildren<'_, Self>,
+            ) -> Result<(), NodeBuildError> {
+                Err(NodeBuildError::ExtMintFailed { detail: "no ext data source".into() })
+            }
+        }
+
+        let source: Arc<Source> = Arc::new(Source::new("x"));
+        let st = state::<MintFailLang>();
+        let b: NodeTreeBuilder<MintFailLang> = NodeTreeBuilder::new();
+        let kind: NodeKind<MintFailLang> = NodeKind::chars(Span::new(0, 1));
+        let err = MintFailLang::make_node_ext(
+            &kind,
+            &spanned(&source, 0..1),
+            &st,
+            b.staged_children(&[]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            NodeBuildError::ExtMintFailed { detail: "no ext data source".into() }
+        );
+        assert_eq!(
+            err.to_string(),
+            "the node-ext mint (Lang::make_node_ext) reported a failure: \
+             no ext data source"
         );
     }
 
@@ -2349,7 +2405,8 @@ mod tests {
                      kind: NodeKind<MintLang>,
                      span: SourceSpan,
                      children: Vec<BuildId>| {
-            let ext = MintLang::make_node_ext(&kind, &span, &st, b.staged_children(&children));
+            let ext = MintLang::make_node_ext(&kind, &span, &st, b.staged_children(&children))
+                .unwrap();
             b.add(kind, span, st.clone(), children, ext, ()).unwrap()
         };
         let a = stage(&mut b, NodeKind::chars(Span::new(2, 3)), spanned(&source, 2..3), vec![]);

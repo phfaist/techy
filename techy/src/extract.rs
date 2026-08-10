@@ -530,7 +530,7 @@ fn stage_piece<'t, L: Lang, A, B>(
         mint(PartFacts { original: Some(piece.node), partial: Some(partial), index });
     let kind = NodeKind::chars(content);
     let state = piece.node.parsing_state().clone();
-    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]))?;
     builder.add(kind, span, state, Vec::new(), ext, annotation)
 }
 
@@ -559,7 +559,7 @@ fn stage_segment_list<'t, L: Lang, A, B>(
     // their annotation comes from the callback with no original node.
     let annotation = mint(PartFacts { original: None, partial: None, index: Some(index) });
     let kind = NodeKind::list();
-    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children));
+    let ext = L::make_node_ext(&kind, &span, &state, builder.staged_children(&children))?;
     builder.add(kind, span, state, children, ext, annotation)
 }
 
@@ -642,7 +642,7 @@ pub fn split_at_chars<'t, L: Lang, A, B>(
     };
     let annotation = mint(PartFacts { original: None, partial: None, index: None });
     let kind = NodeKind::list();
-    let ext = L::make_node_ext(&kind, &span, &anchor_state, builder.staged_children(&lists));
+    let ext = L::make_node_ext(&kind, &span, &anchor_state, builder.staged_children(&lists))?;
     let root = builder.add(kind, span, anchor_state, lists, ext, annotation)?;
     Ok(SplitAtChars { tree: builder.finish(root)? })
 }
@@ -810,7 +810,7 @@ fn finish_keyvals<'t, L: Lang, A, B>(
     let annotation = mint(PartFacts { original: None, partial: None, index: None });
     let kind = NodeKind::list();
     let ext =
-        L::make_node_ext(&kind, &anchor_span, &anchor_state, builder.staged_children(&value_lists));
+        L::make_node_ext(&kind, &anchor_span, &anchor_state, builder.staged_children(&value_lists))?;
     let root = builder.add(kind, anchor_span, anchor_state, value_lists, ext, annotation)?;
     let tree = builder.finish(root)?;
     // The root's children are the staged value lists, in staging order.
@@ -1062,7 +1062,7 @@ impl<L: Lang, B> KeyVals<L, B> {
                     let kind = NodeKind::chars(TextContent::Owned(Box::from(sep)));
                     let span = SourceSpan::entire(sep_source);
                     let ext =
-                        L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]));
+                        L::make_node_ext(&kind, &span, &state, builder.staged_children(&[]))?;
                     children.push(builder.add(kind, span, state.clone(), Vec::new(), ext, ())?);
                 }
             }
@@ -1072,7 +1072,7 @@ impl<L: Lang, B> KeyVals<L, B> {
         }
         let kind = NodeKind::list();
         let ext =
-            L::make_node_ext(&kind, &root_span, &state, builder.staged_children(&children));
+            L::make_node_ext(&kind, &root_span, &state, builder.staged_children(&children))?;
         let root = builder.add(kind, root_span, state, children, ext, ())?;
         Ok(Some(builder.finish(root)?))
     }
