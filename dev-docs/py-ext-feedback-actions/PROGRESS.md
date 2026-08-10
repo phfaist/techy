@@ -8,12 +8,15 @@ any execution-time micro-ruling in the notes column (with the commit that took i
 Commit convention: small per-item commits on this branch
 (`worktree-py-ext-feedback-plan`), messages prefixed `pyext-<item>:`.
 
-**Resume here:** EXECUTING (started 2026-08-10 on user signal; branch rebased onto
-main at d52fe4c — dev-docs cleanup landed). Stages 1, 2, 3, and 4 COMPLETE (all
-gates green; Stage 4 = documentation batch, items 4.1–4.15, docs-only — no code
-behavior changed); next: Stage 5 (api-baseline; rationale entries — ARCHITECTURE/
-DESIGN_RATIONALE now editable only if the cleanup agent is done; courtesy notes;
-delete this folder).
+**Resume here:** EXECUTION COMPLETE except folder deletion (the orchestrator
+deletes `dev-docs/py-ext-feedback-actions/` after reviewing the dev-docs diff).
+Stages 1–5 done, all gates green. Stage 5 delivered: three register entries
+([§dd-dr:hook-fallibility], [§dd-dr:runtime-condition-identity],
+[§dd-dr:embedding-feedback-policy]) + the panic-policy `ChildRegion::staged`
+amendment + smaller currency amendments, ARCHITECTURE brought present-day (all
+references added in the same change), the semver record below (no branch
+moved — `api-baseline` moves at release time, by the user), and
+`dev-docs/extra/PY_EXT_UPDATE_NOTES.md` for the bindings project.
 
 | Item | Status | Notes |
 |---|---|---|
@@ -52,7 +55,11 @@ delete this folder).
 | 4.15 guide coverage for Stage 2 additions | **done** | `pyext-4.15:` MacroSpec rows in specs.md + ai-guide-definitions.md mention the optional after-effect; NodeTree::slice → ai-guide-trees table + integration.md navigation paragraph; NodeTree::tree_tag → integration.md ids paragraph (pre-check before the panicking node(); get() answers None) + ai-guide-embedding row; TreeViolation::new → micro-ruling: NO guide discussed validate_tree at all, so integration.md gained a two-sentence "Checking a tree" paragraph (the embedder audience validate_tree's own docs name) + ai-guide-embedding row; DiagnosticInfo::identifier → parsing.md matching-conditions paragraph (const is the norm, method = binding-adapter exception) + new ai-guide-embedding row |
 | **Stage 4 gate** (docs build, link check) | **green** | cargo test all suites 0 failed (lib 817, integration 30+8+13+23, doc-tests 69 passed/3 ignored); cargo docs from fresh target/doc zero warnings (= intra-doc link check clean); generated-HTML anchor spot-check for every newly linked item (slice, tree_tag, TreeViolation::new, with_after_effect, DiagnosticInfo::identifier, group_interior_state, parse_attached_source) all present; docs-only stage — no code behavior changed, no test added/removed |
 | Stage 3 review fixes | **done** | review findings applied in one commit (`pyext-stage3-review:`): README quick-start seed now `.expect("seed state")` (H1); ExtMintFailed lifted as HookFailed at every parse-side staging lift — new pub(crate) `ParseContext::staging_error` applies the split, all 17 stage_node/stage_invocation lift sites switched, pinning test now expects `core.hooks.hook-failed` + group frame, stage_node/stage_invocation/make_node_ext/guide docs state the split (H2); `#[non_exhaustive]` on `SessionDeriveError` (M3); HookFailed identifier → `core.hooks.hook-failed`, all pins updated + 3.0 row annotated (M4); three "empty one-liner" spots → "the `Ok(())` one-liner" (M5); ExtractError::Build + NodeBuildError poisoned-builder docs qualified for ExtMintFailed (M6); size-pin test now asserts the niche-fit equalities + one <=64 bound, println! dropped (M7/L15); invocation frame pushed around the parser factory call via with_frame — factory tracebacks name the failing spec; test pins [callable ‘\\fail’, group ‘{’] (L9); weak !is_empty frame assertions strengthened to exact title/count pins (resolve_command, nodes factory, body_state_delta, Compute-arm now pins the empty snapshot) (L10); three guide condition paragraphs state the three-way split incl. HookFailed (L11); minilatex_package rustdoc states the failing-seed fallback (L12); ParseResult::session_ext completed-parse-only sentence (L13); ParseContext type doc gained the third-party hook-dispatch traceback paragraph (doc note in lieu of L8); PLAN.md gained "Post-execution follow-ups for the user" (L14 latent span panic in environment_parser ~:706; L8 attach_hook_frames pub flip) |
-| 5 closure (api-baseline; rationale entries AFTER cleanup agent done; courtesy notes; delete folder) | pending | ARCHITECTURE/DESIGN_RATIONALE untouchable until cleanup agent finishes |
+| 5 rationale entries + ARCHITECTURE currency | **done** | new entries: [§dd-dr:hook-fallibility] (fourteen fallible hooks, HookFailed + three-way split, seven documented-infallible hooks + neutral answers, niche-fit size facts, observe_transition dual channel + session_ext read-back; placed end of parsers-engine topic), [§dd-dr:runtime-condition-identity] (adapter-scoped identifier() override; unsealing rejected; E0034 accepted cost; end of errors topic), [§dd-dr:embedding-feedback-policy] (states crate-frozen, ConcatPieces build-only, no test-support feature/graduation policy, declined accessor batch; end of crates topic). Amendments: panic-policy companions clause += ChildRegion::staged; language-init retitled (label kept) + fallible-seed/Into<Arc> revision note; seed-states, resolver-failure, stop-conditions, ext-minting, session-derivation, diagnostic-info-data-split, condition-identities, diagnostics-retention (+ diagnostics_limit) brought current. ARCHITECTURE: fallible seed (state), hook-fallibility paragraph + session_ext + diagnostics_limit + Into<Arc> (engine), fallible predicates (constructs), identifier override + HookFailed + cap (errors), NodeTree::slice (nodes), graduation-policy sentence + decisions-list refs (overview). Every new entry referenced from ARCHITECTURE in the same commit |
+| 5 semver record | **done** | see section below; `api-baseline` found already at 1659057 (descent tip incl. lang-features) — report = exactly this plan's breaks; 6 failing checks recorded + the tool's blind spot (changed return types) noted; NO branch moved |
+| 5 bindings courtesy notes | **done** | `dev-docs/extra/PY_EXT_UPDATE_NOTES.md`: LineIndex fix (ratchet test fails by design → containment can come out), 14 signature one-liners + ripples (lang_initial family, session_ext, diagnostics_limit, +Any, MacroSpec literal), gap-closing API map, declined list with register labels |
+| **Stage 5 / final gate** (build/test/docs) | **green** | cargo build clean; cargo test 0 failed (lib 817, integration 30+8+13+23, doc-tests 69 passed/3 ignored); cargo docs from fresh target/doc, zero warnings |
+| 5 delete this folder | pending (orchestrator) | deliberately NOT done here — the orchestrator deletes after reviewing the dev-docs diff |
 
 ## Stage 5 — semver record (cargo-semver-checks against `api-baseline`)
 
