@@ -184,7 +184,15 @@ branch chain for ff-merge (merges not run from the primary checkout).
 ## Progress log
 
 - [x] 2026-08-10 worktree `.worktrees/descent` created; branch `descent-1-funnel` @ df1d17a; plan committed.
-- [ ] Part 1 implemented (agent) — gates green
+- [x] Part 1 implemented (agent) — gates green
+- 2026-08-10 Part 1 landed on `descent-1-funnel`: 331e28b (parse_construct entry
+  point), de757c8 (call sites migrated, parse_scoped removed), 7bf0e3f (guide docs +
+  funnel tests). build/test/docs green (761 lib tests). Note: the
+  `nodes_parser.rs:700` invocation-dispatch site collapses into
+  `parse_construct(parser, Some(base), Some(frame))` — not `parse_group` as the
+  Part 1 text says (the parser there is the invocation parser, not a group parser);
+  no in-crate caller passes `parse_group`'s new `frame` yet. Stale `parse_scoped`
+  mentions in ARCHITECTURE/DESIGN_RATIONALE await Part 4.
 - [ ] Part 1 reviewed (agent) — findings resolved
 - [ ] Part 2 implemented — gates green
 - [ ] Part 2 reviewed — findings resolved
