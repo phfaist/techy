@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use crate::constructs::{
     ChildStateSpec, FromInvocation, ImplementationError, ParseContext, StopCause, StopSpec, StrayGroupClose,
 };
-use crate::error::ParseError;
+use crate::error::{Diagnostics, ParseError};
 use crate::node::NodeKind;
 use super::descent_guard::DescentGuard;
 use super::driver::ParseDriver;
@@ -179,6 +179,11 @@ impl<L: Lang> Language<L> {
     {
         let mut reader = StdTokenReader::new(source.content());
         let mut session = ParserSession::new();
+        // Seed the diagnostics sink's retention cap from the driver
+        // (`ParseDriver::diagnostics_limit`); `None` keeps the default cap.
+        if let Some(limit) = self.driver.diagnostics_limit() {
+            session.diagnostics = Diagnostics::with_limit(limit);
+        }
         // The descent guard is created eagerly, here at true parse entry on the
         // parsing thread — a stack-measuring guard anchors its reference
         // measurement before any descent runs.
@@ -304,6 +309,48 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
+    /// The latex-ish seed rules the `DocLang`-family test languages share (groups
+    /// `{`/`}` and `%` comments enabled) — generic so a sibling lang differing only
+    /// in its driver does not re-derive the block.
+    fn doc_state_data<
+        L: Lang<
+            GroupTypeId = u32,
+            ModeId = (),
+            StateExt = (),
+            Features = crate::state::AllLangFeatures,
+        >,
+    >() -> StateData<L> {
+        StateData {
+            rules: TokenRules {
+                whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+                paragraphs: ParagraphRules { enabled: true },
+                groups: GroupRules {
+                    enabled: true,
+                    rules: vec![Arc::new(GroupRule {
+                        group_type: 0,
+                        open: "{".into(),
+                        close: "}".into(),
+                    })],
+                    temporary: Vec::new(),
+                    expecting_close: None,
+                },
+                commands: CommandRules {
+                    enabled: false,
+                    rules: Vec::new(),
+                },
+                comments: CommentRules {
+                    enabled: true,
+                    rules: vec![Arc::new(CommentRule { start: "%".into() })],
+                },
+                specials: SpecialsRules { enabled: false },
+                forbidden_chars: ForbiddenCharsRules { chars: "".into() },
+            },
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }
+    }
+
     /// A language whose canonical seed enables the latex-ish syntax the tests use —
     /// exercising the "Language seeds from the Lang hook" path.
     #[derive(Debug, Clone, Copy)]
@@ -322,35 +369,7 @@ mod tests {
         type Driver = StdParseDriver;
 
         fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
-            Ok(StateData {
-                rules: TokenRules {
-                    whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
-                    paragraphs: ParagraphRules { enabled: true },
-                    groups: GroupRules {
-                        enabled: true,
-                        rules: vec![Arc::new(GroupRule {
-                            group_type: 0,
-                            open: "{".into(),
-                            close: "}".into(),
-                        })],
-                        temporary: Vec::new(),
-                        expecting_close: None,
-                    },
-                    commands: CommandRules {
-                        enabled: false,
-                        rules: Vec::new(),
-                    },
-                    comments: CommentRules {
-                        enabled: true,
-                        rules: vec![Arc::new(CommentRule { start: "%".into() })],
-                    },
-                    specials: SpecialsRules { enabled: false },
-                    forbidden_chars: ForbiddenCharsRules { chars: "".into() },
-                },
-                scopes: ScopeStack::new(),
-                mode: (),
-                ext: (),
-            })
+            Ok(doc_state_data())
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -464,6 +483,73 @@ mod tests {
         check_tree_invariants(&result.tree);
         assert_eq!(shapes(&result), ["chars(})", "chars(})", "chars(x)"]);
         assert_eq!(result.diagnostics.len(), 2);
+    }
+
+    // --- the driver's diagnostics retention cap -----------------------------------------
+
+    /// `DocLang` under a driver that caps diagnostics retention — the
+    /// `ParseDriver::diagnostics_limit` seeding path.
+    #[derive(Debug, Clone, Copy)]
+    struct CapLang;
+    impl Lang for CapLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = CapDriver;
+
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(doc_state_data())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    /// Tolerant driver retaining at most two diagnostics per parse.
+    #[derive(Debug, Clone, Copy)]
+    struct CapDriver;
+
+    impl ParseDriver<CapLang> for CapDriver {
+        type DescentGuard = StdDescentGuard;
+        fn recovery(&self) -> Recovery {
+            Recovery::Tolerant
+        }
+        fn diagnostics_limit(&self) -> Option<usize> {
+            Some(2)
+        }
+    }
+
+    #[test]
+    fn a_driver_diagnostics_limit_caps_the_parses_diagnostics() {
+        // Four stray closes under the tolerant policy: four pushes, two retained,
+        // two counted as suppressed (`Diagnostics::with_limit`'s cap semantics).
+        let language: Language<CapLang> =
+            Language::new(CapDriver, ParsingState::lang_initial().expect("seed state"));
+        let result = language.parse("}}}}").unwrap();
+        assert_eq!(result.diagnostics.limit(), 2);
+        assert_eq!(result.diagnostics.len(), 2);
+        assert_eq!(result.diagnostics.suppressed(), 2);
+        assert!(result.diagnostics.has_errors());
+
+        // The `None` default keeps the standard cap.
+        let result = tolerant().parse("}}").unwrap();
+        assert_eq!(
+            result.diagnostics.limit(),
+            crate::error::Diagnostics::<Option<String>>::DEFAULT_LIMIT
+        );
+        assert_eq!(result.diagnostics.suppressed(), 0);
     }
 
     #[test]

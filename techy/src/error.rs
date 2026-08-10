@@ -537,6 +537,8 @@ impl<O: SourceOrigin> Diagnostics<O> {
 
     /// Create an empty collection retaining at most `limit` diagnostics; pushes beyond
     /// the cap are counted as [`suppressed`](Diagnostics::suppressed) instead of stored.
+    /// A driven parse's sink is seeded through
+    /// [`ParseDriver::diagnostics_limit`](crate::engine::ParseDriver::diagnostics_limit).
     pub fn with_limit(limit: usize) -> Self {
         Diagnostics { items: Vec::new(), limit, suppressed: 0, error_count: 0 }
     }

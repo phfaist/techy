@@ -122,6 +122,17 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         Recovery::Strict
     }
 
+    /// The retention cap for the parse's diagnostics sink, consulted once per
+    /// parse: [`Language::parse_source`](super::Language::parse_source) seeds the
+    /// session's [`Diagnostics`] with [`Diagnostics::with_limit`] when this
+    /// answers `Some(limit)`; on `None` — the default — the sink keeps the
+    /// standard cap ([`Diagnostics::DEFAULT_LIMIT`]). Code driving construct
+    /// parsers over a hand-built [`ParserSession`] applies the cap itself (the
+    /// session's [`diagnostics`](ParserSession::diagnostics) field is public).
+    fn diagnostics_limit(&self) -> Option<usize> {
+        None
+    }
+
     /// Detection-site recovery — **the recovery hook**, reached through the parsers'
     /// recovery entry point
     /// ([`ParseContext::recover`](crate::constructs::ParseContext::recover)): applies
