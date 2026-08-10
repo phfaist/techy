@@ -445,6 +445,21 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         self.recover_boxed(Box::new(condition), span)
     }
 
+    /// Attach the live traceback to a hook-returned abort error that carries no
+    /// frames of its own — extension hooks (driver hooks, descent-state
+    /// callbacks) have no session access, so the call site is where the snapshot
+    /// exists. An error already carrying frames passes through unchanged.
+    pub(crate) fn attach_hook_frames(
+        &self,
+        error: ParseError<L::SourceOrigin>,
+    ) -> ParseError<L::SourceOrigin> {
+        if error.frames().is_empty() {
+            error.with_frames(self.session.snapshot_frames())
+        } else {
+            error
+        }
+    }
+
     /// The recovery entry point's boxed form — for payloads that already live behind the dyn facade
     /// (the token-error lift, where a `Custom` payload must not be double-boxed).
     pub(crate) fn recover_boxed(
@@ -491,7 +506,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// A **finalize refusal** ([`FinalizeError`](crate::state::FinalizeError) — a
     /// context-requiring event the driver did not lower) is an extension wiring
     /// bug, not a source condition: it aborts as an
-    /// [`ImplementationError`] under any recovery policy.
+    /// [`ImplementationError`] under any recovery policy. An `Err` from the
+    /// lowering hook itself
+    /// ([`ParseDriver::resolve_state_event`]'s abort channel) propagates
+    /// unchanged, aborting under any recovery policy.
     pub fn derive_state(
         &mut self,
         delta: &ParsingStateDelta<L>,
@@ -501,7 +519,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let delta = if delta.events.is_empty() {
             delta
         } else {
-            effective = self.lower_state_events(delta);
+            effective = self.lower_state_events(delta)?;
             &effective
         };
         self.commit_derivation(&base, delta)
@@ -535,7 +553,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let applied = if delta.events.is_empty() {
             delta
         } else {
-            effective = self.lower_state_events(delta);
+            effective = self.lower_state_events(delta)?;
             &effective
         };
         let new = self.commit_derivation(&base, applied)?;
@@ -586,8 +604,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// `cx.state` between descents; an `Arc`-equal duplicate is harmless under
     /// the stack's scan semantics), and build the effective delta: patches merged
     /// in event order, the original delta's explicit overrides on top, lowered
-    /// events removed.
-    fn lower_state_events(&mut self, delta: &ParsingStateDelta<L>) -> ParsingStateDelta<L> {
+    /// events removed. A hook `Err` aborts ([`ParseDriver::resolve_state_event`]'s
+    /// contract), with the lent stack entry popped and the live traceback
+    /// attached.
+    fn lower_state_events(
+        &mut self,
+        delta: &ParsingStateDelta<L>,
+    ) -> ConstructParserResult<L, ParsingStateDelta<L>> {
         let lent = match self.session.state_stack().innermost() {
             Some(innermost) => !Arc::ptr_eq(innermost, &self.state),
             None => true,
@@ -597,14 +620,24 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         }
         let mut patches: Vec<ParsingStateDelta<L>> = Vec::new();
         let mut kept_events: Vec<L::Event> = Vec::new();
+        let mut abort: Option<ParseError<L::SourceOrigin>> = None;
         for event in &delta.events {
             match self.driver.resolve_state_event(event, self.session.state_stack()) {
-                Some(patch) => patches.push(patch),
-                None => kept_events.push(event.clone()),
+                Ok(Some(patch)) => patches.push(patch),
+                Ok(None) => kept_events.push(event.clone()),
+                Err(error) => {
+                    // Break, don't return: the lent stack entry pops on the
+                    // abort path too.
+                    abort = Some(error);
+                    break;
+                }
             }
         }
         if lent {
             self.session.pop_state();
+        }
+        if let Some(error) = abort {
+            return Err(self.attach_hook_frames(error));
         }
 
         // Merge: patches in event order (later wins), then the original delta's own
@@ -644,7 +677,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             effective.ext = delta.ext.clone();
         }
         effective.events.extend(kept_events);
-        effective
+        Ok(effective)
     }
 
     /// The group-interior derivation from the **current** state — sugar over

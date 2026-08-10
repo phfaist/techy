@@ -832,9 +832,9 @@ mod tests {
             &self,
             state: &ParsingState<EnvLang>,
             token: &Token<'_, EnvLang>,
-        ) -> CommandResolution<EnvLang> {
+        ) -> Result<CommandResolution<EnvLang>, crate::error::ParseError> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unresolved { detail: None };
+                return Ok(CommandResolution::Unresolved { detail: None });
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
             // factory returns the composition parser. `\end` deliberately resolves to
@@ -842,10 +842,10 @@ mod tests {
             // dispatch arms), and an orphan at the root takes the
             // unresolvable-command recovery ([§dd-dr:parsers-engine], decision 8).
             if *name == "begin" {
-                return CommandResolution::Resolved(ResolvedCallable {
+                return Ok(CommandResolution::Resolved(ResolvedCallable {
                     callable_type: CT_ENVIRONMENT,
                     spec: Arc::new(BeginSpec),
-                });
+                }));
             }
             let query = CallableQuery::new(
                 CT_MACRO,
@@ -853,14 +853,14 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            match state.scopes().retrieve_spec(&query, state) {
+            Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
                     .into(),
                 Err(error) => {
                     CommandResolution::Unresolved { detail: Some(error.to_string()) }
                 }
-            }
+            })
         }
     }
 

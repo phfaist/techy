@@ -292,19 +292,22 @@ mod support {
             &self,
             _state: &ParsingState<CommandsWithoutScopesLang>,
             token: &Token<'_, CommandsWithoutScopesLang>,
-        ) -> CommandResolution<CommandsWithoutScopesLang> {
+        ) -> Result<
+            CommandResolution<CommandsWithoutScopesLang>,
+            techy::error::ParseError,
+        > {
             let TokenKind::Command { name, .. } = &token.kind else {
-                return CommandResolution::Unresolved { detail: None };
+                return Ok(CommandResolution::Unresolved { detail: None });
             };
             let spec: Arc<dyn CallableSpec<CommandsWithoutScopesLang>> = match *name {
                 // A plain zero-argument callable.
                 "mark" => Arc::new(StdCallableSpec::default()),
-                _ => return CommandResolution::Unresolved { detail: None },
+                _ => return Ok(CommandResolution::Unresolved { detail: None }),
             };
-            CommandResolution::Resolved(ResolvedCallable {
+            Ok(CommandResolution::Resolved(ResolvedCallable {
                 callable_type: CT_COMMAND,
                 spec,
-            })
+            }))
         }
     }
 

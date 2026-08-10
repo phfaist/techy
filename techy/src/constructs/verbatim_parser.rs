@@ -715,9 +715,9 @@ mod tests {
             &self,
             state: &ParsingState<VerbLang>,
             token: &Token<'_, VerbLang>,
-        ) -> CommandResolution<VerbLang> {
+        ) -> Result<CommandResolution<VerbLang>, crate::error::ParseError> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unresolved { detail: None };
+                return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(
                 CT_MACRO,
@@ -725,14 +725,14 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            match state.scopes().retrieve_spec(&query, state) {
+            Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
                     .into(),
                 Err(error) => {
                     CommandResolution::Unresolved { detail: Some(error.to_string()) }
                 }
-            }
+            })
         }
     }
 

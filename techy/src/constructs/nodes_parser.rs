@@ -686,10 +686,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         L::InvocationSyntax: FromInvocation<L>,
     {
         // `Arc` in, `Arc` out — pass-through policies preserve pointer identity.
+        // A failing Compute aborts under any policy (the hook fallibility
+        // contract), with the live traceback attached here — the callback has no
+        // session access.
         let base = match &self.child_states.invocation {
             InvocationChildState::Inherit => Arc::clone(&cx.state),
             InvocationChildState::Fixed(state) => Arc::clone(state),
-            InvocationChildState::Compute(compute) => compute(&cx.state, &invocation),
+            InvocationChildState::Compute(compute) => compute(&cx.state, &invocation)
+                .map_err(|error| cx.attach_hook_frames(error))?,
         };
         // The invocation's traceback frame — built before the `Invocation` moves into
         // the factory, pushed around the parser run (the dispatch push site, [§dd-dr:errors]).
@@ -918,7 +922,11 @@ where
                     let resolved = if recovered {
                         CommandResolution::Unresolved { detail: None }
                     } else {
-                        cx.driver.resolve_command(&cx.state, &token)
+                        // A hook Err aborts under any policy (resolve_command's
+                        // contract); the recoverable channels are the Ok values.
+                        cx.driver
+                            .resolve_command(&cx.state, &token)
+                            .map_err(|error| cx.attach_hook_frames(error))?
                     };
                     match resolved {
                         CommandResolution::Resolved(resolved) => {
@@ -1040,11 +1048,14 @@ where
                     }
                     // The interior's *base* state per the descent policy (the group
                     // parser derives expecting_group_close from it); `Arc` in, `Arc`
-                    // out — pass-through policies preserve pointer identity.
+                    // out — pass-through policies preserve pointer identity. A
+                    // failing Compute aborts under any policy (the hook fallibility
+                    // contract), with the live traceback attached here.
                     let base = match &self.child_states.group {
                         GroupChildState::Inherit => Arc::clone(&cx.state),
                         GroupChildState::Fixed(state) => Arc::clone(state),
-                        GroupChildState::Compute(compute) => compute(&cx.state, &token),
+                        GroupChildState::Compute(compute) => compute(&cx.state, &token)
+                            .map_err(|error| cx.attach_hook_frames(error))?,
                     };
                     // Consume the trigger token here, at the site that peeked it and
                     // under the state that tokenized it (the at-match-time atomicity
@@ -1175,8 +1186,8 @@ mod tests {
     fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L> {
-        resolve_command_in_scopes(state, token, CT_MACRO)
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
+        Ok(resolve_command_in_scopes(state, token, CT_MACRO))
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -1237,7 +1248,7 @@ mod tests {
             &self,
             state: &ParsingState<CmdLang>,
             token: &Token<'_, CmdLang>,
-        ) -> CommandResolution<CmdLang> {
+        ) -> Result<CommandResolution<CmdLang>, ParseError> {
             resolve_macro_in_scopes(state, token)
         }
     }
@@ -2509,10 +2520,10 @@ mod tests {
             &self,
             _state: &ParsingState<HintLang>,
             _token: &Token<'_, HintLang>,
-        ) -> CommandResolution<HintLang> {
-            CommandResolution::Unresolved {
+        ) -> Result<CommandResolution<HintLang>, ParseError> {
+            Ok(CommandResolution::Unresolved {
                 detail: Some("load the {amsmath} library for this command".into()),
-            }
+            })
         }
     }
 
@@ -2526,6 +2537,83 @@ mod tests {
             parsed.result.diagnostics.iter().next().unwrap().message(),
             "cannot resolve command ‘\\foo’ (load the {amsmath} library for this command)"
         );
+    }
+
+    /// A driver whose resolver fails hard — the hook-fallibility **abort**
+    /// channel (`Err`), as opposed to `HintLang`'s recoverable `Unresolved` and
+    /// the diagnosed `Failed` resolution.
+    #[derive(Debug, Clone, Copy)]
+    struct AbortLang;
+    impl Lang for AbortLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = AbortDriver;
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct AbortDriver {
+        recovery: Recovery,
+    }
+
+    impl ParseDriver<AbortLang> for AbortDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
+        fn recovery(&self) -> Recovery {
+            self.recovery
+        }
+
+        fn resolve_command(
+            &self,
+            _state: &ParsingState<AbortLang>,
+            _token: &Token<'_, AbortLang>,
+        ) -> Result<CommandResolution<AbortLang>, ParseError> {
+            let source: Arc<Source> = Arc::new(Source::new(""));
+            Err(ParseError::new(
+                crate::error::HookFailed::new("resolver backend is down", None),
+                SourceSpan::new(&source, 0..0),
+            ))
+        }
+    }
+
+    impl TestDriver for AbortDriver {
+        fn with_recovery(recovery: Recovery) -> Self {
+            AbortDriver { recovery }
+        }
+    }
+
+    #[test]
+    fn a_failing_resolve_command_aborts_under_any_policy() {
+        // The abort channel: an Err from resolve_command stops the parse even in
+        // tolerant mode — nothing is diagnosed-and-recovered (that is what the
+        // Unresolved/Failed resolution values are for) — and the descent site
+        // attaches the live traceback (the hook has no session access).
+        let st = state_with(rules::<AbortLang>());
+        let content = "a {\\foo} b";
+        let mut reader = StdTokenReader::new(content);
+        let error =
+            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: resolver backend is down"
+        );
+        // The command sits inside a group: the group frame is on the traceback.
+        assert!(!error.frames().is_empty());
     }
 
     // --- ParseDriver::refine_diagnostic ([§dd-dr:errors]) ----------------------------------------------
@@ -2953,7 +3041,7 @@ mod tests {
                 &self,
                 state: &ParsingState<ExtLang>,
                 token: &Token<'_, ExtLang>,
-            ) -> CommandResolution<ExtLang> {
+            ) -> Result<CommandResolution<ExtLang>, ParseError> {
                 resolve_macro_in_scopes(state, token)
             }
         }
@@ -3028,10 +3116,10 @@ mod tests {
         // precedes policy); returning an input preserves pointer identity.
         let compute = |state: &Arc<ParsingState<CmdLang>>,
                        invocation: &Invocation<'_, '_, CmdLang>|
-         -> Arc<ParsingState<CmdLang>> {
+         -> Result<Arc<ParsingState<CmdLang>>, ParseError> {
             assert_eq!(invocation.name, "foo");
             assert_eq!(invocation.callable_type, CT_MACRO);
-            Arc::clone(state)
+            Ok(Arc::clone(state))
         };
         let parsed = run_both_with(
             "\\foo x",
@@ -3392,12 +3480,12 @@ mod tests {
             TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
         let compute = |state: &Arc<ParsingState<TestLang>>, token: &Token<'_, TestLang>| {
-            match &token.kind {
+            Ok(match &token.kind {
                 TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
                     Arc::clone(&no_comments)
                 }
                 _ => Arc::clone(state), // pass-through preserves pointer identity
-            }
+            })
         };
         let policy = ChildStateSpec {
             group: GroupChildState::Compute(&compute),
@@ -3424,6 +3512,54 @@ mod tests {
         assert_eq!(brackets.child_count(), 1);
         assert_eq!(brackets.child(0).unwrap().chars(), Some("%b\n"));
         assert!(Arc::ptr_eq(brackets.parsing_state(), &no_comments));
+    }
+
+    #[test]
+    fn a_failing_child_state_compute_aborts_under_any_policy() {
+        // The hook-fallibility contract on the Compute arms: an Err is an abort
+        // even under tolerant recovery — the descent-state seam has no recovery
+        // channel — and the callback's condition rides the abort error. The
+        // demonstrated body is the documented DeriveError lift: HookFailed with
+        // the derivation failure as the cause.
+        let full = state_with(rules::<TestLang>());
+        let compute = |state: &Arc<ParsingState<TestLang>>, _token: &Token<'_, TestLang>| {
+            // A derivation the policy needs, failing operationally (a scope op
+            // against a provider name that does not exist).
+            let delta = ParsingStateDelta::new()
+                .scope_op(crate::scopes::ScopeOp::Unload { name: "no-such-provider".into() });
+            match state.derived(&delta) {
+                Ok(state) => Ok(Arc::new(state)),
+                Err(error) => {
+                    let scratch: Arc<Source> = Arc::new(Source::new(""));
+                    Err(ParseError::new(
+                        crate::error::HookFailed::new(error.to_string(), None)
+                            .with_cause(error),
+                        SourceSpan::new(&scratch, 0..0),
+                    ))
+                }
+            }
+        };
+        let policy = ChildStateSpec {
+            group: GroupChildState::Compute(&compute),
+            invocation: InvocationChildState::Inherit,
+        };
+
+        let content = "{a}";
+        let mut reader = StdTokenReader::new(content);
+        let error = try_run_with(
+            content,
+            &mut reader,
+            &full,
+            Recovery::Tolerant,
+            StopSpec::none(),
+            policy,
+        )
+        .unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        // The DeriveError cause chain is reachable off the carried condition.
+        let condition =
+            error.data().downcast_ref::<crate::error::HookFailed>().unwrap();
+        assert!(condition.cause.as_ref().unwrap().to_string().contains("scope op failed"));
     }
 
     #[test]
@@ -3641,7 +3777,7 @@ mod tests {
                 &self,
                 state: &ParsingState<DriveLang>,
                 token: &Token<'_, DriveLang>,
-            ) -> CommandResolution<DriveLang> {
+            ) -> Result<CommandResolution<DriveLang>, ParseError> {
                 resolve_macro_in_scopes(state, token)
             }
 

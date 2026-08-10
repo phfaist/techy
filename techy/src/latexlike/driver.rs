@@ -440,13 +440,15 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     /// [`resolve_command_in_scopes`](crate::engine::resolve_command_in_scopes): a hit
     /// dispatches; a clean miss reports the searched providers as the
     /// unresolvable-command detail; an operational provider failure is a distinct
-    /// [`Failed`](CommandResolution::Failed) resolution.
+    /// [`Failed`](CommandResolution::Failed) resolution. Every outcome is a
+    /// resolution value — this implementation never answers the abort channel
+    /// (`Ok(...)` wrapping is its whole use of the `Result`).
     fn resolve_command(
         &self,
         state: &ParsingState<LLL>,
         token: &Token<'_, LLL>,
-    ) -> CommandResolution<LLL> {
-        resolve_command_in_scopes(state, token, LLL::CallableTypeId::macro_callable())
+    ) -> Result<CommandResolution<LLL>, crate::error::ParseError<LLL::SourceOrigin>> {
+        Ok(resolve_command_in_scopes(state, token, LLL::CallableTypeId::macro_callable()))
     }
 
     /// One-line delegation to the [`make_paragraph_break_node`] behavior function
@@ -475,14 +477,17 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     /// One-line delegation to the [`exit_math_context_delta`] behavior function for the
     /// exit-math-context event
     /// ([`is_exit_math_context`](LatexlikeEvent::is_exit_math_context)); every
-    /// other event is context-free (`None`) and stays for
-    /// [`finalize_transition`](crate::state::Lang::finalize_transition).
+    /// other event is context-free (`Ok(None)`) and stays for
+    /// [`finalize_transition`](crate::state::Lang::finalize_transition). This
+    /// implementation never answers the abort channel (`Ok(...)` wrapping is its
+    /// whole use of the `Result`).
     fn resolve_state_event(
         &self,
         event: &LLL::Event,
         stack: &ParsingStateStack<LLL>,
-    ) -> Option<ParsingStateDelta<LLL>> {
-        event.is_exit_math_context().then(|| exit_math_context_delta(stack))
+    ) -> Result<Option<ParsingStateDelta<LLL>>, crate::error::ParseError<LLL::SourceOrigin>>
+    {
+        Ok(event.is_exit_math_context().then(|| exit_math_context_delta(stack)))
     }
 }
 
@@ -665,7 +670,8 @@ mod tests {
         let stack = ParsingStateStack::from_states(vec![Arc::clone(&seed)]);
         let driver = driver(Recovery::Strict);
         // The exit-math event lowers to the pillar's delta…
-        let lowered = driver.resolve_state_event(&Event::ExitMathContext, &stack);
+        let lowered =
+            driver.resolve_state_event(&Event::ExitMathContext, &stack).unwrap();
         assert!(lowered.is_some());
         assert_eq!(lowered.unwrap().mode, Some(Mode::Text));
         // (No other preset event exists yet; non-exit events would answer None.)

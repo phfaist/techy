@@ -830,7 +830,8 @@ mod tests {
             Span::empty(0),
         );
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
-        let resolved: CommandResolution<PlainLang> = driver.resolve_command(&st, &token);
+        let resolved: CommandResolution<PlainLang> =
+            driver.resolve_command(&st, &token).unwrap();
         match resolved {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("command resolution is not implemented"));
@@ -864,7 +865,7 @@ mod tests {
             ScopesCommandResolver::<PlainLang> { command_type: 0u32 },
         );
         assert!(matches!(
-            driver.resolve_command(&st, &token),
+            driver.resolve_command(&st, &token).unwrap(),
             CommandResolution::Resolved(_)
         ));
         // …and a clean miss carries the searched-providers detail.
@@ -873,7 +874,7 @@ mod tests {
             Span::new(0, 4),
             Span::empty(0),
         );
-        match driver.resolve_command(&st, &miss) {
+        match driver.resolve_command(&st, &miss).unwrap() {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("defs"));
             }
@@ -1545,10 +1546,13 @@ mod tests {
 
     /// Lowers `NeedsContext` into a forbidden-chars patch encoding the lent
     /// stack's depth (proving the hook saw the live stack); `lower: false`
-    /// simulates a mis-wired driver that fails to lower.
+    /// simulates a mis-wired driver that fails to lower; `fail_events: true`
+    /// simulates a lowering hook whose own code fails operationally (the
+    /// hook-fallibility abort channel).
     #[derive(Debug, Clone, Copy)]
     struct CtxDriver {
         lower: bool,
+        fail_events: bool,
     }
     impl ParseDriver<CtxLang> for CtxDriver {
         type DescentGuard = crate::engine::StdDescentGuard;
@@ -1559,21 +1563,28 @@ mod tests {
             &self,
             event: &CtxEvent,
             stack: &crate::state::ParsingStateStack<CtxLang>,
-        ) -> Option<ParsingStateDelta<CtxLang>> {
+        ) -> Result<Option<ParsingStateDelta<CtxLang>>, ParseError> {
+            if self.fail_events {
+                let source: Arc<Source> = Arc::new(Source::new(""));
+                return Err(ParseError::new(
+                    crate::error::HookFailed::new("event backend is down", None),
+                    crate::source::SourceSpan::new(&source, 0..0),
+                ));
+            }
             if !self.lower || *event != CtxEvent::NeedsContext {
-                return None;
+                return Ok(None);
             }
             // A context-derived patch: depth many 'd's (any stack-derived fact
             // observable from the derived state works).
             let depth_marker: String = core::iter::repeat('d').take(stack.len()).collect();
-            Some(ParsingStateDelta::new().rules(
+            Ok(Some(ParsingStateDelta::new().rules(
                 crate::state::TokenRulesOverrides {
                     forbidden_chars: crate::state::ForbiddenCharsOverrides {
                         chars: Some(depth_marker.into()),
                     },
                     ..Default::default()
                 },
-            ))
+            )))
         }
     }
 
@@ -1595,7 +1606,7 @@ mod tests {
         let inner = Arc::new(outer.derived(&ParsingStateDelta::new()).unwrap());
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
-        let driver = CtxDriver { lower: true };
+        let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
             ctx_context(&mut reader, &source, Arc::clone(&outer), &mut session, &driver);
 
@@ -1622,7 +1633,7 @@ mod tests {
             Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
-        let driver = CtxDriver { lower: true };
+        let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
             ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
 
@@ -1651,13 +1662,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_resolve_state_event_aborts_and_pops_the_lent_stack_entry() {
+        // The hook-fallibility contract: resolve_state_event's Err aborts even
+        // under this driver's Tolerant recovery (there is no recovery channel at
+        // the lowering seam), the hook's condition rides the abort, and the
+        // enclosing-state stack entry lent for the loop is popped on the abort
+        // path too (zero residue).
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let base: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
+        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut session = ParserSession::new();
+        let driver = CtxDriver { lower: true, fail_events: true };
+        let mut cx =
+            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+
+        let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
+        let error = cx.derive_state(&delta).unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: event backend is down"
+        );
+        assert_eq!(session.state_stack().len(), 0, "zero residue after the abort");
+    }
+
+    #[test]
     fn derive_state_keeps_context_free_events_for_finalize_and_the_author_wins() {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let base: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
-        let driver = CtxDriver { lower: true };
+        let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
             ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
 
@@ -1718,7 +1755,7 @@ mod tests {
             Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
-        let driver = CtxDriver { lower: false };
+        let driver = CtxDriver { lower: false, fail_events: false };
         let mut cx =
             ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
 

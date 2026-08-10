@@ -274,8 +274,13 @@ where
 
         TokenKind::Command { name, escape_char, .. } => {
             // Resolution under the current state, coherent with the state that
-            // tokenized the token ([§dd-dr:parsers-engine]).
-            match cx.driver.resolve_command(&cx.state, next) {
+            // tokenized the token ([§dd-dr:parsers-engine]). A hook Err aborts
+            // under any policy (resolve_command's contract).
+            let resolved = cx
+                .driver
+                .resolve_command(&cx.state, next)
+                .map_err(|error| cx.attach_hook_frames(error))?;
+            match resolved {
                 CommandResolution::Resolved(resolved) => {
                     let invocation = Invocation {
                         callable_type: resolved.callable_type,
@@ -1093,9 +1098,9 @@ mod tests {
             &self,
             state: &ParsingState<ArgLang>,
             token: &Token<'_, ArgLang>,
-        ) -> CommandResolution<ArgLang> {
+        ) -> Result<CommandResolution<ArgLang>, crate::error::ParseError> {
             let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unresolved { detail: None };
+                return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(
                 CT_MACRO,
@@ -1103,14 +1108,14 @@ mod tests {
                 CallableSyntax::Command { escape_char: *escape_char },
             )
             .with_token(token);
-            match state.scopes().retrieve_spec(&query, state) {
+            Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
                     .into(),
                 Err(error) => {
                     CommandResolution::Unresolved { detail: Some(error.to_string()) }
                 }
-            }
+            })
         }
     }
 

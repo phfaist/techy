@@ -199,11 +199,33 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// with a bare "cannot resolve", nothing pointing at the actual cause.
     /// ([`StdParseDriver`] does not use this default: it routes the hook through its
     /// pluggable [`CommandResolver`] strategy.)
+    ///
+    /// # Errors
+    ///
+    /// `Err` **aborts the parse** — reserve it for failures no resolution value can
+    /// express, and keep the two failure channels distinct:
+    ///
+    /// - [`Failed`](CommandResolution::Failed) (an `Ok` value) is the **recoverable**
+    ///   channel: the resolver failed operationally at this document position, the
+    ///   parse diagnoses it
+    ///   ([`CommandResolutionFailed`](crate::constructs::CommandResolutionFailed))
+    ///   and continues with the span-backed chars recovery.
+    /// - `Err` is the **abort** channel: carry
+    ///   [`HookFailed`](crate::error::HookFailed) for an operational failure the
+    ///   parse must not continue past (a resolver backend that is down for the whole
+    ///   parse, a runtime failure in an embedding),
+    ///   [`ImplementationError`](crate::constructs::ImplementationError) for a
+    ///   violated library contract, or a document condition only for a diagnosis
+    ///   made deliberately (aborting is strict-mode behavior; recoverable document
+    ///   problems belong on the `Ok` channels).
+    ///
+    /// An infallible implementation wraps its resolution in `Ok(...)` and that is
+    /// the only change.
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L> {
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         CommandResolver::resolve_command(&(), state, token)
     }
 
@@ -332,13 +354,26 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// ([`ParsingStateStack`]). A returned patch should carry only overrides
     /// (rules/mode/ext/scope ops); events inside a patch are **not** lowered again
     /// — they pass through to `finalize_transition` like any context-free event.
+    ///
+    /// # Errors
+    ///
+    /// `Err` **aborts the parse** (an event carrying document-derived data can be
+    /// malformed by the language's own rules — silently answering `Ok(None)` for a
+    /// recognized-but-unusable event would drop it without a trace). Carry
+    /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
+    /// lowering code itself,
+    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// violated library contract, or a document condition for a document diagnosis
+    /// made deliberately (aborting is strict-mode behavior — there is no recovery
+    /// channel at this seam). An infallible implementation wraps its answer in
+    /// `Ok(...)` and that is the only change.
     fn resolve_state_event(
         &self,
         event: &L::Event,
         stack: &ParsingStateStack<L>,
-    ) -> Option<ParsingStateDelta<L>> {
+    ) -> Result<Option<ParsingStateDelta<L>>, ParseError<L::SourceOrigin>> {
         let _ = (event, stack);
-        None
+        Ok(None)
     }
 
     // --- source resolution ---------------------------------------------------------
@@ -471,13 +506,16 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 /// [`ScopesCommandResolver`] is the standard scope-stack resolution
 /// ([`resolve_command_in_scopes`]) under a fixed command callable type.
 pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
-    /// Resolve a [`Command`](TokenKind::Command) token — the contract is
-    /// [`ParseDriver::resolve_command`]'s, which [`StdParseDriver`] forwards here.
+    /// Resolve a [`Command`](TokenKind::Command) token — the contract, the
+    /// meaning of an `Err` (abort) versus a
+    /// [`Failed`](CommandResolution::Failed) resolution (diagnose and recover),
+    /// and the condition choice are [`ParseDriver::resolve_command`]'s, which
+    /// [`StdParseDriver`] forwards here. The two signatures stay in step.
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L>;
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>;
 }
 
 /// The no-op resolver: resolves nothing, with a detail reporting that command
@@ -488,15 +526,15 @@ impl<L: Lang> CommandResolver<L> for () {
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L> {
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         let _ = (state, token);
-        CommandResolution::Unresolved {
+        Ok(CommandResolution::Unresolved {
             detail: Some(
                 "command resolution is not implemented by this language’s driver — \
                  implement ‘ParseDriver::resolve_command’ or use a preset"
                     .into(),
             ),
-        }
+        })
     }
 }
 
@@ -521,8 +559,8 @@ impl<L: Lang> CommandResolver<L> for ScopesCommandResolver<L> {
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L> {
-        resolve_command_in_scopes(state, token, self.command_type)
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
+        Ok(resolve_command_in_scopes(state, token, self.command_type))
     }
 }
 
@@ -651,7 +689,7 @@ impl<L: Lang, R: CommandResolver<L>, G: DescentGuard> ParseDriver<L>
         &self,
         state: &ParsingState<L>,
         token: &Token<'_, L>,
-    ) -> CommandResolution<L> {
+    ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         self.command_resolver.resolve_command(state, token)
     }
 

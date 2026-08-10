@@ -38,6 +38,7 @@
 use alloc::sync::Arc;
 use core::fmt;
 
+use crate::error::ParseError;
 use crate::state::{Lang, ParsingState};
 use crate::token::Token;
 
@@ -53,10 +54,31 @@ pub enum GroupChildState<'p, L: Lang> {
     Fixed(Arc<ParsingState<L>>),
     /// Compute the base from the loop's current state and the opening token (which
     /// carries `delim` and the resolved `Arc<GroupRule>` — so the policy can key on the
-    /// group's class). Pure: return one of the inputs or a precomputed state; the
-    /// callback is not a place to run derivations.
+    /// group's class). Deterministic, no side effects: return one of the inputs or a
+    /// precomputed state where possible — passing an input through preserves pointer
+    /// identity.
+    ///
+    /// `Err` **aborts the parse** under any recovery policy, propagated exactly
+    /// like a construct parser's own `Err` (the live traceback is attached at the
+    /// descent site — the callback has no session access). Which condition to
+    /// carry: [`HookFailed`](crate::error::HookFailed) for an operational failure
+    /// in the callback's own code — a body that computes its state via
+    /// [`ParsingState::derived`] lifts the failure this way, with the
+    /// [`DeriveError`](crate::state::DeriveError) (an
+    /// [`Error`](core::error::Error) type) as the `cause`:
+    /// `ParseError::new(HookFailed::new(error.to_string(), None).with_cause(error), span)`;
+    /// [`ImplementationError`](super::ImplementationError) for a violated library
+    /// contract; a document condition only for a diagnosis made deliberately —
+    /// aborting is strict-mode behavior, this seam has no recovery channel. An
+    /// infallible policy wraps its state in `Ok(...)` and that is the only change.
     #[allow(clippy::type_complexity)]
-    Compute(&'p dyn Fn(&Arc<ParsingState<L>>, &Token<'_, L>) -> Arc<ParsingState<L>>),
+    Compute(
+        &'p dyn Fn(
+            &Arc<ParsingState<L>>,
+            &Token<'_, L>,
+        )
+            -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,
+    ),
 }
 
 /// The base state for a callable invocation descent (`Command`/`Specials` arms).
@@ -70,10 +92,21 @@ pub enum InvocationChildState<'p, L: Lang> {
     /// Use this state.
     Fixed(Arc<ParsingState<L>>),
     /// Compute the base from the loop's current state and the resolved invocation
-    /// (callable type, name, spec, trigger token). Pure, like
-    /// [`GroupChildState::Compute`].
+    /// (callable type, name, spec, trigger token). Deterministic and fallible with
+    /// the same contract as [`GroupChildState::Compute`] — `Err` aborts the parse
+    /// under any recovery policy ([`HookFailed`](crate::error::HookFailed) for the
+    /// callback's own operational failures, the documented
+    /// [`DeriveError`](crate::state::DeriveError) lift included;
+    /// [`ImplementationError`](super::ImplementationError) for contract
+    /// violations); an infallible policy wraps its state in `Ok(...)`.
     #[allow(clippy::type_complexity)]
-    Compute(&'p dyn Fn(&Arc<ParsingState<L>>, &Invocation<'_, '_, L>) -> Arc<ParsingState<L>>),
+    Compute(
+        &'p dyn Fn(
+            &Arc<ParsingState<L>>,
+            &Invocation<'_, '_, L>,
+        )
+            -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,
+    ),
 }
 
 /// Per-use descent-state configuration of a [`NodesParser`](super::NodesParser) — one
