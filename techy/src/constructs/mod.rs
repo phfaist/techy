@@ -905,8 +905,9 @@ pub struct DescentLimitExceeded {
 /// parse. Recorded immediately by
 /// [`ParseContext::parse_construct`](ParseContext::parse_construct); the parse
 /// continues. A configured limit never produces this warning — it exists as the
-/// early nudge to choose a limit explicitly
-/// ([`Language::with_descent_guard_init`](crate::engine::Language::with_descent_guard_init)).
+/// early notice that no limit was chosen explicitly and that the built-in default
+/// will soon refuse deeper input; choose a limit with
+/// [`Language::with_descent_guard_init`](crate::engine::Language::with_descent_guard_init).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(

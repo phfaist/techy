@@ -107,8 +107,9 @@ pub struct DescentWarning {
 /// at half the budget, and its refusal message points at
 /// [`Language::with_descent_guard_init`](super::Language::with_descent_guard_init).
 /// The default budget is deliberately tight — in unoptimized (debug) builds it
-/// allows only on the order of ten nesting levels — as the nudge to choose a limit
-/// explicitly.
+/// allows only on the order of ten nesting levels — so that a deep parse under the
+/// untuned default fails early, with a message naming the configuration entry
+/// point, instead of consuming an unknown amount of stack.
 ///
 /// # Which mode to choose
 ///
@@ -122,9 +123,12 @@ pub struct DescentWarning {
 ///   probe function you supply (the crate is `no_std` and cannot ask the operating
 ///   system itself). This is the mode that uses the whole available stack safely.
 /// - [`depth_limit`](StdDescentGuardInit::depth_limit): cap the *number* of
-///   simultaneously open descents. Fully deterministic across platforms and build
-///   profiles — the right mode for tests and for format policies ("no document
-///   nests deeper than N") — but says nothing about actual stack use.
+///   simultaneously open descents. The count is engine descents, not syntactic
+///   nesting levels: one nesting level of the input costs about two descents (the
+///   group's own descent plus the content run over its interior), so a format
+///   policy ("no document nests deeper than N") needs a limit of roughly `2 * N`.
+///   Fully deterministic across platforms and build profiles — the right mode for
+///   tests — but says nothing about actual stack use.
 /// - [`off`](StdDescentGuardInit::off): no limit. Deeply nested input can then
 ///   crash the process by stack exhaustion; only for callers that bound their
 ///   input by other means.
@@ -201,8 +205,12 @@ impl StdDescentGuardInit {
     }
 
     /// `DepthLimit`: refuse the descent that would open more than `levels`
-    /// simultaneously open descents. Deterministic across platforms and build
-    /// profiles; counts levels, not bytes.
+    /// simultaneously open descents. `levels` counts engine descents, not
+    /// syntactic nesting levels: one nesting level of the input costs about two
+    /// descents (the group's own descent plus the content run over its interior),
+    /// so a limit aimed at a syntactic nesting depth needs roughly twice that
+    /// number. Deterministic across platforms and build profiles; counts
+    /// descents, not bytes.
     pub fn depth_limit(levels: usize) -> StdDescentGuardInit {
         StdDescentGuardInit { mode: InitMode::DepthLimit { levels }, unconfigured: false }
     }
@@ -263,9 +271,11 @@ impl StdDescentGuard {
     /// and as the fallback when a
     /// [`computed_stack_budget`](StdDescentGuardInit::computed_stack_budget) probe
     /// answers `None`. Deliberately tight — in unoptimized (debug) builds it
-    /// allows only on the order of ten nesting levels — as the nudge to configure
-    /// a limit explicitly
-    /// ([`Language::with_descent_guard_init`](super::Language::with_descent_guard_init)).
+    /// allows only on the order of ten nesting levels — so that untuned deep
+    /// parses fail early, with a message that points at the configuration entry
+    /// point
+    /// ([`Language::with_descent_guard_init`](super::Language::with_descent_guard_init)),
+    /// instead of consuming an unknown amount of stack.
     pub const DEFAULT_STACK_BUDGET: usize = 250 * 1024;
 
     /// The stack reserve (bytes) subtracted from a

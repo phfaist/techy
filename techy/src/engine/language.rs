@@ -106,7 +106,8 @@ impl<L: Lang> Language<L> {
     /// choosing among a byte budget, a depth limit, and off. Without this call,
     /// parses run under the guard type's default configuration (for the standard
     /// guard: a deliberately tight built-in stack budget that also emits a one-time
-    /// warning diagnostic at half use — the nudge to configure explicitly).
+    /// warning diagnostic at half use, so that an untuned deep parse fails early,
+    /// pointing at this method, instead of consuming an unknown amount of stack).
     pub fn with_descent_guard_init(
         mut self,
         init: <DriverGuard<L> as DescentGuard>::InitArg,
@@ -673,6 +674,24 @@ mod tests {
         // than the limit — parse cleanly.
         let siblings = "{a}".repeat(12);
         assert!(language.parse(siblings).is_ok());
+    }
+
+    #[test]
+    fn a_depth_limit_refusal_carries_the_live_traceback() {
+        // The refusal error snapshots the live frame stack, including the frame
+        // of the construct whose descent was refused (pushed before the guard is
+        // asked). With a limit of 4 the refused descent is a group's interior
+        // content run: that group's own frame is already on the stack.
+        let language =
+            strict().with_descent_guard_init(StdDescentGuardInit::depth_limit(4));
+        let err = language.parse(nested_braces(20)).unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
+        assert!(!titles.is_empty(), "the refusal carries the live traceback");
+        assert!(
+            titles.contains(&"group ‘{’"),
+            "the traceback includes the refused construct's group frame: {titles:?}"
+        );
     }
 
     #[test]

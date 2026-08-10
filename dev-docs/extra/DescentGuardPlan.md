@@ -175,6 +175,9 @@ Gate: build + test + docs.
   [§dd-dr:parsers-engine]. `parse_scoped` → [§dd-dr:superseded-names].
 - Pointer from `TechyParsingStackDepth.md` §7 to the entry.
 - api-baseline update (fold in the pending lang-features one).
+- api-baseline note: StdParseDriver gained a private PhantomData field —
+  struct-literal construction is no longer possible downstream; intended path is
+  new() + builders (review finding N1).
 - Docs-clarity pass per project rules (no jargon in user-facing docs).
 - Remove this scaffolding file.
 
@@ -211,9 +214,10 @@ branch chain for ff-merge (merges not run from the primary checkout).
   above), c0ae04f (`DescentGuard` trait + `StdDescentGuard` module + facade
   export), 244be55 (driver type choice + `Language` init + session slot +
   `parse_construct` hook + the two conditions; test-suite audit: no test nests
-  deeper than ~10 syntactic levels, but six shared `Language` helpers/sites
-  tripped the unconfigured default's half-budget warning in debug and now
-  configure `depth_limit(64)` explicitly), 6ade982 (end-to-end refusal tests,
+  deeper than ~10 syntactic levels, but seven shared `Language` helpers/sites
+  (acceptance.rs ×3, chars_group_parser.rs, latexlike/input.rs, latexlike/mod.rs,
+  recompose_oracle.rs) tripped the unconfigured default's half-budget warning in
+  debug and now configure `depth_limit(64)` explicitly), 6ade982 (end-to-end refusal tests,
   F1 expression-chain + tack-on-chain coverage, self-include guard test).
   build/test/docs green, zero warnings (776 lib tests); no `std::` imports in
   src (the crate stays core+alloc). Implementation note for review:
