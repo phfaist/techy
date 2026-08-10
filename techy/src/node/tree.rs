@@ -359,6 +359,53 @@ impl<L: Lang, A> NodeTree<L, A> {
         Some(NodeSlice::new(self, index..index + 1))
     }
 
+    /// The [`NodeSlice`] over a node-index range of this tree's flat storage —
+    /// the validated constructor for ranges kept as bare numbers (an exported
+    /// `Range<u32>` from a [`ChildRegion`](super::ChildRegion), a range computed by
+    /// binding or persistence code).
+    ///
+    /// A `NodeSlice` is always a **contiguous run of sibling nodes** — every node in
+    /// the range must be a child of one and the same parent (that is what the slice's
+    /// [`span`](NodeSlice::span)/[`source_text`](NodeSlice::source_text) exactness and
+    /// the [`extract`](crate::extract) helpers rely on). This constructor answers
+    /// `Some` exactly when `range` is such a run:
+    ///
+    /// - a range within one parent's children block (a node's children, an
+    ///   argument/slot content range, or any sub-range of one) answers `Some`;
+    /// - the root (index 0) has no siblings, so a range containing it answers `Some`
+    ///   only as `0..1`;
+    /// - an **empty** in-bounds range answers `Some` — empty runs are real values
+    ///   (the accessors hand them out for childless nodes and empty regions);
+    /// - everything else answers `None`: out-of-bounds or inverted ranges, and
+    ///   in-bounds ranges that cross from one parent's children into another's.
+    ///
+    /// Like all bare node-index ranges (see [`nodes_in`](NodeTree::nodes_in)), the
+    /// range carries no [`TreeTag`]: an in-bounds range minted by a *different* tree
+    /// is not detected here and silently addresses this tree's nodes at those
+    /// indices.
+    pub fn slice(&self, range: Range<u32>) -> Option<NodeSlice<'_, L, A>> {
+        // `finish()` caps node counts below `u32::MAX`, so the cast is lossless.
+        let node_count = self.core.nodes.len() as u32;
+        if range.start > range.end || range.end > node_count {
+            return None;
+        }
+        if range.is_empty() {
+            return Some(NodeSlice::new(self, range));
+        }
+        if range.start == 0 {
+            // The root has no siblings: the only non-empty run containing it is 0..1.
+            return (range.end == 1).then(|| NodeSlice::new(self, range));
+        }
+        // The sibling-run check, O(1) via the parent table: every index of one
+        // parent's children block maps to that parent, and children blocks are
+        // contiguous — so `range.start`'s parent block containing the range's last
+        // index contains everything between.
+        let parent = self.core.parent[range.start as usize];
+        debug_assert_ne!(parent, NO_PARENT, "non-root node without a parent");
+        let children = &self.core.nodes[parent as usize].children;
+        (range.end <= children.end).then(|| NodeSlice::new(self, range))
+    }
+
     /// A new tree with every [`TextContent`](crate::source::TextContent) owned
     /// (node contents, group delimiters, and callable post-spaces). Trees stay
     /// immutable — `self` is untouched; spans, states, and specs are Arc-shared, and

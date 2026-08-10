@@ -41,7 +41,7 @@ impl<'t, L: Lang, A> NodeSlice<'t, L, A> {
     /// A slice over `range` of `tree`'s flat storage. In-crate constructor: public
     /// values come from the accessors ([`NodeRef::children`](super::NodeRef::children),
     /// the region/content accessors, the extract helpers), which only mint ranges of
-    /// sibling nodes.
+    /// sibling nodes, and from the validated [`NodeTree::slice`].
     pub(crate) fn new(tree: &'t NodeTree<L, A>, range: Range<u32>) -> NodeSlice<'t, L, A> {
         assert!(
             range.start <= range.end && range.end as usize <= tree.node_count(),

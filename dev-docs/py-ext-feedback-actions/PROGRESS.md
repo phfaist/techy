@@ -24,7 +24,7 @@ Stage 2 (2.1–2.8).
 | **Stage 1 gate** (build/test/docs) | **green** | cargo build clean; cargo test all suites 0 failed (lib 783, integration 30+22+13+8, doc-tests 68 passed/3 ignored); cargo docs from fresh target/doc, zero warnings |
 | 2.1 + Any on four traits | **done** | +Any on SpecsProvider/ArgumentParser/EnvironmentBehavior/SourceResolver; CallableSpec rationale generalized, short pointer note on each trait; stale structure.rs no-Any comment removed; micro-ruling: SourceResolver's borrowed/boxed forwarding impls take the `'static` the Any supertrait forces (`&'static R`, `Box<R: 'static>`) — the plan's accepted non-'static break; 4 downcast round-trip tests |
 | 2.2 Language::new Into<Arc> | **done** | `initial_state: impl Into<Arc<ParsingState<L>>>`; every by-value call site compiles unchanged; doc sentence on identity preservation; Arc::ptr_eq test via a parsed node's state |
-| 2.3 NodeTree::slice(range) validated | pending | |
+| 2.3 NodeTree::slice(range) validated | **done** | O(1) parent-table check (parent(start)'s children block must contain range.end); root only as 0..1; in-bounds empty ranges answer Some (incl. start==node_count); NodeSlice::new stays pub(crate); no-TreeTag caveat documented like nodes_in; round-trip/cross-parent/root/empty/out-of-bounds tests over the hand-built example tree |
 | 2.4 MacroSpec::with_after_effect | pending | |
 | 2.5 TreeViolationKind/TokenKind as_str | pending | |
 | 2.6 NodeTree::tree_tag() pub | pending | |

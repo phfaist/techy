@@ -318,6 +318,57 @@ mod tests {
     }
 
     #[test]
+    fn slice_answers_sibling_runs_and_rejects_everything_else() {
+        // Storage layout of `example_tree()` (breadth-first): 0 root List;
+        // 1..5 root's children (x, \frac, ws, comment); 5..7 \frac's children
+        // (the two argument groups); 7..8 a-group's child; 8..9 b-group's child.
+        let tree = example_tree();
+        let root = tree.root();
+        let frac = root.child(1).unwrap();
+
+        // Round trip: every accessor-handed range validates back to the same run.
+        for range in [
+            root.children().range(),
+            frac.children().range(),
+            frac.argument_nodes(0).unwrap().range(),
+            frac.argument_content_nodes(0).unwrap().range(),
+            frac.argument_content_nodes(1).unwrap().range(),
+        ] {
+            let run = tree.slice(range.clone()).expect("accessor range is a sibling run");
+            assert_eq!(run.range(), range);
+        }
+
+        // Sub-runs of a children block are sibling runs too.
+        assert!(tree.slice(2..4).is_some());
+        assert!(tree.slice(5..6).is_some());
+
+        // The root has no siblings: 0..1 is the only non-empty run containing it.
+        assert_eq!(tree.slice(0..1).unwrap().range(), 0..1);
+        assert!(tree.slice(0..2).is_none());
+        assert!(tree.slice(0..5).is_none());
+
+        // In-bounds empty runs are real values (accessors hand them out).
+        for at in [0u32, 3, 9] {
+            let empty = tree.slice(at..at).expect("in-bounds empty range");
+            assert!(empty.is_empty());
+        }
+
+        // Cross-parent ranges: contiguous in storage, but not one parent's children.
+        assert!(tree.slice(4..6).is_none()); // root's last child + \frac's first
+        assert!(tree.slice(6..8).is_none()); // \frac's last child + a-group's child
+        assert!(tree.slice(7..9).is_none()); // a-group's child + b-group's child
+
+        // Out of bounds and inverted ranges.
+        assert!(tree.slice(8..10).is_none());
+        assert!(tree.slice(9..10).is_none());
+        assert!(tree.slice(10..10).is_none()); // empty, but out of bounds
+        #[allow(clippy::reversed_empty_ranges)]
+        {
+            assert!(tree.slice(4..2).is_none());
+        }
+    }
+
+    #[test]
     fn argument_access() {
         let tree = example_tree();
         let frac = tree.root().child(1).unwrap();
