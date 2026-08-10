@@ -1101,6 +1101,114 @@ semver output is unexplained.
   ignored); `cargo check --workspace --tests` zero warnings. Nothing surprising:
   the collapse landed exactly at the predicted values on first compile.
 
+- **M3 reviewer** — full-diff review of 351c95b..d3da11b (M3a f6cb54e, M3b fc33dee,
+  M3c 81726d7, M3d d3da11b) against PLAN M3, the M3-prep mechanics decisions,
+  [§dd-dr:lang-features] as amended, [§dd-dr:panic-policy] rule 3,
+  [§dd-dr:superseded-names], [§dd-arch:naming], and the 2026-08-10 ruling's M3
+  instruction. Findings: **0 blocker, 0 should-fix, 3 nit**. Gates re-run
+  independently, all green.
+  - nit (techy/src/token/rules.rs:300–323): the "Constructing rules for a language
+    with absent features" doctest's example language is a `TrivialLang`
+    (`AllLangFeatures`), so the compiled example never exercises an absent feature —
+    the recipe is correct and identical either way, but the heading promises more
+    than the doctest checks; one comment line in the example noting this (or a
+    genuinely partial doctest language) would close the gap.
+  - nit (techy/tests/lang_features.rs:463): test name
+    `braces_parse_as_group_nodes_while_other_rules_data_is_inert` still describes
+    the M2 populated seed — since M3a there is no "other rules data" to be inert
+    (the body comment is already accurate); rename in the fix pass (e.g.
+    `…_while_other_constructs_read_as_plain_content`).
+  - nit (techy/tests/lang_features.rs:425,497,587): three disable_all test comments
+    still say absent features' blocks "stay all-`None`" — since M3 those fields are
+    zero-sized stores, not all-`None` blocks (delta.rs's own rustdoc says it right).
+  - Checklist-area verdicts, one line each:
+    - **Projections**: all 7+7 rules/override blocks, `scope_ops`, `ScopeStack`'s
+      inner Vec, and both derived caches are fully spelled
+      `<… as FeaturePresence>::Store<…>`; no public alias anywhere.
+    - **Accessors**: the 13 keep exact signatures with the spec'd neutral answers;
+      `scopes()` unchanged; `prefix_table()`/`trigger_chars()` return `Option` with
+      rustdoc saying exactly `None`-iff-absent / disabled-but-present →
+      `Some` of the frozen empty value.
+    - **Transparency**: latexlike untouched except the trait pin (driver.rs not in
+      the diff); concrete languages still write plain literals; generic test
+      helpers gained `Features = AllLangFeatures` equality bounds (type-level
+      only, no semantic change).
+    - **Error-channel retirement**: grep-clean (the one dev-docs mention is the
+      dated removal-record amendment); `apply` infallible; `DeriveError` back to
+      the two-source invariant with Display/Debug/docs consistent;
+      `apply_overrides` → `Vec<ScopeOpError>`; unreachability independently
+      confirmed — fields are store projections, every constructor routes
+      `store_with` (`default`/`disable_all`/`new`/`Default`-for-delta), merges use
+      matched projections (`merge_from` ×2, `lower_state_events`), builders
+      bounded, no serde; a free `ScopeOp` stays constructible but nothing can hold
+      or apply one (`apply_op` answers `ScopesAbsent`). No blocker.
+    - **Lattice bounds**: exactly the PLAN list + private `probe_minted_group` +
+      the forced `lang_initial_with_packages`; no over-bounding
+      (`CharsGroupArgumentParser::contents_delta` and `group_interior_state`
+      project instead), no under-bounding (the only temporaries-minting site is the
+      bounded probe; environment_parser.rs:1109's expecting_close literal is
+      `#[cfg(test)]` on a concrete language); `LangHasParagraphs: LangHasWhitespace`
+      untouched (features.rs:282).
+    - **state_memo**: hash_key/keys_eq in lockstep under the same `store_get`
+      projections, original field order, expecting_close last in both (commented);
+      Arc-identity keying byte-identical for present features; the memoizable guard
+      projects `scope_ops`; `stores_eq`'s impossible mixed arm answering `false` is
+      sound (same-language keys share the marker; a miss, never a false hit).
+    - **disable_all**: `store_with(X::disable)` is value-identical to M2d's if/else
+      for every language (present → `disable()`; absent → nothing exists, matching
+      the old all-`None`-carries-nothing); the delta.rs unit test is untouched;
+      rustdoc carries no stale error mention.
+    - **Size tests**: const asserts match the recorded table (collapse 0×5 + delta
+      32; all-present 176/184/240/200/232/24 under the 64-bit cfg); comments
+      accurate.
+    - **Panic policy**: zero new panic/unwrap/expect/unreachable in lib code (all
+      new `unwrap`/`expect` are `#[cfg(test)]`); projections are if-let/match
+      throughout — no unwrap-because-PRESENT anywhere.
+    - **Naming**: the four `store_*` fns match the recorded prep decision and the
+      crate's non-panicking `get`/`get_mut` convention; `ScopesAbsent` uses the
+      absent vocabulary; no superseded name and no "facet" anywhere in the diff.
+    - **Docs-clarity**: no dd-dr labels in public rustdoc; the TokenRules
+      three-spellings narrative now includes storage; the DR M3 amendment is dated,
+      entry-styled, accurate; the `Send + Sync` GAT bound is documented on `Store`
+      with the old "deliberately no Send/Sync" paragraph fully replaced.
+    - **Behavior identity**: every src-diff assert change is access-syntax only
+      (`.unwrap()`/`.expect` on the new Option accessors, type annotations, two
+      turbofishes); recompose_oracle.rs untouched; lang_features.rs is 15 → 12
+      `#[test]` + 1 doctest — the five M3b retirements are each the ruled
+      unrepresentability with replacements accounted (compile facts in
+      `feature_composition`, the reworked apply-cleanly test with value "Z" kept),
+      and the surviving flipped assertions (`whitespace_chars()` "",
+      `!commands_enabled()`, `!comments_enabled()`) each read now-unrepresentable
+      absent-feature seed data — forced, with all parse-outcome assertions
+      value-identical.
+    - **Public surface**: exactly the four `FeaturePresence` fns + GAT bound
+      change, the gated field types, the Option accessors, the item-5 bounds,
+      `ScopesAbsent`, and the three removals — a grep of pub-item changes shows
+      nothing else; one canonical path preserved (the core facade only dropped the
+      removed error's re-export).
+  - Judgment calls, all endorsed: **Send+Sync GAT** (forced —
+    `CallableSpec: Send + Sync` holds deltas through `ArgumentSpec`; the promise is
+    free on both markers and compile-pinned on all 18 roster payloads);
+    **`ScopeOpError::ScopesAbsent`** (`apply_op` must stay unbounded for the
+    generic delta path; silent no-op and panic both ruled out; additive under the
+    verified `#[non_exhaustive]`); **Option cache accessors** (the recorded prep
+    decision, rustdoc exact); **scope_ops store-gating** (the field is `pub` —
+    method bounds alone would leave literal construction as a violating path);
+    **LatexlikeLang pin** (the ruled family pin made load-bearing at the trait,
+    forced by generic-`LLL` literal transparency; both impls comply);
+    **lang_initial_with_packages bound** (a scope-mutating entry point per PLAN's
+    bound line — the documented-infallible contract bars an error channel and
+    loud-failure bars a silent package drop).
+  - **Gates** (re-run): `cargo build` clean; `cargo test --workspace` **897 passed
+    / 0 failed / 4 ignored** (per-target 758+30+8+12+21+1+67; 2+2 ignored);
+    `cargo check --workspace --tests` zero warnings on a forced rebuild; fresh
+    `rm -rf target/doc && cargo docs` zero warnings — rendered-HTML spot-check: the
+    TokenRules page shows the fully spelled gated field types, the FeaturePresence
+    page carries the four projection fns, the ScopeOpError page carries
+    `ScopesAbsent`, and no `AbsentFeatureOverrideError` remains anywhere under
+    target/doc. (`check_semver.sh` deferred to closure per the M3b note; the
+    M3b/M3c expected-breaking additions are recorded above.)
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
