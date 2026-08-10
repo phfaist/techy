@@ -1289,8 +1289,8 @@ the gated `scope_ops` list, a violating delta cannot be written at all, so
 construction**: it consults the `Lang::Features` presence declarations and sets
 exactly the present features' blocks to their `disable()` values — absent features
 are simply not mentioned by the returned value (under an all-features-present
-language: all six gates `Some(false)` plus the cleared forbidden set — the
-[§dd-dr:takeover-staging-sugar] amendment) — so applying a `disable_all()`-based
+language: all six gates `Some(false)` plus the cleared forbidden set,
+[§dd-dr:takeover-staging-sugar]) — so applying a `disable_all()`-based
 delta never reports an
 absent-feature violation. Of the crate's own constructors, only `disable_all()`
 consults the declarations; the per-block `disable()` constructors stay
@@ -2065,13 +2065,12 @@ needs no string comparison, while `$…$` vs `$$…$$` share a class and are dis
 the stored delimiter strings — and is `Option` so *internal synthesized groups* — structural
 groups corresponding to no language group type — are representable (user amendment). Boxed
 for the same reason `CallableData` is: `Chars` must keep dominating the enum size.
-Amendment (2026-08-10 ruling): `NodeKind::Comment` moved onto the same pattern —
-its three inline `TextContent` fields (start delimiter, content, post-space) had
-made `Comment` the *largest* variant, about three times `Chars`, defeating the
-dominance goal the two boxed siblings serve; the payload is now a boxed
-`CommentData` (fields in source order; no `Lang` parameter, since nothing in it is
-language-specific). Comments are rare relative to chars, so the per-comment
-allocation matches the group/callable trade.
+`NodeKind::Comment` follows the same pattern: three inline `TextContent` fields
+(start delimiter, content, post-space) would make `Comment` the largest variant,
+about three times `Chars`, so the payload is the boxed `CommentData` (fields in
+source order; no `Lang` parameter, since nothing in it is language-specific) —
+comments are rare relative to chars, so the per-comment allocation matches the
+group/callable trade.
 Rejected alternatives: delimiters-only (pylatexenc-pure — group classification degenerates to string
 comparison); registry-only (the inconsistency above).
 Revisit if: per-group-node allocation shows up in profiles (then consider inlining a
@@ -4314,13 +4313,9 @@ delegating sugar kept on cx; invariant-bearing plumbing (`parse_construct` — t
 single normative descent entry point, its frame folding absorbing the separate
 `with_frame` composition at descent sites — `with_frame`,
 `implementation_error`) stays as non-overridable cx methods — pairing invariants must
-not be overridable. The trait carries one required item, `type DescentGuard:
-DescentGuard;` ([§dd-dr:descent-guard]) — "defaulted methods only" reads "defaulted
-methods plus one required associated type"; `StdParseDriver` carries the choice as
-its third type parameter ([§dd-dr:command-resolver]). (Superseded 2026-08-11: the
-associated type and `StdParseDriver`'s third parameter are removed — the
-[§dd-dr:descent-guard] amendment — so "defaulted methods only" holds literally
-again.)
+not be overridable. Every trait item is defaulted — `impl ParseDriver<L> for D {}`
+is a complete driver; the descent guard is engine-fixed, not a driver item
+([§dd-dr:descent-guard]).
 Rationale: the session-purity argument (user) — `ParserSession` is organized scratch
 space, and a parser *provider* conceptually drives the parse; it was misfiled there, as
 was `Recovery`. One seam for provision + one home for parse behavior + typed preset
@@ -4445,23 +4440,15 @@ generic (the erased-at-the-seam argument above); a three-argument
 fails type inference under a generic parameter — the setter shape never spells
 `None` at all).
 
-Final type shape: `StdParseDriver<R = (), O: SourceOrigin = Option<String>,
-G = StdDescentGuard>`. The second defaulted parameter exists because the
+Final type shape: `StdParseDriver<R = (), O: SourceOrigin = Option<String>>`.
+The second defaulted parameter exists because the
 `Option<Arc<dyn SourceResolver<…>>>` field needs the origin type while
 `type Driver = StdParseDriver` must stay annotation-free (decisive reason 3; the
 impl is `impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R,
 L::SourceOrigin>`; a standalone binding needs the alias-defaults annotation —
-`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`). The third
-is the `ParseDriver::DescentGuard` choice ([§dd-dr:descent-guard]), carried as a
-**private** `PhantomData` field — "fields stay `pub`" holds for the three real
-fields, but the private carrier means downstream struct-literal construction is
-not possible; the intended path is `new()` + `with_source_resolver`.
-(Superseded 2026-08-11: the third parameter is removed with
-`ParseDriver::DescentGuard` — the [§dd-dr:descent-guard] amendment. The shape is
-`StdParseDriver<R = (), O: SourceOrigin = Option<String>>` with all three fields
-`pub` and no private carrier, so downstream struct-literal construction became
-possible as a side effect; `new()` + `with_source_resolver` stays the intended
-path.)
+`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`). All three
+fields are `pub` ("fields stay `pub`"), so struct-literal construction is
+possible; `new()` + `with_source_resolver` is the intended path.
 
 Revisit if: languages with several command-syntax callable types appear (they
 write a custom `CommandResolver` — the point of the seam), or a second hook
@@ -4475,19 +4462,18 @@ Three shorthand rulings on the takeover-parser ceremony — all shorter spelling
 the same operations (the [§dd-dr:registration-ergonomics]
 shorthand-not-second-path principle):
 
-1. **`TokenRulesOverrides::disable_all()`** — the overrides value with all six
-   `enable_*` gates `Some(false)`: the raw-state block every rest-of-line and
-   verbatim-like parser hand-builds. Lives on the overrides type so it composes —
-   `verbatim_state_delta` itself becomes `disable_all()` plus its terminator (one
-   source of truth), and parsers tweak fields afterwards. Feature-aware by
-   construction — it flips the gates of exactly the features the language
-   declares present, and can never fail ([§dd-dr:lang-features]).
-   Amendment (2026-08-10 ruling): `disable_all()` means *every* feature off,
-   gateless blocks included — `forbidden_chars` has no gate, so its off is its
-   inactive data, the empty forbidden set (`ForbiddenCharsOverrides::disable()`,
-   `chars: Some("")`). The prior "forbidden_chars is never touched" behavior is
-   superseded; the verbatim consequence (an outlawed character reads as raw
-   content) is recorded at [§dd-dr:verbatim-family].
+1. **`TokenRulesOverrides::disable_all()`** — the overrides value setting every
+   present feature's block to its `disable()` value: the raw-state block every
+   rest-of-line and verbatim-like parser hand-builds. `disable_all()` means
+   *every* feature off — the six gated blocks flip `enabled: Some(false)`;
+   `forbidden_chars` has no gate, so its off is its inactive data, the empty
+   forbidden set (`ForbiddenCharsOverrides::disable()`, `chars: Some("")`; the
+   verbatim consequence — an outlawed character reads as raw content — is
+   recorded at [§dd-dr:verbatim-family]). Lives on the overrides type so it
+   composes — `verbatim_state_delta` itself becomes `disable_all()` plus its
+   terminator (one source of truth), and parsers tweak fields afterwards.
+   Feature-aware by construction — it mentions exactly the features the
+   language declares present, and can never fail ([§dd-dr:lang-features]).
 2. **`ParsedArguments::new(Vec)` / `ParsedSlots::new(Vec)`** — discoverable
    constructors for what only `From<Vec<_>>` impls provided (the walkthrough
    found them by grepping, not on the types' doc pages); the `From`s stay as
@@ -4832,29 +4818,24 @@ undetectable by design — documented, not enforceable. Details ruled with it:
   scan semantics — restoring the "same descent points as the frame stack" symmetry
   those sites were missing.
 
-**2. `DescentGuard`: a per-parse object asked before every descent.** The guard
-*type* is a driver associated type (`ParseDriver::DescentGuard` — the trait's one
-required item; monomorphized, since the check runs on every descent); the init
-*value* lives on `Language` (`with_descent_guard_init`), mirroring seed-state
-placement — configuration on the long-lived bundle, behavior type on the driver. The
+**2. `StdDescentGuard`: a per-run object asked before every descent.** The
+guard type is engine-fixed: every run uses `StdDescentGuard`, typed concretely
+on `ParserSession` and `Language` (fully monomorphized; every `ParseDriver` item
+is defaulted, so `impl ParseDriver<L> for D {}` is a complete driver). The
+`DescentGuard` trait states the contract the engine drives the guard through;
+wiring in another implementation is deliberately not offered — a driver-chosen
+guard type (`ParseDriver::DescentGuard` as the trait's one required item, plus a
+`StdParseDriver` type parameter to carry it) is rejected: exactly one real
+implementation exists, and the associated type taxed every driver impl with
+ceremony buying nothing. Reintroduce a type knob only if a second real guard
+implementation materializes. The init *value* lives on `Language`
+(`with_descent_guard_init`), mirroring seed-state placement — configuration on
+the long-lived bundle. The
 per-parse *instance* lives on the session: `parse_source` installs it eagerly (the
 standard guard measures its stack reference point at true parse entry, on the
 parsing thread), a hand-built `ParseContext` gets a lazy `Default`-init fallback at
 the first descent, and `ParserSession::install_descent_guard` is the public seam
-for hand-built sessions that want a configured guard. A language needing swappable
-guards per `Lang` uses multiple `Lang` markers or a multiplexer driver type (the
-[§dd-dr:parse-driver] revisit clause's route).
-Amendment (2026-08-11 ruling): the guard *type* is no longer a driver choice —
-`ParseDriver::DescentGuard` and `StdParseDriver`'s third type parameter are
-removed, and the engine always uses `StdDescentGuard`, typed concretely on
-`ParserSession` and `Language` (still fully monomorphized; every `ParseDriver`
-item is now defaulted, so `impl ParseDriver<L> for D {}` is a complete driver).
-The `DescentGuard` trait stays as the articulated contract the engine drives the
-guard through, but wiring in another implementation is deliberately not offered,
-and the swappable-guards route above is superseded with it.
-`Language::with_descent_guard_init` and the session seam keep their shapes,
-now `StdDescentGuardInit`/`StdDescentGuard`-typed. Revisit only if a second real
-guard implementation materializes — then reintroduce a type knob deliberately.
+for hand-built sessions that want a configured guard.
 - **The measured stack budget is the mechanism; the depth limit is deterministic
   policy.** `StdDescentGuard`'s budget modes estimate consumption by address
   distance from the init-time reference point — bounding the resource that is
@@ -4923,24 +4904,17 @@ trampolining / an explicit heap descent stack (a whole-engine restructuring that
 forfeits the plain recursive parser-authoring model — third-party
 `ConstructParser`s recurse in ordinary Rust regardless).
 
-Accepted costs: `ParseDriver` loses "empty impl is complete" by exactly one
-required line (`type DescentGuard = StdDescentGuard;`); the two migrated dispatch
+Accepted costs: the two migrated dispatch
 sites push an extra `Arc`-identical enclosing-state stack entry each (above); the
 unconfigured default warns at roughly five to eight syntactic levels in debug
 builds (the intended nudge, but visible in test suites — deep-nesting fixtures
-configure `depth_limit`/a larger budget/`off` explicitly); the guard cannot see
-plain-Rust recursion that bypasses the funnel; and `StdParseDriver` gained a third
-type parameter `G` carried as a **private** `PhantomData` field — downstream
-struct-literal construction of `StdParseDriver` is no longer possible; the
-intended path is `new()` + builders (baseline-visible break, recorded for the
-semver baseline move; [§dd-dr:command-resolver] amendment).
+configure `depth_limit`/a larger budget/`off` explicitly); and the guard cannot
+see plain-Rust recursion that bypasses the funnel.
 
 Deferred, not rejected: a compile-time witness parameter on
 `ConstructParser::parse` (would make the funnel structurally unavoidable);
-tolerant per-site fallbacks for a refusal; consumer-traversal (`walk`/`recompose`)
-guards — the docs state that the parse-side budget does not bound hand-built trees
-or traversals run on smaller threads. (The traversal-side guards were built
-2026-08-11: [§dd-dr:traversal-builders].)
+tolerant per-site fallbacks for a refusal. Consumer-traversal guards are their
+own decision: [§dd-dr:traversal-builders].
 
 Revisit if: a refusal shows up in legitimate documents under a properly computed
 budget (the headroom constant or the ~2× descent factor is then miscalibrated), or
@@ -4948,70 +4922,61 @@ a framework needs the deferred witness parameter.
 
 #### Traversal drivers are builders, and every traversal is depth-guarded [§dd-dr:traversal-builders]
 
-Status: DECIDED (user, traversal-builders design session, 2026-08-11).
+Status: DECIDED (user, traversal-builders design session).
 
-The three tree-traversal entry points stopped being free functions
-(`walk(node, visitor)`, `restage(&tree, visitor)`,
-`recompose(&tree, state, recomposer)`) and became **builder-shaped drivers**:
-`TreeWalker::new(&mut visitor).walk(node)`,
+The three tree-traversal entry points are **builder-shaped drivers**, not free
+functions: `TreeWalker::new(&mut visitor).walk(node)`,
 `TreeRestager::new(&mut visitor).restage(&tree)`,
-`TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`. Motivation: the
-free functions' arities were frozen while run configuration was already arriving
-(the descent guard below), and a driver value with `with_*` methods matches the
-configuration grammar `Language` already speaks
-(`with_descent_guard_init`). Rulings folded in:
+`TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`. Decisive
+reason: a free function's arity is frozen while run configuration grows (the
+descent guard below, future walk features), and a driver value with `with_*`
+methods speaks the configuration grammar `Language` already uses. Details ruled
+with it:
 
 - **`new()` constructors, not pub tuple structs** — a pub field would freeze the
   layout publicly; private fields let `with_*` grow indefinitely.
 - **The visitor is held by `&mut` borrow** (a lifetime on the driver), never by
   value: visitors accumulate run-spanning results in `&mut self` that the caller
   reads back after the run; by-value storage would need a give-back channel.
-  `?Sized` (dyn visitors) and the closure blankets survive unchanged.
-- **Run inputs stay on the terminal call, configuration on `with_*`**:
-  `walk(node)` takes a `NodeRef` (subtree walks must survive; the whole tree is
-  `walk(tree.root())`); recompose's root state is a run input, so it rides the
-  terminal call, not a `with_*`.
-- **The free functions are removed**, not kept as aliases (the
-  single-canonical-path rule); the names live on as the terminal method names.
-- **Every traversal run is depth-guarded** (closing the deferral in
-  [§dd-dr:descent-guard]): each driver creates a per-run `StdDescentGuard` from
-  its own `with_descent_guard_init` configuration — engine-fixed type, per-run
-  init, exactly the parse's arrangement. The guard wraps the drive recursion
-  (`try_enter`/`exit` around each level; `exit` on success and error paths
-  alike, none for a refused descent), and for restage/recompose it lives **in
-  the run context**, so the re-entrant region ops are counted too. A traversal
-  costs exactly one descent per tree nesting level (a parse costs ~2× per
-  syntactic level). A refusal is `RestageError`/`RecomposeError::
-  DescentLimitExceeded`, and `walk` — previously infallible — now returns
-  `Result<(), WalkError>` with the same single variant: **visitors stay
-  infallible**; only the guard can fail a walk.
-- **The warning channel is the visitor** — the answer to "where does the
-  half-budget warning go without a diagnostics stream": the three-channel
-  discipline already places run-spanning consumer state in the visitor's
-  `&mut self`, so all three visitor traits gained a defaulted no-op
-  notification hook, `observe_descent_warning(&mut self, DescentWarning)`
-  (the driver hooks' `observe_*` notification vocabulary). Closures simply
-  inherit the default.
-- **The guard's self-describing texts went owner-agnostic**: the unconfigured
-  default's refusal/warning named `Language::with_descent_guard_init`
-  verbatim — wrong advice inside a traversal — and now name
-  `with_descent_guard_init` with its four owners (Language and the three
-  drivers); the message vocabulary is "the run", not "the parse".
+  `?Sized` (dyn visitors) and the closure blankets are unaffected.
+- **Run inputs ride the terminal call, configuration the `with_*` methods**:
+  `walk(node)` takes a `NodeRef` (the whole tree is `walk(tree.root())`; subtree
+  walks stay expressible); recompose's root state is a run input.
+- **Every traversal run is depth-guarded**: each driver creates a per-run
+  `StdDescentGuard` from its own `with_descent_guard_init` — engine-fixed type,
+  per-run init, exactly the parse's arrangement ([§dd-dr:descent-guard]). The
+  guard wraps the drive recursion (`try_enter`/`exit` around each level; `exit`
+  on success and error paths alike, none for a refused descent); for
+  restage/recompose it lives **in the run context**, so the re-entrant region
+  ops are counted too. A traversal costs exactly one descent per tree nesting
+  level (a parse costs ~2× per syntactic level). A refusal is
+  `RestageError`/`RecomposeError::DescentLimitExceeded`; `walk` returns
+  `Result<(), WalkError>` with the same single variant — **visitors stay
+  infallible**, only the guard can fail a walk.
+- **The warning channel is the visitor**: the three-channel discipline places
+  run-spanning consumer state in the visitor's `&mut self`, so all three
+  visitor traits carry a defaulted no-op hook,
+  `observe_descent_warning(&mut self, DescentWarning)` (the driver hooks'
+  `observe_*` notification vocabulary); closures inherit the default.
+- **The guard's self-describing texts are owner-agnostic**: they speak of "the
+  run" and name `with_descent_guard_init` with its owners (Language and the
+  three drivers), so the unconfigured default's advice is right inside a
+  traversal too.
 
-Accepted costs: every walk/restage/recompose call site grows the builder
-ceremony (the terminal-method names keep reading like the old calls); `walk`'s
-infallible signature is gone (`.unwrap()` in the common case); a *single*
-restage op that copies a subtree verbatim (the `_with_content` helpers' wrapper
-copies, `copy_subtree_into`) still recurses over that subtree between two guard
-checks — documented on `TreeRestager::with_descent_guard_init`, revisit only if
-it bites in practice.
+Accepted costs: call sites carry the builder ceremony (the terminal-method names
+keep reading like the old calls); `walk` is fallible (`.unwrap()` in the common
+case); a *single* restage op that copies a subtree verbatim (the
+`_with_content` helpers' wrapper copies) recurses over that subtree between two
+guard checks — documented on `TreeRestager::with_descent_guard_init`.
 
-Rejected alternatives: keeping the free functions alongside the builders (dual
-canonical paths); making `walk` iterative (heap stack) to stay infallible —
-it would bound only the walk while restage/recompose still need the guard for
-their re-entrant ops, splitting the mechanism story for one signature; a
-`Result`-shaped warning return or a sink closure on the builder (the visitor
-already owns the run's consumer state; a sink borrows against it).
+Rejected alternatives: free-function entry points (frozen arity — every new run
+parameter is a breaking change or a second entry point), and keeping them
+alongside the builders (dual canonical paths); an iterative (heap-stack) `walk`
+to preserve infallibility — it would bound only the walk while
+restage/recompose still need the guard for their re-entrant ops, splitting the
+mechanism story for one signature; a `Result`-shaped warning return or a sink
+closure on the builder (the visitor already owns the run's consumer state; a
+sink borrows against it).
 
 Revisit if: builders accumulate enough configuration that a shared config
 struct beats per-driver `with_*` methods, or the between-checks copy recursion
@@ -6561,8 +6526,8 @@ Status: DECIDED (user, parser-library survey).
 
 `constructs::verbatim_parser` promotes the pinned recipe ([§dd-dr:token-contract-hardening], item 5; the
 test-side `RawBlockParser`): `verbatim_state_delta(rule)` is the recipe as data (every
-feature off via `disable_all()` — the six gates plus, since the 2026-08-10 amendment
-at [§dd-dr:takeover-staging-sugar], the cleared forbidden set — and
+feature off via `disable_all()` — the six gates and the cleared forbidden set
+([§dd-dr:takeover-staging-sugar]) — and
 `expecting_group_close` **replaced**), and the two production
 parsers drive it — `VerbatimArgumentParser` (delimited `\verb|…|`; `ArgumentParser`,
 the `v` codes) and `VerbatimBodyParser` (environment contents up to a **literal**
@@ -6592,10 +6557,10 @@ Points settled in flight:
 - *A tolerated unreadable token* inside a committed verbatim region ends it like
   EOF (diagnosed unterminated/missing-terminator); the enclosing loop re-reads the
   error and applies its own token recovery — the probe protocol, two true
-  diagnostics accepted. Amended 2026-08-10: `disable_all()` now clears the
-  forbidden set (the [§dd-dr:takeover-staging-sugar] amendment), so the standard
+  diagnostics accepted. `disable_all()` clears the
+  forbidden set ([§dd-dr:takeover-staging-sugar]), so the standard
   reader has nothing left to reject under the recipe state — a language-outlawed
-  character reads as raw content — and this ending remains only for custom
+  character reads as raw content — and this ending exists only for custom
   readers. A reader yielding any *other* token kind under the recipe
   state is an implementation-error abort (panic policy: contract violations `Err`).
 
