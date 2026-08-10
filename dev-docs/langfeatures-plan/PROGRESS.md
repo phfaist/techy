@@ -1259,6 +1259,62 @@ semver output is unexplained.
   in the doctest's hidden `make_node_ext` signature). No src changes; only
   docs/custom-lang.md + this file touched. Nothing surprising.
 
+- **M4 implementer (coherence sweep)** — Task 1 rustdoc sweep: verified clean,
+  no edits — token/rules.rs, state/{delta,features,parsing_state,lang}.rs,
+  scopes/mod.rs, latexlike/lang.rs, token/{reader,prefix_table}.rs,
+  engine/{state_memo,mod,driver}.rs (state_memo's M1/M2/M3 `//` comments are
+  present-tense accurate, kept), constructs/{nodes_parser,argument_parsers,
+  chars_group_parser,group_parser,environment_parser,child_state}.rs; the
+  reader.rs TokenReader contract bullet left exactly as ruled (Comment not
+  intercepted). Fixed (one word each): the ambiguous "features-off" for the
+  runtime-disabled verbatim state unified to the ruled **disabled** spelling —
+  latexlike/mod.rs (GroupType::Verbatim rustdoc), latexlike/driver.rs
+  (ParagraphBreakStyle rustdoc), constructs/verbatim_parser.rs:43 (module-doc
+  parenthetical), latexlike/environments.rs (test comment) — matching the
+  "features-disabled" spelling already at verbatim_parser.rs:3 and
+  constructs/mod.rs:127. ARCHITECTURE.md: (1) the line-697 stale clause →
+  "[§dd-dr:takeover-staging-sugar] item 3, S5; that entry's `disable_all` and
+  collection constructors landed at S2 and S3" (nothing claimed pending);
+  (2) [§dd-arch:state] body promotion — StateData sentence now per-feature
+  blocks with `enabled` gates, new body passage for compile-time presence
+  (`Lang::Features`, three spellings, zero-sized collapse incl. Scopes' op
+  list + stack, compile-eliminated paths, `LangHas*` bounds with the
+  Paragraphs→Whitespace edge) citing [§dd-dr:lang-features] inline
+  (decisions-list mention kept); (3) Airtightness bullet:
+  `lang_initial_with_packages` now "infallible, `LangHasScopes`-bounded";
+  (4) Hot-path bullet: caches collapse with their features,
+  `prefix_table()`/`trigger_chars()` Option contract (None iff absent;
+  disabled → Some of frozen empty); (5) [§dd-arch:token] decisions-list
+  annotation "(per-feature `enable_*` gates)" → "(per-feature `enabled`
+  gates)"; (6) line 893 verbatim bullet "features-off" → "features-disabled";
+  lines 99/134/328/576/861 confirmed fine. docs/ai-guide-custom-lang.md stale
+  facts fixed (terse style kept): the `Lang` table gained the missing required
+  `Features` row; the two-spellings passage → three spellings with *absent* =
+  the compile-time no-such-feature (was misassigned to empty); "per-feature
+  `enable_*` gates" → per-block `enabled` flag; two "every syntax feature off"
+  seed phrases disambiguated (empty rules / every feature declared present).
+  DESIGN_RATIONALE.md: ONE edit — the DR:4262 "pinned by" test pointer updated
+  to `temporary_group_rules_are_prefix_table_inputs` (M1 rename; a pin claim
+  is current-facing); all other old-spelling hits left as register history.
+  Task 2 grep survivors, all LEGITIMATE: pylatexenc kwarg mentions
+  (rules.rs:281, chars_group_parser.rs:20/97/104/345); DR decision-time
+  vocabulary (592, 788–791, 837–871, 956, 1156, 1264–65, 1319, 3993,
+  4215–4259, 4507–09, 6249, 6314, 6606); `expecting_group_close` = the
+  current accessor spelling everywhere; docs/*.md zero old-name hits.
+  Flags for the reviewer: docs/custom-lang.md verified, NOT edited — no
+  findings (vocabulary, recipe, bounds, disable_all, Option-cache prose all
+  match the ruled story); deliberately left: DR present-tense old spellings
+  naming still-current mechanisms (notably 592, 6249, 6314, 6606 —
+  "features-off"/pre-M1 field names as decision-time vocabulary), the
+  pre-project Phase-6 step numbers "(6.2)–(6.5)" in nodes_parser/child_state
+  module rustdoc, and three §dd-dr cites in doc comments of non-public items
+  (argument_parsers.rs `pub(super)` fn, a private nodes_parser method, a
+  spec/mod.rs test) — never rendered. Gates: `cargo test --workspace`
+  **898 passed / 0 failed / 4 ignored** exactly; fresh `rm -rf target/doc &&
+  cargo docs` zero warnings; banned-term grep of touched files clean ("facet"
+  only inside DESIGN_RATIONALE where it names the rejected design; "stage"
+  hits are the staging-API verb).
+
 ### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
 
 `check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two

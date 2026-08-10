@@ -48,7 +48,7 @@ use super::{
 /// `"\n\n"` specials entry could never fire — correlating the node shape with package
 /// contents would be dead configuration. The flag is driver-global; per-scope
 /// suppression stays orthogonal (a state delta clearing the paragraphs gate, as
-/// verbatim's features-off state does).
+/// verbatim's features-disabled state does).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ParagraphBreakStyle {

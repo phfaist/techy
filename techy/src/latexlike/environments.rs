@@ -1452,7 +1452,7 @@ mod tests {
         let body: Vec<_> = env.body().unwrap().iter().collect();
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].chars(), Some(&content[17..evpos]));
-        // The raw chars node records the features-off verbatim state.
+        // The raw chars node records the features-disabled verbatim state.
         assert!(!body[0].parsing_state().rules().commands_enabled());
         assert!(!body[0].parsing_state().rules().comments_enabled());
 

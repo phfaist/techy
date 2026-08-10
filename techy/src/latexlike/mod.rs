@@ -181,7 +181,7 @@ pub enum GroupType {
     /// A verbatim region's group: the `\verb|…|` shape staged by the `v`
     /// argument codes ([`argument_specs`]), and the class of the terminator rules
     /// verbatim readers mint. The interior is **raw text** — it is read under a
-    /// features-off derived state, never tokenized — so this class appears on no
+    /// features-disabled derived state, never tokenized — so this class appears on no
     /// tokenizer-declared rule and never descends through the driver's
     /// `group_interior_delta`.
     Verbatim,

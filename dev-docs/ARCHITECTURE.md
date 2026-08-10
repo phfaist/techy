@@ -259,7 +259,7 @@ Decisions behind this section (full topic: [§dd-dr:tokens]): [§dd-dr:minimal-t
 [§dd-dr:group-classes], [§dd-dr:command-escape-char],
 [§dd-dr:token-contract-hardening] (the third-party-implementor contract batch),
 [§dd-dr:token-list-reader-demoted], [§dd-dr:multi-newline-paragraphs],
-[§dd-dr:enable-flags] (per-feature `enable_*` gates), [§dd-dr:token-diagnostics].
+[§dd-dr:enable-flags] (per-feature `enabled` gates), [§dd-dr:token-diagnostics].
 A possible future merged first-character table is [§dd-dr:open-questions] item 1b.
 
 ## Parsing state [§dd-arch:state]
@@ -267,10 +267,19 @@ A possible future merged first-character table is [§dd-dr:open-questions] item 
 Parsing state is **materialized data behind a single transition choke point**. All
 stored fields are private; the public read surface is getters over plain fields; and
 the only way a non-initial state comes into existence is `derived()`. `StateData<L>`
-holds the tokenization rules (`TokenRules`, with per-feature `enable_*` gates), the
-first-class parsing **mode** (`mode: L::ModeId` — a closed per-language vocabulary),
-the definition scope stack (`scopes: ScopeStack<L>`), and the language extension
-(`ext: L::StateExt`).
+holds the tokenization rules (`TokenRules` — one block per feature, each an `enabled`
+gate plus its rules data), the first-class parsing **mode** (`mode: L::ModeId` — a
+closed per-language vocabulary), the definition scope stack (`scopes: ScopeStack<L>`),
+and the language extension (`ext: L::StateExt`). Above the runtime data, the language
+declares **per feature, at compile time, whether the feature exists at all**
+([§dd-dr:lang-features]): `Lang::Features` names a `LangFeatures` bundle of presence
+declarations — three spellings of "off", never interchanged: *absent* (compile-time),
+*disabled* (scoped runtime, data preserved), *empty* (constitutive). An absent
+feature's storage collapses to a zero-sized store (its rules block, its override
+block; for Scopes, the delta's op list and the stack itself), its code paths are
+compile-eliminated, and feature-requiring entry points carry per-feature `LangHas*`
+bounds with dependency edges compiler-enforced (`LangHasParagraphs:
+LangHasWhitespace`).
 
 - **Deltas are reified override values** (`ParsingStateDelta<L>`: rules overrides, a
   mode channel, scope ops, optional ext replacement, typed `L::Event`s) — data, not
@@ -306,12 +315,16 @@ the definition scope stack (`scopes: ScopeStack<L>`), and the language extension
   features, adjust rules).
 - **Airtightness is structural**: private fields, crate-owned freeze, the seed only
   from `ParsingState::lang_initial()` (freezing `Lang::initial_state_data()`; the
-  infallible `lang_initial_with_packages` pushes providers directly onto the seed's
-  stack), everything else only from `derived()` ([§dd-dr:seed-states]).
+  infallible, `LangHasScopes`-bounded `lang_initial_with_packages` pushes providers
+  directly onto the seed's stack), everything else only from `derived()`
+  ([§dd-dr:seed-states]).
 - **Hot path = plain field reads.** Per-instance caches (the delimiter `PrefixTable`,
   the specials `TriggerChars`) are rebuilt eagerly at freeze — `no_std` has no
   `OnceLock` — with the `PrefixTable` reused across derivations when its inputs are
-  unchanged. `dbg!(state)` shows exactly what the tokenizer will do (one recorded
+  unchanged. Each cache collapses with its feature ([§dd-dr:lang-features]):
+  `prefix_table()`/`trigger_chars()` return `Option`, `None` exactly for an absent
+  feature (a merely disabled one answers `Some` of the frozen empty value).
+  `dbg!(state)` shows exactly what the tokenizer will do (one recorded
   caveat: specials recognition sits behind the scan hook).
 - States are immutable and `Arc`-shared; the engine creates a new one only at
   transitions, so all nodes parsed under one state share one `Arc` and record their
@@ -693,8 +706,8 @@ helper), [§dd-dr:input-wiring] (driver resolver accessor, the
 spelling as recorded `CallableData` payload, replacing the core `post_space`
 field, minted at the standard sites via the opt-in `FromInvocation` constructor
 — and the committed `stage_invocation` shorthand with its ruled end-position
-rule ([§dd-dr:invocation-syntax], [§dd-dr:takeover-staging-sugar] items 2–3,
-S5; `disable_all` and the collection constructors remain pending their stage);
+rule ([§dd-dr:invocation-syntax], [§dd-dr:takeover-staging-sugar] item 3,
+S5; that entry's `disable_all` and collection constructors landed at S2 and S3);
 the `parse_attached_source` door and the `attach_source_reference` bundle with
 their `core.sources.*` conditions, completing [§dd-dr:input-wiring] (S6).
 
@@ -890,8 +903,8 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   ([§dd-dr:environment-spec-surface]) — driven by `BeginSpec`'s composition over core
   building blocks ([§dd-dr:begin-composition]). Orphan `\end` diagnoses at dispatch
   time with content-preserving recovery ([§dd-dr:orphan-end-recovery]).
-- **Verbatim** ([§dd-dr:verbatim-family]): the features-off + expected-close recipe as
-  data (`verbatim_state_delta`), with `VerbatimArgumentParser` (`\verb|…|`) and
+- **Verbatim** ([§dd-dr:verbatim-family]): the features-disabled + expected-close
+  recipe as data (`verbatim_state_delta`), with `VerbatimArgumentParser` (`\verb|…|`) and
   `VerbatimBodyParser` (literal-terminator environment contents, pluggable via
   `make_body_parser`); body content designation keeps every byte while gobbling the
   post-`\begin{verbatim}` newline out of the content

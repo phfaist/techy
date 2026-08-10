@@ -40,7 +40,7 @@
 //! fact, not a missing node.
 //!
 //! The raw-content `Chars` nodes record the **verbatim state** they were read under
-//! (features off — pylatexenc marks its verbatim chars nodes the same way); the
+//! (features disabled — pylatexenc marks its verbatim chars nodes the same way); the
 //! group/list wrappers record the surrounding state.
 
 use alloc::string::String;

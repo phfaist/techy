@@ -30,6 +30,7 @@ method has a working default. Contracts live on
 
 | Associated type | Role | Trivial default |
 |---|---|---|
+| [`Features`](crate::core::Lang::Features) | compile-time presence declarations: which parsing features the language has at all ([`LangFeatures`](crate::core::LangFeatures) bundle; absent features get zero-sized storage, writes are compile errors, feature-requiring APIs bound `LangHas*`) | [`AllLangFeatures`](crate::core::AllLangFeatures) |
 | [`GroupTypeId`](crate::core::Lang::GroupTypeId) | group *class* vocabulary (content/math/verbatim), closed per language, detached from delimiter spellings — delimiter pairs are runtime data | `u32` |
 | [`CallableTypeId`](crate::core::Lang::CallableTypeId) | invocation-*form* vocabulary (macro/environment/specials), closed — new callables register at runtime, new forms never do | `u32` |
 | [`ModeId`](crate::core::Lang::ModeId) | the parsing mode a state is in (text/math), first-class state data | `()` |
@@ -43,7 +44,7 @@ method has a working default. Contracts live on
 
 Static hooks on `Lang` (callable outside a driven parse):
 [`initial_state_data`](crate::core::Lang::initial_state_data) (the seed;
-default: every syntax feature off),
+default: empty rules, nothing recognized),
 [`finalize_transition`](crate::core::Lang::finalize_transition),
 [`scan_specials`](crate::core::Lang::scan_specials) /
 [`specials_trigger_chars`](crate::core::Lang::specials_trigger_chars),
@@ -54,7 +55,7 @@ only while a parse is driven lives on the driver.
 
 **Experiments**: `impl TrivialLang for MyLang {}` — a complete
 [`Lang`](crate::core::Lang) with all defaults (no modes, no exts, a driver
-that resolves nothing; seed has every syntax feature off). The blanket
+that resolves nothing; every feature declared present, seed rules empty). The blanket
 implementation makes [`TrivialLang`](crate::core::TrivialLang) and a direct
 `Lang` implementation mutually exclusive: the first real vocabulary type or
 hook means implementing `Lang` yourself.
@@ -107,12 +108,15 @@ invocation-syntax payload while reusing them unchanged.
 
 ## Token rules and the specials double-hook trap
 
-Tokenization is data: [`TokenRules`](crate::core::TokenRules) (whitespace
-set, group delimiter pairs, command escape rules, comment markers,
-forbidden characters, per-feature `enable_*` gates) is stored in the
-parsing state, so all of it can change mid-parse. Two spellings of "off",
-documented on the type: gate off = scoped, data preserved; empty data =
-the language has no such feature. Different tokenization *behavior* (not
+Tokenization is data: [`TokenRules`](crate::core::TokenRules) (one block
+per feature — whitespace set, group delimiter pairs, command escape rules,
+comment markers, forbidden characters — each with an `enabled` flag) is
+stored in the parsing state, so all of it can change mid-parse. Three
+spellings of "off", documented on the type: **disabled** = flag off,
+scoped, data preserved; **empty** = no rules data, nothing recognized;
+**absent** = the language has no such feature at all, declared at compile
+time via [`Lang::Features`](crate::core::Lang::Features) (see the `Lang`
+table). Different tokenization *behavior* (not
 just data) = implement the [`TokenReader`](crate::core::TokenReader)
 trait. Worked example:
 [`default_token_rules`](crate::latexlike::default_token_rules).

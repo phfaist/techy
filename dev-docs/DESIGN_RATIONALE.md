@@ -4259,7 +4259,7 @@ pinned data-equivalent to `derived()` and may never alter a resulting state).
 *Pitfall recorded:* `temporary_groups` is a **prefix-table input** — `derived()`'s
 table-reuse check compares it elementwise like `groups`; omitting that would reuse a
 stale table across a strip and keep tokenizing the dead delimiters (pinned by
-`temporary_groups_are_prefix_table_inputs`).
+`temporary_group_rules_are_prefix_table_inputs`).
 
 #### `parse_scoped` and `probe_token` replace hand-rolled swap/restore [§dd-dr:parse-scoped]
 
