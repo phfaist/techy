@@ -293,14 +293,34 @@ pub struct NoSourceResolver {
 /// [`Error::source`](core::error::Error::source) chain (e.g. to an `io::Error`)
 /// — the serialized projection renders the reference, the message, and the cause
 /// chain. Distinct from [`NoSourceResolver`] (no resolver configured at all).
+///
+/// The rendered message names the reference **as written in the document**
+/// (`reference`), with the resolver's own [`message`](ResolveError::message) as
+/// the detail — a resolver may spell the reference differently in its error
+/// (e.g. a canonicalized path), and that spelling stays available on the
+/// structured `error` field.
 #[derive(Debug, Clone, DiagnosticInfo)]
 #[non_exhaustive]
-#[diagnostic(id = "core.sources.unresolvable-reference", message = "{error}")]
+#[diagnostic(id = "core.sources.unresolvable-reference")]
 pub struct UnresolvableSourceReference {
     /// The reference that failed to resolve, as written.
     pub reference: String,
     /// The resolver's failure ([`Clone`] — the cause sits behind an `Arc`).
     pub error: ResolveError,
+}
+
+// Hand-written (the derive's `message` string cannot reach `error.message()`):
+// the prefix names the reference as written in the document, never the
+// resolver's possibly rewritten spelling — see the type docs.
+impl fmt::Display for UnresolvableSourceReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cannot resolve source reference ‘{}’: {}",
+            self.reference,
+            self.error.message()
+        )
+    }
 }
 
 #[cfg(test)]
@@ -603,11 +623,59 @@ mod tests {
             .unwrap();
         assert_eq!(condition.reference, "missing.tex");
         assert_eq!(condition.error.reference(), "missing.tex");
-        // The message is the ResolveError's own rendering.
+        // The message names the reference as written, with the resolver's own
+        // message as the detail.
         assert_eq!(
             diagnostic.message(),
-            "cannot resolve source reference 'missing.tex': no entry for this reference"
+            "cannot resolve source reference ‘missing.tex’: no entry for this reference"
         );
+    }
+
+    /// A resolver may spell the reference differently in its own error (e.g. a
+    /// canonicalized path). The diagnostic's message must name the reference as
+    /// written in the document; the resolver's spelling stays available on the
+    /// structured `error` field.
+    #[test]
+    fn the_message_names_the_reference_as_written_not_the_resolvers_spelling() {
+        #[derive(Debug)]
+        struct RewritingResolver;
+        impl crate::source::SourceResolver for RewritingResolver {
+            fn resolve(
+                &self,
+                reference: &str,
+                _triggered_at: &SourceSpan,
+            ) -> Result<crate::source::ResolvedContent, ResolveError> {
+                Err(ResolveError::new(
+                    alloc::format!("/texmf/{reference}"),
+                    "no file at this path",
+                ))
+            }
+        }
+
+        let driver = StdParseDriver::new(Recovery::Tolerant, ())
+            .with_source_resolver(RewritingResolver);
+        let (result, session) = with_context(&driver, r"\input{missing.tex}", |cx| {
+            let at = SourceSpan::entire(&cx.source);
+            let mut parser = nodes_parser(cx.driver);
+            cx.attach_source_reference(
+                "missing.tex",
+                &at,
+                Arc::clone(&cx.state),
+                &mut *parser,
+            )
+        });
+        assert!(result.unwrap().is_none());
+        let diagnostic = session.diagnostics.iter().next().unwrap();
+        assert_eq!(
+            diagnostic.message(),
+            "cannot resolve source reference ‘missing.tex’: no file at this path"
+        );
+        let condition = diagnostic
+            .data()
+            .downcast_ref::<UnresolvableSourceReference>()
+            .unwrap();
+        assert_eq!(condition.reference, "missing.tex");
+        assert_eq!(condition.error.reference(), "/texmf/missing.tex");
     }
 
     #[test]

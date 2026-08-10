@@ -16,7 +16,7 @@ main at d52fe4c — dev-docs cleanup landed). Stage 1 in progress; next: 1.2–1
 |---|---|---|
 | 1.1 LineIndex multi-byte resume fix | **done** | boundary-advance on resume point (unclamped — offset==len queries rely on past-the-end computed_end); 3 regression tests |
 | 1.2 ChildRegion::staged() pub + Panics docs | **done** | staged() pub with full doc; three accessors' Panics sections point at is_resolved()/staged() guards; test covers fresh (Some) vs finished-tree (None) |
-| 1.3 Include-chain message: written reference | pending | |
+| 1.3 Include-chain message: written reference | **done** | hand-written Display (derive can't call error.message()); micro-ruling: typographic quotes ‘…’ matching sibling NoSourceResolver, tail = ResolveError::message() not full Display (would repeat the prefix); rewriting-resolver test added |
 | 1.4 Oracle falsifiability test | pending | |
 | 1.5 format_position_with message | pending | |
 | 1.6 scan_specials bounds → Err | pending | |
