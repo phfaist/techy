@@ -1077,6 +1077,30 @@ semver output is unexplained.
     the store projections, the transparent `push` body, and the borrow-driven
     helper re-shaping all behaved as B's delta.rs patterns predicted.
 
+- **Supervisor: M3d — static size regression tests** — new `mod storage_collapse`
+  in techy/tests/lang_features.rs, all `const` asserts (compile-time; no runtime
+  test added — totals stay 897/0/4). Collapse checks (platform-independent):
+  `TokenRules`/`TokenRulesOverrides`/`ScopeStack`/`StateData`/`ParsingState` of
+  `PlainCharsLang` (NoLangFeatures) are all **0 bytes**; `ParsingStateDelta` is
+  **32** (64-bit) — only the ungated `mode`/`ext`/`events` remain. Transparency
+  checks (`#[cfg(target_pointer_width = "64")]`): all-present sizes pinned to the
+  recorded M2 numbers. **The two number sets** (bytes, 64-bit; M2 measured at
+  351c95b, M3 at 81726d7 — all-present column identical before/after, the
+  transparency requirement):
+
+  | type | M2 all-present | M2 NoLangFeatures | M3 all-present | M3 NoLangFeatures |
+  |------|------|------|------|------|
+  | TokenRules | 176 | 176 | 176 | 0 |
+  | TokenRulesOverrides | 184 | 184 | 184 | 0 |
+  | ParsingStateDelta | 240 | 240 | 240 | 32 |
+  | StateData | 200 | 200 | 200 | 0 |
+  | ParsingState | 232 | 232 | 232 | 0 |
+  | ScopeStack | 24 | 24 | 24 | 0 |
+
+  Gates: `cargo test --workspace` 897/0/4 (per-target 758+30+8+12+21+1+67; 2+2
+  ignored); `cargo check --workspace --tests` zero warnings. Nothing surprising:
+  the collapse landed exactly at the predicted values on first compile.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)

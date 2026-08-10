@@ -725,3 +725,59 @@ mod feature_composition {
     const _: () =
         assert!(!<<CommandsDecl as LangFeatures>::Groups as FeaturePresence>::PRESENT);
 }
+
+/// Static storage-collapse regression checks (all `const` asserts — verified when the
+/// test profile compiles, no `#[test]` runs). Two directions:
+///
+/// - **Collapse**: for a language declaring every feature absent
+///   ([`support::PlainCharsLang`], `NoLangFeatures`), every gated store is zero-sized,
+///   so the rules, overrides, scope stack, state data, and frozen state (with its two
+///   derived caches) occupy no storage at all. These checks are
+///   platform-independent.
+/// - **Transparency**: for an all-features-present language, the gated stores are the
+///   payload types themselves, so the sizes are exactly what they were before storage
+///   gating existed (measured on the pre-M3 tree, 2026-08-06; recorded in
+///   dev-docs/langfeatures-plan/PROGRESS.md). Pointer-size dependent, so pinned for
+///   64-bit targets only.
+mod storage_collapse {
+    use core::mem::size_of;
+
+    use techy::core::specs::ScopeStack;
+    use techy::core::{
+        ParsingState, ParsingStateDelta, StateData, TokenRules, TokenRulesOverrides,
+        TrivialLang,
+    };
+
+    use super::support::PlainCharsLang;
+
+    /// All features present (`TrivialLang` declares `AllLangFeatures`).
+    #[derive(Debug, Clone, Copy)]
+    struct AllPresentLang;
+    impl TrivialLang for AllPresentLang {}
+
+    // Collapse: every feature absent — the gated storage vanishes entirely.
+    const _: () = assert!(size_of::<TokenRules<PlainCharsLang>>() == 0);
+    const _: () = assert!(size_of::<TokenRulesOverrides<PlainCharsLang>>() == 0);
+    const _: () = assert!(size_of::<ScopeStack<PlainCharsLang>>() == 0);
+    const _: () = assert!(size_of::<StateData<PlainCharsLang>>() == 0);
+    const _: () = assert!(size_of::<ParsingState<PlainCharsLang>>() == 0);
+
+    // The delta keeps only its ungated parts (`mode`/`ext` — here `Option<()>` each —
+    // and the `events` list); its rules-override and scope-op storage is gone.
+    #[cfg(target_pointer_width = "64")]
+    const _: () = assert!(size_of::<ParsingStateDelta<PlainCharsLang>>() == 32);
+
+    // Transparency: all features present — sizes identical to the pre-storage-gating
+    // tree (the present store *is* the payload; gating adds nothing).
+    #[cfg(target_pointer_width = "64")]
+    mod all_present_sizes_unchanged {
+        use super::*;
+
+        const _: () = assert!(size_of::<TokenRules<AllPresentLang>>() == 176);
+        const _: () = assert!(size_of::<TokenRulesOverrides<AllPresentLang>>() == 184);
+        const _: () = assert!(size_of::<ParsingStateDelta<AllPresentLang>>() == 240);
+        const _: () = assert!(size_of::<StateData<AllPresentLang>>() == 200);
+        const _: () = assert!(size_of::<ParsingState<AllPresentLang>>() == 232);
+        const _: () = assert!(size_of::<ScopeStack<AllPresentLang>>() == 24);
+    }
+}
