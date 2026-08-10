@@ -140,6 +140,15 @@ impl<L: Lang> Language<L> {
     /// carrying origin or provenance (a file, a
     /// [`resolve_source_reference`](crate::source::resolve_source_reference) result),
     /// use [`parse_source`](Language::parse_source).
+    ///
+    /// Each call mints a **fresh source identity** ([`Source::new`]), and
+    /// [`SourceSpan`]/[`SourcePos`](crate::source::SourcePos) equality compares the
+    /// source by identity plus offsets — so spans from two `parse` calls never
+    /// compare equal, even over byte-identical text (the comparison answers
+    /// `false`, it does not fail). To correlate positions across parses
+    /// (re-parsing an edited document, diffing two attempts), hold one
+    /// `Arc<Source>` and call [`parse_source`](Language::parse_source) with the
+    /// same handle each time.
     pub fn parse(
         &self,
         content: impl Into<String>,

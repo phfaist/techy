@@ -39,6 +39,30 @@ use crate::state::{FeaturePresence, Lang, LangFeatures};
 /// Rules are held behind `Arc` in [`GroupRules::rules`]: the tokenizer's resolution of
 /// *which* rule matched travels with the emitted
 /// [`GroupOpen`](super::TokenKind::GroupOpen) token, so parsers never re-derive it.
+///
+/// # Identity matters: two equal rules are not interchangeable
+///
+/// The behavior-deciding comparisons are by **`Arc` identity** (`Arc::ptr_eq`),
+/// never by the structural `==` this type also implements:
+///
+/// - the temporary-group scope check of
+///   [`ParsingState::derived`](crate::state::ParsingState::derived) keeps the
+///   [`temporary`](GroupRules::temporary) rules only when the installed
+///   [`expecting_close`](GroupRules::expecting_close) **is one of them by `Arc`
+///   identity**;
+/// - the derivation caches key on the shared handles the same way — a derived
+///   state reuses its base's [`PrefixTable`](super::PrefixTable) only when the
+///   rule lists match elementwise by `Arc` identity, and the per-parse
+///   group-interior derivations are memoized per `(base, rule)` handle pair
+///   ([`ParserSession::group_interior_state`](crate::engine::ParserSession::group_interior_state));
+/// - the standard optional-argument parsers recognize *their own* minted rules in
+///   the matched token by `Arc` identity.
+///
+/// So clone the `Arc`, never the value: a data-equal copy behaves differently in
+/// every one of these places, and `contains(&rule)`-style checks (which use `==`)
+/// answer a different question. The structural `==` answers exactly that other
+/// question — "same group class and delimiter spellings" — which is what
+/// [`TokenKind`](super::TokenKind) equality uses to compare `GroupOpen` tokens.
 pub struct GroupRule<L: Lang> {
     /// The class of the groups this rule delimits (e.g. the latexlike preset's
     /// content-group vs. math-group distinction) — detached from the spellings below.
@@ -335,7 +359,9 @@ pub struct TokenRules<L: Lang> {
         <<L::Features as LangFeatures>::Paragraphs as FeaturePresence>::Store<ParagraphRules>,
     /// Group delimiters: the delimiter table, its gate, and the expected close
     /// ([`GroupRules`]). For a language that declares the groups feature absent,
-    /// this field holds the zero-sized store and cannot carry data.
+    /// this field holds the zero-sized store and cannot carry data. The `Arc`-held
+    /// rules are compared by identity where behavior is decided — see the
+    /// identity section on [`GroupRule`].
     pub groups: <<L::Features as LangFeatures>::Groups as FeaturePresence>::Store<GroupRules<L>>,
     /// Command syntaxes and their gate ([`CommandRules`]). For a language that
     /// declares the commands feature absent, this field holds the zero-sized store

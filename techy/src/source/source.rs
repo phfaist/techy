@@ -37,6 +37,16 @@ impl<O: SourceOrigin> Source<O> {
     /// Create a primary source (top-level content provided directly by the user).
     ///
     /// Defaults: unknown origin, [`SourceProvenance::Primary`], line/column offsets `(1, 1)`.
+    ///
+    /// Every call creates a **new source identity**: [`SourceSpan`] and
+    /// [`SourcePos`] equality compares the `Arc`-held source by identity plus
+    /// offsets ([`SourceSpan::same_source`]), so spans into two `Source` values
+    /// never compare equal, even when the contents are byte-identical. Code that
+    /// must correlate positions across operations holds one `Arc<Source>` and
+    /// passes that same handle everywhere — parsing included:
+    /// [`Language::parse_source`](crate::engine::Language::parse_source) takes the
+    /// handle, while [`Language::parse`](crate::engine::Language::parse) mints a
+    /// fresh source per call.
     pub fn new(content: impl Into<String>) -> Self {
         Source {
             content: content.into(),
