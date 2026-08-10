@@ -314,6 +314,25 @@ impl ToDiagnosticValue for crate::source::ResolveError {
     }
 }
 
+/// An `Arc`-shared error value — the shape of a condition's optional
+/// underlying-cause field ([`HookFailed::cause`] and the
+/// [`ResolveError`](crate::source::ResolveError) pattern it follows) — projects
+/// as the rendered cause chain: a list of the
+/// error's own `Display`, then each
+/// [`Error::source`](core::error::Error::source) hop's, outermost first.
+impl ToDiagnosticValue for Arc<dyn core::error::Error + Send + Sync + 'static> {
+    fn to_diagnostic_value(&self) -> DiagnosticValue {
+        let mut chain: Vec<DiagnosticValue> = Vec::new();
+        chain.push(DiagnosticValue::Str(self.to_string()));
+        let mut cause = core::error::Error::source(&**self);
+        while let Some(error) = cause {
+            chain.push(DiagnosticValue::Str(error.to_string()));
+            cause = error.source();
+        }
+        DiagnosticValue::List(chain)
+    }
+}
+
 /// One frame of a parse traceback snapshot: a rendered title (`group ‘{’`,
 /// `argument #1 of ‘\frac’`) and the source location the parse descended at.
 ///
@@ -810,6 +829,65 @@ impl<O: SourceOrigin> fmt::Display for ParseError<O> {
 }
 
 impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
+
+/// Condition: an extension hook — consumer-supplied code the library calls, such
+/// as a [`ParseDriver`](crate::engine::ParseDriver) method, a
+/// [`Lang`](crate::state::Lang) hook, or a descent-state callback
+/// ([`GroupChildState::Compute`](crate::constructs::GroupChildState::Compute)) —
+/// reported that it failed to do its own work: an input/output failure, or a
+/// runtime failure inside an embedding (for example, an exception raised by code
+/// behind a language binding). Carried on the [`ParseError`] the hook returns;
+/// the parse aborts.
+///
+/// A failing hook chooses between three distinct answers, and this condition is
+/// exactly one of them:
+///
+/// - **`HookFailed`** — the hook's own code failed while doing its work
+///   (input/output, a runtime failure in an embedding). Not a statement about
+///   the document or about library contracts.
+/// - [`ImplementationError`](crate::constructs::ImplementationError) — an
+///   extension implementation violated a library contract: an implementation
+///   bug to fix, not an operational failure.
+/// - Any other condition type describing a problem **in the parsed document** —
+///   reported through the recovery entry point
+///   ([`ParseContext::recover`](crate::constructs::ParseContext::recover)) where
+///   the hook's signature allows, so tolerant parses can record it and continue.
+///
+/// The optional [`cause`](HookFailed::cause) field carries the underlying error
+/// behind an `Arc` (the [`ResolveError`](crate::source::ResolveError) pattern:
+/// the `Arc` is what keeps the condition `Clone` — clones share the cause by
+/// reference count). Embedders walk the chain from the field
+/// ([`Error::source`](core::error::Error::source) hops) or downcast its
+/// concrete type; the serialized projection renders the `detail` and the cause
+/// chain as text.
+#[derive(Debug, Clone, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.error.hook-failed",
+    message = "extension hook reported a failure: {detail}"
+)]
+pub struct HookFailed {
+    /// Human-readable description of the failure.
+    pub detail: String,
+    /// The underlying error, if the hook has one to attach (`None` when the
+    /// `detail` string says everything). Attach via [`new`](HookFailed::new)'s
+    /// second argument or [`with_cause`](HookFailed::with_cause).
+    pub cause: Option<Arc<dyn core::error::Error + Send + Sync + 'static>>,
+}
+
+impl HookFailed {
+    /// Attach the underlying error (kept on the [`cause`](HookFailed::cause)
+    /// field; the `detail` string stays the rendered summary). Sugar over
+    /// `new`'s second argument for a not-yet-shared error value: it takes the
+    /// concrete error by value and shares it internally (`Arc`).
+    pub fn with_cause(
+        mut self,
+        cause: impl core::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        self.cause = Some(Arc::new(cause));
+        self
+    }
+}
 
 /// The shared body of the `render`/`render_with` family: headline, position,
 /// traceback, provenance chain — line/column lookups answered by `line_cols`
@@ -1359,6 +1437,106 @@ mod tests {
         assert!(err.frames().is_empty());
         assert!(err.render().contains("error: boom"));
         assert!(err.render().contains("line 1"));
+    }
+
+    // --- HookFailed: the general operational hook-failure condition ------------------
+
+    /// The innermost hop of the test cause chain.
+    #[derive(Debug)]
+    struct UnderlyingIo;
+
+    impl fmt::Display for UnderlyingIo {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("disk unavailable")
+        }
+    }
+
+    impl core::error::Error for UnderlyingIo {}
+
+    /// A two-hop cause chain: the embedding's failure, caused by `UnderlyingIo`.
+    #[derive(Debug)]
+    struct EmbeddingFailure {
+        source: UnderlyingIo,
+    }
+
+    impl fmt::Display for EmbeddingFailure {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("embedding call failed")
+        }
+    }
+
+    impl core::error::Error for EmbeddingFailure {
+        fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+            Some(&self.source)
+        }
+    }
+
+    #[test]
+    fn hook_failed_constructs_and_renders() {
+        let plain = HookFailed::new("state seed unavailable", None);
+        assert_eq!(HookFailed::IDENTIFIER, "core.error.hook-failed");
+        assert_eq!(DiagnosticInfo::identifier(&plain), HookFailed::IDENTIFIER);
+        assert_eq!(
+            plain.to_string(),
+            "extension hook reported a failure: state seed unavailable"
+        );
+        assert!(plain.cause.is_none());
+
+        // The derive's constructor also takes the cause positionally (an
+        // already-shared `Arc`); `with_cause` is the by-value sugar.
+        let arc: Arc<dyn core::error::Error + Send + Sync> = Arc::new(UnderlyingIo);
+        let positional = HookFailed::new("boom", Some(arc));
+        assert_eq!(positional.cause.as_ref().unwrap().to_string(), "disk unavailable");
+    }
+
+    #[test]
+    fn hook_failed_cause_chain_is_reachable_through_a_parse_error() {
+        let source = arc_source("Hello");
+        let condition = HookFailed::new("embedding call failed", None)
+            .with_cause(EmbeddingFailure { source: UnderlyingIo });
+        let err: ParseError =
+            ParseError::new(condition, SourceSpan::new(&source, 0..1));
+        assert_eq!(err.identifier(), "core.error.hook-failed");
+
+        // Downcast to the concrete condition, then walk the chain off the field.
+        let condition = err.data().downcast_ref::<HookFailed>().unwrap();
+        let cause = condition.cause.as_ref().unwrap();
+        assert_eq!(cause.to_string(), "embedding call failed");
+        let hop = core::error::Error::source(&**cause).unwrap();
+        assert_eq!(hop.to_string(), "disk unavailable");
+        assert!(hop.source().is_none());
+
+        // Clones share the cause by reference count (the `Arc` pattern).
+        let clone = condition.clone();
+        assert!(Arc::ptr_eq(cause, clone.cause.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn hook_failed_serializable_data_projects_the_cause_chain() {
+        let plain = HookFailed::new("boom", None);
+        assert_eq!(
+            DiagnosticInfo::serializable_data(&plain),
+            DiagnosticValue::Map(vec![
+                ("detail".to_string(), DiagnosticValue::Str("boom".to_string())),
+                ("cause".to_string(), DiagnosticValue::Null),
+            ])
+        );
+
+        let chained =
+            HookFailed::new("boom", None).with_cause(EmbeddingFailure { source: UnderlyingIo });
+        assert_eq!(
+            DiagnosticInfo::serializable_data(&chained),
+            DiagnosticValue::Map(vec![
+                ("detail".to_string(), DiagnosticValue::Str("boom".to_string())),
+                (
+                    "cause".to_string(),
+                    DiagnosticValue::List(vec![
+                        DiagnosticValue::Str("embedding call failed".to_string()),
+                        DiagnosticValue::Str("disk unavailable".to_string()),
+                    ])
+                ),
+            ])
+        );
     }
 
     #[test]
