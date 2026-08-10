@@ -531,6 +531,79 @@ mod tests {
         }
     }
 
+    // --- the session extension returned on the result ------------------------------------
+
+    /// Transition counts accumulated by `observe_transition` — read back off the
+    /// [`ParseResult`].
+    #[derive(Debug, Default)]
+    struct Observed {
+        transitions: usize,
+    }
+
+    /// `DocLang` under a driver whose `observe_transition` accumulates into the
+    /// session extension — the `ParseResult::session_ext` read-back path.
+    #[derive(Debug, Clone, Copy)]
+    struct ObserveLang;
+    impl Lang for ObserveLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = Observed;
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = ObserveDriver;
+
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(doc_state_data())
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct ObserveDriver;
+
+    impl ParseDriver<ObserveLang> for ObserveDriver {
+        type DescentGuard = StdDescentGuard;
+        fn observe_transition(
+            &self,
+            ext: &mut Observed,
+            _diagnostics: &mut crate::error::Diagnostics,
+            _prev: &ParsingState<ObserveLang>,
+            _new: &ParsingState<ObserveLang>,
+            _delta: &ParsingStateDelta<ObserveLang>,
+        ) -> Result<(), ParseError> {
+            ext.transitions += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_session_extension_is_returned_on_the_parse_result() {
+        // Two group descents = two observed transitions (sibling groups memoize the
+        // derivation, but observation fires per transition, memo hits included):
+        // `observe_transition` accumulates them into the session extension, and the
+        // finished result hands the value out.
+        let language: Language<ObserveLang> =
+            Language::new(ObserveDriver, ParsingState::lang_initial().expect("seed state"));
+        let result = language.parse("{a}{b}").unwrap();
+        assert_eq!(result.session_ext.transitions, 2);
+
+        // A language declaring no session extension reads back `()`.
+        let result = strict().parse("{a}").unwrap();
+        let () = result.session_ext;
+    }
+
     #[test]
     fn a_driver_diagnostics_limit_caps_the_parses_diagnostics() {
         // Four stray closes under the tolerant policy: four pushes, two retained,

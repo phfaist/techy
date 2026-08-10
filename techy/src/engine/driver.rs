@@ -320,7 +320,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// math mode") belongs here, in the session's
     /// [`SessionExt`](crate::state::Lang::SessionExt) — never in
     /// `finalize_transition`, where structural scope reverts and memoization would
-    /// make counts wrong twice over.
+    /// make counts wrong twice over. The accumulated value is handed out on
+    /// [`ParseResult::session_ext`](super::ParseResult::session_ext) when the
+    /// session freezes ([`ParserSession::finish`]).
     ///
     /// Observational only: it receives the already-frozen `new` state and cannot alter
     /// the transition's outcome (the session layer is data-equivalent to

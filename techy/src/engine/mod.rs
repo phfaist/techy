@@ -552,11 +552,17 @@ impl<L: Lang> ParserSession<L> {
 
     /// Freeze the session: flatten everything reachable from `root` into the final
     /// [`NodeTree`] (resolving staged argument/slot regions) and hand over the
-    /// diagnostics — available even for successful tolerant parses. `Err` reports a
+    /// diagnostics — available even for successful tolerant parses — and the
+    /// session extension ([`ext`](ParserSession::ext), what
+    /// [`ParseDriver::observe_transition`] accumulated). `Err` reports a
     /// staging-contract violation ([`NodeBuildError`]) — an implementation bug in an
     /// extension, not a source condition.
     pub fn finish(self, root: BuildId) -> Result<ParseResult<L>, NodeBuildError> {
-        Ok(ParseResult { tree: self.builder.finish(root)?, diagnostics: self.diagnostics })
+        Ok(ParseResult {
+            tree: self.builder.finish(root)?,
+            diagnostics: self.diagnostics,
+            session_ext: self.ext,
+        })
     }
 }
 
@@ -581,13 +587,22 @@ impl<L: Lang> fmt::Debug for ParserSession<L> {
     }
 }
 
-/// A finished parse: the frozen tree plus everything reported along the way.
+/// A finished parse: the frozen tree plus everything reported and accumulated
+/// along the way.
 pub struct ParseResult<L: Lang> {
     /// The parsed document.
     pub tree: NodeTree<L>,
     /// The diagnostics recorded during the parse (possibly non-empty even on success —
     /// tolerant parsing).
     pub diagnostics: Diagnostics<L::SourceOrigin>,
+    /// The parse's final session extension ([`Lang::SessionExt`]) — the **data**
+    /// half of transition observation:
+    /// [`ParseDriver::observe_transition`] accumulates parse-history data into it
+    /// while the parse runs, and this field hands the accumulated value out (the
+    /// hook's diagnostics sink is the reporting half, landing in
+    /// [`diagnostics`](ParseResult::diagnostics)). `()` for languages declaring no
+    /// session extension.
+    pub session_ext: L::SessionExt,
 }
 
 impl<L: Lang> fmt::Debug for ParseResult<L> {
@@ -595,6 +610,7 @@ impl<L: Lang> fmt::Debug for ParseResult<L> {
         f.debug_struct("ParseResult")
             .field("tree", &self.tree)
             .field("diagnostics", &self.diagnostics)
+            .field("session_ext", &self.session_ext)
             .finish()
     }
 }

@@ -163,7 +163,8 @@ Obligations (from the hook's documentation):
   so it runs once per unique derivation, not once per transition; anything
   history-shaped belongs in
   [`ParseDriver::observe_transition`](crate::core::ParseDriver::observe_transition)
-  (fires on every transition).
+  (fires on every transition; its accumulated session extension comes back on
+  [`ParseResult::session_ext`](crate::core::ParseResult::session_ext)).
 - Mode changes are interpreted here: the applied override is the signal —
   compare `prev.mode()` with the new mode. No event needed for mode-shaped
   transitions.

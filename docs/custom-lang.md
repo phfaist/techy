@@ -370,7 +370,8 @@ override is the signal — compare `prev.mode()` with the new mode); and
 anything history-shaped belongs in the driver's
 [`observe_transition`](crate::core::ParseDriver::observe_transition)
 instead, which fires on every transition while the customizer runs once per
-unique derivation. Semantic [events](crate::core::Lang::Event) come in the
+unique derivation (what it accumulates into the session extension is handed
+out on [`ParseResult::session_ext`](crate::core::ParseResult::session_ext)). Semantic [events](crate::core::Lang::Event) come in the
 two documented classes: context-free events reach the customizer wherever
 the delta is applied; context-dependent ones (the preset's exit-math
 restore) are lowered by the driver inside a parse and must be *refused*
