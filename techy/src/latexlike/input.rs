@@ -320,11 +320,11 @@ where
                     self.attached_slot_ext.clone(),
                 )]);
                 // The persist_state choice: forward the included run's merged
-                // after-effect record as this invocation's own after-effect
-                // (the existing sibling channel, boxed like every pass-through
-                // delta), or stay transparent.
+                // after-effect record — already boxed, moved as-is — as this
+                // invocation's own after-effect (the existing sibling channel),
+                // or stay transparent.
                 let after_effects = if self.persist_state {
-                    outcome.after_effects.map(Box::new)
+                    outcome.after_effects
                 } else {
                     None
                 };

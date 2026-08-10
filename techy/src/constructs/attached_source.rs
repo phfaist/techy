@@ -21,6 +21,7 @@
 //! [`check_include_chain`](crate::source::check_include_chain) and
 //! [`Source::including_sources`] are the ready-made tools.
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -53,8 +54,9 @@ pub struct AttachedSourceOutcome<L: Lang> {
     /// spec that persists them returns this delta as its own after-effect through
     /// the ordinary sibling channel (the preset's
     /// `input_macro_spec(persist_state: true, …)`); a state-transparent spec drops
-    /// it.
-    pub after_effects: Option<ParsingStateDelta<L>>,
+    /// it. Boxed like [`NodesOutcome::after_effects`]: the common `None` costs one
+    /// pointer-sized slot on a frame that stays live across the whole nested parse.
+    pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
 // Manual impls: derives would demand `L: Debug`/`L: Clone` (the `NodesOutcome`
@@ -161,7 +163,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
 
         inner.with_frame(frame, |cx| {
             let mut nodes: Vec<BuildId> = Vec::new();
-            let mut after_effects: Option<ParsingStateDelta<L>> = None;
+            let mut after_effects: Option<Box<ParsingStateDelta<L>>> = None;
             loop {
                 // `state: None` — each run re-enters under the loop's live ambient
                 // state (re-anchored below to the previous run's exit state).
@@ -170,11 +172,11 @@ impl<L: Lang> ParseContext<'_, '_, L> {
                 // Merge each resumed run's after-effect record into one bundle
                 // record (application order — later runs are sequentially later).
                 // The run's record arrives boxed ([`NodesOutcome::after_effects`]);
-                // the bundle stores the delta value itself.
+                // the first run's box moves in whole, later runs merge into it.
                 if let Some(run_effects) = outcome.after_effects {
                     match &mut after_effects {
                         Some(merged) => merged.merge_from(*run_effects),
-                        None => after_effects = Some(*run_effects),
+                        None => after_effects = Some(run_effects),
                     }
                 }
                 // Thread the segment's exit state (the root-loop discipline):

@@ -4923,12 +4923,18 @@ constructor value, cloned per invocation — the preset recipe passes
 ext remains a framework option `body()` finds ([§dd-dr:slot-roles]'s
 findability clause), never the shipped default.)*
 
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]): the merged record the
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]) and its follow-up
+ruling (user, 2026-08-10, after the Part 3 review): the merged record the
 previous note quotes from `NodesOutcome` is now exported **boxed**
-(`NodesOutcome::after_effects: Option<Box<ParsingStateDelta<L>>>`), and the door
-unboxes it into the bundle — `AttachedSourceOutcome::after_effects` deliberately
-**stays** `Option<ParsingStateDelta<L>>`: the bundle is a per-inclusion return
-value off the recursion cycle, not a slot in every descent frame.)*
+(`NodesOutcome::after_effects: Option<Box<ParsingStateDelta<L>>>`), and
+`AttachedSourceOutcome::after_effects` is boxed **likewise**
+(`Option<Box<ParsingStateDelta<L>>>`): the door's frame stays live across the
+whole nested include parse, and moving the already-boxed record into the bundle
+removes an unbox/rebox round trip on the persist path. The surfaces ruled NOT
+boxed — the driver hooks (`group_interior_delta`/`resolve_state_event`),
+`ArgumentSpec::parsing_state_delta`, `EnvironmentBehavior::body_state_delta` —
+are consumed in frames that unwind before recursion descends, so boxing them
+buys no per-level stack.)*
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
@@ -5207,9 +5213,16 @@ Option<Box<ParsingStateDelta<L>>>)` and `NodesOutcome::after_effects` is
 recursion cycle's frames (the measurement: 61% of `NodesParser::parse`'s debug
 frame) while nearly every slot carries `None` — boxing moves the 208-byte value
 behind a pointer exactly where it rides the recursion.
-`AttachedSourceOutcome::after_effects` deliberately stays unboxed: the bundle is a
-per-inclusion return value off the recursion cycle, not a slot in every descent
-frame (the ruled scope covers the pair and `NodesOutcome` only).
+`AttachedSourceOutcome::after_effects` is boxed too (user ruling 2026-08-10,
+after the Part 3 review — a follow-up extending the initial scope, which covered
+the pair and `NodesOutcome` only): the door's accumulator sits on a frame that
+stays live across the whole nested include parse, and moving the already-boxed
+`NodesOutcome` record into the bundle also removes an unbox/rebox round trip on
+the persist path. Explicitly ruled NOT boxed (same ruling): the driver hooks
+(`group_interior_delta`/`resolve_state_event`),
+`ArgumentSpec::parsing_state_delta`, and `EnvironmentBehavior::body_state_delta`
+— their values are consumed in frames that unwind before recursion descends, so
+boxing them buys no per-level stack.
 
 Rejected alternatives: a depth limit as *the* mechanism (a level count says
 nothing about actual stack use — per-level cost varies ~8× across build profiles
