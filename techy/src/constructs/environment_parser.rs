@@ -1003,7 +1003,8 @@ mod tests {
             let mut body_parser =
                 EnvironmentBodyParser::new(trigger.span, name, "end", GT_BRACE)
                     .with_invocation_name_span(name_group.name_span);
-            let (body, delta) = cx.parse_scoped(slot_state, &mut body_parser)?;
+            let (body, delta) =
+                cx.parse_construct(&mut body_parser, Some(slot_state), None)?;
             debug_assert!(delta.is_none());
 
             let offset = children.len() as u32;

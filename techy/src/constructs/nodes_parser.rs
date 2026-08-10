@@ -697,7 +697,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         // own factory) — Phase 7.2.
         let driver = cx.driver;
         let mut parser = driver.make_invocation_parser(invocation);
-        let result = cx.with_frame(frame, |cx| cx.parse_scoped(base, &mut *parser));
+        let result = cx.parse_construct(&mut *parser, Some(base), Some(frame));
         drop(parser);
         let (id, delta) = result?;
         self.nodes.push(id);
@@ -1056,6 +1056,7 @@ where
                         token.span,
                         Arc::clone(rule),
                         ChildStateSpec::inherit(),
+                        None,
                     )?; // groups have no after-effect
                     self.nodes.push(id);
                     if self.test_node_stop(cx, id) {

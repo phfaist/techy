@@ -267,7 +267,7 @@ where
             cx.tokens.move_past(next, true);
             let base = Arc::clone(&cx.state);
             let (id, _delta) =
-                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?; // groups have no after-effect
+                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit(), None)?; // groups have no after-effect
             nodes.push(id);
             Ok(Some(id))
         }
@@ -603,6 +603,7 @@ where
                             open.span,
                             rule,
                             ChildStateSpec::inherit(),
+                            None,
                         )?;
                         let child_count = staged_child_count(cx, id);
                         noise.nodes.push(id);
@@ -623,8 +624,13 @@ where
                             let rule = Arc::clone(rule);
                             cx.tokens.move_past(&next, true);
                             let base = Arc::clone(&cx.state);
-                            let (id, _delta) =
-                                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit())?;
+                            let (id, _delta) = cx.parse_group(
+                                base,
+                                next.span,
+                                rule,
+                                ChildStateSpec::inherit(),
+                                None,
+                            )?;
                             let child_count = staged_child_count(cx, id);
                             noise.nodes.push(id);
                             return Ok(Some(ParsedArgumentNodes::new(
@@ -871,6 +877,7 @@ where
             open.span,
             rule,
             ChildStateSpec::inherit(),
+            None,
         )?;
 
         // Content: the option group's children, or a lone protective child group's.

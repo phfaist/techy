@@ -206,7 +206,8 @@ where
                 invocation: InvocationChildState::Inherit,
             }
         };
-        let (id, _delta) = cx.parse_group(contents_state, open.span, rule, child_states)?;
+        let (id, _delta) =
+            cx.parse_group(contents_state, open.span, rule, child_states, None)?;
 
         // The id routes through the driver's group-parser factory: a bogus id from a
         // misbehaving custom driver degrades to a zero-child region rather than

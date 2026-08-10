@@ -743,7 +743,8 @@ where
             Some(b) => b.make_body_parser(env_invocation),
             None => default_body_parser(env_invocation),
         };
-        let (body, passthrough) = cx.parse_scoped(body_state, &mut *body_parser)?;
+        let (body, passthrough) =
+            cx.parse_construct(&mut *body_parser, Some(body_state), None)?;
         drop(body_parser);
         // A behavior-supplied body parser is outer-layer input; its documented
         // contract (no pass-through delta) is enforced as an implementation

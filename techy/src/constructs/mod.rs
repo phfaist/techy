@@ -23,8 +23,9 @@
 //! [`ParseContext::state`] is the parser's **input** state — the caller sets it. A parser
 //! that scopes a child state (group interior, argument extent, slot body) derives it
 //! locally and scopes it through
-//! [`with_parsing_state`](ParseContext::with_parsing_state) /
-//! [`parse_scoped`](ParseContext::parse_scoped) (structural revert — `Arc` clone is
+//! [`parse_construct`](ParseContext::parse_construct) /
+//! [`with_parsing_state`](ParseContext::with_parsing_state) (structural revert —
+//! `Arc` clone is
 //! cheap — plus the session's enclosing-state stack bookkeeping). The
 //! `Option<ParsingStateDelta>` in the
 //! return value is exclusively the *after-effect for the caller* (`\newcommand`).
@@ -349,34 +350,18 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         result
     }
 
-    /// Run `parser` with [`state`](ParseContext::state) scoped to `state` for the
-    /// duration of the sub-parse, restoring the outer state afterwards — the **descent
-    /// primitive** for every construct that parses child content under a derived state
-    /// (group interiors, argument extents, slot bodies; the pylatexenc
-    /// `walker.parse_content(parser, …, parsing_state)` analog).
-    ///
-    /// This is ordering enforcement, not unwind safety: hand-rolled swap/restore must
-    /// remember to restore **before** `?`-propagating the result; here the restore is
-    /// structural. The returned [`ParsingStateDelta`] is the construct's after-effect
-    /// for the caller, passed through **unapplied** — whether and where it applies is
-    /// caller business (the "caller applies deltas" law).
-    pub fn parse_scoped<P>(
-        &mut self,
-        state: Arc<ParsingState<L>>,
-        parser: &mut P,
-    ) -> ConstructParserResult<L, (P::Output, Option<ParsingStateDelta<L>>)>
-    where
-        P: ConstructParser<L> + ?Sized,
-    {
-        self.with_parsing_state(state, |cx| parser.parse(cx))
-    }
-
     /// Run `f` with [`state`](ParseContext::state) scoped to `state`, restoring the
     /// outer state afterwards — the closure-shaped scoped-state primitive under
-    /// [`parse_scoped`](ParseContext::parse_scoped), for descents that are not
-    /// `ConstructParser`-shaped (the per-argument delta around
+    /// [`parse_construct`](ParseContext::parse_construct), for state scopes that
+    /// are not `ConstructParser`-shaped (the per-argument delta around
     /// `ArgumentParser::parse_argument`; takeover parsers scoping hand-derived
     /// states around arbitrary code).
+    ///
+    /// This is a **state-scoping utility, not a descent entry point**: code that
+    /// runs another [`ConstructParser`] must go through
+    /// [`parse_construct`](ParseContext::parse_construct) (which performs this
+    /// scoping itself, plus its per-descent obligations), never through this
+    /// method alone.
     ///
     /// Besides the structural swap/restore, this maintains the session's
     /// **enclosing-state stack** ([`ParsingStateStack`](crate::state::ParsingStateStack)):
@@ -533,7 +518,12 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// Derive via [`derive_state`](ParseContext::derive_state), then run `f` with
     /// [`state`](ParseContext::state) scoped to the derived state
     /// ([`with_parsing_state`](ParseContext::with_parsing_state)) — the
-    /// delta-shaped scoped descent in one call, for takeover parsers.
+    /// delta-shaped state scope in one call, for takeover parsers.
+    ///
+    /// Like `with_parsing_state`, this is a state-scoping utility, **not** a
+    /// descent entry point: running another [`ConstructParser`] under the derived
+    /// state goes through [`parse_construct`](ParseContext::parse_construct)
+    /// instead.
     pub fn with_derived_state<R>(
         &mut self,
         delta: &ParsingStateDelta<L>,
@@ -665,12 +655,17 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         Ok(recovered)
     }
 
-    /// Parse one **nodes descent** (a content run: group interior, environment body,
-    /// top-level drive) under `state`, with the parser obtained from the driver's
-    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser) factory — the uniform
-    /// routing that makes one driver override apply to every descent site.
-    /// State scoping and restoration follow
-    /// [`parse_scoped`](ParseContext::parse_scoped).
+    /// **A thin wrapper over [`parse_construct`](ParseContext::parse_construct)**:
+    /// builds the content-loop parser from the driver's
+    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser) factory and runs it
+    /// through `parse_construct(parser, Some(state), None)`. Fusing the factory
+    /// with the descent entry point is the point of this method: routing every
+    /// content descent through it makes one driver override apply at every
+    /// descent site.
+    ///
+    /// Parses one **nodes descent** (a content run: group interior, environment
+    /// body, top-level drive) under `state`. State scoping and restoration follow
+    /// [`parse_construct`](ParseContext::parse_construct).
     ///
     /// # Resuming a stopped run
     ///
@@ -686,7 +681,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// - **Resume under [`NodesOutcome::state`], never under this context's restored
     ///   `state`.** The descent restores [`state`](ParseContext::state) structurally on
-    ///   return ([`parse_scoped`](ParseContext::parse_scoped)), and the run's sibling
+    ///   return ([`parse_construct`](ParseContext::parse_construct)), and the run's sibling
     ///   after-effects (a `\newcommand`-style definition) are applied *internally*, not
     ///   returned as a pass-through delta — so after the call, the outcome's exported
     ///   live state is their only carrier. Re-entering with a clone of `cx.state`
@@ -736,13 +731,21 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     {
         let driver = self.driver;
         let mut parser = driver.make_nodes_parser(stop, child_states);
-        self.parse_scoped(state, &mut *parser)
+        self.parse_construct(&mut *parser, Some(state), None)
     }
 
-    /// Parse one **group descent** (the consumed `GroupOpen` token's facts: open span
-    /// and resolved rule) with `base` as the group's input state, the parser obtained
-    /// from the driver's [`make_group_parser`](ParseDriver::make_group_parser)
-    /// factory — the uniform routing of every group descent site.
+    /// **A thin wrapper over [`parse_construct`](ParseContext::parse_construct)**:
+    /// builds the group parser from the driver's
+    /// [`make_group_parser`](ParseDriver::make_group_parser) factory and runs it
+    /// through `parse_construct(parser, Some(base), frame)`. Fusing the factory
+    /// with the descent entry point is the point of this method: routing every
+    /// group descent through it makes one driver override apply at every group
+    /// site.
+    ///
+    /// Parses one **group descent** (the consumed `GroupOpen` token's facts: open
+    /// span and resolved rule) with `base` as the group's input state. `frame`,
+    /// when `Some`, is pushed around the whole descent
+    /// ([`parse_construct`](ParseContext::parse_construct)'s frame semantics).
     // Same decided pair as above.
     #[allow(clippy::type_complexity)]
     pub fn parse_group<'p>(
@@ -751,6 +754,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         open_span: Span,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
+        frame: Option<Frame<L>>,
     ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)>
     where
         'a: 'p,
@@ -758,7 +762,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     {
         let driver = self.driver;
         let mut parser = driver.make_group_parser(open_span, rule, child_states);
-        self.parse_scoped(base, &mut *parser)
+        self.parse_construct(&mut *parser, Some(base), frame)
     }
 
     /// Run `f` with `frame` pushed on the session's live frame stack — the descent-point

@@ -163,8 +163,9 @@ impl<L: Lang> ParseContext<'_, '_, L> {
             let mut nodes: Vec<BuildId> = Vec::new();
             let mut after_effects: Option<ParsingStateDelta<L>> = None;
             loop {
-                let (outcome, _delta) =
-                    cx.parse_scoped(Arc::clone(&cx.state), &mut *parser)?;
+                // `state: None` — each run re-enters under the loop's live ambient
+                // state (re-anchored below to the previous run's exit state).
+                let (outcome, _delta) = cx.parse_construct(&mut *parser, None, None)?;
                 nodes.extend(outcome.nodes);
                 // Merge each resumed run's after-effect record into one bundle
                 // record (application order — later runs are sequentially later).
