@@ -1229,6 +1229,36 @@ semver output is unexplained.
   untouched per the standing instruction (no new ruling appeared in this file
   during M3).
 
+- **M4 implementer (guide section)** — docs/custom-lang.md: new `##` section
+  "Declaring which features the language has" (anchor slug
+  `declaring-which-features-the-language-has`), placed immediately after
+  "## Token rules and specials recognition" as recommended (the
+  three-spellings narrative builds directly on that section's `enabled`-flag
+  story). Covers the full user-ruled scope: `Lang::Features` + the two
+  ready-made bundles + open custom bundles, the eight-feature roster, the
+  absent/disabled/empty word split (each defined in plain words at first
+  use), runtime meaning of absence (unrecognized syntax, zero-sized storage,
+  compile-error writes), the transparent present store, the
+  `..TokenRules::empty()` recipe (matches the rules.rs rustdoc recipe), the
+  `LangHas*` bounds with reasons (verbatim/group-minting → Groups; scope
+  mutation incl. `lang_initial_with_packages` → Scopes; Paragraphs →
+  Whitespace) plus the commands-do-not-imply-scopes independence,
+  `disable_all()` (consults declarations, flips exactly the present features'
+  flags, never fails), and a brief `prefix_table()`/`trigger_chars()`
+  `Option` note. **1 new doctest** (a complete braces-only language modeled
+  on lang_features.rs's GroupsOnlyLang, boilerplate `#`-hidden): workspace
+  totals 897→**898 passed / 0 failed / 4 ignored** (doc-tests 67→68; delta
+  exactly the new doctest). Also fixed the chapter's stale token-rules
+  opening paragraph (per-block `enabled` flag instead of `enable_*` gates;
+  three spellings with the compile-time *absent* forward-referenced to the
+  new section) and one TrivialLang phrase ("every feature declared present
+  but the seed state's rules are empty" — the old "every syntax feature off"
+  read as absence under the new vocabulary). Gates: `cargo test --doc` green;
+  fresh `rm -rf target/doc && cargo docs` zero warnings; banned-term grep of
+  added lines clean (only substring hits: the API item name `StagedChildren`
+  in the doctest's hidden `make_node_ext` signature). No src changes; only
+  docs/custom-lang.md + this file touched. Nothing surprising.
+
 ### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
 
 `check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two
