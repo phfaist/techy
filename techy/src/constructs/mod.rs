@@ -1310,4 +1310,43 @@ mod tests {
         assert_eq!(err.frames().len(), 1);
         assert_eq!(err.frames()[0].title(), "construct frame");
     }
+
+    /// The `&dyn Fn` hot-path callbacks ([`TokenStopKind::Predicate`],
+    /// [`StopSpec::node`], both [`ChildStateSpec`] `Compute` arms) materialize
+    /// their `Result` on every consultation — per token or per descent — because
+    /// the callee is opaque to the optimizer (unlike the statically dispatched
+    /// `Lang`/driver hooks, where an infallible monomorphized body folds the
+    /// channel away). This pins the measured cost: the whole `Result` stays within
+    /// one cache line, in the same range as the loops' pre-existing per-call
+    /// plumbing ([`ConstructParserResult`] carries the identical [`ParseError`]
+    /// arm), so the `Err` arm is deliberately **not** boxed — re-measure here
+    /// before restructuring.
+    #[test]
+    fn hot_path_result_payloads_stay_within_one_cache_line() {
+        use core::mem::size_of;
+        type Origin = Option<String>;
+
+        let parse_error = size_of::<ParseError<Origin>>();
+        // `TokenStopKind::Predicate` / `StopSpec::node` (pre-sweep: `bool`, 1 B).
+        let predicate = size_of::<Result<bool, ParseError<Origin>>>();
+        // The two `Compute` arms (pre-sweep: `Arc<ParsingState<_>>`, 8 B).
+        let compute =
+            size_of::<Result<Arc<ParsingState<PlainLang>>, ParseError<Origin>>>();
+        // The loops' pre-existing per-token plumbing, for scale.
+        let probe = size_of::<
+            ConstructParserResult<PlainLang, Option<Token<'static, PlainLang>>>,
+        >();
+
+        println!(
+            "ParseError: {parse_error} B; Result<bool, ParseError>: {predicate} B; \
+             Result<Arc<ParsingState>, ParseError>: {compute} B; \
+             probe_token result: {probe} B"
+        );
+        assert!(predicate <= 64, "Predicate/StopSpec::node Result grew: {predicate} B");
+        assert!(compute <= 64, "Compute-arm Result grew: {compute} B");
+        assert!(
+            predicate <= probe.max(64),
+            "the stop hooks outgrew the loop's own plumbing: {predicate} B vs {probe} B"
+        );
+    }
 }
