@@ -396,8 +396,7 @@ mod tests {
     };
     use super::*;
     use crate::constructs::{
-        NoSourceResolver, StdInvocationParser, StrayGroupClose, UnresolvableCommand,
-        UnresolvableSourceReference,
+        NoSourceResolver, StrayGroupClose, UnresolvableCommand, UnresolvableSourceReference,
     };
     use crate::engine::Language;
     use crate::error::{DiagnosticInfo, Recovery};
@@ -783,50 +782,11 @@ mod tests {
 
     // --- persist_state (Ruling B) ----------------------------------------------------
 
-    /// A `\def`-style test callable: stages the standard invocation node, then
-    /// returns `delta` as its after-effect for subsequent siblings — no shipped
-    /// construct produces an after-effect delta, so the persist tests mint one.
-    #[derive(Debug)]
-    struct AfterEffectSpec {
-        delta: ParsingStateDelta<Latexlike>,
-    }
-
-    impl CallableSpec<Latexlike> for AfterEffectSpec {
-        fn make_invocation_parser<'a, 's>(
-            &'a self,
-            invocation: Invocation<'a, 's, Latexlike>,
-        ) -> alloc::boxed::Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
-        where
-            's: 'a,
-        {
-            alloc::boxed::Box::new(AfterEffectParser {
-                inner: StdInvocationParser::new(invocation),
-                delta: self.delta.clone(),
-            })
-        }
-    }
-
-    struct AfterEffectParser<'a, 's> {
-        inner: StdInvocationParser<'a, 's, Latexlike>,
-        delta: ParsingStateDelta<Latexlike>,
-    }
-
-    impl ConstructParser<Latexlike> for AfterEffectParser<'_, '_> {
-        type Output = BuildId;
-        fn parse(
-            &mut self,
-            cx: &mut ParseContext<'_, '_, Latexlike>,
-        ) -> ConstructParserResult<Latexlike, (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>)>
-        {
-            let (id, _) = self.inner.parse(cx)?;
-            Ok((id, Some(Box::new(self.delta.clone()))))
-        }
-    }
-
-    /// A package defining `\{name}` as an [`AfterEffectSpec`] carrying `delta`.
+    /// A package defining `\{name}` as a `\def`-style macro whose after-effect is
+    /// `delta` — the public path ([`MacroSpec::with_after_effect`]).
     fn defining_package(name: &str, delta: ParsingStateDelta<Latexlike>) -> Package<Latexlike> {
         let mut package = Package::new(name);
-        package.insert(CallableType::Macro, name, AfterEffectSpec { delta });
+        package.insert(CallableType::Macro, name, MacroSpec::new(vec![]).with_after_effect(delta));
         package
     }
 

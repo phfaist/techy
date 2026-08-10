@@ -291,20 +291,15 @@ impl<L: Lang> fmt::Debug for Language<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constructs::{
-        ConstructParser, ConstructParserResult, Invocation, StdInvocationParser,
-    };
-    use crate::engine::{CommandResolution, ParseDriver, ResolvedCallable, StdParseDriver};
+    use crate::engine::{ParseDriver, StdParseDriver};
     use crate::error::{DiagnosticInfo, Recovery};
-    use crate::node::{check_tree_invariants, BuildId};
-    use crate::scopes::{CallableQuery, CallableSyntax, Package, ScopeOp, ScopeStack};
+    use crate::node::check_tree_invariants;
+    use crate::scopes::{Package, ScopeOp, ScopeStack};
     use crate::source::{MapResolver, SourceProvenance};
-    use crate::spec::{CallableSpec, StdCallableSpec};
     use crate::state::{GroupOverrides, ParsingStateDelta, StateData, TokenRulesOverrides};
     use crate::token::{
-        CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
-        GroupRules, ParagraphRules, SpecialsRules, Token, TokenKind, TokenRules,
-        WhitespaceRules,
+        CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
+        GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::vec;
@@ -768,194 +763,59 @@ mod tests {
     //
     // A language whose top-level commands carry a `\newcommand`-style after-effect delta:
     // processing one evolves the loop's live state, so it diverges from the frozen seed
-    // *before* a later stray close. The scaffolding mirrors the `CmdLang` pattern in the
-    // `constructs::nodes_parser` tests (a driver that resolves commands against the scope
-    // stack, since `StdParseDriver` resolves nothing).
+    // *before* a later stray close. The after-effect travels the public path
+    // (`latexlike::MacroSpec::with_after_effect`); the findings themselves are root-loop
+    // regressions, independent of the language flavor driving them.
 
-    const CT_MACRO: u32 = 1;
+    use crate::latexlike::{
+        default_token_rules, CallableType, GroupType, Latexlike, LatexlikeDriver, MacroSpec,
+    };
 
-    #[derive(Debug, Clone, Copy)]
-    struct MacroLang;
-    impl Lang for MacroLang {
-        type Features = crate::state::AllLangFeatures;
-        type GroupTypeId = u32;
-        type CallableTypeId = u32;
-        type ModeId = ();
-        type StateExt = ();
-        type Event = ();
-        type SessionExt = ();
-        type SourceOrigin = Option<String>;
-        type NodeExts = ();
-        type InvocationSyntax = ();
-        type Driver = MacroDriver;
-
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
-                rules: macro_rules(vec![brace_rule(), bracket_rule()]),
-                scopes: ScopeStack::new(),
-                mode: (),
-                ext: (),
-            }
-        }
-        fn make_node_ext(
-            _kind: &crate::node::NodeKind<Self>,
-            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
-            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
-            _children: crate::node::StagedChildren<'_, Self>,
-        ) {
-        }
+    fn content_group(open: &str, close: &str) -> Arc<crate::token::GroupRule<Latexlike>> {
+        Arc::new(crate::token::GroupRule {
+            group_type: GroupType::Content,
+            open: open.into(),
+            close: close.into(),
+        })
     }
 
-    #[derive(Debug, Clone, Copy)]
-    struct MacroDriver {
-        recovery: Recovery,
-    }
-    impl MacroDriver {
-        fn new(recovery: Recovery) -> Self {
-            MacroDriver { recovery }
-        }
-    }
-    impl ParseDriver<MacroLang> for MacroDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
-        fn recovery(&self) -> Recovery {
-            self.recovery
-        }
-        fn resolve_command(
-            &self,
-            state: &ParsingState<MacroLang>,
-            token: &Token<'_, MacroLang>,
-        ) -> CommandResolution<MacroLang> {
-            let TokenKind::Command { name, escape_char, .. } = &token.kind else {
-                return CommandResolution::Unresolved { detail: None };
-            };
-            let query = CallableQuery::new(
-                CT_MACRO,
-                name,
-                CallableSyntax::Command { escape_char: *escape_char },
-            )
-            .with_token(token);
-            match state.scopes().retrieve_spec(&query, state) {
-                Ok(resolved) => resolved
-                    .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })
-                    .into(),
-                Err(error) => {
-                    CommandResolution::Unresolved { detail: Some(error.to_string()) }
-                }
-            }
-        }
+    /// A groups override replacing the rule list with the latexlike defaults plus
+    /// `extra` (override lists replace wholesale, so an addition restates the
+    /// defaults).
+    fn add_groups(
+        extra: &[Arc<crate::token::GroupRule<Latexlike>>],
+    ) -> ParsingStateDelta<Latexlike> {
+        let mut rules = default_token_rules::<Latexlike>().groups.rules;
+        rules.extend(extra.iter().cloned());
+        ParsingStateDelta::new().rules(TokenRulesOverrides {
+            groups: GroupOverrides { rules: Some(rules), ..GroupOverrides::default() },
+            ..TokenRulesOverrides::default()
+        })
     }
 
-    /// A callable whose invocation stages the standard node, then returns `delta` as its
-    /// after-effect for subsequent siblings — the `\newcommand` shape.
-    #[derive(Debug)]
-    struct AfterEffectSpec {
-        delta: ParsingStateDelta<MacroLang>,
-    }
-    impl CallableSpec<MacroLang> for AfterEffectSpec {
-        fn make_invocation_parser<'a, 's>(
-            &'a self,
-            invocation: Invocation<'a, 's, MacroLang>,
-        ) -> alloc::boxed::Box<dyn ConstructParser<MacroLang, Output = BuildId> + 'a>
-        where
-            's: 'a,
-        {
-            alloc::boxed::Box::new(AfterEffectParser {
-                inner: StdInvocationParser::new(invocation),
-                delta: self.delta.clone(),
-            })
-        }
-    }
-    struct AfterEffectParser<'a, 's> {
-        inner: StdInvocationParser<'a, 's, MacroLang>,
-        delta: ParsingStateDelta<MacroLang>,
-    }
-    impl ConstructParser<MacroLang> for AfterEffectParser<'_, '_> {
-        type Output = BuildId;
-        fn parse(
-            &mut self,
-            cx: &mut ParseContext<'_, '_, MacroLang>,
-        ) -> ConstructParserResult<
-            MacroLang,
-            (BuildId, Option<alloc::boxed::Box<ParsingStateDelta<MacroLang>>>),
-        > {
-            let (id, _) = self.inner.parse(cx)?;
-            Ok((id, Some(alloc::boxed::Box::new(self.delta.clone()))))
-        }
-    }
-
-    fn brace_rule() -> Arc<GroupRule<MacroLang>> {
-        Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() })
-    }
-    fn bracket_rule() -> Arc<GroupRule<MacroLang>> {
-        Arc::new(GroupRule { group_type: 1, open: "[".into(), close: "]".into() })
-    }
-    fn angle_rule() -> Arc<GroupRule<MacroLang>> {
-        Arc::new(GroupRule { group_type: 2, open: "<".into(), close: ">".into() })
-    }
-    fn double_bracket_rule() -> Arc<GroupRule<MacroLang>> {
-        Arc::new(GroupRule { group_type: 3, open: "[[".into(), close: "]]".into() })
-    }
-
-    fn macro_rules(groups: Vec<Arc<GroupRule<MacroLang>>>) -> TokenRules<MacroLang> {
-        TokenRules {
-            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
-            paragraphs: ParagraphRules { enabled: true },
-            groups: GroupRules {
-                enabled: true,
-                rules: groups,
-                temporary: Vec::new(),
-                expecting_close: None,
-            },
-            commands: CommandRules {
-                enabled: true,
-                rules: vec![Arc::new(CommandRule {
-                    escape_char: '\\',
-                    name_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-                })],
-            },
-            comments: CommentRules {
-                enabled: true,
-                rules: vec![Arc::new(CommentRule { start: "%".into() })],
-            },
-            specials: SpecialsRules { enabled: false },
-            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
-        }
-    }
-
-    /// A tolerant `MacroLang` whose seed defines `name` as a command with after-effect
-    /// `delta` (the everyday seed-plus-packages construction — infallible).
-    fn macro_lang_defining(
+    /// A tolerant latexlike language whose seed defines `\{name}` as a zero-argument
+    /// macro with after-effect `delta`.
+    fn latexlike_defining(
         name: &str,
-        delta: ParsingStateDelta<MacroLang>,
-    ) -> Language<MacroLang> {
-        let mut lib: Package<MacroLang> = Package::new("test");
-        lib.insert(CT_MACRO, name, AfterEffectSpec { delta });
+        delta: ParsingStateDelta<Latexlike>,
+    ) -> Language<Latexlike> {
+        let mut lib: Package<Latexlike> = Package::new("test");
+        lib.insert(CallableType::Macro, name, MacroSpec::new(vec![]).with_after_effect(delta));
         Language::new(
-            MacroDriver::new(Recovery::Tolerant),
+            LatexlikeDriver::new(Recovery::Tolerant),
             ParsingState::lang_initial_with_packages([lib]),
         )
     }
 
     /// A zero-arg macro package defining `name` — a `\def`-style after-effect payload.
-    fn zero_arg_macro(name: &str) -> Arc<Package<MacroLang>> {
-        let mut lib: Package<MacroLang> = Package::new("defined");
-        lib.insert(CT_MACRO, name, Arc::new(StdCallableSpec::default()));
+    fn zero_arg_macro(name: &str) -> Arc<Package<Latexlike>> {
+        let mut lib: Package<Latexlike> = Package::new("defined");
+        lib.insert(CallableType::Macro, name, MacroSpec::default());
         Arc::new(lib)
     }
 
-    /// A group-rules override keeping the seed's `{}`/`[]` and adding `extra`.
-    fn add_group(extra: Arc<GroupRule<MacroLang>>) -> ParsingStateDelta<MacroLang> {
-        ParsingStateDelta::new().rules(TokenRulesOverrides {
-            groups: GroupOverrides {
-                rules: Some(vec![brace_rule(), bracket_rule(), extra]),
-                ..GroupOverrides::default()
-            },
-            ..TokenRulesOverrides::default()
-        })
-    }
-
     /// The callable names among a result's root children, in order (chars/other skipped).
-    fn callable_names(result: &ParseResult<MacroLang>) -> Vec<String> {
+    fn callable_names(result: &ParseResult<Latexlike>) -> Vec<String> {
         result
             .tree
             .root()
@@ -974,7 +834,7 @@ mod tests {
         // spurious `ImplementationError` that aborted the parse even under tolerant
         // recovery. The delimiter the loop actually saw must drive the diagnosis, never a
         // re-read under a different state.
-        let language = macro_lang_defining("addangle", add_group(angle_rule()));
+        let language = latexlike_defining("addangle", add_groups(&[content_group("<", ">")]));
         let result = language.parse("\\addangle >x").unwrap();
         // Recovery continued past the stray close: `\addangle` staged and `x` reached.
         assert_eq!(callable_names(&result), ["addangle"]);
@@ -996,7 +856,7 @@ mod tests {
         // the old root loop resumed every descent from the frozen `seed`, so the `\def`
         // definition was silently dropped across the skip and `\late` came out unresolvable
         // (a second, spurious diagnostic plus a chars fallback).
-        let language = macro_lang_defining(
+        let language = latexlike_defining(
             "def",
             ParsingStateDelta::new().push_provider(zero_arg_macro("late")),
         );
@@ -1020,7 +880,21 @@ mod tests {
         // so it reported the wrong (shorter) delimiter and consumed a single byte — leaving
         // the second `]` to surface as a *second* stray close. Carrying the delimiter on
         // the stop cause makes the loop report `]]` once and skip both bytes.
-        let language = macro_lang_defining("widen", add_group(double_bracket_rule()));
+        // The seed must already close on a single `]` (the finding's premise), so the
+        // language seeds from a state derived with the `[`/`]` pair added; `\widen`'s
+        // after-effect keeps that pair and adds `[[`/`]]`.
+        let bracket = content_group("[", "]");
+        let mut lib: Package<Latexlike> = Package::new("test");
+        lib.insert(
+            CallableType::Macro,
+            "widen",
+            MacroSpec::new(vec![])
+                .with_after_effect(add_groups(&[bracket.clone(), content_group("[[", "]]")])),
+        );
+        let seed = ParsingState::lang_initial_with_packages([lib])
+            .derived(&add_groups(&[bracket]))
+            .unwrap();
+        let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed);
         let result = language.parse("\\widen ]]x").unwrap();
         assert_eq!(callable_names(&result), ["widen"]);
         assert_eq!(result.diagnostics.len(), 1);
