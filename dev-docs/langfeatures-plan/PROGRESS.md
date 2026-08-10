@@ -4,6 +4,8 @@
 - **Branch**: `lang-features`
 - **M3 worktree**: `/Users/philippe/projects/techy/.claude/worktrees/agent-abcf5ade530ed3cd0`
   (branch `lang-features-m3`, off `lang-features`; fast-forwards into the chain at merge time)
+- **M4 worktree**: `/Users/philippe/projects/techy/.claude/worktrees/agent-a2471b7e4952471cb`
+  (branch `lang-features-m4`, off `lang-features-m3` at 4c6cb44; fast-forwards into the chain at merge time)
 - **Plan**: see `dev-docs/langfeatures-plan/PLAN.md` (Design Spec is user-ruled; do not relitigate)
 
 ## Status
@@ -14,7 +16,7 @@
 | M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
 | M2 | `Lang::Features` + const gating | done (d5d6aa8 + d673edf + c955741 + a0bf306 + 54cbe7d + final fix/gate commit) |
 | M3 | Uniform storage gating (FeaturePresence::Store) | done (f6cb54e + fc33dee + 81726d7 + d3da11b + review ab11dfd + final fix/gate commit; branch `lang-features-m3`, ready to fast-forward into `lang-features`) |
-| M4 | Docs, coherence sweep, closure (delete this directory) | pending |
+| M4 | Docs, coherence sweep, closure (delete this directory) | in progress |
 
 ## Log
 
