@@ -227,7 +227,18 @@ branch chain for ff-merge (merges not run from the primary checkout).
   `unconfigured` mark, so construction is constructor-only. HEADROOM executed
   as ruled (64 KiB, Computed-only); flag to the user per decision #7.
 - [ ] Part 2 reviewed — findings resolved
-- [ ] Part 3 implemented — gates green
+- [x] Part 3 implemented — gates green
+- 2026-08-10 Part 3 landed on `descent-3-boxing`: 2cb7a6b (the boxing sweep —
+  pair + `NodesOutcome::after_effects` + `derive_state_recording` record +
+  wrapper signatures + plumbing, 14 src files), 500e3a8 (guide docs:
+  construct-parsers.md, ai-guide-custom-lang.md). build/test/docs green, zero
+  warnings (777 lib tests). Non-mechanical hand-fixes: `derive_state_recording`'s
+  `None` arm boxes the applied clone; `parse_attached_source` unboxes each run's
+  record into the (deliberately unboxed) `AttachedSourceOutcome` bundle;
+  `InputInvocationParser`'s persist_state forwarding re-boxes via
+  `.map(Box::new)`; four test producers wrap their deltas in `Box::new`.
+  `AttachedSourceOutcome::after_effects` stays unboxed per the ruled scope
+  (decision #9 lists the pair and `NodesOutcome` only).
 - [ ] Part 3 reviewed — findings resolved
 - [ ] Part 4 docs/rationale — gates green
 - [ ] Final: rebase onto main, chain ready for ff-merge; scaffolding removed
