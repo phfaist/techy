@@ -737,8 +737,8 @@ mod feature_composition {
 ///   platform-independent.
 /// - **Transparency**: for an all-features-present language, the gated stores are the
 ///   payload types themselves, so the sizes are exactly what they were before storage
-///   gating existed (measured on the pre-M3 tree, 2026-08-06; recorded in
-///   dev-docs/langfeatures-plan/PROGRESS.md). Pointer-size dependent, so pinned for
+///   gating existed (measured on the tree before storage gating landed, 2026-08-06;
+///   the asserts below are the durable record). Pointer-size dependent, so pinned for
 ///   64-bit targets only.
 mod storage_collapse {
     use core::mem::size_of;
