@@ -1420,6 +1420,27 @@ semver output is unexplained.
   CONFIRMED as correct — pinned byte counts would rot in guide prose; the M3d
   regression tests are their home. Final gates follow as the closure step.
 
+- **Supervisor: M4 final gate run (post-fix-pass, at c7721a8)** — all green:
+  `cargo build` clean; `cargo test --workspace` **898 passed / 0 failed / 4
+  ignored** (per-target 758+30+8+12+21+1+68; 2+2 ignored — the 897 M3 baseline
+  + exactly the one M4a guide doctest); fresh `rm -rf target/doc && cargo docs`
+  zero warnings; rendered-HTML verification of the fix-pass-changed pages: the
+  guide/custom_lang page renders the forbidden-characters exception and the
+  disable_all parenthetical, the section anchor is present, every hyperlink
+  target in the page exists on disk (scripted check; the sole miss is rustdoc's
+  own `${f}` JS template string), and a grep of the entire rendered bundle
+  finds no `AbsentFeatureOverrideError`, no `enable_multi_newline_paragraphs`,
+  and no "facet". `scripts/check_semver.sh` vs `api-baseline`: **exactly the
+  recorded M3 expected-breaking list** — the same 2 failed categories
+  (`constructible_struct_adds_field`: M1's five rows;
+  `struct_pub_field_missing`: the 8+8 old fields), no new rows (M4 is
+  docs-only; baseline NOT moved). Superseded-names grep re-run over the final
+  tree: "facet" zero outside the DESIGN_RATIONALE register/rejected-design
+  history; no `Gate`/`On`/`Off` items; every bare `Features` hit is the
+  spec-mandated `Lang::Features` associated type. Closure (scaffolding
+  removal) is the next and last commit; the still-open questions are
+  transcribed verbatim into the supervisor's final report before removal.
+
 ### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
 
 `check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two
