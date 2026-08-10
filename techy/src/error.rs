@@ -57,6 +57,24 @@ pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync 
     /// struct rename is an internal refactor, an identifier change is a silent break.
     const IDENTIFIER: &'static str;
 
+    /// The identity a stored condition *instance* answers — what
+    /// [`Diagnostic::identifier`]/[`ParseError::identifier`] report. The default
+    /// answers [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER), and every ordinary
+    /// condition keeps that default: one Rust type, one compile-time identifier
+    /// remains the norm.
+    ///
+    /// Overriding is for the exceptional case where a compile-time identifier is
+    /// impossible: binding/embedding **adapter types**, where a single Rust struct
+    /// carries conditions defined at runtime on the other side of the boundary
+    /// (e.g. Python-defined conditions carried by one Rust adapter type), answering
+    /// a per-instance identifier stored in the value. An overriding adapter still
+    /// declares its [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const — that stays
+    /// the type's own identity for type-keyed uses; the override changes only what
+    /// stored instances report.
+    fn identifier(&self) -> &str {
+        Self::IDENTIFIER
+    }
+
     /// Serialization-boundary projection only (JSON output, generic tooling) — never a
     /// programmatic access path: consumers downcast to the concrete type instead. The
     /// default is an empty map; the authoritative schema is the Rust struct itself.
@@ -67,8 +85,11 @@ pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync 
 
 mod sealed {
     /// Seals [`DiagnosticData`](super::DiagnosticData): the blanket impl over
-    /// [`DiagnosticInfo`](super::DiagnosticInfo) is the only way in, which enforces the
-    /// const-identifier discipline.
+    /// [`DiagnosticInfo`](super::DiagnosticInfo) is the only way in, so every stored
+    /// condition is a `DiagnosticInfo` type. The const-identifier discipline is the
+    /// default that comes with it; the per-instance
+    /// [`identifier()`](super::DiagnosticInfo::identifier) override is the
+    /// exceptional case (binding/embedding adapter types).
     pub trait Sealed {}
 }
 
@@ -84,7 +105,8 @@ impl<T: DiagnosticInfo> sealed::Sealed for T {}
 pub trait DiagnosticData:
     Any + fmt::Display + fmt::Debug + Send + Sync + sealed::Sealed
 {
-    /// The condition's wire identity ([`DiagnosticInfo::IDENTIFIER`]).
+    /// The condition's wire identity ([`DiagnosticInfo::identifier`] — for every
+    /// ordinary condition, the [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const).
     fn identifier(&self) -> &str;
 
     /// The condition's serialization-boundary projection
@@ -98,7 +120,7 @@ pub trait DiagnosticData:
 
 impl<T: DiagnosticInfo> DiagnosticData for T {
     fn identifier(&self) -> &str {
-        T::IDENTIFIER
+        DiagnosticInfo::identifier(self)
     }
 
     fn serializable_data(&self) -> DiagnosticValue {
@@ -938,6 +960,60 @@ mod tests {
         no_constructor
     )]
     struct OtherCondition;
+
+    /// A binding-adapter-shaped condition: one Rust type carrying conditions defined
+    /// at runtime on the other side of an embedding boundary, overriding
+    /// `identifier()` per instance — the exceptional case the method exists for.
+    #[derive(Debug, Clone)]
+    struct AdapterCondition {
+        identifier: String,
+        detail: String,
+    }
+
+    impl fmt::Display for AdapterCondition {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&self.detail)
+        }
+    }
+
+    impl DiagnosticInfo for AdapterCondition {
+        const IDENTIFIER: &'static str = "test.error.adapter";
+        fn identifier(&self) -> &str {
+            &self.identifier
+        }
+    }
+
+    #[test]
+    fn an_adapter_condition_reports_its_per_instance_identifier() {
+        let source = arc_source("Hello");
+        let diagnostic = Diagnostic::error(
+            AdapterCondition {
+                identifier: "pylang.custom.my-condition".to_string(),
+                detail: "adapter-carried condition".to_string(),
+            },
+            SourceSpan::new(&source, 0..1),
+        );
+        // The stored instance answers its runtime identifier…
+        assert_eq!(diagnostic.identifier(), "pylang.custom.my-condition");
+        // …preserved across the dyn clone path…
+        assert_eq!(diagnostic.clone().identifier(), "pylang.custom.my-condition");
+        // …while the adapter type keeps its const and the in-process type identity.
+        assert_eq!(AdapterCondition::IDENTIFIER, "test.error.adapter");
+        let condition = diagnostic.data().downcast_ref::<AdapterCondition>().unwrap();
+        assert_eq!(condition.detail, "adapter-carried condition");
+    }
+
+    #[test]
+    fn ordinary_conditions_still_answer_their_const_identifier() {
+        // The default `identifier()` body answers the const — shipped conditions and
+        // `T::IDENTIFIER`-keyed matching are unaffected by the method's existence.
+        let ordinary = TestCondition::new("x");
+        assert_eq!(DiagnosticInfo::identifier(&ordinary), TestCondition::IDENTIFIER);
+        let source = arc_source("Hello");
+        let diagnostic =
+            Diagnostic::error(TestCondition::new("x"), SourceSpan::new(&source, 0..1));
+        assert_eq!(diagnostic.identifier(), TestCondition::IDENTIFIER);
+    }
 
     fn origin(url: &str) -> Option<String> {
         Some(url.to_string())
