@@ -24,7 +24,7 @@ syntactic construct. The **parsing state**
 A minimal language is a unit struct with the associated types filled in.
 **The only required method is
 [`make_node_ext`](crate::core::Lang::make_node_ext)** (node exts have no
-default value; a no-ext language writes the empty one-liner); every other
+default value; a no-ext language writes the `Ok(())` one-liner); every other
 method has a working default. Contracts live on
 [`Lang`](crate::core::Lang)'s API page — summary:
 
@@ -261,7 +261,7 @@ whole toolkit:
 | Need | Use |
 |---|---|
 | read tokens | `cx.tokens` ([`TokenReader`](crate::core::TokenReader)); prefer [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token) (maps tokenizer errors per recovery policy) |
-| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns `Result`: a [`BuildId`](crate::core::node::BuildId), or a [`NodeBuildError`](crate::core::node::NodeBuildError) to lift via `implementation_error` (never swallowed by tolerant recovery); children staged first, bottom-up |
+| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns `Result`: a [`BuildId`](crate::core::node::BuildId), or a [`NodeBuildError`](crate::core::node::NodeBuildError) to lift — contract violations via `implementation_error`, the ext mint's own reported failure ([`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed)) as a [`HookFailed`](crate::error::HookFailed) condition; neither is swallowed by tolerant recovery; children staged first, bottom-up |
 | derive/scope state | [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state); [`cx.with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state) / [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state) scope with structural restore — state-scoping utilities only, never a route into a sub-parse |
 | run a sub-parser (descend) | [`cx.parse_construct(parser, state, frame)`](crate::core::constructs::ParseContext::parse_construct) — the one entry point every `ConstructParser` run MUST go through (`state: None` = the current state, same scoping; optional traceback frame). For child content and groups, the thin wrappers [`cx.parse_nodes(state, stop, child_states)`](crate::core::constructs::ParseContext::parse_nodes) / [`cx.parse_group(…)`](crate::core::constructs::ParseContext::parse_group) add the driver's parser factories — never instantiate loop parsers yourself (driver factories must apply) |
 | report a source problem | [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover) — strict: hands back `Err` to propagate; tolerant: records the diagnostic, returns `Ok`, then **your parser performs its documented local recovery and continues** |
@@ -305,7 +305,11 @@ to `false`. Takeovers that keep declared-argument parsing call
 [`DiagnosticInfo`](crate::error::DiagnosticInfo) (derive available: declare
 the semver-stable identifier + a message format string; third-party
 conditions flow through the same carriers as the library's own). Document
-your recovery, as every shipped condition type's page does. Extension-bug
-paths use
-[`ImplementationError`](crate::core::constructs::ImplementationError) —
-loud even in tolerant parsing.
+your recovery, as every shipped condition type's page does. Three answers
+for a failing extension:
+[`ImplementationError`](crate::core::constructs::ImplementationError) for
+contract violations (loud even in tolerant parsing),
+[`HookFailed`](crate::error::HookFailed) for operational failures in
+consumer-supplied hook code (an input/output failure, a runtime failure
+behind a language binding), and ordinary domain conditions for problems the
+hook diagnoses in the parsed document.

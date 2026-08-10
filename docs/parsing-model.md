@@ -245,7 +245,13 @@ it deliberately bypasses `recover` and the recovery policy:
 [`ParseContext::implementation_error`](crate::core::constructs::ParseContext::implementation_error)
 builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
 abort that no recovery policy can absorb. A bug in extension code fails
-loudly even in tolerant parsing.
+loudly even in tolerant parsing. The split is three-way:
+`ImplementationError` for contract violations,
+[`HookFailed`](crate::error::HookFailed) for operational failures in
+consumer-supplied hook code (an input/output failure, a runtime failure
+behind a language binding — also an abort under any policy), and ordinary
+domain conditions — through `recover` — for problems a hook diagnoses in
+the parsed document.
 
 ## Where the extension points are
 

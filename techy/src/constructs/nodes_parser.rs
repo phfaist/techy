@@ -606,7 +606,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         span: Span,
     ) -> ConstructParserResult<L, BuildId> {
         let id = cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), vec![])
-            .map_err(|error| cx.implementation_error(error, span))?;
+            .map_err(|error| cx.staging_error(error, span))?;
         self.nodes.push(id);
         Ok(id)
     }
@@ -735,18 +735,26 @@ impl<'p, L: Lang> NodesParser<'p, L> {
                 .map_err(|error| cx.attach_hook_frames(error))?,
         };
         // The invocation's traceback frame — built before the `Invocation` moves into
-        // the factory, pushed around the parser run (the dispatch push site, [§dd-dr:errors]).
+        // the factory, pushed around the factory call and the parser run alike (the
+        // dispatch push site, [§dd-dr:errors]): a failing factory's traceback names
+        // the failing spec too.
         let frame = invocation_frame(cx, &invocation);
         cx.tokens.move_past(invocation.token, true);
-        // The parser comes from the driver's interception seam (default: the spec's
-        // own factory) — Phase 7.2. A factory Err aborts under any policy ("could
-        // not build the parser"), with the live traceback attached here.
         let driver = cx.driver;
-        let mut parser = driver
-            .make_invocation_parser(invocation)
-            .map_err(|error| cx.attach_hook_frames(error))?;
-        let result = cx.parse_construct(&mut *parser, Some(base), Some(frame));
-        drop(parser);
+        let result = cx.with_frame(frame, |cx| {
+            // The parser comes from the driver's interception seam (default: the
+            // spec's own factory) — Phase 7.2. A factory Err aborts under any
+            // policy ("could not build the parser"), with the live traceback
+            // attached here.
+            let mut parser = driver
+                .make_invocation_parser(invocation)
+                .map_err(|error| cx.attach_hook_frames(error))?;
+            // The frame is already live — `parse_construct` gets `None`, not a
+            // second copy of it.
+            let result = cx.parse_construct(&mut *parser, Some(base), None);
+            drop(parser);
+            result
+        });
         let (id, delta) = result?;
         self.nodes.push(id);
         if let Some(delta) = delta {
@@ -2019,7 +2027,7 @@ mod tests {
             span: SourceSpan::new(&source, 0..0),
         };
         let error = cx.with_frame(frame, |cx| parser.parse(cx)).unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: stop table unavailable"
@@ -2171,7 +2179,7 @@ mod tests {
             span: SourceSpan::new(&source, 0..0),
         };
         let error = cx.with_frame(frame, |cx| parser.parse(cx)).unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         // The live traceback, attached at the consultation site.
         assert_eq!(error.frames().len(), 1);
         assert_eq!(error.frames()[0].title(), "test descent");
@@ -2747,13 +2755,15 @@ mod tests {
         let error =
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: resolver backend is down"
         );
-        // The command sits inside a group: the group frame is on the traceback.
-        assert!(!error.frames().is_empty());
+        // The command sits inside a group: the group frame is on the traceback
+        // (resolution precedes the invocation frame, so it is the only frame).
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "group ‘{’");
     }
 
     // --- ParseDriver::refine_diagnostic ([§dd-dr:errors]) ----------------------------------------------
@@ -3696,11 +3706,15 @@ mod tests {
             policy,
         )
         .unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         // The DeriveError cause chain is reachable off the carried condition.
         let condition =
             error.data().downcast_ref::<crate::error::HookFailed>().unwrap();
         assert!(condition.cause.as_ref().unwrap().to_string().contains("scope op failed"));
+        // The policy computes the descent base *before* the group frame is pushed,
+        // and the harness drives the root loop with no frame of its own — the
+        // attached snapshot is exactly empty.
+        assert_eq!(error.frames().len(), 0);
     }
 
     #[test]
@@ -3967,7 +3981,7 @@ mod tests {
         let error =
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: observer backend gone"
@@ -4238,13 +4252,16 @@ mod tests {
         let error =
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: parser backend unavailable"
         );
-        // The command sits inside a group: the group frame is on the traceback.
-        assert!(!error.frames().is_empty());
+        // The dispatch pushes the invocation's own frame around the factory call,
+        // so the traceback names the failing spec — inside the group's frame.
+        assert_eq!(error.frames().len(), 2);
+        assert_eq!(error.frames()[0].title(), "callable ‘\\fail’");
+        assert_eq!(error.frames()[1].title(), "group ‘{’");
     }
 
     #[test]
@@ -4313,17 +4330,20 @@ mod tests {
         let error =
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
-        assert!(!error.frames().is_empty());
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "group ‘{’");
     }
 
     #[test]
-    fn a_failing_make_node_ext_aborts_as_an_implementation_error() {
+    fn a_failing_make_node_ext_aborts_as_a_hook_failure() {
         // The mint's error channel inside a parse: `Lang::make_node_ext` errs with
         // the builder-level `NodeBuildError::ExtMintFailed`; the staging entry
-        // point reports it like any other builder error and the staging caller
-        // lifts it via `implementation_error` — an abort under any recovery
-        // policy, with the live traceback attached.
+        // point reports it like any other builder error, and the staging caller's
+        // lift applies the condition split — the mint's reported operational
+        // failure becomes `HookFailed`, while every other builder error stays
+        // `ImplementationError` — an abort under any recovery policy, with the
+        // live traceback attached.
         #[derive(Debug, Clone, Copy)]
         struct MintFailLang;
         impl Lang for MintFailLang {
@@ -4361,16 +4381,14 @@ mod tests {
         let error =
             try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
-        assert_eq!(error.identifier(), "core.constructs.implementation-error");
-        assert!(
-            error.message().contains(
-                "the node-ext mint (Lang::make_node_ext) reported a failure: \
-                 ext backend unavailable"
-            ),
-            "{}",
-            error.message()
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: ext backend unavailable"
         );
-        assert!(!error.frames().is_empty());
+        // The chars node is staged inside the group, so the group frame is live.
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "group ‘{’");
     }
 
     // --- the scope stack in a driven parse (7.3): error specs, op failures, specials ---

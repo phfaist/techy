@@ -156,6 +156,7 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
 /// [`ParseError`] that ends the parse
 /// ([`ParseDriver::observe_transition`]'s contract).
 #[allow(clippy::large_enum_variant)] // large `Derive` arm by design — see `DeriveError`
+#[non_exhaustive]
 pub enum SessionDeriveError<L: Lang> {
     /// The derivation failed ([`ParsingState::derived`]'s error): failing scope
     /// ops and/or a finalize refusal, with the recovered state for tolerant
@@ -601,7 +602,8 @@ pub struct ParseResult<L: Lang> {
     /// while the parse runs, and this field hands the accumulated value out (the
     /// hook's diagnostics sink is the reporting half, landing in
     /// [`diagnostics`](ParseResult::diagnostics)). `()` for languages declaring no
-    /// session extension.
+    /// session extension. Available on a completed parse only: an aborted parse
+    /// (the strict-mode `Err`) drops the accumulated value with its session.
     pub session_ext: L::SessionExt,
 }
 
@@ -1793,7 +1795,7 @@ mod tests {
 
         let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
         let error = cx.derive_state(&delta).unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: event backend is down"

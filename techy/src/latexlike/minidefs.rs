@@ -48,7 +48,13 @@ use super::{
 /// [`Latexlike`](super::Latexlike)): they carry no math meaning, so inside
 /// `$…$` they stay plain characters. The tie `~` stays visible in every mode.
 /// The multi-character triggers ride the scope-stack scan's longest-match rule
-/// (`---` beats `--`).
+/// (`---` beats `--`). A language whose seed state data cannot be built
+/// ([`Lang::initial_state_data`](crate::state::Lang::initial_state_data)
+/// answers `Err`) still gets the package: the ligature restriction then uses
+/// the mode type's default value — the same mode
+/// [`StateData::empty`](crate::state::StateData::empty) seeds, and
+/// [`Mode::Text`](super::Mode::Text) for the shipped preset — while the
+/// seeding call site reports the seed failure itself.
 ///
 /// Returns a bare [`Package`] — load it explicitly, e.g.
 /// `ParsingState::lang_initial_with_packages([minilatex_package()])`; it is never

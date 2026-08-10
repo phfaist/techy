@@ -76,7 +76,11 @@ with
 [`implementation_error`](crate::core::constructs::ParseContext::implementation_error)
 — a staging failure is an extension-contract violation, never something
 tolerant recovery may swallow (the chapter's closing example shows the
-lift). Children are
+lift) — except for the ext mint's own reported failure
+([`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed)),
+which is an operational failure to lift as a
+[`HookFailed`](crate::error::HookFailed) condition (also an abort under
+any policy; `stage_node`'s page states the split). Children are
 staged first, bottom-up, and claimed by the parent's own staging call.
 [`cx.staged_nodes()`](crate::core::constructs::ParseContext::staged_nodes)
 is the read-only view over what has been staged so far.
@@ -297,6 +301,12 @@ builds an [`ImplementationError`](crate::core::constructs::ImplementationError)
 abort that ignores the recovery policy. Use it for "this cannot happen
 unless a contract was broken" paths — for example, a
 [`NodeBuildError`](crate::core::node::NodeBuildError) from a staging call.
+The full split is three-way: `ImplementationError` for contract violations
+(loud even in tolerant parsing), [`HookFailed`](crate::error::HookFailed)
+for operational failures in consumer-supplied hook code (an input/output
+failure, a runtime failure behind a language binding — also an abort), and
+ordinary domain conditions — through `cx.recover` — for problems diagnosed
+in the parsed document.
 
 ## A complete takeover parser
 

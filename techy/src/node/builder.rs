@@ -668,14 +668,20 @@ fn check_spanned_contents<L: Lang>(
 ///
 /// This reports an **implementation bug** in an extension, not a source-input
 /// condition: parse layers lift it into a `ParseError` that aborts even under tolerant
-/// recovery, and a builder that returned one is poisoned (the build must be abandoned).
+/// recovery, and a builder that returned one is poisoned (the build must be
+/// abandoned) — with the one exception below.
 ///
 /// One variant carries a reported failure rather than a violated contract:
 /// [`ExtMintFailed`](NodeBuildError::ExtMintFailed) is
 /// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)'s own error channel —
 /// minting is part of staging, and the hook also runs for consumer-built trees,
-/// where no parse-side error type exists. Parse layers lift it like every other
-/// value of this type.
+/// where no parse-side error type exists. It comes out of the mint call itself,
+/// never out of [`add`](NodeTreeBuilder::add): no children have been claimed, the
+/// builder stays usable, and the poisoned-builder rule above does not apply to
+/// it. Inside a parse it aborts like every other value of this type, but the
+/// lift raises a [`HookFailed`](crate::error::HookFailed) condition — an
+/// operational failure in consumer-supplied hook code — instead of an
+/// implementation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NodeBuildError {

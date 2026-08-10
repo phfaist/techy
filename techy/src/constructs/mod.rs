@@ -86,7 +86,7 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
-use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, ParseError, Severity};
+use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
@@ -120,6 +120,19 @@ pub(crate) fn invocation_frame<L: Lang>(
 /// all methods the construct parser might need, including to stage nodes, to delegate
 /// parsing to sub-parsers, pushing frames on the frames stack, to change the parsing
 /// state, etc.
+///
+/// **Dispatching fallible public hooks yourself.** A third-party construct parser
+/// that consults a fallible hook directly — say
+/// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) or
+/// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)
+/// — also owns the error's traceback: the hooks have no session access, so the
+/// in-crate consultation sites attach the live traceback to a hook-returned abort
+/// error through a crate-internal helper. Do the same at your dispatch site with
+/// `error.with_frames(cx.session.snapshot_frames())`
+/// ([`ParseError::with_frames`](crate::error::ParseError::with_frames),
+/// [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames)),
+/// guarded on `error.frames().is_empty()` — an error already carrying frames keeps
+/// them.
 pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
@@ -190,8 +203,14 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// ([`NodeBuildError`](crate::node::NodeBuildError)) — an implementation bug in an
     /// extension, not a source condition — or the ext mint's own reported failure
     /// ([`ExtMintFailed`](crate::node::NodeBuildError::ExtMintFailed),
-    /// [`Lang::make_node_ext`]'s error channel); lift either with
-    /// [`implementation_error`](ParseContext::implementation_error).
+    /// [`Lang::make_node_ext`]'s error channel). Lift a contract violation with
+    /// [`implementation_error`](ParseContext::implementation_error); lift
+    /// `ExtMintFailed` — an operational failure in consumer-supplied hook code, not
+    /// a contract violation — as a [`HookFailed`](crate::error::HookFailed)
+    /// condition carrying the mint's `detail`, with the live traceback attached
+    /// (`error.with_frames(cx.session.snapshot_frames())` when the error carries no
+    /// frames yet). The in-crate staging callers match the variant and do exactly
+    /// that; either lift aborts the parse under any recovery policy.
     pub fn stage_node(
         &mut self,
         kind: NodeKind<L>,
@@ -247,8 +266,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// rule or from `end_pos`) that precedes the trigger's start or does not lie
     /// within the source content on a character boundary: a contract violation by
     /// the calling parser, lifted as an [`ImplementationError`] that aborts under
-    /// any recovery policy, never a panic — or a staging-contract violation lifted
-    /// from [`stage_node`](ParseContext::stage_node) the same way.
+    /// any recovery policy, never a panic — or a
+    /// [`stage_node`](ParseContext::stage_node) failure lifted per that method's
+    /// split (contract violations as [`ImplementationError`], the ext mint's
+    /// reported failure as [`HookFailed`](crate::error::HookFailed); both abort
+    /// under any recovery policy).
     pub fn stage_invocation(
         &mut self,
         invocation: &Invocation<'_, '_, L>,
@@ -305,7 +327,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             Arc::clone(&self.state),
             children,
         )
-        .map_err(|error| self.implementation_error(error, Span::new(start, end)))
+        .map_err(|error| self.staging_error(error, Span::new(start, end)))
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error
@@ -947,6 +969,31 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         )
         .with_frames(self.session.snapshot_frames())
     }
+
+    /// Build the abort error for a failed staging call — the in-crate lift of a
+    /// [`NodeBuildError`](crate::node::NodeBuildError) detected at `span`, applying
+    /// the condition split stated on [`stage_node`](ParseContext::stage_node): the
+    /// ext mint's own reported failure
+    /// ([`ExtMintFailed`](crate::node::NodeBuildError::ExtMintFailed)) becomes a
+    /// [`HookFailed`] condition carrying the mint's `detail` — an operational
+    /// failure in consumer-supplied hook code, not a contract violation — and every
+    /// other variant goes through
+    /// [`implementation_error`](ParseContext::implementation_error). Both arms
+    /// attach the live traceback and abort under any recovery policy.
+    pub(crate) fn staging_error(
+        &self,
+        error: NodeBuildError,
+        span: Span,
+    ) -> ParseError<L::SourceOrigin> {
+        match error {
+            NodeBuildError::ExtMintFailed { detail } => ParseError::new(
+                HookFailed::new(detail, None),
+                SourceSpan::new(&self.source, span),
+            )
+            .with_frames(self.session.snapshot_frames()),
+            other => self.implementation_error(other, span),
+        }
+    }
 }
 
 /// Condition: an implementation of an extension point — an argument or construct
@@ -1331,11 +1378,12 @@ mod tests {
     /// their `Result` on every consultation — per token or per descent — because
     /// the callee is opaque to the optimizer (unlike the statically dispatched
     /// `Lang`/driver hooks, where an infallible monomorphized body folds the
-    /// channel away). This pins the measured cost: the whole `Result` stays within
-    /// one cache line, in the same range as the loops' pre-existing per-call
-    /// plumbing ([`ConstructParserResult`] carries the identical [`ParseError`]
-    /// arm), so the `Err` arm is deliberately **not** boxed — re-measure here
-    /// before restructuring.
+    /// channel away). This pins the measured cost: the `Result` wrapper adds
+    /// zero bytes over the bare [`ParseError`] arm (the `Ok` payload fits the
+    /// error type's niches) and the whole `Result` stays within one cache line
+    /// ([`ConstructParserResult`] carries the identical [`ParseError`] arm), so
+    /// the `Err` arm is deliberately **not** boxed — re-measure here before
+    /// restructuring.
     #[test]
     fn hot_path_result_payloads_stay_within_one_cache_line() {
         use core::mem::size_of;
@@ -1347,21 +1395,17 @@ mod tests {
         // The two `Compute` arms (pre-sweep: `Arc<ParsingState<_>>`, 8 B).
         let compute =
             size_of::<Result<Arc<ParsingState<PlainLang>>, ParseError<Origin>>>();
-        // The loops' pre-existing per-token plumbing, for scale.
-        let probe = size_of::<
-            ConstructParserResult<PlainLang, Option<Token<'static, PlainLang>>>,
-        >();
 
-        println!(
-            "ParseError: {parse_error} B; Result<bool, ParseError>: {predicate} B; \
-             Result<Arc<ParsingState>, ParseError>: {compute} B; \
-             probe_token result: {probe} B"
+        // The niche fit: wrapping either `Ok` payload in `Result` costs nothing
+        // over the bare error arm.
+        assert_eq!(
+            predicate, parse_error,
+            "Predicate/StopSpec::node Result outgrew the bare ParseError"
         );
-        assert!(predicate <= 64, "Predicate/StopSpec::node Result grew: {predicate} B");
-        assert!(compute <= 64, "Compute-arm Result grew: {compute} B");
-        assert!(
-            predicate <= probe.max(64),
-            "the stop hooks outgrew the loop's own plumbing: {predicate} B vs {probe} B"
+        assert_eq!(
+            compute, parse_error,
+            "Compute-arm Result outgrew the bare ParseError"
         );
+        assert!(parse_error <= 64, "ParseError outgrew one cache line: {parse_error} B");
     }
 }

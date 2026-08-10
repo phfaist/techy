@@ -127,7 +127,11 @@ pub enum ExtractError {
         node: NodeId,
     },
     /// Building the result tree failed — the builder surfaced an implementation bug,
-    /// never a source-input condition.
+    /// never a source-input condition — or the ext mint
+    /// ([`Lang::make_node_ext`], run for every fresh node) reported its own
+    /// operational failure
+    /// ([`ExtMintFailed`](NodeBuildError::ExtMintFailed), the one variant carrying
+    /// a reported failure rather than a violated contract).
     Build(NodeBuildError),
 }
 

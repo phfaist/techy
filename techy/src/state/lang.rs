@@ -121,7 +121,7 @@ impl<L: Lang> InvocationSyntax<L> for () {
 /// except [`make_node_ext`](Lang::make_node_ext) has a working default (no transition
 /// customization, no specials) — the one exception exists because node exts have no
 /// default value ([`NodeExtTypes`]'s population-is-initialization rule; a no-ext lang's
-/// body is the empty one-liner). The latexlike preset and FLM are the intended full
+/// body is the `Ok(())` one-liner). The latexlike preset and FLM are the intended full
 /// implementors.
 ///
 /// All associated types are `Send + Sync`: thread-safe states and trees are a core
@@ -490,9 +490,14 @@ pub trait Lang: Sized + 'static {
     /// (the explicit transform-side recipe), where no parse or span context
     /// exists. Inside a parse, the staging entry point
     /// ([`ParseContext::stage_node`](crate::constructs::ParseContext::stage_node))
-    /// reports it like every other builder error, and its callers lift it via
-    /// [`implementation_error`](crate::constructs::ParseContext::implementation_error)
-    /// — an abort under any recovery policy, with the live traceback attached.
+    /// reports it like every other builder error, and its callers' lift applies
+    /// the condition split: `ExtMintFailed` — the mint's own reported operational
+    /// failure — becomes a [`HookFailed`](crate::error::HookFailed) condition,
+    /// while every other builder error becomes an
+    /// [`ImplementationError`](crate::constructs::ImplementationError)
+    /// (via [`implementation_error`](crate::constructs::ParseContext::implementation_error));
+    /// either way the parse aborts under any recovery policy, with the live
+    /// traceback attached.
     /// An infallible implementation wraps its ext in `Ok(...)` and that is the
     /// only change.
     fn make_node_ext(

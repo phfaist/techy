@@ -331,7 +331,7 @@ generic tooling. The attachment points:
   [`make_node_ext`](crate::core::Lang::make_node_ext) is the language's
   one chance to compute per-node data, with the node's parts in view — and
   it is the **only required `Lang` method** (a no-ext language writes the
-  empty one-liner). Its page documents exactly what the hook can see (the
+  `Ok(())` one-liner). Its page documents exactly what the hook can see (the
   descent-only view of the staged children; deliberately no parent access).
 - **Per argument and per slot**: the argument ext is minted by the
   [`ArgumentParser`](crate::core::constructs::ArgumentParser) that parsed

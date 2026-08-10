@@ -176,7 +176,7 @@ where
                     Arc::clone(&cx.state),
                     wrapper_children,
                 )
-                .map_err(|error| cx.implementation_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, span))?;
 
             used[marker_index] = true;
             nodes.extend(noise.nodes);

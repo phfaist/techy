@@ -847,7 +847,7 @@ where
                 children,
             )
             .map_err(|error| {
-                cx.implementation_error(error, Span::new(trigger.span.start(), body.end))
+                cx.staging_error(error, Span::new(trigger.span.start(), body.end))
             })?;
         Ok((id, None))
     }
@@ -886,7 +886,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
                 Arc::clone(&cx.state),
                 vec![],
             )
-            .map_err(|error| cx.implementation_error(error, span))?;
+            .map_err(|error| cx.staging_error(error, span))?;
         Ok((id, None))
     }
 }
@@ -1499,13 +1499,15 @@ mod tests {
             ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let error = language.parse("\\begin{bad}x\\end{bad}").unwrap_err();
-        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
             error.message(),
             "extension hook reported a failure: body-delta table unavailable"
         );
-        // The `\begin` dispatch frame is live at the consultation site.
-        assert!(!error.frames().is_empty());
+        // The `\begin` dispatch frame is live at the consultation site — the only
+        // frame, as `bad` declares no arguments.
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "macro ‘\\begin’");
     }
 
     #[test]

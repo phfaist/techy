@@ -214,7 +214,7 @@ pub(super) fn stage<L: Lang>(
     span: Span,
 ) -> ConstructParserResult<L, BuildId> {
     cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), Vec::new())
-        .map_err(|error| cx.implementation_error(error, span))
+        .map_err(|error| cx.staging_error(error, span))
 }
 
 // --- the expression core --------------------------------------------------------------

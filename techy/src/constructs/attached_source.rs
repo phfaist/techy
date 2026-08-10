@@ -200,7 +200,7 @@ impl<L: Lang> ParseContext<'_, '_, L> {
                                 Arc::clone(&cx.state),
                                 Vec::new(),
                             )
-                            .map_err(|error| cx.implementation_error(error, span))?;
+                            .map_err(|error| cx.staging_error(error, span))?;
                         nodes.push(id);
                     }
                     // The caller-supplied parser's own stop conditions ended the

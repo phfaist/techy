@@ -1464,7 +1464,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
                 Arc::clone(&cx.state),
                 Vec::new(),
             )
-            .map_err(|error| cx.implementation_error(error, token.span))?;
+            .map_err(|error| cx.staging_error(error, token.span))?;
         Ok((id, None))
     }
 }

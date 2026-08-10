@@ -408,7 +408,7 @@ where
                     Arc::clone(&content_state),
                     vec![],
                 )
-                .map_err(|error| cx.implementation_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, span))?;
             children.push(id);
         }
         let child_count = children.len() as u32;
@@ -428,7 +428,7 @@ where
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.implementation_error(error, group_span))?;
+            .map_err(|error| cx.staging_error(error, group_span))?;
         nodes.push(group);
         Ok(Some(ParsedArgumentNodes::new(
             nodes,
@@ -580,7 +580,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                             Arc::clone(&verbatim_state),
                             vec![],
                         )
-                        .map_err(|error| cx.implementation_error(error, token.span))?;
+                        .map_err(|error| cx.staging_error(error, token.span))?;
                     children.push(id);
                     content_designation_start = 1;
                 }
@@ -607,7 +607,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                     Arc::clone(&verbatim_state),
                     vec![],
                 )
-                .map_err(|error| cx.implementation_error(error, span))?;
+                .map_err(|error| cx.staging_error(error, span))?;
             children.push(id);
         }
 
@@ -619,7 +619,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.implementation_error(error, body_span))?;
+            .map_err(|error| cx.staging_error(error, body_span))?;
         let end = raw_end.terminator.map(|span| span.end()).unwrap_or(raw_end.content_end);
         Ok((
             EnvironmentBody {

@@ -865,7 +865,7 @@ impl<O: SourceOrigin> core::error::Error for ParseError<O> {}
 #[derive(Debug, Clone, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
-    id = "core.error.hook-failed",
+    id = "core.hooks.hook-failed",
     message = "extension hook reported a failure: {detail}"
 )]
 pub struct HookFailed {
@@ -1476,7 +1476,7 @@ mod tests {
     #[test]
     fn hook_failed_constructs_and_renders() {
         let plain = HookFailed::new("state seed unavailable", None);
-        assert_eq!(HookFailed::IDENTIFIER, "core.error.hook-failed");
+        assert_eq!(HookFailed::IDENTIFIER, "core.hooks.hook-failed");
         assert_eq!(DiagnosticInfo::identifier(&plain), HookFailed::IDENTIFIER);
         assert_eq!(
             plain.to_string(),
@@ -1498,7 +1498,7 @@ mod tests {
             .with_cause(EmbeddingFailure { source: UnderlyingIo });
         let err: ParseError =
             ParseError::new(condition, SourceSpan::new(&source, 0..1));
-        assert_eq!(err.identifier(), "core.error.hook-failed");
+        assert_eq!(err.identifier(), "core.hooks.hook-failed");
 
         // Downcast to the concrete condition, then walk the chain off the field.
         let condition = err.data().downcast_ref::<HookFailed>().unwrap();

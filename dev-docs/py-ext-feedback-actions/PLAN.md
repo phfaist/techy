@@ -521,3 +521,27 @@ descent merge are now writable.)
   `ExpectedClose` enum; `KeyVals::into_parts`; `Clone` on `RestagedArgument`;
   `StagedChildren::ids()`; blanket visibility flips of tree internals
   (`NodeTree::make_id`, `NodeId::new`, `ParserSession::state_stack`, …).
+
+## Post-execution follow-ups for the user (Stage 3 review, 2026-08-10)
+
+Flagged during the Stage 3 review pass; both are outside the executed plan's
+scope and need their own ruling:
+
+1. **L14 — latent span panic class in the environment composition.** The class
+   3.4 fixed for `stage_invocation` exists one file over:
+   `techy/src/constructs/environment_parser.rs` (~:706–709) builds
+   `SourceSpan::new`/`Span::new` over `body_start..body_end`, ends taken from
+   staged-node spans, with no validity guard — a body parser staging children
+   with out-of-order spans would hit the value functions' always-on
+   precondition asserts instead of an `ImplementationError` abort. The 3.4
+   guard-then-lift recipe (`content.get(range)` check before the span
+   constructors) applies directly.
+
+2. **L8 — consider flipping `ParseContext::attach_hook_frames` to `pub`.**
+   Third-party construct parsers that dispatch the now-fallible public hooks
+   themselves (`driver.resolve_command(...)`,
+   `spec.make_invocation_parser(...)`) currently hand-write
+   `error.with_frames(cx.session.snapshot_frames())` guarded on
+   `error.frames().is_empty()` — documented on `ParseContext`'s type docs as of
+   the Stage 3 review fixes. Making the crate-internal helper public would give
+   them the one-call answer; it is an API addition, hence a ruling.

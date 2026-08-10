@@ -706,7 +706,7 @@ where
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
-            .map_err(|error| cx.implementation_error(error, Span::new(body_start, body_end)))?;
+            .map_err(|error| cx.staging_error(error, Span::new(body_start, body_end)))?;
         Ok((
             EnvironmentBody {
                 body,

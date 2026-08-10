@@ -235,7 +235,7 @@ where
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
-            .map_err(|error| cx.implementation_error(error, span))?;
+            .map_err(|error| cx.staging_error(error, span))?;
         Ok((id, None))
     }
 }

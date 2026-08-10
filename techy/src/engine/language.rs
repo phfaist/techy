@@ -257,7 +257,7 @@ impl<L: Lang> Language<L> {
                             Arc::clone(&cx.state),
                             Vec::new(),
                         )
-                        .map_err(|error| cx.implementation_error(error, span))?;
+                        .map_err(|error| cx.staging_error(error, span))?;
                     nodes.push(id);
                 }
                 StopCause::TokenCondition { span } => {
@@ -277,7 +277,7 @@ impl<L: Lang> Language<L> {
             }
         }
         let root = cx.stage_node(NodeKind::list(), SourceSpan::entire(&source), seed, nodes)
-            .map_err(|error| cx.implementation_error(error, Span::empty(0)))?;
+            .map_err(|error| cx.staging_error(error, Span::empty(0)))?;
         session.finish(root).map_err(|error| {
             ParseError::new(
                 ImplementationError::new(error.to_string()),
