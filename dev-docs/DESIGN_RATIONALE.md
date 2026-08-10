@@ -54,6 +54,18 @@ questions for settled ones.
 - Most of the codebase is provisional; docs describing decided architecture are more
   authoritative than code that hasn't been reviewed yet.
 
+**Content rules** for what can appear in this document:
+
+- **Short, self-contained descriptions of policy and rationale**: To-the-point;
+  explanations that are not important are entirely omitted.
+- **No history**: No trace of history of decisions, other than through rejected
+  alternatives.
+- **No reference to plans or execution phases on the main branch**: On the `main`
+  branch, this document **NEVER** contains references to temporary project plans
+  or execution phases.  (Agents may introduce such references on a temporary
+  basis, on a work branch, to facilitate their work; they MUST remove them before
+  merging into `main`.)
+
 ---
 
 **Entry template for future decisions.**
@@ -1237,8 +1249,7 @@ Ruling 2's loud pairing docs/guide recipe ride the later guide stage.)*
 
 #### Compile-time language features: `Lang::Features` presence declarations [§dd-dr:lang-features]
 
-Status: DECIDED (user-ruled design spec, lang-features session; adopts, with
-modifications, the exploration in `dev-docs/extra/CompileTimeFeatureGates.md`).
+Status: DECIDED (user-ruled design spec, lang-features session).
 
 A language declares **at compile time which parsing features it has at all**: `Lang` gains
 `type Features: LangFeatures`, where the bundle trait `LangFeatures` carries one presence
@@ -1282,8 +1293,7 @@ Three motivations carried the decision, and one explicitly did not:
    `TokenRules`'s public field layout is exactly the kind of shape that cannot be
    changed once dependents exist; the breaking change is cheap now and never again.
 
-The **memory argument was measured and dropped**
-(`dev-docs/extra/CompileTimeFeatureGates.md`): parsing states are 4–8 % of a parse's
+The **memory argument was measured and dropped**: parsing states appear to be 4–8 % of a parse's
 peak memory footprint, and the languages that would declare features absent are
 precisely those whose states are already cheapest — gating recovers mostly-empty struct
 headers. Smaller states are a side effect here, not a motivation.
@@ -2597,10 +2607,7 @@ never lacks a checker. [§dd-dr:public-visibility-sweep].)*
 The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
 piece — the entries below cross-depend — plus the 2b T5 session's exact-type
 detailing and the recompose session's machinery/payload rulings. Applied in the
-review's Phase 3 (stages S3–S8, together with the P1 topology move). Working
-detail for the application sessions: `dev-docs/api-review/P4_RULING.md`,
-`T5_RULINGS.md`, and `RECOMPOSE_RULINGS.md` (process files, deleted when
-the review completes — these entries are the durable record).
+review's Phase 3 (stages S3–S8, together with the P1 topology move).
 
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
 
@@ -5123,8 +5130,8 @@ Status: DECIDED (user, descent-guard design session).
 Parsing recursion was unbounded, and stack overflow is **not a catchable failure**:
 it aborts the process — no `Result`, no diagnostic — a strictly worse outcome than
 the input-triggered panics [§dd-dr:panic-policy] already forbids, and a
-denial-of-service vector for any embedder parsing untrusted input. The measurements
-(`dev-docs/extra/TechyParsingStackDepth.md`): one syntactic nesting level costs
+denial-of-service vector for any embedder parsing untrusted input. Measurements
+showed one syntactic nesting level costs
 4.3–8.0 KB of stack in release and 35–48 KB in debug, so a plain `cargo test`
 aborts on 61 nested `{}`. Two structural decisions plus one storage decision close
 this:
@@ -5213,9 +5220,7 @@ Option<Box<ParsingStateDelta<L>>>)` and `NodesOutcome::after_effects` is
 recursion cycle's frames (the measurement: 61% of `NodesParser::parse`'s debug
 frame) while nearly every slot carries `None` — boxing moves the 208-byte value
 behind a pointer exactly where it rides the recursion.
-`AttachedSourceOutcome::after_effects` is boxed too (user ruling 2026-08-10,
-after the Part 3 review — a follow-up extending the initial scope, which covered
-the pair and `NodesOutcome` only): the door's accumulator sits on a frame that
+`AttachedSourceOutcome::after_effects` is boxed too: the door's accumulator sits on a frame that
 stays live across the whole nested include parse, and moving the already-boxed
 `NodesOutcome` record into the bundle also removes an unbox/rebox round trip on
 the persist path. Explicitly ruled NOT boxed (same ruling): the driver hooks
@@ -7256,7 +7261,7 @@ holding the full argument.
   lifetime chains across N tree transformations; Arc spans fix both at negligible cost.
 - **Per-location provenance chains (`via` vectors)** ([§dd-dr:sources-and-spans]) — pay per-node cost for information
   that is constant per source; provenance lives on `Source`.
-- **Byte-level `Read`/`BufRead` streaming** (dev-docs/archive/SOURCE_ARCHITECTURE.md) — the parser needs
+- **Byte-level `Read`/`BufRead` streaming** — the parser needs
   lookahead/backtrack, so it wants a cursor over `&str`, not a byte stream.
 - **Tokenizer-level environment recognition (`\begin{…}` tokens)** ([§dd-dr:tokens]) — bakes language
   semantics into the tokenizer; `\begin` is an ordinary command, environments are a parser concern.

@@ -5,7 +5,7 @@ the design principles its public surface follows. The *reasons* behind individua
 decisions — arguments, rejected alternatives, open questions — live in the companion
 [DESIGN_RATIONALE.md](DESIGN_RATIONALE.md).
 
-# How to use and maintain this document [§dd-arch:self-meta]
+## How to use and maintain this document [§dd-arch:self-meta]
 
 - This document describes the **present day**: no history, no dates, no implementation
   phases (git history records how we got here). If a change makes a statement here
@@ -27,8 +27,11 @@ decisions — arguments, rejected alternatives, open questions — live in the c
   documentation topic ([§dd-dr:documentation]): rustdoc-hosted guides
   ([§dd-dr:rustdoc-guides]) and this two-pillar, label-based structure itself
   ([§dd-dr:docs-restructure]).
+- **No reference to plans or execution phases**: This document **NEVER** contains
+  references to temporary project plans, benchmark results, or execution phases.
 
-# Library design principles [§dd-arch:lib-design-principles]
+
+## Library design principles [§dd-arch:lib-design-principles]
 
 How the library behaves and what its public surface promises. Each principle names the
 register entries holding the full argument; the implementation-side counterparts are the
