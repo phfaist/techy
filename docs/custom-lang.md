@@ -385,12 +385,25 @@ later field overrides win, scope ops and context-free events concatenate in
 application order. When a construct forwards that merged record as its own
 after-effect — as the shipped `\input` state persistence documents doing
 ([`InputMacroSpec`](crate::latexlike::InputMacroSpec), with state
-persistence enabled) — the caller applies it in a *single* derivation:
-`finalize_transition` sees one transition carrying the merged delta, not
-one call per original operation. A customizer that reacts to intermediate
-values (a mode that was entered and left again inside the included file)
-sees only the net result; scope ops arrive in order, but field overrides
-arrive already collapsed. Design customizers against the merged form — the
+persistence enabled) — the caller applies it in a *single* derivation: the
+**forwarding construct's own transition** carries the merged delta, not one
+call per original after-effect, so an intermediate value of the
+after-effect chain never appears in that transition. This collapse concerns
+sibling after-effects only, never descents: inside the included run nothing
+changes — each after-effect there is its own ordinary transition, and a
+group descent inside the included file (a math group, say) is an ordinary
+child-state derivation that reaches `finalize_transition` like any other.
+Worked example — `\one` and `\two` each carry a
+[`MacroSpec::with_after_effect`](crate::latexlike::MacroSpec::with_after_effect)
+delta overriding the same state-extension field:
+
+```text
+main.tex: a \input{defs.tex} b          defs.tex: \one \two
+inside the included run:  two transitions — the field goes (unset → "one"), ("one" → "two")
+the forwarding transition: one          — the field goes (unset → "two"); "one" never appears
+```
+
+Design customizers against the merged form — the
 delta type's documentation
 ([`ParsingStateDelta`](crate::core::ParsingStateDelta)) is explicit that
 deltas are values built to be merged and applied to bases their producer

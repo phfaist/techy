@@ -185,10 +185,18 @@ later field overrides win; scope operations and context-free events
 concatenate in application order). A construct forwarding that merged
 record as its own after-effect (the shipped `\input` state persistence,
 [`InputMacroSpec`](crate::latexlike::InputMacroSpec)) yields a *single*
-derivation: `finalize_transition` sees one transition carrying the merged
-delta — intermediate values (a mode entered and left inside the included
-file) are invisible; field overrides arrive collapsed. Design customizers
-against the merged form.
+derivation: the **forwarding construct's own transition** carries the
+merged delta, so the after-effect chain's intermediate values never appear
+in it. Sibling after-effects only, never descents: the included run's own
+transitions are unchanged (one per after-effect), and a group descent
+inside the included file (`$x$`) is an ordinary derivation that reaches
+`finalize_transition` normally. Worked example — two
+[`with_after_effect`](crate::latexlike::MacroSpec::with_after_effect)
+macros `\one \two` in an `\input`ed file, both overriding one
+state-extension field: inside the run, two transitions — the field goes
+(unset → "one"), ("one" → "two"); the forwarding transition — (unset →
+"two"), and "one" never appears in it. Design customizers against the
+merged form.
 
 ## The driver
 
@@ -253,7 +261,7 @@ whole toolkit:
 | Need | Use |
 |---|---|
 | read tokens | `cx.tokens` ([`TokenReader`](crate::core::TokenReader)); prefer [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token) (maps tokenizer errors per recovery policy) |
-| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns a [`BuildId`](crate::core::node::BuildId); children staged first, bottom-up |
+| stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns `Result`: a [`BuildId`](crate::core::node::BuildId), or a [`NodeBuildError`](crate::core::node::NodeBuildError) to lift via `implementation_error` (never swallowed by tolerant recovery); children staged first, bottom-up |
 | derive/scope state | [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state); [`cx.with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state) / [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state) scope with structural restore — state-scoping utilities only, never a route into a sub-parse |
 | run a sub-parser (descend) | [`cx.parse_construct(parser, state, frame)`](crate::core::constructs::ParseContext::parse_construct) — the one entry point every `ConstructParser` run MUST go through (`state: None` = the current state, same scoping; optional traceback frame). For child content and groups, the thin wrappers [`cx.parse_nodes(state, stop, child_states)`](crate::core::constructs::ParseContext::parse_nodes) / [`cx.parse_group(…)`](crate::core::constructs::ParseContext::parse_group) add the driver's parser factories — never instantiate loop parsers yourself (driver factories must apply) |
 | report a source problem | [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover) — strict: hands back `Err` to propagate; tolerant: records the diagnostic, returns `Ok`, then **your parser performs its documented local recovery and continues** |

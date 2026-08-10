@@ -70,7 +70,13 @@ protocol is documented on the method).
 [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node)
 is the single staging entry point — every node is staged through it. It mints the node's language extension
 ([`Lang::make_node_ext`](crate::core::Lang::make_node_ext)) and stages the
-node, returning its [`BuildId`](crate::core::node::BuildId). Children are
+node, returning a `Result`: its [`BuildId`](crate::core::node::BuildId) on
+success, or a [`NodeBuildError`](crate::core::node::NodeBuildError) to lift
+with
+[`implementation_error`](crate::core::constructs::ParseContext::implementation_error)
+— a staging failure is an extension-contract violation, never something
+tolerant recovery may swallow (the chapter's closing example shows the
+lift). Children are
 staged first, bottom-up, and claimed by the parent's own staging call.
 [`cx.staged_nodes()`](crate::core::constructs::ParseContext::staged_nodes)
 is the read-only view over what has been staged so far.
@@ -85,7 +91,18 @@ scopes a derived state over a closure with structural restore, and
 [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state)
 is the same primitive in delta-shaped form. Both are state-scoping
 utilities only, never a route into a sub-parse — running another construct
-parser goes through `parse_construct` (next paragraph).
+parser goes through `parse_construct` (next paragraph). A group descent's
+interior state has its own derivation entry point:
+[`cx.group_interior_state(&rule)`](crate::core::constructs::ParseContext::group_interior_state)
+derives the state a just-entered group's interior parses under — the
+entered rule installed as the expected close, merged with the driver's
+[`group_interior_delta`](crate::core::ParseDriver::group_interior_delta)
+(how a group class changes its interior's state) — and the session
+**memoizes** the result per (base state, rule) pair for the whole parse.
+Use it rather than assembling the interior delta by hand: a hand
+derivation forfeits the memo and, worse, silently loses the driver's delta
+— under the shipped preset, a math group whose interior never enters math
+mode.
 
 **Descents.** Running another construct parser — child content, a group, a
 body — has exactly one entry point, and using it is a **MUST** of the
@@ -104,6 +121,36 @@ stop conditions
 ([`NodesOutcome`](crate::core::constructs::NodesOutcome),
 [`StopCause`](crate::core::constructs::StopCause)) are documented with
 [`NodesParser`](crate::core::constructs::NodesParser).
+
+**Attached sources** (`\input`-style inclusion). Two entry points sub-parse
+another [`Source`](crate::source::Source) into the running parse, and the
+choice between them is the whole decision.
+[`cx.attach_source_reference(reference, at, state, parser)`](crate::core::constructs::ParseContext::attach_source_reference)
+is the resolve-and-diagnose form: it looks `reference` up through the
+driver's
+[`source_resolver`](crate::core::ParseDriver::source_resolver), raises the
+two failure conditions
+([`NoSourceResolver`](crate::core::constructs::NoSourceResolver),
+[`UnresolvableSourceReference`](crate::core::constructs::UnresolvableSourceReference))
+through the recovery entry point — under tolerant recovery the failure is
+recorded and `Ok(None)` comes back with nothing attached — and delegates on
+success.
+[`cx.parse_attached_source(source, state, parser)`](crate::core::constructs::ParseContext::parse_attached_source)
+is the form underneath it, for when you already hold the minted
+[`Source`](crate::source::Source). The sub-parse joins the **running
+session** — same builder, so the staged ids it returns are yours to stage
+(for `\input`, as an
+[`Attached`](crate::core::node::SlotRole::Attached) slot of your callable
+node) — and drives the parser you supply (built from the driver's
+[`make_nodes_parser`](crate::core::ParseDriver::make_nodes_parser) factory
+for the `\input` shape) through `parse_construct` like any descent, the
+descent guard included. Both return an
+[`AttachedSourceOutcome`](crate::core::constructs::AttachedSourceOutcome):
+the content nodes plus the included run's merged after-effect record, which
+your parser forwards as its own after-effect or drops — the
+persist-vs-transparent choice
+([`input_macro_spec`](crate::latexlike::input_macro_spec)'s `persist_state`
+parameter).
 
 **Problem channels.**
 [`cx.recover(condition, span)`](crate::core::constructs::ParseContext::recover)
@@ -130,7 +177,12 @@ struct.) It is *not* for the parser's internal state scoping (that is what
 it itself: deltas are plain values, and the *caller* decides whether and
 where they apply — the content loop applies a returned after-effect to its
 own live state so it holds for the siblings that follow. Return `None` when
-the construct has no after-effect, which is the common case.
+the construct has no after-effect, which is the common case. Writing a
+parser is not the only way to produce one: for the plain macro shape the
+declarative route is
+[`MacroSpec::with_after_effect`](crate::latexlike::MacroSpec::with_after_effect)
+— a preset macro whose every invocation leaves a given delta behind, no
+custom parser involved.
 
 ## The invocation route: a spec takes over its own parsing
 
