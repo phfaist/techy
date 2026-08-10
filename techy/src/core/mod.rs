@@ -42,8 +42,8 @@ pub mod specs;
 
 pub use crate::engine::{
     CommandResolver, DescentGuard, DescentRefusal, DescentWarning, Frame, FrameTitle,
-    Language, ParseDriver, ParseResult, ParserSession, StdDescentGuard,
-    StdDescentGuardInit, StdParseDriver,
+    Language, ParseDriver, ParseResult, ParserSession, SessionDeriveError,
+    StdDescentGuard, StdDescentGuardInit, StdParseDriver,
 };
 pub use crate::spec::FrameRole;
 pub use crate::state::{

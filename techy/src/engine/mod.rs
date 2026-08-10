@@ -146,6 +146,57 @@ impl<L: Lang> fmt::Debug for FrameTitle<L> {
     }
 }
 
+/// The failure of a **session-mediated derivation**
+/// ([`ParserSession::derived_state`], [`ParserSession::group_interior_state`]):
+/// either the state derivation itself failed, or the driver's transition
+/// observation hook answered its abort channel. The two arms stay separate
+/// because they carry different continuation material — a derivation failure
+/// comes with the structured [`DeriveError`] (failing ops, the recovered state) a
+/// tolerant caller continues under, while an observation abort is already the
+/// [`ParseError`] that ends the parse
+/// ([`ParseDriver::observe_transition`]'s contract).
+#[allow(clippy::large_enum_variant)] // large `Derive` arm by design — see `DeriveError`
+pub enum SessionDeriveError<L: Lang> {
+    /// The derivation failed ([`ParsingState::derived`]'s error): failing scope
+    /// ops and/or a finalize refusal, with the recovered state for tolerant
+    /// continuation.
+    Derive(DeriveError<L>),
+    /// [`ParseDriver::observe_transition`] answered its abort channel; the
+    /// transition was not committed.
+    Observe(ParseError<L::SourceOrigin>),
+}
+
+impl<L: Lang> fmt::Display for SessionDeriveError<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionDeriveError::Derive(error) => fmt::Display::fmt(error, f),
+            SessionDeriveError::Observe(error) => fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+// Manual Debug: a derive would demand `L: Debug` although only bounded associated
+// data is stored (the `DeriveError` pattern).
+impl<L: Lang> fmt::Debug for SessionDeriveError<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionDeriveError::Derive(error) => f.debug_tuple("Derive").field(error).finish(),
+            SessionDeriveError::Observe(error) => {
+                f.debug_tuple("Observe").field(error).finish()
+            }
+        }
+    }
+}
+
+impl<L: Lang> core::error::Error for SessionDeriveError<L> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            SessionDeriveError::Derive(error) => Some(error),
+            SessionDeriveError::Observe(error) => Some(error),
+        }
+    }
+}
+
 /// The root object of one parse: node building, diagnostics, and the recovery policy.
 ///
 /// The diagnostics and ext fields are public: construct parsers reach them through
@@ -328,10 +379,15 @@ impl<L: Lang> ParserSession<L> {
     /// [`Lang::finalize_transition`] runs once per unique derivation.
     ///
     /// **Fallibility**: scope ops can fail, so this method is fallible like
-    /// [`ParsingState::derived`] under it. Overrides-only deltas cannot fail (which is
-    /// also why the memo never caches a failure). On `Err`, no transition is committed:
-    /// nothing is memoized and [`observe_transition`](ParseDriver::observe_transition)
-    /// has **not** fired — a caller that recovers tolerantly and continues under
+    /// [`ParsingState::derived`] under it — a derivation failure is the
+    /// [`Derive`](SessionDeriveError::Derive) arm of the error. Overrides-only
+    /// deltas cannot fail that way (which is also why the memo never caches a
+    /// failure). The observation hook has its own abort channel
+    /// ([`observe_transition`](ParseDriver::observe_transition)'s `Err`), reported
+    /// as the [`Observe`](SessionDeriveError::Observe) arm. On any `Err`, no
+    /// transition is committed: nothing is memoized, and on the `Derive` arm
+    /// [`observe_transition`](ParseDriver::observe_transition) has **not**
+    /// fired — a caller that recovers tolerantly and continues under
     /// [`DeriveError::recovered`](crate::state::DeriveError) observes that transition
     /// itself (the [`ParseContext`](crate::constructs::ParseContext) sugar does; see
     /// its recovery path).
@@ -344,7 +400,7 @@ impl<L: Lang> ParserSession<L> {
         driver: &L::Driver,
         base: &Arc<ParsingState<L>>,
         delta: &ParsingStateDelta<L>,
-    ) -> Result<Arc<ParsingState<L>>, DeriveError<L>> {
+    ) -> Result<Arc<ParsingState<L>>, SessionDeriveError<L>> {
         // The scope-op list is read through its store projection: absent scopes
         // (`None`) hold no ops, so such a delta is memoizable like any other
         // overrides-only delta.
@@ -359,11 +415,19 @@ impl<L: Lang> ParserSession<L> {
                 rules: &delta.rules,
             }) {
                 let new = Arc::clone(hit);
-                driver.observe_transition(&mut self.ext, base, &new, delta);
+                driver
+                    .observe_transition(&mut self.ext, &mut self.diagnostics, base, &new, delta)
+                    .map_err(SessionDeriveError::Observe)?;
                 return Ok(new);
             }
         }
-        let new = Arc::new(base.derived(delta)?);
+        let new =
+            Arc::new(base.derived(delta).map_err(SessionDeriveError::Derive)?);
+        driver
+            .observe_transition(&mut self.ext, &mut self.diagnostics, base, &new, delta)
+            .map_err(SessionDeriveError::Observe)?;
+        // The memo insert runs last, after the observation: on any Err nothing is
+        // committed — no memo entry, no observed transition to a state nobody got.
         if memoizable {
             self.state_memo.insert(
                 StateMemoKey {
@@ -374,7 +438,6 @@ impl<L: Lang> ParserSession<L> {
                 Arc::clone(&new),
             );
         }
-        driver.observe_transition(&mut self.ext, base, &new, delta);
         Ok(new)
     }
 
@@ -401,9 +464,14 @@ impl<L: Lang> ParserSession<L> {
     /// The descent invariant wins over the hook: whatever the driver's delta says, the
     /// interior's `expecting_group_close` is the entered rule.
     ///
-    /// **Fallibility**: a driver descent delta may carry scope ops, which
-    /// can fail. On `Err`, nothing is memoized and no transition was observed (see
-    /// [`derived_state`](ParserSession::derived_state)); the error's
+    /// **Fallibility**: a driver descent delta may carry scope ops, which can
+    /// fail ([`Derive`](SessionDeriveError::Derive)), and the observation hook has
+    /// its own abort channel
+    /// ([`Observe`](SessionDeriveError::Observe) —
+    /// [`observe_transition`](ParseDriver::observe_transition)'s `Err`). On any
+    /// `Err`, nothing is memoized, and on the `Derive` arm no transition was
+    /// observed (see [`derived_state`](ParserSession::derived_state)); the
+    /// derivation error's
     /// [`recovered`](crate::state::DeriveError::recovered) state still has the
     /// descent invariant applied (the forced expecting-close is an override, not an
     /// op), so a tolerant caller can safely parse the interior under it. Failures are
@@ -415,12 +483,14 @@ impl<L: Lang> ParserSession<L> {
         driver: &L::Driver,
         base: &Arc<ParsingState<L>>,
         rule: &Arc<GroupRule<L>>,
-    ) -> Result<Arc<ParsingState<L>>, DeriveError<L>> {
+    ) -> Result<Arc<ParsingState<L>>, SessionDeriveError<L>> {
         if let Some(entry) = self.group_interior_memo.get(&GroupInteriorProbe { base, rule })
         {
             let new = Arc::clone(&entry.state);
             let delta = Arc::clone(&entry.delta);
-            driver.observe_transition(&mut self.ext, base, &new, &delta);
+            driver
+                .observe_transition(&mut self.ext, &mut self.diagnostics, base, &new, &delta)
+                .map_err(SessionDeriveError::Observe)?;
             return Ok(new);
         }
         let mut delta = driver.group_interior_delta(base, rule).unwrap_or_default();
@@ -436,12 +506,16 @@ impl<L: Lang> ParserSession<L> {
             groups.expecting_close = Some(Some(Arc::clone(rule)));
         }
         let delta = Arc::new(delta);
-        let new = Arc::new(base.derived(&delta)?);
+        let new =
+            Arc::new(base.derived(&delta).map_err(SessionDeriveError::Derive)?);
+        driver
+            .observe_transition(&mut self.ext, &mut self.diagnostics, base, &new, &delta)
+            .map_err(SessionDeriveError::Observe)?;
+        // The memo insert runs last, after the observation (see `derived_state`).
         self.group_interior_memo.insert(
             GroupInteriorKey { base: Arc::clone(base), rule: Arc::clone(rule) },
             GroupInteriorEntry { state: Arc::clone(&new), delta: Arc::clone(&delta) },
         );
-        driver.observe_transition(&mut self.ext, base, &new, &delta);
         Ok(new)
     }
 
@@ -967,11 +1041,13 @@ mod tests {
         fn observe_transition(
             &self,
             ext: &mut Observed,
+            _diagnostics: &mut Diagnostics,
             _prev: &ParsingState<ObserverLang>,
             _new: &ParsingState<ObserverLang>,
             _delta: &ParsingStateDelta<ObserverLang>,
-        ) {
+        ) -> Result<(), ParseError> {
             ext.transitions += 1;
+            Ok(())
         }
     }
 
@@ -1182,11 +1258,13 @@ mod tests {
         fn observe_transition(
             &self,
             ext: &mut Observed,
+            _diagnostics: &mut Diagnostics,
             _prev: &ParsingState<DescentLang>,
             _new: &ParsingState<DescentLang>,
             _delta: &ParsingStateDelta<DescentLang>,
-        ) {
+        ) -> Result<(), ParseError> {
             ext.transitions += 1;
+            Ok(())
         }
 
         fn group_interior_delta(
@@ -1395,10 +1473,18 @@ mod tests {
         // …and a failing delta returns the mechanical DeriveError with nothing
         // committed: no memo entry, no observation.
         let failing = ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() });
-        let error = session.derived_state(&ObserverDriver, &base, &failing).unwrap_err();
+        let SessionDeriveError::Derive(error) =
+            session.derived_state(&ObserverDriver, &base, &failing).unwrap_err()
+        else {
+            panic!("expected the derivation-failure arm");
+        };
         assert_eq!(error.failures.len(), 1);
         assert_eq!(session.ext.transitions, 2);
-        let error = session.derived_state(&ObserverDriver, &base, &failing).unwrap_err();
+        let SessionDeriveError::Derive(error) =
+            session.derived_state(&ObserverDriver, &base, &failing).unwrap_err()
+        else {
+            panic!("expected the derivation-failure arm");
+        };
         assert_eq!(error.failures.len(), 1); // fails identically — nothing was cached
         assert_eq!(session.ext.transitions, 2);
     }
@@ -1437,11 +1523,13 @@ mod tests {
         fn observe_transition(
             &self,
             ext: &mut Observed,
+            _diagnostics: &mut Diagnostics,
             _prev: &ParsingState<FailingDescentLang>,
             _new: &ParsingState<FailingDescentLang>,
             _delta: &ParsingStateDelta<FailingDescentLang>,
-        ) {
+        ) -> Result<(), ParseError> {
             ext.transitions += 1;
+            Ok(())
         }
 
         fn group_interior_delta(
@@ -1465,7 +1553,11 @@ mod tests {
             Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
         let mut session: ParserSession<FailingDescentLang> = ParserSession::new();
 
-        let error = session.group_interior_state(&FailingDescentDriver, &base, &bad).unwrap_err();
+        let SessionDeriveError::Derive(error) =
+            session.group_interior_state(&FailingDescentDriver, &base, &bad).unwrap_err()
+        else {
+            panic!("expected the derivation-failure arm");
+        };
         // The recovered interior still satisfies the descent invariant (the forced
         // expecting-close is an override, not an op) — safe to parse under.
         assert!(error

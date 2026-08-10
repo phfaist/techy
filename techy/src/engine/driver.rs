@@ -296,14 +296,40 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// Observational only: it receives the already-frozen `new` state and cannot alter
     /// the transition's outcome (the session layer is data-equivalent to
     /// [`ParsingState::derived`]). The default does nothing.
+    ///
+    /// # The two reporting channels
+    ///
+    /// The `diagnostics` sink and the `Err` return play different roles — keep
+    /// them apart:
+    ///
+    /// - **`diagnostics` records document-level observations without affecting
+    ///   the parse.** An observer that diagnoses something about the document
+    ///   ("this transition pattern is deprecated here") pushes a
+    ///   [`Diagnostic`](crate::error::Diagnostic) of whatever severity fits and
+    ///   returns `Ok(())` — an error-severity entry does **not** abort the parse,
+    ///   and deciding record-versus-abort for source conditions is
+    ///   [`recover`](ParseDriver::recover)'s business, not this hook's. (The sink
+    ///   is the same channel
+    ///   [`observe_parse_start`](ParseDriver::observe_parse_start) receives.)
+    /// - **`Err` aborts the parse**, under any recovery policy — reserve it for a
+    ///   truly problematic state the parse must not continue past (an observer
+    ///   backend that is gone, a violated invariant in the embedding). Carry
+    ///   [`HookFailed`](crate::error::HookFailed) for an operational failure,
+    ///   [`ImplementationError`](crate::constructs::ImplementationError) for a
+    ///   violated library contract; the derivation seam attaches the live
+    ///   traceback when the error carries no frames of its own.
+    ///
+    /// An infallible implementation returns `Ok(())` and that is the only change.
     fn observe_transition(
         &self,
         ext: &mut L::SessionExt,
+        diagnostics: &mut Diagnostics<L::SourceOrigin>,
         prev: &ParsingState<L>,
         new: &ParsingState<L>,
         delta: &ParsingStateDelta<L>,
-    ) {
-        let _ = (ext, prev, new, delta);
+    ) -> Result<(), ParseError<L::SourceOrigin>> {
+        let _ = (ext, diagnostics, prev, new, delta);
+        Ok(())
     }
 
     /// Once-per-parse **initialization observation**: called by

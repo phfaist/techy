@@ -3785,11 +3785,13 @@ mod tests {
             fn observe_transition(
                 &self,
                 ext: &mut Counts,
+                _diagnostics: &mut crate::error::Diagnostics,
                 _prev: &ParsingState<CountLang>,
                 _new: &ParsingState<CountLang>,
                 _delta: &ParsingStateDelta<CountLang>,
-            ) {
+            ) -> Result<(), ParseError> {
                 ext.observed += 1;
+            Ok(())
             }
         }
 
@@ -3812,6 +3814,166 @@ mod tests {
         assert!(matches!(outcome.stop, StopCause::EndOfInput));
         assert_eq!(session.ext.observed, 2);
         assert_eq!(FINALIZE_RUNS.load(Ordering::Relaxed), 1);
+    }
+
+    /// The two `observe_transition` reporting channels, exercised separately: the
+    /// diagnostics sink records without affecting the parse (an error-severity
+    /// entry does **not** abort — record-versus-abort for source conditions is
+    /// `recover`'s business), while an `Err` aborts under any recovery policy.
+    #[derive(Debug, Default)]
+    struct Seen {
+        transitions: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+    #[diagnostic(
+        id = "testlang.observe.transition-observed",
+        message = "a state transition was observed",
+        no_constructor
+    )]
+    struct TransitionObserved;
+
+    #[test]
+    fn observe_transition_diagnostics_sink_records_without_aborting() {
+        #[derive(Debug, Clone, Copy)]
+        struct SinkLang;
+        impl Lang for SinkLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = Seen;
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = SinkDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct SinkDriver;
+        impl TestDriver for SinkDriver {
+            fn with_recovery(_recovery: Recovery) -> Self {
+                SinkDriver // strict — the sink must not abort even so
+            }
+        }
+        impl ParseDriver<SinkLang> for SinkDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
+            fn observe_transition(
+                &self,
+                ext: &mut Seen,
+                diagnostics: &mut crate::error::Diagnostics,
+                _prev: &ParsingState<SinkLang>,
+                _new: &ParsingState<SinkLang>,
+                _delta: &ParsingStateDelta<SinkLang>,
+            ) -> Result<(), ParseError> {
+                ext.transitions += 1;
+                // An error-severity observation: recorded, never an abort.
+                let scratch: Arc<Source> = Arc::new(Source::new(""));
+                diagnostics.push(crate::error::Diagnostic::error(
+                    TransitionObserved,
+                    SourceSpan::new(&scratch, 0..0),
+                ));
+                Ok(())
+            }
+        }
+
+        // One group descent = one observed transition; the parse completes.
+        let st = state_with(rules::<SinkLang>());
+        let content = "{a}";
+        let mut reader = StdTokenReader::new(content);
+        let parsed =
+            try_run(content, &mut reader, &st, Recovery::Strict, StopSpec::none())
+                .expect("the sink records; it never aborts");
+        assert_eq!(parsed.result.diagnostics.len(), 1);
+        let recorded = parsed.result.diagnostics.iter().next().unwrap();
+        assert_eq!(recorded.severity(), crate::error::Severity::Error);
+        assert_eq!(recorded.identifier(), "testlang.observe.transition-observed");
+        assert_eq!(shapes(&parsed.result), ["group 0..3"]);
+    }
+
+    #[test]
+    fn a_failing_observe_transition_aborts_under_any_policy() {
+        #[derive(Debug, Clone, Copy)]
+        struct FailObserveLang;
+        impl Lang for FailObserveLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = Seen;
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = FailObserveDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) -> Result<(), crate::node::NodeBuildError> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct FailObserveDriver;
+        impl TestDriver for FailObserveDriver {
+            fn with_recovery(_recovery: Recovery) -> Self {
+                FailObserveDriver // tolerant by hand: recovery() below
+            }
+        }
+        impl ParseDriver<FailObserveLang> for FailObserveDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
+            fn recovery(&self) -> Recovery {
+                Recovery::Tolerant
+            }
+            fn observe_transition(
+                &self,
+                ext: &mut Seen,
+                _diagnostics: &mut crate::error::Diagnostics,
+                _prev: &ParsingState<FailObserveLang>,
+                _new: &ParsingState<FailObserveLang>,
+                _delta: &ParsingStateDelta<FailObserveLang>,
+            ) -> Result<(), ParseError> {
+                ext.transitions += 1;
+                if ext.transitions < 2 {
+                    return Ok(());
+                }
+                // The second transition (the inner group's interior derivation,
+                // inside the outer group's frame) is the truly problematic state.
+                let scratch: Arc<Source> = Arc::new(Source::new(""));
+                Err(ParseError::new(
+                    crate::error::HookFailed::new("observer backend gone", None),
+                    SourceSpan::new(&scratch, 0..0),
+                ))
+            }
+        }
+
+        let st = state_with(rules::<FailObserveLang>());
+        let content = "{{a}}";
+        let mut reader = StdTokenReader::new(content);
+        let error =
+            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: observer backend gone"
+        );
+        // The inner descent's consultation runs inside the outer group's frame.
+        assert!(!error.frames().is_empty());
     }
 
     // --- everything at once ----------------------------------------------------------------

@@ -84,7 +84,7 @@ use alloc::vec::Vec;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession};
+use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
 use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, ParseError, Severity};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
@@ -568,8 +568,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
 
     /// The shared commit tail of the derivation seams: run the session-mediated
     /// derivation (so the transition reaches
-    /// [`ParseDriver::observe_transition`]) and route failures through
-    /// [`recover_derive_failure`](ParseContext::recover_derive_failure).
+    /// [`ParseDriver::observe_transition`]) and route derivation failures through
+    /// [`recover_derive_failure`](ParseContext::recover_derive_failure). An
+    /// observation abort ([`SessionDeriveError::Observe`] —
+    /// [`ParseDriver::observe_transition`]'s `Err`) propagates unchanged under
+    /// any recovery policy, with the live traceback attached here.
     fn commit_derivation(
         &mut self,
         base: &Arc<ParsingState<L>>,
@@ -577,7 +580,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
         match self.session.derived_state(self.driver, base, applied) {
             Ok(new) => Ok(new),
-            Err(failure) => self.recover_derive_failure(base, failure),
+            Err(SessionDeriveError::Derive(failure)) => {
+                self.recover_derive_failure(base, failure)
+            }
+            Err(SessionDeriveError::Observe(error)) => Err(self.attach_hook_frames(error)),
         }
     }
 
@@ -697,7 +703,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let base = Arc::clone(&self.state);
         match self.session.group_interior_state(self.driver, &base, rule) {
             Ok(new) => Ok(new),
-            Err(failure) => self.recover_derive_failure(&base, failure),
+            Err(SessionDeriveError::Derive(failure)) => {
+                self.recover_derive_failure(&base, failure)
+            }
+            Err(SessionDeriveError::Observe(error)) => Err(self.attach_hook_frames(error)),
         }
     }
 
@@ -730,9 +739,18 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             return Err(self.implementation_error(finalize_error, Span::new(pos, pos)));
         }
         // Tolerant continuation: commit the recovered transition — the session seam
-        // observed nothing on the Err path (no transition had been committed).
+        // observed nothing on the Err path (no transition had been committed). The
+        // observation hook's own abort channel applies here like everywhere else.
         let recovered = Arc::new(recovered);
-        self.driver.observe_transition(&mut self.session.ext, base, &recovered, &delta);
+        self.driver
+            .observe_transition(
+                &mut self.session.ext,
+                &mut self.session.diagnostics,
+                base,
+                &recovered,
+                &delta,
+            )
+            .map_err(|error| self.attach_hook_frames(error))?;
         Ok(recovered)
     }
 
