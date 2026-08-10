@@ -1315,6 +1315,96 @@ semver output is unexplained.
   only inside DESIGN_RATIONALE where it names the rejected design; "stage"
   hits are the staging-API verb).
 
+- **M4 reviewer** — full-diff review of 4c6cb44..19af638 (bootstrap 1773cf3,
+  M4a 30deb6e, M4b 19af638) against PLAN M4, the M3→M4 hand-off, the
+  docs-clarity rules, [§dd-dr:lang-features] + amendments,
+  [§dd-dr:superseded-names], [§dd-arch:naming]/[§dd-arch:state], and
+  Documentation_Structure.md. Findings: **0 blocker, 2 should-fix, 2 nit**.
+  Gates re-run independently, all green.
+  - should-fix (docs/custom-lang.md:72 + docs/ai-guide-custom-lang.md:113): the
+    rewritten token-rules opening says "one block per feature, each block
+    carrying its own `enabled` flag" (ai-guide: "each with an `enabled` flag")
+    — the forbidden-characters block has **no** `enabled` flag (deliberate,
+    rules.rs:246); the M4a rewrite sharpened the old loose "per-feature
+    `enable_*` gate" into a claim that is now false for one listed block.
+    Minimal fix: except the forbidden-characters block in both sentences
+    (e.g. "…each block except forbidden characters carrying its own `enabled`
+    flag — an empty forbidden-character set is already its off").
+  - should-fix (dev-docs/DESIGN_RATIONALE.md:6606): the one FIX-NEEDED among
+    the deliberately-left sites — [§dd-dr:paragraph-break-hook]'s **Revisit
+    if** clause says "through the `enable_multi_newline_paragraphs` gate
+    (verbatim's features-off state uses it)". Revisit-if text is
+    forward-facing (it speaks to a future re-opener, not decision history):
+    the field no longer exists and "features-off" is the runtime-disabled
+    state, against the ruled word split. Minimal fix: "through the paragraphs
+    block's `enabled` gate (verbatim's features-disabled state uses it)".
+  - nit (docs/custom-lang.md:300–304): the disable_all paragraph ("disables
+    every feature the language *has* … flips the `enabled` flag of exactly
+    the present features") matches the ruled amendment wording, but the guide
+    nowhere says forbidden characters carry no flag; when fixing the
+    should-fix above, optionally add delta.rs's parenthetical ("forbidden
+    characters, having no flag, are never touched").
+  - nit (hand-off deviation, ruled acceptable): the hand-off listed "the
+    storage-collapse numbers (PROGRESS M3d table)" as guide material; the
+    section conveys the collapse qualitatively ("takes no space", "stores
+    literally nothing for its rules") with no numbers. Ruled right — pinned
+    byte counts would rot with layout and live in the M3d regression tests —
+    flagged for supervisor confirmation.
+  - Rulings on the other deliberately-left items: DR 592 ([§dd-dr:token-model]
+    bullet), 6249, 6314 — LEAVE (decision-entry bodies, decision-time
+    vocabulary, pylatexenc-anchored; optional modernization only); the
+    "(6.2)–(6.5)" step numbers and the three §dd-dr doc-comment cites — LEAVE:
+    nodes_parser/child_state are private `mod`s (constructs/mod.rs:41/46),
+    the cite carriers are a private method (nodes_parser.rs:482), a
+    `pub(super)` fn in a private module (argument_parsers.rs:684), and a
+    `#[test]` fn (spec/mod.rs:90); grep of the freshly built target/doc
+    confirms zero rendered pages contain "dd-dr"/"dd-arch" or the step
+    numbers.
+  - Checklist-area verdicts, one line each:
+    - **A guide section**: complete against the hand-off (sole deviation the
+      numbers nit); every factual claim verified against
+      features/rules/delta/parsing_state/lang.rs (sole inaccuracy the flag
+      should-fix); doctest compiles, runs, and demonstrates exactly the
+      prose's claims (group parses, `\c`/`%d`/spaces read as plain content);
+      three spellings defined plainly at first use; no §dd labels, dev-docs,
+      stage/phase refs, or acronyms; anchor slug sensible and final; links
+      canonical; voice matches the chapter.
+    - **B coherence sweep**: all four features-off→disabled unifications
+      verified per site (each describes verbatim's runtime disabling —
+      "disabled" correct); ARCHITECTURE edits accurate (line-697 clause
+      matches [§dd-dr:takeover-staging-sugar]'s applied notes — items 1/2
+      landed S2/S3; [§dd-arch:state] promotion history-free and code-accurate
+      incl. the Scopes collapse and the Paragraphs→Whitespace edge;
+      airtightness/hot-path bullets match parsing_state.rs); ai-guide facts
+      current bar the shared flag should-fix; DR:4262 pointer verified
+      (`temporary_group_rules_are_prefix_table_inputs` exists,
+      parsing_state.rs:733); "verified clean" files spot-checked coherent,
+      reader.rs's Comment-not-intercepted bullet unchanged as ruled.
+    - **C superseded-names grep**: clean — "facet" zero in techy/, docs/,
+      techy-derive/ and ARCHITECTURE (remaining DR hits name the rejected
+      designs); no Gate/On/Off items; bare `Features` hits are all
+      trait-scoped `Lang::Features` link text (register-excluded); the M4
+      diff reintroduces no older register row.
+    - **D old-field-name grep**: every survivor legitimate — current accessor
+      spelling (`expecting_group_close`), pylatexenc kwarg mentions
+      (rules.rs:281, chars_group_parser.rs:20/97/104/345), DR register
+      history; docs/*.md zero hits.
+    - **E diff hygiene**: the techy/ diff is exactly four single-line
+      comment/doc edits, zero code, zero assertion changes; PROGRESS entries
+      style-consistent.
+    - **F gates**: `cargo build` clean; `cargo test --workspace`
+      **898 passed / 0 failed / 4 ignored** exactly
+      (758+30+8+12+21+1+68; doc-tests 67→68 = the new guide doctest); fresh
+      `rm -rf target/doc && cargo docs` zero warnings; rendered-HTML checks
+      on guide/custom_lang: the new section and anchor render, spot-checked
+      links resolve to real pages (LangFeatures, All/NoLangFeatures,
+      TokenRules::empty, TokenRulesOverrides::disable_all, LangHasGroups,
+      verbatim_state_delta, ScopeStack, CommandResolver), doctest hidden
+      lines hidden with the visible elision comment rendering, no stale
+      spellings on the changed pages; TokenRules and LangFeatures pages
+      render their narratives. check_semver.sh deliberately not run
+      (supervisor at closure; docs-only diff).
+
 ### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
 
 `check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two
