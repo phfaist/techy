@@ -224,8 +224,11 @@ impl<L: Lang, A> NodeTree<L, A> {
         Some(NodeRef::new(self, id))
     }
 
-    /// This tree's layout tag.
-    pub(crate) fn tree_tag(&self) -> TreeTag {
+    /// This tree's layout tag ([`TreeTag`]). Comparing it with a
+    /// [`NodeId::tree_tag`] pre-checks whether an id belongs to this tree before
+    /// calling an accessor that asserts ownership in every build
+    /// ([`node`](NodeTree::node)).
+    pub fn tree_tag(&self) -> TreeTag {
         self.core.tree_tag
     }
 
