@@ -13,7 +13,7 @@
 | D | Decision record [§dd-dr:lang-features] + ARCHITECTURE refs + superseded-names + CompileTimeFeatureGates.md status line | done (7a113e8 + fixes d28a3e9) |
 | M1 | TokenRules/Overrides regrouped into per-feature blocks (pure reshaping, behavior identical) | done (d7f480f + 9bb4ac9 + 286edf2 + final fix/gate commit) |
 | M2 | `Lang::Features` + const gating | done (d5d6aa8 + d673edf + c955741 + a0bf306 + 54cbe7d + final fix/gate commit) |
-| M3 | Uniform storage gating (FeaturePresence::Store) | in progress (worktree agent-abcf5ade530ed3cd0, branch lang-features-m3) |
+| M3 | Uniform storage gating (FeaturePresence::Store) | done (f6cb54e + fc33dee + 81726d7 + d3da11b + review ab11dfd + final fix/gate commit; branch `lang-features-m3`, ready to fast-forward into `lang-features`) |
 | M4 | Docs, coherence sweep, closure (delete this directory) | pending |
 
 ## Log
@@ -1209,6 +1209,63 @@ semver output is unexplained.
     target/doc. (`check_semver.sh` deferred to closure per the M3b note; the
     M3b/M3c expected-breaking additions are recorded above.)
 
+- **Supervisor: M3 fix pass + closure gates** — the M3 reviewer found 0 blocker /
+  0 should-fix / 3 nit; all three applied directly (small mechanical edits): the
+  rules.rs construction-recipe doctest now carries a hidden comment noting its
+  example language is all-present (the recipe itself is presence-generic); the
+  groups_only test renamed `braces_parse_as_group_nodes_while_other_constructs_read_as_plain_content`
+  (old name described the retired populated seed); three disable_all test comments
+  reworded off "stay all-`None`" (absent fields are zero-sized stores). Final
+  gates, all green AFTER the fixes: `cargo build` clean; `cargo test --workspace`
+  **897 passed / 0 failed / 4 ignored** (758+30+8+12+21+1+67; 2+2 ignored — the
+  884 pre-M2 baseline intact; lang_features.rs at 12 tests + 1 doctest after the
+  ruled M3 retirements, all accounted in the M3a/M3b logs); `cargo check
+  --workspace --tests` zero warnings; fresh `rm -rf target/doc && cargo docs` zero
+  warnings; `scripts/check_semver.sh` — see the M3 expected-breaking list below
+  (one-time note: a sandboxed `cargo fetch` failure required one unsandboxed
+  fetch, same as the M1 environment note). The open Comment-arm question was left
+  untouched per the standing instruction (no new ruling appeared in this file
+  during M3).
+
+### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
+
+`check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two
+categories as M1, and one M2 row retired:
+1. `constructible_struct_adds_field`: exactly M1's five rows again
+   (`WhitespaceRules.enabled`, `TokenRules.paragraphs`, `TokenRules.specials`,
+   `TokenRulesOverrides.paragraphs`, `TokenRulesOverrides.specials`). The M2 row
+   `DeriveError.absent_overrides` is GONE — the field was removed at M3 with the
+   transitional error channel (net zero against the baseline, per the 2026-08-10
+   ruling's M3 instruction).
+2. `struct_pub_field_missing`: unchanged from M1 (the 8 old `TokenRules` fields +
+   the mirrored 8 on `TokenRulesOverrides`).
+
+Breaking but NOT surfaced by the tool (M3 additions):
+- `TokenRules`/`TokenRulesOverrides` public field TYPES changed again: every
+  feature block is now the fully spelled
+  `<<L::Features as LangFeatures>::X as FeaturePresence>::Store<…>` projection
+  (transparent — identical literals/reads — for all-present languages);
+- `ParsingStateDelta.scope_ops` field type is the Scopes-gated store;
+  `ParsingStateDelta::{scope_op, push_provider}` gained `where L: LangHasScopes`;
+- `ScopeStack::push` and `ParsingState::lang_initial_with_packages` gained
+  `where L: LangHasScopes`;
+- `ParsingState::prefix_table()` / `trigger_chars()` now return `Option<&…>`
+  (`None` iff the feature is absent);
+- `verbatim_state_delta`, `VerbatimArgumentParser`, `VerbatimBodyParser`,
+  `GroupArgumentParser`, `OptionalGroupArgumentParser` gained `L: LangHasGroups`;
+- `LatexlikeLang` supertrait now spells the ruled family pin
+  (`Lang<Features = AllLangFeatures>`).
+
+Reverted M2 breaks (the surface now matches the baseline again):
+`TokenRulesOverrides::apply` is infallible; `DeriveError.absent_overrides`
+removed; `AbsentFeatureOverrideError` removed entirely (was additive at M2).
+Post-baseline API reshaped (new at M2, so not baseline-relevant):
+`FeaturePresence::Store` payload bound is now `Clone + Debug + Send + Sync`
+(`Default` dropped); the trait gained the four projection fns. Additive:
+`ScopeOpError::ScopesAbsent` (enum is `#[non_exhaustive]`). Carried unchanged
+from M1/M2: `Default` removed from `WhitespaceRules`; `Lang` requires
+`type Features` (the M2 headline). Nothing in the semver output is unexplained.
+
 ## Questions for user
 
 (genuine design ambiguities; the most conservative spec-consistent option was chosen and is noted here)
@@ -1240,6 +1297,44 @@ semver output is unexplained.
 ## Hand-off notes
 
 (state a fresh supervisor needs beyond PLAN.md + this file + git log)
+
+### M3 → M4 hand-off (supervisor, M3 closure)
+
+- Stages D, M1, M2, M3 are DONE. M3 lives on branch `lang-features-m3` (worktree
+  agent-abcf5ade530ed3cd0), branched off `lang-features` at 351c95b — it
+  fast-forwards cleanly into `lang-features` (no merges/pushes were made, per
+  rules; the main session integrates). The M4 successor should branch off the
+  integrated chain in a FRESH worktree.
+- M4 scope: PLAN.md "Stage M4" — language-author guide section on declaring
+  features (docs-clarity rules), rustdoc coherence sweep, final gate run with
+  rendered-HTML link verification, superseded-names grep, delete
+  dev-docs/langfeatures-plan/ (retained in git history).
+- Guide-section material the M4 author should cover (all now real): declaring
+  `Lang::Features` (bundle choice or a custom unit struct), the three spellings
+  of off, the transparent-store guarantee (all-present code writes plain
+  literals), the `..TokenRules::empty()` construction recipe for partial
+  languages, the `LangHas*` bounds a language author may hit
+  (verbatim/group-argument parsers, scope mutation), the `Option`-returning
+  cache accessors, and the storage-collapse numbers (PROGRESS M3d table).
+- M4-sweep candidates, carried + new: dev-docs/ARCHITECTURE.md:697 pre-existing
+  stale line ("`disable_all` and the collection constructors remain pending
+  their stage" — contradicts [§dd-dr:takeover-staging-sugar] applied notes);
+  promote [§dd-arch:state]'s reference to [§dd-dr:lang-features] from the
+  decisions list into body prose (Stage-D judgment call — the code now exists);
+  ARCHITECTURE's state/token topic prose still describes ungated storage where
+  it describes `TokenRules` fields at all (verify; M3 touched only
+  DESIGN_RATIONALE).
+- Open user questions (see "Questions for user"): the optional nodes_parser
+  Comment-arm guard (pending main-session ruling, untouched at M3 per
+  instruction); the `ScopeOpError::ScopesAbsent` variant (M3c conservative
+  choice, flagged for review).
+- Test totals after M3: **897 passed / 0 failed / 4 ignored**
+  (884 pre-M2 baseline + 12 lang_features tests + 1 rules.rs doctest; the M2c/M2d
+  transitional pins retired at M3 are accounted test-by-test in the M3a/M3b log
+  entries). Storage numbers: the M3d table above (all-present unchanged from M2;
+  NoLangFeatures collapses to 0 except the delta's ungated 32).
+- Environment note (unchanged): one-time unsandboxed `cargo fetch` may be needed
+  after dependency updates; everything else runs sandboxed.
 
 ### M2 → M3 hand-off (supervisor, M2 closure)
 

@@ -422,8 +422,9 @@ mod plain_chars {
 
     // Ruled 2026-08-10: `disable_all()` is the scoped off for every feature the
     // language *has* — it consults the compile-time declarations. With every feature
-    // absent there is nothing for it to mention: the value is the all-`None` default,
-    // and deriving with it succeeds like the empty delta does.
+    // absent there is nothing for it to mention: the value is the default (every
+    // gated field the zero-sized store), and deriving with it succeeds like the
+    // empty delta does.
     #[test]
     fn disable_all_mentions_nothing_under_an_all_absent_language() {
         let overrides = TokenRulesOverrides::<PlainCharsLang>::disable_all();
@@ -460,7 +461,7 @@ mod groups_only {
     // specials trigger, and forbidden `@` are all ordinary characters, and the
     // double newline splits nothing.
     #[test]
-    fn braces_parse_as_group_nodes_while_other_rules_data_is_inert() {
+    fn braces_parse_as_group_nodes_while_other_constructs_read_as_plain_content() {
         let input = "x{a b}y%z\n\n\\w ~@";
         let result = parse_ok_in(language, input);
 
@@ -494,8 +495,8 @@ mod groups_only {
     }
 
     // Ruled 2026-08-10: `disable_all()` flips exactly the present features' gates —
-    // here just groups — and leaves absent features' blocks all-`None`, so applying
-    // it cannot report an absent-feature violation.
+    // here just groups; the absent features' fields are zero-sized stores that can
+    // carry nothing, so applying it always succeeds.
     #[test]
     fn disable_all_flips_only_the_groups_gate_and_applies_cleanly() {
         let overrides = TokenRulesOverrides::<GroupsOnlyLang>::disable_all();
@@ -583,8 +584,8 @@ mod commands_without_scopes {
     }
 
     // Ruled 2026-08-10: under this two-present-features language, `disable_all()`
-    // names exactly whitespace and commands — the absent features' blocks stay
-    // all-`None` — and the delta it seeds applies without any absent-feature report.
+    // names exactly whitespace and commands — the absent features' fields are
+    // zero-sized stores carrying nothing — and the delta it seeds applies cleanly.
     #[test]
     fn disable_all_names_only_the_present_features_and_applies_cleanly() {
         let overrides = TokenRulesOverrides::<CommandsWithoutScopesLang>::disable_all();

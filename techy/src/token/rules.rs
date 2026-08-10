@@ -305,6 +305,9 @@ impl ForbiddenCharsRules {
 /// ```
 /// # use techy::core::{TokenRules, CommandRule, CommandRules, TrivialLang};
 /// # use std::sync::Arc;
+/// # // The example language declares every feature present (`TrivialLang`), so the
+/// # // recipe compiles here as-is; for a partially-absent language the same recipe
+/// # // applies, and only the absent features' fields must come from `empty()`.
 /// # #[derive(Debug, Clone, Copy)]
 /// # struct MyLang;
 /// # impl TrivialLang for MyLang {}
