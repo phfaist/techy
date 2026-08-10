@@ -8,9 +8,10 @@ any execution-time micro-ruling in the notes column (with the commit that took i
 Commit convention: small per-item commits on this branch
 (`worktree-py-ext-feedback-plan`), messages prefixed `pyext-<item>:`.
 
-**Resume here:** execution not started. Next action: Stage 1, item 1.1.
-Open questions 1–6 (PLAN.md foot) may be answered by the user at any point —
-check there before starting Stage 3.
+**Resume here: WAITING FOR THE USER'S EXPLICIT START SIGNAL** (a parallel agent is
+still working on the dev-docs cleanup — do not begin). All rulings are complete
+(three rounds, 2026-08-10); when the signal comes, next action is Stage 1,
+item 1.1.
 
 | Item | Status | Notes |
 |---|---|---|
@@ -20,6 +21,7 @@ check there before starting Stage 3.
 | 1.4 Oracle falsifiability test | pending | |
 | 1.5 format_position_with message | pending | |
 | 1.6 scan_specials bounds → Err | pending | |
+| 1.7 drop criterion + README bench line | pending | |
 | **Stage 1 gate** (build/test/docs) | pending | |
 | 2.1 + Any on four traits | pending | |
 | 2.2 Language::new Into<Arc> | pending | |
@@ -30,12 +32,14 @@ check there before starting Stage 3.
 | 2.7 TreeViolation::new + MalformedBegin | pending | |
 | 2.8 DiagnosticInfo::identifier() | pending | |
 | **Stage 2 gate** (build/test/docs) | pending | |
-| 3.0 HookFailed condition | pending | cause-chain: open question 1 |
+| 3.0 HookFailed condition (with cause field) | pending | |
 | 3.1 Tier A signatures (+ lang_initial ripple) | pending | |
 | 3.2 Tier B signatures (+ observe_transition sink) | pending | |
 | 3.3 Tier C infallibility docs | pending | |
 | 3.4 stage_invocation Err not panic | pending | |
+| 3.5 ParseDriver::diagnostics_limit() | pending | |
+| 3.6 ParseResult returns SessionExt | pending | |
 | **Stage 3 gate** (build/test/docs + hot-path size check) | pending | |
-| 4.1–4.14 doc batch | pending | |
+| 4.1–4.14 doc batch | pending | 4.2 GroupRule: keep PartialEq, document |
 | **Stage 4 gate** (docs build, link check) | pending | |
 | 5 closure (api-baseline; rationale entries AFTER cleanup agent done; courtesy notes; delete folder) | pending | ARCHITECTURE/DESIGN_RATIONALE untouchable until cleanup agent finishes |

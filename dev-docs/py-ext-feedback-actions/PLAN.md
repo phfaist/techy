@@ -5,7 +5,9 @@
 Python-bindings project). Delete the whole folder once the plan has been executed and
 its decisions are recorded in DESIGN_RATIONALE/ARCHITECTURE.
 
-**Status: all rulings received (2026-08-10, two rounds); ready for execution.**
+**Status: all rulings received (2026-08-10, three rounds); plan COMPLETE.
+Execution starts only on the user's explicit signal** — a parallel agent is still
+working on the dev-docs cleanup; do not begin Stage 1 until told to.
 The descent-guard work is merged into main (`1659057`; record `[§dd-dr:descent-guard]`),
 so the original precondition is satisfied. All file:line references below were
 re-verified against merged main (`69038d8`): still, **re-locate by symbol name at
@@ -125,6 +127,13 @@ call is the user's where flagged. `HookFailed` is ruled (no longer a placeholder
   violation" — is exactly right here). Document the contract on the method.
 - **Tests:** out-of-range `pos`; mid-character `pos`; valid boundary positions
   unaffected.
+
+### 1.7 Drop the unused `criterion` dev-dependency and the README `cargo bench` line (ruled 2026-08-10)
+
+- **Where:** `techy/Cargo.toml` (`criterion = "0.5"`), README's `cargo bench`
+  mention. There is no `benches/` directory; the documentation mismatch is what
+  costs readers time.
+- **What:** remove both. A benchmark corpus remains a separate, future decision.
 
 ---
 
@@ -263,12 +272,11 @@ violation" — the wrong statement for an I/O failure or a runtime exception in
 embedder code; `ResolveError` is resolver-specific plumbing, not a condition.
 
 - Add one condition struct via the `DiagnosticInfo` derive:
-  `HookFailed { detail: String }` (message: `extension hook reported a failure:
-  {detail}`). **Open sub-question (surfaced 2026-08-10):** whether to include a
-  cause-chain field from the start, following `ResolveError`'s
-  `Option<Arc<dyn Error + Send + Sync>>` pattern — recommended yes, because the
-  derive emits `new()` over all fields, so adding the field later changes the
-  constructor signature (a second break).
+  `HookFailed { detail: String, cause: Option<Arc<dyn Error + Send + Sync>> }`
+  (message: `extension hook reported a failure: {detail}`). The cause-chain field
+  is **ruled in from the start** (2026-08-10) — the derive emits `new()` over all
+  fields, so adding it later would have changed the constructor signature. Field
+  shape follows `ResolveError`'s.
 - Name rationale on record: `ExtensionError` rejected (collides with the
   `NodeExt`/`StateExt`/`SessionExt` *extension-data* vocabulary); `OperationalError`
   rejected (vague; Python DB-API flavor); `HookFailed` fits the register's
@@ -346,7 +354,28 @@ the conservative superset, answer `None`).
   panic; tolerant recovery does not swallow it (the `implementation_error`
   contract).
 
-### 3.5 Stage gates specific to this sweep
+### 3.5 `ParseDriver::diagnostics_limit()` (ruled 2026-08-10)
+
+- **Why:** `Diagnostics::with_limit` is public, documented, and tested, but
+  `ParserSession` hard-codes `Diagnostics::new()` — no parse can use the cap.
+- **Change:** defaulted `fn diagnostics_limit(&self) -> Option<usize> { None }` on
+  `ParseDriver`, beside `recovery()`; `ParserSession` seeds its `Diagnostics` from
+  it. Non-breaking (defaulted); rides this stage's trait touch.
+- **Tests:** a driver with a limit gets a capped `Diagnostics` out of a parse.
+
+### 3.6 `ParseResult` returns the session extension (ruled 2026-08-10)
+
+- **Why:** `observe_transition`'s docs direct parse-history accumulation into
+  `Lang::SessionExt`, and `ParserSession::finish` drops it — the documented purpose
+  is unreachable from outside. The 3.2 sink covers diagnostics, not data.
+- **Change:** `ParseResult` gains the session extension value (public field or
+  accessor — match `ParseResult`'s existing style; execution detail). Breaking-ish
+  (adds `L::SessionExt` to the result type), which is why it rides the one breaking
+  stage.
+- **Tests:** an `observe_transition` implementation accumulating into `SessionExt`
+  reads its data back off the `ParseResult`.
+
+### 3.7 Stage gates specific to this sweep
 
 - **Hot-path size check:** the `Predicate`/`Compute`/`StopSpec::node` callbacks are
   `&dyn Fn` — dynamically dispatched, so the `Result` channel is *not* optimized out
@@ -370,10 +399,11 @@ descent merge are now writable.)
 1. `Language::parse` (+ `Source::new`): each parse of a bare `&str` creates a fresh
    source identity; spans from different calls never compare equal even for equal
    text.
-2. `GroupRule`: sharing (`Arc` identity) is what the reuse checks compare; the derived
-   structural `==` is not that test. *Execution-time micro-ruling:* a doc sentence, or
-   remove/replace the misleading `PartialEq` derive — the sharper fix if nothing
-   depends on structural equality.
+2. `GroupRule` (**ruled 2026-08-10: keep the `PartialEq` derive, document clearly**):
+   state on the type that sharing (`Arc` identity, `Arc::ptr_eq`) is what the
+   temporary-group reuse checks and the derivation caches compare — the derived
+   structural `==` answers a different question and is not that test. Cross-reference
+   from `TokenRules::groups`.
 3. `ParseDriver`: name the intra-trait dispatches per method (`recover` calls
    `refine_diagnostic` and `recovery`; `make_invocation_parser` delegates to the
    spec) + a short "wrapping a driver" paragraph — a delegating driver that forwards
@@ -428,40 +458,14 @@ descent merge are now writable.)
 
 ---
 
-## Open questions surfaced at finalization (2026-08-10)
+## Finalization questions — all resolved (2026-08-10, third round)
 
-Small decisions not covered by the rulings so far; each has a recommendation. None
-blocks Stages 1–2.
-
-1. **`HookFailed` cause chain** (see 3.0) — include
-   `Option<Arc<dyn Error + Send + Sync>>` from the start? *Recommended: yes* (the
-   derive-emitted `new()` makes a later addition a second break).
-2. **Diagnostics retention cap is unreachable.** `Diagnostics::with_limit` is
-   public, documented, and tested, but `ParserSession` hard-codes
-   `Diagnostics::new()`, so no parse can use it. *Recommended:* a defaulted
-   `ParseDriver::diagnostics_limit(&self) -> Option<usize>` beside `recovery()`
-   (non-breaking; rides Stage 3's trait touch). Alternative: decline + one doc
-   sentence on `with_limit`.
-3. **`Lang::SessionExt` is write-only.** `observe_transition`'s docs direct
-   parse-history accumulation into `SessionExt`, and `ParserSession::finish` drops
-   it — the documented purpose is unreachable. *Recommended:* return it in
-   `ParseResult` (soft-freeze window; the Stage 3 sink covers diagnostics but not
-   data). Alternative: one doc sentence declaring it parse-scoped by design.
-4. **`criterion` dev-dependency + README `cargo bench` with no `benches/`.**
-   *Recommended:* drop both now (the doc mismatch is what costs readers time); a
-   benchmark corpus is a separate, larger decision.
-5. **`GroupRule`'s structural `PartialEq` derive** (Stage 4 item 2) — settle the
-   spelling now or at execution: remove the derive (sharper, if nothing in-crate
-   depends on structural equality — check first) vs. keep + one doc sentence.
-6. **Deliberately-cut small accessors** — the triage left these out to keep the cut
-   minimal; listed once for cherry-picking, else they close as declined with the
-   register: `NodeTree::id_at(index)`; `Diagnostic::with_frames` (mirror of the
-   public `ParseError::with_frames`); `NamedAccessError` accessors (`name()`,
-   discriminant); `ArgumentCodeError` accessors (`index`/`offset`/`character`);
-   `KeyValEntry::value_node`; `slot_content_parent_named`;
-   `DEFAULT_MAX_SCAN_LEN` const + `max_scan_len()` getters; `copy_subtree_into`
-   made public; `NodeRef::invocation_syntax_materialized`; a parse-start warning
-   when a specials trigger-set/scan pair is half-wired.
+1. `HookFailed` cause chain: **in from the start** → 3.0.
+2. Diagnostics retention cap: **`ParseDriver::diagnostics_limit()`** → 3.5.
+3. `Lang::SessionExt` read-back: **returned in `ParseResult`** → 3.6.
+4. `criterion` + README `cargo bench`: **dropped** → 1.7.
+5. `GroupRule` `PartialEq`: **kept, documented clearly** → Stage 4 item 2.
+6. Deliberately-cut small accessors: **closed as declined** → register below.
 
 ## Declined register (user rulings 2026-08-10 — record in DESIGN_RATIONALE at Stage 5)
 
@@ -479,6 +483,13 @@ blocks Stages 1–2.
   → 2.4; the invariant checkers stay internal (the byte-accounting parse-tree law
   is deliberately *not* the all-trees law — `node/invariants.rs` module doc);
   the hand-tree-builder need collapses into 2.7.
+- **The small-accessor batch** (closed as declined, third round — none urgent, all
+  cut for leanness): `NodeTree::id_at(index)`; `Diagnostic::with_frames`;
+  `NamedAccessError` accessors; `ArgumentCodeError` accessors
+  (`index`/`offset`/`character`); `KeyValEntry::value_node`;
+  `slot_content_parent_named`; `DEFAULT_MAX_SCAN_LEN` const + `max_scan_len()`
+  getters; `copy_subtree_into` made public; `NodeRef::invocation_syntax_materialized`;
+  a parse-start warning for a half-wired specials trigger-set/scan pair.
 - Carried over from the triage: `Default`/public constructors for
   `RestageContext`/`RecomposeContext` (forecloses the "one place to grow" reserve);
   de-lifetiming `ParseContext`; `PartialEq` on `Diagnostic`; `&Arc<ParsingState>` on
