@@ -76,6 +76,7 @@
 //! neighboring chars runs. Group recovery (unclosed at end of input, mismatched close)
 //! lives in [`GroupParser`]. `Err` means abort — nobody continues past one.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -398,8 +399,9 @@ pub struct NodesOutcome<L: Lang> {
     /// re-fire transition observation on a second path). A scope op that *failed*
     /// when first applied stays in the record — nothing is silently stripped — so
     /// a propagating replay re-attempts it and may re-diagnose the same failure
-    /// at the propagation site.
-    pub after_effects: Option<ParsingStateDelta<L>>,
+    /// at the propagation site. Boxed like the [`ConstructParser`] pass-through
+    /// delta: the common `None` costs one pointer-sized slot.
+    pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
 // Manual impls: derives would demand `L: Debug`/`L: Clone`, but the state rides behind
@@ -451,7 +453,7 @@ pub struct NodesParser<'p, L: Lang> {
     run: Option<Span>,
     /// The merged record of the sibling after-effect deltas applied so far
     /// ([`NodesOutcome::after_effects`]); drained at every return like `nodes`.
-    after_effects: Option<ParsingStateDelta<L>>,
+    after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 
 impl<'p, L: Lang> NodesParser<'p, L> {
@@ -735,7 +737,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<Box<ParsingStateDelta<L>>>)> {
         loop {
             // Read one token. On a tokenizer error: strict mode aborts, tolerant mode
             // records the diagnostic and adopts the error's recovery — the placeholder
@@ -2760,12 +2762,12 @@ mod tests {
                 cx: &mut ParseContext<'_, '_, CmdLang>,
             ) -> ConstructParserResult<
                 CmdLang,
-                (BuildId, Option<ParsingStateDelta<CmdLang>>),
+                (BuildId, Option<Box<ParsingStateDelta<CmdLang>>>),
             > {
                 let (id, _) = self.inner.parse(cx)?;
                 let delta =
                     ParsingStateDelta::new().push_provider(macro_library(&["late"]));
-                Ok((id, Some(delta)))
+                Ok((id, Some(Box::new(delta))))
             }
         }
 
@@ -2843,7 +2845,7 @@ mod tests {
                 cx: &mut ParseContext<'_, '_, CmdLang>,
             ) -> ConstructParserResult<
                 CmdLang,
-                (BuildId, Option<ParsingStateDelta<CmdLang>>),
+                (BuildId, Option<Box<ParsingStateDelta<CmdLang>>>),
             > {
                 // The trigger is already consumed whole; its span becomes the "open
                 // delimiter". Raw content runs from there to the `!` marker.
@@ -2878,7 +2880,7 @@ mod tests {
                     comments: CommentOverrides::disable(),
                     ..TokenRulesOverrides::default()
                 });
-                Ok((id, Some(delta)))
+                Ok((id, Some(Box::new(delta))))
             }
         }
 

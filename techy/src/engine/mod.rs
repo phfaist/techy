@@ -670,7 +670,7 @@ mod tests {
             cx: &mut ParseContext<'_, '_, PlainLang>,
         ) -> ConstructParserResult<
             PlainLang,
-            (Self::Output, Option<ParsingStateDelta<PlainLang>>),
+            (Self::Output, Option<Box<ParsingStateDelta<PlainLang>>>),
         > {
             let token = cx.tokens.next(&cx.state).expect("test token stream is error-free");
             let TokenKind::Char(_) = token.kind else { panic!("test feeds a Char token") };

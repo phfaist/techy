@@ -618,7 +618,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, LLL>,
-    ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)>
+    ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)>
     {
         // The language's environment-side record ([`LatexlikeInvocationSyntax::Env`])
         // records the begin/end syntax; the composition owns all scanning plus
@@ -817,7 +817,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, LLL>,
-    ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)>
+    ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)>
     {
         let trigger = self.invocation.token;
         let source = Arc::clone(&cx.source);

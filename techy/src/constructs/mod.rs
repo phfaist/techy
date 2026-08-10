@@ -27,8 +27,10 @@
 //! [`with_parsing_state`](ParseContext::with_parsing_state) (structural revert —
 //! `Arc` clone is
 //! cheap — plus the session's enclosing-state stack bookkeeping). The
-//! `Option<ParsingStateDelta>` in the
-//! return value is exclusively the *after-effect for the caller* (`\newcommand`).
+//! `Option<Box<ParsingStateDelta>>` in the
+//! return value is exclusively the *after-effect for the caller* (`\newcommand`);
+//! it is boxed so the common `None` costs one pointer-sized slot per recursion
+//! level, not the full delta struct.
 //!
 //! # Errors
 //!
@@ -336,7 +338,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         parser: &mut P,
         state: Option<Arc<ParsingState<L>>>,
         frame: Option<Frame<L>>,
-    ) -> ConstructParserResult<L, (P::Output, Option<ParsingStateDelta<L>>)>
+    ) -> ConstructParserResult<L, (P::Output, Option<Box<ParsingStateDelta<L>>>)>
     where
         P: ConstructParser<L> + ?Sized,
     {
@@ -526,7 +528,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub(crate) fn derive_state_recording(
         &mut self,
         delta: &ParsingStateDelta<L>,
-        record: &mut Option<ParsingStateDelta<L>>,
+        record: &mut Option<Box<ParsingStateDelta<L>>>,
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
         let base = Arc::clone(&self.state);
         let effective;
@@ -539,7 +541,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let new = self.commit_derivation(&base, applied)?;
         match record {
             Some(record) => record.merge_from(applied.clone()),
-            None => *record = Some(applied.clone()),
+            None => *record = Some(Box::new(applied.clone())),
         }
         Ok(new)
     }
@@ -768,7 +770,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         state: Arc<ParsingState<L>>,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<ParsingStateDelta<L>>)>
+    ) -> ConstructParserResult<L, (NodesOutcome<L>, Option<Box<ParsingStateDelta<L>>>)>
     where
         'a: 'p,
         L::InvocationSyntax: FromInvocation<L>,
@@ -799,7 +801,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
         frame: Option<Frame<L>>,
-    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)>
+    ) -> ConstructParserResult<L, (BuildId, Option<Box<ParsingStateDelta<L>>>)>
     where
         'a: 'p,
         L::InvocationSyntax: FromInvocation<L>,
@@ -945,9 +947,10 @@ pub type ConstructParserResult<L, T> = Result<T, ParseError<<L as Lang>::SourceO
 /// fields, `&mut self` working state, dropped with the frame.
 ///
 /// On success, a parser returns its output (typically staged `BuildId`s) together with
-/// an optional [`ParsingStateDelta`] — the construct's *after-effect for the caller*
-/// (`\newcommand` pushing definitions for subsequent siblings), never its internal
-/// scoping.
+/// an optional boxed [`ParsingStateDelta`] — the construct's *after-effect for the
+/// caller* (`\newcommand` pushing definitions for subsequent siblings), never its
+/// internal scoping. The delta is boxed so the common `None` case costs one
+/// pointer-sized return slot per recursion level, not the full delta struct.
 pub trait ConstructParser<L: Lang> {
     /// What the parser produces: a staged `BuildId`, a `Vec<BuildId>`, a
     /// `ParsedArguments`, …
@@ -960,7 +963,7 @@ pub trait ConstructParser<L: Lang> {
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (Self::Output, Option<ParsingStateDelta<L>>)>;
+    ) -> ConstructParserResult<L, (Self::Output, Option<Box<ParsingStateDelta<L>>>)>;
 }
 
 /// One resolved callable invocation, as handed to
@@ -1108,7 +1111,7 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, PlainLang>,
-        ) -> ConstructParserResult<PlainLang, ((), Option<ParsingStateDelta<PlainLang>>)>
+        ) -> ConstructParserResult<PlainLang, ((), Option<Box<ParsingStateDelta<PlainLang>>>)>
         {
             self.seen_state = Some(Arc::clone(&cx.state));
             self.seen_depth = Some(cx.session.state_stack().len());
@@ -1126,7 +1129,7 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, PlainLang>,
-        ) -> ConstructParserResult<PlainLang, ((), Option<ParsingStateDelta<PlainLang>>)>
+        ) -> ConstructParserResult<PlainLang, ((), Option<Box<ParsingStateDelta<PlainLang>>>)>
         {
             let span = SourceSpan::new(&cx.source, Span::new(1, 2));
             cx.recover(TestCondition, span)?;

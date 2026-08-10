@@ -39,6 +39,7 @@
 //!
 //! Under [`Recovery::Strict`](crate::error::Recovery) both conditions abort instead.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
@@ -153,7 +154,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (BuildId, Option<Box<ParsingStateDelta<L>>>)> {
         // The interior state: base + expecting_group_close + the driver's descent
         // delta, session-memoized (one derivation per (base, rule); every descent
         // still reaches observe_transition).

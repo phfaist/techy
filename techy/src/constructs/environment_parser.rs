@@ -49,6 +49,7 @@
 //! "Was this environment properly terminated?" lives in the diagnostics, not on the
 //! node — a preset wanting it on the node computes it in ext via `Lang::make_node_ext`.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
@@ -600,7 +601,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         // The environment-body traceback frame ([§dd-dr:errors]), covering the body content *and*
         // the terminator flow — terminator diagnostics name the environment being
         // parsed. Anchored at the invocation trigger.
@@ -625,7 +626,7 @@ where
     fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         let body_start = cx.tokens.pos();
 
         // The content loop, stopping at the terminator command — `consume = false`,
@@ -937,7 +938,7 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, EnvLang>,
-        ) -> ConstructParserResult<EnvLang, (BuildId, Option<ParsingStateDelta<EnvLang>>)>
+        ) -> ConstructParserResult<EnvLang, (BuildId, Option<Box<ParsingStateDelta<EnvLang>>>)>
         {
             let trigger = self.invocation.token;
 
@@ -1082,7 +1083,7 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, EnvLang>,
-        ) -> ConstructParserResult<EnvLang, (BuildId, Option<ParsingStateDelta<EnvLang>>)>
+        ) -> ConstructParserResult<EnvLang, (BuildId, Option<Box<ParsingStateDelta<EnvLang>>>)>
         {
             const TERMINATOR: &str = "\\endraw";
             let trigger = self.invocation.token;

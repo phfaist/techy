@@ -1387,7 +1387,7 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (BuildId, Option<Box<ParsingStateDelta<L>>>)> {
         let token = self.invocation.token;
         cx.recover(
             CallableDefinedAsError {

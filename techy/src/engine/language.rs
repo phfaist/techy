@@ -560,7 +560,7 @@ mod tests {
                 cx: &mut ParseContext<'_, '_, BogusLang>,
             ) -> ConstructParserResult<
                 BogusLang,
-                (Self::Output, Option<ParsingStateDelta<BogusLang>>),
+                (Self::Output, Option<alloc::boxed::Box<ParsingStateDelta<BogusLang>>>),
             > {
                 Ok((
                     NodesOutcome {
@@ -855,10 +855,12 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, MacroLang>,
-        ) -> ConstructParserResult<MacroLang, (BuildId, Option<ParsingStateDelta<MacroLang>>)>
-        {
+        ) -> ConstructParserResult<
+            MacroLang,
+            (BuildId, Option<alloc::boxed::Box<ParsingStateDelta<MacroLang>>>),
+        > {
             let (id, _) = self.inner.parse(cx)?;
-            Ok((id, Some(self.delta.clone())))
+            Ok((id, Some(alloc::boxed::Box::new(self.delta.clone()))))
         }
     }
 

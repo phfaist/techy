@@ -43,6 +43,7 @@
 //! (features disabled — pylatexenc marks its verbatim chars nodes the same way); the
 //! group/list wrappers record the surrounding state.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -535,7 +536,7 @@ impl<L: LangHasGroups> ConstructParser<L> for VerbatimBodyParser<'_, L> {
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         // The same environment-body traceback frame as the tokenized parser.
         let title = match self.invocation_name_span {
             Some(name_span) => FrameTitle::Quoted {
@@ -554,7 +555,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
     fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         let body_start = cx.tokens.pos();
         let close_rule = Arc::new(GroupRule {
             group_type: self.group_type,

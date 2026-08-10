@@ -169,10 +169,12 @@ impl<L: Lang> ParseContext<'_, '_, L> {
                 nodes.extend(outcome.nodes);
                 // Merge each resumed run's after-effect record into one bundle
                 // record (application order — later runs are sequentially later).
+                // The run's record arrives boxed ([`NodesOutcome::after_effects`]);
+                // the bundle stores the delta value itself.
                 if let Some(run_effects) = outcome.after_effects {
                     match &mut after_effects {
-                        Some(merged) => merged.merge_from(run_effects),
-                        None => after_effects = Some(run_effects),
+                        Some(merged) => merged.merge_from(*run_effects),
+                        None => after_effects = Some(*run_effects),
                     }
                 }
                 // Thread the segment's exit state (the root-loop discipline):

@@ -2131,7 +2131,7 @@ mod tests {
                         cx: &mut ParseContext<'_, '_, ArgLang>,
                     ) -> ConstructParserResult<
                         ArgLang,
-                        (BuildId, Option<ParsingStateDelta<ArgLang>>),
+                        (BuildId, Option<Box<ParsingStateDelta<ArgLang>>>),
                     > {
                         let span = self.invocation.token.span;
                         let id = cx.stage_node(
@@ -2144,7 +2144,7 @@ mod tests {
                             comments: crate::state::CommentOverrides::disable(),
                             ..TokenRulesOverrides::default()
                         });
-                        Ok((id, Some(delta)))
+                        Ok((id, Some(Box::new(delta))))
                     }
                 }
                 alloc::boxed::Box::new(DefParser { invocation })

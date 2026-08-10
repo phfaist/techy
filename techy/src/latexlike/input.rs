@@ -44,6 +44,7 @@
 //! );
 //! ```
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
@@ -261,7 +262,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, LLL>,
-    ) -> ConstructParserResult<LLL, (BuildId, Option<ParsingStateDelta<LLL>>)> {
+    ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)> {
         let token = self.invocation.token;
         let name_span = Span::new(token.span.start(), token.post_space().start());
 
@@ -320,9 +321,13 @@ where
                 )]);
                 // The persist_state choice: forward the included run's merged
                 // after-effect record as this invocation's own after-effect
-                // (the existing sibling channel), or stay transparent.
-                let after_effects =
-                    if self.persist_state { outcome.after_effects } else { None };
+                // (the existing sibling channel, boxed like every pass-through
+                // delta), or stay transparent.
+                let after_effects = if self.persist_state {
+                    outcome.after_effects.map(Box::new)
+                } else {
+                    None
+                };
                 (slots, after_effects)
             }
             None => (ParsedSlots::empty(), None),
@@ -811,10 +816,10 @@ mod tests {
         fn parse(
             &mut self,
             cx: &mut ParseContext<'_, '_, Latexlike>,
-        ) -> ConstructParserResult<Latexlike, (BuildId, Option<ParsingStateDelta<Latexlike>>)>
+        ) -> ConstructParserResult<Latexlike, (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>)>
         {
             let (id, _) = self.inner.parse(cx)?;
-            Ok((id, Some(self.delta.clone())))
+            Ok((id, Some(Box::new(self.delta.clone()))))
         }
     }
 

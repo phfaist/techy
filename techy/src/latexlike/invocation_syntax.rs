@@ -726,7 +726,7 @@ mod tests {
                     cx: &mut crate::constructs::ParseContext<'_, '_, Latexlike>,
                 ) -> crate::constructs::ConstructParserResult<
                     Latexlike,
-                    (BuildId, Option<ParsingStateDelta<Latexlike>>),
+                    (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>),
                 > {
                     // Consume raw bytes through the end of the line.
                     let source = Arc::clone(&cx.source);

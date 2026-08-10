@@ -4,6 +4,7 @@
 //! The full invocation-parsing contract — what every parser returned by that factory
 //! runs under — lives on [`StdInvocationParser`]'s own documentation.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -181,7 +182,7 @@ where
     fn parse(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-    ) -> ConstructParserResult<L, (BuildId, Option<ParsingStateDelta<L>>)> {
+    ) -> ConstructParserResult<L, (BuildId, Option<Box<ParsingStateDelta<L>>>)> {
         let token = self.invocation.token;
         // The invocation spelling (trigger minus syntactic post-space) titles the
         // argument frames.
