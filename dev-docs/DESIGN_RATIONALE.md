@@ -951,7 +951,9 @@ review).
 `ParsingState::new(data)` was `pub`, so any caller could assemble a state that never
 passed `finalize_transition` — the one hole in "airtightness is structural". Now the
 language provides its canonical seed as *data* (`Lang::initial_state_data() ->
-StateData<Self>`, default: every syntax gate off, no libraries, default ext), and the
+StateData<Self>` — since revised to `Result<StateData<Self>, FinalizeError>`, a
+seed hook may refuse: [§dd-dr:hook-fallibility]; default: every syntax gate off,
+no libraries, default ext), and the
 *crate* owns the data→state freeze (`ParsingState::initial()`); `new()` is
 `#[cfg(test)] pub(crate)`. Callers customize the starting point via `derived(delta)` —
 which runs finalize — never by assembling a state.
@@ -2581,7 +2583,10 @@ ext system.** The pieces, each argued in the session:
   `NodeDataExt { uniform, per_kind: enum }` bundle is dominated: it pays removal's
   coherence cost *plus* the six-type ceremony.
 - **`Lang::make_node_ext(kind: &NodeKind, span, state, children: StagedChildren)
-  -> NodeExt`** replaces `finalize_node` — value-return, `kind` by shared reference
+  -> NodeExt`** (since revised to return `Result<_, NodeBuildError>` — a refused
+  mint is `ExtMintFailed`, an error at the builder level because the hook also
+  runs for consumer-built trees; [§dd-dr:hook-fallibility]) replaces
+  `finalize_node` — value-return, `kind` by shared reference
   (the hook cannot change the kind; both `&mut kind` and consume-and-return were
   rejected for exactly that reach). The **idempotence contract is deleted**: the hook
   runs once per node, at parse staging, never on restaged copies (their exts travel
@@ -3502,6 +3507,10 @@ downstream (the wildcard obligation already stands).
 along *miss-reason prose* (subsumed by the detail string); this one is along *miss vs.
 operational error* — an outcome axis a detail string cannot carry to a consumer keying on
 the condition id.
+(Later revised, [§dd-dr:hook-fallibility]: `resolve_command` returns
+`Result<CommandResolution<L>, ParseError<_>>` — `Failed` remains the
+diagnose-and-recover outcome; an `Err` aborts. The outcome axis and the abort
+channel are distinct and both documented on the hook.)
 
 #### `Lang::make_paragraph_break_node` hook [§dd-dr:paragraph-break-hook]
 
@@ -3523,7 +3532,8 @@ Status: DECIDED (user; pylatexenc-informed).
 triggers, mirroring pylatexenc's well-tested pair:
 - *token condition* — a small closed enum (`Command(name)`,
   `GroupClose(group_type, close)`, `ParagraphBreak`, …) **or** a programmatic predicate
-  (`Fn(&Token) -> bool`);
+  (`Fn(&Token) -> Result<bool, ParseError<_>>` — fallible,
+  [§dd-dr:hook-fallibility]);
 - *node condition* — a programmatic predicate consulted after each node is assembled,
   receiving (node count, view of the just-staged node) — covers pylatexenc's
   `stop_nodelist_condition` uses (stop-after-one-node, `LatexSingleNodeParser`).
@@ -3781,8 +3791,10 @@ The two levels exist because two different questions get asked at a transition:
 *constructing the data* is `Lang::finalize_transition` (inside `derived()`, unchanged) — a
 pure function of (base data, delta, events), structurally airtight, and memoizable
 *because* pure: it runs once per unique derivation, **not** once per transition event.
-*Observing the event* is the new `Lang::observe_transition(&mut L::SessionExt, prev, new,
-&delta)`, called by `derived_state` on **every** transition event, memo hits included.
+*Observing the event* is `observe_transition(&mut L::SessionExt, &mut
+Diagnostics<_>, prev, new, &delta) -> Result<(), ParseError<_>>` (home: the
+driver, [§dd-dr:parse-driver]; sink and abort channel: [§dd-dr:hook-fallibility]),
+called by `derived_state` on **every** transition event, memo hits included.
 Parse-history accumulation ("how many times did the parse enter math mode") belongs to the
 second level; in finalize it would be doubly wrong — states revert structurally, so a
 state-side counter yields nesting depth at best, and the memo skips finalize on repeats,
@@ -4695,7 +4707,7 @@ derivation; the `Result` mirrors `with_seed_delta` honestly.
 everyday operation at the seed itself, where no derivation runs; `with_provider`
 and `with_seed_delta` are removed.)*
 
-#### Language construction: explicit initial state, infallible seed+packages path [§dd-dr:language-init]
+#### Language construction: explicit initial state, seed+packages path [§dd-dr:language-init]
 
 Status: DECIDED (user, API-review policy session; supersedes the
 construction bullet of [§dd-dr:language-parse-api] and [§dd-dr:with-provider]).
@@ -4732,8 +4744,16 @@ Language` removal no `L::Driver: Default` consumer remains — the spelling is
 `new(driver, initial_state)` + `parse` + `parse_source` + accessors. The
 packages argument takes the sealed `IntoSpecsProvider` conversion —
 `lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc
-noise ([§dd-dr:registration-ergonomics]); the infallibility argument is
-documented on the method.
+noise ([§dd-dr:registration-ergonomics]).
+
+(Later revised, [§dd-dr:hook-fallibility]: `Lang::initial_state_data` may refuse
+a bad seed, so the `lang_initial*` constructors return
+`Result<_, FinalizeError>`. Decisive reason (2) survives narrowed — the packages
+push itself involves no by-name scope ops and the transition choke point stays
+untouched; the seed hook is the only failure source. Later amended,
+[§dd-dr:embedding-feedback-policy]: `initial_state` is `impl
+Into<Arc<ParsingState<L>>>` — a shared handle seeds by identity, and every
+by-value call site compiles unchanged.)
 
 Rejected alternatives: preset-level `parse()`/`parse_tolerant()` facade functions and a
 configuration builder (shortcut accessors — abandoned at the first configuration need;
@@ -4890,6 +4910,101 @@ Revisit if: a refusal shows up in legitimate documents under a properly computed
 budget (the headroom constant or the ~2× descent factor is then miscalibrated), or
 a framework needs the deferred witness parameter or traversal-side guards.
 
+#### Hook fallibility: `Result` where a real failure exists; documented infallibility elsewhere [§dd-dr:hook-fallibility]
+
+Status: DECIDED (user; prompted by the first external embedding, whose hook
+implementations can fail for reasons a bare-value signature cannot report).
+
+The extension hooks split deliberately: **fourteen hooks return `Result`; seven
+return bare values on purpose, with the rationale in their rustdoc.** The sorting
+question, applied per hook: *is a failure of this hook a diagnosis of the
+document, an operational failure or defect in the embedder's code — or is a
+neutral answer always sound?* A hook is fallible where a genuine failure case
+exists even for pure-Rust implementors — the natural body calls fallible
+machinery (both `ChildStateSpec` `Compute` arms call `derived()`; a lazily-loaded
+definition provider can fail to load inside `resolve_command`; a seed assembled
+from configuration can be invalid in `initial_state_data`) — or where the
+infallible signature silently corrupted the parse (a failing stop predicate
+answering `false` means "keep parsing": the parse *succeeds* and the tree is
+silently wrong). The fallible roster: the two `ChildStateSpec::Compute` arms,
+`TokenStopKind::Predicate` and the node-stop predicate, `Lang::initial_state_data`
+(erring `FinalizeError`, surfacing through the fallible
+`lang_initial`/`lang_initial_with_packages` seed constructors),
+`Lang::make_node_ext` (builder-level: `NodeBuildError::ExtMintFailed` — the
+builder also runs for consumer-built trees, where no parse context exists), the
+parser factories (`ParseDriver::make_nodes_parser`/`make_group_parser`/
+`make_invocation_parser` and `CallableSpec::make_invocation_parser` — an `Err`
+means "could not build the parser", distinct from the descent guard's depth
+refusal, [§dd-dr:descent-guard]), `ParseDriver::resolve_command` (with
+`CommandResolver` in step), `resolve_state_event`,
+`EnvironmentBehavior::body_state_delta`, and `observe_transition`. In-parse hooks
+err with `ParseError<L::SourceOrigin>`; the consultation site attaches the live
+traceback when the error carries no frames (hooks have no session access); an
+`Err` aborts under any recovery policy ([§dd-dr:err-means-abort]).
+
+**The three-way condition split**, documented on every fallible hook: the
+condition `HookFailed` (`core.hooks.hook-failed`; `{ detail, cause:
+Option<Arc<dyn Error + Send + Sync>> }`, the cause-chain field modeled on
+`ResolveError`'s) reports *operational* failures of consumer-supplied hook code —
+I/O gone wrong, a runtime exception in embedder code; `ImplementationError` keeps
+its verbatim meaning (extension *contract* violation) and is never reused for
+operational failures; document diagnoses carry ordinary domain conditions.
+`resolve_command` keeps `CommandResolution::Failed` as the diagnose-and-recover
+outcome ([§dd-dr:resolver-failure]); its `Err` channel is the abort axis, not a
+replacement for it.
+
+**`observe_transition` is a dual channel**: it takes the diagnostics sink (`&mut
+Diagnostics`, already public API in exactly this position on
+`observe_parse_start`) *and* returns `Result`. Sink = record document-level
+observations without affecting the parse (an error-severity diagnostic does not
+abort — aborting is `recover`'s business); `Err` = abort on a truly problematic
+state. The data half is `L::SessionExt`, which `ParseResult` returns as
+`session_ext` — accumulating into the session extension is the hook's documented
+purpose, so the value must be readable after the parse.
+
+**The seven deliberately infallible hooks** — `recovery`, `refine_diagnostic`,
+`make_paragraph_break_node`, `source_resolver()`, `specials_trigger_chars`,
+`ComposePiece::append`, `LineColProvider::line_col` — each state in their rustdoc
+that the infallibility is deliberate and why (a pure policy read; an identity
+fallback is always sound; a fixed default node is always answerable; failure
+belongs on `SourceResolver::resolve`, which is fallible; a conservative superset
+is always answerable; both shipped piece types genuinely cannot fail; `Option`
+*is* the no-answer channel), plus the recommended course for embedding code that
+can still fail internally: report through the embedding's own channel and answer
+the documented neutral value. The documentation obligation is load-bearing: an
+absent `Result` must read as a constraint, never as an oversight.
+
+**Cost**: the statically dispatched hooks (`Lang`, `L::Driver`, specs) are
+monomorphized, so an infallible body lets the compiler fold the `Result` channel
+away — the channel is free where it is unused. The `&dyn Fn` callbacks
+(`Predicate`, the node stop, both `Compute` arms) materialize their `Result` on
+every consultation; the measured sizes, pinned by an in-crate test:
+`Result<bool, ParseError<_>>` and `Result<Arc<ParsingState<_>>, ParseError<_>>`
+are byte-identical to the bare `ParseError` (the `Ok` payload fits the error
+type's niches; 64 bytes, one cache line, smaller than the content loop's
+pre-existing per-token plumbing), so the `Err` arm is not boxed — the pin test
+says re-measure before restructuring.
+
+Rejected alternatives: a `Result` on every bare-value hook uniformly (churn
+without a failure story — the neutral-answer hooks would gain an abort channel
+with no sound abort semantics); a session-level "abort with implementation
+error" escape reachable from hooks (a second error path bypassing the typed
+condition channel); factories deferring failure into a parser whose `parse()`
+errs (reports one call later than the failure, and every embedding invents its
+own stub parser); the names `ExtensionError` (collides with the
+`NodeExt`/`StateExt`/`SessionExt` extension-*data* vocabulary) and
+`OperationalError` (vague; database-API flavor) for the new condition —
+`HookFailed` matches the register's event-style condition names
+(`StrayGroupClose`, `MalformedBegin`, `DescentLimitExceeded`); an `Arc`'d cause
+field on `ExtMintFailed` (would cost `NodeBuildError` its derived `PartialEq`,
+matched by in-crate and downstream assertions, and the parse-side lift
+stringifies anyway — an implementation renders its cause chain into `detail`).
+
+Revisit if: an infallible hook acquires a genuine failure case with no sound
+neutral answer, or the pinned hot-path size test shows the `Err` arm outgrowing
+a cache line (then box it, following the boxed-deltas discipline of
+[§dd-dr:descent-guard]).
+
 ---
 
 ## Generics strategy [§dd-dr:generics]
@@ -4938,7 +5053,8 @@ Four rules:
    call directly, and follow a std-standard policy. Approved:
    (a) *indexing-style accessors* — `NodeTree::node`/`nodes_in`, `Span::slice`,
    `TextContent::resolve`, and `ChildRegion`'s resolved-only accessors keep their
-   documented panics **with non-panicking companions** (`NodeTree::get`, `Span::get`)
+   documented panics **with non-panicking companions** (`NodeTree::get`, `Span::get`,
+   `ChildRegion::staged`)
    — the std `Index`-vs-`get` convention: the panicking form for ids/spans the caller
    minted from this very tree/source, the `Option` form for values of unknown
    provenance; (b) *always-on precondition asserts* on the six
@@ -5143,8 +5259,10 @@ plus a defaulted `serializable_data()`. The dyn-compatible facade `DiagnosticDat
 `DiagnosticInfo` type and **sealed** — the blanket impl is the only way in.
 Rationale: the split is forced (an associated const makes a trait non-dyn-compatible) and
 buys everything else: `clone_box` boilerplate vanishes (the blanket impl uses the ordinary
-`Clone` derive), the identifier is a compile-time constant, and sealing enforces the
-const-identifier discipline. Downcasting targets the data struct itself — one type, one
+`Clone` derive), the identifier is a compile-time constant, and sealing keeps the
+blanket impl the only way in — the const-identifier discipline is the norm, with
+one narrow, adapter-scoped `identifier()` method override
+([§dd-dr:runtime-condition-identity]). Downcasting targets the data struct itself — one type, one
 identity.
 Rejected alternatives: macro-generated wrapper types implementing the dyn trait (Rust separates data
 from impls, so no wrapper is needed; a wrapper would make downcasts target the wrapper,
@@ -5197,7 +5315,9 @@ convention-based in every ecosystem (rustc lints, ESLint rules, LSP codes); what
 *can* get is hardening: single-definition consts and a documented namespace rule.
 Rejected alternatives: deriving the identifier from the type name (the two have different change
 cadences — a struct rename is an internal refactor, a wire-id change is a silent break; the
-derive macro will *require* the id attribute); method name `diagnostic_identifier()`
+derive macro will *require* the id attribute; the narrowly-scoped per-instance
+override for binding/embedding adapters is [§dd-dr:runtime-condition-identity]);
+method name `diagnostic_identifier()`
 (stutters as `DiagnosticData::diagnostic_identifier`; the trait context already qualifies,
 [§dd-dr:naming]); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (maintenance work to keep in
 sync, and namespace prefixes already prevent collisions — can be
@@ -5308,7 +5428,11 @@ per-diagnostic `render()` builds a fresh index per position, making k diagnostic
 an N-byte source O(k·N), with provenance chains multiplying the rescans. The cache
 (`SourceIndexCache`) lives in the renderer, not on `Source`: a lazily-populated cache on
 the shared `Source` is blocked dep-free (`alloc` has no `Mutex`; `OnceCell` would cost
-`Sync`). `format_position` stays as the documented one-shot convenience.
+`Sync`). `format_position` stays as the documented one-shot convenience. The
+cap is per-parse driver policy: `ParseDriver::diagnostics_limit()` (defaulted
+`None` = `DEFAULT_LIMIT`) seeds the session's sink in `Language::parse_source`,
+before `observe_parse_start` so the cap governs the whole parse; hand-built
+sessions apply `with_limit` themselves through the public `diagnostics` field.
 Rejected alternatives: an unbounded default (the failure mode is silent and input-controlled), and
 a public `DiagnosticRenderer` type (no second consumer yet; `render_all` covers the
 need — promote the cache if one appears).
@@ -5395,6 +5519,43 @@ documented as source order *within each source*. Narrow by design: a total "posi
 order" is ill-defined across multi-source parse trees, which are first-class
 ([§dd-dr:input-attachment]). Both `IntoIterator` impls already exist — the
 walkthrough claim to the contrary was a doc gap, not an API gap.
+
+#### Runtime condition identity: the defaulted `identifier()` override for embedding adapters [§dd-dr:runtime-condition-identity]
+
+Status: DECIDED (user; a scoped relaxation of the const-identifier discipline).
+
+`DiagnosticInfo` carries a defaulted method `fn identifier(&self) -> &str {
+Self::IDENTIFIER }`, and the sealed `DiagnosticData` blanket impl forwards
+through the *method* rather than the const. Overriding it is documented as the
+exceptional case where a compile-time identifier is impossible: binding/embedding
+**adapter** types — one Rust type carrying conditions defined at runtime in a
+host language (e.g. Python-defined conditions), each instance answering its own
+identity. Everything else keeps the const: `IDENTIFIER` remains required and
+remains the type's own identity, typed matching via `T::IDENTIFIER` is untouched,
+and the const-identifier discipline stays the norm
+([§dd-dr:condition-identities]); adapter-minted identifiers fall under the same
+namespace and stability rules as any downstream vocabulary
+([§dd-dr:wire-identifier-stability]).
+
+Rejected alternatives: unsealing `DiagnosticData` (an adapter would bypass
+`DiagnosticInfo` entirely — losing the blanket impl's `clone_box` coherence and
+the one-type-one-identity story; unsealing is also one-way — re-sealing is
+breaking — while the defaulted method is additive and narrow); one wrapper
+condition type per foreign condition (foreign conditions are runtime data; there
+is no Rust type per condition to write); lang-dependent identifiers everywhere
+(rejected in [§dd-dr:condition-identities] and still rejected — this entry
+changes the *instance* channel for adapters only, not the identity model).
+
+Accepted cost: downstream code with both `DiagnosticInfo` and `DiagnosticData`
+in scope finds an unqualified `.identifier()` call on a *concrete* condition
+type ambiguous (E0034) where it previously resolved uniquely; the qualified
+spellings (`DiagnosticInfo::identifier(&c)` / `DiagnosticData::identifier(&c)`)
+resolve it.
+
+Revisit if: overrides appear outside binding/embedding adapter types (the norm
+is eroding — tighten the docs or reconsider the seam), or runtime-minted
+identifiers need collision policing across embeddings (that would need a
+deliberate namespace-registration design, not an ad-hoc exception).
 
 ## Dependencies [§dd-dr:dependencies]
 
@@ -5971,6 +6132,55 @@ bindings consumer is concrete).
 Revisit if: a demoted item acquires a real external consumer (re-publishing is
 additive), or a framework's usage evidence contradicts a keep's stated consumer
 story at hard-freeze time.
+
+#### Embedding-feedback policy: graduation over convenience surface; the declined batch [§dd-dr:embedding-feedback-policy]
+
+Status: DECIDED (user; batch ruling over the first external embedding's filed
+API requests).
+
+Three policy anchors, each closing a class of requests:
+
+- **Parsing states stay crate-frozen.** `ParsingState::data()`/`from_data()`
+  are declined: states are shared by handle — a data-equal copy is a
+  *different* state — and a public data→state freeze would force deciding what
+  identity and provenance an externally assembled state has
+  ([§dd-dr:seed-states] holds unweakened). The sanctioned paths: `derived()`
+  from one state to the next, and `Language::new(driver, impl
+  Into<Arc<ParsingState<L>>>)`, which seeds a parse pipeline from an
+  already-shared handle with its identity preserved ([§dd-dr:language-init]
+  amendment) — closing the real symptom behind the request.
+- **`ConcatPieces` stays build-only.** The read direction (`into_parts`) is
+  declined: the type is a build-only instruction, and publishing the read side
+  freezes an internal six-part shape as API. A wrapping recomposer that must
+  inspect a delegate's instruction maintains its own structure.
+- **No `test-support` cargo feature.** Embedders write their own test
+  fixtures; anything genuinely indispensable graduates to real public API
+  instead of shipping behind a feature gate (`validate_tree` is the model,
+  [§dd-dr:tree-validation]; graduated under the policy: `TreeViolation::new`,
+  so consumers can manufacture values that exercise their violation-handling
+  code, and `MacroSpec::with_after_effect`, which replaced in-crate test-only
+  scaffolding with the public declarative route). The in-crate invariant
+  checkers stay internal — the byte-accounting parse law is deliberately *not*
+  the all-trees law.
+
+Rejected alternatives (the declined accessor batch — none urgent, all cut for
+leanness; each is additive later if a framework consumer materializes):
+`NodeTree::id_at(index)`; `Diagnostic::with_frames`; `NamedAccessError`
+accessors; `ArgumentCodeError` accessors; `KeyValEntry::value_node`;
+`slot_content_parent_named`; a public `DEFAULT_MAX_SCAN_LEN`/`max_scan_len()`;
+a public `copy_subtree_into`; `NodeRef::invocation_syntax_materialized`; a
+parse-start warning for a half-wired specials trigger/scan pair; `Default` or
+public constructors for `RestageContext`/`RecomposeContext` (forecloses the
+one-place-to-grow reserve); de-lifetiming `ParseContext`; `PartialEq` on
+`Diagnostic`; `&Arc<ParsingState>` on the four state-reading hooks;
+`Package::get` trigger fallback; `recompose_from`; `TriggerChars::None`; an
+owning `LineIndex` (that is `LineIndexCache`); an `ExpectedClose` enum;
+`KeyVals::into_parts`; `Clone` on `RestagedArgument`; `StagedChildren::ids()`;
+blanket visibility flips of tree internals (`NodeTree::make_id`, `NodeId::new`,
+`ParserSession::state_stack`, …).
+
+Revisit if: a declined item acquires a concrete framework consumer (graduation
+is additive), or a second, independent embedding files the same gap.
 
 ## Documentation [§dd-dr:documentation]
 

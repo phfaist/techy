@@ -154,13 +154,18 @@ on techy, important discovered shortcomings may still be fixed breakingly; from 
 adoption on, the freeze is hard. The guards: `missing_docs` is a workspace `deny`
 lint, and `scripts/check_semver.sh` runs cargo-semver-checks against the
 `api-baseline` git branch — a movable branch deliberately advanced at each version
-bump, not a tag. Full decision: [§dd-dr:stability-rubric].
+bump, not a tag. Full decision: [§dd-dr:stability-rubric]. Surface leanness
+follows a graduation policy: no test-support feature tier — embedders write their
+own fixtures, and an item proven genuinely indispensable graduates to real public
+API; parsing states stay crate-frozen even for embedders
+([§dd-dr:embedding-feedback-policy]).
 
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
 extracted subsets), [§dd-dr:stability-rubric] (one stability class, soft freeze),
 [§dd-dr:public-visibility-sweep] (the completed per-item pub-vs-pub(crate) sweep),
-[§dd-dr:workspace-layout] (virtual workspace, crates in
+[§dd-dr:embedding-feedback-policy] (graduation over convenience surface; the
+declined accessor batch), [§dd-dr:workspace-layout] (virtual workspace, crates in
 subfolders), [§dd-dr:decisions] (how the register itself is organized).
 
 ## Sources and spans [§dd-arch:source]
@@ -314,10 +319,12 @@ LangHasWhitespace`).
   the driver's math-group descent delta) and *interpreted* by finalize (disable
   features, adjust rules).
 - **Airtightness is structural**: private fields, crate-owned freeze, the seed only
-  from `ParsingState::lang_initial()` (freezing `Lang::initial_state_data()`; the
-  infallible, `LangHasScopes`-bounded `lang_initial_with_packages` pushes providers
-  directly onto the seed's stack), everything else only from `derived()`
-  ([§dd-dr:seed-states]).
+  from `ParsingState::lang_initial()` (freezing `Lang::initial_state_data()`, which
+  may refuse a bad seed — both `lang_initial*` constructors return
+  `Result<_, FinalizeError>`; the `LangHasScopes`-bounded
+  `lang_initial_with_packages` pushes providers directly onto the seed's stack),
+  everything else only from `derived()`
+  ([§dd-dr:seed-states], [§dd-dr:hook-fallibility]).
 - **Hot path = plain field reads.** Per-instance caches (the delimiter `PrefixTable`,
   the specials `TriggerChars`) are rebuilt eagerly at freeze, with the `PrefixTable`
   reused across derivations when its inputs are unchanged. Each cache collapses with its feature ([§dd-dr:lang-features]):
@@ -409,7 +416,8 @@ Range<u32>`. `NodeKind<L>` is closed **and purely structural**:
 inside the ext. Access goes through `NodeRef` proxies (`Copy`, borrow-checked
 against the tree; upward via the stored `parent()`, position-keyed via
 `NodeTree::node_at`/`covering_slice` under the whole-run single-source slice
-contracts — [§dd-dr:tree-navigation]); `validate_tree` is the public all-trees-law
+contracts — [§dd-dr:tree-navigation] — and range-keyed via the validated
+`NodeTree::slice`, `Some` only for a sibling run); `validate_tree` is the public all-trees-law
 checker (a `Result`, never panics); the parse-law byte-accounting oracle is an
 in-crate test utility ([§dd-dr:tree-validation]).
 
@@ -570,7 +578,9 @@ returns (nodes, StopCause) — the caller interprets the ending.
 
 - **Stop conditions are reified values plus tier-2 predicates**; abnormal endings are
   `StopCause` data, not errors — only the caller knows whether end-of-input before
-  `\end{align}` is a problem ([§dd-dr:stop-conditions]).
+  `\end{align}` is a problem ([§dd-dr:stop-conditions]). The predicates are
+  fallible: an erring predicate aborts the parse instead of silently continuing
+  ([§dd-dr:hook-fallibility]).
 - **Descent-state policy** is per-use configuration (`ChildStateSpec`:
   inherit/fixed/compute, one level deep by design — [§dd-dr:child-state-spec]); group
   interiors always carry their `expecting_group_close` and are deduplicated through
@@ -680,6 +690,24 @@ installed eagerly at parse entry, created lazily from `Default` on the
 hand-built-context path, with `ParserSession::install_descent_guard` as the
 public seam ([§dd-dr:descent-guard]).
 
+**Hook fallibility is a deliberate split** ([§dd-dr:hook-fallibility]): the hooks
+with a real failure story return `Result` — the parser factories (an `Err` means
+"could not build the parser", distinct from the guard's depth refusal),
+`resolve_command`/`resolve_state_event`, the stop predicates and the
+`ChildStateSpec` `Compute` arms, `body_state_delta`, `make_node_ext`
+(builder-level), `initial_state_data` (through the fallible `lang_initial*` seed
+constructors), and `observe_transition` — erring `HookFailed` (operational
+failure in consumer code, with an optional cause chain), `ImplementationError`
+(contract violation), or a domain condition (document diagnosis), and aborting
+under any recovery policy. The remaining hooks (`recovery`, `refine_diagnostic`,
+`make_paragraph_break_node`, `source_resolver`, `specials_trigger_chars`,
+`ComposePiece::append`, `LineColProvider::line_col`) are deliberately infallible,
+each documenting its neutral answer for an embedding whose implementation can
+still fail internally. `observe_transition` is a dual channel — a diagnostics
+sink for non-aborting observations, `Err` for aborts — with `L::SessionExt` as
+the data half, read back from `ParseResult.session_ext`; the driver also picks
+the diagnostics retention cap per parse (`diagnostics_limit()`).
+
 **`ParserSession` is pure per-parse scratch**: the node builder, the diagnostics sink,
 the live frame stack, the enclosing-state stack (lent to `resolve_state_event`;
 dies with the session), the derivation memo, the per-parse `DescentGuard` instance
@@ -695,21 +723,27 @@ on every transition event, memo hits included — the two-level transition doctr
 (finalize constructs, observe accumulates).
 
 **`Language<L>` is the long-lived runtime bundle** ([§dd-dr:language-parse-api]): the
-driver instance and the frozen initial state, both mandatory `new` arguments
-([§dd-dr:language-init]: seeds come from `ParsingState::lang_initial()` /
-`lang_initial_with_packages(…)`, and further customization derives *before*
-construction — `lang_initial().derived(&delta)?`). The source resolver lives on the
+driver instance and the frozen initial state, both mandatory `new` arguments —
+`initial_state: impl Into<Arc<ParsingState<L>>>`, so an already-shared handle
+seeds by identity ([§dd-dr:language-init],
+[§dd-dr:embedding-feedback-policy]: seeds come from the fallible
+`ParsingState::lang_initial()` / `lang_initial_with_packages(…)`, and further
+customization derives *before* construction —
+`lang_initial()?.derived(&delta)?`). The source resolver lives on the
 driver, not here ([§dd-dr:input-wiring]); the descent-guard configuration lives
 here, set with the `with_descent_guard_init` builder ([§dd-dr:descent-guard]). Entry points are two named methods —
 `parse(content)` and `parse_source(Arc<Source>)` — plus accessors for the advanced
 path; the root drive loop diagnoses stray closes through the recover funnel, stages the
 consumed delimiter as a `Chars` node, threads the loop's evolved state through
-diagnosis and resume, and finishes into a `ParseResult` that owns its tree and
-diagnostics with no `Language` reference. "Define a language once, parse many
+diagnosis and resume, and finishes into a `ParseResult` that owns its tree, its
+diagnostics, and the session extension (`session_ext` — the read-back for
+`observe_transition` accumulation) with no `Language` reference. "Define a language once, parse many
 documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
 Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
-state; infallible seed+packages construction), [§dd-dr:parse-driver],
+state; the seed+packages construction path), [§dd-dr:hook-fallibility] (which
+hooks return `Result`; the `HookFailed` condition and the three-way condition
+split; the deliberately infallible remainder), [§dd-dr:parse-driver],
 [§dd-dr:descent-guard] (the driver's required `DescentGuard` type choice, the
 `Language`-held configuration, the session-held instance), [§dd-dr:session-derivation],
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node]
@@ -741,7 +775,11 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   function of the payload (`Display`); condition types are plain data structs defined
   next to the construct that detects them, and third-party conditions are structurally
   identical citizens. Two identities: the concrete type in-process (downcast), the
-  namespaced string identifier on the wire ([§dd-dr:condition-identities]);
+  namespaced string identifier on the wire ([§dd-dr:condition-identities]) — the
+  const identifier is the norm; binding/embedding adapter types carrying
+  conditions defined at runtime in a host language may override the defaulted
+  `DiagnosticInfo::identifier()` method per instance
+  ([§dd-dr:runtime-condition-identity]);
   serialization is a derived projection through the minimal `DiagnosticValue` tree
   ([§dd-dr:serialized-schema]). The implementor/facade split and the derive:
   [§dd-dr:diagnostic-info-data-split], [§dd-dr:diagnostic-derive]. Identifiers are a
@@ -754,7 +792,8 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   advance the reader — violations abort even in tolerant mode,
   [§dd-dr:resume-pos-contract]); the session's `Recovery` policy decides record-and-
   continue versus abort. Diagnostics accumulate on the session, capped with counted
-  suppression, and render collections through one shared `LineIndexCache`
+  suppression (the cap is the driver's per-parse `diagnostics_limit()` choice), and
+  render collections through one shared `LineIndexCache`
   ([§dd-dr:diagnostics-retention]) — every rendering entry point also has a `_with`
   variant taking a caller-held `LineColProvider` ([§dd-dr:line-col-ownership]).
   Recording order is recovery order; `sorted_by_position()` is the source-major
@@ -767,7 +806,11 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   state `Arc`s coherent through recovery by construction. Implementation bugs
   (`ImplementationError`) abort even under tolerant recovery: tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions
-  ([§dd-dr:panic-policy]); the descent guard's `DescentLimitExceeded` aborts
+  ([§dd-dr:panic-policy]); operational failures of consumer-supplied hook code are
+  the distinct `HookFailed` condition (detail plus optional cause chain) and abort
+  likewise — the three-way split (hook failure / contract violation / document
+  diagnosis) is documented on every fallible hook ([§dd-dr:hook-fallibility]);
+  the descent guard's `DescentLimitExceeded` aborts
   likewise under any policy — past the limit there is no safe way to continue
   ([§dd-dr:descent-guard]).
 - **Tracebacks come from an explicit frame stack** on the session
@@ -781,7 +824,8 @@ Decisions behind this section (full topic: [§dd-dr:errors]): [§dd-dr:panic-pol
 [§dd-dr:tolerant-parsing], [§dd-dr:err-means-abort], [§dd-dr:resume-pos-contract],
 [§dd-dr:structured-diagnostics], [§dd-dr:diagnostic-info-data-split],
 [§dd-dr:diagnostic-derive], [§dd-dr:condition-identities], [§dd-dr:serialized-schema],
-[§dd-dr:wire-identifier-stability], [§dd-dr:parse-traceback],
+[§dd-dr:wire-identifier-stability], [§dd-dr:runtime-condition-identity] (the
+adapter-scoped `identifier()` override), [§dd-dr:parse-traceback],
 [§dd-dr:refine-diagnostic-hook], [§dd-dr:diagnostics-retention],
 [§dd-dr:diagnostics-position-sort].
 
