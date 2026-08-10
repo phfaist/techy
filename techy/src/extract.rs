@@ -54,7 +54,13 @@
 //!   nodes get `A::default()`).
 //!
 //! Same triple for [`parse_keyval`], [`split_embellishments`], and
-//! [`split_tack_on_fields`]. Boundary: the callback **mints annotations only** —
+//! [`split_tack_on_fields`]. Each triple is **one operation in three spellings**:
+//! the two suffixed forms are the general form with a canned callback —
+//! `*_drop_annotations` passes `|_| ()`, and `*_keep_annotations` passes
+//! `|part| part.original().map(|node| node.annotation().clone()).unwrap_or_default()`
+//! — and the triple exists so the `A: Clone + Default` bound lands only on the
+//! `_keep_annotations` form, leaving the general form free of annotation bounds.
+//! Boundary: the callback **mints annotations only** —
 //! vetoing or modifying nodes is the job of
 //! [`techy::transform`](crate::transform)'s restage pass.
 //!
