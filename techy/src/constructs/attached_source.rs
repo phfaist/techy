@@ -55,7 +55,7 @@ pub struct AttachedSourceOutcome<L: Lang> {
     /// the ordinary sibling channel (the preset's
     /// `input_macro_spec(persist_state: true, …)`); a state-transparent spec drops
     /// it. Boxed like [`NodesOutcome::after_effects`]: the common `None` costs one
-    /// pointer-sized slot on a frame that stays live across the whole nested parse.
+    /// pointer-sized slot on a stack frame that stays live across the whole nested parse.
     pub after_effects: Option<Box<ParsingStateDelta<L>>>,
 }
 

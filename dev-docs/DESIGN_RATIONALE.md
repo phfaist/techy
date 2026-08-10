@@ -5231,9 +5231,9 @@ deterministic policy mode); `dyn` guard storage on the session (the check runs o
 every descent — the associated type keeps it monomorphized at the cost of exactly
 one line per driver); a guard parameter on `Language::parse` (per-call
 configuration for a per-language policy; `Language` is the configuration home,
-mirroring the seed state); warning unconditionally rather than unconfigured-only
-(an explicitly configured limit is a deliberate choice — the warning exists to
-flag the untuned default, not to nag every deep legitimate parse);
+mirroring the seed state); warning on every unconfigured parse
+regardless of depth (noise on every casual shallow parse; replaced by the
+self-describing refusal text plus the once-latched half-budget warning);
 callback-owned headroom (every probe author would have to know the engine's
 between-checks consumption — that number is the library's to own); stacker-style
 stack *growing* (`stacker::maybe_grow` segments) — unavailable to a `no_std` core,
