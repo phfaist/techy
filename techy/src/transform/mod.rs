@@ -6,14 +6,15 @@
 //! (a buried `\includegraphics` is seen before anything below it is staged) —
 //! while the driver stages the output **bottom-up** into a fresh
 //! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder) (children before
-//! parents; the driver mediates the two orders). The entry point is [`restage`]:
+//! parents; the driver mediates the two orders). The entry point is
+//! [`TreeRestager`] (`TreeRestager::new(&mut visitor).restage(&tree)`):
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
 //! use techy::core::node::{NodeId, NodeRef, NodeTree};
 //! use techy::error::Recovery;
 //! use techy::latexlike::{Latexlike, LatexlikeDriver};
-//! use techy::transform::{restage, Restage, RestageContext, RestageError};
+//! use techy::transform::{Restage, RestageContext, RestageError, TreeRestager};
 //!
 //! // The origin-tracking convention: the consumer's own annotation type carries
 //! // the original node's id (ids are tree-tagged, so old ids stay unambiguous).
@@ -27,8 +28,7 @@
 //! let input = language.parse("a{b}c").unwrap().tree;
 //!
 //! // Restage every node unchanged, annotating each copy with its original:
-//! let output: NodeTree<Latexlike, Ann> = restage(
-//!     &input,
+//! let output: NodeTree<Latexlike, Ann> = TreeRestager::new(
 //!     &mut |node: NodeRef<'_, Latexlike>,
 //!           _cx: &mut RestageContext<'_, Latexlike, (), Ann>| {
 //!         Ok::<_, core::convert::Infallible>(
@@ -36,6 +36,7 @@
 //!         )
 //!     },
 //! )
+//! .restage(&input)
 //! .unwrap();
 //!
 //! assert_eq!(output.root().annotation().original, input.root().id());
@@ -124,6 +125,7 @@ use core::fmt;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::engine::DescentWarning;
 use crate::node::{BuildId, NodeBuildError, NodeId, NodeRef};
 use crate::state::Lang;
 
@@ -131,7 +133,7 @@ mod bundles;
 mod context;
 
 pub use bundles::{RestagedArgument, RestagedSlot};
-pub use context::{restage, RestageContext};
+pub use context::{RestageContext, TreeRestager};
 
 /// The visitor's verdict about one input node (returned from
 /// [`RestageVisitor::restage`]).
@@ -171,7 +173,8 @@ pub enum Restage<B> {
 ///
 /// # Errors
 ///
-/// `Error` is the visitor's own failure type; it rides through [`restage`] typed,
+/// `Error` is the visitor's own failure type; it rides through
+/// [`TreeRestager::restage`] typed,
 /// as [`RestageError::Visitor`]. Context ops fail with
 /// [`RestageError`]`<Self::Error>` values; a visitor that wants to propagate
 /// them with `?` gives its error type a conversion, e.g.:
@@ -193,6 +196,15 @@ pub trait RestageVisitor<L: Lang, A, B> {
         node: NodeRef<'_, L, A>,
         cx: &mut RestageContext<'_, L, A, B>,
     ) -> Result<Restage<B>, Self::Error>;
+
+    /// Notification: the run's descent guard granted a descent with an early
+    /// warning (under the unconfigured default, at half the stack budget — see
+    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)). Run-spanning
+    /// consumer state lives in the visitor's own `&mut self`, so the warning is
+    /// delivered here. Defaults to ignoring it.
+    fn observe_descent_warning(&mut self, warning: DescentWarning) {
+        let _ = warning;
+    }
 }
 
 /// Closures are visitors (non-reentrant passes; see [`RestageVisitor`]'s docs).
@@ -211,14 +223,16 @@ where
     }
 }
 
-/// Error of a [`restage`] run — generic over the visitor's own error type `E`
+/// Error of a [`TreeRestager`] run — generic over the visitor's own error type `E`
 /// (the framework's error rides through typed; `Clone`/`PartialEq`/`Eq` are
 /// conditional on `E`, keeping the uniform-Clone principle).
 ///
 /// The variants beyond the visitor's own ([`Visitor`](RestageError::Visitor))
-/// report either builder contract violations
+/// report builder contract violations
 /// ([`Build`](RestageError::Build)), driver-detected unrepairable edits
-/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), or misuse of
+/// ([`ContentParentDropped`](RestageError::ContentParentDropped)), the descent
+/// guard's refusal
+/// ([`DescentLimitExceeded`](RestageError::DescentLimitExceeded)), or misuse of
 /// a context op (a documented-contract violation returns an `Err`, never
 /// panics).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -289,12 +303,21 @@ pub enum RestageError<E> {
         /// The absent argument's index.
         index: usize,
     },
-    /// The root's replacement was not exactly one staged node ([`restage`]
+    /// The root's replacement was not exactly one staged node
+    /// ([`TreeRestager::restage`]
     /// returns a tree, and a synthesized wrapper would need an annotation the
     /// driver cannot invent — wrap the root yourself via `Emit`).
     RootNotSingular {
         /// How many staged nodes the visitor produced for the root.
         count: usize,
+    },
+    /// The run's descent guard refused to go one level deeper (the input is
+    /// nested too deeply for the configured limit): the run is abandoned.
+    /// Configure the limit with
+    /// [`TreeRestager::with_descent_guard_init`].
+    DescentLimitExceeded {
+        /// Which limit was hit and how to configure it.
+        detail: String,
     },
 }
 
@@ -363,6 +386,9 @@ impl<E: fmt::Display> fmt::Display for RestageError<E> {
                  replacement in a node of your own via Emit)",
                 count
             ),
+            RestageError::DescentLimitExceeded { detail } => {
+                write!(f, "restage descent limit exceeded: {}", detail)
+            }
         }
     }
 }

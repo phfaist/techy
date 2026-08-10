@@ -19,13 +19,13 @@ modules are `pub(crate)` and invisible to public paths:
 - **techy::source**: Source model (Source, SourceSpan, Span, SourceProvenance, LineIndex, LineIndexCache, TextContent, SourceResolver, the include-chain helpers)
 - **techy::error**: Diagnostics (Diagnostic, Diagnostics, ParseError, Severity, Recovery; the DiagnosticInfo/ToDiagnosticValue derives)
 - **techy::extract**: Extraction helpers over parsed trees (SplitAtChars, KeyVals, free fns; the producers mint output annotations via per-part callbacks)
-- **techy::transform**: Tree→tree transformation — the streaming restage driver (restage, RestageVisitor, Restage, RestageContext + region ops, RestagedArgument/RestagedSlot, RestageError)
-- **techy::visit**: Read-only structural traversal (walk, NodeVisitor, VisitFlow, VisitContext; the walk is role-blind)
-- **techy::recompose**: Tree→value recomposition — the meaning-free piece fold (recompose, Recomposer, Recompose::{Emit, Concat(ConcatPieces)}, ComposePiece, RecomposeContext + region ops, RecomposeError, core_source_instruction)
+- **techy::transform**: Tree→tree transformation — the streaming restage driver (TreeRestager, RestageVisitor, Restage, RestageContext + region ops, RestagedArgument/RestagedSlot, RestageError)
+- **techy::visit**: Read-only structural traversal (TreeWalker, NodeVisitor, VisitFlow, VisitContext, WalkError; the walk is role-blind and depth-guarded)
+- **techy::recompose**: Tree→value recomposition — the meaning-free piece fold (TreeRecomposer, Recomposer, Recompose::{Emit, Concat(ConcatPieces)}, ComposePiece, RecomposeContext + region ops, RecomposeError, core_source_instruction)
 - **techy::core**: The flat machinery hub — Lang/state (Lang, ParsingState, ParsingStateDelta, TrivialLang), tokens (Token, TokenKind, TokenRules, TokenReader, StdTokenReader), engine (Language + `parse()`, ParseDriver, ParserSession, ParseResult, Frame/FrameTitle/FrameRole)
 - **techy::core::specs**: Defining callables (CallableSpec, StdCallableSpec, ArgumentSpec; SpecsProvider, Package, Scope, ScopeStack; the command-resolution family)
 - **techy::core::constructs**: Construct parsers (ConstructParser trait + standard parsers, ArgumentParser, their diagnostic conditions)
-- **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, NodeTreeBuilder)
+- **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, CommentData, NodeTreeBuilder)
 - **techy::latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs, the SourceRecomposer source re-emission; `latexlike::minidefs` = the opt-in toy `minilatex` package)
 
 Internal file layout (src/token, src/state, src/engine, src/spec, src/scopes, …) is

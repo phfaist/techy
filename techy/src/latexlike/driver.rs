@@ -411,7 +411,6 @@ impl<LLL: LatexlikeLang> fmt::Debug for LatexlikeDriver<LLL> {
 }
 
 impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
-    type DescentGuard = crate::engine::StdDescentGuard;
 
     fn recovery(&self) -> Recovery {
         self.recovery

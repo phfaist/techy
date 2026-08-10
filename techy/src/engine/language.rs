@@ -19,9 +19,8 @@ use crate::constructs::{
 };
 use crate::error::{Diagnostics, ParseError};
 use crate::node::NodeKind;
-use super::descent_guard::DescentGuard;
+use super::descent_guard::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use super::driver::ParseDriver;
-use super::DriverGuard;
 use crate::source::{Source, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 use crate::token::StdTokenReader;
@@ -76,11 +75,11 @@ pub struct Language<L: Lang> {
     /// The frozen initial state every parse starts from — shared by `Arc` across
     /// parses (states are immutable).
     initial_state: Arc<ParsingState<L>>,
-    /// The configuration for the per-parse [`DescentGuard`] (the parsing-depth
+    /// The configuration for the per-parse [`StdDescentGuard`] (the parsing-depth
     /// limiter): defaulted in [`new`](Language::new), set with
     /// [`with_descent_guard_init`](Language::with_descent_guard_init), consumed by
     /// [`parse_source`](Language::parse_source) to create each parse's guard.
-    descent_guard_init: <DriverGuard<L> as DescentGuard>::InitArg,
+    descent_guard_init: StdDescentGuardInit,
 }
 
 impl<L: Lang> Language<L> {
@@ -91,7 +90,7 @@ impl<L: Lang> Language<L> {
     /// `Arc<ParsingState<L>>`: passing the shared handle preserves the state's
     /// identity (states are shared by handle — a data-equal copy is a different
     /// state), so a language can start parses from exactly the state some parsed
-    /// node carries. The parsing-depth limit starts at the guard type's default
+    /// node carries. The parsing-depth limit starts at the guard's default
     /// configuration; choose one explicitly with
     /// [`with_descent_guard_init`](Language::with_descent_guard_init).
     pub fn new(
@@ -105,20 +104,16 @@ impl<L: Lang> Language<L> {
         }
     }
 
-    /// Use `init` as the configuration of the per-parse [`DescentGuard`] — the
+    /// Use `init` as the configuration of the per-parse [`StdDescentGuard`] — the
     /// parsing-depth limiter that refuses input nested too deeply instead of
-    /// letting it crash the process by stack exhaustion. For the standard guard
-    /// ([`StdDescentGuard`](super::StdDescentGuard)) the configuration is a
-    /// [`StdDescentGuardInit`](super::StdDescentGuardInit) — see its docs for
+    /// letting it crash the process by stack exhaustion. See
+    /// [`StdDescentGuardInit`]'s docs for
     /// choosing among a byte budget, a depth limit, and off. Without this call,
-    /// parses run under the guard type's default configuration (for the standard
-    /// guard: a deliberately tight built-in stack budget that also emits a one-time
+    /// parses run under the guard's default configuration:
+    /// a deliberately tight built-in stack budget that also emits a one-time
     /// warning diagnostic at half use, so that an untuned deep parse fails early,
-    /// pointing at this method, instead of consuming an unknown amount of stack).
-    pub fn with_descent_guard_init(
-        mut self,
-        init: <DriverGuard<L> as DescentGuard>::InitArg,
-    ) -> Language<L> {
+    /// pointing at this method, instead of consuming an unknown amount of stack.
+    pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> Language<L> {
         self.descent_guard_init = init;
         self
     }
@@ -196,7 +191,7 @@ impl<L: Lang> Language<L> {
         // The descent guard is created eagerly, here at true parse entry on the
         // parsing thread — a stack-measuring guard anchors its reference
         // measurement before any descent runs.
-        session.install_descent_guard(DriverGuard::<L>::init(&self.descent_guard_init));
+        session.install_descent_guard(StdDescentGuard::init(&self.descent_guard_init));
         let mut nodes = Vec::new();
         let seed = Arc::clone(&self.initial_state);
         // Parse-initialization observation (registration-sanity diagnostics): once
@@ -531,7 +526,6 @@ mod tests {
     struct CapDriver;
 
     impl ParseDriver<CapLang> for CapDriver {
-        type DescentGuard = StdDescentGuard;
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }
@@ -583,7 +577,6 @@ mod tests {
     struct ObserveDriver;
 
     impl ParseDriver<ObserveLang> for ObserveDriver {
-        type DescentGuard = StdDescentGuard;
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -762,7 +755,6 @@ mod tests {
         }
 
         impl ParseDriver<BogusLang> for BogusDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -817,7 +809,7 @@ mod tests {
             assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
             let message = err.to_string();
             assert!(message.contains("StdDescentGuard::DEFAULT_STACK_BUDGET"), "{message}");
-            assert!(message.contains("Language::with_descent_guard_init"), "{message}");
+            assert!(message.contains("with_descent_guard_init"), "{message}");
         }
     }
 
@@ -900,9 +892,10 @@ mod tests {
     }
 
     #[test]
-    fn a_driver_with_only_the_guard_type_line_is_complete() {
-        // The one-line custom-driver check: `type DescentGuard = …;` is the
-        // trait's single required item — nothing else, and the language parses.
+    fn an_empty_driver_impl_is_complete() {
+        // Every `ParseDriver` item is defaulted (the guard is engine-owned, not a
+        // driver choice): `impl ParseDriver<L> for D {}` is a whole driver, and
+        // the language parses.
         #[derive(Debug, Clone, Copy)]
         struct OneLineLang;
         impl Lang for OneLineLang {
@@ -928,9 +921,7 @@ mod tests {
         }
         #[derive(Debug, Clone, Copy)]
         struct OneLineDriver;
-        impl ParseDriver<OneLineLang> for OneLineDriver {
-            type DescentGuard = StdDescentGuard;
-        }
+        impl ParseDriver<OneLineLang> for OneLineDriver {}
         let language: Language<OneLineLang> =
             Language::new(OneLineDriver, ParsingState::lang_initial().expect("seed state"));
         assert!(language.parse("hello").is_ok());

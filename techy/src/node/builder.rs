@@ -645,10 +645,10 @@ fn check_spanned_contents<L: Lang>(
     };
     match kind {
         NodeKind::Chars { content: text, .. } => check(text, "chars content"),
-        NodeKind::Comment { content, start, post_space, .. } => {
-            check(content, "comment content")?;
-            check(start, "comment start delimiter")?;
-            check(post_space, "comment post_space")
+        NodeKind::Comment(data) => {
+            check(&data.content, "comment content")?;
+            check(&data.start, "comment start delimiter")?;
+            check(&data.post_space, "comment post_space")
         }
         // A Callable's invocation-syntax payload is Lang-opaque here: span-backed
         // fields inside it are the Lang's own recording discipline (checked by the

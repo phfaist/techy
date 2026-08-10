@@ -489,7 +489,8 @@ in-crate test utility ([§dd-dr:tree-validation]).
   source through the roles (`Attached` regions carry their own accounting,
   `Hidden` regions none).
 - **Transformation is the top-level `techy::transform`** (full topic:
-  [§dd-dr:transform]): the streaming restage driver — `restage` +
+  [§dd-dr:transform]): the streaming restage driver — `TreeRestager` (the
+  builder-shaped entry point, [§dd-dr:traversal-builders]) +
   `RestageVisitor` with a closure blanket; top-down visits, bottom-up staging;
   `Descend` always descends, role-uniformly into `Attached`/`Hidden` slot
   children; read-frozen/write-staged; annotations single-pathway with
@@ -502,7 +503,8 @@ in-crate test utility ([§dd-dr:tree-validation]).
   any input annotation type (`SplitAtChars`/`KeyVals` results;
   [§dd-dr:extract-annotations]).
 - **Recomposition is the top-level `techy::recompose`** — a meaning-free `Piece`
-  value fold with instruction lowering (`recompose(tree, state, recomposer)`;
+  value fold with instruction lowering
+  (`TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`;
   `Recompose::{Emit, Concat(ConcatPieces)}` with chainable
   `children()`/`wrap()`/`join()`; the `ComposePiece` monoid over `String` and
   `()` — streaming is a recomposer-held writer, no sink concept), bound to the
@@ -523,10 +525,19 @@ in-crate test utility ([§dd-dr:tree-validation]).
   oracle (`techy/tests/recompose_oracle.rs`) certifies payload completeness
   across strict + tolerant + multi-source matrices.
 - **The read-only walk and the recompose driver share one traversal engine** in
-  the top-level `techy::visit` module (`walk` + `NodeVisitor`/`VisitFlow`;
+  the top-level `techy::visit` module (`TreeWalker` + `NodeVisitor`/`VisitFlow`;
   `VisitContext` = engine bookkeeping only, the three-channel state discipline;
   the walk is role-blind — the deliberate read/compose asymmetry;
   [§dd-dr:visit-engine]).
+- **All three traversal drivers are builder-shaped and depth-guarded**
+  ([§dd-dr:traversal-builders]): `TreeWalker`/`TreeRestager`/`TreeRecomposer`
+  hold the visitor by `&mut` borrow, take run configuration through `with_*`
+  methods (`with_descent_guard_init`), and run via their terminal
+  `walk(node)`/`restage(&tree)`/`recompose(&tree, state)` calls. Each run
+  creates its own `StdDescentGuard` (one descent per tree nesting level);
+  a refusal is the run's `DescentLimitExceeded`-style error (`WalkError` for
+  the otherwise-infallible walk), and the guard's early warning is delivered
+  to the visitor's defaulted `observe_descent_warning` hook.
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -617,10 +628,13 @@ returns (nodes, StopCause) — the caller interprets the ending.
   half the budget. `StdDescentGuard` measures estimated stack consumption against
   a byte budget (`DEFAULT_STACK_BUDGET` = 250 KiB in all builds, deliberately
   tight in debug; `ComputedStackBudget` resolves probe() − `HEADROOM`); its
-  `DepthLimit` mode counts engine descents (~2× the syntactic nesting depth) as
-  the deterministic alternative, and `off()` disables the bound. The budget
-  bounds the *parse* only — hand-built trees (`NodeTreeBuilder`) and consumer
-  traversals (`walk`/`recompose`) on smaller threads are outside it.
+  `DepthLimit` mode counts engine descents (~2× the syntactic nesting depth;
+  a tree traversal costs one per nesting level) as
+  the deterministic alternative, and `off()` disables the bound. The consumer
+  traversals are guarded the same way, each run under its own driver-configured
+  guard ([§dd-dr:traversal-builders]) — so hand-built trees
+  (`NodeTreeBuilder`) deeper than any parse limit are refused, not crashed on,
+  when traversed.
 - **Attached-source parsing** ([§dd-dr:input-wiring]): the
   `cx.parse_attached_source(source, state, parser)` door sub-parses an included
   source into the *same* session/builder over a fresh inner reader — the
@@ -680,14 +694,15 @@ hooks (`resolve_command` with its three-outcome `CommandResolution`
 `observe_parse_start` — parse-initialization diagnostics, e.g. the preset's
 all-escape-shadowed provider check). Drivers are instances, so behavior carries
 configuration static hooks never could; preset parsers reach preset helper methods
-fully typed. The trait's one *required* item is the `DescentGuard` type choice
-(`type DescentGuard: DescentGuard;` — `StdDescentGuard` is the standard answer;
-`StdParseDriver`'s third type parameter `G` carries the choice as a private
-`PhantomData` field): the guard **type** is driver business, its per-language
-**configuration** travels on `Language` (`with_descent_guard_init`, mirroring
-seed-state placement), and the per-parse **instance** lives on the session —
-installed eagerly at parse entry, created lazily from `Default` on the
-hand-built-context path, with `ParserSession::install_descent_guard` as the
+fully typed. Every item is defaulted — `impl ParseDriver<L> for D {}` is a
+complete driver. The parsing-depth guard is engine-fixed, not a driver choice:
+the engine always uses `StdDescentGuard` (the `DescentGuard` trait states its
+contract; wiring in another implementation is deliberately not offered). The
+guard's per-language **configuration** travels on `Language`
+(`with_descent_guard_init`, mirroring seed-state placement), and the per-parse
+**instance** lives on the session — installed eagerly at parse entry, created
+lazily from `Default` on the hand-built-context path, with
+`ParserSession::install_descent_guard` as the
 public seam ([§dd-dr:descent-guard]).
 
 **Hook fallibility is a deliberate split** ([§dd-dr:hook-fallibility]): the hooks
@@ -744,7 +759,7 @@ Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initi
 state; the seed+packages construction path), [§dd-dr:hook-fallibility] (which
 hooks return `Result`; the `HookFailed` condition and the three-way condition
 split; the deliberately infallible remainder), [§dd-dr:parse-driver],
-[§dd-dr:descent-guard] (the driver's required `DescentGuard` type choice, the
+[§dd-dr:descent-guard] (the engine-fixed `StdDescentGuard`, the
 `Language`-held configuration, the session-held instance), [§dd-dr:session-derivation],
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node]
 (superseded by parse-once ext minting),

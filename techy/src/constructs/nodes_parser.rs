@@ -1295,7 +1295,6 @@ mod tests {
     }
 
     impl ParseDriver<CmdLang> for CmdDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1595,13 +1594,16 @@ mod tests {
                     NodeKind::Chars { .. } => {
                         format!("chars {} {:?}", span, node.chars().unwrap())
                     }
-                    NodeKind::Comment { .. } => format!(
-                        "comment {} start={:?} content={:?} post={:?}",
-                        span,
-                        node.comment_start().unwrap(),
-                        node.comment().unwrap(),
-                        node.comment_post_space().unwrap()
-                    ),
+                    NodeKind::Comment(_) => {
+                        let data = node.comment().unwrap();
+                        format!(
+                            "comment {} start={:?} content={:?} post={:?}",
+                            span,
+                            data.start.resolve(node.source()),
+                            data.content.resolve(node.source()),
+                            data.post_space.resolve(node.source())
+                        )
+                    }
                     NodeKind::Group(_) => format!("group {}", span),
                     NodeKind::Callable(_) => format!("callable {}", span),
                     NodeKind::List { .. } => format!("list {}", span),
@@ -1716,7 +1718,6 @@ mod tests {
         }
 
         impl ParseDriver<MarkLang> for MarkDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -2658,7 +2659,6 @@ mod tests {
     }
 
     impl ParseDriver<HintLang> for HintDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2719,7 +2719,6 @@ mod tests {
     }
 
     impl ParseDriver<AbortLang> for AbortDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2818,7 +2817,6 @@ mod tests {
     }
 
     impl ParseDriver<RefineLang> for RefineDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -3183,7 +3181,6 @@ mod tests {
         }
 
         impl ParseDriver<ExtLang> for ExtDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -3609,7 +3606,11 @@ mod tests {
         );
         let group = parsed.result.tree.root().child(1).unwrap();
         assert_eq!(group.child_count(), 1);
-        assert_eq!(group.child(0).unwrap().comment(), Some("y"));
+        let comment = group.child(0).unwrap();
+        assert_eq!(
+            comment.comment().map(|data| data.content.resolve(comment.source())),
+            Some("y")
+        );
         // The group node itself records the policy's base state (its input state).
         assert!(Arc::ptr_eq(group.parsing_state(), &full));
     }
@@ -3656,7 +3657,11 @@ mod tests {
         .unwrap();
         let braces = parsed.result.tree.root().child(0).unwrap();
         assert_eq!(braces.child_count(), 1);
-        assert_eq!(braces.child(0).unwrap().comment(), Some("a"));
+        let comment = braces.child(0).unwrap();
+        assert_eq!(
+            comment.comment().map(|data| data.content.resolve(comment.source())),
+            Some("a")
+        );
         assert!(Arc::ptr_eq(braces.parsing_state(), &full)); // pass-through identity
         let brackets = parsed.result.tree.root().child(1).unwrap();
         assert_eq!(brackets.group_type(), Some(GT_OPT));
@@ -3795,7 +3800,6 @@ mod tests {
         struct CountDriver;
 
         impl ParseDriver<CountLang> for CountDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn observe_transition(
                 &self,
                 ext: &mut Counts,
@@ -3881,7 +3885,6 @@ mod tests {
             }
         }
         impl ParseDriver<SinkLang> for SinkDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn observe_transition(
                 &self,
                 ext: &mut Seen,
@@ -3949,7 +3952,6 @@ mod tests {
             }
         }
         impl ParseDriver<FailObserveLang> for FailObserveDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -4011,7 +4013,11 @@ mod tests {
         let group = parsed.result.tree.root().child(1).unwrap();
         assert_eq!(group.child_count(), 3);
         assert_eq!(group.child(0).unwrap().chars(), Some("cd "));
-        assert_eq!(group.child(1).unwrap().comment(), Some("e"));
+        let comment = group.child(1).unwrap();
+        assert_eq!(
+            comment.comment().map(|data| data.content.resolve(comment.source())),
+            Some("e")
+        );
         assert_eq!(group.child(2).unwrap().chars(), Some("f"));
         assert_partition(&parsed.result, 0..content.len());
     }
@@ -4091,7 +4097,6 @@ mod tests {
         }
 
         impl ParseDriver<DriveLang> for DriveDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
@@ -4302,7 +4307,6 @@ mod tests {
             }
         }
         impl ParseDriver<BrokenLang> for BrokenDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -4475,7 +4479,6 @@ mod tests {
     }
 
     impl ParseDriver<FailingMathLang> for FailingMathDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }

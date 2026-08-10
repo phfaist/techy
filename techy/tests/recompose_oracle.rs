@@ -36,9 +36,34 @@ use techy::latexlike::{
     EnvironmentSpec, Latexlike, LatexlikeDriver, MacroSpec, ParagraphBreakStyle,
     SourceRecomposeError, SourceRecomposer, VerbatimBehavior,
 };
-use techy::recompose::{recompose, Recompose, RecomposeContext, RecomposeError, Recomposer};
+use techy::recompose::{Recompose, RecomposeContext, RecomposeError, Recomposer, TreeRecomposer};
+
+/// The suite's shorthand: a default-configured `TreeRecomposer` run.
+fn recompose<L, A, R>(
+    tree: &techy::core::node::NodeTree<L, A>,
+    state: R::State,
+    recomposer: &mut R,
+) -> Result<R::Piece, RecomposeError<R::Error>>
+where
+    L: techy::core::Lang,
+    R: Recomposer<L, A> + ?Sized,
+{
+    TreeRecomposer::new(recomposer).recompose(tree, state)
+}
 use techy::source::MapResolver;
-use techy::transform::{restage, Restage, RestageContext};
+use techy::transform::{Restage, RestageContext, RestageError, RestageVisitor, TreeRestager};
+
+/// The suite's shorthand: a default-configured `TreeRestager` run.
+fn restage<L, A, B, V>(
+    tree: &techy::core::node::NodeTree<L, A>,
+    visitor: &mut V,
+) -> Result<techy::core::node::NodeTree<L, B>, RestageError<V::Error>>
+where
+    L: techy::core::Lang,
+    V: RestageVisitor<L, A, B> + ?Sized,
+{
+    TreeRestager::new(visitor).restage(tree)
+}
 
 use techy::core::specs::Package;
 

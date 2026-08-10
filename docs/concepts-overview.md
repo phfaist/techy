@@ -136,9 +136,9 @@ facts ([`GroupData`](crate::core::node::GroupData),
 and content regions). New trees are assembled through a
 [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder). The consumer toolkit
 is structured per module: extraction helpers in [`extract`](crate::extract),
-the structured traversal [`visit::walk`](crate::visit::walk), tree→tree
-transformation [`transform::restage`](crate::transform::restage), and
-tree→value recomposition [`recompose::recompose`](crate::recompose::recompose)
+the structured traversal [`visit::TreeWalker`](crate::visit::TreeWalker), tree→tree
+transformation [`transform::TreeRestager`](crate::transform::TreeRestager), and
+tree→value recomposition [`recompose::TreeRecomposer`](crate::recompose::TreeRecomposer)
 — the preset's
 [`source_recomposer`](crate::latexlike::source_recomposer) reemits a tree's
 source spelling from its recorded facts.

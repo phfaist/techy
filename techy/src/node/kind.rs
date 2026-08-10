@@ -1,11 +1,11 @@
-//! [`NodeKind`]: the closed structural node taxonomy; [`GroupData`] and [`CallableData`]:
-//! the payloads of group and callable-invocation nodes.
+//! [`NodeKind`]: the closed structural node taxonomy; [`GroupData`], [`CallableData`],
+//! and [`CommentData`]: the payloads of group, callable-invocation, and comment nodes.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::source::{Source, TextContent};
+use crate::source::{Source, SourceOrigin, TextContent};
 use crate::spec::CallableSpec;
 use crate::state::{InvocationSyntax, Lang};
 
@@ -17,7 +17,7 @@ use super::arguments::{ParsedArguments, ParsedSlots};
 /// - **No `Macro`/`Environment`/`Specials`/`Math` kinds.** Macro, environment, and
 ///   specials invocations differ by invocation *form*, not by parsed shape — all are
 ///   [`Callable`](NodeKind::Callable) nodes; "is this an environment" is
-///   `callable_type == latexlike::CT_ENVIRONMENT` (honest two-level dispatch). `$…$`
+///   `callable_type == latexlike::CallableType::Environment` (honest two-level dispatch). `$…$`
 ///   parses as a [`Group`](NodeKind::Group) whose class (`Lang::GroupTypeId`) is the
 ///   preset's math-group class, under the preset's math-mode state ext.
 /// - **`NodeKind` is purely structural**: custom per-node language data rides in the
@@ -42,24 +42,11 @@ pub enum NodeKind<L: Lang> {
     /// [`CallableData`]). Boxed: `Chars` dominates node vectors, and boxing the large
     /// payload keeps the enum small.
     Callable(Box<CallableData<L>>),
-    /// A comment: start delimiter, content, and syntactic post-space, each recorded on
-    /// the node: with several `CommentRule`s in
-    /// scope, *which* delimiter fired and what post-space followed are per-instance
-    /// facts, and level-2 recomposition must not depend on `Lang` cooperation — the same
-    /// recorded-delimiter principle as [`GroupData`]. The node's span covers all three
-    /// parts (the token's span convention).
-    Comment {
-        /// The comment text (sans delimiter and newline).
-        content: TextContent,
-        /// The start delimiter as written (`%` in LaTeX).
-        start: TextContent,
-        /// Syntactic whitespace consumed after the content: the terminating newline plus
-        /// following indentation — empty when the comment ran to end of input or
-        /// bordered a paragraph break (the comment token's own syntactic
-        /// post-space; a callable trigger's counterpart is recorded in the
-        /// Lang-owned [`CallableData::invocation_syntax`] payload).
-        post_space: TextContent,
-    },
+    /// A comment; the payload records its start delimiter, content, and syntactic
+    /// post-space ([`CommentData`]). Boxed like [`Group`](NodeKind::Group) and
+    /// [`Callable`](NodeKind::Callable): the payload holds three [`TextContent`]
+    /// fields, and `Chars` should keep dominating the enum size.
+    Comment(Box<CommentData>),
     /// A plain sequence of nodes (the children range): the tree root, a slot body
     /// (an environment's content), or a multi-node argument value.
     List,
@@ -88,11 +75,11 @@ impl<L: Lang> NodeKind<L> {
         content: impl Into<TextContent>,
         post_space: impl Into<TextContent>,
     ) -> NodeKind<L> {
-        NodeKind::Comment {
-            content: content.into(),
+        NodeKind::Comment(Box::new(CommentData {
             start: start.into(),
+            content: content.into(),
             post_space: post_space.into(),
-        }
+        }))
     }
 
     /// A [`List`](NodeKind::List) kind.
@@ -109,7 +96,7 @@ impl<L: Lang> NodeKind<L> {
             NodeKind::Chars { .. } => "Chars",
             NodeKind::Group(_) => "Group",
             NodeKind::Callable(_) => "Callable",
-            NodeKind::Comment { .. } => "Comment",
+            NodeKind::Comment(_) => "Comment",
             NodeKind::List => "List",
         }
     }
@@ -127,11 +114,9 @@ impl<L: Lang> NodeKind<L> {
             NodeKind::Callable(data) => {
                 NodeKind::Callable(Box::new(data.materialized(source)))
             }
-            NodeKind::Comment { content, start, post_space } => NodeKind::Comment {
-                content: content.materialized(source),
-                start: start.materialized(source),
-                post_space: post_space.materialized(source),
-            },
+            NodeKind::Comment(data) => {
+                NodeKind::Comment(Box::new(data.materialized(source)))
+            }
             NodeKind::List => NodeKind::List,
         }
     }
@@ -249,6 +234,38 @@ impl<L: Lang> CallableData<L> {
     }
 }
 
+/// The payload of a [`Comment`](NodeKind::Comment) node: start delimiter, content, and
+/// syntactic post-space, each recorded on the node — with several `CommentRule`s in
+/// scope, *which* delimiter fired and what post-space followed are per-instance facts,
+/// and level-2 recomposition must not depend on `Lang` cooperation — the same
+/// recorded-delimiter principle as [`GroupData`]. The node's span covers all three
+/// parts (the token's span convention). Fields are in source order; unlike its
+/// [`GroupData`]/[`CallableData`] siblings the payload stores nothing
+/// language-specific, so the struct has no `Lang` parameter.
+#[derive(Clone, Debug)]
+pub struct CommentData {
+    /// The start delimiter as written (`%` in LaTeX).
+    pub start: TextContent,
+    /// The comment text (sans delimiter and newline).
+    pub content: TextContent,
+    /// Syntactic whitespace consumed after the content: the terminating newline plus
+    /// following indentation — empty when the comment ran to end of input or
+    /// bordered a paragraph break (the comment token's own syntactic
+    /// post-space; a callable trigger's counterpart is recorded in the
+    /// Lang-owned [`CallableData::invocation_syntax`] payload).
+    pub post_space: TextContent,
+}
+
+impl CommentData {
+    fn materialized<O: SourceOrigin>(&self, source: &Source<O>) -> CommentData {
+        CommentData {
+            start: self.start.materialized(source),
+            content: self.content.materialized(source),
+            post_space: self.post_space.materialized(source),
+        }
+    }
+}
+
 // Manual impls: derives would demand `L: Clone`/`L: Debug` although only associated
 // types (already bounded via `NodeExtTypes`) are stored.
 
@@ -258,11 +275,7 @@ impl<L: Lang> Clone for NodeKind<L> {
             NodeKind::Chars { content } => NodeKind::Chars { content: content.clone() },
             NodeKind::Group(data) => NodeKind::Group(data.clone()),
             NodeKind::Callable(data) => NodeKind::Callable(data.clone()),
-            NodeKind::Comment { content, start, post_space } => NodeKind::Comment {
-                content: content.clone(),
-                start: start.clone(),
-                post_space: post_space.clone(),
-            },
+            NodeKind::Comment(data) => NodeKind::Comment(data.clone()),
             NodeKind::List => NodeKind::List,
         }
     }
@@ -276,12 +289,7 @@ impl<L: Lang> fmt::Debug for NodeKind<L> {
             }
             NodeKind::Group(data) => f.debug_tuple("Group").field(data).finish(),
             NodeKind::Callable(data) => f.debug_tuple("Callable").field(data).finish(),
-            NodeKind::Comment { content, start, post_space } => f
-                .debug_struct("Comment")
-                .field("content", content)
-                .field("start", start)
-                .field("post_space", post_space)
-                .finish(),
+            NodeKind::Comment(data) => f.debug_tuple("Comment").field(data).finish(),
             NodeKind::List => f.debug_struct("List").finish(),
         }
     }

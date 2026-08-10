@@ -259,6 +259,11 @@ mod support {
         parse_ok_in(with_recovery, input)
     }
 
+    /// A comment node's syntactic post-space as text (`None` for non-comments).
+    pub fn comment_post_space<'t>(node: NodeRef<'t, Latexlike>) -> Option<&'t str> {
+        node.comment().map(|data| data.post_space.resolve(node.span().source()))
+    }
+
     /// The joined chars content of argument `i` of `node` (house helper from the
     /// factory suite).
     pub fn argument_chars(node: NodeRef<'_, Latexlike>, i: usize) -> String {
@@ -393,8 +398,9 @@ mod environments {
         assert_eq!(argument_chars(second_item, 0), "a");
 
         let comment = env.body().unwrap().get(3).unwrap();
-        assert_eq!(comment.comment(), Some(" here goes a comment"));
-        assert_eq!(comment.comment_post_space(), Some("\n "));
+        let data = comment.comment().unwrap();
+        assert_eq!(data.content.resolve(comment.span().source()), " here goes a comment");
+        assert_eq!(comment_post_space(comment), Some("\n "));
     }
 
     // pylatexenc: test_get_latex_environment (the `XYZNFKLD-WRONG` assertRaises
@@ -522,10 +528,10 @@ mod comments {
 
         let root = result.tree.root();
         // Post-space: newline plus following indentation…
-        assert_eq!(root.child(1).unwrap().comment_post_space(), Some("\n  "));
+        assert_eq!(comment_post_space(root.child(1).unwrap()), Some("\n  "));
         // …but empty when the comment borders a paragraph break or end of input.
-        assert_eq!(root.child(2).unwrap().comment_post_space(), Some(""));
-        assert_eq!(root.child(5).unwrap().comment_post_space(), Some(""));
+        assert_eq!(comment_post_space(root.child(2).unwrap()), Some(""));
+        assert_eq!(comment_post_space(root.child(5).unwrap()), Some(""));
     }
 
     // pylatexenc: test_get_latex_nodes_comments (second document): comment directly
@@ -555,7 +561,7 @@ mod comments {
         // terminating newline.
         let root = result.tree.root();
         assert_eq!(root.child(7).unwrap().post_space(), Some(""));
-        assert_eq!(root.child(8).unwrap().comment_post_space(), Some("\n"));
+        assert_eq!(comment_post_space(root.child(8).unwrap()), Some("\n"));
     }
 }
 

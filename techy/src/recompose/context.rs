@@ -1,40 +1,116 @@
-//! The recompose driver: the [`recompose`] entry point and the run context
-//! ([`RecomposeContext`]) handed to recomposers.
+//! The recompose driver: the [`TreeRecomposer`] entry point and the run
+//! context ([`RecomposeContext`]) handed to recomposers.
 
 use core::marker::PhantomData;
 use core::ops::Range;
 
 use alloc::string::String;
 
+use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use crate::node::{BodySlotExt, CallableData, NodeRef, NodeTree, SlotExt};
 use crate::state::Lang;
 use crate::visit::scoped_children;
 
 use super::{ComposePiece, Recompose, RecomposeError, Recomposer};
 
-/// Recompose `tree` into one piece: the fold asks `recomposer` for an
-/// [instruction](Recompose) per node (root first), lowers `Concat`
-/// instructions over the scoped children, and composes the pieces bottom-up —
-/// see the [module docs](super) for the state model, the scope, and the
-/// wrapping contract. `state` is the root's downward state (`()` for
-/// stateless recomposers).
-pub fn recompose<L, A, R>(
-    tree: &NodeTree<L, A>,
-    state: R::State,
+/// The recompose driver: holds the recomposer and the run configuration, and
+/// [`recompose`](TreeRecomposer::recompose)s a tree — see
+/// [`Recomposer`] and the [module docs](super).
+///
+/// ```text
+/// let piece = TreeRecomposer::new(&mut recomposer).recompose(&tree, state)?;
+/// let piece = TreeRecomposer::new(&mut recomposer)
+///     .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
+///     .recompose(&tree, state)?;
+/// ```
+///
+/// The recomposer is held by `&mut` borrow: its run-spanning state stays
+/// caller-owned and is read back after the run.
+pub struct TreeRecomposer<'v, R: ?Sized> {
+    recomposer: &'v mut R,
+    descent_guard_init: StdDescentGuardInit,
+}
+
+impl<'v, R: ?Sized> TreeRecomposer<'v, R> {
+    /// A driver folding through `recomposer` — configure with the `with_*`
+    /// methods, then run with [`recompose`](TreeRecomposer::recompose).
+    pub fn new(recomposer: &'v mut R) -> TreeRecomposer<'v, R> {
+        TreeRecomposer { recomposer, descent_guard_init: StdDescentGuardInit::default() }
+    }
+
+    /// Configure the run's descent guard
+    /// ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit): a stack
+    /// budget, a depth limit, or off; a traversal costs one descent per tree
+    /// nesting level — the re-entrant region ops included). Without this call
+    /// the run uses the guard's default — a deliberately tight stack budget
+    /// whose refusal names this method family.
+    pub fn with_descent_guard_init(
+        mut self,
+        init: StdDescentGuardInit,
+    ) -> TreeRecomposer<'v, R> {
+        self.descent_guard_init = init;
+        self
+    }
+
+    /// Recompose `tree` into one piece: the fold asks the recomposer for an
+    /// [instruction](Recompose) per node (root first), lowers `Concat`
+    /// instructions over the scoped children, and composes the pieces bottom-up
+    /// — see the [module docs](super) for the state model, the scope, and the
+    /// wrapping contract. `state` is the root's downward state (`()` for
+    /// stateless recomposers).
+    pub fn recompose<L, A>(
+        self,
+        tree: &NodeTree<L, A>,
+        state: R::State,
+    ) -> Result<R::Piece, RecomposeError<R::Error>>
+    where
+        L: Lang,
+        R: Recomposer<L, A>,
+    {
+        let mut cx = RecomposeContext {
+            descent_guard: StdDescentGuard::init(&self.descent_guard_init),
+            _input: PhantomData,
+        };
+        drive(self.recomposer, tree.root(), &state, &mut cx)
+    }
+}
+
+impl<R: ?Sized> core::fmt::Debug for TreeRecomposer<'_, R> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TreeRecomposer")
+            .field("descent_guard_init", &self.descent_guard_init)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Fold one node, guarded: ask the guard, ask the instruction, then emit or
+/// lower the concat over the scoped children (recursing per child under the
+/// derived or inherited state). The guard's `exit` runs on the success and
+/// error paths alike; a refused descent gets no `exit`.
+pub(super) fn drive<L, A, R>(
     recomposer: &mut R,
+    node: NodeRef<'_, L, A>,
+    state: &R::State,
+    cx: &mut RecomposeContext<'_, L, A>,
 ) -> Result<R::Piece, RecomposeError<R::Error>>
 where
     L: Lang,
     R: Recomposer<L, A> + ?Sized,
 {
-    let mut cx = RecomposeContext { _input: PhantomData };
-    drive(recomposer, tree.root(), &state, &mut cx)
+    match cx.descent_guard.try_enter() {
+        Err(refusal) => {
+            return Err(RecomposeError::DescentLimitExceeded { detail: refusal.detail })
+        }
+        Ok(Some(warning)) => recomposer.observe_descent_warning(warning),
+        Ok(None) => {}
+    }
+    let result = drive_entered(recomposer, node, state, cx);
+    cx.descent_guard.exit();
+    result
 }
 
-/// Fold one node: ask the instruction, then emit or lower the concat over the
-/// scoped children (recursing per child under the derived or inherited
-/// state).
-pub(super) fn drive<L, A, R>(
+/// The granted-descent body of [`drive`].
+fn drive_entered<L, A, R>(
     recomposer: &mut R,
     node: NodeRef<'_, L, A>,
     state: &R::State,
@@ -71,13 +147,16 @@ where
     }
 }
 
-/// The run context of a [`recompose`] fold, handed to every recomposer call.
+/// The run context of a [`TreeRecomposer`] fold, handed to every recomposer call.
 /// It carries **no user state** (the three-channel discipline,
 /// [`techy::visit`](crate::visit)); its surface is the self-passing region
 /// ops (arriving with the op roster) that re-enter the fold for one
 /// argument's/slot's nodes — the recompose mirror of
 /// [`RestageContext`](crate::transform::RestageContext)'s op family.
 pub struct RecomposeContext<'t, L: Lang, A = ()> {
+    /// The run's descent guard, consulted by every [`drive`] — the re-entrant
+    /// region ops included, since they fold through this same context.
+    descent_guard: StdDescentGuard,
     /// The run's input tree, as a type/lifetime anchor: the context stores no
     /// borrow of it (ops take their nodes explicitly and accept any tree's).
     _input: PhantomData<&'t NodeTree<L, A>>,

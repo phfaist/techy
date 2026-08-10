@@ -4,8 +4,9 @@
 //! The machinery attaches no meaning to what it composes: a [`Recomposer`]
 //! answers one [instruction](Recompose) per node — *emit this piece* or
 //! *concatenate the children's pieces* (with optional head/separator/tail,
-//! [`ConcatPieces`]) — and the driver ([`recompose`]) folds the pieces
-//! bottom-up into one value. Source re-emission is ONE recomposer
+//! [`ConcatPieces`]) — and the driver ([`TreeRecomposer`],
+//! `TreeRecomposer::new(&mut recomposer).recompose(&tree, state)`) folds the
+//! pieces bottom-up into one value. Source re-emission is ONE recomposer
 //! implementation (the latexlike preset's
 //! [`SourceRecomposer`](crate::latexlike::SourceRecomposer)), never a
 //! machinery default; the same fold renders plain text, HTML, token streams,
@@ -17,7 +18,7 @@
 //! use techy::error::Recovery;
 //! use techy::latexlike::{Latexlike, LatexlikeDriver};
 //! use techy::recompose::{
-//!     core_source_instruction, recompose, Recompose, RecomposeContext, Recomposer,
+//!     core_source_instruction, Recompose, RecomposeContext, Recomposer, TreeRecomposer,
 //! };
 //!
 //! // A minimal source reemitter over the core-complete kinds (a real language
@@ -45,7 +46,7 @@
 //!     ParsingState::lang_initial().expect("seed state"),
 //! );
 //! let tree = language.parse("a{b}c").unwrap().tree;
-//! let out = recompose(&tree, (), &mut CoreSource).unwrap();
+//! let out = TreeRecomposer::new(&mut CoreSource).recompose(&tree, ()).unwrap();
 //! assert_eq!(out, "a{b}c");
 //! ```
 //!
@@ -77,7 +78,7 @@
 //! *derived* content whose invocation text is its own recomposition (`\input`'s
 //! resolved file), and `Hidden` means "no recomposition, no byte accounting" —
 //! recompose is the **one role-sensitive site**; reads (the
-//! [walk](crate::visit::walk) included) stay role-blind.
+//! [walk](crate::visit::TreeWalker) included) stay role-blind.
 //!
 //! # The wrapping contract: instructions lower against the outermost recomposer
 //!
@@ -95,7 +96,7 @@
 //! exactly those nodes (there is no span-based fast path — see the reading
 //! contract below). To replace the *tree content* itself, transform first and
 //! reemit after: the restage→recompose pipeline
-//! ([`transform::restage`](crate::transform::restage), then [`recompose`]).
+//! ([`TreeRestager`](crate::transform::TreeRestager), then [`TreeRecomposer`]).
 //!
 //! # The reading contract: payload only, spans are provenance
 //!
@@ -120,24 +121,31 @@
 //! accuracy rule,
 //! [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)).
 //!
+//! # The fold is depth-guarded
+//!
 //! The fold recurses once per tree nesting level (at a small, constant stack
-//! cost per level), and the parse-side descent-guard budget
-//! ([`DescentGuard`](crate::core::DescentGuard)) does not bound it: a very
-//! deep tree — hand-built through
+//! cost per level), and every level passes the run's descent guard
+//! ([`StdDescentGuard`](crate::core::StdDescentGuard), configured per run with
+//! [`with_descent_guard_init`](TreeRecomposer::with_descent_guard_init)): a
+//! tree nested too deeply for the configured limit — hand-built through
 //! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or recomposed on
-//! a thread with a smaller stack than the parse's — can still exhaust the
-//! thread's stack.
+//! a thread with a smaller stack than the parse's — is refused with
+//! [`RecomposeError::DescentLimitExceeded`] instead of exhausting the
+//! thread's stack. The guard's early warning (emitted under the unconfigured
+//! default at half the stack budget) reaches the recomposer's
+//! [`observe_descent_warning`](Recomposer::observe_descent_warning) hook.
 
 use core::fmt;
 
 use alloc::string::String;
 
+use crate::engine::DescentWarning;
 use crate::node::{NodeId, NodeKind, NodeRef};
 use crate::state::Lang;
 
 mod context;
 
-pub use context::{recompose, RecomposeContext};
+pub use context::{RecomposeContext, TreeRecomposer};
 
 /// The piece monoid of a recomposition: an empty value and an associative
 /// append — everything the fold needs to compose children's contributions.
@@ -202,7 +210,8 @@ pub trait Recomposer<L: Lang, A> {
     /// The composed piece type (see [`ComposePiece`]).
     type Piece: ComposePiece;
 
-    /// The recomposer's own failure type; it rides through [`recompose`]
+    /// The recomposer's own failure type; it rides through
+    /// [`TreeRecomposer::recompose`]
     /// typed, as [`RecomposeError::Recomposer`].
     type Error;
 
@@ -214,6 +223,15 @@ pub trait Recomposer<L: Lang, A> {
         state: &Self::State,
         cx: &mut RecomposeContext<'_, L, A>,
     ) -> Result<Recompose<Self::Piece, Self::State>, Self::Error>;
+
+    /// Notification: the run's descent guard granted a descent with an early
+    /// warning (under the unconfigured default, at half the stack budget — see
+    /// [`StdDescentGuardInit`](crate::core::StdDescentGuardInit)). Run-spanning
+    /// consumer state lives in the recomposer's own `&mut self`, so the warning
+    /// is delivered here. Defaults to ignoring it.
+    fn observe_descent_warning(&mut self, warning: DescentWarning) {
+        let _ = warning;
+    }
 }
 
 /// The recomposer's instruction for one node (returned from
@@ -319,13 +337,15 @@ impl<P: ComposePiece, S> ConcatPieces<P, S> {
     }
 }
 
-/// Error of a [`recompose`] run — generic over the recomposer's own error
+/// Error of a [`TreeRecomposer`] run — generic over the recomposer's own error
 /// type `E` (the framework's error rides through typed;
 /// `Clone`/`PartialEq`/`Eq` are conditional on `E`, keeping the uniform-Clone
 /// principle). The variant roster deliberately mirrors
 /// [`RestageError`](crate::transform::RestageError) — the recompose surface
 /// speaks the transform family's vocabulary; the variants beyond the
-/// recomposer's own report misuse of a [context op](RecomposeContext) (a
+/// recomposer's own report the descent guard's refusal
+/// ([`DescentLimitExceeded`](RecomposeError::DescentLimitExceeded)) or misuse
+/// of a [context op](RecomposeContext) (a
 /// documented-contract violation returns an `Err`, never panics).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -380,6 +400,14 @@ pub enum RecomposeError<E> {
         /// The callable that was queried.
         node: NodeId,
     },
+    /// The run's descent guard refused to go one level deeper (the tree is
+    /// nested too deeply for the configured limit): the run is abandoned.
+    /// Configure the limit with
+    /// [`TreeRecomposer::with_descent_guard_init`].
+    DescentLimitExceeded {
+        /// Which limit was hit and how to configure it.
+        detail: String,
+    },
 }
 
 impl<E: fmt::Display> fmt::Display for RecomposeError<E> {
@@ -408,6 +436,9 @@ impl<E: fmt::Display> fmt::Display for RecomposeError<E> {
                 "callable {:?} has no body slot (no slot ext reports is_body)",
                 node
             ),
+            RecomposeError::DescentLimitExceeded { detail } => {
+                write!(f, "recompose descent limit exceeded: {}", detail)
+            }
         }
     }
 }
@@ -450,10 +481,10 @@ where
     let source = node.span().source();
     match node.kind() {
         NodeKind::Chars { content } => Some(Recompose::Emit(P::from(content.resolve(source)))),
-        NodeKind::Comment { content, start, post_space } => {
-            let mut piece = P::from(start.resolve(source));
-            piece.append(P::from(content.resolve(source)));
-            piece.append(P::from(post_space.resolve(source)));
+        NodeKind::Comment(data) => {
+            let mut piece = P::from(data.start.resolve(source));
+            piece.append(P::from(data.content.resolve(source)));
+            piece.append(P::from(data.post_space.resolve(source)));
             Some(Recompose::Emit(piece))
         }
         NodeKind::Group(data) => Some(Recompose::Concat(

@@ -13,7 +13,7 @@ use crate::state::{Lang, ParsingState};
 use alloc::vec::Vec;
 
 use super::arguments::{BodySlotExt, ChildRegion, ParsedArguments, ParsedSlots};
-use super::kind::{CallableData, GroupData, NodeKind};
+use super::kind::{CallableData, CommentData, GroupData, NodeKind};
 use super::slice::NodeSlice;
 use super::tree::{NodeData, NodeId, NodeTree, NO_PARENT};
 use super::{NodeExt, SlotExt};
@@ -135,8 +135,8 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
             format!("group({class} {open} {close})")
         } else if let Some(data) = self.callable() {
             format!("{:?}({})", data.callable_type, data.name)
-        } else if let Some(text) = self.comment() {
-            format!("comment({text})")
+        } else if let Some(data) = self.comment() {
+            format!("comment({})", data.content.resolve(self.source()))
         } else {
             format!("list({})", self.child_count())
         }
@@ -214,30 +214,13 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
         }
     }
 
-    /// A `Comment` node's logical text (sans delimiter and newline).
-    pub fn comment(&self) -> Option<&'t str> {
+    /// A `Comment` node's full payload ([`CommentData`]: start delimiter, content,
+    /// and syntactic post-space). Span-backed payload fields resolve against the
+    /// node's own source, `node.span().source()`
+    /// ([`TextContent::resolve`](crate::source::TextContent::resolve)).
+    pub fn comment(&self) -> Option<&'t CommentData> {
         match self.kind() {
-            NodeKind::Comment { content, .. } => Some(content.resolve(self.source())),
-            _ => None,
-        }
-    }
-
-    /// A `Comment` node's start delimiter, as logical text (`%` in LaTeX — records which
-    /// comment syntax fired).
-    pub fn comment_start(&self) -> Option<&'t str> {
-        match self.kind() {
-            NodeKind::Comment { start, .. } => Some(start.resolve(self.source())),
-            _ => None,
-        }
-    }
-
-    /// A `Comment` node's syntactic post-space (terminating newline plus following
-    /// indentation; empty at end of input or before a paragraph break), as logical text.
-    pub fn comment_post_space(&self) -> Option<&'t str> {
-        match self.kind() {
-            NodeKind::Comment { post_space, .. } => {
-                Some(post_space.resolve(self.source()))
-            }
+            NodeKind::Comment(data) => Some(data),
             _ => None,
         }
     }

@@ -148,11 +148,11 @@ fn validate_node<L: Lang, A>(
             leaf_without_children("Chars")?;
             residency(content, "chars content")
         }
-        NodeKind::Comment { content, start, post_space } => {
+        NodeKind::Comment(data) => {
             leaf_without_children("Comment")?;
-            residency(content, "comment content")?;
-            residency(start, "comment start delimiter")?;
-            residency(post_space, "comment post-space")
+            residency(&data.content, "comment content")?;
+            residency(&data.start, "comment start delimiter")?;
+            residency(&data.post_space, "comment post-space")
         }
         NodeKind::List => Ok(()),
         NodeKind::Group(group) => {
@@ -631,7 +631,8 @@ fn check_parse_law_node<L: Lang, A>(tree: &NodeTree<L, A>, i: usize, data: &Node
             }
         }
 
-        NodeKind::Comment { content, start, post_space } => {
+        NodeKind::Comment(data) => {
+            let (start, content, post_space) = (&data.start, &data.content, &data.post_space);
             if let TextContent::Spanned(s) = start {
                 assert!(
                     s.start() == span.start,

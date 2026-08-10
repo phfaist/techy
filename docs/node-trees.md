@@ -100,7 +100,11 @@ assert_eq!(
 
 let comment = root.child(3).unwrap();
 assert!(comment.is_comment());
-assert_eq!(comment.comment(), Some(" three"));
+// The comment payload records the start delimiter, the comment text, and the
+// whitespace that ended the comment; text fields resolve against the node's
+// own source.
+let data = comment.comment().unwrap();
+assert_eq!(data.content.resolve(comment.span().source()), " three");
 
 // Every node knows exactly where it came from:
 assert_eq!(emph.span_content(), r"\emph{two}");
@@ -131,7 +135,7 @@ examples are in the [`extract`](crate::extract) module documentation.
 ## Traversing: `techy::visit`
 
 The [`visit`](crate::visit) module is read-only structural traversal:
-[`walk`](crate::visit::walk) drives a
+[`TreeWalker`](crate::visit::TreeWalker) drives a
 [`NodeVisitor`](crate::visit::NodeVisitor) over a subtree in document order,
 with an enter/exit call pair around each node's children and per-node control
 over the traversal (descend, skip the children, or stop). Use it when the
@@ -144,7 +148,7 @@ after a node's children. The contract and examples are in the
 
 The [`transform`](crate::transform) module is tree-to-tree transformation.
 Because trees are frozen, editing is expressed as **restaging**:
-[`restage`](crate::transform::restage) walks the input tree and stages a new
+[`TreeRestager`](crate::transform::TreeRestager) walks the input tree and stages a new
 tree, with a visitor deciding per node whether to carry it over (descending
 into its children) or to emit a replacement — drop a node, rewrite it,
 splice in nodes from another tree. Output nodes carry a consumer-chosen
@@ -157,7 +161,7 @@ documentation.
 
 The [`recompose`](crate::recompose) module folds a tree into a single value —
 plain text, HTML, a token stream, anything you can concatenate:
-[`recompose`](crate::recompose::recompose) drives a
+[`TreeRecomposer`](crate::recompose::TreeRecomposer) drives a
 [`Recomposer`](crate::recompose::Recomposer) that answers one instruction per
 node (emit this piece, or concatenate the children's pieces). Re-emitting a
 tree's exact source spelling is one shipped recomposer, the preset's

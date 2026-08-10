@@ -109,8 +109,8 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
     }
 }
 
-/// The verbatim reading recipe as a [`ParsingStateDelta`]: the gate of every
-/// tokenization feature the language has off
+/// The verbatim reading recipe as a [`ParsingStateDelta`]: every tokenization
+/// feature the language has off
 /// ([`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all))
 /// and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
 /// **replaced** by `terminator`. Under the derived state the
@@ -120,8 +120,9 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 ///
 /// The base building block for custom raw-content parsers; [`VerbatimArgumentParser`]
 /// and [`VerbatimBodyParser`] derive their reading states through it.
-/// `forbidden_chars` is deliberately not touched: a character the language outlaws
-/// stays diagnosable inside verbatim content.
+/// `disable_all()` clears the forbidden-character set with everything else: a
+/// character the language outlaws elsewhere reads as ordinary raw content inside
+/// a verbatim region.
 ///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
 /// installed as the expected group close, which is groups data.
@@ -164,9 +165,12 @@ fn read_raw_content<L: Lang>(
 ) -> ConstructParserResult<L, RawContentEnd> {
     loop {
         let Some(token) = cx.probe_token(state)? else {
-            // A tolerated unreadable token (e.g. a forbidden char): the verbatim region
-            // ends here; the enclosing content loop re-reads the error and applies its
-            // own token recovery (the probe protocol, DESIGN_RATIONALE.md [§dd-dr:errors]).
+            // A tolerated unreadable token: the standard reader has nothing left to
+            // reject under the recipe state (the forbidden set is cleared with the
+            // other features), but a custom reader may still fail. The verbatim
+            // region ends here; the enclosing content loop re-reads the error and
+            // applies its own token recovery (the probe protocol,
+            // DESIGN_RATIONALE.md [§dd-dr:errors]).
             return Ok(RawContentEnd { content_end: cx.tokens.pos(), terminator: None });
         };
         match &token.kind {
@@ -707,7 +711,6 @@ mod tests {
     }
 
     impl ParseDriver<VerbLang> for VerbDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -931,6 +934,30 @@ mod tests {
         let group = verb_group(verb);
         assert_eq!(group.group_delimiters(), Some(("<", ">")));
         assert_eq!(verbatim_text(verb), Some(&text[1..text.len() - 1]));
+    }
+
+    #[test]
+    fn a_language_forbidden_char_is_ordinary_raw_content() {
+        // Ruled 2026-08-10: `disable_all()` clears the forbidden set (a gateless
+        // feature's off is its inactive data), so a character outlawed outside the
+        // region reads as raw verbatim content instead of ending the region early
+        // with a diagnostic.
+        let st = {
+            let spec: Arc<dyn CallableSpec<VerbLang>> =
+                Arc::new(StdCallableSpec { arguments: vec![verb_arg()] });
+            let mut package = Package::new("test-macros");
+            package.insert(CT_MACRO, "verb", spec);
+            let mut scopes = ScopeStack::new();
+            scopes.push(Arc::new(package));
+            let mut rules = rules();
+            rules.forbidden_chars.chars = "$".into();
+            Arc::new(ParsingState::new(StateData { rules, scopes, mode: (), ext: () }))
+        };
+        let result = parse(r"\verb|a$b| x", &st, Recovery::Strict);
+        assert!(result.diagnostics.is_empty());
+
+        let verb = root_child(&result, 0);
+        assert_eq!(verbatim_text(verb), Some("a$b"));
     }
 
     #[test]

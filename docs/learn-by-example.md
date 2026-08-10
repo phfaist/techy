@@ -672,9 +672,9 @@ assert_eq!(label.value_content().unwrap().source_text(), Some("fig,main"));
 ## Transforming and recomposing
 
 Trees are frozen; editing is a **restage** pass
-([`transform::restage`](crate::transform::restage)) that stages a new tree while
+([`transform::TreeRestager`](crate::transform::TreeRestager)) that stages a new tree while
 walking the input, and
-[`recompose`](crate::recompose::recompose) folds any tree into a value — with the
+[`TreeRecomposer`](crate::recompose::TreeRecomposer) folds any tree into a value — with the
 preset's [`source_recomposer`](crate::latexlike::source_recomposer) reemitting a
 tree's exact source spelling from its recorded facts. Together they are the
 edit-and-write-back pipeline:
@@ -684,8 +684,8 @@ use techy::core::node::NodeRef;
 use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{source_recomposer, Latexlike, LatexlikeDriver};
-use techy::recompose::recompose;
-use techy::transform::{restage, Restage, RestageContext};
+use techy::recompose::TreeRecomposer;
+use techy::transform::{Restage, RestageContext, TreeRestager};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
@@ -694,12 +694,12 @@ let language: Language<Latexlike> = Language::new(
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 
 // Reemission reads recorded facts only — byte-exact for parsed trees:
-let full = recompose(&input, (), &mut source_recomposer()).unwrap();
+let full =
+    TreeRecomposer::new(&mut source_recomposer()).recompose(&input, ()).unwrap();
 assert_eq!(full, "one % secret\ntwo {three}");
 
 // Drop every comment node; carry everything else over unchanged:
-let cleaned = restage(
-    &input,
+let cleaned = TreeRestager::new(
     &mut |node: NodeRef<'_, Latexlike>,
           _cx: &mut RestageContext<'_, Latexlike, (), ()>| {
         Ok::<_, core::convert::Infallible>(if node.is_comment() {
@@ -709,16 +709,18 @@ let cleaned = restage(
         })
     },
 )
+.restage(&input)
 .unwrap();
 
-let stripped = recompose(&cleaned, (), &mut source_recomposer()).unwrap();
+let stripped =
+    TreeRecomposer::new(&mut source_recomposer()).recompose(&cleaned, ()).unwrap();
 assert_eq!(stripped, "one two {three}");
 ```
 
 Both drivers have more to them — replacement staging, region edits, downward
 state, custom piece types — covered in the
 [`transform`](crate::transform) and [`recompose`](crate::recompose) module docs;
-[`visit::walk`](crate::visit::walk) is their read-only sibling for
+[`visit::TreeWalker`](crate::visit::TreeWalker) is their read-only sibling for
 structure-aware analysis passes.
 
 ## Where to go from here

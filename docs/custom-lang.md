@@ -419,10 +419,11 @@ could not. The trait's page groups its five concerns: recovery policy,
 parse-time hooks (command resolution, paragraph-break emission, diagnostic
 refinement, transition observation, event lowering), source resolution,
 the group descent-delta channel, and construct provision. Every method has
-a working default, and the one required item is the
-[`DescentGuard`](crate::core::ParseDriver::DescentGuard) type choice — so
-`impl ParseDriver<MyLang> for MyDriver { type DescentGuard = StdDescentGuard; }`
-is a complete driver; override what your language needs.
+a working default, so `impl ParseDriver<MyLang> for MyDriver {}` is a
+complete driver; override what your language needs. (Parsing depth is
+limited by the engine's own guard, configured on the language value with
+[`with_descent_guard_init`](crate::core::Language::with_descent_guard_init)
+— it is not a driver concern.)
 
 **Command resolution** is the hook a command-bearing language cannot leave
 defaulted — the core cannot know which of your callable types commands

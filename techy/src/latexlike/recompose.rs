@@ -21,7 +21,8 @@ use super::Latexlike;
 
 /// The preset's source reemitter: reconstructs a latexlike-family tree's
 /// **source spelling from its recorded facts** —
-/// `recompose(&tree, (), &mut source_recomposer())` reemits the tree.
+/// `TreeRecomposer::new(&mut source_recomposer()).recompose(&tree, ())` reemits
+/// the tree.
 ///
 /// Everything it emits comes from node payload: the core-complete kinds
 /// through [`core_source_instruction`] (chars content, comment parts, group
@@ -62,8 +63,8 @@ pub struct SourceRecomposer<LLL: LatexlikeLang = Latexlike> {
 }
 
 /// The [`SourceRecomposer`] constructor:
-/// `recompose(&tree, (), &mut source_recomposer())` reemits `tree`'s source
-/// spelling.
+/// `TreeRecomposer::new(&mut source_recomposer()).recompose(&tree, ())` reemits
+/// `tree`'s source spelling.
 pub fn source_recomposer<LLL: LatexlikeLang>() -> SourceRecomposer<LLL> {
     SourceRecomposer { _lang: PhantomData }
 }
@@ -241,10 +242,22 @@ mod tests {
         BuildId, CallableData, NodeKind, NodeTree, NodeTreeBuilder, ParsedArguments,
         ParsedSlots,
     };
-    use crate::recompose::{recompose, RecomposeError};
+    use crate::recompose::{RecomposeError, TreeRecomposer};
     use crate::scopes::Package;
     use crate::source::{Source, SourceSpan};
     use crate::state::ParsingState;
+
+    /// The suite's shorthand: a default-configured [`TreeRecomposer`] run.
+    fn recompose<A, R>(
+        tree: &NodeTree<Latexlike, A>,
+        state: R::State,
+        recomposer: &mut R,
+    ) -> Result<R::Piece, RecomposeError<R::Error>>
+    where
+        R: Recomposer<Latexlike, A>,
+    {
+        TreeRecomposer::new(recomposer).recompose(tree, state)
+    }
 
     /// Parse strictly with `language`, assert a clean parse, and assert the
     /// reemission equals the input byte-for-byte.

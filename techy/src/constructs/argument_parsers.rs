@@ -1094,7 +1094,6 @@ mod tests {
     }
 
     impl ParseDriver<ArgLang> for ArgDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1532,7 +1531,10 @@ mod tests {
         let region0: Vec<_> = frac.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region0.len(), 2);
         assert!(region0[0].is_comment());
-        assert_eq!(region0[0].comment(), Some("half"));
+        assert_eq!(
+            region0[0].comment().map(|data| data.content.resolve(region0[0].source())),
+            Some("half")
+        );
         assert!(region0[1].is_group());
         let content0 = content_of(frac, 0);
         assert_eq!(content0.len(), 1);
@@ -1662,7 +1664,10 @@ mod tests {
         assert_eq!(item.child_count(), 0);
         let comment = root_child(&parsed, 1);
         assert!(comment.is_comment());
-        assert_eq!(comment.comment(), Some(" c"));
+        assert_eq!(
+            comment.comment().map(|data| data.content.resolve(comment.source())),
+            Some(" c")
+        );
         assert_eq!(root_child(&parsed, 2).chars(), Some("x"));
         // Exactly root + callable + comment + chars: the abandoned probe nodes are gone.
         assert_eq!(parsed.result.tree.node_count(), 4);

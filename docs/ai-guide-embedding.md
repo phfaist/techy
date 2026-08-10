@@ -129,7 +129,7 @@ with PyO3) like any other Rust dependency.
 
 ## Streaming recomposition
 
-[`recompose`](crate::recompose::recompose) (the tree→value fold — see
+[`TreeRecomposer`](crate::recompose::TreeRecomposer) (the tree→value fold — see
 [AI guide: node trees](crate::guide::ai_guide_trees)) returns a value;
 there is deliberately no sink type. To stream output instead of building a
 string: a recomposer that holds its writer in its own `&mut self` and

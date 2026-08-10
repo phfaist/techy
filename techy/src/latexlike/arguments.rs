@@ -647,7 +647,10 @@ mod tests {
         let m = macro_node(&result);
         let region: Vec<_> = m.argument_nodes(0).unwrap().iter().collect();
         assert_eq!(region.len(), 2);
-        assert_eq!(region[0].comment(), Some("comment here"));
+        assert_eq!(
+            region[0].comment().map(|data| data.content.resolve(region[0].source())),
+            Some("comment here")
+        );
         assert_eq!(content_chars(m, 0), "mandatory argument");
     }
 

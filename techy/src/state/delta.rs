@@ -243,6 +243,14 @@ pub struct ForbiddenCharsOverrides {
 }
 
 impl ForbiddenCharsOverrides {
+    /// The forbidden-characters block's scoped off. The block has no gate, so the
+    /// off is expressed in the data itself: `chars: Some("")` — the empty forbidden
+    /// set — the block [`TokenRulesOverrides::disable_all`] sets up when the
+    /// language has the forbidden-characters feature.
+    pub fn disable() -> ForbiddenCharsOverrides {
+        ForbiddenCharsOverrides { chars: Some("".into()) }
+    }
+
     pub(crate) fn merge_from(&mut self, stronger: ForbiddenCharsOverrides) {
         if let Some(v) = stronger.chars {
             self.chars = Some(v);
@@ -329,13 +337,14 @@ pub struct TokenRulesOverrides<L: Lang> {
 }
 
 impl<L: Lang> TokenRulesOverrides<L> {
-    /// The scoped off for every feature the language has: each gate-carrying block
-    /// (whitespace, multi-newline paragraphs, groups, commands, comments, specials)
-    /// whose feature `L` declares present ([`Lang::Features`]) is set to its
-    /// `disable()` value — `enabled: Some(false)`, every other field untouched.
-    /// Features the language declares absent are simply not mentioned by the returned
-    /// value: their fields hold the zero-sized store, which carries nothing.
-    /// (`forbidden_chars` has no gate and is never touched.)
+    /// The scoped off for every feature the language has: each block whose feature
+    /// `L` declares present ([`Lang::Features`]) is set to its `disable()` value.
+    /// For the gate-carrying blocks (whitespace, multi-newline paragraphs, groups,
+    /// commands, comments, specials) that is `enabled: Some(false)`, every other
+    /// field untouched; `forbidden_chars` has no gate, so its off is expressed in
+    /// the data itself — the empty forbidden set (`chars: Some("")`). Features the
+    /// language declares absent are simply not mentioned by the returned value:
+    /// their fields hold the zero-sized store, which carries nothing.
     ///
     /// This is the raw-state block a rest-of-line or verbatim-like takeover parser
     /// starts from. It composes: tweak fields afterwards, e.g. install the terminator
@@ -346,7 +355,9 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// [`disable()`](GroupOverrides::disable), not from its default.
     ///
     /// The gates flip while the rules data stays in place, so a later delta can
-    /// re-enable a feature with its original rules. The *constitutive* off (no rules
+    /// re-enable a gated feature with its original rules (the forbidden set, having
+    /// no gate, is replaced instead — re-establishing it means overriding the
+    /// characters again). The *constitutive* off (no rules
     /// data at all) is [`TokenRules::empty`](crate::token::TokenRules::empty).
     pub fn disable_all() -> TokenRulesOverrides<L> {
         // `store_with` consults the presence declaration: a present feature's field
@@ -370,7 +381,7 @@ impl<L: Lang> TokenRulesOverrides<L> {
                 SpecialsOverrides::disable,
             ),
             forbidden_chars: <L::Features as LangFeatures>::ForbiddenChars::store_with(
-                ForbiddenCharsOverrides::default,
+                ForbiddenCharsOverrides::disable,
             ),
         }
     }
@@ -874,12 +885,13 @@ mod tests {
     impl crate::state::TrivialLang for PlainLang {}
 
     // Under an all-features-present language (`PlainLang` is a `TrivialLang`, so
-    // `AllLangFeatures`), the feature-aware `disable_all()` (user ruling 2026-08-10:
-    // flip only the gates of features the language has) sets up all six gated blocks
-    // — exactly the value it always produced here. The partially-absent languages
-    // are pinned in tests/lang_features.rs.
+    // `AllLangFeatures`), the feature-aware `disable_all()` (user rulings
+    // 2026-08-10: flip only the gates of features the language has; a gateless
+    // feature's off is its inactive data) sets up all six gated blocks plus the
+    // cleared forbidden set. The partially-absent languages are pinned in
+    // tests/lang_features.rs.
     #[test]
-    fn disable_all_flips_exactly_the_six_gates() {
+    fn disable_all_flips_the_six_gates_and_clears_the_forbidden_set() {
         let overrides: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::disable_all();
         // All six gates off…
         assert_eq!(overrides.whitespace.enabled, Some(false));
@@ -888,8 +900,11 @@ mod tests {
         assert_eq!(overrides.commands.enabled, Some(false));
         assert_eq!(overrides.comments.enabled, Some(false));
         assert_eq!(overrides.specials.enabled, Some(false));
-        // …and nothing else touched: the value is the default plus the gate flips, so
-        // rules data (and the expected close) survives for later re-enabling.
+        // …the gateless forbidden set overridden to empty (its inactive state)…
+        assert_eq!(overrides.forbidden_chars.chars.as_deref(), Some(""));
+        // …and nothing else touched: the gated blocks are the default plus the gate
+        // flips, so rules data (and the expected close) survives for later
+        // re-enabling.
         let mut expected: TokenRulesOverrides<PlainLang> = TokenRulesOverrides::default();
         expected.whitespace.enabled = Some(false);
         expected.paragraphs.enabled = Some(false);
@@ -897,6 +912,7 @@ mod tests {
         expected.commands.enabled = Some(false);
         expected.comments.enabled = Some(false);
         expected.specials.enabled = Some(false);
+        expected.forbidden_chars.chars = Some("".into());
         assert_eq!(overrides, expected);
     }
 }

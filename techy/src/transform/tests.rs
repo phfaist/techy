@@ -20,8 +20,21 @@ use crate::source::TextContent;
 use crate::state::{Lang, ParsingState};
 
 use super::{
-    restage, Restage, RestageContext, RestageError, RestageVisitor, RestagedArgument,
+    Restage, RestageContext, RestageError, RestageVisitor, RestagedArgument, TreeRestager,
 };
+
+/// The suite's shorthand: a default-configured [`TreeRestager`] run (most tests
+/// exercise the visitor contract, not the run configuration).
+fn restage<L, A, B, V>(
+    tree: &NodeTree<L, A>,
+    visitor: &mut V,
+) -> Result<NodeTree<L, B>, RestageError<V::Error>>
+where
+    L: Lang,
+    V: RestageVisitor<L, A, B> + ?Sized,
+{
+    TreeRestager::new(visitor).restage(tree)
+}
 
 /// The documented reentrant-visitor error pattern: one boxed self-referential
 /// `From` impl makes every context op `?`-propagatable.
@@ -1059,4 +1072,98 @@ fn content_swap_annotations_flow_explicitly() {
     // The visitor-driven first argument flowed through Descend(1).
     let first = callable.argument_content_nodes(0).unwrap();
     assert_eq!(*first.first().unwrap().annotation(), 1);
+}
+
+// --- the descent guard bounds the run ------------------------------------------------
+
+#[test]
+fn a_depth_limit_refuses_the_restage_of_a_deeper_tree() {
+    use crate::engine::StdDescentGuardInit;
+
+    // `a{b}c` drives three levels deep (root list → group → chars).
+    let input = parse("a{b}c");
+    let keep = |_node: NodeRef<'_, Latexlike>,
+                _cx: &mut RestageContext<'_, Latexlike, (), ()>| {
+        Ok::<_, Infallible>(Restage::Descend(()))
+    };
+
+    let mut visitor = keep;
+    let error = TreeRestager::new(&mut visitor)
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(2))
+        .restage::<Latexlike, (), ()>(&input)
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        RestageError::DescentLimitExceeded { detail } if detail.contains("depth_limit")
+    ));
+
+    // A limit the tree fits under restages it whole.
+    let mut visitor = keep;
+    let output: NodeTree<Latexlike, ()> = TreeRestager::new(&mut visitor)
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(3))
+        .restage(&input)
+        .unwrap();
+    assert_eq!(output.node_count(), input.node_count());
+}
+
+#[test]
+fn the_unconfigured_default_warns_the_visitor_once_then_refuses() {
+    use crate::node::GroupData;
+    use crate::source::{Source, SourceSpan};
+
+    // A hand-built chain of nested groups, deeper than any parse could stage.
+    let source = alloc::sync::Arc::new(Source::new("stub"));
+    let span = || SourceSpan::new(&source, 0..4);
+    let state =
+        alloc::sync::Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
+    let mut builder: crate::node::NodeTreeBuilder<Latexlike> =
+        crate::node::NodeTreeBuilder::new();
+    let kind = NodeKind::chars(TextContent::Owned("x".into()));
+    let ext =
+        <Latexlike as Lang>::make_node_ext(&kind, &span(), &state, builder.staged_children(&[]))
+            .expect("mint node ext");
+    let mut node = builder.add(kind, span(), state.clone(), Vec::new(), ext, ()).unwrap();
+    for _ in 0..200_000 {
+        let kind: NodeKind<Latexlike> = NodeKind::group(GroupData::untyped("{", "}"));
+        let children = vec![node];
+        let ext = <Latexlike as Lang>::make_node_ext(
+            &kind,
+            &span(),
+            &state,
+            builder.staged_children(&children),
+        )
+        .expect("mint node ext");
+        node = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
+    }
+    let deep = builder.finish(node).unwrap();
+
+    /// Restages everything unchanged; counts the guard warnings it observes.
+    #[derive(Default)]
+    struct Meter {
+        warnings: usize,
+    }
+    impl RestageVisitor<Latexlike, (), ()> for Meter {
+        type Error = Infallible;
+
+        fn restage(
+            &mut self,
+            _node: NodeRef<'_, Latexlike>,
+            _cx: &mut RestageContext<'_, Latexlike, (), ()>,
+        ) -> Result<Restage<()>, Infallible> {
+            Ok(Restage::Descend(()))
+        }
+
+        fn observe_descent_warning(&mut self, warning: crate::engine::DescentWarning) {
+            self.warnings += 1;
+            assert!(warning.detail.contains("with_descent_guard_init"));
+        }
+    }
+
+    let mut meter = Meter::default();
+    let error = TreeRestager::new(&mut meter).restage::<Latexlike, (), ()>(&deep).unwrap_err();
+    assert!(matches!(
+        &error,
+        RestageError::DescentLimitExceeded { detail } if detail.contains("DEFAULT_STACK_BUDGET")
+    ));
+    assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
 }

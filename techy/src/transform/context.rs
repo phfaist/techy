@@ -1,4 +1,4 @@
-//! The restage driver: the [`restage`] entry point and the staging context
+//! The restage driver: the [`TreeRestager`] entry point and the staging context
 //! ([`RestageContext`]) handed to visitors.
 
 use core::marker::PhantomData;
@@ -10,6 +10,7 @@ use hashbrown::HashMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 
+use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use crate::node::{
     BuildId, CallableData, ChildRegion, ContentNodes, ContentParentMapping, NodeBuildError,
     NodeId, NodeKind, NodeRef, NodeTree, NodeTreeBuilder, ParsedArgument, ParsedArguments,
@@ -20,38 +21,111 @@ use crate::state::Lang;
 use super::bundles::ProvidedRegion;
 use super::{Restage, RestageError, RestageVisitor, RestagedArgument, RestagedSlot};
 
-/// Transform a tree by streaming restage: the visitor is invoked **top-down**
-/// over the frozen `tree` (root included), staging the output **bottom-up**;
-/// the finished tree is returned. See the [module docs](super) for the callback
-/// contract, the annotation pathway, and the edit policy.
+/// The restage driver: holds the visitor and the run configuration, and
+/// [`restage`](TreeRestager::restage)s a tree — see
+/// [`RestageVisitor`](super::RestageVisitor) and the [module docs](super).
 ///
-/// The root must restage to exactly one node —
-/// [`RootNotSingular`](RestageError::RootNotSingular) otherwise.
-pub fn restage<L, A, B, V>(
-    tree: &NodeTree<L, A>,
+/// ```text
+/// let output = TreeRestager::new(&mut visitor).restage(&tree)?;
+/// let output = TreeRestager::new(&mut visitor)
+///     .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
+///     .restage(&tree)?;
+/// ```
+///
+/// The visitor is held by `&mut` borrow: its run-spanning state stays
+/// caller-owned and is read back after the run.
+pub struct TreeRestager<'v, V: ?Sized> {
+    visitor: &'v mut V,
+    descent_guard_init: StdDescentGuardInit,
+}
+
+impl<'v, V: ?Sized> TreeRestager<'v, V> {
+    /// A restager driving `visitor` — configure with the `with_*` methods, then
+    /// run with [`restage`](TreeRestager::restage).
+    pub fn new(visitor: &'v mut V) -> TreeRestager<'v, V> {
+        TreeRestager { visitor, descent_guard_init: StdDescentGuardInit::default() }
+    }
+
+    /// Configure the run's descent guard
+    /// ([`StdDescentGuardInit`](crate::core::StdDescentGuardInit): a stack
+    /// budget, a depth limit, or off; a traversal costs one descent per tree
+    /// nesting level — the re-entrant region ops included). Without this call
+    /// the run uses the guard's default — a deliberately tight stack budget
+    /// whose refusal names this method family. One caveat: a *single* op that
+    /// copies a subtree verbatim (the `_with_content` helpers' wrapper copies)
+    /// recurses over that subtree between two guard checks.
+    pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> TreeRestager<'v, V> {
+        self.descent_guard_init = init;
+        self
+    }
+
+    /// Transform a tree by streaming restage: the visitor is invoked
+    /// **top-down** over the frozen `tree` (root included), staging the output
+    /// **bottom-up**; the finished tree is returned. See the
+    /// [module docs](super) for the callback contract, the annotation pathway,
+    /// and the edit policy.
+    ///
+    /// The root must restage to exactly one node —
+    /// [`RootNotSingular`](RestageError::RootNotSingular) otherwise.
+    pub fn restage<L, A, B>(
+        self,
+        tree: &NodeTree<L, A>,
+    ) -> Result<NodeTree<L, B>, RestageError<V::Error>>
+    where
+        L: Lang,
+        V: RestageVisitor<L, A, B>,
+    {
+        let mut cx = RestageContext {
+            builder: NodeTreeBuilder::new(),
+            replaced: HashMap::new(),
+            descent_guard: StdDescentGuard::init(&self.descent_guard_init),
+            _input: PhantomData,
+        };
+        let ids = drive(&mut cx, tree.root(), self.visitor)?;
+        if ids.len() != 1 {
+            return Err(RestageError::RootNotSingular { count: ids.len() });
+        }
+        cx.builder.finish(ids[0]).map_err(RestageError::Build)
+    }
+}
+
+impl<V: ?Sized> core::fmt::Debug for TreeRestager<'_, V> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TreeRestager")
+            .field("descent_guard_init", &self.descent_guard_init)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Restage one subtree through the visitor, guarded: ask the guard, ask the
+/// verdict for `node`, then either recurse over all children and restage the
+/// node over their results (`Descend`), or accept the callback's staged
+/// replacement (`Emit`). Records the node's replacement in the context's map
+/// either way. The guard's `exit` runs on the success and error paths alike;
+/// a refused descent gets no `exit`.
+pub(super) fn drive<L, A, B, V>(
+    cx: &mut RestageContext<'_, L, A, B>,
+    node: NodeRef<'_, L, A>,
     visitor: &mut V,
-) -> Result<NodeTree<L, B>, RestageError<V::Error>>
+) -> Result<Vec<BuildId>, RestageError<V::Error>>
 where
     L: Lang,
     V: RestageVisitor<L, A, B> + ?Sized,
 {
-    let mut cx = RestageContext {
-        builder: NodeTreeBuilder::new(),
-        replaced: HashMap::new(),
-        _input: PhantomData,
-    };
-    let ids = drive(&mut cx, tree.root(), visitor)?;
-    if ids.len() != 1 {
-        return Err(RestageError::RootNotSingular { count: ids.len() });
+    match cx.descent_guard.try_enter() {
+        Err(refusal) => {
+            return Err(RestageError::DescentLimitExceeded { detail: refusal.detail })
+        }
+        Ok(Some(warning)) => visitor.observe_descent_warning(warning),
+        Ok(None) => {}
     }
-    cx.builder.finish(ids[0]).map_err(RestageError::Build)
+    let result = drive_entered(cx, node, visitor);
+    cx.descent_guard.exit();
+    result
 }
 
-/// Restage one subtree through the visitor: ask the verdict for `node`, then
-/// either recurse over all children and restage the node over their results
-/// (`Descend`), or accept the callback's staged replacement (`Emit`). Records
-/// the node's replacement in the context's map either way.
-pub(super) fn drive<L, A, B, V>(
+/// The granted-descent body of [`drive`].
+fn drive_entered<L, A, B, V>(
     cx: &mut RestageContext<'_, L, A, B>,
     node: NodeRef<'_, L, A>,
     visitor: &mut V,
@@ -96,7 +170,7 @@ enum Replaced {
     Count(usize),
 }
 
-/// The staging side of a [`restage`] run, handed to every visitor call: the
+/// The staging side of a [`TreeRestager`] run, handed to every visitor call: the
 /// region-aware restaging ops and the raw output
 /// [`builder()`](RestageContext::builder) underneath them.
 ///
@@ -110,6 +184,9 @@ pub struct RestageContext<'t, L: Lang, A, B> {
     /// the `content_parents` oracle for record translation (tree-tagged ids, so
     /// entries from several input trees never collide).
     replaced: HashMap<NodeId, Replaced>,
+    /// The run's descent guard, consulted by every [`drive`] — the re-entrant
+    /// region ops included, since they drive through this same context.
+    descent_guard: StdDescentGuard,
     /// The run's frozen input tree, as a type/lifetime anchor: the context
     /// itself stores no borrow of it (ops take their input nodes explicitly and
     /// accept any tree's).

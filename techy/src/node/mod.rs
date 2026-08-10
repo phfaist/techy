@@ -16,6 +16,8 @@
 //! - [`CallableData`] records the **invocation facts** (form, spelling, parsed
 //!   arguments/slots, post-space); shared behavior lives in the spec, context in the
 //!   recorded parsing state (the division-of-labor rule).
+//! - [`CommentData`] records a comment's start delimiter, content, and syntactic
+//!   post-space on the node (the same recorded-delimiter principle as [`GroupData`]).
 //! - **One child region per argument/slot**: a callable's children are the concatenation of one
 //!   contiguous region per *provided* argument, then one per slot — each region holding
 //!   noise (comment nodes, whitespace-only `Chars` nodes) alongside the syntax-bearing
@@ -51,7 +53,7 @@ pub use builder::{
 };
 pub use display::display_tree;
 pub use invariants::{validate_tree, TreeViolation, TreeViolationKind};
-pub use kind::{CallableData, GroupData, NodeKind};
+pub use kind::{CallableData, CommentData, GroupData, NodeKind};
 pub use node_ref::{Descendants, NamedAccessError, NodeRef};
 pub use slice::{NodeSlice, NodeSliceIter};
 pub use tree::{NodeId, NodeTree, TreeTag};
@@ -300,12 +302,11 @@ mod tests {
         assert!(frac.spec().is_some());
 
         let comment = root.child(3).unwrap();
-        assert_eq!(comment.comment(), Some(" note"));
-        assert_eq!(comment.comment_start(), Some("%"));
-        assert_eq!(comment.comment_post_space(), Some(""));
+        let data = comment.comment().unwrap();
+        assert_eq!(data.content.resolve(comment.source()), " note");
+        assert_eq!(data.start.resolve(comment.source()), "%");
+        assert_eq!(data.post_space.resolve(comment.source()), "");
         assert!(comment.chars().is_none());
-        assert!(x.comment_start().is_none());
-        assert!(x.comment_post_space().is_none());
 
         assert!(root.child(4).is_none());
         // Out-of-range must hold for indices past u32 too: `1 << 32` truncates to 0
@@ -767,7 +768,10 @@ mod tests {
         assert_eq!(region0.len(), 4);
         assert_eq!(region0[0].chars(), Some(" ")); // whitespace-only Chars node
         assert!(region0[1].is_comment());
-        assert_eq!(region0[1].comment(), Some("h"));
+        assert_eq!(
+            region0[1].comment().map(|data| data.content.resolve(region0[1].source())),
+            Some("h")
+        );
         assert!(region0[3].is_group());
         // …while the content is undisturbed by the noise:
         let content0: Vec<_> = frac.argument_content_nodes(0).unwrap().iter().collect();
@@ -1127,18 +1131,20 @@ mod tests {
         let root = owned.root();
         assert_eq!(root.child(0).unwrap().chars(), Some("x"));
         assert_eq!(root.child(2).unwrap().chars(), Some(" "));
-        assert_eq!(root.child(3).unwrap().comment(), Some(" note"));
-        assert_eq!(root.child(3).unwrap().comment_start(), Some("%"));
+        let comment = root.child(3).unwrap();
+        let data = comment.comment().unwrap();
+        assert_eq!(data.content.resolve(comment.source()), " note");
+        assert_eq!(data.start.resolve(comment.source()), "%");
         let arg0 = root.child(1).unwrap().argument_nodes(0).unwrap().iter().next().unwrap();
         assert_eq!(arg0.group_delimiters(), Some(("{", "}")));
         // …but stored owned:
         for node in owned.iter_storage_order() {
             match node.kind() {
                 NodeKind::Chars { content, .. } => assert!(content.is_owned()),
-                NodeKind::Comment { content, start, post_space, .. } => {
-                    assert!(content.is_owned());
-                    assert!(start.is_owned());
-                    assert!(post_space.is_owned());
+                NodeKind::Comment(data) => {
+                    assert!(data.content.is_owned());
+                    assert!(data.start.is_owned());
+                    assert!(data.post_space.is_owned());
                 }
                 NodeKind::Group(data) => {
                     assert!(data.open.is_owned());
@@ -2057,7 +2063,11 @@ mod tests {
         let frac = tree.root().child(1).unwrap();
         assert_eq!(at(6).unwrap().id(), frac.child(0).unwrap().id());
         assert_eq!(at(2).unwrap().id(), frac.id());
-        assert_eq!(at(14).unwrap().comment(), Some(" note"));
+        let comment = at(14).unwrap();
+        assert_eq!(
+            comment.comment().map(|data| data.content.resolve(comment.source())),
+            Some(" note")
+        );
         // Half-open: one past the end of the last node matches nothing.
         assert!(at(19).is_none());
         // A position in a source the tree does not use matches nothing.

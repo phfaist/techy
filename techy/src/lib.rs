@@ -84,12 +84,15 @@
 //! - [`error`] — span-based structured diagnostics and the tolerant-parsing policy.
 //! - [`extract`] — content-extraction helpers over parsed node trees.
 //! - [`transform`] — tree→tree transformation: the streaming restage driver
-//!   ([`restage`](transform::restage) + [`RestageVisitor`](transform::RestageVisitor)).
-//! - [`visit`] — read-only structural traversal: [`walk`](visit::walk) +
+//!   ([`TreeRestager`](transform::TreeRestager) +
+//!   [`RestageVisitor`](transform::RestageVisitor)).
+//! - [`visit`] — read-only structural traversal:
+//!   [`TreeWalker`](visit::TreeWalker) +
 //!   [`NodeVisitor`](visit::NodeVisitor) with enter/exit and per-node flow
 //!   control.
 //! - [`recompose`] — tree→value recomposition: the meaning-free piece fold
-//!   ([`recompose`](recompose::recompose) + [`Recomposer`](recompose::Recomposer));
+//!   ([`TreeRecomposer`](recompose::TreeRecomposer) +
+//!   [`Recomposer`](recompose::Recomposer));
 //!   source re-emission is the preset's
 //!   [`source_recomposer`](latexlike::source_recomposer).
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,

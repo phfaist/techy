@@ -50,7 +50,8 @@ assert!(emph.is_callable());
 assert_eq!(emph.name(), Some("emph"));       // any callable
 assert_eq!(emph.macro_name(), Some("emph")); // latexlike sugar: macros only
 assert_eq!(emph.argument_content_nodes(0).unwrap().source_text(), Some("two"));
-assert_eq!(root.child(3).unwrap().comment(), Some(" three"));
+let comment = root.child(3).unwrap(); // comment() = the CommentData payload
+assert_eq!(comment.comment().unwrap().content.resolve(comment.span().source()), " three");
 
 // Spans: every node records its exact byte range; source text needs no lookup.
 assert_eq!(emph.span_content(), r"\emph{two}");
@@ -67,7 +68,7 @@ Navigation summary (details on each method's page):
 |---|---|
 | children / parent | [`children()`](crate::core::node::NodeRef::children), [`child(i)`](crate::core::node::NodeRef::child), [`parent()`](crate::core::node::NodeRef::parent) |
 | flat scan, no nesting info | [`descendants()`](crate::core::node::NodeRef::descendants) |
-| structure-aware pass (enter/exit, depth, skip/stop) | [`visit::walk`](crate::visit::walk) |
+| structure-aware pass (enter/exit, depth, skip/stop) | [`visit::TreeWalker`](crate::visit::TreeWalker) |
 | deepest node at a byte position | [`NodeTree::node_at`](crate::core::node::NodeTree::node_at) |
 | minimal sibling run covering a span | [`NodeTree::covering_slice`](crate::core::node::NodeTree::covering_slice) |
 | sibling run from a known index range | [`NodeTree::slice(range)`](crate::core::node::NodeTree::slice) — validated: `Some` iff the range is a run of siblings |
@@ -143,7 +144,7 @@ assert_eq!(keyvals.get("label").unwrap().value_content().unwrap().source_text(),
 
 ## Traversing: `techy::visit`
 
-[`walk`](crate::visit::walk) drives a
+[`TreeWalker`](crate::visit::TreeWalker) drives a
 [`NodeVisitor`](crate::visit::NodeVisitor) over a subtree in document order
 (preorder: `enter` before the children, `exit` after), returning a
 [`VisitFlow`](crate::visit::VisitFlow) per node: descend, skip the
@@ -159,7 +160,7 @@ three-channel state discipline, [`visit`](crate::visit) module docs).
 ## Transforming: `techy::transform`
 
 Trees are frozen, so editing is **restaging**:
-[`restage`](crate::transform::restage) walks the input top-down while
+[`TreeRestager`](crate::transform::TreeRestager) walks the input top-down while
 staging a new tree bottom-up. Per node the
 [`RestageVisitor`](crate::transform::RestageVisitor) returns a
 [`Restage`](crate::transform::Restage):
@@ -190,7 +191,7 @@ never role-conditional.
 
 ## Recomposing: `techy::recompose`
 
-[`recompose`](crate::recompose::recompose) folds a tree into one value
+[`TreeRecomposer`](crate::recompose::TreeRecomposer) folds a tree into one value
 (text, HTML, tokens — anything you can concatenate). A
 [`Recomposer`](crate::recompose::Recomposer) answers one
 [instruction](crate::recompose::Recompose) per node: **`Emit(piece)`**
@@ -240,8 +241,8 @@ use techy::core::node::NodeRef;
 use techy::core::{Language, ParsingState};
 use techy::error::Recovery;
 use techy::latexlike::{source_recomposer, Latexlike, LatexlikeDriver};
-use techy::recompose::recompose;
-use techy::transform::{restage, Restage, RestageContext};
+use techy::recompose::TreeRecomposer;
+use techy::transform::{Restage, RestageContext, TreeRestager};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
@@ -250,12 +251,12 @@ let language: Language<Latexlike> = Language::new(
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 
 // Re-emission reads recorded facts only — byte-exact for parsed trees:
-let full = recompose(&input, (), &mut source_recomposer()).unwrap();
+let full =
+    TreeRecomposer::new(&mut source_recomposer()).recompose(&input, ()).unwrap();
 assert_eq!(full, "one % secret\ntwo {three}");
 
 // Drop every comment; carry everything else over:
-let cleaned = restage(
-    &input,
+let cleaned = TreeRestager::new(
     &mut |node: NodeRef<'_, Latexlike>,
           _cx: &mut RestageContext<'_, Latexlike, (), ()>| {
         Ok::<_, core::convert::Infallible>(if node.is_comment() {
@@ -265,8 +266,10 @@ let cleaned = restage(
         })
     },
 )
+.restage(&input)
 .unwrap();
-let stripped = recompose(&cleaned, (), &mut source_recomposer()).unwrap();
+let stripped =
+    TreeRecomposer::new(&mut source_recomposer()).recompose(&cleaned, ()).unwrap();
 assert_eq!(stripped, "one two {three}");
 ```
 
@@ -276,6 +279,6 @@ assert_eq!(stripped, "one two {three}");
 |---|---|
 | text out of an argument or list | [`extract`](crate::extract) |
 | flat query / scan | [`descendants()`](crate::core::node::NodeRef::descendants) |
-| structure-aware analysis pass | [`visit::walk`](crate::visit::walk) |
-| change the document | [`transform::restage`](crate::transform::restage), then [`recompose`](crate::recompose::recompose) with [`source_recomposer`](crate::latexlike::source_recomposer) |
+| structure-aware analysis pass | [`visit::TreeWalker`](crate::visit::TreeWalker) |
+| change the document | [`transform::TreeRestager`](crate::transform::TreeRestager), then [`TreeRecomposer`](crate::recompose::TreeRecomposer) with [`source_recomposer`](crate::latexlike::source_recomposer) |
 | convert to another format | [`recompose`](crate::recompose) with your own [`Recomposer`](crate::recompose::Recomposer) |

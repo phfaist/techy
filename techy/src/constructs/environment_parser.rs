@@ -824,7 +824,6 @@ mod tests {
     }
 
     impl ParseDriver<EnvLang> for EnvDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1420,7 +1419,11 @@ mod tests {
                         format!("chars {} {:?}", span, node.chars().unwrap())
                     }
                     NodeKind::Comment { .. } => {
-                        format!("comment {} {:?}", span, node.comment().unwrap())
+                        format!(
+                        "comment {} {:?}",
+                        span,
+                        node.comment().unwrap().content.resolve(node.source())
+                    )
                     }
                     NodeKind::Group(_) => format!("group {}", span),
                     NodeKind::Callable(_) => {
@@ -1447,7 +1450,11 @@ mod tests {
                         format!("chars {} {:?}", span, node.chars().unwrap())
                     }
                     NodeKind::Comment { .. } => {
-                        format!("comment {} {:?}", span, node.comment().unwrap())
+                        format!(
+                        "comment {} {:?}",
+                        span,
+                        node.comment().unwrap().content.resolve(node.source())
+                    )
                     }
                     NodeKind::Group(_) => format!("group {}", span),
                     NodeKind::Callable(_) => {

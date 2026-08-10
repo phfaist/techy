@@ -23,9 +23,23 @@ use crate::spec::StdCallableSpec;
 use crate::state::{Lang, ParsingState};
 
 use super::{
-    core_source_instruction, recompose, ConcatPieces, Recompose, RecomposeContext,
-    RecomposeError, Recomposer,
+    core_source_instruction, ConcatPieces, Recompose, RecomposeContext,
+    RecomposeError, Recomposer, TreeRecomposer,
 };
+
+/// The suite's shorthand: a default-configured [`TreeRecomposer`] run (most
+/// tests exercise the recomposer contract, not the run configuration).
+fn recompose<L, A, R>(
+    tree: &NodeTree<L, A>,
+    state: R::State,
+    recomposer: &mut R,
+) -> Result<R::Piece, RecomposeError<R::Error>>
+where
+    L: Lang,
+    R: Recomposer<L, A> + ?Sized,
+{
+    TreeRecomposer::new(recomposer).recompose(tree, state)
+}
 
 /// Parse `input` with the plain latexlike preset (strict).
 fn parse(input: &str) -> NodeTree<Latexlike> {
@@ -649,4 +663,94 @@ fn concat_pieces_constructors_chain() {
     let _: ConcatPieces<String, u32> =
         ConcatPieces::children().wrap("{", "}").join(", ").with_state(3);
     let _: ConcatPieces<(), ()> = ConcatPieces::children().include_attached().include_hidden();
+}
+
+// --- the descent guard bounds the run ------------------------------------------------
+
+#[test]
+fn a_depth_limit_refuses_the_recomposition_of_a_deeper_tree() {
+    use crate::engine::StdDescentGuardInit;
+    use crate::latexlike::source_recomposer;
+
+    // `a{b}c` folds three levels deep (root list → group → chars).
+    let tree = parse("a{b}c");
+    let error = TreeRecomposer::new(&mut source_recomposer())
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(2))
+        .recompose(&tree, ())
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        RecomposeError::DescentLimitExceeded { detail } if detail.contains("depth_limit")
+    ));
+
+    // A limit the tree fits under reemits it whole.
+    let out = TreeRecomposer::new(&mut source_recomposer())
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(3))
+        .recompose(&tree, ())
+        .unwrap();
+    assert_eq!(out, "a{b}c");
+}
+
+#[test]
+fn the_guard_warning_reaches_the_recomposer() {
+    use crate::latexlike::{source_recomposer, SourceRecomposer};
+
+    /// Wraps the source reemitter; counts the guard warnings it observes.
+    struct Meter {
+        inner: SourceRecomposer,
+        warnings: usize,
+    }
+    impl Recomposer<Latexlike, ()> for Meter {
+        type State = ();
+        type Piece = String;
+        type Error = <SourceRecomposer as Recomposer<Latexlike, ()>>::Error;
+
+        fn recompose_node(
+            &mut self,
+            node: NodeRef<'_, Latexlike>,
+            state: &(),
+            cx: &mut RecomposeContext<'_, Latexlike>,
+        ) -> Result<Recompose<String, ()>, Self::Error> {
+            self.inner.recompose_node(node, state, cx)
+        }
+
+        fn observe_descent_warning(&mut self, warning: crate::engine::DescentWarning) {
+            self.warnings += 1;
+            assert!(warning.detail.contains("with_descent_guard_init"));
+        }
+    }
+
+    use crate::node::GroupData;
+
+    // A chain of nested groups, hand-built deeper than any parse could stage.
+    let source = Arc::new(Source::new("stub"));
+    let span = || SourceSpan::new(&source, 0..4);
+    let state = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
+    let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
+    let kind = NodeKind::chars(TextContent::Owned("x".into()));
+    let ext =
+        <Latexlike as Lang>::make_node_ext(&kind, &span(), &state, builder.staged_children(&[]))
+            .expect("mint node ext");
+    let mut node = builder.add(kind, span(), state.clone(), Vec::new(), ext, ()).unwrap();
+    for _ in 0..200_000 {
+        let kind: NodeKind<Latexlike> = NodeKind::group(GroupData::untyped("{", "}"));
+        let children = vec![node];
+        let ext = <Latexlike as Lang>::make_node_ext(
+            &kind,
+            &span(),
+            &state,
+            builder.staged_children(&children),
+        )
+        .expect("mint node ext");
+        node = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
+    }
+    let deep = builder.finish(node).unwrap();
+
+    let mut meter = Meter { inner: source_recomposer(), warnings: 0 };
+    let error = TreeRecomposer::new(&mut meter).recompose(&deep, ()).unwrap_err();
+    assert!(matches!(
+        &error,
+        RecomposeError::DescentLimitExceeded { detail } if detail.contains("DEFAULT_STACK_BUDGET")
+    ));
+    assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
 }

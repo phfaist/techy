@@ -1,7 +1,7 @@
 //! Read-only structural traversal: the **walk engine** shared with
 //! [`recompose`](crate::recompose).
 //!
-//! [`walk`] drives a [`NodeVisitor`] over a subtree in **document order**
+//! [`TreeWalker`] drives a [`NodeVisitor`] over a subtree in **document order**
 //! (preorder: [`enter`](NodeVisitor::enter) before the children,
 //! [`exit`](NodeVisitor::exit) after them), with structural control per node
 //! ([`VisitFlow`]): descend, skip the children, or stop the whole walk. This is
@@ -15,7 +15,7 @@
 //! use techy::core::node::NodeRef;
 //! use techy::error::Recovery;
 //! use techy::latexlike::{Latexlike, LatexlikeDriver};
-//! use techy::visit::{walk, VisitContext, VisitFlow};
+//! use techy::visit::{TreeWalker, VisitContext, VisitFlow};
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
@@ -26,15 +26,16 @@
 //! // Collect every chars node with its nesting depth. An inline closure
 //! // annotates its two parameter types (fn items need no annotations).
 //! let mut seen: Vec<(String, usize)> = Vec::new();
-//! walk(
-//!     tree.root(),
+//! TreeWalker::new(
 //!     &mut |node: NodeRef<'_, Latexlike>, cx: &VisitContext<'_, Latexlike>| {
 //!         if let Some(text) = node.chars() {
 //!             seen.push((text.to_string(), cx.depth()));
 //!         }
 //!         VisitFlow::Descend
 //!     },
-//! );
+//! )
+//! .walk(tree.root())
+//! .unwrap();
 //! assert_eq!(
 //!     seen,
 //!     [("a".into(), 1), ("b".into(), 2), ("c".into(), 3), ("d".into(), 1)],
@@ -59,7 +60,7 @@
 //!
 //! # The walk is role-blind
 //!
-//! `walk` visits **everything** — children in
+//! The walk visits **everything** — children in
 //! [`Attached`](crate::core::node::SlotRole::Attached) and
 //! [`Hidden`](crate::core::node::SlotRole::Hidden) slot regions included, like
 //! any other child (reads show reality; `Hidden` is never read-invisibility).
@@ -68,19 +69,27 @@
 //! both roles: the read/compose asymmetry is part of the slot-role contract
 //! ([`SlotRole`]), not an accident of implementation.
 //!
+//! # The walk is depth-guarded
+//!
 //! The walk recurses once per tree nesting level (at a small, constant stack
-//! cost per level), and the parse-side descent-guard budget
-//! ([`DescentGuard`](crate::core::DescentGuard)) does not bound it: a very
-//! deep tree — hand-built through
-//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or walked on a
-//! thread with a smaller stack than the parse's — can still exhaust the
-//! thread's stack.
+//! cost per level), and every level passes the run's descent guard
+//! ([`StdDescentGuard`], configured per run with
+//! [`with_descent_guard_init`](TreeWalker::with_descent_guard_init)): a tree
+//! nested too deeply for the configured limit — hand-built through
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), say, or walked on a
+//! thread with a smaller stack than the parse's — is refused with
+//! [`WalkError::DescentLimitExceeded`] instead of exhausting the thread's
+//! stack. The guard's early warning (emitted under the unconfigured default at
+//! half the stack budget) reaches the visitor's
+//! [`observe_descent_warning`](NodeVisitor::observe_descent_warning) hook.
 
 use core::fmt;
 use core::ops::ControlFlow;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::engine::{DescentGuard, DescentWarning, StdDescentGuard, StdDescentGuardInit};
 use crate::node::{NodeKind, NodeRef, NodeTree, SlotRole};
 use crate::state::Lang;
 
@@ -100,7 +109,7 @@ pub enum VisitFlow {
     Stop,
 }
 
-/// A structural visitor for [`walk`]: [`enter`](NodeVisitor::enter) is invoked
+/// A structural visitor for [`TreeWalker`]: [`enter`](NodeVisitor::enter) is invoked
 /// once per visited node in document order and steers the traversal via
 /// [`VisitFlow`]; the defaulted [`exit`](NodeVisitor::exit) fires after the
 /// node's (possibly skipped) children — the "closing bracket" hook that flat
@@ -113,9 +122,10 @@ pub enum VisitFlow {
 /// the spelling; a fully unannotated `|node, cx|` does not infer against the
 /// generic visitor parameter), while a fn item needs no annotations.
 ///
-/// The walk is **infallible** by design: the engine itself has nothing that
-/// can fail, and a visitor that discovers an error condition records it in its
-/// own `&mut self` state and returns [`VisitFlow::Stop`]. Deliberately **no
+/// **Visitors are infallible** by design: a visitor that discovers an error
+/// condition records it in its own `&mut self` state and returns
+/// [`VisitFlow::Stop`] — the run itself fails only through the descent guard's
+/// refusal ([`WalkError`]). Deliberately **no
 /// `Send`/`Sync` bounds** (the same argument as
 /// [`RestageVisitor`](crate::transform::RestageVisitor): the walk runs
 /// synchronously on the calling thread — a bound would demand without buying).
@@ -130,6 +140,16 @@ pub trait NodeVisitor<L: Lang, A> {
     fn exit(&mut self, node: NodeRef<'_, L, A>, cx: &VisitContext<'_, L, A>) {
         let _ = (node, cx);
     }
+
+    /// Notification: the walk's descent guard granted a descent with an early
+    /// warning (under the unconfigured default, at half the stack budget — see
+    /// [`StdDescentGuardInit`]). Run-spanning
+    /// consumer state lives in the visitor's own `&mut self` (the three-channel
+    /// discipline, [module docs](self)), so the warning is delivered here.
+    /// Defaults to ignoring it.
+    fn observe_descent_warning(&mut self, warning: DescentWarning) {
+        let _ = warning;
+    }
 }
 
 /// Closures are enter-only visitors (see [`NodeVisitor`]'s docs).
@@ -142,8 +162,8 @@ where
     }
 }
 
-/// The engine bookkeeping of one [`walk`] (or one
-/// [`recompose`](crate::recompose::recompose) run), lent to every visitor
+/// The engine bookkeeping of one walk (or one
+/// [recompose](crate::recompose) run), lent to every visitor
 /// call. Deliberately **no user state** — see the [module docs](self) for the
 /// three-channel discipline.
 pub struct VisitContext<'t, L: Lang, A = ()> {
@@ -170,41 +190,146 @@ impl<L: Lang, A> fmt::Debug for VisitContext<'_, L, A> {
     }
 }
 
-/// Walk the subtree rooted at `node` (the node itself included) in document
-/// order, driving `visitor` — see [`NodeVisitor`] and the [module docs](self).
-/// The whole tree is `walk(tree.root(), visitor)`; any other node walks just
-/// its subtree, with [`depth`](VisitContext::depth) `0` at the start node.
+/// The walk driver: holds the visitor and the run configuration, and
+/// [`walk`](TreeWalker::walk)s a subtree — see [`NodeVisitor`] and the
+/// [module docs](self).
 ///
-/// The walk is **role-blind**: children in `Attached` and `Hidden` slot
-/// regions are visited like any others (module docs).
-pub fn walk<L, A, V>(node: NodeRef<'_, L, A>, visitor: &mut V)
-where
-    L: Lang,
-    V: NodeVisitor<L, A> + ?Sized,
-{
-    let mut cx = VisitContext { tree: node.tree(), depth: 0 };
-    let _ = drive(node, visitor, &mut cx);
+/// ```text
+/// TreeWalker::new(&mut visitor).walk(tree.root())?;                 // whole tree
+/// TreeWalker::new(&mut visitor)
+///     .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
+///     .walk(node)?;                                                 // one subtree
+/// ```
+///
+/// The visitor is held by `&mut` borrow: its run-spanning state (the
+/// three-channel discipline, [module docs](self)) stays caller-owned and is
+/// read back after the run.
+pub struct TreeWalker<'v, V: ?Sized> {
+    visitor: &'v mut V,
+    descent_guard_init: StdDescentGuardInit,
 }
 
-/// One node of the walk: enter, recurse per the verdict, exit.
-/// `ControlFlow::Break` = the walk was stopped.
+impl<'v, V: ?Sized> TreeWalker<'v, V> {
+    /// A walker driving `visitor` — configure with the `with_*` methods, then
+    /// run with [`walk`](TreeWalker::walk).
+    pub fn new(visitor: &'v mut V) -> TreeWalker<'v, V> {
+        TreeWalker { visitor, descent_guard_init: StdDescentGuardInit::default() }
+    }
+
+    /// Configure the run's descent guard
+    /// ([`StdDescentGuardInit`]: a stack
+    /// budget, a depth limit, or off; a traversal costs one descent per tree
+    /// nesting level). Without this call the run uses the guard's default — a
+    /// deliberately tight stack budget whose refusal names this method family.
+    pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> TreeWalker<'v, V> {
+        self.descent_guard_init = init;
+        self
+    }
+
+    /// Walk the subtree rooted at `node` (the node itself included) in document
+    /// order, driving the visitor. The whole tree is `walk(tree.root())`; any
+    /// other node walks just its subtree, with [`depth`](VisitContext::depth)
+    /// `0` at the start node. A visitor [`Stop`](VisitFlow::Stop) is an `Ok`
+    /// outcome; the one error is the descent guard's refusal.
+    ///
+    /// The walk is **role-blind**: children in `Attached` and `Hidden` slot
+    /// regions are visited like any others (module docs).
+    pub fn walk<L, A>(self, node: NodeRef<'_, L, A>) -> Result<(), WalkError>
+    where
+        L: Lang,
+        V: NodeVisitor<L, A>,
+    {
+        let mut guard = StdDescentGuard::init(&self.descent_guard_init);
+        let mut cx = VisitContext { tree: node.tree(), depth: 0 };
+        match drive(node, self.visitor, &mut cx, &mut guard) {
+            ControlFlow::Break(Some(error)) => Err(error),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl<V: ?Sized> fmt::Debug for TreeWalker<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TreeWalker")
+            .field("descent_guard_init", &self.descent_guard_init)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Error of a [`TreeWalker`] run. Visitors themselves are infallible
+/// ([`NodeVisitor`]); the run fails only through the descent guard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WalkError {
+    /// The run's descent guard refused to go one level deeper (the tree is
+    /// nested too deeply for the configured limit): the walk is abandoned.
+    /// Configure the limit with
+    /// [`with_descent_guard_init`](TreeWalker::with_descent_guard_init).
+    DescentLimitExceeded {
+        /// Which limit was hit and how to configure it.
+        detail: String,
+    },
+}
+
+impl fmt::Display for WalkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WalkError::DescentLimitExceeded { detail } => {
+                write!(f, "walk descent limit exceeded: {}", detail)
+            }
+        }
+    }
+}
+
+impl core::error::Error for WalkError {}
+
+/// One node of the walk, guarded: ask the guard, enter, recurse per the
+/// verdict, exit — `exit` on the guard runs for every granted descent, also
+/// when a `Break` unwinds through. `Break(None)` = the visitor stopped the
+/// walk; `Break(Some(_))` = the guard refused a descent.
 fn drive<L, A, V>(
     node: NodeRef<'_, L, A>,
     visitor: &mut V,
     cx: &mut VisitContext<'_, L, A>,
-) -> ControlFlow<()>
+    guard: &mut StdDescentGuard,
+) -> ControlFlow<Option<WalkError>>
+where
+    L: Lang,
+    V: NodeVisitor<L, A> + ?Sized,
+{
+    match guard.try_enter() {
+        Err(refusal) => {
+            return ControlFlow::Break(Some(WalkError::DescentLimitExceeded {
+                detail: refusal.detail,
+            }))
+        }
+        Ok(Some(warning)) => visitor.observe_descent_warning(warning),
+        Ok(None) => {}
+    }
+    let flow = drive_entered(node, visitor, cx, guard);
+    guard.exit();
+    flow
+}
+
+/// The granted-descent body: enter, recurse per the verdict, exit.
+fn drive_entered<L, A, V>(
+    node: NodeRef<'_, L, A>,
+    visitor: &mut V,
+    cx: &mut VisitContext<'_, L, A>,
+    guard: &mut StdDescentGuard,
+) -> ControlFlow<Option<WalkError>>
 where
     L: Lang,
     V: NodeVisitor<L, A> + ?Sized,
 {
     match visitor.enter(node, cx) {
-        VisitFlow::Stop => return ControlFlow::Break(()),
+        VisitFlow::Stop => return ControlFlow::Break(None),
         VisitFlow::SkipChildren => {}
         VisitFlow::Descend => {
             cx.depth += 1;
             // Role-blind: every child, Attached/Hidden slot regions included.
             for child in scoped_children(node, true, true) {
-                drive(child, visitor, cx)?;
+                drive(child, visitor, cx, guard)?;
             }
             cx.depth -= 1;
         }
@@ -272,7 +397,10 @@ mod tests {
     use crate::spec::StdCallableSpec;
     use crate::state::{Lang, ParsingState};
 
-    use super::{scoped_children, walk, NodeVisitor, VisitContext, VisitFlow};
+    use super::{
+        scoped_children, NodeVisitor, TreeWalker, VisitContext, VisitFlow, WalkError,
+    };
+    use crate::engine::{DescentWarning, StdDescentGuardInit};
 
     /// Parse `input` with the plain latexlike preset (strict).
     fn parse(input: &str) -> NodeTree<Latexlike> {
@@ -323,7 +451,7 @@ mod tests {
     fn walk_is_preorder_with_paired_exits_and_depths() {
         let tree = parse("a{b}c");
         let mut log = Log::default();
-        walk(tree.root(), &mut log);
+        TreeWalker::new(&mut log).walk(tree.root()).unwrap();
         assert_eq!(
             log.events,
             [
@@ -345,7 +473,7 @@ mod tests {
     fn skip_children_skips_the_subtree_but_still_exits() {
         let tree = parse("a{b}c");
         let mut log = Log { skip_at: Some("group"), ..Log::default() };
-        walk(tree.root(), &mut log);
+        TreeWalker::new(&mut log).walk(tree.root()).unwrap();
         assert_eq!(
             log.events,
             [
@@ -365,7 +493,8 @@ mod tests {
     fn stop_aborts_the_whole_walk_without_further_events() {
         let tree = parse("a{b}c");
         let mut log = Log { stop_at: Some("chars(b)"), ..Log::default() };
-        walk(tree.root(), &mut log);
+        // A visitor Stop is an Ok outcome (the one error is the guard's refusal).
+        TreeWalker::new(&mut log).walk(tree.root()).unwrap();
         assert_eq!(
             log.events,
             [
@@ -385,7 +514,7 @@ mod tests {
         let tree = parse("a{b{c}}");
         let group = tree.root().child(1).unwrap();
         let mut log = Log::default();
-        walk(group, &mut log);
+        TreeWalker::new(&mut log).walk(group).unwrap();
         assert_eq!(
             log.events,
             [
@@ -405,15 +534,16 @@ mod tests {
     fn the_closure_blanket_supports_inline_closures() {
         let tree = parse("x{y}");
         let mut names: Vec<String> = Vec::new();
-        walk(
-            tree.root(),
+        TreeWalker::new(
             &mut |node: NodeRef<'_, Latexlike>, _cx: &VisitContext<'_, Latexlike>| {
                 if let Some(text) = node.chars() {
                     names.push(text.to_string());
                 }
                 VisitFlow::Descend
             },
-        );
+        )
+        .walk(tree.root())
+        .unwrap();
         assert_eq!(names, ["x", "y"]);
     }
 
@@ -480,15 +610,16 @@ mod tests {
     fn the_walk_visits_slot_children_of_every_role() {
         let tree = three_slot_fixture();
         let mut seen: Vec<String> = Vec::new();
-        walk(
-            tree.root(),
+        TreeWalker::new(
             &mut |node: NodeRef<'_, Latexlike>, _cx: &VisitContext<'_, Latexlike>| {
                 if let Some(text) = node.chars() {
                     seen.push(text.to_string());
                 }
                 VisitFlow::Descend
             },
-        );
+        )
+        .walk(tree.root())
+        .unwrap();
         assert_eq!(seen, ["content", "attached", "hidden"]);
     }
 
@@ -521,5 +652,105 @@ mod tests {
             .map(|child| child.chars().unwrap().to_string())
             .collect();
         assert_eq!(texts, ["ab"]);
+    }
+
+    // --- the descent guard bounds the walk ----------------------------------------------
+
+    /// A hand-built chain of `levels` nested untyped groups around one chars
+    /// node — deeper than any parse could stage under its own guard.
+    fn deep_group_chain(levels: usize) -> NodeTree<Latexlike> {
+        use crate::node::GroupData;
+
+        let source = Arc::new(Source::new("stub"));
+        let span = || SourceSpan::new(&source, 0..4);
+        let state = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
+
+        let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
+        let kind = NodeKind::chars(TextContent::Owned("x".into()));
+        let ext = <Latexlike as Lang>::make_node_ext(
+            &kind,
+            &span(),
+            &state,
+            builder.staged_children(&[]),
+        )
+        .expect("mint node ext");
+        let mut node = builder.add(kind, span(), state.clone(), Vec::new(), ext, ()).unwrap();
+        for _ in 0..levels {
+            let kind: NodeKind<Latexlike> = NodeKind::group(GroupData::untyped("{", "}"));
+            let children = vec![node];
+            let ext = <Latexlike as Lang>::make_node_ext(
+                &kind,
+                &span(),
+                &state,
+                builder.staged_children(&children),
+            )
+            .expect("mint node ext");
+            node = builder.add(kind, span(), state.clone(), children, ext, ()).unwrap();
+        }
+        builder.finish(node).unwrap()
+    }
+
+    #[test]
+    fn a_depth_limit_refuses_the_walk_of_a_deeper_tree() {
+        // `a{b{c}}d` walks four levels deep (root list → group → group → chars).
+        let tree = parse("a{b{c}}d");
+        let mut log = Log::default();
+        let error = TreeWalker::new(&mut log)
+            .with_descent_guard_init(StdDescentGuardInit::depth_limit(2))
+            .walk(tree.root())
+            .unwrap_err();
+        let WalkError::DescentLimitExceeded { detail } = error;
+        assert!(detail.contains("depth_limit"), "{detail}");
+
+        // A limit the tree fits under walks it whole.
+        let mut log = Log::default();
+        TreeWalker::new(&mut log)
+            .with_descent_guard_init(StdDescentGuardInit::depth_limit(4))
+            .walk(tree.root())
+            .unwrap();
+        assert_eq!(log.events.len(), 2 * 7, "all seven nodes entered and exited");
+    }
+
+    #[test]
+    fn the_unconfigured_default_warns_the_visitor_once_then_refuses() {
+        /// Counts descents and warnings; never stops on its own.
+        #[derive(Default)]
+        struct Meter {
+            entered: usize,
+            warnings: usize,
+        }
+        impl NodeVisitor<Latexlike, ()> for Meter {
+            fn enter(
+                &mut self,
+                _node: NodeRef<'_, Latexlike>,
+                _cx: &VisitContext<'_, Latexlike>,
+            ) -> VisitFlow {
+                self.entered += 1;
+                VisitFlow::Descend
+            }
+
+            fn observe_descent_warning(&mut self, warning: DescentWarning) {
+                self.warnings += 1;
+                assert!(warning.detail.contains("with_descent_guard_init"));
+            }
+        }
+
+        // Deep enough that even tiny walk frames exhaust the default budget.
+        let tree = deep_group_chain(200_000);
+        let mut meter = Meter::default();
+        let error = TreeWalker::new(&mut meter).walk(tree.root()).unwrap_err();
+        let WalkError::DescentLimitExceeded { detail } = error;
+        assert!(detail.contains("DEFAULT_STACK_BUDGET"), "{detail}");
+        assert_eq!(meter.warnings, 1, "the half-budget warning latches once");
+        assert!(meter.entered > 0, "the walk made progress before refusing");
+
+        // With the guard off, the same visitor walks a modest chain untroubled.
+        let tree = deep_group_chain(16);
+        let mut meter = Meter::default();
+        TreeWalker::new(&mut meter)
+            .with_descent_guard_init(StdDescentGuardInit::off())
+            .walk(tree.root())
+            .unwrap();
+        assert_eq!((meter.entered, meter.warnings), (17, 0));
     }
 }

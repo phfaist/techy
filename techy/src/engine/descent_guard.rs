@@ -1,4 +1,5 @@
-//! [`DescentGuard`]: the per-parse limiter of parsing depth.
+//! [`DescentGuard`]: the per-run limiter of recursion depth — for parses and for
+//! the tree traversals.
 //!
 //! Parsing is recursive: a construct parser that needs a sub-construct parsed (a
 //! group interior, an argument, an environment body) runs another construct parser
@@ -8,82 +9,96 @@
 //! Each descent consumes call stack, so input nested deeply enough — pathological or
 //! hostile — would otherwise crash the process by exhausting the stack.
 //!
-//! The guard is the defense: a small per-parse object that is asked before every
-//! descent whether the parse may go one level deeper. A refusal aborts the parse
+//! The guard is the defense: a small per-run object that is asked before every
+//! descent whether the run may go one level deeper. A refusal aborts the parse
 //! with an ordinary error
 //! ([`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded)) instead of
 //! crashing — under any recovery policy, since past the limit there is no safe way
 //! to continue.
 //!
-//! The guard bounds the **parse** only. Trees built by hand through a
-//! [`NodeTreeBuilder`](crate::node::NodeTreeBuilder) can be deeper than any
-//! parse-side limit, and consumer traversals over a parsed tree
-//! ([`walk`](crate::visit::walk), [`recompose`](crate::recompose::recompose))
-//! recurse on their own thread's stack — running them on a thread with a smaller
-//! stack than the parse's can still exhaust that stack.
+//! The consumer traversals are bounded the same way: trees built by hand through
+//! a [`NodeTreeBuilder`](crate::node::NodeTreeBuilder) can be deeper than any
+//! parse-side limit, so the traversal drivers
+//! ([`TreeWalker`](crate::visit::TreeWalker),
+//! [`TreeRestager`](crate::transform::TreeRestager),
+//! [`TreeRecomposer`](crate::recompose::TreeRecomposer)) each create their own
+//! per-run guard, configured through their own `with_descent_guard_init`. A
+//! traversal refusal surfaces as the run's `DescentLimitExceeded`-style error
+//! value, and the guard's early warning reaches the run's own visitor
+//! (its defaulted `observe_descent_warning` hook). Traversal descents track the
+//! tree directly: one descent per nesting level (a parse costs about two per
+//! syntactic level).
 //!
-//! Which guard *type* a language uses is part of its driver
-//! ([`ParseDriver::DescentGuard`](super::ParseDriver::DescentGuard)); the guard's
-//! *configuration* travels on the [`Language`](super::Language) value
-//! ([`with_descent_guard_init`](super::Language::with_descent_guard_init)) and a
-//! fresh guard instance is created for every parse, on the parsing thread, at parse
-//! entry. [`StdDescentGuard`] is the standard implementation; its configuration
-//! type is [`StdDescentGuardInit`].
+//! Every guarded run uses the standard implementation, [`StdDescentGuard`]; its
+//! *configuration* ([`StdDescentGuardInit`]) travels on the run's long-lived
+//! entry value — the [`Language`](super::Language)
+//! ([`with_descent_guard_init`](super::Language::with_descent_guard_init)) or the
+//! traversal driver — and a
+//! fresh guard instance is created for every run, on the running thread, at
+//! run entry. The [`DescentGuard`] trait states the contract the engine drives
+//! the guard through; wiring in a different implementation is deliberately not
+//! offered for now.
 
 use alloc::format;
 use alloc::string::String;
 
-/// The per-parse limiter of parsing depth — asked before every descent (one
-/// construct parser running another over the same input) whether the parse may
-/// go one level deeper.
+/// The per-run limiter of recursion depth — asked before every descent whether
+/// the run may go one level deeper.
 ///
-/// One guard value is created per parse and lives on the
-/// [`ParserSession`](super::ParserSession). The engine drives it from the single
+/// One guard value is created per run: a parse's lives on the
+/// [`ParserSession`](super::ParserSession) and is driven from the single
 /// descent entry point,
-/// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct):
-/// [`try_enter`](DescentGuard::try_enter) before the sub-parse runs,
+/// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct);
+/// a traversal's is created by its driver
+/// ([`TreeWalker`](crate::visit::TreeWalker) and its transform/recompose
+/// siblings) and wraps the per-node recursion. Either way:
+/// [`try_enter`](DescentGuard::try_enter) before the descent runs,
 /// [`exit`](DescentGuard::exit) after it returns (on the success and error paths
-/// alike — parse errors are returned values, not unwinds). A refusal aborts the
-/// parse under any recovery policy, and the refused descent never gets a matching
-/// `exit` call.
+/// alike — errors are returned values, not unwinds). A refusal aborts the
+/// run — for a parse, under any recovery policy — and the refused descent never
+/// gets a matching `exit` call.
 ///
 /// Implementations are plain values — no `Send`/`Sync` requirement on the guard
-/// itself (it never leaves its parse's thread); the configuration
-/// ([`InitArg`](DescentGuard::InitArg)) is shared on the long-lived
-/// [`Language`](super::Language) and must be `Send + Sync`.
+/// itself (it never leaves its run's thread); the configuration
+/// ([`InitArg`](DescentGuard::InitArg)) is shared on the long-lived entry value
+/// ([`Language`](super::Language), a traversal driver) and must be `Send + Sync`.
 pub trait DescentGuard: Sized {
-    /// The guard's configuration, stored on the [`Language`](super::Language)
-    /// (set with
-    /// [`with_descent_guard_init`](super::Language::with_descent_guard_init)).
+    /// The guard's configuration, stored on the run's entry value (set with its
+    /// `with_descent_guard_init` method — on [`Language`](super::Language) and
+    /// the traversal drivers alike).
     /// The `Default` value is the fallback used when no configuration was given —
     /// including on the hand-built-context path, where the session creates the
     /// guard lazily at the first descent.
     type InitArg: Default + Send + Sync;
 
-    /// Create the per-parse guard from its configuration. Runs at parse entry, on
-    /// the thread that parses — an implementation measuring the call stack takes
+    /// Create the per-run guard from its configuration. Runs at run entry, on
+    /// the thread that runs — an implementation measuring the call stack takes
     /// its reference measurement here.
     fn init(arg: &Self::InitArg) -> Self;
 
-    /// Ask whether the parse may descend one level deeper.
+    /// Ask whether the run may descend one level deeper.
     ///
     /// - `Ok(None)`: descend.
-    /// - `Ok(Some(warning))`: descend, and record `warning` as a warning-severity
-    ///   diagnostic ([`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching)).
-    /// - `Err(refusal)`: do not descend — the parse aborts with
+    /// - `Ok(Some(warning))`: descend, and surface `warning` — a parse records a
+    ///   warning-severity diagnostic
+    ///   ([`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching)),
+    ///   a traversal notifies its visitor (`observe_descent_warning`).
+    /// - `Err(refusal)`: do not descend — a parse aborts with
     ///   [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded) under
-    ///   any recovery policy. [`exit`](DescentGuard::exit) is **not** called for a
-    ///   refused descent.
+    ///   any recovery policy, a traversal with its own
+    ///   `DescentLimitExceeded`-style error value.
+    ///   [`exit`](DescentGuard::exit) is **not** called for a refused descent.
     fn try_enter(&mut self) -> Result<Option<DescentWarning>, DescentRefusal>;
 
     /// The matching end of a granted [`try_enter`](DescentGuard::try_enter): the
-    /// sub-parse returned (successfully or with an error) and the parse is one
+    /// descent returned (successfully or with an error) and the run is one
     /// level shallower again.
     fn exit(&mut self);
 }
 
-/// A guard's answer "do not descend": the parse aborts with
-/// [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded) carrying
+/// A guard's answer "do not descend": the run aborts — a parse with
+/// [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), a traversal
+/// with its own `DescentLimitExceeded`-style error value — carrying
 /// `detail` as its message body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentRefusal {
@@ -91,10 +106,11 @@ pub struct DescentRefusal {
     pub detail: String,
 }
 
-/// A guard's early warning "descend, but the limit is getting close": recorded as
-/// a warning-severity
+/// A guard's early warning "descend, but the limit is getting close": a parse
+/// records it as a warning-severity
 /// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching)
-/// diagnostic carrying `detail` as its message body; the parse continues.
+/// diagnostic, a traversal hands it to its visitor's `observe_descent_warning`
+/// hook; the run continues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescentWarning {
     /// Human-readable explanation of the approaching limit and how to configure it.
@@ -111,12 +127,13 @@ pub struct DescentWarning {
 /// of [`StdDescentGuard::DEFAULT_STACK_BUDGET`] bytes, marked as unconfigured:
 /// under it the guard additionally emits the one-time
 /// [`DescentLimitApproaching`](crate::constructs::DescentLimitApproaching) warning
-/// at half the budget, and its refusal message points at
-/// [`Language::with_descent_guard_init`](super::Language::with_descent_guard_init).
+/// at half the budget, and its refusal message points at the
+/// `with_descent_guard_init` configuration method (on
+/// [`Language`](super::Language) and the traversal drivers alike).
 /// The default budget is deliberately tight — in unoptimized (debug) builds it
-/// allows only on the order of ten nesting levels — so that a deep parse under the
-/// untuned default fails early, with a message naming the configuration entry
-/// point, instead of consuming an unknown amount of stack.
+/// allows only on the order of ten parse nesting levels — so that a deep run
+/// under the untuned default fails early, with a message naming the
+/// configuration entry point, instead of consuming an unknown amount of stack.
 ///
 /// # Which mode to choose
 ///
@@ -130,12 +147,13 @@ pub struct DescentWarning {
 ///   probe function you supply (the crate is `no_std` and cannot ask the operating
 ///   system itself). This is the mode that uses the whole available stack safely.
 /// - [`depth_limit`](StdDescentGuardInit::depth_limit): cap the *number* of
-///   simultaneously open descents. The count is engine descents, not syntactic
-///   nesting levels: one nesting level of the input costs about two descents (the
-///   group's own descent plus the content run over its interior), so a format
-///   policy ("no document nests deeper than N") needs a limit of roughly `2 * N`.
-///   Fully deterministic across platforms and build profiles — the right mode for
-///   tests — but says nothing about actual stack use.
+///   simultaneously open descents. In a parse the count is engine descents, not
+///   syntactic nesting levels: one nesting level of the input costs about two
+///   descents (the group's own descent plus the content run over its interior),
+///   so a format policy ("no document nests deeper than N") needs a limit of
+///   roughly `2 * N`. A tree traversal costs exactly one descent per tree
+///   nesting level. Fully deterministic across platforms and build profiles —
+///   the right mode for tests — but says nothing about actual stack use.
 /// - [`off`](StdDescentGuardInit::off): no limit. Deeply nested input can then
 ///   crash the process by stack exhaustion; only for callers that bound their
 ///   input by other means.
@@ -212,12 +230,13 @@ impl StdDescentGuardInit {
     }
 
     /// `DepthLimit`: refuse the descent that would open more than `levels`
-    /// simultaneously open descents. `levels` counts engine descents, not
-    /// syntactic nesting levels: one nesting level of the input costs about two
-    /// descents (the group's own descent plus the content run over its interior),
-    /// so a limit aimed at a syntactic nesting depth needs roughly twice that
-    /// number. Deterministic across platforms and build profiles; counts
-    /// descents, not bytes.
+    /// simultaneously open descents. In a parse, `levels` counts engine
+    /// descents, not syntactic nesting levels: one nesting level of the input
+    /// costs about two descents (the group's own descent plus the content run
+    /// over its interior), so a limit aimed at a syntactic nesting depth needs
+    /// roughly twice that number; a tree traversal costs exactly one descent per
+    /// tree nesting level. Deterministic across platforms and build profiles;
+    /// counts descents, not bytes.
     pub fn depth_limit(levels: usize) -> StdDescentGuardInit {
         StdDescentGuardInit { mode: InitMode::DepthLimit { levels }, unconfigured: false }
     }
@@ -333,7 +352,7 @@ impl DescentGuard for StdDescentGuard {
                 if *current >= *limit {
                     return Err(DescentRefusal {
                         detail: format!(
-                            "the parse is {} construct levels deep, the configured \
+                            "the run is {} descent levels deep, the configured \
                              depth limit (StdDescentGuardInit::depth_limit)",
                             limit
                         ),
@@ -347,17 +366,18 @@ impl DescentGuard for StdDescentGuard {
                 if consumed > *budget {
                     let detail = if self.unconfigured {
                         format!(
-                            "parsing's estimated stack use ({} bytes) exceeds the \
+                            "the run's estimated stack use ({} bytes) exceeds the \
                              built-in default budget of {} bytes \
                              (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
                              configuration was given — choose a limit explicitly with \
-                             Language::with_descent_guard_init",
+                             with_descent_guard_init (on Language, TreeWalker, \
+                             TreeRestager, or TreeRecomposer)",
                             consumed,
                             StdDescentGuard::DEFAULT_STACK_BUDGET
                         )
                     } else {
                         format!(
-                            "parsing's estimated stack use ({} bytes) exceeds the \
+                            "the run's estimated stack use ({} bytes) exceeds the \
                              configured budget of {} bytes",
                             consumed, budget
                         )
@@ -371,12 +391,13 @@ impl DescentGuard for StdDescentGuard {
                     self.warned = true;
                     return Ok(Some(DescentWarning {
                         detail: format!(
-                            "parsing's estimated stack use ({} bytes) has passed half \
+                            "the run's estimated stack use ({} bytes) has passed half \
                              of the built-in default budget of {} bytes \
                              (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
                              configuration was given — deeper input will be refused; \
-                             choose a limit explicitly with \
-                             Language::with_descent_guard_init",
+                             choose a limit explicitly with with_descent_guard_init \
+                             (on Language, TreeWalker, TreeRestager, or \
+                             TreeRecomposer)",
                             consumed,
                             StdDescentGuard::DEFAULT_STACK_BUDGET
                         ),
@@ -507,7 +528,7 @@ mod tests {
         assert!(descend(&mut guard, 3, &mut granted, &mut warnings).is_ok());
         assert_eq!(granted, 3);
         let refusal = descend(&mut guard, 4, &mut granted, &mut warnings).unwrap_err();
-        assert!(refusal.detail.contains("3 construct levels deep"));
+        assert!(refusal.detail.contains("3 descent levels deep"));
         assert!(refusal.detail.contains("depth_limit"));
         // The unwound exits rebalanced the count: three levels pass again.
         let (mut granted, mut warnings) = (0, 0);

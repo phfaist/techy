@@ -52,10 +52,6 @@ pub use driver::{
 };
 pub use language::Language;
 
-/// Crate-internal shorthand for the guard type a language's driver declares
-/// ([`ParseDriver::DescentGuard`]).
-pub(crate) type DriverGuard<L> = <<L as Lang>::Driver as ParseDriver<L>>::DescentGuard;
-
 /// One live entry of the session's parse-frame stack:
 /// pushed at the descent points through
 /// [`ParseContext::with_frame`](crate::constructs::ParseContext::with_frame) and
@@ -252,14 +248,14 @@ pub struct ParserSession<L: Lang> {
     /// and it is dropped with the session: no ancestry data survives into parsed
     /// material. Private: the push/pop balance is an invariant.
     state_stack: ParsingStateStack<L>,
-    /// The per-parse [`DescentGuard`] instance, consulted by
+    /// The per-parse [`StdDescentGuard`] instance, consulted by
     /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct)
     /// before every descent. [`Language::parse_source`] installs it eagerly at
     /// parse entry (through
     /// [`install_descent_guard`](ParserSession::install_descent_guard)); a
     /// hand-built session that never installs one gets a
     /// default-configured guard lazily at the first descent.
-    descent_guard: Option<DriverGuard<L>>,
+    descent_guard: Option<StdDescentGuard>,
 }
 
 impl<L: Lang> ParserSession<L> {
@@ -278,16 +274,16 @@ impl<L: Lang> ParserSession<L> {
         }
     }
 
-    /// Install the parse's [`DescentGuard`] instance — the seam for embedders
+    /// Install the parse's [`StdDescentGuard`] instance — the seam for embedders
     /// driving construct parsers over a hand-built
     /// [`ParseContext`](crate::constructs::ParseContext), where no
     /// [`Language::parse_source`] runs to install the guard:
     /// create the guard with [`DescentGuard::init`] on the thread that will parse
     /// and install it before parsing starts. Without an installed guard, the first
-    /// descent creates one lazily from the guard type's default configuration —
+    /// descent creates one lazily from the guard's default configuration —
     /// whose stack measurement then starts at that first descent rather than at
     /// the true parse entry.
-    pub fn install_descent_guard(&mut self, guard: DriverGuard<L>) {
+    pub fn install_descent_guard(&mut self, guard: StdDescentGuard) {
         self.descent_guard = Some(guard);
     }
 
@@ -299,7 +295,7 @@ impl<L: Lang> ParserSession<L> {
         &mut self,
     ) -> Result<Option<DescentWarning>, DescentRefusal> {
         self.descent_guard
-            .get_or_insert_with(|| DriverGuard::<L>::init(&Default::default()))
+            .get_or_insert_with(|| StdDescentGuard::init(&Default::default()))
             .try_enter()
     }
 
@@ -1055,7 +1051,6 @@ mod tests {
     #[derive(Debug, Clone, Copy, Default)]
     struct ObserverDriver;
     impl ParseDriver<ObserverLang> for ObserverDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1272,7 +1267,6 @@ mod tests {
     }
 
     impl ParseDriver<DescentLang> for DescentDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1385,7 +1379,6 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct QuietDriver;
         impl ParseDriver<QuietLang> for QuietDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
             fn recover(
                 &self,
                 _session: &mut ParserSession<QuietLang>,
@@ -1444,7 +1437,6 @@ mod tests {
             answer: u32,
         }
         impl ParseDriver<HelperLang> for HelperDriver {
-            type DescentGuard = crate::engine::StdDescentGuard;
         }
         impl HelperDriver {
             /// An inherent helper — not on the `ParseDriver` trait.
@@ -1537,7 +1529,6 @@ mod tests {
     }
 
     impl ParseDriver<FailingDescentLang> for FailingDescentDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1671,7 +1662,6 @@ mod tests {
         fail_events: bool,
     }
     impl ParseDriver<CtxLang> for CtxDriver {
-        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }
