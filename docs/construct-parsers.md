@@ -82,17 +82,24 @@ is the parser-facing derivation entry point (event lowering plus the
 session-mediated derivation);
 [`cx.with_parsing_state(state, f)`](crate::core::constructs::ParseContext::with_parsing_state)
 scopes a derived state over a closure with structural restore, and
-[`parse_scoped`](crate::core::constructs::ParseContext::parse_scoped) /
 [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state)
-are the same primitive in parser-shaped and delta-shaped form.
+is the same primitive in delta-shaped form. Both are state-scoping
+utilities only, never a route into a sub-parse — running another construct
+parser goes through `parse_construct` (next paragraph).
 
-**Descents.** To parse child content, do not instantiate loop parsers
-yourself:
+**Descents.** Running another construct parser — child content, a group, a
+body — has exactly one entry point, and using it is a **MUST** of the
+[`ConstructParser`](crate::core::constructs::ConstructParser) contract:
+[`cx.parse_construct(parser, state, frame)`](crate::core::constructs::ParseContext::parse_construct)
+scopes the sub-parse's input state (`None` runs it under the current
+state) and optionally pushes a traceback frame around the run. Two thin
+wrappers delegate to it, adding the driver's parser factories:
 [`cx.parse_nodes(state, stop, child_states)`](crate::core::constructs::ParseContext::parse_nodes)
 runs one content-loop descent and
 [`cx.parse_group(…)`](crate::core::constructs::ParseContext::parse_group)
-one group descent, each obtaining its parser from the driver's factories so
-driver overrides apply uniformly. The stop conditions
+one group descent — never instantiate the loop parsers yourself; going
+through the wrappers is what makes driver overrides apply uniformly. The
+stop conditions
 ([`StopSpec`](crate::core::constructs::StopSpec)) and the outcome contract
 ([`NodesOutcome`](crate::core::constructs::NodesOutcome),
 [`StopCause`](crate::core::constructs::StopCause)) are documented with

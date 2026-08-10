@@ -946,3 +946,191 @@ pub trait FromInvocation<L: Lang>: Sized {
 impl<L: Lang> FromInvocation<L> for () {
     fn from_invocation(_invocation: &Invocation<'_, '_, L>) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::StdParseDriver;
+    use crate::error::Recovery;
+    use crate::scopes::ScopeStack;
+    use crate::state::{StateData, TrivialLang};
+    use crate::token::{
+        CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
+        SpecialsRules, TokenListReader, TokenRules, WhitespaceRules,
+    };
+    use alloc::vec;
+
+    #[derive(Debug, Clone, Copy)]
+    struct PlainLang;
+    impl TrivialLang for PlainLang {}
+
+    // `Features = AllLangFeatures` (via `TrivialLang`): the plain block literals
+    // below only typecheck once the per-feature stores normalize to the blocks
+    // themselves.
+    fn min_rules() -> TokenRules<PlainLang> {
+        TokenRules {
+            whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
+            paragraphs: ParagraphRules { enabled: true },
+            groups: GroupRules {
+                enabled: true,
+                rules: Vec::new(),
+                temporary: Vec::new(),
+                expecting_close: None,
+            },
+            commands: CommandRules { enabled: true, rules: Vec::new() },
+            comments: CommentRules { enabled: true, rules: Vec::new() },
+            specials: SpecialsRules { enabled: true },
+            forbidden_chars: ForbiddenCharsRules { chars: "".into() },
+        }
+    }
+
+    fn state() -> Arc<ParsingState<PlainLang>> {
+        Arc::new(ParsingState::new(StateData {
+            rules: min_rules(),
+            scopes: ScopeStack::new(),
+            mode: Default::default(),
+            ext: (),
+        }))
+    }
+
+    /// A test condition — recorded through the recovery entry point by
+    /// [`RecoveringParser`].
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestCondition;
+
+    impl fmt::Display for TestCondition {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "test condition")
+        }
+    }
+
+    impl crate::error::DiagnosticInfo for TestCondition {
+        const IDENTIFIER: &'static str = "test.constructs.test-condition";
+    }
+
+    /// A probing construct parser: records the input state it ran under and the
+    /// enclosing-state stack depth it saw; consumes nothing, stages nothing.
+    #[derive(Default)]
+    struct StackProbeParser {
+        seen_state: Option<Arc<ParsingState<PlainLang>>>,
+        seen_depth: Option<usize>,
+    }
+
+    impl ConstructParser<PlainLang> for StackProbeParser {
+        type Output = ();
+
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, PlainLang>,
+        ) -> ConstructParserResult<PlainLang, ((), Option<ParsingStateDelta<PlainLang>>)>
+        {
+            self.seen_state = Some(Arc::clone(&cx.state));
+            self.seen_depth = Some(cx.session.state_stack().len());
+            Ok(((), None))
+        }
+    }
+
+    /// A construct parser that reports one [`TestCondition`] through the recovery
+    /// entry point (tolerant: records and continues; strict: aborts).
+    struct RecoveringParser;
+
+    impl ConstructParser<PlainLang> for RecoveringParser {
+        type Output = ();
+
+        fn parse(
+            &mut self,
+            cx: &mut ParseContext<'_, '_, PlainLang>,
+        ) -> ConstructParserResult<PlainLang, ((), Option<ParsingStateDelta<PlainLang>>)>
+        {
+            let span = SourceSpan::new(&cx.source, Span::new(1, 2));
+            cx.recover(TestCondition, span)?;
+            Ok(((), None))
+        }
+    }
+
+    // --- the descent entry point (parse_construct) --------------------------------
+
+    #[test]
+    fn parse_construct_state_none_matches_explicit_current_state_clone() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
+
+        // `state: None`: the sub-parse runs under the current state, scoped (one
+        // enclosing-state stack entry), and the outer state is restored after.
+        let mut probe = StackProbeParser::default();
+        cx.parse_construct(&mut probe, None, None).unwrap();
+        assert!(Arc::ptr_eq(probe.seen_state.as_ref().unwrap(), &st));
+        let depth_under_none = probe.seen_depth.unwrap();
+        assert_eq!(depth_under_none, 1);
+        assert!(Arc::ptr_eq(&cx.state, &st), "outer state restored");
+        assert_eq!(cx.session.state_stack().len(), 0, "stack entry popped");
+
+        // `Some(Arc::clone(&cx.state))`: observably identical — same input state,
+        // same enclosing-state stack depth seen inside, same restore.
+        let mut probe = StackProbeParser::default();
+        let explicit = Arc::clone(&cx.state);
+        cx.parse_construct(&mut probe, Some(explicit), None).unwrap();
+        assert!(Arc::ptr_eq(probe.seen_state.as_ref().unwrap(), &st));
+        assert_eq!(probe.seen_depth.unwrap(), depth_under_none);
+        assert!(Arc::ptr_eq(&cx.state, &st), "outer state restored");
+        assert_eq!(cx.session.state_stack().len(), 0, "stack entry popped");
+    }
+
+    #[test]
+    fn parse_construct_frame_reaches_the_diagnostic_snapshot() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
+        let mut cx =
+            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+
+        let frame = Frame {
+            title: FrameTitle::Static("construct frame"),
+            span: SourceSpan::new(&source, Span::new(0, 1)),
+        };
+        cx.parse_construct(&mut RecoveringParser, None, Some(frame)).unwrap();
+        assert!(cx.session.snapshot_frames().is_empty(), "frame popped on return");
+
+        let diagnostic = session.diagnostics.iter().next().unwrap();
+        assert_eq!(diagnostic.frames().len(), 1);
+        assert_eq!(diagnostic.frames()[0].title(), "construct frame");
+        assert_eq!(diagnostic.frames()[0].span().range(), 0..1);
+    }
+
+    #[test]
+    fn parse_construct_pops_the_frame_on_the_err_path() {
+        let source: Arc<Source> = Arc::new(Source::new("xy"));
+        let st = state();
+        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Strict, ());
+        let mut cx =
+            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+
+        let frame = Frame {
+            title: FrameTitle::Static("construct frame"),
+            span: SourceSpan::new(&source, Span::new(0, 1)),
+        };
+        let err =
+            cx.parse_construct(&mut RecoveringParser, None, Some(frame)).unwrap_err();
+        assert!(
+            cx.session.snapshot_frames().is_empty(),
+            "frame popped on the Err path"
+        );
+        // The strict abort snapshotted the frame while it was live.
+        assert_eq!(err.frames().len(), 1);
+        assert_eq!(err.frames()[0].title(), "construct frame");
+    }
+}
