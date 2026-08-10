@@ -7,6 +7,8 @@
 - STACK GUARD - In progress.
 - STACK GUARD ON VISITORS -> simply plug in the DescentGuard we just developed.
 
+- DO NOT HARDCODE "begin" and "end" MACRO NAMES (!!)
+
 - PY binding's wishlist analysis.
 
 
@@ -29,6 +31,9 @@
 - `techy::core::node::NodeKind::Comment` should hold a `CommentData` struct,
   mirroring `GroupData` and `CallableData`.
 
+- TokenRulesOverrides - disable_all() does not disable forbidden chars???   ### still up-to-date?
+  Rationale & revisit if necessary.
+
 - Need a significant clean-up of Claude-generated docs & guides.  [CHECK: STILL
   THE CASE?]
 
@@ -38,9 +43,6 @@
     stated at that point exactly to justify the use of that word
   - References to dev-docs stages in API docs (e.g. "phase 7.8",
     "7.8 checkpoint") !!! Ban that.
-
-- TokenRulesOverrides - disable_all() does not disable forbidden chars???
-  Rationale & revisit if necessary.
 
 
 ## Smaller todo
