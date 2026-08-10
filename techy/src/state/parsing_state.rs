@@ -90,19 +90,28 @@ impl<L: Lang> ParsingState<L> {
     /// path from data to state, so every state a parse sees is either this seed or a
     /// [`derived()`](ParsingState::derived) descendant that passed through
     /// [`Lang::finalize_transition`]. Callers customize the starting point by deriving
-    /// from the seed with a delta (`ParsingState::lang_initial().derived(&delta)?`) —
+    /// from the seed with a delta (`ParsingState::lang_initial()?.derived(&delta)?`) —
     /// or, for the everyday "seed plus these packages" case,
     /// [`lang_initial_with_packages`](ParsingState::lang_initial_with_packages). The
     /// seed itself does *not* run `finalize_transition` (it has no predecessor); its
     /// coherence is the language author's contract (the hook's docs).
-    pub fn lang_initial() -> ParsingState<L> {
-        ParsingState::freeze(L::initial_state_data())
+    ///
+    /// # Fallibility
+    ///
+    /// `Err` is [`Lang::initial_state_data`]'s own failure passed through
+    /// ([`FinalizeError`] — a seed built from configuration or external definition
+    /// data can be invalid or unavailable; see the hook's docs): the failure
+    /// surfaces here, at seeding time, so a broken seed is never parsed with. For
+    /// a language whose seed data cannot fail, unwrapping with
+    /// `.expect("seed state")` states exactly that.
+    pub fn lang_initial() -> Result<ParsingState<L>, FinalizeError> {
+        Ok(ParsingState::freeze(L::initial_state_data()?))
     }
 
     /// The *Lang's* seed state with `packages` pushed onto its scope stack (in
     /// iteration order — the last pushed is innermost and shadows the ones below):
-    /// the everyday "define a package, add it to the language" construction,
-    /// **infallible** where the delta path is not. Requires a language whose
+    /// the everyday "define a package, add it to the language" construction.
+    /// Requires a language whose
     /// features declare the scope stack present ([`LangHasScopes`]) — pushing
     /// providers is scope mutation; a language without the feature seeds via
     /// [`lang_initial`](ParsingState::lang_initial). Packages pass by value through
@@ -118,32 +127,33 @@ impl<L: Lang> ParsingState<L> {
     /// # let my_package: Package<MyLang> = Package::new("mydefs");
     /// let language = Language::new(
     ///     StdParseDriver::new(Recovery::Strict, ()),
-    ///     ParsingState::lang_initial_with_packages([my_package]),
+    ///     ParsingState::lang_initial_with_packages([my_package]).expect("seed state"),
     /// );
     /// ```
     ///
-    /// # Why this cannot fail
+    /// # Fallibility
     ///
-    /// The two failure sources of the derive path are structurally absent here: the
-    /// seed never runs [`Lang::finalize_transition`] (it has no predecessor — see
-    /// [`lang_initial`](ParsingState::lang_initial)), and pushing providers directly
-    /// onto the seed's scope stack involves no by-name scope ops (the only failing
-    /// kind). The derivation path is not involved — packages-at-seed is not a
-    /// transition, and the freeze rebuilds the derived caches over the augmented
+    /// `Err` is [`Lang::initial_state_data`]'s own failure passed through, exactly
+    /// as on [`lang_initial`](ParsingState::lang_initial) — **the packages step
+    /// adds no failure source of its own**: the seed never runs
+    /// [`Lang::finalize_transition`] (it has no predecessor), and pushing providers
+    /// directly onto the seed's scope stack involves no by-name scope ops (the only
+    /// failing kind). The derivation path is not involved — packages-at-seed is not
+    /// a transition, and the freeze rebuilds the derived caches over the augmented
     /// data. Anything beyond packages — rules overrides, a mode, events — goes
-    /// through the (fallible) delta idiom instead:
-    /// `ParsingState::lang_initial().derived(&delta)?`.
+    /// through the delta idiom instead:
+    /// `ParsingState::lang_initial()?.derived(&delta)?`.
     pub fn lang_initial_with_packages(
         packages: impl IntoIterator<Item: IntoSpecsProvider<L>>,
-    ) -> ParsingState<L>
+    ) -> Result<ParsingState<L>, FinalizeError>
     where
         L: LangHasScopes,
     {
-        let mut data = L::initial_state_data();
+        let mut data = L::initial_state_data()?;
         for package in packages {
             data.scopes.push(package.into_specs_provider());
         }
-        ParsingState::freeze(data)
+        Ok(ParsingState::freeze(data))
     }
 
     /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`].
@@ -490,21 +500,28 @@ impl<L: Lang> fmt::Debug for DeriveError<L> {
 
 impl<L: Lang> core::error::Error for DeriveError<L> {}
 
-/// [`Lang::finalize_transition`]'s refusal of a transition — the customizer's loud
-/// "this delta cannot be applied here". The canonical producer: a
-/// **context-dependent** event reaching [`ParsingState::derived`] un-lowered
-/// (outside any driven parse, or under a driver that failed to lower it) — see the two-class contract
-/// on [`Lang::Event`]. Folded into [`DeriveError::finalize_error`] by
-/// [`derived()`](ParsingState::derived).
+/// A [`Lang`] state hook's refusal to produce a parsing state, from either of the
+/// two producers on the data→state path:
+///
+/// - [`Lang::finalize_transition`] refusing a **transition** — the customizer's
+///   loud "this delta cannot be applied here". The canonical case: a
+///   **context-dependent** event reaching [`ParsingState::derived`] un-lowered
+///   (outside any driven parse, or under a driver that failed to lower it) — see
+///   the two-class contract on [`Lang::Event`]. Folded into
+///   [`DeriveError::finalize_error`] by [`derived()`](ParsingState::derived).
+/// - [`Lang::initial_state_data`] refusing to assemble the **seed** data (a seed
+///   built from configuration or external definition data can be invalid or
+///   unavailable). Passed through by the
+///   [`lang_initial`](ParsingState::lang_initial) family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizeError {
     message: String,
 }
 
 impl FinalizeError {
-    /// A refusal with the given human-facing description (say *which* event or
-    /// invariant, and what the caller should have done — e.g. "derive through a
-    /// parse context so the driver can lower the event").
+    /// A refusal with the given human-facing description (say *which* event,
+    /// invariant, or seed input, and what the caller should have done — e.g.
+    /// "derive through a parse context so the driver can lower the event").
     pub fn new(message: impl Into<String>) -> FinalizeError {
         FinalizeError { message: message.into() }
     }
@@ -517,7 +534,9 @@ impl FinalizeError {
 
 impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "transition refused by finalize_transition: {}", self.message)
+        // Neutral over the two producers (transition refusal, seed refusal): the
+        // message names the specific hook and cause.
+        write!(f, "cannot build the parsing state: {}", self.message)
     }
 }
 
@@ -777,7 +796,7 @@ mod tests {
     #[test]
     fn default_initial_state_is_neutral() {
         // The default `Lang::initial_state_data`: every syntax gate off, no libraries.
-        let state: ParsingState<PlainLang> = ParsingState::lang_initial();
+        let state: ParsingState<PlainLang> = ParsingState::lang_initial().expect("seed state");
         assert!(!state.rules().whitespace_enabled());
         assert!(!state.rules().groups_enabled());
         assert!(!state.rules().commands_enabled());
@@ -801,7 +820,7 @@ mod tests {
         inner.insert(0u32, "cmd", StdCallableSpec::default());
 
         let state: ParsingState<PlainLang> =
-            ParsingState::lang_initial_with_packages([outer, inner]);
+            ParsingState::lang_initial_with_packages([outer, inner]).expect("seed state");
         // Iteration order: last pushed is innermost (provider_names lists
         // innermost-first) — it shadows the ones below.
         assert_eq!(
@@ -817,13 +836,13 @@ mod tests {
         let dyn_made: Arc<dyn SpecsProvider<PlainLang>> =
             Arc::new(Package::<PlainLang>::new("dyn"));
         let state: ParsingState<PlainLang> =
-            ParsingState::lang_initial_with_packages([premade]);
+            ParsingState::lang_initial_with_packages([premade]).expect("seed state");
         assert_eq!(
             state.scopes().provider_names().collect::<alloc::vec::Vec<_>>(),
             ["premade"]
         );
         let state: ParsingState<PlainLang> =
-            ParsingState::lang_initial_with_packages([dyn_made]);
+            ParsingState::lang_initial_with_packages([dyn_made]).expect("seed state");
         assert_eq!(
             state.scopes().provider_names().collect::<alloc::vec::Vec<_>>(),
             ["dyn"]
@@ -847,8 +866,8 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () }
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+            Ok(StateData { rules: base_rules(), scopes: ScopeStack::new(), mode: (), ext: () })
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -861,7 +880,7 @@ mod tests {
 
     #[test]
     fn initial_freezes_the_langs_seed_data() {
-        let state: ParsingState<SeededLang> = ParsingState::lang_initial();
+        let state: ParsingState<SeededLang> = ParsingState::lang_initial().expect("seed state");
         assert!(state.rules().groups_enabled());
         // The caches are built from the seed data at freeze:
         assert!(state.prefix_table().unwrap().match_at("{x").is_some());
@@ -870,6 +889,55 @@ mod tests {
         // mechanical check, trivial here since SeededLang has no normalizer):
         let derived = state.derived(&ParsingStateDelta::new()).unwrap();
         assert_eq!(derived.rules(), state.rules());
+    }
+
+    // --- a lang whose seed data itself fails: the Err surfaces at seeding time --------
+
+    #[derive(Debug, Clone, Copy)]
+    struct BrokenSeedLang;
+    impl Lang for BrokenSeedLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = crate::engine::StdParseDriver;
+
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+            Err(FinalizeError::new("the seed definition data is unavailable"))
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) {
+        }
+    }
+
+    #[test]
+    fn a_failing_seed_surfaces_from_both_seed_constructors() {
+        use crate::scopes::Package;
+
+        // The bare seed: initial_state_data's FinalizeError passes through…
+        let err = ParsingState::<BrokenSeedLang>::lang_initial().unwrap_err();
+        assert_eq!(err.message(), "the seed definition data is unavailable");
+        assert_eq!(
+            err.to_string(),
+            "cannot build the parsing state: the seed definition data is unavailable"
+        );
+        // …and the packages form adds no failure source of its own — the same
+        // error, before any package is pushed.
+        let err = ParsingState::<BrokenSeedLang>::lang_initial_with_packages([
+            Package::<BrokenSeedLang>::new("unused"),
+        ])
+        .unwrap_err();
+        assert_eq!(err.message(), "the seed definition data is unavailable");
     }
 
     #[test]
@@ -1057,15 +1125,15 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
             // Coherent seed: text mode with comments enabled — exactly what
             // finalize_transition would normalize to (the hook's coherence contract).
-            StateData {
+            Ok(StateData {
                 rules: base_rules(),
                 scopes: ScopeStack::new(),
                 mode: Mode::Text,
                 ext: SeenEdge::default(),
-            }
+            })
         }
 
         fn finalize_transition(
@@ -1116,17 +1184,18 @@ mod tests {
             ) {
             }
         }
-        let state: ParsingState<DefaultSeedLang> = ParsingState::lang_initial();
+        let state: ParsingState<DefaultSeedLang> =
+            ParsingState::lang_initial().expect("seed state");
         assert_eq!(state.mode(), Mode::Text);
         // TrivialLang languages are modeless: `ModeId = ()`.
-        let plain: ParsingState<PlainLang> = ParsingState::lang_initial();
+        let plain: ParsingState<PlainLang> = ParsingState::lang_initial().expect("seed state");
         assert_eq!(plain.mode(), ());
     }
 
     #[test]
     fn moded_seed_is_coherent_under_the_empty_delta() {
         // The mechanical pin of the coherence contract, mode included.
-        let seed: ParsingState<ModedLang> = ParsingState::lang_initial();
+        let seed: ParsingState<ModedLang> = ParsingState::lang_initial().expect("seed state");
         assert_eq!(seed.mode(), Mode::Text);
         assert!(seed.rules().comments_enabled());
         let derived = seed.derived(&ParsingStateDelta::new()).unwrap();
@@ -1137,7 +1206,7 @@ mod tests {
 
     #[test]
     fn mode_overrides_via_delta_and_is_inherited_otherwise() {
-        let state: ParsingState<ModedLang> = ParsingState::lang_initial();
+        let state: ParsingState<ModedLang> = ParsingState::lang_initial().expect("seed state");
 
         let math = state.derived(&ParsingStateDelta::new().mode(Mode::Math)).unwrap();
         assert_eq!(math.mode(), Mode::Math);
@@ -1164,7 +1233,7 @@ mod tests {
 
     #[test]
     fn finalize_interprets_mode_changes_seeing_prev_and_new() {
-        let state: ParsingState<ModedLang> = ParsingState::lang_initial();
+        let state: ParsingState<ModedLang> = ParsingState::lang_initial().expect("seed state");
 
         // Entering math: level normalization applies (comments off), and the hook saw
         // the Text→Math edge.

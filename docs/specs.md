@@ -47,7 +47,7 @@ package.insert(
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"\cite[p. 7]{knuth}").unwrap();
@@ -95,7 +95,7 @@ package.insert_specials(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse("x_{down}").unwrap();
@@ -126,7 +126,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"\begin{equation}x+y\end{equation}").unwrap();
@@ -223,7 +223,7 @@ package.insert(
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 // Inside the body, `\note` resolves; past `\end{notes}`, it is gone again.
@@ -329,7 +329,7 @@ package.insert(
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict)
         .with_source_resolver(DirectoryResolver { base: PathBuf::from("book-src") }),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language.parse(r"\input{chapter-one.tex}").unwrap();
 ```

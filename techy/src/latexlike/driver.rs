@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn math_rules_enter_math_mode_content_rules_do_not() {
         let driver = driver(Recovery::Strict);
-        let state = ParsingState::<Latexlike>::lang_initial();
+        let state = ParsingState::<Latexlike>::lang_initial().expect("seed state");
 
         let math = Arc::new(GroupRule {
             group_type: GroupType::Math(MathGroupForm::Inline),
@@ -554,7 +554,7 @@ mod tests {
         // A custom single-char math pair: the interior's forbidden set gains the
         // pair's delimiters (derived, not a '$' literal) merged into the outer
         // set, and every math rule is removed while content rules stay.
-        let seed = ParsingState::<Latexlike>::lang_initial();
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state");
         let mut groups = seed.rules().groups.rules.clone();
         let custom = Arc::new(GroupRule {
             group_type: GroupType::Math(MathGroupForm::Display),
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn exit_math_pillar_restores_the_first_non_math_context() {
-        let seed = Arc::new(ParsingState::<Latexlike>::lang_initial());
+        let seed = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
         // A distinguishable enclosing text context: custom forbidden chars, plus
         // in-flight transients (an expected close and a temporary rule) that the
         // restore must NOT carry over (user ruling amendment, 2026-08-04).
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn the_driver_lowers_exactly_the_exit_math_event() {
-        let seed = Arc::new(ParsingState::<Latexlike>::lang_initial());
+        let seed = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
         let stack = ParsingStateStack::from_states(vec![Arc::clone(&seed)]);
         let driver = driver(Recovery::Strict);
         // The exit-math event lowers to the pillar's delta…
@@ -676,7 +676,7 @@ mod tests {
         use crate::source::Span;
         use crate::token::TokenKind;
 
-        let state = ParsingState::<Latexlike>::lang_initial();
+        let state = ParsingState::<Latexlike>::lang_initial().expect("seed state");
         let content = "a\n \t\nb";
         let token: Token<'static, Latexlike> =
             Token::new(TokenKind::ParagraphBreak, Span::new(1, 5), Span::empty(1));

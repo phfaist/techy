@@ -357,8 +357,8 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(StateData {
                 rules: TokenRules {
                     whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
                     paragraphs: ParagraphRules { enabled: true },
@@ -390,7 +390,7 @@ mod tests {
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
-            }
+            })
         }
         fn make_node_ext(
             _kind: &NodeKind<Self>,
@@ -423,7 +423,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(source.content());
         let mut session: ParserSession<DocLang> = ParserSession::new();
-        let state = Arc::new(ParsingState::<DocLang>::lang_initial());
+        let state = Arc::new(ParsingState::<DocLang>::lang_initial().expect("seed state"));
         let result = {
             let mut cx =
                 ParseContext::new(&mut reader, Arc::clone(&source), state, &mut session, driver);
@@ -772,7 +772,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let mut reader = StdTokenReader::new(source.content());
         let mut session: ParserSession<PlainLang> = ParserSession::new();
-        let state = Arc::new(ParsingState::<PlainLang>::lang_initial());
+        let state = Arc::new(ParsingState::<PlainLang>::lang_initial().expect("seed state"));
         let mut cx = ParseContext::new(&mut reader, source.clone(), state, &mut session, &driver);
         let at = SourceSpan::entire(&cx.source);
         let mut parser = ParseDriver::<PlainLang>::make_nodes_parser(

@@ -22,7 +22,7 @@
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
-//!     ParsingState::lang_initial(),
+//!     ParsingState::lang_initial().expect("seed state"),
 //! );
 //! let input = language.parse("a{b}c").unwrap().tree;
 //!

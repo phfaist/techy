@@ -31,7 +31,7 @@
 //!
 //! let language = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
-//!     ParsingState::lang_initial_with_packages([package]),
+//!     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 //! );
 //! let result = language.parse(r"a \input{chapter.tex} b").unwrap();
 //! let input = result.tree.root().child(1).unwrap();
@@ -440,7 +440,7 @@ mod tests {
         Language::new(
             LatexlikeDriver::new(recovery)
                 .with_source_resolver(resolver.with_reference_as_origin()),
-            ParsingState::lang_initial_with_packages(packages),
+            ParsingState::lang_initial_with_packages(packages).expect("seed state"),
         )
         // Explicit guard: nested inclusions stack enough construct levels to trip
         // the unconfigured default's half-budget warning in debug builds.
@@ -451,7 +451,7 @@ mod tests {
     fn language_without_resolver(recovery: Recovery) -> Language<Latexlike> {
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([input_package()]),
+            ParsingState::lang_initial_with_packages([input_package()]).expect("seed state"),
         )
     }
 
@@ -641,7 +641,7 @@ mod tests {
         // spec is strictly opt-in.
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Tolerant),
-            ParsingState::<Latexlike>::lang_initial(),
+            ParsingState::<Latexlike>::lang_initial().expect("seed state"),
         );
         let result = language.parse(r"\input{chapter.tex}").unwrap();
         assert_eq!(result.diagnostics.len(), 1);
@@ -685,7 +685,7 @@ mod tests {
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Tolerant)
                 .with_source_resolver(PolicyResolver { map: map.with_reference_as_origin() }),
-            ParsingState::lang_initial_with_packages([input_package()]),
+            ParsingState::lang_initial_with_packages([input_package()]).expect("seed state"),
         );
 
         let result = language.parse(r"\input{a.tex}").unwrap();

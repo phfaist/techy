@@ -75,7 +75,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([minilatex_package()]),
+    ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 );
 let result = language.parse(r"one \emph{two} % three").unwrap();
 

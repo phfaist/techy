@@ -314,7 +314,7 @@ mod tests {
         package.insert(CallableType::Macro, "section", Arc::new(MacroSpec::new(arguments)));
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
     }
 
@@ -400,7 +400,7 @@ mod tests {
         package.insert(CallableType::Macro, "start", spec);
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
         .with_descent_guard_init(StdDescentGuardInit::depth_limit(20));
 

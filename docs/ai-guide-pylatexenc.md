@@ -81,7 +81,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 // LatexWalker(text, tolerant_parsing=True).get_latex_nodes() becomes:
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse(r"Hello $x+y$ \undefined").unwrap();
 

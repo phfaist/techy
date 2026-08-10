@@ -75,7 +75,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("Hello {brave} $x+y$ world % bye").unwrap();
 let shapes: Vec<String> =
@@ -103,7 +103,7 @@ package.define_environment("enumerate", ["o"]).unwrap();
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language
     .parse(r"\cite[p. 7]{knuth} \begin{enumerate}[(i)] a \end{enumerate}")
@@ -143,7 +143,7 @@ let mut package: Package<Latexlike> = Package::new("mydefs");
 package.define_macro("usetikzlibrary", ["m"]).unwrap();
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language.parse(r"\usetikzlibrary{arrows,shapes.geometric}").unwrap();
 let arg = result.tree.root().child(0).unwrap().argument_content_nodes(0).unwrap();
@@ -174,7 +174,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse(r"a \foo b").unwrap();
 assert!(result.diagnostics.has_errors());      // always check before trusting the tree

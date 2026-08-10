@@ -24,7 +24,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("Hello {brave} world!").unwrap();
 
@@ -60,7 +60,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("one {two} three").unwrap();
 let group = result.tree.root().child(1).unwrap();
@@ -116,7 +116,7 @@ package.insert(
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"see \cite[Lemma 3]{Author}!").unwrap();
@@ -176,7 +176,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"\item plain").unwrap();
@@ -209,7 +209,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver, MathGroupForm, Mode};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse(r"a $x+y$ b \[z\]").unwrap();
 
@@ -236,7 +236,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("$a$$b$").unwrap();
 let shapes: Vec<String> =
@@ -276,7 +276,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"\begin{enumerate}[(i)] a b \end{enumerate}").unwrap();
@@ -311,7 +311,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([minilatex_package()]),
+    ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 );
 
 // Inside a list body, `\item` resolves (here with its optional argument)…
@@ -354,7 +354,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 // `\verb|…|`: everything between the delimiters is raw — `%`, `\`, `{`, `$` inert.
@@ -393,7 +393,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([minilatex_package()]),
+    ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 );
 let result = language.parse("x---y--z").unwrap();
 let shapes: Vec<String> =
@@ -417,7 +417,7 @@ package.insert_specials(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse("x_{down}").unwrap();
@@ -443,7 +443,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver, ParagraphBreakStyle};
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict)
         .with_paragraph_break_style(ParagraphBreakStyle::Specials),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("one\n\ntwo").unwrap();
 
@@ -470,7 +470,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 // Strict: an unresolvable command aborts.
 let strict: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let err = strict.parse(r"a \foo b").unwrap_err();
 assert!(err.to_string().contains("cannot resolve command ‘\\foo’"));
@@ -479,7 +479,7 @@ assert!(err.to_string().contains("cannot resolve command ‘\\foo’"));
 // on the result.
 let tolerant: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = tolerant.parse(r"a \foo b").unwrap();
 let shapes: Vec<String> =
@@ -500,7 +500,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let tolerant: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = tolerant.parse("a}b").unwrap();
 let shapes: Vec<String> =
@@ -531,7 +531,7 @@ use techy::source::LineIndexCache;
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("first line\nsee \\foo here").unwrap();
 
@@ -580,7 +580,7 @@ package.insert(
 );
 let language = Language::new(
     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"a \input{preamble.tex} b").unwrap();
@@ -620,7 +620,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 // A comma-separated list argument:
@@ -651,7 +651,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 // Keyval options, grouped values protected:
@@ -689,7 +689,7 @@ use techy::transform::{restage, Restage, RestageContext};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 

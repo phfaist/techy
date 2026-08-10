@@ -91,7 +91,7 @@ use techy::source::{LineIndexCache, Source};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 
 // Hold the source yourself; parse it; spans now correlate across parses.

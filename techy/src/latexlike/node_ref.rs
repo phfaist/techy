@@ -150,7 +150,7 @@ mod tests {
             open: "«".into(),
             close: "»".into(),
         }));
-        let seed = ParsingState::<Latexlike>::lang_initial()
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 groups: GroupOverrides { rules: Some(groups), ..GroupOverrides::default() },
                 ..TokenRulesOverrides::default()

@@ -46,9 +46,9 @@ mod support {
     };
     use techy::core::{
         CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
-        GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures, ParseResult,
-        ParsingState, SpecialsMatch, StateData, StdParseDriver, Token, TokenKind,
-        TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
+        ParseResult, ParsingState, SpecialsMatch, StateData, StdParseDriver, Token,
+        TokenKind, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -101,13 +101,13 @@ mod support {
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+            Ok(StateData {
                 rules: TokenRules::empty(),
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
-            }
+            })
         }
 
         fn scan_specials<'s>(
@@ -166,8 +166,8 @@ mod support {
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+            Ok(StateData {
                 rules: TokenRules {
                     groups: GroupRules {
                         enabled: true,
@@ -188,7 +188,7 @@ mod support {
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
-            }
+            })
         }
 
         fn scan_specials<'s>(
@@ -249,8 +249,8 @@ mod support {
         type InvocationSyntax = ();
         type Driver = StdParseDriver<FixedTableResolver>;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+            Ok(StateData {
                 rules: TokenRules {
                     whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
                     commands: CommandRules {
@@ -267,7 +267,7 @@ mod support {
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
-            }
+            })
         }
 
         fn make_node_ext(
@@ -372,7 +372,10 @@ mod plain_chars {
     use techy::error::Recovery;
 
     fn language(recovery: Recovery) -> Language<PlainCharsLang> {
-        Language::new(StdParseDriver::new(recovery, ()), ParsingState::lang_initial())
+        Language::new(
+            StdParseDriver::new(recovery, ()),
+            ParsingState::lang_initial().expect("seed state"),
+        )
     }
 
     // The input spells every construct — a command escape, a brace group, a `%`
@@ -415,7 +418,7 @@ mod plain_chars {
     // accessors keep answering neutrally.
     #[test]
     fn an_empty_delta_derives_cleanly() {
-        let derived = ParsingState::<PlainCharsLang>::lang_initial()
+        let derived = ParsingState::<PlainCharsLang>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new())
             .unwrap();
         assert_eq!(derived.rules().whitespace_chars(), "");
@@ -431,7 +434,7 @@ mod plain_chars {
         let overrides = TokenRulesOverrides::<PlainCharsLang>::disable_all();
         assert_eq!(overrides, TokenRulesOverrides::default());
 
-        let derived = ParsingState::<PlainCharsLang>::lang_initial()
+        let derived = ParsingState::<PlainCharsLang>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().rules(overrides))
             .expect("disable_all() applies cleanly whatever the language declares");
         // Nothing was flipped — there is nothing to flip: absent features store no
@@ -486,7 +489,7 @@ mod plain_chars {
         let mut cx = ParseContext::new(
             &mut reader,
             Arc::new(Source::new("%c")),
-            Arc::new(ParsingState::<PlainCharsLang>::lang_initial()),
+            Arc::new(ParsingState::<PlainCharsLang>::lang_initial().expect("seed state")),
             &mut session,
             &driver,
         );
@@ -511,7 +514,10 @@ mod groups_only {
     use techy::source::Span;
 
     fn language(recovery: Recovery) -> Language<GroupsOnlyLang> {
-        Language::new(StdParseDriver::new(recovery, ()), ParsingState::lang_initial())
+        Language::new(
+            StdParseDriver::new(recovery, ()),
+            ParsingState::lang_initial().expect("seed state"),
+        )
     }
 
     // Braces parse as `Group` nodes; the command escape, `%` comment start, `~`
@@ -537,7 +543,7 @@ mod groups_only {
     // and every token's pre-space is empty.
     #[test]
     fn whitespace_characters_are_ordinary_content_tokens_with_empty_pre_space() {
-        let state = Arc::new(ParsingState::<GroupsOnlyLang>::lang_initial());
+        let state = Arc::new(ParsingState::<GroupsOnlyLang>::lang_initial().expect("seed state"));
         let mut reader = StdTokenReader::new(" {");
 
         let token: Token<'_, GroupsOnlyLang> = reader.peek(&state).unwrap();
@@ -561,7 +567,7 @@ mod groups_only {
         expected.groups.enabled = Some(false);
         assert_eq!(overrides, expected);
 
-        let derived = ParsingState::<GroupsOnlyLang>::lang_initial()
+        let derived = ParsingState::<GroupsOnlyLang>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().rules(overrides))
             .expect("disable_all() applies cleanly under a partially-absent language");
         assert!(!derived.rules().groups_enabled());
@@ -585,7 +591,7 @@ mod commands_without_scopes {
     fn language(recovery: Recovery) -> Language<CommandsWithoutScopesLang> {
         Language::new(
             StdParseDriver::new(recovery, FixedTableResolver),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         )
     }
 
@@ -630,7 +636,7 @@ mod commands_without_scopes {
     // literal on this language's `TokenRulesOverrides` is a compile-time type error.
     #[test]
     fn overrides_for_present_features_apply_cleanly() {
-        let seed = ParsingState::<CommandsWithoutScopesLang>::lang_initial();
+        let seed = ParsingState::<CommandsWithoutScopesLang>::lang_initial().expect("seed state");
         let derived = seed
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 whitespace: WhitespaceOverrides { enabled: None, chars: Some("Z".into()) },
@@ -651,7 +657,7 @@ mod commands_without_scopes {
         expected.commands.enabled = Some(false);
         assert_eq!(overrides, expected);
 
-        let derived = ParsingState::<CommandsWithoutScopesLang>::lang_initial()
+        let derived = ParsingState::<CommandsWithoutScopesLang>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().rules(overrides))
             .expect("disable_all() applies cleanly under a partially-absent language");
         assert!(!derived.rules().whitespace_enabled());
@@ -671,7 +677,7 @@ mod commands_without_scopes {
     // permanently empty and every read gives the empty-stack answer.
     #[test]
     fn the_scope_stack_of_a_scopes_absent_language_is_permanently_empty() {
-        let state = ParsingState::<CommandsWithoutScopesLang>::lang_initial();
+        let state = ParsingState::<CommandsWithoutScopesLang>::lang_initial().expect("seed state");
         assert!(state.scopes().is_empty());
         assert!(state.scopes().providers().is_empty());
         assert_eq!(state.scopes().len(), 0);

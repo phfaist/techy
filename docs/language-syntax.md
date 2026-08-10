@@ -133,7 +133,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("Hello {brave} $x+y$ world % bye").unwrap();
 let shapes: Vec<String> =
@@ -212,7 +212,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([minilatex_package()]),
+    ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 );
 
 // Inside a list environment's body, `\item` is defined…

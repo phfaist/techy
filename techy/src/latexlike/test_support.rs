@@ -22,12 +22,18 @@ use super::{CallableType, Latexlike, LatexlikeDriver, Mode};
 
 /// A strict-recovery latexlike `Language` (the seed defaults).
 pub(super) fn strict() -> Language<Latexlike> {
-    Language::new(LatexlikeDriver::new(Recovery::Strict), ParsingState::lang_initial())
+    Language::new(
+        LatexlikeDriver::new(Recovery::Strict),
+        ParsingState::lang_initial().expect("seed state"),
+    )
 }
 
 /// A tolerant-recovery latexlike `Language`.
 pub(super) fn tolerant() -> Language<Latexlike> {
-    Language::new(LatexlikeDriver::new(Recovery::Tolerant), ParsingState::lang_initial())
+    Language::new(
+        LatexlikeDriver::new(Recovery::Tolerant),
+        ParsingState::lang_initial().expect("seed state"),
+    )
 }
 
 /// A latexlike `Language` under `recovery` with `package` pushed innermost over the
@@ -35,7 +41,7 @@ pub(super) fn tolerant() -> Language<Latexlike> {
 pub(super) fn with_package(recovery: Recovery, package: Package<Latexlike>) -> Language<Latexlike> {
     Language::new(
         LatexlikeDriver::new(recovery),
-        ParsingState::lang_initial_with_packages([package]),
+        ParsingState::lang_initial_with_packages([package]).expect("seed state"),
     )
 }
 
@@ -47,7 +53,7 @@ pub(super) fn with_packages(
 ) -> Language<Latexlike> {
     Language::new(
         LatexlikeDriver::new(recovery),
-        ParsingState::lang_initial_with_packages(packages),
+        ParsingState::lang_initial_with_packages(packages).expect("seed state"),
     )
 }
 

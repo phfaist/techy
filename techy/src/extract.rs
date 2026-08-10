@@ -66,7 +66,7 @@
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
-//!     ParsingState::lang_initial(),
+//!     ParsingState::lang_initial().expect("seed state"),
 //! );
 //! let result = language.parse("alpha,beta{x,y},gamma").unwrap();
 //!
@@ -593,7 +593,7 @@ fn stage_segment_list<'t, L: Lang, A, B>(
 ///
 /// let language: Language<Latexlike> = Language::new(
 ///     LatexlikeDriver::new(Recovery::Strict),
-///     ParsingState::lang_initial(),
+///     ParsingState::lang_initial().expect("seed state"),
 /// );
 /// let tree = language.parse("ab,c").unwrap().tree;
 ///
@@ -1174,7 +1174,7 @@ mod tests {
         use crate::state::ParsingState;
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial_with_packages([minilatex_package()]),
+            ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
         );
         let result = language.parse(input).expect("test inputs parse cleanly");
         assert!(result.diagnostics.is_empty(), "unexpected diagnostics: {:?}", result.diagnostics);

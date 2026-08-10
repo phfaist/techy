@@ -412,7 +412,7 @@ let mut package: Package<Latexlike> = Package::new("mydefs");
 package.insert(CallableType::Macro, "until", UntilSpec);
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 let result = language.parse(r"a \until {raw} % text; b").unwrap();

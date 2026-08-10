@@ -170,7 +170,7 @@ impl core::error::Error for ArgumentCodeError {}
 /// );
 /// let language: Language<Latexlike> = Language::new(
 ///     LatexlikeDriver::new(Recovery::Strict),
-///     ParsingState::lang_initial_with_packages([package]),
+///     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 /// );
 ///
 /// let result = language.parse(r"\includegraphics[width=5cm]{fig.png}").unwrap();
@@ -591,7 +591,7 @@ mod tests {
         package.insert(CallableType::Macro, "m", Arc::new(MacroSpec::new(specs)));
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
     }
 
@@ -972,7 +972,7 @@ mod tests {
         );
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            crate::state::ParsingState::lang_initial_with_packages([package]),
+            crate::state::ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let result = language.parse(r"\m{world}").unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -1033,6 +1033,7 @@ mod tests {
             close: "»".into(),
         }));
         let seed = ParsingState::<Latexlike>::lang_initial_with_packages([package])
+            .expect("seed state")
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 groups: GroupOverrides { rules: Some(groups), ..GroupOverrides::default() },
                 ..TokenRulesOverrides::default()

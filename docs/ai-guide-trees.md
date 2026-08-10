@@ -37,7 +37,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([minilatex_package()]),
+    ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 );
 let result = language.parse(r"one \emph{two} % three").unwrap();
 let root = result.tree.root();          // root is a List over the whole input
@@ -115,7 +115,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 
 // Split a comma-separated argument, groups protected:
@@ -244,7 +244,7 @@ use techy::transform::{restage, Restage, RestageContext};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let input = language.parse("one % secret\ntwo {three}").unwrap().tree;
 

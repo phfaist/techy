@@ -183,7 +183,7 @@ mod tests {
     use crate::token::GroupRule;
 
     fn latexlike_state() -> Arc<ParsingState<Latexlike>> {
-        Arc::new(ParsingState::lang_initial())
+        Arc::new(ParsingState::lang_initial().expect("seed state"))
     }
 
     /// A root `List` over `span` holding one callable node of the same span,

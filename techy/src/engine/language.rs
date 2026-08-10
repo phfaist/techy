@@ -35,9 +35,9 @@ use super::{ParseResult, ParserSession};
 /// recovery policy) and the initial state — kept cheap by the two seed constructors:
 /// [`ParsingState::lang_initial()`] is the `Lang`'s canonical seed, and
 /// [`ParsingState::lang_initial_with_packages`] is the everyday "seed plus these
-/// packages" form (infallible — see its docs). Any further customization derives
+/// packages" form. Any further customization derives
 /// *before* construction, through the single derivation point:
-/// `Language::new(driver, ParsingState::lang_initial().derived(&delta)?)` — so
+/// `Language::new(driver, ParsingState::lang_initial()?.derived(&delta)?)` — so
 /// [`Lang::finalize_transition`](crate::state::Lang::finalize_transition) holds its
 /// invariants over every customized seed.
 ///
@@ -49,7 +49,7 @@ use super::{ParseResult, ParserSession};
 /// # impl TrivialLang for MyLang {}
 /// let language: Language<MyLang> = Language::new(
 ///     StdParseDriver::new(Recovery::Tolerant, ()),
-///     ParsingState::lang_initial(),
+///     ParsingState::lang_initial().expect("seed state"),
 /// );
 /// let result = language.parse("hello").unwrap();
 /// assert_eq!(result.tree.root().chars(), None); // the root is a List
@@ -321,8 +321,8 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(StateData {
                 rules: TokenRules {
                     whitespace: WhitespaceRules { enabled: true, chars: " \t\n".into() },
                     paragraphs: ParagraphRules { enabled: true },
@@ -350,7 +350,7 @@ mod tests {
                 scopes: ScopeStack::new(),
                 mode: (),
                 ext: (),
-            }
+            })
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -362,13 +362,16 @@ mod tests {
     }
 
     fn strict() -> Language<DocLang> {
-        Language::new(StdParseDriver::new(Recovery::Strict, ()), ParsingState::lang_initial())
+        Language::new(
+            StdParseDriver::new(Recovery::Strict, ()),
+            ParsingState::lang_initial().expect("seed state"),
+        )
     }
 
     fn tolerant() -> Language<DocLang> {
         Language::new(
             StdParseDriver::new(Recovery::Tolerant, ()),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         )
     }
 
@@ -465,8 +468,8 @@ mod tests {
     #[test]
     fn a_derived_seed_customizes_through_the_choke_point() {
         // Disabling comments through the delta idiom — the seed derives *before*
-        // construction: `Language::new(driver, lang_initial().derived(&delta)?)`.
-        let seed = ParsingState::<DocLang>::lang_initial()
+        // construction: `Language::new(driver, lang_initial()?.derived(&delta)?)`.
+        let seed = ParsingState::<DocLang>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().rules(TokenRulesOverrides {
                 comments: crate::state::CommentOverrides::disable(),
                 ..TokenRulesOverrides::default()
@@ -482,7 +485,7 @@ mod tests {
     #[test]
     fn the_delta_idiom_surfaces_scope_op_failures_before_construction() {
         // A failing scope op aborts seed derivation — no `Language` is ever built.
-        let error = ParsingState::<DocLang>::lang_initial()
+        let error = ParsingState::<DocLang>::lang_initial().expect("seed state")
             .derived(
                 &ParsingStateDelta::new().scope_op(ScopeOp::Unload { name: "absent".into() }),
             )
@@ -501,7 +504,7 @@ mod tests {
         resolver.insert("chapter.tex", "chapter {content}");
         let language: Language<DocLang> = Language::new(
             StdParseDriver::new(Recovery::Strict, ()).with_source_resolver(resolver),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         );
 
         let main = language.parse(r"\input{chapter.tex}").unwrap();
@@ -605,7 +608,7 @@ mod tests {
         }
 
         let language: Language<BogusLang> =
-            Language::new(BogusDriver, ParsingState::lang_initial());
+            Language::new(BogusDriver, ParsingState::lang_initial().expect("seed state"));
         let err = language.parse("x").unwrap_err();
         assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
     }
@@ -755,7 +758,7 @@ mod tests {
             type DescentGuard = StdDescentGuard;
         }
         let language: Language<OneLineLang> =
-            Language::new(OneLineDriver, ParsingState::lang_initial());
+            Language::new(OneLineDriver, ParsingState::lang_initial().expect("seed state"));
         assert!(language.parse("hello").is_ok());
     }
 
@@ -803,7 +806,7 @@ mod tests {
         lib.insert(CallableType::Macro, name, MacroSpec::new(vec![]).with_after_effect(delta));
         Language::new(
             LatexlikeDriver::new(Recovery::Tolerant),
-            ParsingState::lang_initial_with_packages([lib]),
+            ParsingState::lang_initial_with_packages([lib]).expect("seed state"),
         )
     }
 
@@ -891,7 +894,7 @@ mod tests {
             MacroSpec::new(vec![])
                 .with_after_effect(add_groups(&[bracket.clone(), content_group("[[", "]]")])),
         );
-        let seed = ParsingState::lang_initial_with_packages([lib])
+        let seed = ParsingState::lang_initial_with_packages([lib]).expect("seed state")
             .derived(&add_groups(&[bracket]))
             .unwrap();
         let language = Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed);

@@ -290,15 +290,26 @@ pub trait Lang: Sized + 'static {
     /// customizer maintains — if `finalize_transition` installs a `$…$` group rule
     /// whenever the mode is math, a seed whose mode is math must come with that rule in
     /// place. Both hooks have the same author, which keeps the contract local; a test
-    /// asserting `lang_initial().derived(&ParsingStateDelta::new())` is data-equivalent to
-    /// `lang_initial()` pins it mechanically.
+    /// asserting `lang_initial()?.derived(&ParsingStateDelta::new())` is data-equivalent
+    /// to `lang_initial()?` pins it mechanically.
     ///
     /// The default is the most neutral data — [`StateData::empty`]: every syntax gate
     /// off (character-level content — no whitespace handling, groups, commands,
     /// comments, or specials), an empty scope stack, default mode and ext. Real
     /// languages return their canonical rules instead.
-    fn initial_state_data() -> StateData<Self> {
-        StateData::empty()
+    ///
+    /// # Fallibility
+    ///
+    /// Returns `Err` ([`FinalizeError`]) when the seed data cannot be assembled —
+    /// a seed built from configuration or external definition data can be invalid
+    /// or unavailable, and this is where that failure surfaces (an embedding whose
+    /// seed-building code fails reports through the same channel). The failure
+    /// surfaces from the [`lang_initial`](ParsingState::lang_initial) family, before
+    /// any parse exists — a broken seed is never parsed with. An implementation
+    /// that cannot fail wraps its data in `Ok(...)` and that is the only change;
+    /// the default does exactly that.
+    fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+        Ok(StateData::empty())
     }
 
     /// Transition customizer — the choke-point hook, run exactly once per

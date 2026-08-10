@@ -493,7 +493,7 @@ mod tests {
         // escape fired, not a canonical `\`.
         let seed = ParsingState::<Latexlike>::lang_initial_with_packages([macro_package(
             "t", "emph", None,
-        )]);
+        )]).expect("seed state");
         let mut commands = seed.rules().commands.rules.clone();
         commands.push(Arc::new(CommandRule {
             escape_char: '@',

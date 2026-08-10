@@ -850,7 +850,8 @@ mod tests {
         // A state whose scope stack defines `foo` under callable type 0.
         let mut package: Package<PlainLang> = Package::new("defs");
         package.insert(0u32, "foo", StdCallableSpec::default());
-        let st = ParsingState::<PlainLang>::lang_initial_with_packages([package]);
+        let st = ParsingState::<PlainLang>::lang_initial_with_packages([package])
+            .expect("seed state");
 
         let token: Token<'static, PlainLang> = Token::new(
             TokenKind::Command { name: "foo", escape_char: '\\', post_space: Span::empty(4) },
@@ -1589,7 +1590,8 @@ mod tests {
     #[test]
     fn with_parsing_state_maintains_the_session_stack() {
         let source: Arc<Source> = Arc::new(Source::new(""));
-        let outer: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let outer: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let inner = Arc::new(outer.derived(&ParsingStateDelta::new()).unwrap());
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
@@ -1616,7 +1618,8 @@ mod tests {
     #[test]
     fn derive_state_lowers_context_dependent_events_through_the_stack() {
         let source: Arc<Source> = Arc::new(Source::new(""));
-        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let base: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true };
@@ -1650,7 +1653,8 @@ mod tests {
     #[test]
     fn derive_state_keeps_context_free_events_for_finalize_and_the_author_wins() {
         let source: Arc<Source> = Arc::new(Source::new(""));
-        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let base: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true };
@@ -1693,14 +1697,15 @@ mod tests {
     fn context_dependent_event_in_bare_derived_errors_loudly() {
         // Out of any parse, the two-class contract's loud arm: finalize refuses,
         // derived() folds the refusal into the DeriveError.
-        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let base: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let error = base
             .derived(&ParsingStateDelta::new().event(CtxEvent::NeedsContext))
             .unwrap_err();
         assert!(error.failures.is_empty());
         let finalize_error = error.finalize_error.as_ref().unwrap();
         assert!(finalize_error.message().contains("NeedsContext"));
-        assert!(error.to_string().contains("transition refused"));
+        assert!(error.to_string().contains("cannot build the parsing state"));
     }
 
     #[test]
@@ -1709,7 +1714,8 @@ mod tests {
         // wiring gone wrong: derive_state aborts under ANY recovery policy
         // (CtxDriver reports Tolerant).
         let source: Arc<Source> = Arc::new(Source::new(""));
-        let base: Arc<ParsingState<CtxLang>> = Arc::new(ParsingState::lang_initial());
+        let base: Arc<ParsingState<CtxLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: false };

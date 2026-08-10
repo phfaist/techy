@@ -43,7 +43,7 @@
 //! );
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
-//!     ParsingState::lang_initial_with_packages([package]),
+//!     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 //! );
 //!
 //! let result = language.parse(r"\begin{itemize} a b \end{itemize}").unwrap();
@@ -303,7 +303,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
 /// );
 /// let language: Language<Latexlike> = Language::new(
 ///     LatexlikeDriver::new(Recovery::Strict),
-///     ParsingState::lang_initial_with_packages([package]),
+///     ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 /// );
 ///
 /// let result = language
@@ -967,7 +967,7 @@ mod tests {
     fn language(recovery: Recovery) -> Language<Latexlike> {
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([test_definitions()]),
+            ParsingState::lang_initial_with_packages([test_definitions()]).expect("seed state"),
         )
     }
 
@@ -1165,7 +1165,7 @@ mod tests {
             math_envs.set_visible_modes(Some(vec![Mode::Math]));
             Language::new(
                 LatexlikeDriver::new(recovery),
-                ParsingState::lang_initial_with_packages([math_envs]),
+                ParsingState::lang_initial_with_packages([math_envs]).expect("seed state"),
             )
         };
 
@@ -1190,7 +1190,7 @@ mod tests {
         // terminator under the tolerant fallback.
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Tolerant),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         );
         let result = language.parse("\\begin{itemize}x\\end{itemize}").unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -1202,7 +1202,7 @@ mod tests {
 
     #[test]
     fn unloading_builtin_removes_the_dispatch_pair() {
-        let seed = ParsingState::<Latexlike>::lang_initial()
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::Unload {
                 name: "_builtin".into(),
             }))
@@ -1459,7 +1459,7 @@ mod tests {
         );
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let result = language.parse("\\begin{gen}{a}x\\end{gen}").unwrap();
         check_latexlike_tree_invariants(&result.tree);

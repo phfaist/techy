@@ -20,7 +20,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("Hello {world}!").unwrap();
 assert_eq!(result.tree.root().child_count(), 3);
@@ -74,14 +74,14 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 // Strict: an unresolvable command aborts the parse.
 let strict: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 assert!(strict.parse(r"a \foo b").is_err());
 
 // Tolerant: the parse completes; the command recovered as literal characters.
 let tolerant: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = tolerant.parse(r"a \foo b").unwrap();
 assert_eq!(result.tree.root().child_count(), 3);
@@ -163,7 +163,7 @@ use techy::latexlike::{Latexlike, LatexlikeDriver};
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Tolerant),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse(r"a \foo b").unwrap();
 

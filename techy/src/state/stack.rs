@@ -159,7 +159,8 @@ mod tests {
 
     #[test]
     fn from_states_iterates_innermost_first() {
-        let outer: Arc<ParsingState<PlainLang>> = Arc::new(ParsingState::lang_initial());
+        let outer: Arc<ParsingState<PlainLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let inner = Arc::new(outer.derived(&ParsingStateDelta::new()).unwrap());
 
         let stack =
@@ -185,7 +186,7 @@ mod tests {
 
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         );
         let result = language.parse("{a $x y$ b}").unwrap();
         let brace = result.tree.root().child(0).unwrap();
@@ -218,7 +219,8 @@ mod tests {
 
     #[test]
     fn push_pop_track_the_innermost_entry() {
-        let a: Arc<ParsingState<PlainLang>> = Arc::new(ParsingState::lang_initial());
+        let a: Arc<ParsingState<PlainLang>> =
+            Arc::new(ParsingState::lang_initial().expect("seed state"));
         let b = Arc::new(a.derived(&ParsingStateDelta::new()).unwrap());
 
         let mut stack: ParsingStateStack<PlainLang> = ParsingStateStack::new();

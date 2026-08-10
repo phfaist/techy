@@ -64,7 +64,7 @@ use super::{
 ///
 /// let language: Language<Latexlike> = Language::new(
 ///     LatexlikeDriver::new(Recovery::Strict),
-///     ParsingState::lang_initial_with_packages([minilatex_package()]),
+///     ParsingState::lang_initial_with_packages([minilatex_package()]).expect("seed state"),
 /// );
 /// let result = language.parse(r"\emph{try} it --- now").unwrap();
 /// assert_eq!(result.tree.root().child(0).unwrap().macro_name(), Some("emph"));
@@ -115,7 +115,11 @@ where
     // Ligatures are restricted to the language's seed (document-base) mode — the
     // generic stand-in for "text-only": the mode role trait deliberately has no
     // text-mode constructor, and for `Latexlike` the seed mode is `Mode::Text`.
-    let base_mode = LLL::initial_state_data().mode;
+    // A language whose (fallible) seed data cannot be built here still gets the
+    // package; the restriction then uses the mode type's default value — the same
+    // value `StateData::empty` seeds, and `Mode::Text` for the shipped preset. The
+    // seeding call site surfaces the seed failure itself.
+    let base_mode = LLL::initial_state_data().map(|data| data.mode).unwrap_or_default();
     for trigger in ["``", "''", "--", "---"] {
         package.insert_specials_in_modes(
             LLL::CallableTypeId::specials_callable(),

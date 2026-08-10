@@ -47,7 +47,7 @@ package.insert(
 
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language.parse(r"\cite[p. 7]{knuth}").unwrap();
 let cite = result.tree.root().child(0).unwrap();
@@ -139,7 +139,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language.parse(r"\begin{equation}x+y\end{equation}").unwrap();
 let body = result.tree.root().child(0).unwrap().body().unwrap();
@@ -181,7 +181,7 @@ package.insert(
 );
 let language: Language<Latexlike> = Language::new(
     LatexlikeDriver::new(Recovery::Strict),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 assert!(language.parse(r"\begin{notes}\note{a}\end{notes}").is_ok());
 assert!(language.parse(r"\note{a}").is_err()); // gone outside the body
@@ -256,7 +256,7 @@ package.insert(
 );
 let language = Language::new(
     LatexlikeDriver::new(Recovery::Strict).with_source_resolver(resolver),
-    ParsingState::lang_initial_with_packages([package]),
+    ParsingState::lang_initial_with_packages([package]).expect("seed state"),
 );
 let result = language.parse(r"a \input{preamble.tex} b").unwrap();
 let input = result.tree.root().child(1).unwrap();

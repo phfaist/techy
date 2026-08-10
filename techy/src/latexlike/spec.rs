@@ -352,7 +352,7 @@ mod tests {
         );
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
 
         let result = language.parse(r"\emph{x} y").unwrap();
@@ -385,7 +385,7 @@ mod tests {
         }
         Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Tolerant),
-            ParsingState::lang_initial_with_packages([lib]),
+            ParsingState::lang_initial_with_packages([lib]).expect("seed state"),
         )
     }
 
@@ -433,7 +433,7 @@ mod tests {
 
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let result = language
             .parse("\\emph{x}\\begin{enumerate}[i] y\\end{enumerate}")

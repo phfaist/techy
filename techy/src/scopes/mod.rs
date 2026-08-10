@@ -2619,7 +2619,8 @@ mod tests {
             Arc::new(EnvironmentSpec::new(alloc::vec![])),
         );
         let state =
-            crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([package]);
+            crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([package])
+                .expect("seed state");
         let source = Arc::new(Source::new("any content"));
         let mut diagnostics = crate::error::Diagnostics::new();
         check_provider_commands_shadowed_by_escape(&state, &source, &mut diagnostics);
@@ -2659,7 +2660,7 @@ mod tests {
         use crate::latexlike::{CallableType, Latexlike, Mode as LMode};
         let seed = crate::state::ParsingState::<Latexlike>::lang_initial_with_packages([
             crate::latexlike::minidefs::minilatex_package(),
-        ]);
+        ]).expect("seed state");
         let symbols = all_symbols(&seed.scopes().clone(), LMode::Text);
         let has = |ct: CallableType, name: &str| {
             symbols.iter().any(|(t, n)| *t == ct && &**n == name)

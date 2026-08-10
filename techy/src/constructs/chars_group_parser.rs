@@ -270,7 +270,7 @@ mod tests {
         );
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
         // Explicit guard: these inputs nest enough construct levels to trip the
         // unconfigured default's half-budget warning in debug builds.

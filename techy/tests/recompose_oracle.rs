@@ -94,7 +94,8 @@ fn language(recovery: Recovery) -> Language<Latexlike> {
     // definitions win.
     Language::new(
         LatexlikeDriver::new(recovery),
-        ParsingState::lang_initial_with_packages([minilatex_package(), testdb()]),
+        ParsingState::lang_initial_with_packages([minilatex_package(), testdb()])
+            .expect("seed state"),
     )
 }
 
@@ -147,7 +148,8 @@ fn strict_macros_with_and_without_post_space() {
 fn strict_a_second_escape_character_reemits_as_written() {
     // A language with an additional `@` command rule: the payload records
     // whichever escape fired, and reemission reproduces it.
-    let seed = ParsingState::<Latexlike>::lang_initial_with_packages([testdb()]);
+    let seed = ParsingState::<Latexlike>::lang_initial_with_packages([testdb()])
+        .expect("seed state");
     let mut commands = seed.rules().commands.rules.clone();
     commands.push(Arc::new(CommandRule {
         escape_char: '@',
@@ -213,7 +215,7 @@ fn strict_paragraph_breaks_in_both_styles() {
     let language = Language::new(
         LatexlikeDriver::new(Recovery::Strict)
             .with_paragraph_break_style(ParagraphBreakStyle::Specials),
-        ParsingState::lang_initial_with_packages([testdb()]),
+        ParsingState::lang_initial_with_packages([testdb()]).expect("seed state"),
     );
     for input in ["a\n\nb", "a\n \t\n  b", "one\n\ntwo\n\n\nthree"] {
         let result = language.parse(input).unwrap();
@@ -398,7 +400,7 @@ fn input_language(entries: &[(&str, &str)]) -> Language<Latexlike> {
     Language::new(
         LatexlikeDriver::new(Recovery::Strict)
             .with_source_resolver(resolver.with_reference_as_origin()),
-        ParsingState::lang_initial_with_packages([package]),
+        ParsingState::lang_initial_with_packages([package]).expect("seed state"),
     )
     // Explicit guard: nested inclusions stack enough construct levels to trip
     // the unconfigured default's half-budget warning in debug builds.

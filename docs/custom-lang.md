@@ -172,8 +172,8 @@ name. A complete braces-only language:
 # use techy::error::Recovery;
 # use techy::source::SourceSpan;
 use techy::core::{
-    FeatureAbsent, FeaturePresent, GroupRule, GroupRules, Lang, LangFeatures,
-    Language, ParsingState, StateData, StdParseDriver, TokenRules,
+    FeatureAbsent, FeaturePresent, FinalizeError, GroupRule, GroupRules, Lang,
+    LangFeatures, Language, ParsingState, StateData, StdParseDriver, TokenRules,
 };
 
 // The declaration: group delimiters present, the seven other features absent.
@@ -207,8 +207,8 @@ impl Lang for BracesOnlyLang {
 #     type InvocationSyntax = ();
 #     type Driver = StdParseDriver;
 
-    fn initial_state_data() -> StateData<Self> {
-        StateData {
+    fn initial_state_data() -> Result<StateData<Self>, FinalizeError> {
+        Ok(StateData {
             rules: TokenRules {
                 // The present feature's block: a plain struct literal.
                 groups: GroupRules {
@@ -227,7 +227,7 @@ impl Lang for BracesOnlyLang {
             scopes: ScopeStack::new(),
             mode: (),
             ext: (),
-        }
+        })
     }
 #
 #     fn make_node_ext(
@@ -243,7 +243,7 @@ impl Lang for BracesOnlyLang {
 // spaces are plain content — those features do not exist here.
 let language: Language<BracesOnlyLang> = Language::new(
     StdParseDriver::new(Recovery::Strict, ()),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse(r"a{b} \c %d").unwrap();
 let root = result.tree.root();
@@ -444,7 +444,7 @@ impl TrivialLang for MyLang {}
 
 let language: Language<MyLang> = Language::new(
     StdParseDriver::new(Recovery::Strict, ()),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("hello").unwrap();
 assert_eq!(result.tree.root().child(0).unwrap().chars(), Some("hello"));

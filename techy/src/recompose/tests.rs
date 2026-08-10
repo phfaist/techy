@@ -31,7 +31,7 @@ use super::{
 fn parse(input: &str) -> NodeTree<Latexlike> {
     let language: Language<Latexlike> = Language::new(
         LatexlikeDriver::new(Recovery::Strict),
-        ParsingState::lang_initial(),
+        ParsingState::lang_initial().expect("seed state"),
     );
     let result = language.parse(input).expect("test inputs parse cleanly");
     assert!(result.diagnostics.is_empty(), "unexpected: {:?}", result.diagnostics);
@@ -161,7 +161,7 @@ fn without_a_derived_state_children_inherit_the_parents() {
 fn three_slot_fixture() -> NodeTree<Latexlike> {
     let source = Arc::new(Source::new("stub"));
     let span = || SourceSpan::new(&source, 0..4);
-    let state = Arc::new(ParsingState::<Latexlike>::lang_initial());
+    let state = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
 
     let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
     let chars = |builder: &mut NodeTreeBuilder<Latexlike>, text: &str| {
@@ -267,7 +267,7 @@ fn core_source_instruction_declines_callables() {
     package.insert(CallableType::Macro, "emph", MacroSpec::new(vec![]));
     let language: Language<Latexlike> = Language::new(
         LatexlikeDriver::new(Recovery::Strict),
-        ParsingState::lang_initial_with_packages([package]),
+        ParsingState::lang_initial_with_packages([package]).expect("seed state"),
     );
     let tree = language.parse("\\emph x").unwrap().tree;
 
@@ -364,7 +364,7 @@ fn parse_with_macros(input: &str) -> NodeTree<Latexlike> {
     );
     let language: Language<Latexlike> = Language::new(
         LatexlikeDriver::new(Recovery::Strict),
-        ParsingState::lang_initial_with_packages([package]),
+        ParsingState::lang_initial_with_packages([package]).expect("seed state"),
     );
     let result = language.parse(input).expect("test inputs parse cleanly");
     assert!(result.diagnostics.is_empty(), "unexpected: {:?}", result.diagnostics);
@@ -378,7 +378,7 @@ fn parse_with_environment(input: &str) -> NodeTree<Latexlike> {
     package.insert(CallableType::Environment, "itemize", EnvironmentSpec::new(vec![]));
     let language: Language<Latexlike> = Language::new(
         LatexlikeDriver::new(Recovery::Strict),
-        ParsingState::lang_initial_with_packages([package]),
+        ParsingState::lang_initial_with_packages([package]).expect("seed state"),
     );
     let result = language.parse(input).expect("test inputs parse cleanly");
     assert!(result.diagnostics.is_empty(), "unexpected: {:?}", result.diagnostics);

@@ -332,7 +332,7 @@ mod tests {
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         );
         assert_reemit(&language, "a\n \t\nb");
     }
@@ -373,7 +373,7 @@ mod tests {
         // Hand-build a macro-typed callable carrying the Specials arm (a
         // parse never produces this).
         let source: Arc<Source> = Arc::new(Source::new("\\emph x"));
-        let state = Arc::new(ParsingState::<Latexlike>::lang_initial());
+        let state = Arc::new(ParsingState::<Latexlike>::lang_initial().expect("seed state"));
         let mut builder: NodeTreeBuilder<Latexlike> = NodeTreeBuilder::new();
         let node = builder
             .add(
@@ -445,7 +445,7 @@ mod tests {
         let language: Language<Latexlike> = Language::new(
             LatexlikeDriver::new(Recovery::Strict)
                 .with_source_resolver(resolver.with_reference_as_origin()),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let input = "a\\input{sub.tex}b";
         let result = language.parse(input).unwrap();

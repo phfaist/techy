@@ -43,7 +43,7 @@
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
-//!     ParsingState::lang_initial(),
+//!     ParsingState::lang_initial().expect("seed state"),
 //! );
 //! let result = language.parse("inline $x+y$ math").unwrap();
 //! let math = result.tree.root().child(1).unwrap();
@@ -344,21 +344,23 @@ impl Lang for Latexlike {
     type Driver = LatexlikeDriver;
 
     /// The canonical latexlike seed: [`default_token_rules`], a scope stack holding
-    /// the [`builtin_package`] (`\begin`/`\end` dispatch), [`Mode::Text`].
+    /// the [`builtin_package`] (`\begin`/`\end` dispatch), [`Mode::Text`]. Built
+    /// from in-crate constants, so it always answers `Ok` (the hook's `Result`
+    /// exists for seeds built from external data).
     ///
     /// Coherence contract: `finalize_transition` is not customized (nothing to
     /// normalize yet — math groups only set the mode), so the seed is trivially
     /// finalize-coherent; a test pins `lang_initial().derived(&empty) == lang_initial()`
     /// data-equivalence mechanically.
-    fn initial_state_data() -> StateData<Self> {
+    fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
         let mut scopes = ScopeStack::new();
         scopes.push(Arc::new(builtin_package()));
-        StateData {
+        Ok(StateData {
             rules: default_token_rules(),
             scopes,
             mode: Mode::Text,
             ext: (),
-        }
+        })
     }
 
     /// The two-class event contract's loud arm ([`Event`]): the preset's
@@ -564,7 +566,7 @@ mod tests {
     fn the_seed_is_finalize_coherent() {
         // The initial_state_data() contract: deriving with an empty delta must be
         // data-equivalent to the seed itself (pins the coherence obligation).
-        let seed = ParsingState::<Latexlike>::lang_initial();
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state");
         let rederived = seed.derived(&ParsingStateDelta::new()).unwrap();
         assert_eq!(seed.rules(), rederived.rules());
         assert_eq!(seed.mode(), rederived.mode());
@@ -615,7 +617,7 @@ mod tests {
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials),
-            ParsingState::lang_initial(),
+            ParsingState::lang_initial().expect("seed state"),
         );
         let result = language.parse("a\n\nb").unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -858,7 +860,7 @@ mod tests {
         package.insert(CallableType::Macro, r"\greet", Arc::new(super::MacroSpec::default()));
         let mut fallback = FallbackProvider::new("anymacro");
         fallback.set(CallableType::Macro, Arc::new(super::MacroSpec::default()));
-        let seed = ParsingState::<Latexlike>::lang_initial()
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
                 Arc::new(builtin_package()),
@@ -1050,7 +1052,7 @@ mod tests {
         );
         let language = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
         .with_descent_guard_init(StdDescentGuardInit::depth_limit(20));
 
@@ -1097,7 +1099,7 @@ mod tests {
 
         let mut groups = default_token_rules::<Latexlike>().groups.rules;
         groups.push(Arc::clone(&custom_group));
-        let seed = ParsingState::lang_initial_with_packages([package])
+        let seed = ParsingState::lang_initial_with_packages([package]).expect("seed state")
             .derived(&ParsingStateDelta::new().rules(crate::state::TokenRulesOverrides {
                 groups: crate::state::GroupOverrides {
                     rules: Some(groups),
@@ -1160,7 +1162,7 @@ mod tests {
     fn exit_math_event_in_bare_derived_is_refused_loudly() {
         // The two-class contract's loud arm on the preset: out of any parse the
         // context does not exist, so finalize_transition refuses the event.
-        let seed = ParsingState::<Latexlike>::lang_initial();
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state");
         let error =
             seed.derived(&ParsingStateDelta::new().event(Event::ExitMathContext)).unwrap_err();
         let finalize_error = error.finalize_error.as_ref().unwrap();
@@ -1186,13 +1188,13 @@ mod tests {
         type InvocationSyntax = InvocationSyntaxData<StdEnvironmentSyntax<Flavored>>;
         type Driver = LatexlikeDriver<Flavored>;
 
-        fn initial_state_data() -> StateData<Self> {
-            StateData {
+        fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
+            Ok(StateData {
                 rules: default_token_rules(),
                 scopes: ScopeStack::new(),
                 mode: Mode::Text,
                 ext: (),
-            }
+            })
         }
         fn make_node_ext(
             _kind: &crate::node::NodeKind<Self>,
@@ -1221,7 +1223,7 @@ mod tests {
 
         let language: Language<Flavored> = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
         let result = language.parse(r"a $x\text{ b }y$ c").unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -1271,7 +1273,7 @@ mod tests {
         );
         let language: Language<Flavored> = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
 
         // The tokenized composition: begin/end facts per side, in the foreign
@@ -1335,7 +1337,7 @@ mod tests {
         );
         let language: Language<Flavored> = Language::new(
             LatexlikeDriver::new(crate::error::Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         );
 
         let result = language.parse("\\emph{x} \\verb|a%\\y{|!").unwrap();
@@ -1354,7 +1356,7 @@ mod tests {
 
     #[test]
     fn the_builtin_package_is_unloadable_by_name() {
-        let seed = ParsingState::<Latexlike>::lang_initial()
+        let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::Unload {
                 name: "_builtin".into(),
             }))

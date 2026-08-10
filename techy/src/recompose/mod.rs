@@ -42,7 +42,7 @@
 //!
 //! let language: Language<Latexlike> = Language::new(
 //!     LatexlikeDriver::new(Recovery::Strict),
-//!     ParsingState::lang_initial(),
+//!     ParsingState::lang_initial().expect("seed state"),
 //! );
 //! let tree = language.parse("a{b}c").unwrap().tree;
 //! let out = recompose(&tree, (), &mut CoreSource).unwrap();

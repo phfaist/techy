@@ -319,7 +319,7 @@ mod tests {
         package.insert(CallableType::Macro, "alpha", Arc::new(MacroSpec::new(vec![])));
         Language::new(
             LatexlikeDriver::new(Recovery::Strict),
-            ParsingState::lang_initial_with_packages([package]),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
         )
     }
 

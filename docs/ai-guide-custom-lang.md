@@ -70,7 +70,7 @@ impl TrivialLang for MyLang {}
 
 let language: Language<MyLang> = Language::new(
     StdParseDriver::new(Recovery::Strict, ()),
-    ParsingState::lang_initial(),
+    ParsingState::lang_initial().expect("seed state"),
 );
 let result = language.parse("hello").unwrap();
 assert_eq!(result.tree.root().child(0).unwrap().chars(), Some("hello"));

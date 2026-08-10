@@ -159,7 +159,7 @@ mod support {
     pub fn with_recovery(recovery: Recovery) -> Language<Latexlike> {
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([testdb()]),
+            ParsingState::lang_initial_with_packages([testdb()]).expect("seed state"),
         )
         // Explicit guard: suite inputs nest enough construct levels to trip the
         // unconfigured default's half-budget warning in debug builds.
@@ -174,7 +174,7 @@ mod support {
     ) -> Language<Latexlike> {
         Language::new(
             LatexlikeDriver::new(recovery),
-            ParsingState::lang_initial_with_packages([testdb(), package]),
+            ParsingState::lang_initial_with_packages([testdb(), package]).expect("seed state"),
         )
         // Explicit guard (see `with_recovery`).
         .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
@@ -198,7 +198,7 @@ mod support {
     pub fn with_macro_fallback(recovery: Recovery) -> Language<Latexlike> {
         let mut fallback = FallbackProvider::new("anymacro");
         fallback.set(CallableType::Macro, Arc::new(MacroSpec::default()));
-        let seed = ParsingState::lang_initial()
+        let seed = ParsingState::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
                 Arc::new(builtin_package()),
@@ -1073,7 +1073,7 @@ mod paragraph_breaks {
         Language::new(
             LatexlikeDriver::new(recovery)
                 .with_paragraph_break_style(ParagraphBreakStyle::Specials),
-            ParsingState::lang_initial_with_packages([testdb()]),
+            ParsingState::lang_initial_with_packages([testdb()]).expect("seed state"),
         )
     }
 
