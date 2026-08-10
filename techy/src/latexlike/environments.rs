@@ -67,7 +67,7 @@ use crate::constructs::{
     ConstructParserResult, EnvironmentBeginSyntaxData, EnvironmentBody,
     EnvironmentBodyParser, Invocation, ParseContext, VerbatimBodyParser,
 };
-use crate::error::DiagnosticInfo;
+use crate::error::{DiagnosticInfo, ParseError};
 use crate::node::{
     BodySlotExt, BuildId, CallableData, ChildRegion, NodeKind, ParsedArguments,
     ParsedSlot, ParsedSlots, SlotRole,
@@ -211,13 +211,26 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// The body's parsing-state delta (mode changes, tokenization tweaks), stacked on
     /// the invocation's base state for the body's whole extent — terminator included —
     /// and reverted structurally after (pylatexenc's `make_body_parsing_state_delta`).
-    /// Default: none.
+    /// Default: none (`Ok(None)`).
+    ///
+    /// # Errors
+    ///
+    /// `Err` **aborts the parse** under any recovery policy — the composition
+    /// derives the body state from the answer, and there is no recovery channel
+    /// at this seam; the composition attaches the live traceback when the error
+    /// carries no frames of its own. Carry
+    /// [`HookFailed`](crate::error::HookFailed) for an operational failure in the
+    /// behavior's own code,
+    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// violated library contract, or a document condition for a diagnosis made
+    /// deliberately (a behavior reading malformed argument data). An infallible
+    /// implementation wraps its delta in `Ok(...)` and that is the only change.
     fn body_state_delta(
         &self,
         invocation: EnvironmentInvocation<'_>,
-    ) -> Option<ParsingStateDelta<LLL>> {
+    ) -> Result<Option<ParsingStateDelta<LLL>>, ParseError<LLL::SourceOrigin>> {
         let _ = invocation;
-        None
+        Ok(None)
     }
 
     /// The parser that reads the environment's body, entered right after the declared
@@ -383,11 +396,13 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for BodyDeltaOverride<LLL> {
         self.inner.arguments()
     }
 
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn body_state_delta(
         &self,
         _invocation: EnvironmentInvocation<'_>,
-    ) -> Option<ParsingStateDelta<LLL>> {
-        Some(self.delta.clone())
+    ) -> Result<Option<ParsingStateDelta<LLL>>, ParseError<LLL::SourceOrigin>> {
+        Ok(Some(self.delta.clone()))
     }
 
     fn make_body_parser<'p>(
@@ -760,8 +775,14 @@ where
         // The body: parsed under the behavior's state delta stacked on the
         // invocation's base (session-mediated, structurally reverted), by the
         // behavior's body parser — content up to and including the `\end{name}`
-        // terminator in the default shape.
-        let body_delta = behavior.and_then(|b| b.body_state_delta(env_invocation));
+        // terminator in the default shape. A hook Err aborts under any policy
+        // (body_state_delta's contract), with the live traceback attached here.
+        let body_delta = match behavior {
+            Some(b) => b
+                .body_state_delta(env_invocation)
+                .map_err(|error| cx.attach_hook_frames(error))?,
+            None => None,
+        };
         let body_state = match &body_delta {
             Some(delta) => cx.derive_state(delta)?,
             None => Arc::clone(&cx.state),
@@ -1418,11 +1439,13 @@ mod tests {
 
     #[test]
     fn with_body_delta_overrides_any_behavior() {
-        // On the declarative standard behavior…
+        // On the declarative standard behavior… (the infallible impls answer
+        // through the `Ok(...)` wrapping — their only use of the `Result`).
         let spec = EnvironmentSpec::<Latexlike>::new(vec![]);
-        assert!(spec.behavior().body_state_delta(probe_invocation()).is_none());
+        assert!(spec.behavior().body_state_delta(probe_invocation()).unwrap().is_none());
         let spec = spec.with_body_delta(ParsingStateDelta::new().mode(Mode::Math));
-        let delta = spec.behavior().body_state_delta(probe_invocation()).unwrap();
+        let delta =
+            spec.behavior().body_state_delta(probe_invocation()).unwrap().unwrap();
         assert_eq!(delta.mode, Some(Mode::Math));
 
         // …and wrapping a custom behavior.
@@ -1432,14 +1455,57 @@ mod tests {
             fn body_state_delta(
                 &self,
                 _invocation: EnvironmentInvocation<'_>,
-            ) -> Option<ParsingStateDelta<Latexlike>> {
-                Some(ParsingStateDelta::new().mode(Mode::Text))
+            ) -> Result<Option<ParsingStateDelta<Latexlike>>, ParseError> {
+                Ok(Some(ParsingStateDelta::new().mode(Mode::Text)))
             }
         }
         let custom = EnvironmentSpec::from_behavior(Arc::new(Custom))
             .with_body_delta(ParsingStateDelta::new().mode(Mode::Math));
-        let delta = custom.behavior().body_state_delta(probe_invocation()).unwrap();
+        let delta =
+            custom.behavior().body_state_delta(probe_invocation()).unwrap().unwrap();
         assert_eq!(delta.mode, Some(Mode::Math));
+    }
+
+    #[test]
+    fn a_failing_body_state_delta_aborts_under_any_policy() {
+        // The hook-fallibility contract on `body_state_delta`: an Err ends the
+        // parse even under tolerant recovery — the composition derives the body
+        // state from the answer, so there is no recovery channel — and the
+        // composition attaches the live traceback (the `\begin` invocation frame).
+        #[derive(Debug)]
+        struct Broken;
+        impl EnvironmentBehavior for Broken {
+            fn body_state_delta(
+                &self,
+                _invocation: EnvironmentInvocation<'_>,
+            ) -> Result<Option<ParsingStateDelta<Latexlike>>, ParseError> {
+                let scratch: Arc<crate::source::Source> =
+                    Arc::new(crate::source::Source::new(""));
+                Err(ParseError::new(
+                    crate::error::HookFailed::new("body-delta table unavailable", None),
+                    SourceSpan::new(&scratch, 0..0),
+                ))
+            }
+        }
+
+        let mut package = Package::new("broken");
+        package.insert(
+            CallableType::Environment,
+            "bad",
+            EnvironmentSpec::from_behavior(Arc::new(Broken)),
+        );
+        let language = Language::new(
+            LatexlikeDriver::new(Recovery::Tolerant),
+            ParsingState::lang_initial_with_packages([package]).expect("seed state"),
+        );
+        let error = language.parse("\\begin{bad}x\\end{bad}").unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: body-delta table unavailable"
+        );
+        // The `\begin` dispatch frame is live at the consultation site.
+        assert!(!error.frames().is_empty());
     }
 
     #[test]
