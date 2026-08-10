@@ -9,8 +9,8 @@ Commit convention: small per-item commits on this branch
 (`worktree-py-ext-feedback-plan`), messages prefixed `pyext-<item>:`.
 
 **Resume here:** EXECUTING (started 2026-08-10 on user signal; branch rebased onto
-main at d52fe4c — dev-docs cleanup landed). Stage 1 COMPLETE (gate green); next:
-Stage 2 (2.1–2.8).
+main at d52fe4c — dev-docs cleanup landed). Stages 1 and 2 COMPLETE (gates green);
+next: Stage 3 (3.0–3.6, the one breaking stage — land as a single unit).
 
 | Item | Status | Notes |
 |---|---|---|
@@ -30,7 +30,7 @@ Stage 2 (2.1–2.8).
 | 2.6 NodeTree::tree_tag() pub | **done** | visibility flip + doc sentence naming the NodeId pre-check use before the always-on `node()` assert |
 | 2.7 TreeViolation::new + MalformedBegin | **done** | TreeViolation::new(node, kind) (struct stays #[non_exhaustive]); no_constructor dropped from MalformedBegin (the only shipped condition carrying it — test-only conditions keep theirs); construct-and-match + Display test; MalformedBegin::new() doc-test |
 | 2.8 DiagnosticInfo::identifier() | **done** | defaulted method answering Self::IDENTIFIER; blanket DiagnosticData forwards to the method; docs scope the override to binding/embedding adapter types per ruling (const stays required, remains the type's own identity); sealing comment softened; adapter round-trip + shipped-conditions-unaffected tests |
-| **Stage 2 gate** (build/test/docs) | pending | |
+| **Stage 2 gate** (build/test/docs) | **green** | cargo build clean; cargo test all suites 0 failed (lib 796, integration 30+8+13+22, doc-tests 69 passed/3 ignored); cargo docs from fresh workspace target/doc, zero warnings |
 | 3.0 HookFailed condition (with cause field) | pending | |
 | 3.1 Tier A signatures (+ lang_initial ripple) | pending | |
 | 3.2 Tier B signatures (+ observe_transition sink) | pending | |
