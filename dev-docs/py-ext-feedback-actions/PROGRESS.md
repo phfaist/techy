@@ -53,3 +53,51 @@ delete this folder).
 | **Stage 4 gate** (docs build, link check) | **green** | cargo test all suites 0 failed (lib 817, integration 30+8+13+23, doc-tests 69 passed/3 ignored); cargo docs from fresh target/doc zero warnings (= intra-doc link check clean); generated-HTML anchor spot-check for every newly linked item (slice, tree_tag, TreeViolation::new, with_after_effect, DiagnosticInfo::identifier, group_interior_state, parse_attached_source) all present; docs-only stage — no code behavior changed, no test added/removed |
 | Stage 3 review fixes | **done** | review findings applied in one commit (`pyext-stage3-review:`): README quick-start seed now `.expect("seed state")` (H1); ExtMintFailed lifted as HookFailed at every parse-side staging lift — new pub(crate) `ParseContext::staging_error` applies the split, all 17 stage_node/stage_invocation lift sites switched, pinning test now expects `core.hooks.hook-failed` + group frame, stage_node/stage_invocation/make_node_ext/guide docs state the split (H2); `#[non_exhaustive]` on `SessionDeriveError` (M3); HookFailed identifier → `core.hooks.hook-failed`, all pins updated + 3.0 row annotated (M4); three "empty one-liner" spots → "the `Ok(())` one-liner" (M5); ExtractError::Build + NodeBuildError poisoned-builder docs qualified for ExtMintFailed (M6); size-pin test now asserts the niche-fit equalities + one <=64 bound, println! dropped (M7/L15); invocation frame pushed around the parser factory call via with_frame — factory tracebacks name the failing spec; test pins [callable ‘\\fail’, group ‘{’] (L9); weak !is_empty frame assertions strengthened to exact title/count pins (resolve_command, nodes factory, body_state_delta, Compute-arm now pins the empty snapshot) (L10); three guide condition paragraphs state the three-way split incl. HookFailed (L11); minilatex_package rustdoc states the failing-seed fallback (L12); ParseResult::session_ext completed-parse-only sentence (L13); ParseContext type doc gained the third-party hook-dispatch traceback paragraph (doc note in lieu of L8); PLAN.md gained "Post-execution follow-ups for the user" (L14 latent span panic in environment_parser ~:706; L8 attach_hook_frames pub flip) |
 | 5 closure (api-baseline; rationale entries AFTER cleanup agent done; courtesy notes; delete folder) | pending | ARCHITECTURE/DESIGN_RATIONALE untouchable until cleanup agent finishes |
+
+## Stage 5 — semver record (cargo-semver-checks against `api-baseline`)
+
+**Baseline position (found at execution, differs from the plan's note):**
+`api-baseline` already points at `1659057` (the descent-merge tip, whose
+ancestry includes the lang-features merge `0027167`) — the reflog shows a
+recent `branch: Reset to HEAD`. So the report below covers **exactly this
+plan's Stage 2+3 changes**, NOT the lang-features/descent breaks the plan
+expected to see mixed in. The branch was NOT moved by this stage — the
+`api-baseline` move happens at release/merge time by the user
+(`git branch -f api-baseline <release-commit>` per the script header).
+
+**Run:** `bash scripts/check_semver.sh` (cargo-semver-checks v0.50.0 already
+installed), on `worktree-py-ext-feedback-plan` at the Stage-5 tree.
+Result: `196 checks: 190 pass, 6 fail, 0 warn, 58 skip` — "semver requires
+new major version" (at 0.x: minor bump, 0.(x+1).0).
+
+The 6 failing checks, mapped to plan items:
+
+1. `constructible_struct_adds_field` — `ParseResult.session_ext` (item 3.6;
+   `ParseResult` has plain public fields, so exhaustive literals break).
+2. `constructible_struct_adds_private_field` — `MacroSpec.after_effect`
+   (item 2.4; struct-literal construction of `MacroSpec` no longer possible —
+   intended, recorded micro-ruling).
+3. `enum_no_repr_variant_discriminant_changed` — `NodeBuildError`: 16 variants
+   shifted one position by the inserted `ExtMintFailed` (item 3.2; breaks only
+   numeric casts of discriminants, no `repr` involved).
+4. `trait_added_supertrait` — `SpecsProvider`, `SourceResolver`,
+   `EnvironmentBehavior` gained `Any` (item 2.1; the tool did not flag
+   `ArgumentParser`, which gained `Any` in the same commit — record it
+   manually).
+5. `trait_method_parameter_count_changed` — `ParseDriver::observe_transition`
+   4 → 5 parameters (item 3.2, the diagnostics sink).
+6. `trait_method_return_value_added` — `ParseDriver::observe_transition`
+   `()` → `Result` (item 3.2).
+
+**The tool's list is NOT the full breaking record** — cargo-semver-checks has
+no lint for a changed (as opposed to added) trait-method return type or for
+`&dyn Fn` signature changes inside enum variants, so the fallibility sweep's
+main body is invisible to it: `initial_state_data`, `resolve_command`
+(+`CommandResolver`), `resolve_state_event`, the three driver factories,
+`CallableSpec::make_invocation_parser`, `body_state_delta`, `make_node_ext`,
+`TokenStopKind::Predicate`, the node-stop, both `Compute` arms, and the
+fallible `lang_initial*` family. The complete hand-tracked list (one line per
+signature) is `dev-docs/extra/PY_EXT_UPDATE_NOTES.md` §2, plus the two narrow
+Stage 2 source breaks recorded in PLAN.md Stage 5 (the
+`DiagnosticInfo::identifier` E0034 ambiguity; `Language::new`'s
+`impl Into<Arc<…>>` no longer pinning `L` by structural unification).
