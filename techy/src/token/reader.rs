@@ -51,11 +51,9 @@ use super::token::{Token, TokenKind};
 /// - **Absent features yield no tokens:** a token kind belonging to a feature the
 ///   language declares absent ([`Lang::Features`]) must never be produced — no
 ///   `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
-///   `Specials`, or `ParagraphBreak` without theirs. For `Command`, `GroupOpen`,
-///   stray `GroupClose`, `Specials`, and `ParagraphBreak` tokens the parsing
-///   machinery treats such a token as a violated contract and reports an
-///   implementation error instead of processing it; a `Comment` token from a
-///   contract-violating reader is not intercepted.
+///   `Specials`, or `ParagraphBreak` without theirs. The parsing machinery treats
+///   any such token as a violated contract and reports an implementation error
+///   instead of processing it — uniformly across token kinds.
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;

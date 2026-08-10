@@ -365,6 +365,7 @@ mod support {
 
 mod plain_chars {
     use super::support::*;
+    use std::sync::Arc;
     use techy::core::{
         Language, ParsingState, ParsingStateDelta, StdParseDriver, TokenRulesOverrides,
     };
@@ -436,6 +437,62 @@ mod plain_chars {
         // Nothing was flipped — there is nothing to flip: absent features store no
         // data, and the accessor keeps the neutral answer.
         assert!(!derived.rules().commands_enabled());
+    }
+
+    // Ruled 2026-08-10: content dispatch intercepts a `Comment` token under an
+    // absent comments feature exactly like the other absent features' token kinds —
+    // an implementation error that aborts even under tolerant recovery.
+    // `StdTokenReader` can never emit the token here (the reader never produces an
+    // absent feature's token kinds), so the violating token source is written by
+    // hand and the nodes parser is driven directly over it.
+    #[test]
+    fn a_comment_token_from_a_violating_token_source_is_an_implementation_error() {
+        use techy::core::constructs::{
+            ConstructParser, ImplementationError, NodesParser, ParseContext, StopSpec,
+        };
+        use techy::core::{ParserSession, Token, TokenKind, TokenReader, TokenResult};
+        use techy::error::DiagnosticInfo;
+        use techy::source::{Source, Span};
+
+        struct CommentEmittingReader;
+        impl<'s> TokenReader<'s, PlainCharsLang> for CommentEmittingReader {
+            fn peek(
+                &mut self,
+                _state: &Arc<ParsingState<PlainCharsLang>>,
+            ) -> TokenResult<'s, PlainCharsLang, Token<'s, PlainCharsLang>> {
+                // Spells the `%c` comment of the plain-parse test above — but as a
+                // `Comment` token, which the language's declaration rules out.
+                Ok(Token::new(
+                    TokenKind::Comment {
+                        start: Span::new(0, 1),
+                        content: "c",
+                        post_space: Span::empty(2),
+                    },
+                    Span::new(0, 2),
+                    Span::empty(0),
+                ))
+            }
+            fn move_past(&mut self, _tok: &Token<'s, PlainCharsLang>, _skip: bool) {}
+            fn move_to(&mut self, _tok: &Token<'s, PlainCharsLang>, _rewind: bool) {}
+            fn move_to_pos(&mut self, _pos: usize) {}
+            fn pos(&self) -> usize {
+                0
+            }
+        }
+
+        let driver = StdParseDriver::new(Recovery::Tolerant, ());
+        let mut session = ParserSession::new();
+        let mut reader = CommentEmittingReader;
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::new(Source::new("%c")),
+            Arc::new(ParsingState::<PlainCharsLang>::lang_initial()),
+            &mut session,
+            &driver,
+        );
+
+        let err = NodesParser::new(StopSpec::none()).parse(&mut cx).unwrap_err();
+        assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
     }
 }
 

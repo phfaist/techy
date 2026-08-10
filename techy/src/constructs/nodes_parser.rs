@@ -867,6 +867,17 @@ where
                 }
 
                 TokenKind::Comment { start, post_space, .. } => {
+                    // Impossible under a language that declares comments absent: the
+                    // token source violated its contract (`TokenReader` docs) — an
+                    // implementation bug aborts under any policy, never a panic.
+                    if !<L::Features as LangFeatures>::Comments::PRESENT {
+                        return Err(cx.implementation_error(
+                            "a Comment token reached content dispatch although the \
+                             language declares the comments feature absent \
+                             (token-source contract violation)",
+                            token.span,
+                        ));
+                    }
                     if self.flush_through(cx, token.pre_space)? {
                         if !recovered {
                             cx.tokens.move_to(&token, false);
