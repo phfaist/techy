@@ -22,7 +22,7 @@ The trait's shape ([`ConstructParser`](crate::core::constructs::ConstructParser)
 trait ConstructParser<L: Lang> {
     type Output;
     fn parse(&mut self, cx: &mut ParseContext<'_, '_, L>)
-        -> ConstructParserResult<L, (Self::Output, Option<ParsingStateDelta<L>>)>;
+        -> ConstructParserResult<L, (Self::Output, Option<Box<ParsingStateDelta<L>>>)>;
 }
 ```
 
@@ -119,11 +119,13 @@ every condition recorded while the closure runs carries it.
 
 ## What a parser returns
 
-`parse` succeeds with `(output, after_effect)`. The optional
+`parse` succeeds with `(output, after_effect)`. The optional boxed
 [`ParsingStateDelta`](crate::core::ParsingStateDelta) is **exclusively the
 construct's after-effect for the caller** — a state change that must outlive
 the construct, like `\newcommand` defining a macro for the following
-siblings. It is *not* for the parser's internal state scoping (that is what
+siblings. (It is boxed so that the common `None` case costs one
+pointer-sized return slot per nesting level rather than the full delta
+struct.) It is *not* for the parser's internal state scoping (that is what
 `with_parsing_state` and its siblings are for), and the parser never applies
 it itself: deltas are plain values, and the *caller* decides whether and
 where they apply — the content loop applies a returned after-effect to its
@@ -317,7 +319,7 @@ impl ConstructParser<Latexlike> for UntilParser<'_, '_> {
         cx: &mut ParseContext<'_, '_, Latexlike>,
     ) -> ConstructParserResult<
         Latexlike,
-        (BuildId, Option<ParsingStateDelta<Latexlike>>),
+        (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>),
     > {
         // The dispatch loop already consumed the trigger token whole
         // (post-space included): the reader stands on the raw content.

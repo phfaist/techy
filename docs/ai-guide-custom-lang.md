@@ -233,7 +233,7 @@ spec's factory
 trait ConstructParser<L: Lang> {
     type Output;
     fn parse(&mut self, cx: &mut ParseContext<'_, '_, L>)
-        -> ConstructParserResult<L, (Self::Output, Option<ParsingStateDelta<L>>)>;
+        -> ConstructParserResult<L, (Self::Output, Option<Box<ParsingStateDelta<L>>>)>;
 }
 ```
 
