@@ -57,6 +57,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 
 use alloc::format;
@@ -183,7 +184,14 @@ pub struct EnvironmentInvocation<'p> {
 /// downcast. The pylatexenc `EnvironmentSpec` analog (`make_body_parser`,
 /// `make_body_parsing_state_delta`), with the declarative standard implementation
 /// behind [`EnvironmentSpec::new`].
-pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>: fmt::Debug + Send + Sync {
+///
+/// **Downcasting is part of the contract** (`Any` supertrait;
+/// [`CallableSpec`]'s downcasting note applies): a consumer recovers a behavior's
+/// concrete type from the stored `Arc<dyn EnvironmentBehavior<LLL>>` or
+/// `&dyn EnvironmentBehavior<LLL>`.
+pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
+    fmt::Debug + Send + Sync + Any
+{
     /// The declarative argument structure of the environment, in invocation order —
     /// parsed right after `\begin{name}`, before the body. Default:
     /// no arguments.
@@ -878,6 +886,18 @@ mod tests {
 
     fn env(arguments: Vec<Arc<ArgumentSpec<Latexlike>>>) -> Arc<EnvironmentSpec> {
         Arc::new(EnvironmentSpec::new(arguments))
+    }
+
+    #[test]
+    fn dyn_environment_behavior_downcasts_to_its_concrete_type() {
+        // The `Any` supertrait: a stored `Arc<dyn EnvironmentBehavior>` gives its
+        // concrete type back through dyn-to-`Any` upcasting.
+        #[derive(Debug)]
+        struct Custom;
+        impl EnvironmentBehavior for Custom {}
+        let behavior: Arc<dyn EnvironmentBehavior> = Arc::new(Custom);
+        let any: &dyn Any = &*behavior;
+        assert!(any.downcast_ref::<Custom>().is_some());
     }
 
     fn test_definitions() -> Package<Latexlike> {

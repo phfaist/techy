@@ -28,6 +28,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 
 use crate::constructs::{ConstructParserResult, ParseContext};
@@ -127,7 +128,12 @@ impl<L: Lang> fmt::Debug for ParsedArgumentNodes<L> {
 /// Argument parsers are tier-1 *stored* behavior objects (`Arc`-shared inside
 /// [`ArgumentSpec`]s): immutable, `&self`, every per-use input arriving as arguments —
 /// unlike the tier-2 construct-parser temporaries they drive internally.
-pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync {
+///
+/// **Downcasting is part of the contract** (`Any` supertrait;
+/// [`CallableSpec`](super::CallableSpec)'s downcasting note applies): a consumer
+/// recovers a parser's concrete type from a stored `Arc<dyn ArgumentParser<L>>` or
+/// `&dyn ArgumentParser<L>`.
+pub trait ArgumentParser<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// Parse one argument at the context's current position.
     ///
     /// `cx.state` is the argument's own state — the caller has already stacked the
@@ -204,8 +210,6 @@ pub trait IntoArgumentParser<L: Lang, M>: sealed::SealedParser<L, M> {
     fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>>;
 }
 
-// `'static` spelled out: `ArgumentParser` has no `Any` supertrait (unlike
-// `CallableSpec`), and the stored handle is `Arc<dyn ArgumentParser<L>>` = `… + 'static`.
 impl<L: Lang, P: ArgumentParser<L> + 'static> IntoArgumentParser<L, sealed::ByValue> for P {
     fn into_argument_parser(self) -> Arc<dyn ArgumentParser<L>> {
         Arc::new(self)
@@ -295,6 +299,26 @@ impl<L: Lang> fmt::Debug for ArgumentSpec<L> {
             .field("name", &self.name)
             .field("parsing_state_delta", &self.parsing_state_delta)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constructs::MarkerArgumentParser;
+
+    #[derive(Debug, Clone, Copy)]
+    struct PlainLang;
+    impl crate::state::TrivialLang for PlainLang {}
+
+    #[test]
+    fn dyn_argument_parser_downcasts_to_its_concrete_type() {
+        // The `Any` supertrait: a stored `Arc<dyn ArgumentParser<L>>` gives its
+        // concrete type back through dyn-to-`Any` upcasting.
+        let parser: Arc<dyn ArgumentParser<PlainLang>> =
+            Arc::new(MarkerArgumentParser::new("*"));
+        let any: &dyn Any = &*parser;
+        assert!(any.downcast_ref::<MarkerArgumentParser>().is_some());
     }
 }
 

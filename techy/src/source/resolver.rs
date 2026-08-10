@@ -8,6 +8,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use core::any::Any;
 use core::fmt;
 
 use super::origin::SourceOrigin;
@@ -47,7 +48,12 @@ use super::source::{Source, SourceSpan};
 /// long-lived, shareable language bundles. `resolve` takes `&self`, so a caching
 /// implementation needs interior mutability — under this contract that means locks or
 /// atomics (`Mutex`/`RwLock`/`OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.
-pub trait SourceResolver<O: SourceOrigin = Option<String>>: Send + Sync {
+///
+/// **Downcasting is part of the contract** (`Any` supertrait;
+/// [`CallableSpec`](crate::spec::CallableSpec)'s downcasting note applies): a consumer
+/// recovers a resolver's concrete type from the stored `Arc<dyn SourceResolver<O>>` or
+/// `&dyn SourceResolver<O>`.
+pub trait SourceResolver<O: SourceOrigin = Option<String>>: Send + Sync + Any {
     /// Resolve `reference` to its content (plus origin metadata for the source the
     /// caller will mint), or explain why it cannot be resolved.
     fn resolve(
@@ -62,13 +68,15 @@ pub trait SourceResolver<O: SourceOrigin = Option<String>>: Send + Sync {
 const _: fn(&dyn SourceResolver) = |_| {};
 
 // Forwarding impls, so borrowed/boxed resolvers plug in wherever an
-// `impl SourceResolver` is expected without newtype shims. There is deliberately no
+// `impl SourceResolver` is expected without newtype shims. The `Any` supertrait
+// requires `Self: 'static`, so the reference impl covers `&'static R` only and the
+// box impl requires `R: 'static`. There is deliberately no
 // `Arc<R>` forwarding impl: shared resolvers travel as `Arc<dyn SourceResolver<O>>`
 // through the sealed [`IntoSourceResolver`] conversion, whose pass-through impls for
 // `Arc<R>`/`Arc<dyn …>` (no double-wrap) would conflict with a blanket-covered
 // `Arc<R>: SourceResolver`.
 
-impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for &R {
+impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for &'static R {
     fn resolve(
         &self,
         reference: &str,
@@ -78,7 +86,7 @@ impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for &R {
     }
 }
 
-impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Box<R> {
+impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized + 'static> SourceResolver<O> for Box<R> {
     fn resolve(
         &self,
         reference: &str,
@@ -377,6 +385,19 @@ mod tests {
     fn trigger_span() -> SourceSpan {
         let main: Arc<Source> = Arc::new(Source::new(r"\input{chapter.tex}"));
         SourceSpan::entire(&main)
+    }
+
+    #[test]
+    fn dyn_source_resolver_downcasts_to_its_concrete_type() {
+        // The `Any` supertrait: a stored `Arc<dyn SourceResolver>` gives its concrete
+        // type back through dyn-to-`Any` upcasting.
+        let mut map = MapResolver::new();
+        map.insert("chapter.tex", "chapter content");
+        let resolver: Arc<dyn SourceResolver> = Arc::new(map);
+        let any: &dyn Any = &*resolver;
+        let concrete = any.downcast_ref::<MapResolver>().expect("downcast to MapResolver");
+        let resolved = concrete.resolve("chapter.tex", &trigger_span()).unwrap();
+        assert_eq!(resolved.content, "chapter content");
     }
 
     #[test]

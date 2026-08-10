@@ -48,6 +48,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 
 use hashbrown::HashMap;
@@ -452,7 +453,11 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 /// [`CallableSpec`]'s note): every method takes `&self`, so a stateful implementation (a
 /// memo cache, a database connection) needs interior mutability regardless — under this
 /// contract that means `Mutex`/`RwLock`, not `RefCell`.
-pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
+///
+/// **Downcasting is part of the contract** (`Any` supertrait; [`CallableSpec`]'s
+/// downcasting note applies): a consumer recovers a provider's concrete type from a
+/// stored `Arc<dyn SpecsProvider<L>>` or `&dyn SpecsProvider<L>`.
+pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// The provider's name: how definition ops target it ([`ScopeOp::Define`] routing),
     /// and how it appears in diagnostics (the miss detail of
     /// [`ScopeStack::searched_providers`], the provider context of a
@@ -1836,6 +1841,16 @@ mod tests {
     }
 
     // --- Package data surface -----------------------------------------------------------
+
+    #[test]
+    fn dyn_specs_provider_downcasts_to_its_concrete_type() {
+        // The `Any` supertrait: a stored `Arc<dyn SpecsProvider<L>>` gives its concrete
+        // type back through dyn-to-`Any` upcasting.
+        let provider: Arc<dyn SpecsProvider<PlainLang>> = Arc::new(Package::new("mypkg"));
+        let any: &dyn Any = &*provider;
+        let package = any.downcast_ref::<Package<PlainLang>>().expect("downcast to Package");
+        assert_eq!(package.name(), "mypkg");
+    }
 
     #[test]
     fn package_insert_get_replace() {

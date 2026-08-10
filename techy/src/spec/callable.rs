@@ -59,11 +59,16 @@ pub enum FrameRole {
 /// regardless — under this contract that means locks or atomics (`Mutex`/`RwLock`/
 /// `OnceLock`, or `spin` on `no_std`), not `RefCell`/`Cell`.
 ///
-/// **Downcasting is part of the contract** (`Any` supertrait): a preset's
-/// [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)
-/// mint recovers its concrete spec type from a stored `Arc<dyn CallableSpec<L>>` via
-/// trait upcasting — `(&*spec as &dyn core::any::Any).downcast_ref::<MySpec>()`. The
-/// `Arc`'d trait object was already implicitly `'static`; the supertrait makes it
+/// **Downcasting is part of the contract** (`Any` supertrait — shared by every stored
+/// extension trait: [`SpecsProvider`](crate::scopes::SpecsProvider),
+/// [`ArgumentParser`](crate::spec::ArgumentParser),
+/// [`EnvironmentBehavior`](crate::latexlike::EnvironmentBehavior),
+/// [`SourceResolver`](crate::source::SourceResolver)): a
+/// consumer recovers the concrete type from a stored `Arc<dyn _>` or `&dyn _` via
+/// trait upcasting — `(&*spec as &dyn core::any::Any).downcast_ref::<MySpec>()`. A
+/// preset's [`Lang::make_node_ext`](crate::state::Lang::make_node_ext)
+/// mint does exactly this with the `Arc<dyn CallableSpec<L>>` a node stores. The
+/// `Arc`'d trait objects were already implicitly `'static`; the supertrait makes it
 /// per-implementor law. Downcasting to a preset's own spec *trait* (an open set of
 /// third-party spec types) needs one extra move: register every spec behind one
 /// concrete wrapper (`FlmSpecBox(Arc<dyn FlmSpec>)` delegating to the inner value) and

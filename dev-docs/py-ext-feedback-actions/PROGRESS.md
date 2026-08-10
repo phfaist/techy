@@ -22,7 +22,7 @@ Stage 2 (2.1–2.8).
 | 1.6 scan_specials bounds → Err | **done** | content.get(pos..) guard in Package::scan_specials; spelling = Custom+ImplementationError (the token reader's shipped match-end-validation precedent — no new TokenErrorKind variant needed); micro-rulings: guard runs before the visibility gate (caller bugs not maskable by mode), error span clamped to content.len() (stays liftable to SourceSpan); pos contract documented on trait method + impl; only in-crate impl with the slice (ScopeStack folds, defaults ignore pos; test-only impls out of scope); 3 tests |
 | 1.7 drop criterion + README bench line | **done** | criterion removed from dev-deps; README's whole Performance section removed (it contained only the cargo bench instructions — an empty header would remain otherwise); Cargo.lock untracked, nothing else |
 | **Stage 1 gate** (build/test/docs) | **green** | cargo build clean; cargo test all suites 0 failed (lib 783, integration 30+22+13+8, doc-tests 68 passed/3 ignored); cargo docs from fresh target/doc, zero warnings |
-| 2.1 + Any on four traits | pending | |
+| 2.1 + Any on four traits | **done** | +Any on SpecsProvider/ArgumentParser/EnvironmentBehavior/SourceResolver; CallableSpec rationale generalized, short pointer note on each trait; stale structure.rs no-Any comment removed; micro-ruling: SourceResolver's borrowed/boxed forwarding impls take the `'static` the Any supertrait forces (`&'static R`, `Box<R: 'static>`) — the plan's accepted non-'static break; 4 downcast round-trip tests |
 | 2.2 Language::new Into<Arc> | pending | |
 | 2.3 NodeTree::slice(range) validated | pending | |
 | 2.4 MacroSpec::with_after_effect | pending | |
