@@ -70,7 +70,8 @@ Tokenization is data, not code: [`TokenRules`](crate::core::TokenRules) —
 stored in the parsing state, so all of it can change mid-parse — declares
 the whitespace set, group delimiter pairs, command escape rules, comment
 markers, and forbidden characters, one block per feature, each block
-carrying its own `enabled` flag. The type's documentation records the
+except forbidden characters carrying its own `enabled` flag (an empty
+forbidden-character set is already its off). The type's documentation records the
 detection priority and the three distinct spellings of "off": flag `false`
 = disabled, data preserved; empty data = nothing recognized; and, beyond
 both runtime spellings, a feature can be *absent* — the language does not
@@ -299,8 +300,9 @@ declare the scope stack absent.
 The declarations also shape one runtime helper.
 [`TokenRulesOverrides::disable_all()`](crate::core::TokenRulesOverrides::disable_all)
 disables every feature the language *has*: it consults the presence
-declarations and flips the `enabled` flag of exactly the present features —
-absent features are simply not mentioned by the value it returns — so it
+declarations and flips the `enabled` flag of exactly the present features
+(forbidden characters, which have no flag, are never touched) — absent
+features are simply not mentioned by the value it returns — so it
 can never fail, whatever the language declares. Finally, one short note
 that matters mainly to custom tooling: the frozen state's two derived
 lookup caches follow the declarations —

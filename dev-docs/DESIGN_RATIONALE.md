@@ -6603,7 +6603,7 @@ would cost `LatexlikeDriver` its `Copy`/`Eq` config-value nature to save a
 negligible per-break allocation (specs are behavior, never compared).
 Revisit if: a *scoped* shape switch is ever wanted — the flag is driver-global by
 design; per-scope suppression already exists orthogonally through the
-`enable_multi_newline_paragraphs` gate (verbatim's features-off state uses it).
+paragraphs block's `enabled` gate (verbatim's features-disabled state uses it).
 
 #### The acceptance suite: an integration-crate port of pylatexenc's walker slice [§dd-dr:acceptance-suite]
 

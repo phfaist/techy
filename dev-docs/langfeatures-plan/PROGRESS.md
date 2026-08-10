@@ -1405,6 +1405,21 @@ semver output is unexplained.
       render their narratives. check_semver.sh deliberately not run
       (supervisor at closure; docs-only diff).
 
+- **Supervisor: M4 fix pass** — the M4 reviewer found 0 blocker / 2 should-fix /
+  2 nit; both should-fixes and nit 1 applied directly (small mechanical doc
+  edits): docs/custom-lang.md token-rules paragraph now excepts forbidden
+  characters from the per-block `enabled` flag ("an empty forbidden-character
+  set is already its off"), and its disable_all paragraph gained the
+  "(forbidden characters, which have no flag, are never touched)" parenthetical
+  (nit 1); docs/ai-guide-custom-lang.md got the same forbidden-characters
+  exception in its terse form; DESIGN_RATIONALE [§dd-dr:paragraph-break-hook]
+  Revisit-if clause reworded off the removed field name and off "features-off"
+  ("the paragraphs block's `enabled` gate (verbatim's features-disabled state
+  uses it)" — Revisit-if text is forward-facing, not register history). Nit 2
+  (guide omits the M3d byte numbers, collapse conveyed qualitatively):
+  CONFIRMED as correct — pinned byte counts would rot in guide prose; the M3d
+  regression tests are their home. Final gates follow as the closure step.
+
 ### M3 expected-breaking list (vs `api-baseline`; baseline NOT moved)
 
 `check_semver.sh` after M3: 196 checks, 194 pass, 2 fail — the SAME two

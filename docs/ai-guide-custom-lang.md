@@ -110,7 +110,8 @@ invocation-syntax payload while reusing them unchanged.
 
 Tokenization is data: [`TokenRules`](crate::core::TokenRules) (one block
 per feature — whitespace set, group delimiter pairs, command escape rules,
-comment markers, forbidden characters — each with an `enabled` flag) is
+comment markers, forbidden characters — each, except forbidden
+characters, with an `enabled` flag) is
 stored in the parsing state, so all of it can change mid-parse. Three
 spellings of "off", documented on the type: **disabled** = flag off,
 scoped, data preserved; **empty** = no rules data, nothing recognized;
