@@ -4,12 +4,11 @@
 
 - SERIALIZATION - ??
 
-- STACK GUARD - In progress.
 - STACK GUARD ON VISITORS -> simply plug in the DescentGuard we just developed.
 
 - DO NOT HARDCODE "begin" and "end" MACRO NAMES (!!)
 
-- PY binding's wishlist analysis.
+- PY binding's wishlist analysis. - DONE
 
 
 ## More targeted items
