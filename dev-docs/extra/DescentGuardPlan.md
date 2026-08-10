@@ -204,7 +204,24 @@ branch chain for ff-merge (merges not run from the primary checkout).
   duplicate of the current state, harmless per `ParsingStateStack`'s documented
   scan semantics; it restores the documented "same descent points as the frame
   stack" symmetry these sites were missing.
-- [ ] Part 2 implemented — gates green
+- [x] Part 2 implemented — gates green
+- 2026-08-10 Part 2 landed on `descent-2-guard`: 5fb7f63 (pre-step: the two
+  remaining direct dispatch sites migrated into `parse_construct` — F1 from the
+  Part 1 review, ruled decision #1, accepted enclosing-state-entry delta noted
+  above), c0ae04f (`DescentGuard` trait + `StdDescentGuard` module + facade
+  export), 244be55 (driver type choice + `Language` init + session slot +
+  `parse_construct` hook + the two conditions; test-suite audit: no test nests
+  deeper than ~10 syntactic levels, but six shared `Language` helpers/sites
+  tripped the unconfigured default's half-budget warning in debug and now
+  configure `depth_limit(64)` explicitly), 6ade982 (end-to-end refusal tests,
+  F1 expression-chain + tack-on-chain coverage, self-include guard test).
+  build/test/docs green, zero warnings (776 lib tests); no `std::` imports in
+  src (the crate stays core+alloc). Implementation note for review:
+  `StdDescentGuardInit`'s ruled variant names live on a private mode enum
+  behind snake_case constructors (`fixed_stack_budget`/`computed_stack_budget`/
+  `depth_limit`/`off`) — Rust enum variants cannot carry the required private
+  `unconfigured` mark, so construction is constructor-only. HEADROOM executed
+  as ruled (64 KiB, Computed-only); flag to the user per decision #7.
 - [ ] Part 2 reviewed — findings resolved
 - [ ] Part 3 implemented — gates green
 - [ ] Part 3 reviewed — findings resolved
