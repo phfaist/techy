@@ -70,6 +70,7 @@ Navigation summary (details on each method's page):
 | structure-aware pass (enter/exit, depth, skip/stop) | [`visit::walk`](crate::visit::walk) |
 | deepest node at a byte position | [`NodeTree::node_at`](crate::core::node::NodeTree::node_at) |
 | minimal sibling run covering a span | [`NodeTree::covering_slice`](crate::core::node::NodeTree::covering_slice) |
+| sibling run from a known index range | [`NodeTree::slice(range)`](crate::core::node::NodeTree::slice) — validated: `Some` iff the range is a run of siblings |
 | environment body / marked body slot | [`body()`](crate::core::node::NodeRef::body) — `None` for non-callables and body-less callables; `Some` with zero nodes = empty body |
 | argument content | [`argument_content_nodes(i)`](crate::core::node::NodeRef::argument_content_nodes) / [`argument_content_nodes_named(name)`](crate::core::node::NodeRef::argument_content_nodes_named) |
 | parsing state a node was parsed under (e.g. mode) | [`parsing_state()`](crate::core::node::NodeRef::parsing_state) |

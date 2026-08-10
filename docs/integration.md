@@ -21,7 +21,23 @@ an 8-byte `Copy` value that re-resolves through the tree in hand —
 minted, [`NodeTree::get`](crate::core::node::NodeTree::get) for ids of
 unknown provenance. Every id carries its tree layout's tag, so a stale or
 foreign id is detected in every build instead of silently resolving to the
-wrong node ([`TreeTag`](crate::core::node::TreeTag)).
+wrong node ([`TreeTag`](crate::core::node::TreeTag)). Both tags are
+readable — [`NodeId::tree_tag`](crate::core::node::NodeId::tree_tag) and
+[`NodeTree::tree_tag`](crate::core::node::NodeTree::tree_tag) — so an
+embedder can pre-check an id against a tree before calling
+[`NodeTree::node`](crate::core::node::NodeTree::node), whose mismatch check
+panics ([`NodeTree::get`](crate::core::node::NodeTree::get) answers `None`
+instead).
+
+**Checking a tree.**
+[`validate_tree`](crate::core::node::validate_tree) checks any tree —
+parsed, transformed, or consumer-built — against the structural rules every
+tree must satisfy, reporting problems as plain
+[`TreeViolation`](crate::core::node::TreeViolation) values. The reports
+have a public constructor
+([`TreeViolation::new`](crate::core::node::TreeViolation::new)), so an
+embedding's violation-handling code can be tested with manufactured
+values.
 
 **Visitor callbacks need not be thread-safe.** The traversal and
 transformation drivers run their callbacks synchronously on the calling
@@ -73,7 +89,10 @@ multi-source trees are answered per source), and
 [`covering_slice`](crate::core::node::NodeTree::covering_slice) answers a
 span query with the minimal covering sibling run. Ancestors of either
 answer come free via [`NodeRef::parent`](crate::core::node::NodeRef::parent).
-Each method's page states the exact containment and multi-source rules.
+Each method's page states the exact containment and multi-source rules. A
+tool that recorded a node-index range earlier turns it back into a sibling
+run with [`NodeTree::slice(range)`](crate::core::node::NodeTree::slice) —
+validated: `Some` exactly when the range is a run of siblings.
 
 **Line/column positions are the consumer's.** Parsing works purely in byte
 offsets; line/column is a display concern, computed on demand and owned by

@@ -106,7 +106,7 @@ that restores the enclosing non-math context: recipe on
 
 | Type | Registered under | Notes |
 |---|---|---|
-| [`MacroSpec`](crate::latexlike::MacroSpec) | `CallableType::Macro` | argument list as plain data |
+| [`MacroSpec`](crate::latexlike::MacroSpec) | `CallableType::Macro` | argument list as plain data; optional sibling after-effect via [`with_after_effect`](crate::latexlike::MacroSpec::with_after_effect) — a state delta every invocation leaves behind for the content following it (`\newcommand`-style definitions), no custom parser needed |
 | [`EnvironmentSpec`](crate::latexlike::EnvironmentSpec) | `CallableType::Environment` | arguments parsed after `\begin{name}`, plus body behavior |
 | [`SpecialsSpec`](crate::latexlike::SpecialsSpec) | `CallableType::Specials`, via [`insert_specials`](crate::core::specs::Package::insert_specials) | trigger sequence is the registration key, not stored in the spec; longest trigger match wins |
 

@@ -153,7 +153,11 @@ roster of shipped condition types is the implementors listing on the
 [`DiagnosticInfo`](crate::error::DiagnosticInfo) trait page; each condition
 type's own page displays its identifier string (the rendered `IDENTIFIER`
 value in its `DiagnosticInfo` implementation) alongside its recovery
-behavior.
+behavior. (A condition type's identity is its compile-time `IDENTIFIER`
+const; the defaulted
+[`DiagnosticInfo::identifier`](crate::error::DiagnosticInfo::identifier)
+method exists only for binding/embedding adapter types that carry a
+runtime identity — its documentation scopes the override.)
 
 ```rust
 use techy::core::constructs::UnresolvableCommand;

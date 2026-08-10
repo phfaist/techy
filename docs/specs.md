@@ -72,7 +72,11 @@ ligatures): see
 The preset ships three declarative spec types, one per callable type:
 
 - [`MacroSpec`](crate::latexlike::MacroSpec) — a macro's argument list as
-  plain data.
+  plain data, plus an optional **after-effect**
+  ([`with_after_effect`](crate::latexlike::MacroSpec::with_after_effect)): a
+  parsing-state change every invocation leaves behind for the content that
+  follows it, the way a `\newcommand`-style definition makes a name usable
+  for the rest of the group.
 - [`EnvironmentSpec`](crate::latexlike::EnvironmentSpec) — an environment's
   arguments (parsed after `\begin{name}`) plus its **body behavior**: how the
   region up to `\end{name}` is handled.
