@@ -236,9 +236,9 @@ branch chain for ff-merge (merges not run from the primary checkout).
   `None` arm boxes the applied clone; `parse_attached_source` unboxes each run's
   record into the (deliberately unboxed) `AttachedSourceOutcome` bundle;
   `InputInvocationParser`'s persist_state forwarding re-boxes via
-  `.map(Box::new)`; four test producers wrap their deltas in `Box::new`.
+  `.map(Box::new)`; five test producers wrap their deltas in `Box::new`.
   `AttachedSourceOutcome::after_effects` stays unboxed per the ruled scope
   (decision #9 lists the pair and `NodesOutcome` only).
-- [ ] Part 3 reviewed — findings resolved
+- [x] Part 3 reviewed — findings resolved
 - [ ] Part 4 docs/rationale — gates green
 - [ ] Final: rebase onto main, chain ready for ff-merge; scaffolding removed
