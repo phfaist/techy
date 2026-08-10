@@ -1028,6 +1028,45 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_expression_invocation_chain_is_counted_by_the_descent_guard() {
+        // Guard coverage for the expression-position dispatch (the F1 site): a
+        // macro whose embellishment expression is another bare macro invocation —
+        // single-token callables nested in argument position, no braces anywhere —
+        // recurses through `dispatch_expression_invocation` alone. (A *mandatory*
+        // argument cannot form this chain: a content-requiring callable is
+        // refused as a bare expression — `ExpressionCallableRequiresContent`.)
+        // Since the expression dispatch routes through `parse_construct`, a
+        // configured depth limit counts the chain and refuses it instead of
+        // letting it recurse unbounded.
+        use crate::constructs::DescentLimitExceeded;
+        use crate::engine::StdDescentGuardInit;
+        use crate::error::DiagnosticInfo as _;
+
+        let mut package: Package<Latexlike> = Package::new("chain");
+        package.insert(
+            CallableType::Macro,
+            "m",
+            Arc::new(MacroSpec::new(argument_specs(["e{^}"]).unwrap())),
+        );
+        let language = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        )
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(20));
+
+        // A short chain fits comfortably under the limit…
+        assert!(language.parse(r"\m^\m^\m^x").is_ok());
+        // …a 40-invocation chain crosses it and is refused at the limit.
+        let mut chain = String::new();
+        for _ in 0..40 {
+            chain.push_str(r"\m^");
+        }
+        chain.push('x');
+        let err = language.parse(chain).unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+    }
+
+    #[test]
     fn text_argument_close_expectation_survives_a_foreign_restored_expectation() {
         // Discriminating shape (S4 review should-fix): in the sibling test the
         // restored context's `expecting_group_close` and the `\text` argument's

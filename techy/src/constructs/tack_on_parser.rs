@@ -375,6 +375,48 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_tack_on_field_chain_is_counted_by_the_descent_guard() {
+        // Guard coverage for the tack-on field dispatch (the F1 sibling site): a
+        // chain of specs where each `\f`'s own tack-on argument accepts the next
+        // `\f` nests one field dispatch inside the other. Since that dispatch
+        // routes through `parse_construct`, a configured depth limit counts the
+        // chain and refuses it instead of letting it recurse unbounded.
+        use crate::constructs::DescentLimitExceeded;
+        use crate::engine::StdDescentGuardInit;
+        use crate::error::DiagnosticInfo as _;
+        use alloc::string::String;
+
+        // 40 nested spec levels: level k's `\f` tack-on accepts level k-1's spec.
+        let mut spec: Arc<dyn CallableSpec<Latexlike>> =
+            Arc::new(MacroSpec::new(Vec::new()));
+        for _ in 0..40 {
+            let tack = TackOnFieldsArgumentParser::new(CallableType::Macro)
+                .with_field("f", Arc::clone(&spec));
+            spec = Arc::new(MacroSpec::new(vec![Arc::new(ArgumentSpec::new_unnamed(
+                Arc::new(tack),
+            ))]));
+        }
+        let mut package = Package::new("tack-chain");
+        package.insert(CallableType::Macro, "start", spec);
+        let language: Language<Latexlike> = Language::new(
+            LatexlikeDriver::new(Recovery::Strict),
+            ParsingState::lang_initial_with_packages([package]),
+        )
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(20));
+
+        // A short chain fits comfortably under the limit…
+        assert!(language.parse(r"\start \f \f \f x").is_ok());
+        // …a 40-field chain crosses it and is refused at the limit.
+        let mut chain = String::from(r"\start");
+        for _ in 0..40 {
+            chain.push_str(r" \f");
+        }
+        chain.push_str(" x");
+        let err = language.parse(chain).unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+    }
+
+    #[test]
     fn field_commands_are_not_language_commands() {
         // Outside a tack-on position `\label` resolves nowhere — the decided
         // no-attach-anywhere behavior (module docs, decision reason 2).

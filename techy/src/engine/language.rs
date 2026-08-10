@@ -595,6 +595,137 @@ mod tests {
         assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);
     }
 
+    // --- the descent guard end to end (Part 2) ------------------------------------------
+
+    use crate::constructs::DescentLimitExceeded;
+    use crate::engine::{StdDescentGuard, StdDescentGuardInit};
+
+    /// Balanced `{…{…}…}` nesting, `levels` deep, with one char inside.
+    fn nested_braces(levels: usize) -> String {
+        let mut input = String::new();
+        for _ in 0..levels {
+            input.push('{');
+        }
+        input.push('a');
+        for _ in 0..levels {
+            input.push('}');
+        }
+        input
+    }
+
+    #[test]
+    fn deep_nesting_under_the_unconfigured_default_is_an_error_not_a_crash() {
+        // 50 000 nesting levels would exhaust the call stack without the guard; the
+        // built-in default refuses long before that, under either recovery policy
+        // (a refusal aborts under any policy), and the process survives. The
+        // refusal is self-describing: it names the built-in default and the
+        // configuration entry point.
+        let deep = nested_braces(50_000);
+        for language in [strict(), tolerant()] {
+            let err = language.parse(deep.clone()).unwrap_err();
+            assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+            let message = err.to_string();
+            assert!(message.contains("StdDescentGuard::DEFAULT_STACK_BUDGET"), "{message}");
+            assert!(message.contains("Language::with_descent_guard_init"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_tiny_fixed_budget_refuses_deep_nesting_in_any_build_profile() {
+        // 200 levels always outrun a 4 KiB consumption cap, optimized or not — the
+        // deterministic refusal contrast for the `Off` test below. The configured
+        // refusal names the configured cap, not the built-in default.
+        let language = strict()
+            .with_descent_guard_init(StdDescentGuardInit::fixed_stack_budget(4 * 1024));
+        let err = language.parse(nested_braces(200)).unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        let message = err.to_string();
+        assert!(message.contains("configured budget"), "{message}");
+        assert!(!message.contains("with_descent_guard_init"), "{message}");
+    }
+
+    #[test]
+    fn off_disables_the_limit() {
+        // The same 30-level input that a 4 KiB cap refuses parses cleanly under
+        // `Off` (30 levels stay comfortably within the test thread's real stack).
+        let input = nested_braces(30);
+        let capped = strict()
+            .with_descent_guard_init(StdDescentGuardInit::fixed_stack_budget(4 * 1024));
+        assert!(capped.parse(input.clone()).is_err());
+        let off = strict().with_descent_guard_init(StdDescentGuardInit::off());
+        let result = off.parse(input).unwrap();
+        assert!(result.diagnostics.is_empty());
+        check_tree_invariants(&result.tree);
+    }
+
+    #[test]
+    fn depth_limit_counts_nesting_not_siblings() {
+        // Depth mode is deterministic across build profiles: nesting past the
+        // limit is refused; sibling constructs at the same depth re-use the level
+        // (each descent's exit rebalances the count).
+        let language =
+            strict().with_descent_guard_init(StdDescentGuardInit::depth_limit(10));
+        assert!(language.parse(nested_braces(3)).is_ok());
+        let err = language.parse(nested_braces(20)).unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        assert!(err.to_string().contains("depth limit"), "{}", err);
+        // Twelve sibling groups — more constructs than the limit, none deeper
+        // than the limit — parse cleanly.
+        let siblings = "{a}".repeat(12);
+        assert!(language.parse(siblings).is_ok());
+    }
+
+    #[test]
+    fn a_computed_budget_resolves_probe_minus_headroom_at_parse_entry() {
+        // The probe answers HEADROOM + 100 bytes: the resolved budget is 100
+        // bytes — which the very first descent's own frames already outrun — and
+        // the refusal names the headroom-subtracted number, observable end to end.
+        fn probe() -> Option<usize> {
+            Some(StdDescentGuard::HEADROOM + 100)
+        }
+        let language = strict()
+            .with_descent_guard_init(StdDescentGuardInit::computed_stack_budget(probe));
+        let err = language.parse("x").unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+        assert!(err.to_string().contains("configured budget of 100 bytes"), "{}", err);
+    }
+
+    #[test]
+    fn a_driver_with_only_the_guard_type_line_is_complete() {
+        // The one-line custom-driver check: `type DescentGuard = …;` is the
+        // trait's single required item — nothing else, and the language parses.
+        #[derive(Debug, Clone, Copy)]
+        struct OneLineLang;
+        impl Lang for OneLineLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = OneLineDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
+        }
+        #[derive(Debug, Clone, Copy)]
+        struct OneLineDriver;
+        impl ParseDriver<OneLineLang> for OneLineDriver {
+            type DescentGuard = StdDescentGuard;
+        }
+        let language: Language<OneLineLang> =
+            Language::new(OneLineDriver, ParsingState::lang_initial());
+        assert!(language.parse("hello").is_ok());
+    }
+
     // --- state threading across tolerant stray-close skips (findings #1–#3) -----------------
     //
     // A language whose top-level commands carry a `\newcommand`-style after-effect delta:

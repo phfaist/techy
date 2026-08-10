@@ -27,8 +27,8 @@ use alloc::format;
 use alloc::string::String;
 
 /// The per-parse limiter of parsing depth — asked before every descent (one
-/// construct parser running another; see the [module docs](self)) whether the
-/// parse may go one level deeper.
+/// construct parser running another over the same input) whether the parse may
+/// go one level deeper.
 ///
 /// One guard value is created per parse and lives on the
 /// [`ParserSession`](super::ParserSession). The engine drives it from the single

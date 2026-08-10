@@ -452,6 +452,22 @@ mod tests {
     }
 
     #[test]
+    fn a_self_including_source_is_refused_by_the_shared_session_guard() {
+        // The attached-source sub-parse runs on the SAME session — and therefore
+        // under the same descent guard — as the includer: an inclusion cycle (a
+        // source `\input`-ing itself through a resolver with no cycle check of
+        // its own) is cut off at the configured depth limit as an ordinary
+        // error, aborting under the tolerant policy too — never unbounded
+        // recursion. (`language()` configures `depth_limit(64)`.)
+        use crate::constructs::DescentLimitExceeded;
+
+        let language =
+            language(Recovery::Tolerant, &[("self.tex", r"\input{self.tex}")]);
+        let err = language.parse(r"\input{self.tex}").unwrap_err();
+        assert_eq!(err.identifier(), DescentLimitExceeded::IDENTIFIER);
+    }
+
+    #[test]
     fn input_attaches_the_resolved_content_as_the_attached_slot() {
         let language =
             language(Recovery::Strict, &[("chapter.tex", "hello {world}")]);
