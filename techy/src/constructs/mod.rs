@@ -134,7 +134,22 @@ pub struct ParseContext<'a, 's, L: Lang> {
     /// The parser's **input** parsing state (the caller sets it; see the
     /// state-threading contract in [`core::constructs`](crate::core::constructs)).
     pub state: Arc<ParsingState<L>>,
-    /// The session: node building, diagnostics, derivation memos, frames.
+    /// The per-parse [`ParserSession`]. What a construct parser reaches on it
+    /// directly: the [`diagnostics`](ParserSession::diagnostics) sink, the
+    /// language's session extension ([`ext`](ParserSession::ext)), and a rendered
+    /// snapshot of the live frame stack
+    /// ([`snapshot_frames`](ParserSession::snapshot_frames)). Everything else a
+    /// parser needs from the session goes through this context's own methods,
+    /// which are also the preferred spellings for the session-mediated derivations:
+    /// staging via [`stage_node`](ParseContext::stage_node) /
+    /// [`stage_invocation`](ParseContext::stage_invocation), descents via
+    /// [`parse_construct`](ParseContext::parse_construct), state derivation via
+    /// [`derive_state`](ParseContext::derive_state) /
+    /// [`group_interior_state`](ParseContext::group_interior_state), problem
+    /// reporting via [`recover`](ParseContext::recover) /
+    /// [`implementation_error`](ParseContext::implementation_error), frames via
+    /// [`with_frame`](ParseContext::with_frame). The session's node builder, memo
+    /// storage, and frame stack are internal.
     pub session: &'a mut ParserSession<L>,
     /// The language's [`ParseDriver`]: recovery policy, parse-time hooks,
     /// the descent-delta channel, construct provision. **Concretely typed through

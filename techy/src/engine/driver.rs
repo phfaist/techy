@@ -87,6 +87,26 @@ use super::ParserSession;
 /// that lives on the [`ParserSession`]. Hooks consulted by the session's memoized
 /// derivation helpers ([`group_interior_delta`](ParseDriver::group_interior_delta))
 /// must be pure; the per-method docs state their contracts.
+///
+/// # Wrapping a driver
+///
+/// Several defaulted methods call sibling methods **through `self`**, and the
+/// per-method docs name each such call: the default
+/// [`recover`](ParseDriver::recover) calls
+/// [`refine_diagnostic`](ParseDriver::refine_diagnostic) and
+/// [`recovery`](ParseDriver::recovery); the default
+/// [`probe_token`](ParseDriver::probe_token) reads
+/// [`recovery`](ParseDriver::recovery); the default
+/// [`make_invocation_parser`](ParseDriver::make_invocation_parser) delegates to
+/// the resolved spec's own factory. This matters for a **delegating driver** — a
+/// type that wraps another driver and forwards methods to it: a forwarded method
+/// re-dispatches through the *inner* driver's `self`, so forwarding `recover`
+/// while overriding `refine_diagnostic` on the wrapper means the wrapper's
+/// override silently never runs. A wrapper therefore forwards every method it
+/// does not override — the defaulted ones included, so a hook the inner driver
+/// overrides is not silently replaced by this trait's default — and
+/// re-implements, rather than forwards, any defaulted method whose body calls a
+/// method the wrapper overrides.
 pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// The [`DescentGuard`] type limiting this language's parsing depth — the
     /// per-parse object asked before every descent (one construct parser running
@@ -135,8 +155,11 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     /// Detection-site recovery — **the recovery hook**, reached through the parsers'
     /// recovery entry point
-    /// ([`ParseContext::recover`](crate::constructs::ParseContext::recover)): applies
-    /// [`refine_diagnostic`](ParseDriver::refine_diagnostic) exactly once, then
+    /// ([`ParseContext::recover`](crate::constructs::ParseContext::recover)). The
+    /// default calls [`refine_diagnostic`](ParseDriver::refine_diagnostic) and
+    /// [`recovery`](ParseDriver::recovery) **through `self`** (a delegating driver
+    /// must account for that — see *Wrapping a driver* on the trait): it applies
+    /// the refinement exactly once, then — per the policy `recovery()` answers —
     /// records the condition as an error-severity diagnostic and returns `Ok(())`
     /// (tolerant — the caller continues with its site's local recovery) or returns it
     /// as a [`ParseError`] to bubble (strict — nobody continues past an `Err`).
@@ -159,7 +182,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     }
 
     /// Probe the token at the reader's position under `state`, mapping a tokenizer
-    /// error per the recovery policy — the **probing peek** of the argument-probe
+    /// error per the recovery policy (the default reads it through
+    /// `self.`[`recovery()`](ParseDriver::recovery)) — the **probing peek** of the argument-probe
     /// protocol, reached through [`ParseContext::probe_token`](crate::constructs::ParseContext::probe_token): strict mode aborts
     /// with the token error (mirroring the content loop); tolerant mode reports `None`
     /// **without diagnosing or consuming** — the caller treats the position as
@@ -567,7 +591,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// The interception point over
     /// [`CallableSpec::make_invocation_parser`]: the dispatch loops obtain every
     /// invocation parser through the driver, and the default delegates to the resolved
-    /// spec's own factory — specs keep owning their invocation behavior; the driver
+    /// spec's own factory (`invocation.spec` — it builds no parser itself and calls
+    /// no other driver method) — specs keep owning their invocation behavior; the driver
     /// merely gets a uniform veto/wrap point (instrumentation, per-language parser
     /// substitution) that no per-spec override could provide.
     ///
