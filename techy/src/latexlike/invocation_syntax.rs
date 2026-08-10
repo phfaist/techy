@@ -758,6 +758,95 @@ mod tests {
         }
     }
 
+    /// A takeover that stages with a deliberately chosen explicit end — the
+    /// vehicle for the bad-computed-span contract violation:
+    /// `stage_invocation` must answer an implementation error, never panic.
+    #[derive(Debug)]
+    struct BadEndSpec {
+        end: usize,
+    }
+
+    impl CallableSpec<Latexlike> for BadEndSpec {
+        fn make_invocation_parser<'a, 's>(
+            &'a self,
+            invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+        ) -> Result<
+            Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
+            crate::error::ParseError,
+        >
+        where
+            's: 'a,
+        {
+            struct BadEndParser<'a, 's> {
+                invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+                end: usize,
+            }
+            impl ConstructParser<Latexlike> for BadEndParser<'_, '_> {
+                type Output = BuildId;
+                fn parse(
+                    &mut self,
+                    cx: &mut crate::constructs::ParseContext<'_, '_, Latexlike>,
+                ) -> crate::constructs::ConstructParserResult<
+                    Latexlike,
+                    (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>),
+                > {
+                    let id = cx.stage_invocation(
+                        &self.invocation,
+                        ParsedArguments::empty(),
+                        ParsedSlots::empty(),
+                        Vec::new(),
+                        Some(self.end),
+                    )?;
+                    Ok((id, None))
+                }
+            }
+            Ok(Box::new(BadEndParser { invocation, end: self.end }))
+        }
+
+        fn stack_frame_title(&self, role: FrameRole, name: &str) -> alloc::string::String {
+            super::super::spec::frame_title("macro", role, name)
+        }
+    }
+
+    /// A language whose `\bad` macro stages with the given explicit end.
+    fn bad_end_language(recovery: Recovery, end: usize) -> Language<Latexlike> {
+        let mut package = Package::new("t");
+        package.insert(CallableType::Macro, "bad", Arc::new(BadEndSpec { end }));
+        with_packages(recovery, [package])
+    }
+
+    #[test]
+    fn stage_invocation_reports_a_bad_computed_span_as_an_error_not_a_panic() {
+        let assert_implementation_error = |error: crate::error::ParseError| {
+            let condition = error
+                .data()
+                .downcast_ref::<crate::constructs::ImplementationError>()
+                .expect("an ImplementationError condition");
+            assert!(
+                condition.detail.contains("invalid node span"),
+                "unexpected detail: {}",
+                condition.detail
+            );
+        };
+
+        // An end preceding the trigger's start (`\bad` starts at 3).
+        let language = bad_end_language(Recovery::Strict, 0);
+        assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
+
+        // An end beyond the source content.
+        let language = bad_end_language(Recovery::Strict, 999);
+        assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
+
+        // An end inside a multi-byte character ("é" occupies bytes 8..10).
+        let language = bad_end_language(Recovery::Strict, 9);
+        assert_implementation_error(language.parse("ab \\bad é").unwrap_err());
+
+        // Tolerant recovery does not swallow the abort (the implementation-error
+        // contract: a contract violation is not a source condition).
+        let language = bad_end_language(Recovery::Tolerant, 0);
+        assert_implementation_error(language.parse("ab \\bad cd").unwrap_err());
+    }
+
     #[test]
     fn stage_invocation_applies_the_std_and_explicit_end_rules() {
         // end_pos: None — the std rule: last child's span end…

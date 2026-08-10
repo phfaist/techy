@@ -79,6 +79,7 @@ pub use verbatim_parser::{
 };
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::sync::Arc;
@@ -226,6 +227,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// stays on [`stage_node`](ParseContext::stage_node) itself with
     /// an explicit [`CallableData`]. No ext/annotation parameters — staging
     /// mints the ext, and parse annotations are `()`.
+    ///
+    /// `Err` reports an **invalid computed span** — a node end (from the standard
+    /// rule or from `end_pos`) that precedes the trigger's start or does not lie
+    /// within the source content on a character boundary: a contract violation by
+    /// the calling parser, lifted as an [`ImplementationError`] that aborts under
+    /// any recovery policy, never a panic — or a staging-contract violation lifted
+    /// from [`stage_node`](ParseContext::stage_node) the same way.
     pub fn stage_invocation(
         &mut self,
         invocation: &Invocation<'_, '_, L>,
@@ -238,6 +246,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         L::InvocationSyntax: FromInvocation<L>,
     {
         let token = invocation.token;
+        let start = token.span.start();
         // The std end rule: last staged child's span end, else the trigger's end.
         // A last child no parser ever staged (an implementation bug) falls back to
         // the trigger's end — the builder diagnoses the foreign id in `add`.
@@ -248,6 +257,25 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                 .map(|child| child.span().end())
                 .unwrap_or(token.span.end())
         });
+        // A bad computed span is a contract violation by outer code (a takeover's
+        // `end_pos`, or a staged child's span outside the trigger's source) — the
+        // implementation-error abort, never a panic (`SourceSpan::new` would
+        // otherwise assert on the invalid range below). `get` answers `None` for a
+        // decreasing range, one out of bounds, and one off a character boundary
+        // alike.
+        if self.source.content().get(start..end).is_none() {
+            return Err(self.implementation_error(
+                format!(
+                    "stage_invocation computed the invalid node span {start}..{end} \
+                     (source length {}): the node's end must not precede the \
+                     trigger's start and must lie within the source content on a \
+                     character boundary — check the explicit end_pos or the staged \
+                     children's spans",
+                    self.source.content().len(),
+                ),
+                token.span,
+            ));
+        }
         let data = CallableData {
             callable_type: invocation.callable_type,
             name: invocation.name.into(),
@@ -258,11 +286,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         };
         self.stage_node(
             NodeKind::callable(data),
-            SourceSpan::new(&self.source, token.span.start()..end),
+            SourceSpan::new(&self.source, start..end),
             Arc::clone(&self.state),
             children,
         )
-        .map_err(|error| self.implementation_error(error, Span::new(token.span.start(), end)))
+        .map_err(|error| self.implementation_error(error, Span::new(start, end)))
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error
