@@ -6,6 +6,8 @@
 
 - STACK GUARD
 
+- PY binding's wishlist analysis.
+
 
 ## More targeted items
 

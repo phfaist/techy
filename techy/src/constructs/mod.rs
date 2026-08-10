@@ -112,9 +112,10 @@ pub(crate) fn invocation_frame<L: Lang>(
     }
 }
 
-/// Everything a construct parser needs, in one context value — avoiding pylatexenc's
-/// three-argument threading (`walker, token_reader, parsing_state`) and giving the API
-/// one place to grow (depth limits, cancellation).
+/// Everything a construct parser needs, in one context value.  Includes pretty much
+/// all methods the construct parser might need, including to stage nodes, to delegate
+/// parsing to sub-parsers, pushing frames on the frames stack, to change the parsing
+/// state, etc.
 pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
