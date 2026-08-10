@@ -822,6 +822,7 @@ mod tests {
     }
 
     impl ParseDriver<EnvLang> for EnvDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }

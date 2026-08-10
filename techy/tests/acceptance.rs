@@ -45,7 +45,7 @@ mod support {
     use techy::core::specs::ArgumentSpec;
     use techy::core::{
         ForbiddenCharsOverrides, GroupOverrides, ParsingState, ParsingStateDelta,
-        TokenRulesOverrides,
+        StdDescentGuardInit, TokenRulesOverrides,
     };
 
     /// Argument specs from per-argument code strings ([`argument_specs`] + unwrap).
@@ -161,6 +161,9 @@ mod support {
             LatexlikeDriver::new(recovery),
             ParsingState::lang_initial_with_packages([testdb()]),
         )
+        // Explicit guard: suite inputs nest enough construct levels to trip the
+        // unconfigured default's half-budget warning in debug builds.
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
     }
 
     /// Like [`with_recovery`], with one more `package` pushed innermost (it shadows
@@ -173,6 +176,8 @@ mod support {
             LatexlikeDriver::new(recovery),
             ParsingState::lang_initial_with_packages([testdb(), package]),
         )
+        // Explicit guard (see `with_recovery`).
+        .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
     }
 
     /// The strict suite language ([`testdb`] over the seed defaults).
@@ -201,6 +206,8 @@ mod support {
             ])))
             .unwrap();
         Language::new(LatexlikeDriver::new(recovery), seed)
+            // Explicit guard (see `with_recovery`).
+            .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
     }
 
     /// `{byte range} {summary}` per node — the suite's exact-shape currency.

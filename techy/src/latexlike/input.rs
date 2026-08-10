@@ -438,6 +438,9 @@ mod tests {
                 .with_source_resolver(resolver.with_reference_as_origin()),
             ParsingState::lang_initial_with_packages(packages),
         )
+        // Explicit guard: nested inclusions stack enough construct levels to trip
+        // the unconfigured default's half-budget warning in debug builds.
+        .with_descent_guard_init(crate::engine::StdDescentGuardInit::depth_limit(64))
     }
 
     /// `\input` defined but no resolver configured.

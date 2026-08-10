@@ -1068,7 +1068,10 @@ mod tests {
             }))
             .unwrap();
         let language =
-            Language::new(LatexlikeDriver::new(crate::error::Recovery::Strict), seed);
+            Language::new(LatexlikeDriver::new(crate::error::Recovery::Strict), seed)
+                // Explicit guard: the input nests enough construct levels to trip
+                // the unconfigured default's half-budget warning in debug builds.
+                .with_descent_guard_init(crate::engine::StdDescentGuardInit::depth_limit(64));
 
         let result = language.parse(r"\wrap«$$a\text{y}b$$»").unwrap();
         check_latexlike_tree_invariants(&result.tree);

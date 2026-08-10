@@ -68,13 +68,19 @@ use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
 use crate::token::{GroupRule, Token, TokenKind, TokenReader};
 
+use core::marker::PhantomData;
+
+use super::descent_guard::{DescentGuard, StdDescentGuard};
 use super::ParserSession;
 
 /// The Lang-provided parse-behavior object, grouping five concerns: the recovery
 /// policy, the parse-time hooks (command resolution, paragraph-break emission,
 /// diagnostic refinement, transition observation, event lowering), source
 /// resolution, the group descent-delta channel, and construct provision — all
-/// defaulted, so `impl ParseDriver<MyLang> for MyDriver {}` is a complete driver.
+/// defaulted; the one required item is the [`DescentGuard`](ParseDriver::DescentGuard)
+/// type choice, so
+/// `impl ParseDriver<MyLang> for MyDriver { type DescentGuard = StdDescentGuard; }`
+/// is a complete driver.
 ///
 /// Implementations are **stateless behavior objects**: `&self` everywhere, shared
 /// across parses (`Send + Sync`), carrying configuration but never per-parse state —
@@ -82,6 +88,22 @@ use super::ParserSession;
 /// derivation helpers ([`group_interior_delta`](ParseDriver::group_interior_delta))
 /// must be pure; the per-method docs state their contracts.
 pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
+    /// The [`DescentGuard`] type limiting this language's parsing depth — the
+    /// per-parse object asked before every descent (one construct parser running
+    /// another through
+    /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct))
+    /// whether the parse may go one level deeper, so deeply nested input is
+    /// refused with an ordinary error instead of crashing the process by stack
+    /// exhaustion.
+    ///
+    /// The **type** is a driver choice (this associated type — the trait's one
+    /// required item; [`StdDescentGuard`] is the standard answer); the guard's
+    /// per-language **configuration** travels on the [`Language`](super::Language)
+    /// value ([`with_descent_guard_init`](super::Language::with_descent_guard_init)),
+    /// and the per-parse **instance** lives on the
+    /// [`ParserSession`](super::ParserSession).
+    type DescentGuard: DescentGuard;
+
     // --- policy -----------------------------------------------------------------
 
     /// The tolerant-parsing policy this driver drives under. The default is
@@ -536,6 +558,13 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
 /// type — the standard shape for a command-bearing language; beyond those, implement
 /// [`CommandResolver`] (or a whole [`ParseDriver`]) yourself.
 ///
+/// The third parameter `G` is the [`DescentGuard`](ParseDriver::DescentGuard) type
+/// choice — defaulted to [`StdDescentGuard`] and carried at the type level only
+/// (`PhantomData`); a custom guard type plugs in as
+/// `StdParseDriver<R, O, MyGuard>`. The guard's per-language *configuration* is
+/// not driver state: it travels on the [`Language`](super::Language) value
+/// ([`with_descent_guard_init`](super::Language::with_descent_guard_init)).
+///
 /// # The two resolvers are deliberately asymmetric
 ///
 /// Storage matches how each part is consumed. The **command resolver** is part of the
@@ -560,7 +589,7 @@ impl<L: Lang> fmt::Debug for ScopesCommandResolver<L> {
 /// let tolerant: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
 /// # let _ = tolerant;
 /// ```
-pub struct StdParseDriver<R = (), O: SourceOrigin = Option<String>> {
+pub struct StdParseDriver<R = (), O: SourceOrigin = Option<String>, G = StdDescentGuard> {
     /// The tolerant-parsing policy to drive under.
     pub recovery: Recovery,
     // The ruled asymmetry (storage matches the consumption seam — see the type-level
@@ -577,13 +606,22 @@ pub struct StdParseDriver<R = (), O: SourceOrigin = Option<String>> {
     /// (`None` = this language resolves no external source references); set via
     /// [`with_source_resolver`](StdParseDriver::with_source_resolver).
     pub source_resolver: Option<Arc<dyn SourceResolver<O>>>,
+    /// The [`DescentGuard`] type choice `G` (the default is [`StdDescentGuard`]) —
+    /// a type-level parameter only, so it is carried as `PhantomData` (the
+    /// `fn() -> G` spelling keeps the driver `Send + Sync` independent of `G`).
+    descent_guard: PhantomData<fn() -> G>,
 }
 
-impl<R, O: SourceOrigin> StdParseDriver<R, O> {
+impl<R, O: SourceOrigin, G> StdParseDriver<R, O, G> {
     /// A driver with the given recovery policy and command resolver (`()` = resolves
     /// nothing), and no source resolver.
-    pub fn new(recovery: Recovery, command_resolver: R) -> StdParseDriver<R, O> {
-        StdParseDriver { recovery, command_resolver, source_resolver: None }
+    pub fn new(recovery: Recovery, command_resolver: R) -> StdParseDriver<R, O, G> {
+        StdParseDriver {
+            recovery,
+            command_resolver,
+            source_resolver: None,
+            descent_guard: PhantomData,
+        }
     }
 
     /// Use `resolver` for `\input`-like external source references — exposed through
@@ -592,13 +630,17 @@ impl<R, O: SourceOrigin> StdParseDriver<R, O> {
     pub fn with_source_resolver<M>(
         mut self,
         resolver: impl IntoSourceResolver<O, M>,
-    ) -> StdParseDriver<R, O> {
+    ) -> StdParseDriver<R, O, G> {
         self.source_resolver = Some(resolver.into_source_resolver());
         self
     }
 }
 
-impl<L: Lang, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin> {
+impl<L: Lang, R: CommandResolver<L>, G: DescentGuard> ParseDriver<L>
+    for StdParseDriver<R, L::SourceOrigin, G>
+{
+    type DescentGuard = G;
+
     fn recovery(&self) -> Recovery {
         self.recovery
     }
@@ -624,17 +666,18 @@ impl<L: Lang, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::Sou
 // Driver `Copy`/`Eq` are deliberately gone (API-review T4 ruling): nothing relied on
 // them, and the resolver fields are not `Copy`/`Eq` material.
 
-impl<R: Clone, O: SourceOrigin> Clone for StdParseDriver<R, O> {
+impl<R: Clone, O: SourceOrigin, G> Clone for StdParseDriver<R, O, G> {
     fn clone(&self) -> Self {
         StdParseDriver {
             recovery: self.recovery,
             command_resolver: self.command_resolver.clone(),
             source_resolver: self.source_resolver.clone(),
+            descent_guard: PhantomData,
         }
     }
 }
 
-impl<R: fmt::Debug, O: SourceOrigin> fmt::Debug for StdParseDriver<R, O> {
+impl<R: fmt::Debug, O: SourceOrigin, G> fmt::Debug for StdParseDriver<R, O, G> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StdParseDriver")
             .field("recovery", &self.recovery)

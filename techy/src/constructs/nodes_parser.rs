@@ -1226,6 +1226,7 @@ mod tests {
     }
 
     impl ParseDriver<CmdLang> for CmdDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1643,6 +1644,7 @@ mod tests {
         }
 
         impl ParseDriver<MarkLang> for MarkDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -2496,6 +2498,7 @@ mod tests {
     }
 
     impl ParseDriver<HintLang> for HintDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2574,6 +2577,7 @@ mod tests {
     }
 
     impl ParseDriver<RefineLang> for RefineDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2938,6 +2942,7 @@ mod tests {
         }
 
         impl ParseDriver<ExtLang> for ExtDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -3496,6 +3501,7 @@ mod tests {
         struct CountDriver;
 
         impl ParseDriver<CountLang> for CountDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
             fn observe_transition(
                 &self,
                 ext: &mut Counts,
@@ -3628,6 +3634,7 @@ mod tests {
         }
 
         impl ParseDriver<DriveLang> for DriveDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
@@ -3830,6 +3837,7 @@ mod tests {
     }
 
     impl ParseDriver<FailingMathLang> for FailingMathDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }

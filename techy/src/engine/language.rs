@@ -19,7 +19,9 @@ use crate::constructs::{
 };
 use crate::error::ParseError;
 use crate::node::NodeKind;
+use super::descent_guard::DescentGuard;
 use super::driver::ParseDriver;
+use super::DriverGuard;
 use crate::source::{Source, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 use crate::token::StdTokenReader;
@@ -74,15 +76,43 @@ pub struct Language<L: Lang> {
     /// The frozen initial state every parse starts from — shared by `Arc` across
     /// parses (states are immutable).
     initial_state: Arc<ParsingState<L>>,
+    /// The configuration for the per-parse [`DescentGuard`] (the parsing-depth
+    /// limiter): defaulted in [`new`](Language::new), set with
+    /// [`with_descent_guard_init`](Language::with_descent_guard_init), consumed by
+    /// [`parse_source`](Language::parse_source) to create each parse's guard.
+    descent_guard_init: <DriverGuard<L> as DescentGuard>::InitArg,
 }
 
 impl<L: Lang> Language<L> {
     /// A language over `driver`, parsing from `initial_state`. Both inputs are
     /// mandatory — the type-level docs show the canonical construction, and the
     /// [`ParsingState::lang_initial`]`[_with_packages]` constructors keep the everyday
-    /// spellings short.
+    /// spellings short. The parsing-depth limit starts at the guard type's default
+    /// configuration; choose one explicitly with
+    /// [`with_descent_guard_init`](Language::with_descent_guard_init).
     pub fn new(driver: L::Driver, initial_state: ParsingState<L>) -> Language<L> {
-        Language { driver, initial_state: Arc::new(initial_state) }
+        Language {
+            driver,
+            initial_state: Arc::new(initial_state),
+            descent_guard_init: Default::default(),
+        }
+    }
+
+    /// Use `init` as the configuration of the per-parse [`DescentGuard`] — the
+    /// parsing-depth limiter that refuses input nested too deeply instead of
+    /// letting it crash the process by stack exhaustion. For the standard guard
+    /// ([`StdDescentGuard`](super::StdDescentGuard)) the configuration is a
+    /// [`StdDescentGuardInit`](super::StdDescentGuardInit) — see its docs for
+    /// choosing among a byte budget, a depth limit, and off. Without this call,
+    /// parses run under the guard type's default configuration (for the standard
+    /// guard: a deliberately tight built-in stack budget that also emits a one-time
+    /// warning diagnostic at half use — the nudge to configure explicitly).
+    pub fn with_descent_guard_init(
+        mut self,
+        init: <DriverGuard<L> as DescentGuard>::InitArg,
+    ) -> Language<L> {
+        self.descent_guard_init = init;
+        self
     }
 
     /// The frozen initial state every parse starts from.
@@ -141,6 +171,10 @@ impl<L: Lang> Language<L> {
     {
         let mut reader = StdTokenReader::new(source.content());
         let mut session = ParserSession::new();
+        // The descent guard is created eagerly, here at true parse entry on the
+        // parsing thread — a stack-measuring guard anchors its reference
+        // measurement before any descent runs.
+        session.install_descent_guard(DriverGuard::<L>::init(&self.descent_guard_init));
         let mut nodes = Vec::new();
         let seed = Arc::clone(&self.initial_state);
         // Parse-initialization observation (registration-sanity diagnostics): once
@@ -240,7 +274,9 @@ impl<L: Lang> fmt::Debug for Language<L> {
         f.debug_struct("Language")
             .field("driver", &self.driver)
             .field("initial_state", &self.initial_state)
-            .finish()
+            // The descent-guard configuration carries no `Debug` bound: shown by
+            // omission.
+            .finish_non_exhaustive()
     }
 }
 
@@ -538,6 +574,7 @@ mod tests {
         }
 
         impl ParseDriver<BogusLang> for BogusDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -610,6 +647,7 @@ mod tests {
         }
     }
     impl ParseDriver<MacroLang> for MacroDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }

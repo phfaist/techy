@@ -27,7 +27,7 @@ use std::sync::Arc;
 use techy::core::node::NodeRef;
 use techy::core::{
     CommandOverrides, CommandRule, Language, ParsingState, ParsingStateDelta,
-    TokenRulesOverrides,
+    StdDescentGuardInit, TokenRulesOverrides,
 };
 use techy::error::Recovery;
 use techy::latexlike::minidefs::minilatex_package;
@@ -328,6 +328,9 @@ fn input_language(entries: &[(&str, &str)]) -> Language<Latexlike> {
             .with_source_resolver(resolver.with_reference_as_origin()),
         ParsingState::lang_initial_with_packages([package]),
     )
+    // Explicit guard: nested inclusions stack enough construct levels to trip
+    // the unconfigured default's half-budget warning in debug builds.
+    .with_descent_guard_init(StdDescentGuardInit::depth_limit(64))
 }
 
 #[test]

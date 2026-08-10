@@ -272,6 +272,9 @@ mod tests {
             LatexlikeDriver::new(recovery),
             ParsingState::lang_initial_with_packages([package]),
         )
+        // Explicit guard: these inputs nest enough construct levels to trip the
+        // unconfigured default's half-budget warning in debug builds.
+        .with_descent_guard_init(crate::engine::StdDescentGuardInit::depth_limit(64))
     }
 
     fn parser() -> CharsGroupArgumentParser<Latexlike> {

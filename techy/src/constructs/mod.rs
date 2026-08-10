@@ -83,7 +83,7 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession};
-use crate::error::{DiagnosticData, DiagnosticInfo, ParseError};
+use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, ParseError, Severity};
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
@@ -297,11 +297,19 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// [`parse_nodes`](ParseContext::parse_nodes) and
     /// [`parse_group`](ParseContext::parse_group), which delegate here. One shared
     /// entry point is what lets the engine attach its per-descent bookkeeping (the
-    /// enclosing-state stack, the optional traceback frame) uniformly, with no
-    /// per-site cooperation. The contract's limit: plain Rust recursion that
+    /// enclosing-state stack, the optional traceback frame, the
+    /// [`DescentGuard`](crate::engine::DescentGuard) depth check) uniformly, with
+    /// no per-site cooperation. The contract's limit: plain Rust recursion that
     /// bypasses it — code calling another parser's
     /// [`parse`](ConstructParser::parse) method directly — cannot be detected by
     /// the library. The rule is documented, not enforceable.
+    ///
+    /// Before the sub-parse runs, the session's per-parse
+    /// [`DescentGuard`](crate::engine::DescentGuard) is asked whether the parse
+    /// may go one level deeper: a warning answer is recorded as a
+    /// [`DescentLimitApproaching`] diagnostic and the parse continues; a refusal
+    /// aborts with a [`DescentLimitExceeded`] error under **any** recovery policy
+    /// (past the limit there is no safe way to continue).
     ///
     /// `state` is the sub-parse's input state, scoped structurally for the duration
     /// of the run — swapped in, restored afterwards, with the session's
@@ -341,8 +349,44 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         if let Some(frame) = frame {
             self.session.push_frame(frame);
         }
-        // descent-guard slot (Part 2)
+        // The descent guard: ask the session's per-parse guard whether one more
+        // level may open. A refusal aborts under ANY recovery policy — past the
+        // limit there is no safe way to continue — with the just-pushed frame in
+        // the error's traceback, and popped again before returning.
+        match self.session.enter_descent() {
+            Ok(None) => {}
+            Ok(Some(warning)) => {
+                // The guard's early warning (the standard guard's one-time
+                // half-budget notice under the unconfigured default): recorded
+                // immediately, at the current position, with the live traceback.
+                let pos = self.tokens.pos();
+                let span = SourceSpan::new(&self.source, Span::empty(pos));
+                let frames = self.session.snapshot_frames();
+                self.session.diagnostics.push(Diagnostic::from_parts(
+                    Severity::Warning,
+                    Box::new(DescentLimitApproaching::new(warning.detail)),
+                    span,
+                    frames,
+                ));
+            }
+            Err(refusal) => {
+                let pos = self.tokens.pos();
+                let error = ParseError::new(
+                    DescentLimitExceeded::new(refusal.detail),
+                    SourceSpan::new(&self.source, Span::empty(pos)),
+                )
+                .with_frames(self.session.snapshot_frames());
+                if framed {
+                    self.session.pop_frame();
+                }
+                return Err(error);
+            }
+        }
         let result = self.with_parsing_state(state, |cx| parser.parse(cx));
+        // The guard exit runs on the `Ok` and `Err` result paths alike — errors
+        // are values, not unwinds — and only for a granted entry (a refusal
+        // returned above, before any descent opened).
+        self.session.exit_descent();
         // The pop covers the `Err` path too — errors are values, not unwinds.
         if framed {
             self.session.pop_frame();
@@ -830,6 +874,47 @@ pub struct ImplementationError {
 pub struct ScopeOpFailed {
     /// The rendered failure ([`ScopeOpError`](crate::scopes::ScopeOpError)'s
     /// `Display`).
+    pub detail: String,
+}
+
+/// Condition: the parse's [`DescentGuard`](crate::engine::DescentGuard) refused to
+/// open one more nesting level — the input nests deeper than the configured (or
+/// built-in default) limit allows. Raised by
+/// [`ParseContext::parse_construct`](ParseContext::parse_construct) and **aborts
+/// under any recovery policy**: the limit exists so deeply nested input cannot
+/// crash the process by stack exhaustion, and past it there is no safe way to
+/// continue. The `detail` names the limit that was hit and, when the parse ran on
+/// the unconfigured built-in default, points at
+/// [`Language::with_descent_guard_init`](crate::engine::Language::with_descent_guard_init).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.constructs.descent-limit-exceeded",
+    message = "the input nests too deeply to parse: {detail}"
+)]
+pub struct DescentLimitExceeded {
+    /// The guard's explanation: which limit was hit, and how to configure it.
+    pub detail: String,
+}
+
+/// Condition (warning severity): the parse's
+/// [`DescentGuard`](crate::engine::DescentGuard) reported the nesting limit as
+/// getting close — for the standard guard
+/// ([`StdDescentGuard`](crate::engine::StdDescentGuard)): the first descent past
+/// half of the **unconfigured built-in default** stack budget, reported once per
+/// parse. Recorded immediately by
+/// [`ParseContext::parse_construct`](ParseContext::parse_construct); the parse
+/// continues. A configured limit never produces this warning — it exists as the
+/// early nudge to choose a limit explicitly
+/// ([`Language::with_descent_guard_init`](crate::engine::Language::with_descent_guard_init)).
+#[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(
+    id = "core.constructs.descent-limit-approaching",
+    message = "the input's nesting approaches the parsing depth limit: {detail}"
+)]
+pub struct DescentLimitApproaching {
+    /// The guard's explanation: how close the limit is, and how to configure it.
     pub detail: String,
 }
 

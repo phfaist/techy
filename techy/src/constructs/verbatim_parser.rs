@@ -705,6 +705,7 @@ mod tests {
     }
 
     impl ParseDriver<VerbLang> for VerbDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }

@@ -1084,6 +1084,7 @@ mod tests {
     }
 
     impl ParseDriver<ArgLang> for ArgDriver {
+        type DescentGuard = crate::engine::StdDescentGuard;
         fn recovery(&self) -> Recovery {
             self.recovery
         }
