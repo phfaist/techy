@@ -258,7 +258,17 @@ pub enum TokenStopKind<'p, L: Lang> {
     ParagraphBreak,
     /// Stop at any token matching the predicate. Programmatic conditions live only in
     /// tier-2 parser temporaries, never in spec data.
-    Predicate(&'p dyn Fn(&Token<'_, L>) -> bool),
+    ///
+    /// An `Err` from the predicate **aborts the parse** under any recovery policy —
+    /// a predicate that cannot answer leaves no sound way to decide where the run
+    /// ends. Carry [`HookFailed`](crate::error::HookFailed) for an operational
+    /// failure in the predicate's own code,
+    /// [`ImplementationError`](super::ImplementationError) for a violated library
+    /// contract, or a document condition for a diagnosis made deliberately. The
+    /// consultation site attaches the live traceback when the error carries no
+    /// frames of its own. An infallible predicate wraps its answer in `Ok(...)`
+    /// and that is the only change.
+    Predicate(&'p dyn Fn(&Token<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>),
 }
 
 /// The token-condition half of a [`StopSpec`]: which peeked token ends the parse
@@ -295,9 +305,24 @@ pub struct StopSpec<'p, L: Lang> {
     /// consulted-but-ignored call). The
     /// (count, last node) signature is a deliberate deviation from pylatexenc's
     /// whole-nodelist rescans.
+    ///
+    /// An `Err` from the condition **aborts the parse** under any recovery policy —
+    /// a condition that cannot answer leaves no sound way to decide where the run
+    /// ends. Carry [`HookFailed`](crate::error::HookFailed) for an operational
+    /// failure in the condition's own code,
+    /// [`ImplementationError`](super::ImplementationError) for a violated library
+    /// contract, or a document condition for a diagnosis made deliberately. The
+    /// consultation site attaches the live traceback when the error carries no
+    /// frames of its own. An infallible condition wraps its answer in `Ok(...)`
+    /// and that is the only change.
     // The decided signature (DESIGN_RATIONALE.md [§dd-dr:parsers-engine]); an alias would only rename it.
     #[allow(clippy::type_complexity)]
-    pub node: Option<&'p mut dyn FnMut(usize, StagedNodeView<'_, L>) -> bool>,
+    pub node: Option<
+        &'p mut dyn FnMut(
+            usize,
+            StagedNodeView<'_, L>,
+        ) -> Result<bool, ParseError<L::SourceOrigin>>,
+    >,
 }
 
 impl<'p, L: Lang> StopSpec<'p, L> {
@@ -595,30 +620,44 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         span: Span,
     ) -> ConstructParserResult<L, bool> {
         let id = self.stage(cx, kind, span)?;
-        Ok(self.test_node_stop(cx, id))
+        self.test_node_stop(cx, id)
     }
 
     /// Test the node stop condition against an already-recorded sibling (the last entry
     /// of `self.nodes` — staged either by [`stage`](Self::stage) or by a child construct
-    /// parser).
-    fn test_node_stop(&mut self, cx: &mut ParseContext<'_, '_, L>, id: BuildId) -> bool {
+    /// parser). A condition `Err` aborts under any policy ([`StopSpec::node`]'s
+    /// contract), with the live traceback attached here — the callback has no
+    /// session access.
+    fn test_node_stop(
+        &mut self,
+        cx: &mut ParseContext<'_, '_, L>,
+        id: BuildId,
+    ) -> ConstructParserResult<L, bool> {
         let Some(condition) = &mut self.stop.node else {
-            return false;
+            return Ok(false);
         };
         let staged = cx.staged_nodes();
         // A miss means a child construct parser handed back a foreign id (an
         // implementation bug — the builder diagnoses it when the id lands in a child
         // list); treat it as "condition did not fire" rather than panic (panic policy).
         let Some(view) = staged.get(id) else {
-            return false;
+            return Ok(false);
         };
-        condition(self.nodes.len(), view)
+        condition(self.nodes.len(), view).map_err(|error| cx.attach_hook_frames(error))
     }
 
     /// If the token stop condition matches the peeked token, whether it is to be consumed
-    /// ([`TokenStopCondition::consume`]); `None` when no token condition matches.
-    fn token_stop(&self, state: &ParsingState<L>, token: &Token<'_, L>) -> Option<bool> {
-        let cond = self.stop.token.as_ref()?;
+    /// ([`TokenStopCondition::consume`]); `None` when no token condition matches. A
+    /// predicate `Err` aborts under any policy ([`TokenStopKind::Predicate`]'s
+    /// contract); the caller attaches the live traceback.
+    fn token_stop(
+        &self,
+        state: &ParsingState<L>,
+        token: &Token<'_, L>,
+    ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
+        let Some(cond) = self.stop.token.as_ref() else {
+            return Ok(None);
+        };
         let matches = match &cond.kind {
             TokenStopKind::Command { name } => {
                 matches!(&token.kind, TokenKind::Command { name: n, .. } if n == name)
@@ -633,9 +672,9 @@ impl<'p, L: Lang> NodesParser<'p, L> {
                 _ => false,
             },
             TokenStopKind::ParagraphBreak => matches!(token.kind, TokenKind::ParagraphBreak),
-            TokenStopKind::Predicate(predicate) => predicate(token),
+            TokenStopKind::Predicate(predicate) => predicate(token)?,
         };
-        matches.then_some(cond.consume)
+        Ok(matches.then_some(cond.consume))
     }
 
     /// The shared tolerant recovery of the not-yet-wired arms (`Command` until
@@ -715,7 +754,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             // ([`NodesOutcome::after_effects`]).
             cx.state = cx.derive_state_recording(&delta, &mut self.after_effects)?;
         }
-        Ok(self.test_node_stop(cx, id))
+        self.test_node_stop(cx, id)
     }
 
     /// Drain the collected siblings (and the merged after-effect record) into the
@@ -784,9 +823,14 @@ where
 
             // Token stop condition — consulted for cleanly read tokens only: a recovery
             // placeholder is processed as content (its site already diagnosed it, and a
-            // stop token that cannot be re-read cannot be left for the caller).
+            // stop token that cannot be re-read cannot be left for the caller). A
+            // predicate Err aborts under any policy, the live traceback attached
+            // here — the callback has no session access.
             if !recovered {
-                if let Some(consume) = self.token_stop(&cx.state, &token) {
+                if let Some(consume) = self
+                    .token_stop(&cx.state, &token)
+                    .map_err(|error| cx.attach_hook_frames(error))?
+                {
                     self.flush_for_token_stop(cx, token.pre_space)?;
                     if consume {
                         // Take the whole token, syntactic post-space included; its
@@ -1072,7 +1116,7 @@ where
                         None,
                     )?; // groups have no after-effect
                     self.nodes.push(id);
-                    if self.test_node_stop(cx, id) {
+                    if self.test_node_stop(cx, id)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                 }
@@ -1919,7 +1963,8 @@ mod tests {
     #[test]
     fn stop_at_a_token_predicate() {
         let st = state();
-        let predicate = |t: &Token<'_, TestLang>| matches!(t.kind, TokenKind::Comment { .. });
+        let predicate =
+            |t: &Token<'_, TestLang>| Ok(matches!(t.kind, TokenKind::Comment { .. }));
         let parsed = run_both(
             "ab %c\nd",
             &st,
@@ -1930,6 +1975,51 @@ mod tests {
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"ab \""]);
         assert_eq!(parsed.stop, StopCause::TokenCondition { span: Span::new(3, 6) });
         assert_eq!(parsed.pos, 3);
+    }
+
+    #[test]
+    fn a_failing_stop_predicate_aborts_under_any_policy() {
+        // The hook-fallibility contract on `TokenStopKind::Predicate`: an Err ends
+        // the parse even under tolerant recovery — a predicate that cannot answer
+        // leaves no sound way to decide where the run ends — and the consultation
+        // site attaches the live traceback (the predicate has no session access).
+        let st = state();
+        let failing = |_: &Token<'_, TestLang>| -> Result<bool, ParseError> {
+            let scratch: Arc<Source> = Arc::new(Source::new(""));
+            Err(ParseError::new(
+                crate::error::HookFailed::new("stop table unavailable", None),
+                SourceSpan::new(&scratch, 0..0),
+            ))
+        };
+        let content = "ab";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(content);
+        let mut session: ParserSession<TestLang> = ParserSession::new();
+        let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
+        let mut parser = NodesParser::new(StopSpec::at_token(
+            TokenStopKind::Predicate(&failing),
+            false,
+        ));
+        let frame = crate::engine::Frame {
+            title: crate::engine::FrameTitle::Static("test descent"),
+            span: SourceSpan::new(&source, 0..0),
+        };
+        let error = cx.with_frame(frame, |cx| parser.parse(cx)).unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: stop table unavailable"
+        );
+        // The live traceback, attached at the consultation site.
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "test descent");
     }
 
     #[test]
@@ -1979,8 +2069,8 @@ mod tests {
     #[test]
     fn node_condition_stops_after_a_flushed_chars_node() {
         let st = state();
-        let mut c1 = |count: usize, _: StagedNodeView<'_, TestLang>| count >= 1;
-        let mut c2 = |count: usize, _: StagedNodeView<'_, TestLang>| count >= 1;
+        let mut c1 = |count: usize, _: StagedNodeView<'_, TestLang>| Ok(count >= 1);
+        let mut c2 = |count: usize, _: StagedNodeView<'_, TestLang>| Ok(count >= 1);
         let parsed = run_both(
             "ab %c\nde",
             &st,
@@ -2000,10 +2090,10 @@ mod tests {
     fn node_condition_stops_after_a_directly_staged_node() {
         let st = state();
         let mut c1 = |count: usize, view: StagedNodeView<'_, TestLang>| {
-            count >= 1 && matches!(view.kind(), NodeKind::Comment { .. })
+            Ok(count >= 1 && matches!(view.kind(), NodeKind::Comment { .. }))
         };
         let mut c2 = |count: usize, view: StagedNodeView<'_, TestLang>| {
-            count >= 1 && matches!(view.kind(), NodeKind::Comment { .. })
+            Ok(count >= 1 && matches!(view.kind(), NodeKind::Comment { .. }))
         };
         let parsed = run_both(
             "%c\nab",
@@ -2025,8 +2115,8 @@ mod tests {
     #[test]
     fn node_condition_on_the_trailing_whitespace_node_wins_over_end_of_input() {
         let st = state();
-        let mut c1 = |count: usize, _: StagedNodeView<'_, TestLang>| count >= 1;
-        let mut c2 = |count: usize, _: StagedNodeView<'_, TestLang>| count >= 1;
+        let mut c1 = |count: usize, _: StagedNodeView<'_, TestLang>| Ok(count >= 1);
+        let mut c2 = |count: usize, _: StagedNodeView<'_, TestLang>| Ok(count >= 1);
         let parsed = run_both(
             "ab",
             &st,
@@ -2041,6 +2131,46 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_node_stop_condition_aborts_under_any_policy() {
+        // The hook-fallibility contract on `StopSpec::node`: an Err ends the parse
+        // even under tolerant recovery — a condition that cannot answer leaves no
+        // sound way to decide where the run ends — and the consultation site
+        // attaches the live traceback (the callback has no session access).
+        let st = state();
+        let mut failing =
+            |_: usize, _: StagedNodeView<'_, TestLang>| -> Result<bool, ParseError> {
+                let scratch: Arc<Source> = Arc::new(Source::new(""));
+                Err(ParseError::new(
+                    crate::error::HookFailed::new("node table unavailable", None),
+                    SourceSpan::new(&scratch, 0..0),
+                ))
+            };
+        let content = "ab";
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(content);
+        let mut session: ParserSession<TestLang> = ParserSession::new();
+        let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            Arc::clone(&st),
+            &mut session,
+            &driver,
+        );
+        let mut parser =
+            NodesParser::new(StopSpec { token: None, node: Some(&mut failing) });
+        let frame = crate::engine::Frame {
+            title: crate::engine::FrameTitle::Static("test descent"),
+            span: SourceSpan::new(&source, 0..0),
+        };
+        let error = cx.with_frame(frame, |cx| parser.parse(cx)).unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        // The live traceback, attached at the consultation site.
+        assert_eq!(error.frames().len(), 1);
+        assert_eq!(error.frames()[0].title(), "test descent");
+    }
+
+    #[test]
     fn token_stop_flush_does_not_consult_the_node_condition() {
         // Both triggers collide: the `\end` match flushes the pending run, and the
         // (always-true) node condition would fire on the flushed node. The token
@@ -2052,11 +2182,11 @@ mod tests {
         let mut calls_list = 0usize;
         let mut c1 = |_: usize, _: StagedNodeView<'_, TestLang>| {
             calls_std += 1;
-            true
+            Ok(true)
         };
         let mut c2 = |_: usize, _: StagedNodeView<'_, TestLang>| {
             calls_list += 1;
-            true
+            Ok(true)
         };
         let parsed = run_both(
             "ab \\end rest",
@@ -3227,10 +3357,10 @@ mod tests {
     fn node_condition_counts_a_group_as_one_node() {
         let st = state();
         let mut c1 = |count: usize, view: StagedNodeView<'_, TestLang>| {
-            count >= 1 && matches!(view.kind(), NodeKind::Group(_))
+            Ok(count >= 1 && matches!(view.kind(), NodeKind::Group(_)))
         };
         let mut c2 = |count: usize, view: StagedNodeView<'_, TestLang>| {
-            count >= 1 && matches!(view.kind(), NodeKind::Group(_))
+            Ok(count >= 1 && matches!(view.kind(), NodeKind::Group(_)))
         };
         let parsed = run_both(
             "{a}b",
