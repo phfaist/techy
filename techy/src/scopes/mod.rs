@@ -52,7 +52,9 @@ use core::fmt;
 
 use hashbrown::HashMap;
 
-use crate::constructs::{ConstructParser, ConstructParserResult, Invocation, ParseContext};
+use crate::constructs::{
+    ConstructParser, ConstructParserResult, ImplementationError, Invocation, ParseContext,
+};
 use crate::error::{Diagnostic, DiagnosticInfo, Diagnostics};
 use crate::node::{BuildId, NodeKind};
 use crate::source::{Source, SourceSpan, Span};
@@ -61,7 +63,9 @@ use crate::state::{
     ClosedVocabulary, FeaturePresence, Lang, LangFeatures, LangHasScopes, ParsingState,
     ParsingStateDelta,
 };
-use crate::token::{SpecialsMatch, Token, TokenResult, TriggerChars};
+use crate::token::{
+    SpecialsMatch, Token, TokenError, TokenErrorKind, TokenResult, TriggerChars,
+};
 
 /// The syntax through which a callable invocation was recognized.
 ///
@@ -476,6 +480,13 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync {
     /// deliberate: a scanning provider keeps the tokenizer's recoverable-failure
     /// channel, which a [`ProviderError`] could not express). Implementations should return their **longest** match at `pos`.
     /// The default recognizes nothing.
+    ///
+    /// **`pos` contract:** `pos` must be a byte offset within `content`'s bounds
+    /// (`pos <= content.len()`) and on a character boundary. A caller passing an
+    /// invalid `pos` violates this contract; the shipped implementations answer
+    /// with an `Err` carrying an
+    /// [`ImplementationError`](crate::constructs::ImplementationError) — never a
+    /// panic, never a silent no-match.
     fn scan_specials<'s>(
         &self,
         state: &ParsingState<L>,
@@ -1006,16 +1017,40 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         Ok(Some(Arc::clone(&entry.spec)))
     }
 
+    /// See the trait method's `pos` contract: an invalid `pos` (out of
+    /// `content`'s bounds, or not a character boundary) answers an `Err`
+    /// carrying an [`ImplementationError`] — checked before the visibility
+    /// gate, so a caller bug is reported regardless of the package's mode
+    /// visibility.
     fn scan_specials<'s>(
         &self,
         state: &ParsingState<L>,
         content: &'s str,
         pos: usize,
     ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+        // Caller contract violation — same error spelling as the token
+        // reader's own `Lang::scan_specials` match-end validation: a
+        // `Custom`-wrapped `ImplementationError`, no recovery (an
+        // implementation bug aborts even under tolerant recovery). The error
+        // span is clamped to the content so it stays liftable to a source
+        // span.
+        let Some(rest) = content.get(pos..) else {
+            return Err(TokenError::new(
+                TokenErrorKind::Custom(Box::new(ImplementationError::new(
+                    alloc::format!(
+                        "Package::scan_specials called with an invalid position {pos} \
+                         (out of the content's bounds or not a character boundary; \
+                         content length {})",
+                        content.len()
+                    ),
+                ))),
+                Span::empty(pos.min(content.len())),
+                None,
+            ));
+        };
         if !self.visible_in(state.mode()) {
             return Ok(None);
         }
-        let rest = &content[pos..];
         // Entries are sorted longest-first: the first hit is the package's longest.
         for entry in &self.specials {
             // A mode-invisible entry is not there: skip it (a shorter visible trigger
@@ -2312,6 +2347,32 @@ mod tests {
         assert!(Arc::ptr_eq(&matched.spec, &replacement));
 
         assert_eq!(package.specials_trigger_chars(), TriggerChars::Only("-".into()));
+    }
+
+    /// The `pos` contract: an invalid position (out of the content's bounds or
+    /// not a character boundary) answers an implementation-error `TokenError` —
+    /// never a panic, never a silent no-match — while every valid boundary
+    /// position scans as before.
+    #[test]
+    fn package_scan_specials_rejects_invalid_positions_with_an_error() {
+        let spec = new_spec();
+        let package = specials_package("lig", &[("--", &spec)]);
+        let st = state_with(ScopeStack::new());
+
+        // Out of range.
+        let error = package.scan_specials(&st, "--", 7).unwrap_err();
+        assert!(error.to_string().contains("extension contract violation"));
+        assert!(error.to_string().contains("invalid position 7"));
+        assert!(error.recovery().is_none());
+
+        // Mid-character: `é` is two bytes, so pos 1 is not a character boundary.
+        let error = package.scan_specials(&st, "é--", 1).unwrap_err();
+        assert!(error.to_string().contains("invalid position 1"));
+
+        // Valid boundary positions are unaffected — end of content included.
+        assert!(package.scan_specials(&st, "x--", 1).unwrap().is_some());
+        assert!(package.scan_specials(&st, "--", 2).unwrap().is_none());
+        assert!(package.scan_specials(&st, "é--", 2).unwrap().is_some());
     }
 
     #[test]
