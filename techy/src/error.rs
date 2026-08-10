@@ -71,6 +71,11 @@ pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync 
     /// declares its [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const — that stays
     /// the type's own identity for type-keyed uses; the override changes only what
     /// stored instances report.
+    ///
+    /// With both this trait and [`DiagnosticData`] in scope, an unqualified
+    /// `.identifier()` call on a concrete condition type is ambiguous (both traits
+    /// supply the method — E0034); use the qualified spelling,
+    /// `DiagnosticInfo::identifier(&c)` or `DiagnosticData::identifier(&c)`.
     fn identifier(&self) -> &str {
         Self::IDENTIFIER
     }
@@ -431,7 +436,8 @@ impl<O: SourceOrigin> Diagnostic<O> {
         &*self.data
     }
 
-    /// The condition's wire identity ([`DiagnosticInfo::IDENTIFIER`]).
+    /// The condition's wire identity ([`DiagnosticInfo::identifier`] — for every
+    /// ordinary condition, the [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const).
     pub fn identifier(&self) -> &str {
         self.data.identifier()
     }
@@ -761,7 +767,8 @@ impl<O: SourceOrigin> ParseError<O> {
         &*self.data
     }
 
-    /// The condition's wire identity ([`DiagnosticInfo::IDENTIFIER`]).
+    /// The condition's wire identity ([`DiagnosticInfo::identifier`] — for every
+    /// ordinary condition, the [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) const).
     pub fn identifier(&self) -> &str {
         self.data.identifier()
     }

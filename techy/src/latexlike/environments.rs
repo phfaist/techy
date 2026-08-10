@@ -899,14 +899,20 @@ mod tests {
 
     #[test]
     fn dyn_environment_behavior_downcasts_to_its_concrete_type() {
-        // The `Any` supertrait: a stored `Arc<dyn EnvironmentBehavior>` gives its
-        // concrete type back through dyn-to-`Any` upcasting.
+        // The `Any` supertrait: the behavior a spec stores comes back type-erased
+        // from the accessor a consumer actually uses — `EnvironmentSpec::behavior` —
+        // and gives its concrete type back through dyn-to-`Any` upcasting.
         #[derive(Debug)]
-        struct Custom;
+        struct Custom {
+            label: &'static str,
+        }
         impl EnvironmentBehavior for Custom {}
-        let behavior: Arc<dyn EnvironmentBehavior> = Arc::new(Custom);
-        let any: &dyn Any = &*behavior;
-        assert!(any.downcast_ref::<Custom>().is_some());
+        let spec: EnvironmentSpec =
+            EnvironmentSpec::from_behavior(Arc::new(Custom { label: "custom" }));
+        let any: &dyn Any = spec.behavior();
+        let recovered = any.downcast_ref::<Custom>().expect("downcast to Custom");
+        // The recovered reference answers the concrete value's own state.
+        assert_eq!(recovered.label, "custom");
     }
 
     fn test_definitions() -> Package<Latexlike> {

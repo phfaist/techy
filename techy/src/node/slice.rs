@@ -4,7 +4,9 @@
 //! Every "list of nodes" the read API hands out — a node's children, an argument's
 //! region or content nodes, a slot's content — is a contiguous run of siblings in the
 //! flat tree layout, and this is its currency: the return type of
-//! [`NodeRef::children`](super::NodeRef::children) and the region/content accessors.
+//! [`NodeRef::children`](super::NodeRef::children) and the region/content accessors,
+//! and of [`NodeTree::slice`](super::NodeTree::slice), the validated constructor
+//! over a bare index range.
 //! Beyond iteration it answers *where the run is in the source* ([`span`](NodeSlice::span),
 //! [`source_text`](NodeSlice::source_text)) **exactly** — sibling runs are
 //! span-contiguous by the partition invariant, so the covering span is the first
@@ -24,7 +26,9 @@ use super::tree::NodeTree;
 
 /// A contiguous run of sibling nodes of one [`NodeTree`] — the node-list view returned
 /// by [`NodeRef::children`](super::NodeRef::children) and the argument/slot content
-/// accessors, and the input of the [`extract`](crate::extract) helpers.
+/// accessors — or built from a bare index range via
+/// [`NodeTree::slice`](super::NodeTree::slice) — and the input of the
+/// [`extract`](crate::extract) helpers.
 ///
 /// `Copy` like [`NodeRef`]: it stores only the tree borrow and an index range, and the
 /// borrow checker guarantees it cannot outlive the tree. Iterate it directly

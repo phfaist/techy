@@ -342,6 +342,9 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// as a single-node run within its parent's child list. An **empty** query span
     /// resolves by point containment like `node_at`, to a single-node run of the
     /// deepest containing node. `None` when no node's span contains the query.
+    ///
+    /// A run already addressed by a node-index range (rather than a span query) is
+    /// built with [`slice`](NodeTree::slice) instead.
     pub fn covering_slice(
         &self,
         span: &SourceSpan<L::SourceOrigin>,
@@ -365,7 +368,9 @@ impl<L: Lang, A> NodeTree<L, A> {
     /// The [`NodeSlice`] over a node-index range of this tree's flat storage —
     /// the validated constructor for ranges kept as bare numbers (an exported
     /// `Range<u32>` from a [`ChildRegion`](super::ChildRegion), a range computed by
-    /// binding or persistence code).
+    /// binding or persistence code). The span-addressed companion — the run
+    /// answering a source-span query — is
+    /// [`covering_slice`](NodeTree::covering_slice).
     ///
     /// A `NodeSlice` is always a **contiguous run of sibling nodes** — every node in
     /// the range must be a child of one and the same parent (that is what the slice's

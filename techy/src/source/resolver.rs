@@ -69,8 +69,9 @@ const _: fn(&dyn SourceResolver) = |_| {};
 
 // Forwarding impls, so borrowed/boxed resolvers plug in wherever an
 // `impl SourceResolver` is expected without newtype shims. The `Any` supertrait
-// requires `Self: 'static`, so the reference impl covers `&'static R` only and the
-// box impl requires `R: 'static`. There is deliberately no
+// requires `Self: 'static`, so the reference impl covers `&'static R` only (the
+// box impl is unrestricted: `R: SourceResolver<O>` already implies `R: 'static`
+// through `Any`). There is deliberately no
 // `Arc<R>` forwarding impl: shared resolvers travel as `Arc<dyn SourceResolver<O>>`
 // through the sealed [`IntoSourceResolver`] conversion, whose pass-through impls for
 // `Arc<R>`/`Arc<dyn …>` (no double-wrap) would conflict with a blanket-covered
@@ -86,7 +87,7 @@ impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for &'sta
     }
 }
 
-impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized + 'static> SourceResolver<O> for Box<R> {
+impl<O: SourceOrigin, R: SourceResolver<O> + ?Sized> SourceResolver<O> for Box<R> {
     fn resolve(
         &self,
         reference: &str,
@@ -393,12 +394,23 @@ mod tests {
 
     #[test]
     fn dyn_source_resolver_downcasts_to_its_concrete_type() {
-        // The `Any` supertrait: a stored `Arc<dyn SourceResolver>` gives its concrete
-        // type back through dyn-to-`Any` upcasting.
+        // The `Any` supertrait: the resolver a driver stores comes back type-erased
+        // from the accessor a consumer actually uses — `ParseDriver::source_resolver`
+        // — and gives its concrete type back through dyn-to-`Any` upcasting.
+        use crate::engine::{ParseDriver, StdParseDriver};
+        use crate::error::Recovery;
+
+        #[derive(Debug, Clone, Copy)]
+        struct PlainLang;
+        impl crate::state::TrivialLang for PlainLang {}
+
         let mut map = MapResolver::new();
         map.insert("chapter.tex", "chapter content");
-        let resolver: Arc<dyn SourceResolver> = Arc::new(map);
-        let any: &dyn Any = &*resolver;
+        let driver: StdParseDriver =
+            StdParseDriver::new(Recovery::Strict, ()).with_source_resolver(map);
+        let resolver =
+            ParseDriver::<PlainLang>::source_resolver(&driver).expect("resolver configured");
+        let any: &dyn Any = resolver;
         let concrete = any.downcast_ref::<MapResolver>().expect("downcast to MapResolver");
         let resolved = concrete.resolve("chapter.tex", &trigger_span()).unwrap();
         assert_eq!(resolved.content, "chapter content");

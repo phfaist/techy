@@ -306,6 +306,7 @@ impl<L: Lang> fmt::Debug for ArgumentSpec<L> {
 mod tests {
     use super::*;
     use crate::constructs::MarkerArgumentParser;
+    use alloc::format;
 
     #[derive(Debug, Clone, Copy)]
     struct PlainLang;
@@ -318,7 +319,11 @@ mod tests {
         let parser: Arc<dyn ArgumentParser<PlainLang>> =
             Arc::new(MarkerArgumentParser::new("*"));
         let any: &dyn Any = &*parser;
-        assert!(any.downcast_ref::<MarkerArgumentParser>().is_some());
+        let recovered = any
+            .downcast_ref::<MarkerArgumentParser>()
+            .expect("downcast to MarkerArgumentParser");
+        // The recovered reference answers the concrete value's own state — the "*"
+        // marker (readable here through the `Debug` rendering only).
+        assert!(format!("{recovered:?}").contains("\"*\""), "{recovered:?}");
     }
 }
-

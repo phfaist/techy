@@ -53,6 +53,11 @@ pub(crate) fn frame_title(kind: &str, role: FrameRole, name: &str) -> String {
 /// ([`StdCallableSpec`](crate::spec::StdCallableSpec),
 /// custom takeovers) remain first-class.
 ///
+/// Constructed through [`new`](MacroSpec::new), [`Default`], or
+/// [`with_after_effect`](MacroSpec::with_after_effect) — the after-effect field is
+/// private, so there is no struct-literal form; the public `arguments` field stays
+/// readable and assignable on an owned value.
+///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
 /// [`Latexlike`]) — a family member registers the same declarative macro shape
 /// under its own marker type.
@@ -131,6 +136,8 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for AfterEffectInvocationParser<'_
         &mut self,
         cx: &mut ParseContext<'_, '_, LLL>,
     ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)> {
+        // The discarded tuple slot is the inner parse's own sibling after-effect;
+        // `StdInvocationParser` never produces one.
         let (id, _) = self.inner.parse(cx)?;
         Ok((id, Some(Box::new(self.delta.clone()))))
     }

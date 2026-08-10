@@ -435,6 +435,15 @@ descent merge are now writable.)
 14. `extract` module: the `*_keep_annotations` triple exists so the `Clone + Default`
     bound lands only where needed; the short names are the general form with a
     default callback.
+15. Guide coverage for the Stage 2 additions (from the Stage 2 review): the
+    `MacroSpec` rows in `docs/specs.md` (~:74) and `docs/ai-guide-definitions.md`
+    (~:109) currently saying "argument list as plain data" must mention the optional
+    after-effect; `docs/construct-parsers.md` (~:47, :124) and `docs/custom-lang.md`
+    (~:380–385) present the sibling after-effect as reachable only via a takeover
+    parser — name `MacroSpec::with_after_effect` as the declarative route. Plus
+    one-line mentions for `NodeTree::slice`, `NodeTree::tree_tag`,
+    `TreeViolation::new`, and `DiagnosticInfo::identifier` where each guide already
+    discusses the surrounding topic.
 
 ---
 
@@ -442,7 +451,15 @@ descent merge are now writable.)
 
 - `cargo build` / `cargo test` / `cargo docs` (fresh `target/doc`) green.
 - Update the api-baseline (fold in the still-pending lang-features baseline update;
-  Stage 3 is the bulk of the record).
+  Stage 3 is the bulk of the record). Also record two narrow Stage 2 source breaks:
+  - the defaulted `DiagnosticInfo::identifier()` (2.8) makes an unqualified
+    `.identifier()` call on a *concrete* condition type ambiguous (E0034) for
+    downstream code with both `DiagnosticInfo` and `DiagnosticData` in scope
+    (previously resolved uniquely); the fix is the qualified spelling
+    (`DiagnosticInfo::identifier(&c)` / `DiagnosticData::identifier(&c)`).
+  - `Language::new`'s `impl Into<Arc<ParsingState<L>>>` parameter (2.2) no longer
+    pins `L` by structural unification; a downstream call site inferring `L`
+    through the second argument may need a type annotation.
 - **After the ARCHITECTURE/DESIGN_RATIONALE cleanup agent finishes** (do not touch
   those files before): DESIGN_RATIONALE entries for the 2026-08-10 decisions — the
   hook-fallibility ruling (tiers, the `HookFailed` condition, the Tier C

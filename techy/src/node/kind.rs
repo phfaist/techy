@@ -104,7 +104,7 @@ impl<L: Lang> NodeKind<L> {
     /// or `"List"` — for kind labels in messages and renderings (the
     /// [`display_tree`](super::display_tree) companion; payload-aware one-liners are
     /// [`NodeRef::summary`](super::NodeRef::summary)'s job).
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             NodeKind::Chars { .. } => "Chars",
             NodeKind::Group(_) => "Group",
