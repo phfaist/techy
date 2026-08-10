@@ -28,7 +28,7 @@ Stage 2 (2.1–2.8).
 | 2.4 MacroSpec::with_after_effect | **done** | builder + private `after_effect` field; make_invocation_parser wraps StdInvocationParser, returns boxed delta (post-descent shape); both AfterEffectSpec test copies replaced by the public path — engine's finding #1–#3 tests ported from the private MacroLang scaffolding to Latexlike (MacroLang/MacroDriver deleted; finding #3 seeds via lang_initial_with_packages().derived() to keep the single-`]` premise); micro-ruling: the private field ends external MacroSpec struct-literal construction (new/default/builder cover it); tests: sibling effect + scoping, two-effect merge, persist_state on/off (existing, now public-path) |
 | 2.5 TreeViolationKind/TokenKind as_str | **done** | both `pub const fn`, bare variant name (data-carrying variants answer the name only); exhaustive-match (no `_` arm) test per enum; micro-ruling: written as `const fn` although the NodeKind::as_str pattern is plain `fn` (plan text named const; strictly more general, no cost) |
 | 2.6 NodeTree::tree_tag() pub | **done** | visibility flip + doc sentence naming the NodeId pre-check use before the always-on `node()` assert |
-| 2.7 TreeViolation::new + MalformedBegin | pending | |
+| 2.7 TreeViolation::new + MalformedBegin | **done** | TreeViolation::new(node, kind) (struct stays #[non_exhaustive]); no_constructor dropped from MalformedBegin (the only shipped condition carrying it — test-only conditions keep theirs); construct-and-match + Display test; MalformedBegin::new() doc-test |
 | 2.8 DiagnosticInfo::identifier() | pending | |
 | **Stage 2 gate** (build/test/docs) | pending | |
 | 3.0 HookFailed condition (with cause field) | pending | |

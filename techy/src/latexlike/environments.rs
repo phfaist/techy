@@ -101,13 +101,22 @@ pub(crate) const END_COMMAND_NAME: &str = "end";
 /// its syntactic post-space included, keeping the sibling partition exact — as a
 /// `Chars` node (the accepted markup-in-chars recovery artifact) and consumes
 /// nothing past it.
+///
+/// Like every condition, it is constructible outside the crate (e.g. for
+/// manufacturing diagnostics in an embedding's own tests):
+///
+/// ```
+/// use techy::latexlike::MalformedBegin;
+///
+/// let condition = MalformedBegin::new();
+/// assert_eq!(condition, MalformedBegin::new());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "latexlike.environments.malformed-begin",
     message = "malformed ‘\\begin’: expected the environment's name group immediately \
-               after the command",
-    no_constructor
+               after the command"
 )]
 pub struct MalformedBegin;
 

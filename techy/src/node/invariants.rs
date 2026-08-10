@@ -299,6 +299,16 @@ pub struct TreeViolation {
     pub kind: TreeViolationKind,
 }
 
+impl TreeViolation {
+    /// A violation value from its parts — for consumers of [`validate_tree`]
+    /// manufacturing violations to test their own handling code. (The struct is
+    /// `#[non_exhaustive]`: its fields read publicly, but it cannot be built with
+    /// a struct literal outside this crate.)
+    pub fn new(node: Option<NodeId>, kind: TreeViolationKind) -> TreeViolation {
+        TreeViolation { node, kind }
+    }
+}
+
 /// The specific all-trees-law violation inside a [`TreeViolation`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -912,6 +922,26 @@ mod tests {
             alloc::vec![a, group, d], (), (),
         ).unwrap();
         builder.finish(root).unwrap()
+    }
+
+    #[test]
+    fn tree_violation_new_constructs_matchable_values() {
+        // Consumers of `validate_tree` manufacture violations to test their own
+        // handling code; the constructed value matches and renders like a
+        // checker-produced one.
+        let tree = build_valid();
+        let id = tree.root().id();
+        let violation = TreeViolation::new(Some(id), TreeViolationKind::Unreachable);
+        assert_eq!(violation.node, Some(id));
+        assert!(matches!(violation.kind, TreeViolationKind::Unreachable));
+        assert_eq!(
+            alloc::format!("{violation}"),
+            "node 0: the node is unreachable from the root"
+        );
+
+        let anonymous = TreeViolation::new(None, TreeViolationKind::Empty);
+        assert!(anonymous.node.is_none());
+        assert!(matches!(anonymous.kind, TreeViolationKind::Empty));
     }
 
     #[test]
