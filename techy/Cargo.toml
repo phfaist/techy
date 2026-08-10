@@ -26,5 +26,4 @@ hashbrown = "0.15"
 techy-derive = { version = "0.1.0", path = "../techy-derive" }
 
 [dev-dependencies]
-criterion = "0.5"
 proptest = "1.0"

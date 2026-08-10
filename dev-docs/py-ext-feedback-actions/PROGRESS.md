@@ -20,7 +20,7 @@ main at d52fe4c — dev-docs cleanup landed). Stage 1 in progress; next: 1.2–1
 | 1.4 Oracle falsifiability test | **done** | drops the middle \emph node via restage (Emit(vec![])), reemits "one  three" from "one \emph{two} three" — span-copying would resurrect the dropped bytes |
 | 1.5 format_position_with message | **done** | fallback now "@ char pos N (no line info)" — no cause named; assertion updated; no other test pinned the old wording |
 | 1.6 scan_specials bounds → Err | **done** | content.get(pos..) guard in Package::scan_specials; spelling = Custom+ImplementationError (the token reader's shipped match-end-validation precedent — no new TokenErrorKind variant needed); micro-rulings: guard runs before the visibility gate (caller bugs not maskable by mode), error span clamped to content.len() (stays liftable to SourceSpan); pos contract documented on trait method + impl; only in-crate impl with the slice (ScopeStack folds, defaults ignore pos; test-only impls out of scope); 3 tests |
-| 1.7 drop criterion + README bench line | pending | |
+| 1.7 drop criterion + README bench line | **done** | criterion removed from dev-deps; README's whole Performance section removed (it contained only the cargo bench instructions — an empty header would remain otherwise); Cargo.lock untracked, nothing else |
 | **Stage 1 gate** (build/test/docs) | pending | |
 | 2.1 + Any on four traits | pending | |
 | 2.2 Language::new Into<Arc> | pending | |

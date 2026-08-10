@@ -117,14 +117,6 @@ Run a specific test:
 cargo test test_macro_parsing
 ```
 
-## Performance
-
-Run benchmarks (requires nightly Rust):
-
-```bash
-cargo bench
-```
-
 ## License
 
 MIT License - see LICENSE file for details.
