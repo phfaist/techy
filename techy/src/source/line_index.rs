@@ -103,7 +103,16 @@ impl<'c> LineIndex<'c> {
 
     /// Extend the computed line starts to cover byte position `up_to`.
     fn extend_line_starts_up_to(&mut self, up_to: usize) {
-        let new_computed_end = up_to + 1;
+        // The resume point must stay on a char boundary: `up_to + 1` may fall inside
+        // a multi-byte character, and the next call resumes by slicing
+        // `content[computed_end..]`. Advance to the next boundary (past-the-end
+        // values are boundary-safe as-is).
+        let mut new_computed_end = up_to + 1;
+        while new_computed_end < self.content.len()
+            && !self.content.is_char_boundary(new_computed_end)
+        {
+            new_computed_end += 1;
+        }
 
         if self.content.len() > self.max_scan_len {
             if self.computed_end == 0 {
@@ -499,6 +508,30 @@ mod tests {
         // Valid positions still work afterwards.
         assert_eq!(index.line_col(0), Some((1, 1)));
         assert_eq!(index.line_col(4), Some((1, 5)));
+    }
+
+    #[test]
+    fn multibyte_first_character_then_later_query() {
+        // Regression: `line_col(k)` stored `k + 1` as the resume point and the next
+        // call sliced `content[k + 1..]` — a panic whenever byte `k` began a
+        // multi-byte character. Offset 0 first, a larger offset second is the
+        // `display_tree` query order.
+        let mut index = LineIndex::new("é—x\ny");
+        assert_eq!(index.line_col(0), Some((1, 1)));
+        assert_eq!(index.line_col(5), Some((1, 6))); // 'x' (columns count bytes)
+        assert_eq!(index.line_col(7), Some((2, 1))); // 'y'
+    }
+
+    #[test]
+    fn multibyte_incremental_queries_agree_with_a_fresh_index() {
+        for content in ["é", "—x{y}", "😀", "aé\nb—c\n😀"] {
+            let mut index = LineIndex::new(content);
+            for off in 0..=content.len() {
+                let incremental = index.line_col(off);
+                let mut fresh = LineIndex::new(content);
+                assert_eq!(incremental, fresh.line_col(off), "offset {off} of {content:?}");
+            }
+        }
     }
 
     // --- line_of / line_col_span ------------------------------------------------------

@@ -8,14 +8,13 @@ any execution-time micro-ruling in the notes column (with the commit that took i
 Commit convention: small per-item commits on this branch
 (`worktree-py-ext-feedback-plan`), messages prefixed `pyext-<item>:`.
 
-**Resume here: WAITING FOR THE USER'S EXPLICIT START SIGNAL** (a parallel agent is
-still working on the dev-docs cleanup — do not begin). All rulings are complete
-(three rounds, 2026-08-10); when the signal comes, next action is Stage 1,
-item 1.1.
+**Resume here:** EXECUTING (started 2026-08-10 on user signal; branch rebased onto
+main at d52fe4c — dev-docs cleanup landed). Stage 1 in progress; next: 1.2–1.7
+(delegated).
 
 | Item | Status | Notes |
 |---|---|---|
-| 1.1 LineIndex multi-byte resume fix | pending | |
+| 1.1 LineIndex multi-byte resume fix | **done** | boundary-advance on resume point (unclamped — offset==len queries rely on past-the-end computed_end); 3 regression tests |
 | 1.2 ChildRegion::staged() pub + Panics docs | pending | |
 | 1.3 Include-chain message: written reference | pending | |
 | 1.4 Oracle falsifiability test | pending | |

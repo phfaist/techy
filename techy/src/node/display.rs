@@ -233,6 +233,43 @@ mod tests {
     }
 
     #[test]
+    fn multibyte_first_character_renders() {
+        // Regression: the line index resumed mid-character, so any document whose
+        // first character is multi-byte panicked the renderer.
+        let source: Arc<Source> = Arc::new(Source::new("é—{x}"));
+        let st = state();
+        let mut b: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+        let text = b.add(
+            NodeKind::chars(Span::new(0, 5)),
+            SourceSpan::new(&source, 0..5),
+            st.clone(),
+            vec![], (), (),
+        ).unwrap();
+        let x = b.add(
+            NodeKind::chars(Span::new(6, 7)),
+            SourceSpan::new(&source, 6..7),
+            st.clone(),
+            vec![], (), (),
+        ).unwrap();
+        let group = b.add(
+            NodeKind::group(GroupData::new(0u32, Span::new(5, 6), Span::new(7, 8))),
+            SourceSpan::new(&source, 5..8),
+            st.clone(),
+            vec![x], (), (),
+        ).unwrap();
+        let root = b.add(
+            NodeKind::list(),
+            SourceSpan::entire(&source),
+            st.clone(),
+            vec![text, group], (), (),
+        ).unwrap();
+        let tree = b.finish(root).unwrap();
+
+        let rendered = display_tree(tree.root());
+        assert!(rendered.contains("@ 1:1"), "line/col rendered:\n{rendered}");
+    }
+
+    #[test]
     fn source_name_printed_only_on_change() {
         // main (labeled) holds x·y; an attached resolved source "f" holds the
         // middle child. Expect: no name on the first lines (initial source),
