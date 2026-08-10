@@ -112,6 +112,12 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// Consulted by the default [`recover`](ParseDriver::recover) and
     /// [`probe_token`](ParseDriver::probe_token) paths — a custom policy beyond the
     /// strict/tolerant enum overrides those methods instead.
+    ///
+    /// Deliberately infallible: this is a pure read of configured policy, with no
+    /// computation that could fail. Embedding or binding code whose implementation
+    /// can still fail should report the failure through the embedding's own channel
+    /// and answer [`Recovery::Strict`] — the conservative policy: a strict parse
+    /// aborts on problems instead of continuing under a policy nobody chose.
     fn recovery(&self) -> Recovery {
         Recovery::Strict
     }
@@ -248,6 +254,12 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// The default preserves the whitespace-as-chars invariant: a
     /// whitespace-only `Chars` kind, span-backed over the full token span (newlines
     /// included).
+    ///
+    /// Deliberately infallible: a fixed default node is always answerable — the
+    /// whitespace-as-chars default requires no computation that could fail.
+    /// Embedding or binding code whose implementation can still fail should report
+    /// the failure through the embedding's own channel and answer the default node
+    /// (`NodeKind::chars(token.span)`).
     fn make_paragraph_break_node(
         &self,
         state: &ParsingState<L>,
@@ -272,6 +284,12 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// message needs is stored in the refined payload's fields here — conditions stay
     /// self-contained after the parse (no state references inside errors, no lazy
     /// rendering).
+    ///
+    /// Deliberately infallible: the identity fallback is always sound — a refiner
+    /// that cannot refine returns the payload it received. Embedding or binding
+    /// code whose implementation can still fail should report the failure through
+    /// the embedding's own channel and pass `data` through unchanged; the condition
+    /// is then recorded unrefined.
     fn refine_diagnostic(
         &self,
         data: Box<dyn DiagnosticData>,
@@ -418,6 +436,12 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// composition it owns. Resolution itself stays *outside* the parse machinery:
     /// callers compose accessor → [`resolve_source_reference`](crate::source::resolve_source_reference)
     /// → parse, so caching frameworks can substitute either half.
+    ///
+    /// Deliberately infallible: this accessor only hands out an already-configured
+    /// resolver — failure belongs on [`SourceResolver::resolve`], which is already
+    /// fallible and reports per reference. Embedding or binding code that cannot
+    /// produce its resolver should report the failure through the embedding's own
+    /// channel and answer `None` (the parse then resolves nothing).
     fn source_resolver(&self) -> Option<&dyn SourceResolver<L::SourceOrigin>> {
         None
     }

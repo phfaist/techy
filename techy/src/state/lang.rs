@@ -425,6 +425,13 @@ pub trait Lang: Sized + 'static {
     /// - "Rebuilt at transitions" means once per group descent, optional-argument probe,
     ///   and argument delta — keep it cheap (cache expensive derivations in an `Arc`
     ///   inside `StateExt` if needed).
+    ///
+    /// Deliberately infallible: a conservative superset is always answerable —
+    /// [`TriggerChars::Any`] satisfies the contract with no computation at all.
+    /// Embedding or binding code whose implementation can still fail should report
+    /// the failure through the embedding's own channel and answer the conservative
+    /// superset ([`TriggerChars::Any`]); the per-position work then falls to
+    /// [`scan_specials`](Lang::scan_specials), which can fail recoverably.
     fn specials_trigger_chars(data: &StateData<Self>) -> TriggerChars {
         let _ = data;
         TriggerChars::default()

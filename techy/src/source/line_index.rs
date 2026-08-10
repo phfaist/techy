@@ -254,6 +254,12 @@ fn compute_line_starts(content: &str) -> Vec<usize> {
 pub trait LineColProvider<O: SourceOrigin = Option<String>> {
     /// The (line, column) of `byte_offset` within `source`, or `None` when no
     /// answer is available (see the trait docs).
+    ///
+    /// Deliberately infallible beyond its `Option`: `None` **is** the no-answer
+    /// channel — callers fall back to raw byte positions, whatever the reason no
+    /// answer exists. Embedding or binding code whose implementation fails
+    /// internally (a failure in the embedding's own line table) should report the
+    /// failure through the embedding's own channel and answer `None`.
     fn line_col(
         &mut self,
         source: &Arc<Source<O>>,

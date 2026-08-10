@@ -155,6 +155,15 @@ pub trait ComposePiece: Clone {
     fn empty() -> Self;
 
     /// Append `other` after `self`.
+    ///
+    /// Deliberately infallible: both shipped piece types (`String` and `()`)
+    /// genuinely cannot fail here, and a recomposition already has a typed
+    /// failure channel of its own ([`Recomposer::Error`]). Embedding or binding
+    /// code whose piece type can still fail (one writing into an external
+    /// buffer) should report the failure through the embedding's own channel —
+    /// recording it so the recomposer can answer its own
+    /// [`Error`](Recomposer::Error) from the next instruction callback — and
+    /// leave `self` unchanged.
     fn append(&mut self, other: Self);
 }
 
