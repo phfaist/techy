@@ -87,13 +87,20 @@ impl<L: Lang> Language<L> {
     /// A language over `driver`, parsing from `initial_state`. Both inputs are
     /// mandatory — the type-level docs show the canonical construction, and the
     /// [`ParsingState::lang_initial`]`[_with_packages]` constructors keep the everyday
-    /// spellings short. The parsing-depth limit starts at the guard type's default
+    /// spellings short. `initial_state` accepts a state by value or an already-shared
+    /// `Arc<ParsingState<L>>`: passing the shared handle preserves the state's
+    /// identity (states are shared by handle — a data-equal copy is a different
+    /// state), so a language can start parses from exactly the state some parsed
+    /// node carries. The parsing-depth limit starts at the guard type's default
     /// configuration; choose one explicitly with
     /// [`with_descent_guard_init`](Language::with_descent_guard_init).
-    pub fn new(driver: L::Driver, initial_state: ParsingState<L>) -> Language<L> {
+    pub fn new(
+        driver: L::Driver,
+        initial_state: impl Into<Arc<ParsingState<L>>>,
+    ) -> Language<L> {
         Language {
             driver,
-            initial_state: Arc::new(initial_state),
+            initial_state: initial_state.into(),
             descent_guard_init: Default::default(),
         }
     }
@@ -382,6 +389,18 @@ mod tests {
                 None => "other".into(),
             })
             .collect()
+    }
+
+    #[test]
+    fn new_accepts_a_shared_state_handle_preserving_identity() {
+        // A parsed node's state is a shared handle; seeding a new language from that
+        // handle preserves the state's identity (no data-equal copy is minted).
+        let result = strict().parse("hello").unwrap();
+        let node_state = Arc::clone(result.tree.root().parsing_state());
+
+        let language =
+            Language::new(StdParseDriver::new(Recovery::Strict, ()), Arc::clone(&node_state));
+        assert!(Arc::ptr_eq(language.initial_state(), &node_state));
     }
 
     #[test]
