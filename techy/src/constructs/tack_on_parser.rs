@@ -225,7 +225,10 @@ where
             cx.tokens.move_past(&token, true);
             let driver = cx.driver;
             let mut parser = driver.make_invocation_parser(invocation);
-            let result = cx.with_frame(frame, |cx| parser.parse(cx));
+            // The descent runs through the single entry point (its MUST contract);
+            // `None` scopes a clone of the current state — same swap/restore as the
+            // content loop's dispatch site.
+            let result = cx.parse_construct(&mut *parser, None, Some(frame));
             drop(parser);
             // An after-effect delta has no scope here: the argument channel
             // deliberately carries none (`ArgumentParser::parse_argument` docs).

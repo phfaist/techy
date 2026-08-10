@@ -193,7 +193,17 @@ branch chain for ff-merge (merges not run from the primary checkout).
   Part 1 text says (the parser there is the invocation parser, not a group parser);
   no in-crate caller passes `parse_group`'s new `frame` yet. Stale `parse_scoped`
   mentions in ARCHITECTURE/DESIGN_RATIONALE await Part 4.
-- [ ] Part 1 reviewed (agent) — findings resolved
+- [x] Part 1 reviewed (agent) — findings resolved
+- 2026-08-10 F1 from Part 1 review: the two remaining direct
+  `ConstructParser::parse` dispatch sites under a hand-pushed frame — the
+  expression-position invocation dispatch (`argument_parsers.rs`) and the tack-on
+  field dispatch (`tack_on_parser.rs`) — migrated to
+  `parse_construct(&mut *parser, None, Some(frame))` under ruled decision #1.
+  Accepted behavior delta (user-vetoable): each site now also pushes an
+  enclosing-state stack entry for the descent's duration — an `Arc`-identical
+  duplicate of the current state, harmless per `ParsingStateStack`'s documented
+  scan semantics; it restores the documented "same descent points as the frame
+  stack" symmetry these sites were missing.
 - [ ] Part 2 implemented — gates green
 - [ ] Part 2 reviewed — findings resolved
 - [ ] Part 3 implemented — gates green
