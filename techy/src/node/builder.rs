@@ -470,6 +470,13 @@ impl<'b, L: Lang> StagedNodeView<'b, L> {
 /// [`ChildNotStaged`](NodeBuildError::ChildNotStaged) — reads as absent here:
 /// [`get`](StagedChildren::get) answers `None` and [`iter`](StagedChildren::iter)
 /// skips it (this view never panics).
+///
+/// The view **borrows the builder's staging storage, which the very next staging
+/// call grows** — nothing borrowed through it (child views and everything they
+/// hand out) may be held past the call that received the view; copy out what is
+/// needed. Safe Rust cannot violate this (the lifetimes forbid it); the rule is
+/// stated for embeddings that adapt the receiving hook across a boundary where
+/// lifetimes are erased.
 pub struct StagedChildren<'b, L: Lang> {
     arena: &'b [Staged<L>],
     children: &'b [BuildId],

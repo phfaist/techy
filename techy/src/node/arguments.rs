@@ -78,7 +78,11 @@ pub enum ContentNodes {
     /// Elements `i..j` of the region's own node list (`0` = the region's first node):
     /// content sitting directly among the callable's children — a `\frac 1 2` single
     /// token, a provided `*` marker (which counts as content — pylatexenc parity), or
-    /// multi-node content of a custom parser.
+    /// multi-node content of a custom parser. The shipped **slot-level** example is
+    /// [`input_macro_spec`](crate::latexlike::input_macro_spec)'s `attached` slot
+    /// (a region-level slot has no wrapper node —
+    /// [`NodeRef::slot_content_parent`](super::NodeRef::slot_content_parent)
+    /// answers `None` for it).
     InRegion(Range<u32>),
     /// Children `i..j` of the staged node: content *inside* a region node — a `{…}`
     /// argument's group children, the inner group's children of `[{arg with ]}]`, a

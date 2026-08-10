@@ -43,6 +43,8 @@ impl TextContent {
     /// `source` — the source the span refers into (the carrying node's **own**
     /// source, per the `Spanned` invariant: in a multi-source tree each node's
     /// payload resolves against its own span's source, never an ambient one).
+    /// For content read off a parsed node, that source is
+    /// `node.span().source()` ([`SourceSpan::source`](super::SourceSpan::source)).
     ///
     /// # Panics
     ///

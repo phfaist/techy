@@ -25,7 +25,10 @@
 //!   builder's `finish()`), and which [`ArgumentSpec`](crate::spec::ArgumentSpec) each
 //!   was parsed against.
 //! - Node textual payloads are [`TextContent`](crate::source::TextContent) (span-backed
-//!   or owned); [`NodeTree::materialize`] produces an all-owned copy. Names are always
+//!   or owned); a span-backed payload resolves against the carrying node's own
+//!   source, `node.span().source()`
+//!   ([`TextContent::resolve`](crate::source::TextContent::resolve));
+//!   [`NodeTree::materialize`] produces an all-owned copy. Names are always
 //!   owned (identity vs. content ownership rule).
 
 mod arguments;

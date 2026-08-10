@@ -51,6 +51,12 @@ use super::Latexlike;
 /// children (an `\input`'s attached content reemits as the `\input{…}`
 /// invocation it came from). Works for any language family member (`LLL:`
 /// [`LatexlikeLang`]) over trees with any annotation type.
+///
+/// Its only failure is [`SourceRecomposeError`]'s payload-coherence check,
+/// which **no parse output can trigger**
+/// ([`IncoherentInvocationSyntax`](SourceRecomposeError::IncoherentInvocationSyntax)
+/// reports a hand-built or incoherently restaged tree) — over trees a parse
+/// produced, the recomposition never errs.
 pub struct SourceRecomposer<LLL: LatexlikeLang = Latexlike> {
     _lang: PhantomData<LLL>,
 }

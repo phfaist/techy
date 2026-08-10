@@ -118,9 +118,12 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// delimiters; callables print their invocation form (`Debug`) and spelling;
     /// chars/comments print their full logical text; lists print their child count.
     ///
-    /// The format is human-oriented and **not a stability contract** — compare trees
-    /// structurally (kinds, spans, accessors) where exactness matters beyond a test's
-    /// lifetime.
+    /// The format is human-oriented and **not a stability contract**: it may change
+    /// between releases. Within a release it is exact, and the crate's own tests
+    /// pin it — a re-implementation that must agree with this crate's renderings
+    /// (a binding porting the test suite) reproduces it verbatim. Compare trees
+    /// structurally (kinds, spans, accessors) where exactness matters beyond a
+    /// test's lifetime.
     pub fn summary(&self) -> String {
         if let Some(text) = self.chars() {
             format!("chars({text})")
@@ -372,7 +375,12 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
     /// when the slot's content sits directly among the callable's own children
     /// ([`ContentNodes::InRegion`](super::ContentNodes) designations), where no such
     /// wrapper node exists — returning the callable itself would send naive recursive
-    /// walkers into a loop. Content access that works for *both* shapes is
+    /// walkers into a loop. The shipped producer of that wrapperless shape is
+    /// [`input_macro_spec`](crate::latexlike::input_macro_spec)'s `attached` slot:
+    /// the included content's nodes sit directly among the `\input` callable's
+    /// children (reaching it takes a
+    /// [`SourceResolver`](crate::source::SourceResolver) on the driver). Content
+    /// access that works for *both* shapes is
     /// [`slot_content_nodes`](NodeRef::slot_content_nodes) / [`body`](NodeRef::body).
     pub fn slot_content_parent(&self, i: usize) -> Option<NodeRef<'t, L, A>> {
         let region = &self.callable()?.slots.get(i)?.region;

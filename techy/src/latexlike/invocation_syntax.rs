@@ -79,7 +79,10 @@ pub enum InvocationSyntaxData<Env = StdEnvironmentSyntax<Latexlike>> {
         escape_char: char,
         /// The trigger token's own syntactic post-space (see the enum docs) —
         /// span-backed when parsed, owned after
-        /// [`materialize`](crate::node::NodeTree::materialize).
+        /// [`materialize`](crate::node::NodeTree::materialize). Span-backed
+        /// content resolves against the carrying node's own source,
+        /// `node.span().source()`
+        /// ([`TextContent::resolve`]'s contract).
         post_space: TextContent,
     },
     /// An environment-shaped invocation's begin/end syntax facts.
@@ -290,9 +293,9 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     ) -> Self;
 
     /// The begin-side spelling as recorded, resolved around `name` (the
-    /// environment's name as written); `source` (the carrying node's own source)
-    /// resolves span-backed fields. What a source recomposer emits for the begin
-    /// syntax.
+    /// environment's name as written); `source` (the carrying node's own source,
+    /// `node.span().source()`) resolves span-backed fields. What a source
+    /// recomposer emits for the begin syntax.
     fn write_begin(&self, name: &str, source: &Source<L::SourceOrigin>) -> String;
 
     /// The end-side spelling as recorded — the empty string when the end side is

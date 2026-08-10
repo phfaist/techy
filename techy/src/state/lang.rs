@@ -473,6 +473,14 @@ pub trait Lang: Sized + 'static {
     /// staging is bottom-up, the parent does not exist yet; downward context is
     /// [`StateExt`](Lang::StateExt)'s job.
     ///
+    /// The view **borrows the staging storage the pending staging call is about to
+    /// grow** — nothing borrowed from it may be held past this call; whatever the
+    /// ext needs is copied into the returned value. A safe Rust implementation
+    /// cannot get this wrong (the view's lifetime is call-scoped and
+    /// [`NodeExt`] carries none), so the rule is stated for the code the compiler
+    /// is not checking: an embedding that adapts this hook across a boundary
+    /// where lifetimes are erased must enforce it itself.
+    ///
     /// # Errors
     ///
     /// `Err` means the ext could not be computed — typically

@@ -975,6 +975,16 @@ impl<L: Lang> Package<L> {
 
     /// The spec defined under `(callable_type, name)`, if any (visibility-blind: this
     /// is the raw data accessor; mode checks apply only on the provider paths).
+    ///
+    /// **Specials are not reachable here.** They are keyed by **trigger**, not by
+    /// name, and live in their own store — `get` answers `None` for a specials
+    /// definition even immediately after
+    /// [`insert_specials`](Package::insert_specials) (whose `callable_type`
+    /// parameter is what the *match* reports, not a lookup key here). To read
+    /// them back, use [`iter_symbols`](SpecsProvider::iter_symbols) (which lists
+    /// specials with the trigger as the name) or
+    /// [`scan_specials`](SpecsProvider::scan_specials) (the matching path);
+    /// [`len`](Package::len) counts them.
     pub fn get(
         &self,
         callable_type: L::CallableTypeId,
