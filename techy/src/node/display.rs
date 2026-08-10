@@ -235,38 +235,55 @@ mod tests {
     #[test]
     fn multibyte_first_character_renders() {
         // Regression: the line index resumed mid-character, so any document whose
-        // first character is multi-byte panicked the renderer.
-        let source: Arc<Source> = Arc::new(Source::new("é—{x}"));
-        let st = state();
-        let mut b: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
-        let text = b.add(
-            NodeKind::chars(Span::new(0, 5)),
-            SourceSpan::new(&source, 0..5),
-            st.clone(),
-            vec![], (), (),
-        ).unwrap();
-        let x = b.add(
-            NodeKind::chars(Span::new(6, 7)),
-            SourceSpan::new(&source, 6..7),
-            st.clone(),
-            vec![], (), (),
-        ).unwrap();
-        let group = b.add(
-            NodeKind::group(GroupData::new(0u32, Span::new(5, 6), Span::new(7, 8))),
-            SourceSpan::new(&source, 5..8),
-            st.clone(),
-            vec![x], (), (),
-        ).unwrap();
-        let root = b.add(
-            NodeKind::list(),
-            SourceSpan::entire(&source),
-            st.clone(),
-            vec![text, group], (), (),
-        ).unwrap();
-        let tree = b.finish(root).unwrap();
+        // first character is multi-byte panicked the renderer. Same tree shape
+        // over a 2-byte and a 4-byte first character (`é` and `😀`, each followed
+        // by the 3-byte `—` and the ASCII `{x}`); byte offsets differ per source.
+        // Columns count bytes, so the pinned root line ends at byte length + 1.
+        for (content, expected_root_line) in [
+            ("é—{x}", "list(2) @ 1:1..1:9"),   // 2 + 3 + 3 = 8 bytes
+            ("😀—{x}", "list(2) @ 1:1..1:11"), // 4 + 3 + 3 = 10 bytes
+        ] {
+            let text_end = content.len() - 3; // the trailing ASCII "{x}"
+            let source: Arc<Source> = Arc::new(Source::new(content));
+            let st = state();
+            let mut b: NodeTreeBuilder<PlainLang> = NodeTreeBuilder::new();
+            let text = b.add(
+                NodeKind::chars(Span::new(0, text_end)),
+                SourceSpan::new(&source, 0..text_end),
+                st.clone(),
+                vec![], (), (),
+            ).unwrap();
+            let x = b.add(
+                NodeKind::chars(Span::new(text_end + 1, text_end + 2)),
+                SourceSpan::new(&source, text_end + 1..text_end + 2),
+                st.clone(),
+                vec![], (), (),
+            ).unwrap();
+            let group = b.add(
+                NodeKind::group(GroupData::new(
+                    0u32,
+                    Span::new(text_end, text_end + 1),
+                    Span::new(text_end + 2, text_end + 3),
+                )),
+                SourceSpan::new(&source, text_end..text_end + 3),
+                st.clone(),
+                vec![x], (), (),
+            ).unwrap();
+            let root = b.add(
+                NodeKind::list(),
+                SourceSpan::entire(&source),
+                st.clone(),
+                vec![text, group], (), (),
+            ).unwrap();
+            let tree = b.finish(root).unwrap();
 
-        let rendered = display_tree(tree.root());
-        assert!(rendered.contains("@ 1:1"), "line/col rendered:\n{rendered}");
+            let rendered = display_tree(tree.root());
+            let first_line = rendered.lines().next().unwrap_or_default();
+            assert_eq!(
+                first_line, expected_root_line,
+                "root line of {content:?}:\n{rendered}"
+            );
+        }
     }
 
     #[test]

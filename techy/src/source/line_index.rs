@@ -105,8 +105,12 @@ impl<'c> LineIndex<'c> {
     fn extend_line_starts_up_to(&mut self, up_to: usize) {
         // The resume point must stay on a char boundary: `up_to + 1` may fall inside
         // a multi-byte character, and the next call resumes by slicing
-        // `content[computed_end..]`. Advance to the next boundary (past-the-end
-        // values are boundary-safe as-is).
+        // `content[computed_end..]`. Advance to the next boundary. The loop leaves
+        // past-the-end values alone; that is safe because the resume point is at
+        // most `len + 1` (`line_index_of` rejects `byte_offset > content.len()`,
+        // so `up_to <= len`), and a stored `len + 1` never becomes a slice start:
+        // any later call computes `new_computed_end <= len + 1`, which the
+        // `new_computed_end > self.computed_end` guard below rejects.
         let mut new_computed_end = up_to + 1;
         while new_computed_end < self.content.len()
             && !self.content.is_char_boundary(new_computed_end)
@@ -523,13 +527,32 @@ mod tests {
     }
 
     #[test]
-    fn multibyte_incremental_queries_agree_with_a_fresh_index() {
+    fn multibyte_incremental_queries_agree_with_a_precomputed_table() {
+        // The oracle is `LineIndexCache`, which computes each source's full
+        // line-starts table in one pass — independent of the lazy extension
+        // under test, so a bug shared by two lazily-extended indexes cannot
+        // hide. Both query orders: ascending grows the lazy index step by step,
+        // descending answers every later query from one big first extension.
         for content in ["é", "—x{y}", "😀", "aé\nb—c\n😀"] {
-            let mut index = LineIndex::new(content);
+            let source = arc_source(content);
+            let mut cache: LineIndexCache = LineIndexCache::new();
+
+            let mut ascending = LineIndex::new(content);
             for off in 0..=content.len() {
-                let incremental = index.line_col(off);
-                let mut fresh = LineIndex::new(content);
-                assert_eq!(incremental, fresh.line_col(off), "offset {off} of {content:?}");
+                assert_eq!(
+                    ascending.line_col(off),
+                    cache.line_col(&source, off),
+                    "ascending, offset {off} of {content:?}"
+                );
+            }
+
+            let mut descending = LineIndex::new(content);
+            for off in (0..=content.len()).rev() {
+                assert_eq!(
+                    descending.line_col(off),
+                    cache.line_col(&source, off),
+                    "descending, offset {off} of {content:?}"
+                );
             }
         }
     }

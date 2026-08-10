@@ -346,6 +346,42 @@ fn dropping_a_middle_node_drops_exactly_its_text() {
     assert_eq!(out, "one  three");
 }
 
+/// The argument-interior variant of the drop check above. Dropping a direct
+/// child of the root list only catches a recomposer that span-copies the *root*;
+/// a recomposer that span-copies callables or groups still passes it (no
+/// surviving callable or group has the dropped bytes inside its span). Here the
+/// dropped node sits *inside* `\emph`'s argument group, so the surviving `\emph`
+/// callable's span — and its group's — still cover the dropped bytes: a
+/// span-copying callable or group recomposer resurrects `two` and fails.
+#[test]
+fn dropping_a_node_inside_an_argument_drops_exactly_its_text() {
+    let input = "one \\emph{two} three";
+    let result = language(Recovery::Strict).parse(input).expect("oracle inputs parse");
+    assert!(result.diagnostics.is_empty());
+
+    // Drop the `two` Chars node inside the argument group; everything else —
+    // the `\emph` callable and its delimiting group included — restages
+    // unchanged. Dropping every node of the argument's content leaves the
+    // argument provided with an empty region (absent ≠ empty).
+    let restaged = restage(
+        &result.tree,
+        &mut |node: NodeRef<'_, Latexlike>,
+              _cx: &mut RestageContext<'_, Latexlike, (), ()>| {
+            Ok::<_, std::convert::Infallible>(if node.chars() == Some("two") {
+                Restage::Emit(Vec::new())
+            } else {
+                Restage::Descend(())
+            })
+        },
+    )
+    .unwrap();
+
+    let out = recompose(&restaged, (), &mut source_recomposer()).unwrap();
+    // The input minus exactly the dropped node's text (`two`): the argument's
+    // braces survive as recorded group delimiters.
+    assert_eq!(out, "one \\emph{} three");
+}
+
 // --- the multi-source matrix (rides the S6 `\input` surface) ----------------------------
 
 fn input_language(entries: &[(&str, &str)]) -> Language<Latexlike> {

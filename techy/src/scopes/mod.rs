@@ -488,10 +488,11 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any {
     ///
     /// **`pos` contract:** `pos` must be a byte offset within `content`'s bounds
     /// (`pos <= content.len()`) and on a character boundary. A caller passing an
-    /// invalid `pos` violates this contract; the shipped implementations answer
-    /// with an `Err` carrying an
-    /// [`ImplementationError`](crate::constructs::ImplementationError) — never a
-    /// panic, never a silent no-match.
+    /// invalid `pos` violates this contract; an implementation that indexes
+    /// `content` with `pos` must answer with an `Err` carrying an
+    /// [`ImplementationError`](crate::constructs::ImplementationError) rather
+    /// than panic ([`Package`] does). The default body below and implementations
+    /// that ignore `pos` answer `Ok(None)`.
     fn scan_specials<'s>(
         &self,
         state: &ParsingState<L>,
@@ -1024,9 +1025,9 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
 
     /// See the trait method's `pos` contract: an invalid `pos` (out of
     /// `content`'s bounds, or not a character boundary) answers an `Err`
-    /// carrying an [`ImplementationError`] — checked before the visibility
-    /// gate, so a caller bug is reported regardless of the package's mode
-    /// visibility.
+    /// carrying an [`ImplementationError`] whose message names which of the two
+    /// cases applies — checked before the visibility gate, so a caller bug is
+    /// reported regardless of the package's mode visibility.
     fn scan_specials<'s>(
         &self,
         state: &ParsingState<L>,
@@ -1040,12 +1041,16 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
         // span is clamped to the content so it stays liftable to a source
         // span.
         let Some(rest) = content.get(pos..) else {
+            let case = if pos > content.len() {
+                "out of the content's bounds"
+            } else {
+                "not a character boundary"
+            };
             return Err(TokenError::new(
                 TokenErrorKind::Custom(Box::new(ImplementationError::new(
                     alloc::format!(
                         "Package::scan_specials called with an invalid position {pos} \
-                         (out of the content's bounds or not a character boundary; \
-                         content length {})",
+                         ({case}; content length {})",
                         content.len()
                     ),
                 ))),
@@ -1567,6 +1572,9 @@ impl<L: Lang> ScopeStack<L> {
     /// (pylatexenc `test_for_specials` parity — `---` beats `--` across providers, and
     /// an equal-length match is the same spelling, so the tie rule implements
     /// shadowing). A provider's scan `Err` aborts the fold and propagates.
+    /// `pos` is passed through to every provider unchecked, under the `pos`
+    /// contract documented on [`SpecsProvider::scan_specials`] (within
+    /// `content`'s bounds, on a character boundary).
     pub fn scan_specials<'s>(
         &self,
         state: &ParsingState<L>,
@@ -2374,15 +2382,18 @@ mod tests {
         let package = specials_package("lig", &[("--", &spec)]);
         let st = state_with(ScopeStack::new());
 
-        // Out of range.
+        // Out of range — the message names the case.
         let error = package.scan_specials(&st, "--", 7).unwrap_err();
         assert!(error.to_string().contains("extension contract violation"));
         assert!(error.to_string().contains("invalid position 7"));
+        assert!(error.to_string().contains("out of the content's bounds"), "{error}");
         assert!(error.recovery().is_none());
 
-        // Mid-character: `é` is two bytes, so pos 1 is not a character boundary.
+        // Mid-character: `é` is two bytes, so pos 1 is not a character boundary —
+        // named as the boundary case, not the bounds case.
         let error = package.scan_specials(&st, "é--", 1).unwrap_err();
         assert!(error.to_string().contains("invalid position 1"));
+        assert!(error.to_string().contains("not a character boundary"), "{error}");
 
         // Valid boundary positions are unaffected — end of content included.
         assert!(package.scan_specials(&st, "x--", 1).unwrap().is_some());

@@ -64,7 +64,10 @@
 //! - [`ChildRegion::children`](core::node::ChildRegion::children),
 //!   [`ChildRegion::content_range`](core::node::ChildRegion::content_range), and
 //!   [`ChildRegion::content_parent`](core::node::ChildRegion::content_parent) —
-//!   panic on a staged (never finished) region, which no finished tree can contain.
+//!   panic on a staged (never finished) region, which no finished tree can contain
+//!   (guard with [`ChildRegion::is_resolved`](core::node::ChildRegion::is_resolved);
+//!   the non-panicking companion answering the staged coordinates is
+//!   [`ChildRegion::staged`](core::node::ChildRegion::staged)).
 //!
 //! These two families are the complete list of documented panics in the public API;
 //! no other public item panics on documented use.

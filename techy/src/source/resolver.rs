@@ -307,9 +307,13 @@ impl ResolveError {
     }
 }
 
+// The wording deliberately differs from the `UnresolvableSourceReference`
+// condition's "cannot resolve source reference ‘…’: …" (which renders this
+// error's `message()` as its detail): in an error chain that shows both, the
+// two sentences stay distinguishable instead of reading as a duplicated prefix.
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot resolve source reference '{}': {}", self.reference, self.message)
+        write!(f, "source reference ‘{}’ failed to resolve: {}", self.reference, self.message)
     }
 }
 

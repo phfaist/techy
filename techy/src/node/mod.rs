@@ -432,6 +432,16 @@ mod tests {
         assert!(region0.staged().is_none());
     }
 
+    /// Pins the documented panic of the resolved-only accessors on a still-staged
+    /// region — a register-load-bearing contract: the crate-level Panics list and
+    /// each accessor's Panics section promise exactly this behavior.
+    #[test]
+    #[should_panic(expected = "child region still staged")]
+    fn resolved_only_accessor_panics_on_a_staged_region() {
+        let region = ChildRegion::new(0..3, ContentNodes::InRegion(1..2));
+        let _ = region.children();
+    }
+
     #[test]
     fn absent_marker_and_named_arguments() {
         // \section*{t}-shaped: star marker provided (a Chars node — pylatexenc behavior),

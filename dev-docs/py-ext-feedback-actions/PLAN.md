@@ -453,6 +453,11 @@ descent merge are now writable.)
   "Revisit if" clause, no dates in entry bodies, the ARCHITECTURE reference added
   in the same change, and no mention of this plan, its stages, or its worktree
   anywhere in ARCHITECTURE.
+- In the same DESIGN_RATIONALE edit: the panic-policy clause that lists the
+  non-panicking companions ("(`NodeTree::get`, `Span::get`)") must gain
+  `ChildRegion::staged` (the companion of the `ChildRegion` resolved-only
+  accessors, promised by the crate-level panic register since the Stage 1
+  review fixes).
 - Courtesy notes to the bindings project (1.1 ratchet; the Stage 3 signature sweep).
 - Delete `dev-docs/py-ext-feedback-actions/`.
 

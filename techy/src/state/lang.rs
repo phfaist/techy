@@ -360,7 +360,10 @@ pub trait Lang: Sized + 'static {
     /// makes scanning/lookup mismatches impossible by construction. Typically implemented
     /// as a fold over the state's scope stack
     /// ([`ScopeStack::scan_specials`](crate::scopes::ScopeStack::scan_specials)). Positions are
-    /// absolute byte offsets into `content`.
+    /// absolute byte offsets into `content`; `pos` is passed through to implementations
+    /// unchecked, under the `pos` contract documented on
+    /// [`SpecsProvider::scan_specials`](crate::scopes::SpecsProvider::scan_specials)
+    /// (within `content`'s bounds, on a character boundary).
     ///
     /// **Implementer obligations:**
     ///

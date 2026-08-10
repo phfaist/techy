@@ -849,9 +849,9 @@ fn render_report<O: SourceOrigin>(
 
 /// Format a span's starting position for display: `@ (line 2, col 5) [origin]`, falling
 /// back to a raw byte position — with a short parenthetical explaining that line
-/// information is unavailable — for huge sources (see
-/// [`LineIndexCache`]). The `[origin]` part is omitted when the
-/// source's origin has no label.
+/// information is unavailable — whenever the line/column provider answers `None`
+/// for the position (content past the [`LineIndexCache`] scan cap is one such
+/// reason). The `[origin]` part is omitted when the source's origin has no label.
 ///
 /// One-shot convenience: builds (and drops) a fresh transient cache per call —
 /// shorthand for [`format_position_with`]. Rendering a
