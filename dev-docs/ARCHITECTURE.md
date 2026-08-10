@@ -67,8 +67,9 @@ policy topic: [§dd-dr:dependencies].
 5. **Closed structural core, open payloads.** The engine knows a small fixed set of
    *structural* shapes — chars, group, callable invocation, comment, list — with no
    `Custom` variant and no open-ended node trait objects. Semantics attach through
-   specs; custom data attaches through per-node and per-kind ext types supplied by
-   `Lang`, orthogonal to structural identity. (Cf. [§dd-dr:closed-core-open-payloads],
+   specs; custom data attaches through the `Lang`-supplied ext types (uniform per-node,
+   plus the argument- and slot-record exts), orthogonal to structural identity.
+   (Cf. [§dd-dr:closed-core-open-payloads],
    [§dd-dr:closed-node-kind].)
 
 6. **Zero mandatory runtime dependencies; `no_std`-friendly core.** Hand-written
@@ -123,15 +124,11 @@ layer depends only on lower ones":
    no runtime value references nodes. This generalizes the source topic's
    cycle-prevention invariant.
 
-The insight that shaped this ([§dd-dr:three-strata]): a strict layer ladder conflates
-three different graphs. The **type/signature graph** is cyclic inside S1 — harmlessly:
-traits are signatures, `dyn` references tie the recursive knot, and cross-module cycles
-within one crate are idiomatic Rust. Every cycle edge is itself a decided feature (state
-stores definitions; lookup receives the state; specs carry their invocation parser;
-parsers build nodes and derive states; nodes record their parse-time state and spec).
-The **runtime ownership graph** must stay acyclic — rule 3. The **build order** is a
-topological order over concrete machinery, DAG-shaped even where signatures are mutually
-recursive.
+A strict layer ladder conflates three different graphs ([§dd-dr:three-strata]): the
+**type/signature graph** is cyclic inside S1 — harmlessly, and every cycle edge is
+itself a decided feature; the **runtime ownership graph** must stay acyclic (rule 3);
+the **build order** is a topological order over concrete machinery, DAG-shaped even
+where signatures are mutually recursive.
 
 Within S1 the useful distinction is not vertical but by **role**: plain data
 (`StateData`, `NodeKind`, `TokenRules`, …); contracts (the dyn extension-point traits —
@@ -139,27 +136,25 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 `SourceResolver` — plus `Lang` and `ParseDriver`); standard machinery (`StdTokenReader`,
 `Package`/`Scope`, `NodesParser`, …); orchestration (`Language`, `ParserSession`).
 
-**Public export topology (decided; applied):**
+**Public export topology:**
 the public API is exposed through re-export facades with one canonical path per
 item — `techy::{source, error, extract, transform, visit, recompose}` top-level,
 `techy::core` as a flat machinery hub with extracted satellites
-`core::{constructs, specs, node}`, `techy::latexlike` unchanged — and internal
-src modules are private (internal reorganization stops being public-breaking).
+`core::{constructs, specs, node}`, `techy::latexlike` — and internal
+src modules are private (internal reorganization is never public-breaking).
 The topic modules sketched above describe the *internal* organization only. Full
 decision incl. the specs-vs-hub author-side/run-side rule and rejected shapes:
-[§dd-dr:public-namespace-topology]; `techy::recompose` and `techy::visit` joined
-the top-level set by the recompose-session rulings, applied Phase 3 S8
-([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).
+[§dd-dr:public-namespace-topology]; the top-level standing of `techy::recompose`
+and `techy::visit`: [§dd-dr:recompose-machinery], [§dd-dr:visit-engine].
 
-**Stability rubric (decided; guards in place):** everything `pub` is one stability
-class under one semver discipline — no unstable tier; access tiers are expressed by
-placement and guides, not stability levels. The freeze has a soft onset: it starts
-when the API-review restructuring lands, but important shortcomings may still be
-fixed breakingly until frameworks actually build on techy; from that adoption on,
-the freeze is hard. The guards (applied Phase 3 S10): `missing_docs` is a workspace
-`deny` lint, and `scripts/check_semver.sh` runs cargo-semver-checks against the
-`api-baseline` git branch (the Phase-3 landing commit; moved deliberately at
-each version bump — a movable branch, not a tag, by user ruling). Full decision: [§dd-dr:stability-rubric].
+**Stability rubric:** everything `pub` is one stability class under one semver
+discipline — no unstable tier; access tiers are expressed by placement and guides,
+not stability levels. The freeze is currently soft: until frameworks actually build
+on techy, important discovered shortcomings may still be fixed breakingly; from that
+adoption on, the freeze is hard. The guards: `missing_docs` is a workspace `deny`
+lint, and `scripts/check_semver.sh` runs cargo-semver-checks against the
+`api-baseline` git branch — a movable branch deliberately advanced at each version
+bump, not a tag. Full decision: [§dd-dr:stability-rubric].
 
 Decisions behind this section (full topic: [§dd-dr:crates]): [§dd-dr:three-strata],
 [§dd-dr:public-namespace-topology] (export facades, one canonical path, hub +
@@ -314,8 +309,8 @@ LangHasWhitespace`).
   pointer — [§dd-dr:descent-guard]), and the caller applies deltas — never the
   producer.
 - **Cross-cutting rules centralize in `Lang::finalize_transition`** — a pure function
-  of (new data, previous state, events), run exactly once per unique derivation. Purity
-  is what makes derivations memoizable. Mode changes are *initiated* by deltas (e.g.
+  of (new data, previous state, events), run exactly once per unique derivation.
+  Mode changes are *initiated* by deltas (e.g.
   the driver's math-group descent delta) and *interpreted* by finalize (disable
   features, adjust rules).
 - **Airtightness is structural**: private fields, crate-owned freeze, the seed only
@@ -324,9 +319,8 @@ LangHasWhitespace`).
   directly onto the seed's stack), everything else only from `derived()`
   ([§dd-dr:seed-states]).
 - **Hot path = plain field reads.** Per-instance caches (the delimiter `PrefixTable`,
-  the specials `TriggerChars`) are rebuilt eagerly at freeze — `no_std` has no
-  `OnceLock` — with the `PrefixTable` reused across derivations when its inputs are
-  unchanged. Each cache collapses with its feature ([§dd-dr:lang-features]):
+  the specials `TriggerChars`) are rebuilt eagerly at freeze, with the `PrefixTable`
+  reused across derivations when its inputs are unchanged. Each cache collapses with its feature ([§dd-dr:lang-features]):
   `prefix_table()`/`trigger_chars()` return `Option`, `None` exactly for an absent
   feature (a merely disabled one answers `Some` of the frozen empty value).
   `dbg!(state)` shows exactly what the tokenizer will do (one recorded
@@ -341,13 +335,10 @@ rejected alternatives), [§dd-dr:immutable-state-deltas], [§dd-dr:token-rules-d
 [§dd-dr:first-class-mode], [§dd-dr:enclosing-state-stack] (session-held enclosing
 context; two-level event consumption, fallible `finalize_transition`),
 [§dd-dr:temporary-group-rules] (the state-scoped delimiter
-lifecycle enforced in `derived()`), [§dd-dr:trivial-lang] (`SimpleLang` renamed
-`TrivialLang`, repositioned as the test lang), [§dd-dr:on-ramp-defaults]
+lifecycle enforced in `derived()`), [§dd-dr:trivial-lang] (`TrivialLang`, the
+all-defaults test lang), [§dd-dr:on-ramp-defaults]
 (`TokenRules::empty()`/`StateData::empty()`; specials defaults stay
-recognize-nothing), [§dd-dr:lang-features] (the compile-time feature axis:
-`Lang::Features` declares per-feature presence — absent (compile-time) vs.
-disabled (scoped runtime) vs. empty (constitutive); per-feature `LangHas*`
-bounds with compiler-enforced dependency edges).
+recognize-nothing), [§dd-dr:lang-features] (the compile-time feature axis).
 
 ## Specs and scopes [§dd-arch:specs]
 
@@ -417,7 +408,8 @@ Range<u32>`. `NodeKind<L>` is closed **and purely structural**:
 `Chars`/`Group`/`Callable`/`Comment`/`List` — kind-shaped custom data is an enum
 inside the ext. Access goes through `NodeRef` proxies (`Copy`, borrow-checked
 against the tree; upward via the stored `parent()`, position-keyed via
-`NodeTree::node_at`/`covering_slice`); `validate_tree` is the public all-trees-law
+`NodeTree::node_at`/`covering_slice` under the whole-run single-source slice
+contracts — [§dd-dr:tree-navigation]); `validate_tree` is the public all-trees-law
 checker (a `Result`, never panics); the parse-law byte-accounting oracle is an
 in-crate test utility ([§dd-dr:tree-validation]).
 
@@ -452,9 +444,8 @@ in-crate test utility ([§dd-dr:tree-validation]).
   partition the parent's content interior exactly** — the byte-accounting contract
   exactness consumers build on. Environment `\begin{name}`/`\end{name}` scaffolding
   is rigid at parse time and *recorded* per side in the payload's `Environment` arm
-  (applied Phase 3 S5 — the recompose session's reconstruct→record reversal,
-  [§dd-dr:invocation-syntax], superseding the reconstructed-scaffolding rule of
-  [§dd-dr:environment-scaffolding]).
+  ([§dd-dr:invocation-syntax], which supersedes the reconstructed-scaffolding rule
+  of [§dd-dr:environment-scaffolding]).
 - **Recomposition levels**: level 1 — a node's own `SourceSpan` → exact original text,
   no external lookup; level 2 — Lang-aware quasi-equivalent reproduction from recorded
   facts. Consequence: per-instance syntax choices the spec does not determine live as
@@ -475,69 +466,59 @@ in-crate test utility ([§dd-dr:tree-validation]).
   [§dd-dr:node-id-provenance]).
 - Indices are `u32` behind a private newtype; the one safeguard that matters is the
   checked conversion at the single mint site.
-- **The API-review P4 redesign** (full topic [§dd-dr:transform]; the working
-  detail lived in `dev-docs/api-review/P4_RULING.md`, a process file now only in
-  git history) — **its node-core half
-  applied in Phase 3 S3**: trees carry consumer-owned per-node **annotations**
-  (`NodeTree<L, A = ()>`, a parallel `Vec<A>` over an `Arc`-shared node core;
-  zero-copy `annotate()`; [§dd-dr:node-annotations]); tree tags are always-on
-  `NodeId` identity (`TreeTag`, [§dd-dr:tree-tags]); the two-tier ext system is
-  replaced by **parse-once ext minting** — per-kind node exts removed, required
-  `Lang::make_node_ext`, a hook-free builder demanding ready ext + annotation, parse
-  staging only via `ParseContext::stage_node` ([§dd-dr:ext-minting]); slots carry
-  `SlotRole { Content, Attached, Hidden }` and trait-based body marking
-  (`BodySlotExt`, [§dd-dr:slot-roles]); parent links are stored, `SourcePos`-keyed
-  reverse lookup (`node_at`/`covering_slice`) landed with the whole-run
-  single-source slice contracts ([§dd-dr:tree-navigation]); the runtime
-  all-trees-law checker is `core::node::validate_tree` ([§dd-dr:tree-validation]);
-  and the level-0 cross-tree `restage_node` primitive is in
-  ([§dd-dr:restage-ops] — its visitor/ops/bundles surface landed in S7, below).
-  **Applied in Phase 3 S6**: `\input` content attaches as an `Attached` slot of a
-  same-builder sub-parse, making multi-source parse trees first-class
-  ([§dd-dr:input-attachment], [§dd-dr:input-wiring]) — the parse-law oracle scopes
-  its byte accounting per source through the slot roles (`Attached` regions carry
-  their own accounting, `Hidden` regions none).
-  **Applied in Phase 3 S7**: transformation is the top-level `techy::transform` —
-  the streaming restage driver (`restage` + `RestageVisitor` with a closure
-  blanket; top-down visits, bottom-up staging; `Descend` always descends,
-  role-uniformly into `Attached`/`Hidden` slot children; read-frozen/
-  write-staged; annotations single-pathway with origin-by-convention;
-  [§dd-dr:restage]) over region-aware context ops, constructible
-  `RestagedArgument`/`RestagedSlot` bundles, generic `RestageError<E>`, the
-  no-silent-repair edit policy (`ContentParentDropped`), and narrow content-swap
-  helpers ([§dd-dr:restage-ops]); and the extract producers mint output
+- **Annotations are consumer-owned** ([§dd-dr:node-annotations]): the `A` in
+  `NodeTree<L, A = ()>` is a parallel `Vec<A>` over the `Arc`-shared node core,
+  re-annotated zero-copy through `annotate()`. The ext system is **parse-once
+  minting** ([§dd-dr:ext-minting]): no per-kind node exts; the required
+  `Lang::make_node_ext` runs exactly once at staging, the builder demands ready
+  ext + annotation (no fill-in-later hook), and parse staging goes only through
+  `ParseContext::stage_node`.
+- **Slot roles**: every slot carries `SlotRole { Content, Attached, Hidden }`,
+  with trait-based body marking (`BodySlotExt`; [§dd-dr:slot-roles]). `\input`
+  content attaches as an `Attached` slot of a same-builder sub-parse, making
+  multi-source parse trees first-class ([§dd-dr:input-attachment],
+  [§dd-dr:input-wiring]); the parse-law oracle scopes its byte accounting per
+  source through the roles (`Attached` regions carry their own accounting,
+  `Hidden` regions none).
+- **Transformation is the top-level `techy::transform`** (full topic:
+  [§dd-dr:transform]): the streaming restage driver — `restage` +
+  `RestageVisitor` with a closure blanket; top-down visits, bottom-up staging;
+  `Descend` always descends, role-uniformly into `Attached`/`Hidden` slot
+  children; read-frozen/write-staged; annotations single-pathway with
+  origin-by-convention ([§dd-dr:restage]) — over region-aware context ops,
+  constructible `RestagedArgument`/`RestagedSlot` bundles, generic
+  `RestageError<E>`, the no-silent-repair edit policy (`ContentParentDropped`),
+  narrow content-swap helpers, and the level-0 cross-tree `restage_node`
+  primitive ([§dd-dr:restage-ops]). The extract producers mint output
   annotations through a general per-part callback with suffixed shorthands over
   any input annotation type (`SplitAtChars`/`KeyVals` results;
   [§dd-dr:extract-annotations]).
-  **Applied in Phase 3 S8** (the recompose-session machinery; substrate:
-  trigger spelling is recorded payload — `Lang::InvocationSyntax` on
-  `CallableData`, replacing the core `post_space` field
-  ([§dd-dr:invocation-syntax]; applied in Phase 3 S5, with `stage_invocation`
-  and the parse-law payload pins — preset-side since the S5 design revision:
-  core's checker is payload-blind, the latexlike checker layers the pins)):
-  recomposition is the top-level `techy::recompose` — a meaning-free `Piece`
+- **Recomposition is the top-level `techy::recompose`** — a meaning-free `Piece`
   value fold with instruction lowering (`recompose(tree, state, recomposer)`;
   `Recompose::{Emit, Concat(ConcatPieces)}` with chainable
   `children()`/`wrap()`/`join()`; the `ComposePiece` monoid over `String` and
   `()` — streaming is a recomposer-held writer, no sink concept), bound to the
-  per-node doctrine (spans are provenance — no inter-node span arithmetic; the
-  recomposer never resolves span content; [§dd-dr:recompose] and its
-  amendments); wrap-intended recomposers return instructions that lower against
-  the *outermost* recomposer (the wrapping contract — targeted replacement is
-  the wrapper pattern + the restage→recompose pipeline, not a mechanism);
-  `Concat`'s default scope skips `Attached` AND `Hidden` slot children (the one
-  role-sensitive site) with explicit widening opt-ins; `RecomposeError` and the
-  `RecomposeContext` op roster mirror the restage family
-  ([§dd-dr:recompose-machinery]). Source re-emission is ONE preset recomposer —
-  `latexlike::SourceRecomposer` (`source_recomposer()`), reconstructing
-  spelling from recorded facts via the invocation-syntax payload and the
-  environment writer pair; the in-crate reemit oracle
-  (`techy/tests/recompose_oracle.rs`) certifies payload completeness across
-  strict + tolerant + multi-source matrices. The read-only walk and the
-  recompose driver share one traversal engine in the top-level `techy::visit`
-  module (`walk` + `NodeVisitor`/`VisitFlow`; `VisitContext` = engine
-  bookkeeping only, the three-channel state discipline; the walk is role-blind
-  — the deliberate read/compose asymmetry; [§dd-dr:visit-engine]).
+  per-node doctrine: spans are provenance — no inter-node span arithmetic; the
+  recomposer never resolves span content ([§dd-dr:recompose]). Wrap-intended
+  recomposers return instructions that lower against the *outermost* recomposer
+  (the wrapping contract — targeted replacement is the wrapper pattern + the
+  restage→recompose pipeline, not a mechanism); `Concat`'s default scope skips
+  `Attached` AND `Hidden` slot children (the one role-sensitive site) with
+  explicit widening opt-ins; `RecomposeError` and the `RecomposeContext` op
+  roster mirror the restage family ([§dd-dr:recompose-machinery]). The substrate
+  is recorded trigger spelling — the `Lang::InvocationSyntax` payload on
+  `CallableData` ([§dd-dr:invocation-syntax]); core's parse-law checker is
+  payload-blind, the latexlike checker layers the payload pins. Source
+  re-emission is ONE preset recomposer — `latexlike::SourceRecomposer`
+  (`source_recomposer()`), reconstructing spelling from recorded facts via the
+  invocation-syntax payload and the environment writer pair; the in-crate reemit
+  oracle (`techy/tests/recompose_oracle.rs`) certifies payload completeness
+  across strict + tolerant + multi-source matrices.
+- **The read-only walk and the recompose driver share one traversal engine** in
+  the top-level `techy::visit` module (`walk` + `NodeVisitor`/`VisitFlow`;
+  `VisitContext` = engine bookkeeping only, the three-channel state discipline;
+  the walk is role-blind — the deliberate read/compose asymmetry;
+  [§dd-dr:visit-engine]).
 
 Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-tree], [§dd-dr:closed-node-kind],
 [§dd-dr:no-core-math-node], [§dd-dr:parsed-arguments], [§dd-dr:child-regions],
@@ -546,13 +527,12 @@ Decisions behind this section (full topic: [§dd-dr:nodes]): [§dd-dr:flat-node-
 [§dd-dr:environment-scaffolding], [§dd-dr:span-invariants],
 [§dd-dr:named-argument-errors], [§dd-dr:display-tree],
 [§dd-dr:node-id-provenance], [§dd-dr:iter-storage-order], [§dd-dr:slot-read-api],
-[§dd-dr:read-api], [§dd-dr:node-summary], [§dd-dr:tree-validation]; the P4
-transformation ruling ([§dd-dr:transform]): [§dd-dr:node-annotations],
-[§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:recompose],
-[§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation]; the T5
-detailing: [§dd-dr:restage-ops], [§dd-dr:extract-annotations]; the recompose
-session: [§dd-dr:invocation-syntax], [§dd-dr:recompose-machinery],
-[§dd-dr:visit-engine].
+[§dd-dr:read-api], [§dd-dr:node-summary], [§dd-dr:tree-validation]; the
+transformation topic ([§dd-dr:transform]): [§dd-dr:node-annotations],
+[§dd-dr:tree-tags], [§dd-dr:ext-minting], [§dd-dr:restage], [§dd-dr:restage-ops],
+[§dd-dr:recompose], [§dd-dr:recompose-machinery], [§dd-dr:visit-engine],
+[§dd-dr:slot-roles], [§dd-dr:input-attachment], [§dd-dr:tree-navigation],
+[§dd-dr:invocation-syntax], [§dd-dr:extract-annotations].
 
 ## Construct parsers [§dd-arch:constructs]
 
@@ -652,7 +632,7 @@ returns (nodes, StopCause) — the caller interprets the ending.
   `StdInvocationParser`, the standard `ArgumentParser`s (group/optional/marker/
   expression, multi-delimiter `any_of`, chars-group, embellishments, tack-on fields,
   verbatim), `EnvironmentBodyParser`, `ExpressionParser` — the parity survey and its
-  per-parser rulings: [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers]. (No
+  per-parser decisions: [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers]. (No
   `CommentParser`: whole-comment tokens made it vestigial.)
 
 Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context], [§dd-dr:token-kind-dispatch],
@@ -732,27 +712,22 @@ Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initi
 state; infallible seed+packages construction), [§dd-dr:parse-driver],
 [§dd-dr:descent-guard] (the driver's required `DescentGuard` type choice, the
 `Language`-held configuration, the session-held instance), [§dd-dr:session-derivation],
-[§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node],
+[§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node]
+(superseded by parse-once ext minting),
 [§dd-dr:resolve-command-hook], [§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:paragraph-break-hook], [§dd-dr:language-parse-api], [§dd-dr:with-provider],
 [§dd-dr:stateless-language], [§dd-dr:command-resolver] (the pluggable
-command-resolution strategy on `StdParseDriver<R = ()>`, with the ruled
-generic/dyn resolver asymmetry and constructor doctrine; supersedes the
-[§dd-dr:scopes-resolving-driver] component struct), [§dd-dr:takeover-staging-sugar]
-(`disable_all`, collection constructors, the committed `stage_invocation`
-helper), [§dd-dr:input-wiring] (driver resolver accessor, the
-`parse_attached_source` door, `attach_source_reference`). Applied in Phase 3:
-`finalize_node` is replaced by parse-once minting — parse staging via
-`ParseContext::stage_node`, `ParserSession::builder` crate-private
-([§dd-dr:ext-minting], S3); the source resolver lives on the driver, not
-`Language` ([§dd-dr:input-attachment], S2); `Lang::InvocationSyntax` — invocation
-spelling as recorded `CallableData` payload, replacing the core `post_space`
-field, minted at the standard sites via the opt-in `FromInvocation` constructor
-— and the committed `stage_invocation` shorthand with its ruled end-position
-rule ([§dd-dr:invocation-syntax], [§dd-dr:takeover-staging-sugar] item 3,
-S5; that entry's `disable_all` and collection constructors landed at S2 and S3);
-the `parse_attached_source` door and the `attach_source_reference` bundle with
-their `core.sources.*` conditions, completing [§dd-dr:input-wiring] (S6).
+`CommandResolver` strategy — standard value `ScopesCommandResolver` — on
+`StdParseDriver`'s `R` parameter, with the generic/dyn resolver asymmetry and
+constructor doctrine; supersedes the [§dd-dr:scopes-resolving-driver] component
+struct), [§dd-dr:takeover-staging-sugar] (`disable_all`, collection constructors,
+the `stage_invocation` helper with its end-position rule), [§dd-dr:input-wiring]
+(driver resolver accessor, the `parse_attached_source` door,
+`attach_source_reference`), [§dd-dr:ext-minting] (parse staging only via
+`ParseContext::stage_node`; the session's builder is crate-private),
+[§dd-dr:invocation-syntax] (invocation spelling as recorded `CallableData`
+payload, minted at the standard sites via the opt-in `FromInvocation`
+constructor).
 
 ## Errors and tolerant parsing [§dd-arch:errors]
 
@@ -835,8 +810,7 @@ Decisions behind this section (full topic: [§dd-dr:generics]): [§dd-dr:defer-r
 
 # Naming [§dd-arch:naming]
 
-The durable naming principles (absorbed from the archived NAMING_STRATEGY.md; the
-decision record is [§dd-dr:naming]):
+The durable naming principles (decision record: [§dd-dr:naming]):
 
 1. **Generic over specific** — no `Latex` prefixes anywhere in the core (`Token`, not
    `LatexToken`). The library targets LaTeX-*like* languages; LaTeX-flavored names live
@@ -858,10 +832,8 @@ decision record is [§dd-dr:naming]):
    `to_uppercase` convention: a *transition* producing a new value, not a field copy.
 7. **`make_*` for factory hooks** — hooks that construct and hand over a fresh value:
    `CallableSpec::make_invocation_parser`, `ParseDriver::make_paragraph_break_node`.
-8. **Three spellings of "off", each with its own word** ([§dd-dr:lang-features]):
-   *absent* (compile-time — the language has no such feature; `Lang::Features`),
-   *disabled* (scoped runtime — the `enabled` flag is `false`, data preserved for
-   re-enabling), *empty* (constitutive — no rules data). The words are never
+8. **Three spellings of "off", each with its own word** ([§dd-dr:lang-features];
+   the vocabulary itself: [§dd-arch:state]). The words are never
    interchanged; "disable(d)" stays reserved for the runtime action family
    (`TokenRulesOverrides::disable_all()`), "empty" for the all-empty constructors.
    The compile-time vocabulary carries `Lang*`/`Feature*` prefixes (`LangFeatures`,
@@ -878,10 +850,10 @@ specials** (preset-level invocation flavors: the latexlike preset's registered
 
 Names that were consciously rejected or replaced must not be reintroduced — the
 distilled list with reasons is [§dd-dr:superseded-names]; the full old-to-new registry
-stays in the archived NAMING_STRATEGY.md and in git history.
+stays in git history.
 
 Decisions behind this section (full topic: [§dd-dr:naming]): [§dd-dr:parsed-arguments-naming],
-[§dd-dr:superseded-names], [§dd-dr:naming] (the convention rulings).
+[§dd-dr:superseded-names], [§dd-dr:naming] (the convention decisions).
 
 # The latexlike preset [§dd-arch:latexlike]
 
@@ -920,7 +892,7 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   `%` comments. `[]` is deliberately **not** a group type — plain characters; optional
   arguments recognize brackets through per-use temporary rules.
 - **The seed package `"_builtin"`** (`builtin_package::<LLL>()`,
-  [§dd-dr:base-package] amendment): exactly what any latexlike parse must have
+  [§dd-dr:base-package]): exactly what any latexlike parse must have
   preloaded — the environment dispatch pair `begin`/`end` registered as ordinary
   entries ([§dd-dr:begin-end-dispatch]) — everything goes through the stack; nothing
   is hardcoded, everything is shadowable and unloadable. Typography specials are
@@ -973,26 +945,22 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   record's `write_begin`/`write_end` pair; specials name-as-written), with a
   coherence error for payload/`callable_type` mismatches; accuracy = what the
   parse records, certified by the reemit oracle
-  ([§dd-dr:recompose-machinery], applied Phase 3 S8).
+  ([§dd-dr:recompose-machinery]).
 - **The acceptance suite** (`techy/tests/acceptance.rs`) is a public-API-only
   integration port of pylatexenc's walker tests — anything the port cannot reach is an
   API gap by construction ([§dd-dr:acceptance-suite]).
 
-**Preset generalization (in application):** the role traits, the `LatexlikeLang`
-umbrella, `GroupType::Math(MathGroupForm)` with the `math_form()` sugar, the
-generic `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the pillar functions,
-and `LatexlikeDriver<LLL>` are applied (Phase 3 S4); `MacroSpec<LLL>`, the
-environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`VerbatimBehavior`
-and the composition), `argument_specs`, and the fifth role trait
-`LatexlikeInvocationSyntax` — with the invocation-syntax payload
-`InvocationSyntaxData<Env>`, the `EnvironmentSyntax` record contract
-(`from_parsed` + the writer pair; composition-owned scanning, per the S5
-design-revision amendment on [§dd-dr:invocation-syntax]), and the
-canonical `ParagraphBreakSpec` — are applied (Phase 3 S5); the opt-in
-`input_macro_spec` (S6) and `SourceRecomposer` (S8) are `LLL`-generic from
-birth; `builtin_package` and `minidefs::minilatex_package` landed `LLL`-generic
-with the preset-definitions stage (Phase 3 S9). The generalization is complete;
-`Lang` itself stays whole.
+**Preset generalization is complete** — every preset component is `LLL`-generic:
+the role traits under the `LatexlikeLang` umbrella (the fifth role trait is
+`LatexlikeInvocationSyntax`, carrying the invocation-syntax payload
+`InvocationSyntaxData<Env>` and the `EnvironmentSyntax` record contract —
+`from_parsed` + the writer pair, with composition-owned scanning;
+[§dd-dr:invocation-syntax]), `default_token_rules::<LLL>`, the spec types
+(`MacroSpec`/`SpecialsSpec`/`EnvironmentSpec` with the begin/end composition and
+`VerbatimBehavior`), the canonical `ParagraphBreakSpec`, `argument_specs`, the
+pillar functions and `LatexlikeDriver<LLL>`, the opt-in `input_macro_spec`,
+`SourceRecomposer`, `builtin_package`, and `minidefs::minilatex_package`. `Lang`
+itself stays whole.
 [§dd-dr:latexlike-generalization], [§dd-dr:math-group-form].
 
 Decisions behind this section (full topic: [§dd-dr:latexlike]):

@@ -174,7 +174,7 @@ group type, a spec) or as an explicit replacement of a well-defined component.
 
 ## Non-goals [§dd-dr:non-goals]
 
-Decided intentional limitations (PROPOSALS.md §4 gap analysis, in `dev-docs/archive/`):
+Decided intentional limitations:
 
 - **techy is not a TeX engine.** No catcode system, no macro expansion engine, no conditional
   (`\if…`) evaluation, no full primitive set. Target use cases are structural parsing for
@@ -190,7 +190,7 @@ Decided intentional limitations (PROPOSALS.md §4 gap analysis, in `dev-docs/arc
 
 # Decision register [§dd-dr:decisions]
 
-Format: **Status** (DECIDED / PROPOSED / OPEN / DEFERRED) · date · decision · why · rejected
+Format: **Status** (DECIDED / PROPOSED / OPEN / DEFERRED) · decision · why · rejected
 alternatives · revisit-if.
 
 ## Sources and spans [§dd-dr:sources-and-spans]
@@ -241,41 +241,28 @@ Status: DECIDED.
 The parser works purely in byte offsets; `LineIndex` computes line starts lazily and only for
 display (errors, diagnostics).
 Rationale: upfront line indexing costs O(source) on every parse for data usually never read.
-*(Amended — API-review T4 session: ownership layering, the persistent
-`LineIndexCache`, and the `LineColProvider` seam: [§dd-dr:line-col-ownership];
-this entry's doctrine is unchanged.)*
+Ownership layering — the persistent `LineIndexCache` and the `LineColProvider` seam — is
+[§dd-dr:line-col-ownership]; this entry's doctrine is unchanged.
 
 #### Pluggable content resolution [§dd-dr:source-resolver]
 
 Status: DECIDED.
 
-`SourceResolver` trait for `\input`-like lookups; `NoResolver` is a zero-sized type so a
-no-I/O build pays nothing. No file-system resolver is shipped (no_std policy,
-[§dd-dr:dependencies]): an embedder implements `SourceResolver` on its side, where the I/O
-capability lives; the in-memory `MapResolver` covers tests and fully preloaded setups.
-*(The `SourceContent` backing-abstraction half this entry originally carried was later
-retired — cf. [§dd-dr:source-cursor-retired].)*
-*(Direction recorded — API-review P4: the resolver instance moves from `Language` to
-the `ParseDriver` (parse-time instance behavior, the placement doctrine); wiring
-designed in the 2b T4 session. [§dd-dr:input-attachment].)*
-*(Wiring landed — API-review T4 session: [§dd-dr:input-wiring]. `NoResolver`'s
-default-slot role is replaced by the driver accessor's `None`; its own fate rides
-the Tier-C batch.)*
-*(Tier-C ruling — `NoResolver` is REMOVED: with `None` as the canonical "resolves
-nothing", an always-fail resolver value adds nothing (an empty `MapResolver`
-covers deterministic-failure tests), and a `pub(crate)` residue would be dead
-code. [§dd-dr:public-visibility-sweep].)*
-*(Applied — Phase 3 S2: `NoResolver` deleted; drivers carry the resolver behind
-`with_source_resolver` + the `ParseDriver::source_resolver` accessor. Application
-note: `SourceResolver`'s `Arc<R>` forwarding impl was removed with it — it made
-the sealed `IntoSourceResolver` conversion's ruled no-double-wrap `Arc`
-pass-through impls incoherent (blanket-covered `Arc<R>: SourceResolver` overlaps
-them); the `&R`/`Box<R>` forwarding impls stay.)*
+`SourceResolver` trait for `\input`-like lookups. No file-system resolver is shipped
+(no_std policy, [§dd-dr:dependencies]): an embedder implements `SourceResolver` on its
+side, where the I/O capability lives; the in-memory `MapResolver` covers tests and fully
+preloaded setups. The resolver instance lives on the `ParseDriver` (parse-time instance
+behavior), behind `with_source_resolver` and the `ParseDriver::source_resolver` accessor;
+"resolves nothing" is the accessor's `None`. A dedicated always-fail `NoResolver` type
+was rejected: it adds nothing over `None` plus an empty `MapResolver` for
+deterministic-failure tests ([§dd-dr:public-visibility-sweep]). Engine wiring:
+[§dd-dr:input-wiring]; attachment rationale: [§dd-dr:input-attachment]. (The
+`SourceContent` backing-abstraction half this entry originally carried was retired —
+cf. [§dd-dr:source-cursor-retired].)
 
 #### Origin genericity without `Lang` [§dd-dr:origin-genericity]
 
-Status: DECIDED (user; later revised — the default origin is a plain optional
-URL string).
+Status: DECIDED (user).
 
 `Source<O: SourceOrigin = Option<String>>` takes the origin type as a plain, defaulted type
 parameter; `SourceSpan`/`SourceProvenance`/`SourceResolver`/`Diagnostic` carry the same
@@ -290,8 +277,8 @@ how it entered the parse, and it (not the origin) holds synthesis descriptions a
 resolution references. One inference consequence of the defaulted parameter: bare
 `Source::new(…)` cannot infer `O`, so simple usage annotates (`let src: Arc<Source> = …`)
 until preset type aliases make it moot.
-Rejected alternatives: a concrete-now/genericize-in-Phase-3 approach (would retrofit a type parameter
-through every L0 signature later). Also rejected, in the July 2026 revision: the first-cut
+Rejected alternatives: a concrete-now/genericize-later approach (would retrofit a type parameter
+through every S0 signature). Also rejected, in a recorded revision: the first-cut
 `StdSourceOrigin` enum (`Unknown` / `Named { name, kind: File | Snippet | Resolved |
 Synthesized | Other }`). Its kind taxonomy was too detailed and too rigid for the intended
 generality (where does content fetched from a database fall?), it partially duplicated
@@ -337,38 +324,30 @@ then, with a content abstraction shaped by its real requirements.
 
 #### `Span` has private fields; in-place growth is the monotone `extend_to` [§dd-dr:span-extend-to]
 
-Status: DECIDED (user; the T4 amendment's `contains` applied — Phase 3 S3, docs +
-tests in the same commit; `overlaps` stays unadded — `covering_slice`'s
-implementation did not need it).
+Status: DECIDED (user).
 
-`Span`'s `start`/`end` went private with the
-`start()`/`end()` accessors, closing the gap where the `start <= end` invariant was only
-advisory (`new` debug-asserts; the fields allowed silent violation). The one mutation
-pattern the lib actually used — growing a chars-run/marker span rightward — became
-`extend_to(end)` (debug-asserted monotone), so every mutator now preserves the
-invariant. `cover(other)` (byte-range union, min/max so it is order- and
-overlap-agnostic) was added at the same time. Consistency with `SourceSpan` (private +
-accessors + validating constructor) decided it over the `std::ops::Range` precedent
-(public fields, no invariant) — the honest alternative that was considered and
-rejected. `contains`/`overlaps` are deliberately **not** added: whichever empty-span
-semantics they pick will be silently depended on, so they arrive only with a consumer,
-pinned by docs + tests in the same commit. Bridging: `SourceSpan::new` accepts
-`impl Into<Range<usize>>` (so a `Span` passes directly; `From<Span> for Range<usize>`)
-and `SourceSpan::span()` is the inverse — `span.rs` itself stays ignorant of
-`SourceSpan` (dependency direction preserved).
-
-*(Amended — API-review T4 session: `contains(pos)` lands — `node_at`
-([§dd-dr:tree-navigation]) is the consumer the deferral awaited; empty-span
-semantics ruled (an empty span contains nothing), pinned by docs + tests in the
-same commit. `overlaps` remains deferred, unless `covering_slice`'s
-implementation wants it.)*
+`Span`'s `start`/`end` are private with `start()`/`end()` accessors, closing the gap where
+the `start <= end` invariant was only advisory (`new` debug-asserts; public fields allowed
+silent violation). The one mutation pattern the lib actually uses — growing a
+chars-run/marker span rightward — is `extend_to(end)` (debug-asserted monotone), so every
+mutator preserves the invariant. `cover(other)` is the byte-range union (min/max — order-
+and overlap-agnostic). Consistency with `SourceSpan` (private + accessors + validating
+constructor) decided it over the honest alternative, the `std::ops::Range` precedent
+(public fields, no invariant). Empty-span-sensitive predicates arrive only with a
+consumer — whichever empty-span semantics they pick will be silently depended on, so each
+is pinned by docs + tests in the same commit: `contains(pos)` exists (an empty span
+contains nothing; its consumer is `node_at`, [§dd-dr:tree-navigation]), `overlaps` is
+deliberately not added. Bridging: `SourceSpan::new` accepts `impl Into<Range<usize>>`
+(so a `Span` passes directly; `From<Span> for Range<usize>`) and `SourceSpan::span()` is
+the inverse — `span.rs` itself stays ignorant of `SourceSpan` (dependency direction
+preserved).
 
 #### `SourceResolver` contract batch: content-returning, `Send + Sync`, no core recursion checking [§dd-dr:resolver-contract]
 
-Status: DECIDED (user, Action-05 session; settled before any consumer existed).
+Status: DECIDED (user; settled before any consumer existed).
 
 - **`resolve()` returns `ResolvedContent { content, origin }`; the caller mints the
-  `Source`** (the `resolve_source` composition). Rationale: provenance lives on the
+  `Source`** (the `resolve_source_reference` composition). Rationale: provenance lives on the
   `Source` (`Resolved { reference, triggered_at }`) and diagnostics self-render include
   chains from it, so a resolver-cached `Arc<Source>` shared across two include sites
   silently renders the wrong chain inside the second inclusion. Returning content makes
@@ -382,40 +361,27 @@ Status: DECIDED (user, Action-05 session; settled before any consumer existed).
   needs interior mutability — the bounds pick the thread-safe form (locks/atomics, not
   `RefCell`), stated before implementors exist.
 - **Recursion is the embedder's job.** The core never interprets reference strings
-  (no path semantics, no canonicalization) and performs no recursion checking; the
-  std/I/O command-line driver enforces its own include-depth/cycle policy, with
-  `Source::provenance_chain()` as the ready-made tool. Documented on the trait.
+  (no path semantics, no canonicalization) and performs no recursion checking — held up
+  even against the engine recursing on its own stack ([§dd-dr:input-wiring]), because
+  `.dtx`-style legitimate self-inclusion exists. The embedder's policy tools are
+  [§dd-dr:include-chain-helpers]. Documented on the trait.
 - **`ResolveError` = strings + optional structured cause**: human-readable
   `reference`/`message` stay the primary interface (a failed `\input` flattens into a
-  diagnostic anyway); an optional `Box<dyn core::error::Error + Send + Sync>` cause
+  diagnostic anyway); an optional `Arc<dyn core::error::Error + Send + Sync>` cause
   travels the standard `Error::source()` chain so embedders can downcast (e.g.
-  `io::Error` kind). Consequence: `ResolveError` is no longer `Clone` (single-owner
-  box; nothing relied on it).
-- Smalls: forwarding impls (`&R`/`Box<R>`; the `Arc<R>` forwarding impl was removed at
-  the Phase 3 S2 application — with it, the ruled no-double-wrap `Arc` pass-through of
-  `with_source_resolver` is coherence-ambiguous; user-confirmed), a compile-time object-safety pin
+  `io::Error` kind). Principle recorded here: **techy error types stay uniformly
+  `Clone`; out-of-crate information sits behind the `Arc`** (`with_cause` wraps with
+  `Arc::new`).
+- Smalls: forwarding impls (`&R`/`Box<R>` only — an `Arc<R>` forwarding impl would
+  overlap the sealed `IntoSourceResolver` conversion's no-double-wrap `Arc`
+  pass-through impls), a compile-time object-safety pin
   (drivers may store `Arc<dyn SourceResolver>`), `MapResolver::with_reference_as_origin`
   (its blanket impl narrows to `O: From<String>` — a convenience type may narrow;
   exotic origins write their own ten-line resolver).
 
-*(Amended — API-review T4 session: (1) the cause field becomes
-`Option<Arc<dyn core::error::Error + Send + Sync>>` and `ResolveError` derives
-`Clone` again — principle recorded: **techy error types stay uniformly `Clone`;
-out-of-crate information sits behind the `Arc`**; `Error::source()` downcasting is
-unaffected, `with_cause` wraps with `Arc::new`. (2) "No core recursion checking"
-SURVIVES the engine now recursing on its own stack ([§dd-dr:input-wiring]) —
-reaffirmed for `.dtx`-style legitimate self-inclusion; the embedder's policy tools
-are [§dd-dr:include-chain-helpers]. Amendment applied — Phase 3 S6.)*
-
 #### Include-chain tools: `including_sources` + `check_include_chain`; recursion stays embedder policy [§dd-dr:include-chain-helpers]
 
-Status: DECIDED (user, API-review T4 session; applied — Phase 3 S6. Application
-notes: `check_include_chain` lives beside the resolver machinery it serves —
-public path `techy::source` as ruled; the minted `ResolveError`'s `reference` is
-the offending chain source's origin label when present, else empty, since `K` is
-not `Display`-bounded; the core-level no-recursion-checking stance is pinned by a
-self-inclusion test on the door, and the resolver-side policy by a
-`check_include_chain`-using resolver test on the preset spec).
+Status: DECIDED (user, API-review session).
 
 Recursion/cycle control for `\input`-style inclusion stays OUT of core — reaffirmed
 against the new fact that the engine now recurses on its own stack
@@ -433,8 +399,9 @@ policy a one-liner:
   whose origins carry the comparable names.
 - **`check_include_chain<O, K: PartialEq>(target_key: &K, triggered_at:
   &SourceSpan<O>, origin_key: impl Fn(&O) -> Option<K>, max_depth: Option<usize>)
-  -> Result<(), ResolveError>`** (home: the source topic) — the canned
-  cycle-plus-depth check a resolver calls with `?`. Keying design (user-driven):
+  -> Result<(), ResolveError>`** (home: the source topic, public path `techy::source`) —
+  the canned
+  cycle-plus-depth check a resolver calls with `?`. Keying design:
   compare **origins**, not provenance reference strings — the primary source
   participates (the embedder mints it with a suitable canonical name); the caller
   passes the already-canonicalized target key (the resolver computes it during
@@ -458,21 +425,12 @@ reference-keyed variant could then be added beside, not instead).
 
 #### Line/col ownership: consumer-held `LineIndexCache` + the `LineColProvider` seam [§dd-dr:line-col-ownership]
 
-Status: DECIDED (user, API-review T4 session; applied — Phase 3 S6. Application
-notes: the `_with` variants are `Diagnostic::render_with`,
-`ParseError::render_with`, `Diagnostics::render_all_with`,
-`format_position_with`, `format_traceback_with` (provider parameter last); the
-renderer's internal borrowing per-call cache was *replaced by* a transient
-`LineIndexCache` — one mechanism, and the blocked-dep-free note on a
-`Source`-owned cache moved to the line-index module docs; `LineIndexCache` keeps
-a `set_max_scan_len` knob (the bound stays adjustable, mirroring `LineIndex`,
-with re-admission under a raised cap); `line_of`'s range excludes the `\n`
-terminator, and an offset on the terminator (or at end of content) belongs to
-the line it ends).
+Status: DECIDED (user, API-review session).
 
 Who computes and caches line/column stays LAYERED, never the `Source`: the parse
-computes nothing ([§dd-dr:lazy-line-col] holds); the diagnostics renderer keeps its
-per-call cache; **persistence belongs to whoever holds a `LineIndexCache<O>`** — a
+computes nothing ([§dd-dr:lazy-line-col] holds); the diagnostics renderer uses a
+transient per-call `LineIndexCache` — one mechanism;
+**persistence belongs to whoever holds a `LineIndexCache<O>`** — a
 new public cache in the source topic holding one owned line-starts table per
 source, keyed by `Arc` identity (entries own `Arc<Source>` + `Vec<usize>`, not the
 borrowing `LineIndex` view). Because source content is immutable, an entry never
@@ -485,7 +443,7 @@ no_std synchronization.
 **`LineColProvider`** (name over `LineIndexCacheProvider` — the trait provides
 line/col *answers*, not caches): single method `line_col(&mut self, source,
 offset) -> Option<(usize, usize)>`; implemented by `LineIndexCache`; the rendering
-entry points gain `_with(&mut impl LineColProvider)` variants, the no-argument
+entry points have `_with(&mut impl LineColProvider)` variants, the no-argument
 forms remaining as transient-cache shorthand (shorthand-not-second-path). Editor
 tools with incremental line tables — surviving per-keystroke re-parses that mint
 new `Source`s — plug in without recomputation: the Arc-keyed cache's
@@ -495,8 +453,7 @@ Query-surface additions ruled with the ownership: `LineIndex::line_of(offset) ->
 Option<(usize, Range<usize>)>` (line number + byte range — the caret/underline
 path; the inverse `line_range(line_no)` skipped — no demonstrated consumer,
 additive later); `line_col_span(impl Into<Range<usize>>)`; `DEFAULT_MAX_SCAN_LEN`
-raised 100 000 → **500 000** (still bounded; the loud docs on silent `None` past
-the bound stay).
+is 500 000 (bounded; the loud docs on silent `None` past the bound stay).
 
 Rejected alternatives: a `Source`-owned lazy cache (blocked dep-free — `alloc` has
 no `Mutex`, `OnceCell` costs `Sync`; recorded at the renderer cache since its
@@ -506,8 +463,8 @@ load-bearing for Lang-free rendering and tooling; and precompute/lazy/incrementa
 are strategies of one pure function — no consumer is generic over them);
 per-node/per-span `line_col()` methods (hidden per-call index build, O(k·N); the
 bind-the-`Arc` one-index pattern is the guide example); a shipped caret/underline
-renderer (presentation policy frozen forever under P5 for a ~10-line hand-roll
-once `line_of` exists; `format_position`'s output shape is documented as not a
+renderer (a ~10-line hand-roll once `line_of` exists — presentation policy stays
+out of the library; `format_position`'s output shape is documented as not a
 contract); non-`&mut` `LineIndex` (interior mutability for a transient local).
 
 Revisit if: a no_std embedder needs shared lazy indexing (the provider seam is
@@ -534,9 +491,8 @@ parser cares about — see the review entry below.)
 
 Status: DECIDED (user-led, three-round design review).
 
-Supersedes four earlier proposals — uniform `post_space`, maximal-run `Chars`,
-`Ok(None)` at end of stream — each recorded below as rejected; the token topic moves
-wholly into S1.
+Supersedes earlier proposals — uniform `post_space`, maximal-run `Chars`,
+`Ok(None)` at end of stream — each recorded below as rejected.
 Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
 `Char(char)` | `GroupOpen`/`GroupClose` | `Command { name, post_space }` |
 `Specials { name, spec: Arc<dyn CallableSpec<L>> }` | `Comment { content, post_space }` |
@@ -845,9 +801,9 @@ public (a maintained API surface nothing external needs).
 
 Status: DECIDED (user).
 
-Any run of two or more newlines (however many, with interleaved inline whitespace) forms one paragraph break; the old name misread as
-"exactly two". *(Later joined the `enable_*` family as `enable_multi_newline_paragraphs`
-— cf. [§dd-dr:enable-flags].)*
+Any run of two or more newlines (however many, with interleaved inline whitespace) forms
+one paragraph break; pylatexenc's "double" name misread as "exactly two". Spelled
+`enable_multi_newline_paragraphs` in the `enable_*` family ([§dd-dr:enable-flags]).
 
 #### `enable_*` feature flags on `TokenRules` [§dd-dr:enable-flags]
 
@@ -864,8 +820,8 @@ original rules — the restore problem wholesale collection overrides cannot sol
 the re-enabling party (applying a returned delta, or a `ChildStateSpec` policy) typically
 never saw the state that held the original `CommandRule`s. Two spellings of "off" are
 accepted deliberately: flag `false` is the *scoped* off (data preserved for re-enabling),
-empty data is the *constitutive* off (no rules data) — pylatexenc
-precedent. Uniformization rider: `whitespace` loses its `Option` (plain `WhitespaceRules` +
+empty data is the *constitutive* off (no rules data) — pylatexenc precedent; the third,
+compile-time **absent** spelling of "off" is [§dd-dr:lang-features]. Uniformization rider: `whitespace` loses its `Option` (plain `WhitespaceRules` +
 `enable_whitespace`), which also removes the `Option<Option<…>>` override wart in
 `TokenRulesOverrides`; every flag overrides as a plain `Option<bool>`.
 Decided interactions: (1) **`enable_groups` does not gate `expecting_group_close`** — the
@@ -886,11 +842,6 @@ reversible feature disabling, and field-wise wholesale replacement can express "
 not "off, remembering what on meant".
 Rejected alternatives: keeping `Option<WhitespaceRules>` alongside the flag (three states, two meaning
 "off"); `enable_forbidden_chars` (uniformity for its own sake).
-
-*(Gloss amended — lang-features session: the constitutive parenthetical originally
-read "the language has no such feature", wording that now defines the compile-time
-**absent** spelling; "empty" means no rules data. The third spelling of "off" is
-[§dd-dr:lang-features].)*
 
 ## Parsing state and deltas [§dd-dr:parsing-state]
 
@@ -1028,10 +979,10 @@ is the cheap mechanical option before any signature change.
 
 #### Parsing mode is first-class state data: `StateData.mode: L::ModeId` [§dd-dr:first-class-mode]
 
-Status: DECIDED (user; settles parity item N1 jointly with the `ParseDriver` entry,
+Status: DECIDED (user; settles the group-interior-state parity gap jointly with the `ParseDriver` entry,
 [§dd-dr:parsers-engine]).
 
-`Lang` gains `type ModeId` (`Copy + Eq + Debug + Send + Sync`; `()` under `SimpleLang`) —
+`Lang` gains `type ModeId` (`Copy + Eq + Debug + Send + Sync`; `()` under `TrivialLang`) —
 the third closed per-language vocabulary after `GroupTypeId`/`CallableTypeId` — stored as
 a plain field on `StateData` with a matching `ParsingStateDelta.mode: Option<L::ModeId>`
 override channel. Mode is deliberately not lookup-private: the scope stack reads it for
@@ -1048,7 +999,7 @@ driver-dependent states would break both.
 events remain for non-modal semantics); the latexlike preset likely needs no
 `in_math_mode` in its `StateExt` (single source of truth).
 Rejected alternatives: computing the mode at freeze from `ext` (a hidden derivation for what is
-honestly plain data); an interior delta or events payload on `GroupRule` (the N1
+honestly plain data); an interior delta or events payload on `GroupRule` (the
 data-first candidate — `GroupRule` feeds elementwise prefix-table comparisons and derives
 `Eq`, which a delta payload breaks; and cross-rule policy would smear across rule
 definitions instead of centralizing in finalize).
@@ -1065,12 +1016,15 @@ unchanged (no ext/events/pushes); `ParsingState::mode()` returns by value.
 
 #### Enclosing-state stack on the session; context-dependent events lowered by the driver [§dd-dr:enclosing-state-stack]
 
-Status: DECIDED (user-led, API-review T1/T2 session; applied — Phase 3 S4).
+Status: DECIDED (user-led, API-review session).
 
 The parse **machinery**, not the state model, keeps the enclosing context:
 `ParserSession` maintains a stack of enclosing `ParsingState`s — push/pop at the same
 descent points as the traceback frame stack ([§dd-dr:parse-traceback]), a scoped
-`with_parsing_state(closure)` form for takeover parsers, innermost-first iteration
+`ParseContext::with_parsing_state(state, closure)` form for takeover parsers
+(`parse_construct`, the single descent entry point, maintains the stack through it
+underneath; `with_derived_state(&delta, f)` composes derivation and scoping),
+innermost-first iteration
 starting at the current state. The engine already retains exactly these states
 implicitly (group exit structurally restores the outer `Arc`); the stack only
 materializes them, and it dies with the session — **no ancestry residue survives into
@@ -1084,24 +1038,54 @@ callable outside a driven parse; driver = driven-parse-only behavior):
 - **`Lang::finalize_transition` is kept** — it is what keeps bare `derived()`
   composition coherent (the [§dd-dr:language-init] embedder idiom runs outside any
   session), and mode-shaped transitions don't even need events (`delta.mode` is the
-  signal). It becomes **fallible** (folded into `DeriveError`, default `Ok(())`): a
+  signal). It is **fallible** (the message-carrying `FinalizeError`, folded into
+  `DeriveError`; default `Ok(())`): a
   context-requiring event reaching bare `derived()` errors loudly instead of being
-  silently dropped. The seed still never runs it.
+  silently dropped — in-parse, that aborts as an implementation error under any
+  recovery policy (extension wiring, not source input). The seed still never runs it.
 - **`ParseContext::derive_state(&delta)`** (+ scoped `with_derived_state`) is the
-  parser-facing derivation: it lowers context-dependent events through the new driver
-  hook **`ParseDriver::resolve_state_event(&event, &StateStackView) ->
+  parser-facing derivation: it lowers context-dependent events through the driver
+  hook **`ParseDriver::resolve_state_event(&event, &ParsingStateStack) ->
   Option<ParsingStateDelta>`** (default `None` = context-free, left for
-  `finalize_transition`), merges the patches, strips the lowered events, then calls
+  `finalize_transition`), merges the patches (in event order; the delta's own explicit
+  overrides win — the delta author spoke), strips the lowered events, then calls
   plain `derived()` — one choke point preserved. Per-event *policy* lives on the
   driver; the event *loop* lives in the one cx method — parsers never iterate events.
+  The lend guarantees current-state-first: `derive_state` pushes the context's current
+  state for the hook call when sibling after-effects have evolved it past the
+  innermost stack entry. (`ParserSession::derived_state` performs no lowering.)
 
-First consumer: the latexlike text-restore ([§dd-dr:argument-factory-additions]) —
-the driver walks to the nearest text-mode state (else the outermost) and restores its
-whole `TokenRules`; core learns nothing about modes. The preset's event logic (math
-entry, text restore) ships as **public pillar functions** (post-generalization
-`LLL`-generic; the hooks are one-line delegations) so post-parse processing can
-synthesize coherent recorded states for constructed nodes — restaged or synthetic
-children emulating "enter math"/"restore text" ([§dd-dr:transform]).
+**`ParsingStateStack`** is the owning, session-independent stack type — it holds
+`Vec<Arc<ParsingState<L>>>`; the session stores its live stack as one and lends `&` to
+hooks (zero extra cost; the states themselves are never copied). The
+`ParsingStateDelta` specificity precedent rules out bare `StateStack`, and "View"
+would misname an owning value. It is constructible outside any session:
+`from_states(states)` and **`from_node_ancestors(node)`** — the node's own recorded
+state first, then parents outward via the stored parent table
+([§dd-dr:tree-navigation]), i.e. exactly the innermost-first/current-state-first
+order — so post-parse synthesis feeds the same pillar signatures the driver hook feeds
+([§dd-dr:preset-driver-pillars]). Contract note: the walk's sequence is not
+entry-for-entry the parse-time stack (ancestor chains contain Arc-equal duplicates and
+non-group nodes); the documented contract is the **scan semantics** — first non-math
+state, outermost fallback — which duplicates cannot affect.
+
+First consumer: the latexlike math-exit ([§dd-dr:argument-factory-additions]) — the
+preset pillar **`exit_math_context_delta`**. The delta is defined by *exiting the math
+context*: look up the first non-math enclosing group in the stack and restore that
+context's `TokenRules` **minus the transient gates** — `expecting_group_close` and
+`temporary_groups` are never restored, because they describe in-flight structural
+expectations of the abandoned context (which close that context's own group descent
+was waiting for; which scoped-lifecycle delimiters were live there), not lexical
+context, and restoring them would plant another scope's expectations into the new one
+(the derived state inherits both fields from its base as usual, and a following group
+descent installs its own expectation through the descent invariant). The delta is
+never defined by seeking or naming a text mode as the target — consistently, the mode
+role trait carries no text-mode constructor ([§dd-dr:latexlike-generalization]); core
+learns nothing about modes. The preset's event logic (math entry, math exit) ships as
+**public pillar functions** (`LLL`-generic; the hooks are one-line delegations) so
+post-parse processing can synthesize coherent recorded states for constructed nodes —
+restaged or synthetic children emulating "enter math"/"exit math"
+([§dd-dr:transform]).
 
 Rejected alternatives: per-`GroupRule` mode visibility (plants a semantic reading of
 `mode` in core, deliberately unclaimed there — and arbitrarily privileges groups over
@@ -1120,68 +1104,9 @@ Revisit if: a Lang needs an event resolvable only between the driver lowering an
 finalize (an ordering the two-level split cannot express), or post-parse synthesis
 needs machinery context beyond what the public pillar functions take as arguments.
 
-*(Amended — API-review T3 session: the text-restore pillar is renamed and
-re-specified as **`exit_math_context_delta`** — the delta is defined by *exiting
-the math context*: look up the first non-math enclosing group in the stack and
-restore that context, never by seeking or naming a text mode as the target
-(consistently, the mode role trait carries no text-mode constructor —
-[§dd-dr:latexlike-generalization] amendment). The "nearest text-mode state"
-wording above reads accordingly; `restore_text_context_delta` is a superseded
-name.)*
-
-*(Amended — API-review T5 session: the hook's stack view becomes the owning,
-session-independent type **`ParsingStateStack`** — it holds
-`Vec<Arc<ParsingState<L>>>`; the session stores its live stack as one and lends
-`&` to hooks (zero extra cost; the states themselves are never copied). The
-`ParsingStateDelta` specificity precedent rules out bare `StateStack`, and
-"View" misnames an owning value — `StateStackView`/`StateStack` both superseded.
-It is constructible outside any session: `from_states(states)` and
-**`from_node_ancestors(node)`** — the node's own recorded state first, then
-parents outward via the stored parent table ([§dd-dr:tree-navigation]), i.e.
-exactly the ruled innermost-first/current-state-first order — so post-parse
-synthesis feeds the same pillar signatures the driver hook feeds
-([§dd-dr:preset-driver-pillars] amendment). Contract note: the walk's sequence
-is not entry-for-entry the parse-time stack (ancestor chains contain Arc-equal
-duplicates and non-group nodes); the documented contract is the **scan
-semantics** — first non-math state, outermost fallback — which duplicates cannot
-affect.)*
-
-*(Applied — Phase 3 S4. Application details: the scoped form is the public
-`ParseContext::with_parsing_state(state, f)` (the former crate-internal
-`with_scoped_state`, now also maintaining the session stack; `parse_scoped` is its
-parser-shaped sugar, and `with_derived_state(&delta, f)` composes derivation and
-scoping); the parser-facing derivation is `ParseContext::derive_state` (absorbing
-the former `cx.derived_state` — the session-level `ParserSession::derived_state`
-keeps its name and performs no lowering). The finalize refusal type is
-`FinalizeError` (message-carrying), folded into `DeriveError` as the
-`finalize_error: Option<FinalizeError>` field; in-parse, an unlowered
-context-requiring event aborts as an implementation error under any recovery
-policy (extension wiring, not source input). The lend guarantees
-current-state-first: `derive_state` pushes the context's current state for the
-hook call when sibling after-effects have evolved it past the innermost stack
-entry (an `Arc`-equal duplicate otherwise being harmless under scan semantics).
-Patch merging: patches in event order, the delta's own explicit overrides win —
-"the delta author spoke".)*
-
-*(Amended — user ruling, 2026-08-04: the restore is the found state's
-`TokenRules` **minus the transient gates** — `expecting_group_close` and
-`temporary_groups` are **never restored**. They describe in-flight structural
-expectations of the abandoned context (which close that context's own group
-descent was waiting for; which scoped-lifecycle delimiters were live there), not
-lexical context; restoring them would plant another scope's expectations into
-the new one. This supersedes the literal whole-`TokenRules` reading above (the
-S4 application initially implemented the literal reading, correct at the time);
-the derived state inherits both fields from its base as usual, and a following
-group descent installs its own expectation through the descent invariant.)*
-
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]): the S4 note's
-"`parse_scoped` is its parser-shaped sugar" now names `parse_construct` —
-`parse_scoped` was renamed and generalized into the single descent entry point,
-still maintaining the session stack through `with_parsing_state` underneath.)*
-
 #### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
 
-Status: DECIDED (user, API-review T3 session).
+Status: DECIDED (user, API-review session).
 
 The blanket-impl marker trait stays public, renamed **`TrivialLang`**, and is
 repositioned honestly: the trivial language — for tests and machinery experiments;
@@ -1208,7 +1133,7 @@ entirely (it is documented as that workaround).
 
 #### On-ramp values: `empty()` constructors; recognize-nothing specials defaults stay [§dd-dr:on-ramp-defaults]
 
-Status: DECIDED (user, API-review T3 session).
+Status: DECIDED (user, API-review session).
 
 Two rulings on the from-scratch `Lang` cliff:
 
@@ -1242,10 +1167,6 @@ Revisit if: evidence accumulates of standalone custom-`Lang` authors (not
 framework users) hitting the specials pairing trap despite the docs — the
 fold-as-default option is sound in isolation (a `SpecialsMatch` carries its own
 resolution, so no vocabulary conjuring is needed) and could be reconsidered.
-
-*(Applied — Phase 3 S2, ruling 1: `TokenRules::empty()`/`StateData::empty()`
-landed; the default `initial_state_data` body is the `StateData::empty()` call.
-Ruling 2's loud pairing docs/guide recipe ride the later guide stage.)*
 
 #### Compile-time language features: `Lang::Features` presence declarations [§dd-dr:lang-features]
 
@@ -1360,7 +1281,17 @@ accessor surface, and only constructors and the override channel would move.
 
 **Overrides are gated the same way.** `TokenRulesOverrides` mirrors the per-feature
 blocks; an override for an absent feature is unrepresentable — writing one is a compile
-error at the site that wrote it.
+error at the site that wrote it (with the zero-sized stores on the override blocks and
+the gated `scope_ops` list, a violating delta cannot be written at all, so
+`TokenRulesOverrides::apply()` is infallible). `disable_all()` is feature-aware **by
+construction**: it consults the `Lang::Features` presence declarations and flips the
+`enabled` gate of exactly the features the language has — absent features are simply
+not mentioned by the returned value (under an all-features-present language: all six
+gates `Some(false)`) — so applying a `disable_all()`-based delta never reports an
+absent-feature violation. Of the crate's own constructors, only `disable_all()`
+consults the declarations; the six per-block `disable()` constructors stay
+presence-blind, since authored use of one on an absent feature is exactly the explicit
+data the compile error exists for.
 
 **The present store is transparent — a requirement, not an optimization.** For a present
 feature, `Store<T>` *is* `T`, not a wrapper: a concrete language with a feature present
@@ -1382,7 +1313,7 @@ deliberately exhaustive literal) stay exhaustive at both levels.
 `LangHasScopes` — because `techy::core` is the flat machinery hub where sibling
 vocabulary competes ([§dd-arch:naming] principles 3–4): a bare `Present`, `Absent`,
 `Features`, or `Has*` next to `Token`/`ParsingState`/`CallableSpec` answers neither
-"present *what*?" nor "features *of what*?". The exploration document's spellings (a
+"present *what*?" nor "features *of what*?". The earlier sketch's spellings (a
 `Gate` trait with `On`/`Off` markers) were rejected: "gate" already names the *runtime*
 `enable_*` flags in the crate's documentation, and reusing it for the compile-time axis
 would fuse the two axes the absent/disabled word split exists to keep apart
@@ -1417,28 +1348,6 @@ equality); or the independent-declaration test/documentation surface becomes a r
 maintenance burden (the remedy is more ready-made bundles next to
 `AllLangFeatures`/`NoLangFeatures`, not closed tiers).
 
-*(Amendment — user ruling 2026-08-10: `TokenRulesOverrides::disable_all()` is
-feature-aware **by construction** — it consults the `Lang::Features` presence
-declarations and flips the `enabled` gate of exactly the features the language has;
-absent features are simply not mentioned by the returned value (their blocks stay
-all-`None`). It is the scoped off for every feature the language has and must never
-be able to fail: applying a `disable_all()`-based delta never reports an
-absent-feature violation. This supplements, not softens, the loud-failure stance on
-gated overrides — explicitly *authored* data on an absent feature's block still
-errors; of the crate's own constructors, only `disable_all()` consults the
-declarations (the six per-block `disable()` constructors stay presence-blind —
-authored use of one on an absent feature is exactly the explicit data the error
-exists for). Under an
-all-features-present language the returned value is unchanged: all six gates
-`Some(false)`.)*
-
-*(Amendment — same 2026-08-10 ruling, M3 follow-through: M3's zero-sized stores on
-the override blocks and the gated `scope_ops` list made the transitional runtime
-error channel unreachable — a violating delta can no longer be written — so
-`TokenRulesOverrides::apply()` is infallible again and `AbsentFeatureOverrideError`
-was removed, per the ruling's instruction that the transitional plumbing must not
-outlive its milestone.)*
-
 ## Specs and scopes [§dd-dr:specs]
 
 #### Unified `CallableSpec` with self-supplied invocation parser [§dd-dr:unified-callable-spec]
@@ -1460,8 +1369,8 @@ Rationale: specs are data + optional behavior, matching [§dd-dr:data-vs-traits]
 Status: DECIDED (user-led).
 
 Ordered stack, innermost/last wins. Shadowing *is* the intended semantic (`\newcommand`
-redefinition, group-local definitions), so a configurable conflict policy (PROPOSALS.md's
-`FirstWins`/`LastWins`/`Error`) solves a non-problem while complicating resolution; an optional
+redefinition, group-local definitions), so a configurable conflict policy
+(`FirstWins`/`LastWins`/`Error`) solves a non-problem while complicating resolution; an optional
 lint can warn on shadowing if ever wanted.
 
 #### `SpecLookup` receives a `CallableQuery` (query struct), not bare `(ct, name)` [§dd-dr:callable-query]
@@ -1484,7 +1393,7 @@ syntax); a mandatory `&Token` parameter (lifetime noise on a dyn trait, and inco
 sometimes there is no token).
 *Mode-awareness*, as proposed: the `&ParsingState<L>` parameter lets a preset's lookup dispatch
 on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
-token alike. This replaces PROPOSALS.md's hard-coded `math_mode_macros` tables, which
+token alike. This replaces an earlier proposal's hard-coded `math_mode_macros` tables, which
 contradicted [§dd-dr:no-privileged-concepts].
 (The lookup contract has since rehomed to `SpecsProvider::retrieve_spec` — fallible,
 part of a richer provider trait — with `CallableQuery` and its rationale carried over
@@ -1530,7 +1439,7 @@ Status: DECIDED (user, current-level review session; replaces the open interned-
 
 `Lang::CallableTypeId: Copy + Ord + Hash + Debug` (Ord: library map keys),
 `Lang::GroupTypeId: Copy + Eq + Hash + Debug`; a real language defines small enums,
-`SimpleLang` defaults both to `u32`. The planned `Language<L>` interning machinery for these
+`TrivialLang` defaults both to `u32`. The earlier `Language<L>` interning machinery for these
 ids was deleted outright.
 Rationale: invocation forms and group-type identities are static per language definition —
 nobody registers a new *form* at runtime (new *callables*, yes — via libraries; new
@@ -1601,7 +1510,7 @@ the trait had no `Any` supertrait. Now it is: `(&*spec as &dyn Any).downcast_ref
 ConcreteSpec>()` via trait upcasting (stable exactly at our MSRV 1.86; the rehearsal
 test performs the real downcast through the dispatch loop). Since `Any` requires
 `'static` and generic spec types (`StdCallableSpec<L>`) must satisfy the supertrait,
-`Lang` (and `SimpleLang`) gained a `'static` bound — free in practice, a `Lang` is a
+`Lang` (and `TrivialLang`) gained a `'static` bound — free in practice, a `Lang` is a
 unit marker type, and the stored `Arc<dyn CallableSpec<L>>` was implicitly `'static`
 all along. **The trait-object case:** `Any` downcasts to concrete types only; a preset
 dispatching on an *open* set of spec types (third parties implementing FLM's
@@ -1612,7 +1521,7 @@ its registration sugar wraps every spec in `FlmSpecBox(Arc<dyn FlmSpec>)` (imple
 *Rejected (for now):* a `Lang`-associated dyn type (`type CallableSpecExt: ?Sized` set
 to `dyn FlmSpec`, plus a defaulted `fn lang_ext(&self) -> Option<&L::CallableSpecExt>`
 bridge on the spec trait) — expressible and object-safe, but it adds an associated type
-to every hand-written `Lang` impl (the SimpleLang-cliff cost, cf. [§dd-dr:parsers-engine]) for a need the
+to every hand-written `Lang` impl (the `TrivialLang`-cliff cost, cf. [§dd-dr:parsers-engine]) for a need the
 wrapper covers; recorded here as the upgrade path if the wrapper proves annoying in
 FLM practice. This also unblocks the flagged default-factory escape hatch ([§dd-dr:parsers-engine]): the
 dispatch loop *can* now detect `StdCallableSpec` and elide the per-invocation `Box`, if
@@ -1707,8 +1616,8 @@ documented on `DeriveError` itself.
 *(b) Specials fold:* longest match wins, ties innermost — verified as *exact*
 pylatexenc parity (`test_for_specials`: a strictly longer match beats an
 earlier-searched category, ties keep the first-searched); since equal-length matches at
-one position are the same spelling, the tie rule *is* redefinition shadowing. One
-deviation from the plan-session sketch: provider-side `scan_specials` returns
+one position are the same spelling, the tie rule *is* redefinition shadowing.
+Provider-side `scan_specials` returns
 `TokenResult` (the exact shape of the `Lang` hook it feeds), not
 `Result<_, ProviderError>` — scanning providers keep the tokenizer's recoverable-error
 protocol, and the `ScopeStack::scan_specials` fold propagates the first `Err`
@@ -1764,10 +1673,22 @@ counterpart of `retrieve_spec`'s point queries, closing the earlier deferral. Ke
 - **`ClosedVocabulary` (`const ALL: &'static [Self]`, in `state`)** closes the
   enumeration gap a required filter creates: `L::CallableTypeId` has no
   list-the-variants bound, so generic whole-scope tooling states the opt-in bound and
-  iterates `ALL`. Deliberately **not** required by `Lang`: `SimpleLang` defaults the
+  iterates `ALL`. Deliberately **not** required by `Lang`: `TrivialLang` defaults the
   id types to `u32`, which has no value list. The preset implements it for all three
   vocabularies; `#[non_exhaustive]` enums keep `ALL` in sync by same-change
-  discipline (compiler can't enforce it).
+  discipline (compiler can't enforce it). It stays opt-in under the generalized
+  preset — **not** a role-trait or `LatexlikeLang` supertrait ("provide, don't
+  require", user): no shipped function requires the bound; the did-you-mean miss
+  detail needs no vocabulary enumeration (its callable type and mode are already in
+  hand at the miss site, [§dd-dr:resolution-extraction]); and the parse-init
+  escape-char check ([§dd-dr:registration-ergonomics]) ships as a bound-where-used
+  check function, `core::specs::check_provider_commands_shadowed_by_escape` — wired
+  through the defaulted core hook `ParseDriver::observe_parse_start` (once per root
+  parse) plus a defaulted no-op `LatexlikeLang::check_parse_start` behavior method
+  that `Latexlike` overrides with the unconditional call (trait impls cannot state
+  per-method bounds, so each family member opts in monomorphically, where its bound
+  trivially holds), gracefully absent for non-enumerable vocabularies — a
+  best-effort diagnostics nicety, not semantics.
 Rejected alternatives: an `Option`al type filter (generic listing without the vocabulary bound —
 user preferred always-filtered plus statically listable vocabularies); a
 `&ParsingState` parameter (nothing beyond the mode feeds visibility); state-blind
@@ -1775,32 +1696,9 @@ enumeration with visibility data carried on entries (information without a consu
 excluding specials or a separate `iter_specials` (the recorded-type framing unifies
 the tables with no extra surface).
 
-*(Amended — API-review T3 session: `ClosedVocabulary` stays opt-in under the
-generalized preset — **not** a role-trait or `LatexlikeLang` supertrait
-("provide, don't require", user): no shipped function requires the bound; the
-did-you-mean miss detail needs no vocabulary enumeration (its callable type and
-mode are already in hand at the miss site, [§dd-dr:resolution-extraction]); and
-the parse-init escape-char check ([§dd-dr:registration-ergonomics]) ships as a
-bound-where-used check function — wired unconditionally on the monomorphic preset
-path, narrowly bounded at the generic-`LLL` wiring point, and gracefully absent
-for non-enumerable vocabularies (a best-effort diagnostics nicety, not
-semantics).)*
-
-*(A1(iv) amendment applied — Phase 3 S9:
-`core::specs::check_provider_commands_shadowed_by_escape` carries the bounds; the
-wiring realization is the defaulted core hook `ParseDriver::observe_parse_start`
-(once per root parse) + a defaulted no-op `LatexlikeLang::check_parse_start`
-behavior method that `Latexlike` overrides with the unconditional call — trait
-impls cannot state per-method bounds, so each family member opts in
-monomorphically, where its bound trivially holds; the default keeps the check
-gracefully absent.)*
-
 #### Registering callables: conversion idiom, one-liners, no insert-time validation [§dd-dr:registration-ergonomics]
 
-Status: DECIDED (user, API-review T1/T2 session; conversion idiom applied — the
-spec/provider side Phase 3 S2, the `IntoArgumentParser` sibling Phase 3 S3; the
-one-liners and the miss-path/init-warning/insert-callout measures applied Phase 3
-S9).
+Status: DECIDED (user, API-review session).
 
 Three rulings on the registration surface:
 
@@ -1812,7 +1710,14 @@ Three rulings on the registration surface:
    MacroSpec::new(…))` with no `Arc::new` anywhere, pre-shared flyweights still
    accepted. (A plain `Into<Arc<dyn …>>` bound cannot express this: unsized coercion
    is not `From`, and blanket impls hit coherence walls — the sealed trait is the
-   mechanism.) The `insert` vs `insert_specials` parameter-order flip is fixed while
+   mechanism. Coherence pitfall: on a `Lang`-generic conversion trait, a *blanket*
+   by-value impl and the `Arc` pass-through impls overlap — downstream
+   `impl CallableSpec<TheirL> for Arc<…>` is orphan-legal — so `IntoCallableSpec`,
+   and the resolver-side `IntoSourceResolver`, carry a sealed, never-named
+   inference-marker type parameter distinguishing the argument shapes;
+   `IntoSpecsProvider` needs no marker, its by-value impl being the concrete
+   `Package<L>`. No double-wrap.) The `insert` vs `insert_specials` parameter-order
+   flip is fixed while
    breaking is free: `insert_specials(callable_type, trigger, spec)`.
 2. **Preset one-liners**: `define_macro(name, codes)` / `define_environment(name,
    codes)` as inherent methods on `Package<LLL>` in the latexlike module
@@ -1827,9 +1732,12 @@ Three rulings on the registration surface:
    mid-parse, and a leading escape char can be intended (`@greet` under
    `\makeatletter`-style situations — or registered before `@` *becomes* an escape
    char). The trap is caught where it bites instead: (a) on a resolution miss, a
-   **did-you-mean** detail iterates the scopes' advertised symbols
-   ([§dd-dr:iter-symbols]) and reports near-misses — at minimum the
-   initial-escape-char case, optionally a small edit-distance check (accepted
+   **did-you-mean** detail in `resolve_command_in_scopes`'s miss arm
+   ([§dd-dr:resolution-extraction]): after the searched-providers detail, the
+   enumerable providers are scanned innermost-first for the escape-prefixed
+   registration ("provider 'p' defines '\greet' — command names are registered
+   without the escape character") and for capped small-edit-distance suggestions
+   (accepted
    limitation: an in-stack fallback provider means the miss path never fires);
    (b) at **parse initialization** — the layering-correct moment: the diagnostics
    sink is live and the `TokenRules` escape char is known — a warning diagnostic
@@ -1850,40 +1758,9 @@ Revisit if: the did-you-mean scan measurably slows cold miss paths (bound the
 iteration), or fallback-provider stacks dominate real deployments (the miss detail
 never fires there — the init-time check remains).
 
-*(Amended — API-review T3 session: (a) the did-you-mean detail's home is the miss
-arm of the extracted `resolve_command_in_scopes`
-([§dd-dr:resolution-extraction]); it enumerates *symbols*, not vocabularies — no
-`ClosedVocabulary` dependency. (b) The parse-init all-escape-char warning is
-realized as a public bound-where-used check function (`where
-L::CallableTypeId: ClosedVocabulary, L::ModeId: ClosedVocabulary`) —
-[§dd-dr:iter-symbols] amendment.)*
-
-*(Ruling 1 applied — Phase 3 S2: `IntoSpecsProvider` (impls exactly as ruled:
-`Package<L>` by value, `Arc<P>`, `Arc<dyn SpecsProvider<L>>`) and the spec-side
-sibling **`IntoCallableSpec`** on `Package::insert`/`insert_specials`/`…_in_modes`,
-with the parameter-order flip. Mechanism note (coherence pitfall found at
-application): on a `Lang`-generic conversion trait, a *blanket* by-value impl and
-the `Arc` pass-through impls overlap (downstream `impl CallableSpec<TheirL> for
-Arc<…>` is orphan-legal), so `IntoCallableSpec` — and the resolver-side
-`IntoSourceResolver` — carry a sealed, never-named inference-marker type
-parameter distinguishing the three argument shapes; `IntoSpecsProvider` needs no
-marker (its by-value impl is the concrete `Package<L>`). All ruled call shapes
-hold; no double-wrap. Rulings 2 (preset one-liners) and 3's did-you-mean /
-parse-init checks ride S9.)*
-
-*(Rulings 2–3 applied — Phase 3 S9: `Package<LLL>::define_macro` /
-`define_environment` (inherent preset methods, list-form codes, `Result`, no
-escape validation); the did-you-mean detail in `resolve_command_in_scopes`'s miss
-arm (escape-prefixed registration callout + capped small-edit-distance
-suggestions over the enumerable providers); the parse-init warning as
-`check_provider_commands_shadowed_by_escape` wired through the new
-`ParseDriver::observe_parse_start` hook + `LatexlikeLang::check_parse_start`
-default; the `Package::insert` normalized-name callout with the A4
-no-cross-check passage.)*
-
 #### Command resolution is a standalone `specs` function: `resolve_command_in_scopes` [§dd-dr:resolution-extraction]
 
-Status: DECIDED (user, API-review T3 session; completes the deferred resolver half
+Status: DECIDED (user, API-review session; completes the deferred resolver half
 of [§dd-dr:public-namespace-topology]).
 
 The standard command-resolution body — build a `CallableQuery` with
@@ -1902,9 +1779,10 @@ cross-boundary signature reference. The associated-fn spelling
 (`CommandResolution::resolve_via_scopes`) is removed — one canonical path; it was
 also a discoverability accident (the walkthrough found it by reading the enum's
 docs, not by looking for a resolver). Interactions: the did-you-mean miss detail
-([§dd-dr:registration-ergonomics]) lives in this function's miss arm;
-`ScopesResolvingDriver` ([§dd-dr:scopes-resolving-driver]) is its one-line
-wrapper; the resolution-condition wire areas
+([§dd-dr:registration-ergonomics]) lives in this function's miss arm; the strategy
+value `ScopesCommandResolver` ([§dd-dr:command-resolver], superseding
+[§dd-dr:scopes-resolving-driver]) is its one-line wrapper, placed beside the
+family; the resolution-condition wire areas
 ([§dd-dr:wire-identifier-stability]) name the concept this entry defines.
 
 Rejected alternatives: splitting the family across the boundary (function + query
@@ -1917,24 +1795,9 @@ discoverability accident above).
 Revisit if: a second resolution syntax family (beyond `Command`) wants extracting
 — mirror this shape rather than growing this function.
 
-*(Amended — API-review Tier-C session: the one-line wrapper is now the strategy
-value `ScopesCommandResolver`, placed beside this function and the family;
-[§dd-dr:command-resolver] supersedes [§dd-dr:scopes-resolving-driver].)*
-
-*(Applied — Phase 3 S2: `resolve_command_in_scopes` + `ScopesCommandResolver`
-live at `techy::core::specs`; `CommandResolution::resolve_via_scopes` removed.
-Phase 3 S9 landed the did-you-mean miss detail in the function's miss arm:
-after the searched-providers detail, the enumerable providers are scanned
-innermost-first for the escape-prefixed registration
-(`provider ‘p’ defines ‘\greet’ — command names are registered without the
-escape character`) and for capped small-edit-distance suggestions
-(`did you mean ‘…’ (provider ‘…’)?`); fallback-provider stacks never reach the
-miss arm — the accepted limitation, mitigated by the parse-init check of
-[§dd-dr:registration-ergonomics].)*
-
 #### Arguments are named at construction: `new(parser, name)` + `new_unnamed` [§dd-dr:named-first-constructors]
 
-Status: DECIDED (user, API-review T3 session; applied — Phase 3 S3).
+Status: DECIDED (user, API-review session).
 
 Naming an argument becomes the primary spelling: `ArgumentSpec::new(parser, name)`
 takes the name directly, and the anonymous case is the marked, longer spelling
@@ -1951,8 +1814,8 @@ existing word — no new synonym. **`ParsedSlot` mirrors the convention** (user)
 `ParsedSlot::new(region, name)` + `ParsedSlot::new_unnamed(region)`,
 `ParsedSlot::named` removed; parameter order is payload-first in both families.
 `ParsedArgument` needs no change — it carries no own name (the name lives on its
-`Arc<ArgumentSpec>`). Final slot-constructor arities land with the ext-minting
-application ([§dd-dr:ext-minting] makes `SlotExt` non-defaultable).
+`Arc<ArgumentSpec>`). Slot-constructor arities follow [§dd-dr:ext-minting]
+(`SlotExt` is demanded at construction).
 
 Rejected alternatives: `new(parser, name: Option<…>)` (decorates the *encouraged*
 path with `Some(…)` noise — backwards); a descriptor-enum factory
@@ -1982,11 +1845,11 @@ Status: DECIDED (user-led design discussion; "Option F").
 
 The structural taxonomy is `Chars`/`Group`/`Callable`/`Comment`/`List`;
 macro/environment/specials are invocation *forms* (`CallableTypeId` on `CallableData`), not
-node kinds; custom data rides in the two-tier ext bundle (`Lang::NodeExts: NodeExtTypes` —
-uniform `NodeExt` + per-kind `<Kind>NodeExt`, all bounded `Clone + Debug + Default`; the
-`Default` gives builders their no-ext value, mirroring `StateExt`). `NodeExtTypes` is defined
+node kinds; custom data rides in the ext bundle (`Lang::NodeExts: NodeExtTypes` — the
+member roster is [§dd-dr:ext-minting], which removed the per-kind node-ext tier this
+entry first carried, leaving `NodeKind` purely structural). `NodeExtTypes` is defined
 next to `Lang` in the state topic, not in `node/` (moving it would recreate a module cycle for
-cosmetics); `SimpleLang` + blanket impl provides the all-defaults shortcut.
+cosmetics); `TrivialLang`'s blanket impl provides the all-defaults shortcut.
 The resolution argument, in full:
 - The original proposal — closed structural enum + `Custom(L::NodeData)` variant —
   conflated two needs: *extra per-instance data on a node that IS structurally a
@@ -1997,7 +1860,7 @@ The resolution argument, in full:
   generic tooling.
 - The `Callable` merge (macro/environment/specials differ by invocation form, not by parsed
   shape) is itself a de-privileging move — "environment" was a preset concept wrongly
-  enshrined as a core node kind — and it made the two-tier ext affordable.
+  enshrined as a core node kind — and it made the ext bundle affordable.
 - The merge required recording the invocation form somewhere ⇒ `CallableTypeId`, which
   also became the definition key space and the per-form unknown-fallback hook. Specs were
   **de-keyed** (behavior only, no name), enabling flyweight sharing across names and
@@ -2016,11 +1879,6 @@ generated trait-based design) — loses exhaustive matching, adds per-node boxin
 serialization and flat storage impossible, and reintroduces runtime type errors that the
 type system should prevent; annotation wrapper nodes (re-create the problem one level up);
 side tables (break node self-containment across tree transforms).
-
-*(Amended — API-review P4: the tier-2 per-kind ext half of this entry is superseded —
-per-kind node exts are removed and `NodeKind` becomes purely structural,
-[§dd-dr:ext-minting]. The closed structural taxonomy, the `Callable` merge, de-keyed
-specs, owned names, and `TextContent` are untouched.)*
 
 #### No core `MathNode` [§dd-dr:no-core-math-node]
 
@@ -2063,16 +1921,13 @@ exist, cf. [§dd-dr:no-spec-side-slots]). Key points, each argued in the session
   ([§dd-dr:child-regions]) — eliminating pylatexenc's lone-group unwrap heuristics. The
   extraction-view API: [§dd-dr:read-api]. What *is* stored beyond the region: the
   `ArgumentExt` slot in the `Lang::NodeExts` bundle, for extensions caching derived
-  per-argument data (e.g. `{ref_domain, ref_key}` from a `fig:Abc` argument) — populated
-  by custom argument parsers or `Lang::finalize_node`.
+  per-argument data (e.g. `{ref_domain, ref_key}` from a `fig:Abc` argument) — minted
+  by the argument parser at record creation: the parser output carries it, the record
+  constructor demands it, and the standard parsers are conditionally defined
+  `where ArgumentExt<L>: Default` ([§dd-dr:ext-minting]).
 Rejected alternatives: parallel `specs`/`args` vectors (pylatexenc-literal — an unenforced
 length/pointer-consistency invariant and a redundant `Arc` when the spec also sits in the
 entry); "layout" as a name (opaque — nobody could say what it referred to).
-
-*(Amended — API-review P4: `ArgumentExt` is minted by the argument parser at record
-creation — the parser output carries it, the record constructor demands it, and the
-standard parsers are conditionally defined `where ArgumentExt<L>: Default`;
-`Lang::finalize_node` no longer exists as a populate-later path. [§dd-dr:ext-minting].)*
 
 #### `SlotExt` — slot records carry per-instance ext, symmetric with `ArgumentExt` [§dd-dr:slot-ext]
 
@@ -2084,12 +1939,10 @@ Status: DECIDED (user).
 environment's *body* is a slot, and per-instance derived data about a body (tabular cell
 structure, enumerate item boundaries) had no home except the whole-callable ext. Added
 while cheap: one associated type on the bundle, one field on the record; retrofitting after
-downstream `NodeExtTypes` implementors exist would break them all.
-
-*(Amended — API-review P4: `SlotExt` values are demanded at `ParsedSlot` construction
-(no `Default` path); slots additionally gain a `SlotRole` and trait-based body
-marking, with the preset claiming the `SlotExt` member. [§dd-dr:ext-minting],
-[§dd-dr:slot-roles].)*
+downstream `NodeExtTypes` implementors exist would break them all. `SlotExt` values are
+demanded at `ParsedSlot` construction (no `Default` path); slots additionally carry a
+`SlotRole` with trait-based body marking, the preset claiming the `SlotExt` member
+([§dd-dr:ext-minting], [§dd-dr:slot-roles]).
 
 #### `NodeTree::iter` renamed `iter_storage_order`; no `parent` stored in `NodeData` [§dd-dr:iter-storage-order]
 
@@ -2099,15 +1952,11 @@ The flat iterator yields storage
 (breadth-first) order — `a`, `c`, `b` for `a{b}c` — which a name as generic as `iter`
 invites consumers to mistake for document order; the rename makes the iteration order
 part of the signature. The document-order `descendants()` arrived with the read API
-([§dd-dr:read-api]), once it had consumers. Upward navigation (`parent: u32` in
-`NodeData`, `parent()`/`next_sibling()`/`ancestors()`) was considered and declined as not
-needed — the transient parent vector `finish()` computes for region resolution stays
-transient. Named argument-node accessors (`argument_nodes_named` etc.) likewise landed
+([§dd-dr:read-api]), once it had consumers. Upward navigation was first declined as
+not needed, then landed once consumers materialized: `finish()`'s parent vector is
+kept on the tree (`parent()`/`index_in_parent()` — [§dd-dr:tree-navigation]). Named
+argument-node accessors (`argument_nodes_named` etc.) likewise landed
 with the read/extraction package, not piecemeal.
-
-*(Amended — API-review P4: the parent-navigation half is reversed — `finish()`'s
-parent vector is now kept on the tree (`parent()`/`index_in_parent()`), consumers
-having materialized; the `iter_storage_order` rename stands. [§dd-dr:tree-navigation].)*
 
 #### Argument/slot child regions with parser-designated content (`ChildRegion`, `ContentNodes`) [§dd-dr:child-regions]
 
@@ -2169,8 +2018,9 @@ content (`\m{}`). Key points:
   node identity — transforms and views splice child *ranges* ([§dd-dr:read-api]);
   `NodeRef::argument(i)`/`argument_named()` are replaced by region/content-nodes accessors;
   `ParsedArguments` holds no `TextContent`, so its materialization plumbing is deleted.
-  `CallableData.post_space` deliberately stays a field: it lies outside the region tiling
-  and is whitespace-only by construction (trailing comments are never consumed).
+  Callable post-space lies outside the region tiling and is whitespace-only by
+  construction (trailing comments are never consumed); it rides the invocation-syntax
+  payload ([§dd-dr:invocation-syntax]).
 - **Slots mirror arguments** (same `ChildRegion` type), keeping the body `List` as the
   content parent (span/state/ext identity; "an empty body exists"); terminator syntax is settled
   separately — rigid scaffolding is reconstructed, cf. [§dd-dr:environment-scaffolding].
@@ -2241,12 +2091,9 @@ Rationale: `children: Range<u32>` requires *sibling*-contiguous storage, and no 
 arena-emission order provides it — recursive descent gives subtree-contiguous layouts
 (`G(c1(d1,d2), c2(e1))` emits `d1,d2,c1,e1,c2,G` post-order; `c1` and `c2` are not adjacent).
 Staging + flatten is O(n) with one transient copy, and keeps the builder API free of layout
-obligations.
-
-*(Amended — API-review P4: the builder becomes hook-free with a single
-`add(kind, span, state, children, ext, annotation)` demanding ready values; the
-staging semantics recorded here — bottom-up, claim-once, breadth-first flatten,
-unreachable dropped — are unchanged. [§dd-dr:ext-minting], [§dd-dr:node-annotations].)*
+obligations. The builder is hook-free, with a single
+`add(kind, span, state, children, ext, annotation)` demanding ready values
+([§dd-dr:ext-minting], [§dd-dr:node-annotations]).
 
 #### `TextContent` is S0 and lives in the source topic; no `PartialEq` on node types yet [§dd-dr:text-content-s0]
 
@@ -2276,10 +2123,10 @@ Rejected alternatives: recovering either from the span (fails for synthesized co
 #### Environment scaffolding is rigid syntax, reconstructed — not nodes, not a record [§dd-dr:environment-scaffolding]
 
 Status: DECIDED (user; closes the terminator-representation question left open by the
-regions session; **superseded** — API-review recompose session: the
+regions session), then **partially superseded** (API-review recompose session): the
 reconstruct-don't-record half is reversed — scaffolding facts are recorded as
-invocation-syntax payload, cf. [§dd-dr:invocation-syntax] and the amendment note
-below).
+invocation-syntax payload, cf. [§dd-dr:invocation-syntax] and the closing note
+below.
 
 An environment-shaped callable's span covers the whole `\begin{align}…\end{align}` extent
 (plus post-space); its children are the argument regions followed by the body `List` — one
@@ -2306,21 +2153,19 @@ closing with its own trigger text is fine — that is `name`; a freely chosen cl
 is not): that construct's parser then records the choice on the node, following the
 `GroupData` delimiter precedent.
 
-*(Amended — API-review recompose session, SUPERSESSION: the per-node recomposition
-doctrine ([§dd-dr:recompose] amendments) reversed reconstruct → **record** — the
-begin/end facts (per side: escape char, command word, post-space, name-group rule)
-are recorded on the node as the environment arm of the Lang-owned invocation-syntax
-payload ([§dd-dr:invocation-syntax]). What stands: the rigid parse syntax (with
-strictness now Env-owned — a tolerance variant is a newtype over
-`StdEnvironmentSyntax`), and both recorded rejections above — scaffolding is still
-neither nodes nor slot records (the recompose session separately rejected the
-`Hidden`-slot storage design). The "tolerated and *not recorded*" post-space clause
-no longer holds: the per-side record keeps it. Applied — Phase 3 S5, revised at
-S5-M6 ([§dd-dr:invocation-syntax] amendment note): the
-`EnvironmentSyntax`/`StdEnvironmentSyntax` record, constructed once at staging
-via `from_parsed(begin, terminator)` with the spelling writer pair; the
-composition owns all scanning, and the body parser's terminator facts flow back
-through `EnvironmentBody::terminator`.)*
+*What the supersession changed:* the per-node recomposition doctrine
+([§dd-dr:recompose]) reversed reconstruct → **record** — the begin/end facts (per
+side: escape char, command word, post-space, name-group rule) are recorded on the
+node as the environment arm of the Lang-owned invocation-syntax payload
+([§dd-dr:invocation-syntax]): the `EnvironmentSyntax`/`StdEnvironmentSyntax` record
+is constructed once at staging via `from_parsed(begin, terminator)` with the
+spelling writer pair; the composition owns all scanning, and the body parser's
+terminator facts flow back through `EnvironmentBody::terminator`. The "tolerated
+and *not recorded*" post-space clause no longer holds: the per-side record keeps
+it. What stands: the rigid parse syntax (strictness Env-owned — a tolerance
+variant is a newtype over `StdEnvironmentSyntax`), and both recorded rejections
+above — scaffolding is still neither nodes nor slot records (a `Hidden`-slot
+storage design was separately rejected).
 
 #### Whitespace and span invariants pinned [§dd-dr:span-invariants]
 
@@ -2336,7 +2181,10 @@ Status: DECIDED (user).
    are possible and fine — deterministic).
 3. *Callable post-space:* **exactly the trigger token's own syntactic post-space** — the
    name-terminating whitespace of a multi-character command, already inside the token's
-   span (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed. Whitespace
+   span (pylatexenc's `macro_post_space`); nothing beyond it is ever claimed. Storage is
+   the Lang-owned invocation-syntax payload ([§dd-dr:invocation-syntax] — latexlike
+   records it in `Macro { escape_char, post_space }` and per environment side); the
+   recorded fact and its token-only rule are as stated here. Whitespace
    after a single-character command (`\& b`) or after a final argument is ordinary
    sibling/region content, as in TeX. Groups have no post-space (space after `}` is
    content). Comment post-space is the token's (newline + indentation, stopping at
@@ -2356,25 +2204,16 @@ Status: DECIDED (user).
    rigid scaffolding is the reconstructible complement (previous entry). Checked
    mechanically by a test-utility `check_tree_invariants()` — deliberately a test aid, not
    builder law, so a future construct that legitimately breaks byte-accounting amends a
-   test, not the architecture.
-
-*(Amended — API-review recompose session: invariant 3's *storage* moves — the core
-`CallableData.post_space` field is replaced by the Lang-owned invocation-syntax
-payload ([§dd-dr:invocation-syntax]); the recorded fact and its token-only rule are
-unchanged (latexlike records it in `Macro { escape_char, post_space }` and per
-environment side). Applied — Phase 3 S5: kind.rs invariant 3 reworded to the
-payload channel, and the payload pins read the shipped payloads by downcast —
-the macro spelling + post-space pins (the childless arm pins containment, not
-span-end: a takeover's `stage_invocation(.., end_pos: Some)` legitimately
-claims extent past the trigger), the specials name-as-written prefix pin, and
-the environment `write_begin`/`write_end` byte pins. Since the S5-M6 revision
-([§dd-dr:invocation-syntax] amendment note, Option B) the pins live in the
-**preset checker** `check_latexlike_tree_invariants`, layered on the
-payload-blind core `check_tree_invariants`.)*
+   test, not the architecture. The core checker is payload-blind; the payload-dependent
+   pins — macro spelling + post-space (the childless arm pins containment, not span-end:
+   a takeover's `stage_invocation(.., end_pos: Some)` legitimately claims extent past
+   the trigger), the specials name-as-written prefix, the environment
+   `write_begin`/`write_end` bytes — live in the **preset checker**
+   `check_latexlike_tree_invariants`, layered on top ([§dd-dr:invocation-syntax]).
 
 #### Cross-tree `NodeId` misuse: debug-only provenance tags [§dd-dr:node-id-provenance]
 
-Status: DECIDED (user, code-review follow-up session; **superseded** — API-review P4:
+Status: DECIDED (user, code-review follow-up session; **superseded** — API review:
 tags are now always-on in all builds and part of `NodeId` identity, cf.
 [§dd-dr:tree-tags] — the revisit condition below fired).
 
@@ -2453,13 +2292,14 @@ Status: DECIDED (user).
   parity in mechanism: its `split_at_chars` mints new `LatexCharsNode`s). Whole nodes
   are deep-copied (`copy_subtree_into`; spans/states/specs `Arc`-shared, new ids),
   boundary partials become fresh `Chars` nodes span-backed into the *same* source
-  (exact sub-spans, zero-copy text). Result wrappers (`Split`, `KeyVals`) own their
+  (exact sub-spans, zero-copy text). Result wrappers (`SplitAtChars`, `KeyVals`) own their
   tree privately and expose **primary access** (`segment(i)`, `segments()`,
   `keyval(i)`, `get(name)`) as `NodeSlice` views (user requirement) — one currency,
   so every helper composes with every other (re-split a segment, walk `descendants()`
   of a derived tree). Documented edges: partials of *owned*-content chars nodes
   (materialized trees) keep the whole original node's span as provenance (no byte
-  mapping exists to subdivide); partial nodes carry default ext; derived trees'
+  mapping exists to subdivide); partial nodes' ext is minted via `make_node_ext`
+  ([§dd-dr:ext-minting]); derived trees'
   sibling spans do not tile (separators omitted) and are exempt from
   `check_tree_invariants`' byte accounting, while *pure* copies satisfy it fully.
 - **`parse_keyval` has no policy knobs** (user): entries are recorded **in source
@@ -2490,12 +2330,6 @@ covering-span *helper* recomputing spans best-effort (user: return types must ca
 them); `indexmap`-style ordered-map dependency for keyval; keyval aggregation knobs
 (strictly less information than duplicate-preserving entries).
 
-*(Amended — API-review P4: extract-built trees are `NodeTree<L, ()>`
-([§dd-dr:node-annotations]); boundary partials are minted via `make_node_ext` instead
-of carrying default exts ([§dd-dr:ext-minting]); rebasing the `Split`/`KeyVals`
-builders on the restage mechanism so they can keep/map annotations of annotated input
-trees is a recorded later option ([§dd-dr:restage]; decide in 2b).)*
-
 #### `NodeRef::summary()`: the compact node description is core API [§dd-dr:node-summary]
 
 Status: DECIDED (user).
@@ -2512,7 +2346,7 @@ carry three copies of the same formatter).
 
 #### `_named` argument accessors: unknown name is an error, absent argument is `None` [§dd-dr:named-argument-errors]
 
-Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S9).
+Status: DECIDED (user, API-review session).
 
 `argument_nodes_named`/`argument_content_nodes_named` return `Result<Option<…>, E>`:
 `Err` = category error (the node is not a callable, or the name is not among the
@@ -2523,23 +2357,22 @@ replicated on all of them and a pointer to the `_named` forms as the distinguish
 alternative. Decisive reason: for a *name*, a silent `None` on a typo is a trap with
 no cheap call-site discriminator — and names, unlike indices, are exactly the form the
 API recommends; the error is a `Result`, never a panic ([§dd-dr:panic-policy]).
+The error type is `core::node::NamedAccessError`
+(`NotACallable` / `UnknownArgumentName` / `UnknownSlotName`). The sibling
+`slot_content_nodes_named` carries the same error contract but returns
+`Result<NodeSlice, E>` **without** the `Option` layer — a recorded slot has no
+"declared but absent" state, so an always-`Some` option would force a dead arm on
+every caller. `ParsedArguments::get_named`/`ParsedSlots::get_named` stay plain
+record lookups (their `None` is unambiguous), documented with pointers here;
+transform's `restage_argument_named` carries the same error contract.
 Rejected alternatives: `Result` on the indexed accessors too (forks the crate-wide
 Option idiom where `arguments().get(i)` + `is_provided()` already discriminates);
 panicking on unknown names (this family is the non-panicking companion shape by
 design).
 
-*(Applied — Phase 3 S9: error type `core::node::NamedAccessError`
-(`NotACallable` / `UnknownArgumentName` / `UnknownSlotName`). The sibling
-`slot_content_nodes_named` gets the same error contract but returns
-`Result<NodeSlice, E>` **without** the `Option` layer — a recorded slot has no
-"declared but absent" state, so an always-`Some` option would force a dead arm on
-every caller. `ParsedArguments::get_named`/`ParsedSlots::get_named` stay plain
-record lookups (their `None` is unambiguous), documented with pointers here;
-transform's `restage_argument_named` already carried the error contract from S7.)*
-
 #### `display_tree()`: a free debug renderer; `NodeKind::as_str()` [§dd-dr:display-tree]
 
-Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S3).
+Status: DECIDED (user, API-review session).
 
 A free public function `display_tree(node) -> String` renders a subtree one line per
 node: box-drawing guides + `summary()` + **line/col** positions (internal per-source
@@ -2549,7 +2382,7 @@ not a `NodeRef`/`NodeTree` method (user): lean surface, trivially dead-code-elim
 when unused. The output format is human-oriented and explicitly not a stability
 contract (`summary()`'s caveat restated); v1 ignores tree annotations. Companion
 accessor **`NodeKind::as_str()`** → `"Chars"`/`"Group"`/`"Callable"`/`"Comment"`/
-`"List"` (the visualizer's own need and an independent T1+T4 wish): `as_str` is the
+`"List"` (the visualizer's own need and an independent review wish): `as_str` is the
 Rust idiom for a static variant name. Placement: the node read group beside
 `summary()` — display, not content extraction (not `extract`); replaces the rejected
 elaborate plain-text extraction (that gap belongs to the totext companion project).
@@ -2559,9 +2392,8 @@ Rejected names: `label()` (reads as user-provided/dynamic data), `kind_as_string
 
 #### `validate_tree`: the all-trees law as a `Result`, in `core::node` [§dd-dr:tree-validation]
 
-Status: DECIDED (user, API-review T5 session; realizes [§dd-dr:restage]'s validator
-rider; applied — Phase 3 S3, incl. the Tier-C wrapper demotion; the parse-law
-oracle's `Attached` byte-accounting scoping rides S6).
+Status: DECIDED (user, API-review session; realizes [§dd-dr:restage]'s validator
+rider).
 
 `pub fn validate_tree<L: Lang, A>(tree: &NodeTree<L, A>) -> Result<(),
 TreeViolation>` (with `#[non_exhaustive] TreeViolation { node: Option<NodeId>,
@@ -2575,10 +2407,15 @@ source order — the parse-tree law, which legitimate transform output (spliced,
 reordered, synthesized nodes) breaks by design. It returns `Err`, never panics:
 its persona is a framework validating rebuilt/spliced trees at runtime (FFI
 included) — the panic policy's outer-layer case; the panicking
-`check_tree_invariants` keeps its declared test-utility role for the parse-tree
-law (and must scope its byte accounting per source via the `Attached` role once
-`\input` lands, or every multi-source parse tree fails it; the two doc pages
-cross-reference — all-trees law ⊂ parse-tree law).
+`check_tree_invariants` keeps its test-utility role for the parse-tree
+law, now `pub(crate)` and re-implemented as a panic-assert wrapper over
+`validate_tree`'s `Result` — ONE canonical check implementation, no duplicated
+invariant logic, with the returned violation carrying enough detail that the
+wrapper's panic message stays as informative as the asserts it replaced
+([§dd-dr:public-visibility-sweep]). Its byte accounting is scoped per source via
+the `Attached` role, so multi-source parse trees pass it; the two doc pages
+cross-reference — all-trees law ⊂ parse-tree law.
+
 **Home `core::node`, not `techy::transform`** (user): the function checks the
 universal node-tree law and accepts any tree — transform output is merely its
 commonest client; placement follows logical function, not audience. Name
@@ -2594,27 +2431,15 @@ a checker that cannot check what its users would believe it checks is a trap.
 Revisit if: a runtime consumer genuinely needs the geometric parse-law check —
 additive as a sibling, with the semantic limitation stated on it.
 
-*(Amended — API-review Tier-C session: `check_tree_invariants` becomes
-`pub(crate)` and is re-implemented as a panic-assert wrapper over
-`validate_tree`'s `Result` (user: ONE canonical check implementation — no
-duplicated invariant logic; the returned violation must carry enough detail that
-the wrapper's panic message stays as informative as today's asserts). The
-demotion rides the same commit that adds `validate_tree`, so the public surface
-never lacks a checker. [§dd-dr:public-visibility-sweep].)*
-
 ## Tree transformation, annotations, and ext minting [§dd-dr:transform]
 
-The API-review P4 session's coherent redesign of the post-parse surface, ruled as one
-piece — the entries below cross-depend — plus the 2b T5 session's exact-type
-detailing and the recompose session's machinery/payload rulings. Applied in the
-review's Phase 3 (stages S3–S8, together with the P1 topology move).
+The API review's coherent redesign of the post-parse surface, ruled as one
+piece — the entries below cross-depend — together with the recompose session's
+machinery/payload rulings.
 
 #### Per-tree node annotations: `NodeTree<L, A = ()>` [§dd-dr:node-annotations]
 
-Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 for the tree
-core and the read/annotate accessors, S7 for the extract-side annotation flow
-([§dd-dr:extract-annotations]) and the transform-side single pathway
-([§dd-dr:restage])).
+Status: DECIDED (user, API-review session).
 
 Trees gain a second, defaulted generic parameter: the **annotation** type `A` — one
 value per node, uniform across kinds, chosen by the *consumer* per processing stage.
@@ -2633,9 +2458,12 @@ untouched, and all same-layout stages share the core and its tree tag
 not stage); `NodeTree::clone()` becomes O(annotations). Bounds: `A: Clone + Debug +
 Send + Sync`, deliberately **no `Default`** — every annotation value is supplied
 explicitly ([§dd-dr:restage]'s single-pathway rule; the parser passes `()`
-literally). Extract-built trees (`Split`/`KeyVals`) produce `A = ()`; rebasing the
-extract builders on the restage mechanism so they can keep/map annotations is a
-recorded later option (note on [§dd-dr:read-api]). FFI note (T5): a binding fixes one
+literally). Extract producers mint output annotations through a general per-part
+callback ([§dd-dr:extract-annotations]). Accessors: `NodeRef::annotation()`,
+`NodeTree::annotations()`, `annotate()` in storage order with the loud doc sentence
+([§dd-dr:restage-ops]); the read types carry the defaulted `A` parameter
+(`NodeRef<'t, L, A = ()>`, `NodeSlice`, `Descendants`, the extract helpers — every
+pre-existing spelling keeps compiling). FFI note: a binding fixes one
 concrete `A` for its pipeline (e.g. a PyObject-slot type) — dynamic typing inside a
 single monomorphization; Rust frameworks use typed per-stage `A`. Per-kind
 annotation typing is intentionally absent — a consumer uses an enum inside `A`
@@ -2652,24 +2480,10 @@ annotations on argument/slot records (declined — per-node only, kept simple).
 Revisit if: adding the parameter later were the question — it isn't; the reason to
 decide *now* is that the builder, restage, and extract surfaces are shaped around it.
 
-*(Amended — API-review T5 session: accessors ruled — `NodeRef::annotation()`,
-`NodeTree::annotations()`, `annotate()` in storage order with the loud doc
-sentence ([§dd-dr:restage-ops]); the read types gain the defaulted `A` parameter
-at application (`NodeRef<'t, L, A = ()>`, `NodeSlice`, `Descendants`, the extract
-helpers — every existing spelling keeps compiling). The "extract-built trees
-produce `A = ()`" clause and its recorded later option are **superseded**: the
-user ruled annotation handling into present scope — extract producers mint output
-annotations through a general callback ([§dd-dr:extract-annotations]).)*
-
 #### Extract producers mint annotations: general callback + suffixed shorthands [§dd-dr:extract-annotations]
 
-Status: DECIDED (user, API-review T5 session; supersedes the `A = ()` extract
-clause of [§dd-dr:node-annotations]; applied — Phase 3 S7: the four producer
-triples with input genericity over the annotation type (the T5-A8 rider), the
-part contexts named `SplitAtCharsPart`/`KeyValsPart` with accessors
-`original()`/`is_partial()`/`partial_text()`/`segment_index()`/`entry_index()`
-(the delegated naming pass), and the `SplitAtChars<L, B = ()>`/`KeyVals<L, B =
-()>` result reshape).
+Status: DECIDED (user, API-review session; supersedes the earlier `A = ()` extract
+clause of [§dd-dr:node-annotations]).
 
 The four extract producers that build backing trees — `split_at_chars`,
 `parse_keyval`, `split_embellishments`, `split_tack_on_fields` (the tree is built
@@ -2691,14 +2505,16 @@ output annotations can be *split-semantic* (entry/part discrimination), informat
 only the op holds at mint time. The callback is the consumer-side mirror of
 `make_node_ext` (consumer-owned data ⇒ consumer callback, [§dd-dr:ext-minting]
 symmetry), and it erases the `Clone`/`Default` bounds from the general path —
-synthesized nodes are just another callback call.
-Part context: one opaque accessor-based struct per op (`SplitPart`/`KeyValsPart`
-working names), accessors admitted under the inclusion test — *only what the
+synthesized nodes are just another callback call. The producers are input-generic
+over the annotation type.
+Part context: one opaque accessor-based struct per op —
+`SplitAtCharsPart`/`KeyValsPart` — with accessors admitted under the inclusion
+test, *only what the
 callback cannot recover itself*: the original node (`original() ->
 Option<NodeRef>`, `None` exactly for the synthesized `List` wrappers/roots;
-`copied_from` rejected — partials are cut, not copied), partial-piece info,
-segment/entry index. KeyVals keys are plain strings, not nodes — no key-side
-annotations arise. Final accessor names land at the application naming pass.
+`copied_from` rejected — partials are cut, not copied), partial-piece info
+(`is_partial()`/`partial_text()`), and `segment_index()`/`entry_index()`.
+KeyVals keys are plain strings, not nodes — no key-side annotations arise.
 The result struct is kept — it owns the backing tree and the segment view API; a
 bare-`NodeTree` return would promote the root-List-of-segment-Lists shape into
 frozen contract — and renamed **`Split` → `SplitAtChars<L, B = ()>`** (std
@@ -2715,9 +2531,8 @@ Revisit if: a fifth producer materializes trees — it adopts the same triple.
 
 #### Always-on tree tags: `TreeTag` joins `NodeId` identity [§dd-dr:tree-tags]
 
-Status: DECIDED (user, API-review P4 session; supersedes the debug-only scheme of
-[§dd-dr:node-id-provenance] — that entry's revisit condition fired; applied —
-Phase 3 S3).
+Status: DECIDED (user, API-review session; supersedes the debug-only scheme of
+[§dd-dr:node-id-provenance] — that entry's revisit condition fired).
 
 Every tree layout mints a `TreeTag` (newtype over `u32`, from the existing wrapping
 global counter) in **all builds**; `NodeId` becomes `{ index: u32, tree_tag:
@@ -2726,8 +2541,8 @@ minted by different trees are different values, so one map can key ids from seve
 trees, and an old tree's `NodeId` stored inside a new tree's annotation is
 unambiguous (the enabling substrate of [§dd-dr:restage]'s origin-by-convention).
 The old exclusion from `Eq`/`Hash` existed only because tags were debug-only; with
-tags everywhere, debug and release agree again. `NodeTree::get()` now genuinely
-rejects foreign ids in release builds (the T5 binding-pattern caveat disappears);
+tags everywhere, debug and release agree again. `NodeTree::get()` genuinely
+rejects foreign ids in release builds (the binding-pattern caveat disappears);
 `node()` keeps its panicking own-tree contract. Layout-preserving copies (`clone`,
 `materialize`, `annotate` stages) share the tag — their ids are interchangeable by
 design. Terminology: **`tree_tag`** (the compound answers "tag of what?"); a newtype
@@ -2746,11 +2561,8 @@ that needs a registry design, not a wider tag.
 
 #### Ext minting: population is initialization — `make_node_ext` replaces `finalize_node` [§dd-dr:ext-minting]
 
-Status: DECIDED (user, API-review P4 session; supersedes [§dd-dr:finalize-node] and
-the two-tier ext half of [§dd-dr:closed-node-kind]; applied — Phase 3 S3, with one
-flagged deviation: absent arguments store no ext (`ParsedArgument.ext:
-Option<ArgumentExt<L>>`, `absent(spec)` — deviation D-C1 in the stage report,
-pending user confirmation)).
+Status: DECIDED (user, API-review session; supersedes [§dd-dr:finalize-node] and
+the two-tier ext half of [§dd-dr:closed-node-kind]).
 
 **Principle: an ext is minted exactly once, at creation, by the party with the
 knowledge — no "default-initialized, populated later" state exists anywhere in the
@@ -2784,7 +2596,7 @@ ext system.** The pieces, each argued in the session:
   tier-1 ext value can only be minted by the hook or cloned from a node; there is no
   third path, not even an explicit `Default::default()`. Forced consequence, kept as
   a feature: `make_node_ext` is a **required** `Lang` method (techy cannot conjure a
-  default body without `Default`); `SimpleLang`'s blanket impl supplies the `()`
+  default body without `Default`); `TrivialLang`'s blanket impl supplies the `()`
   version, `Latexlike` writes the one-liner, and a lang that declares a real ext
   type *must* say how it is initialized.
 - **`NodeTreeBuilder` is hook-free and mode-free**, with exactly one staging method:
@@ -2817,6 +2629,8 @@ ext system.** The pieces, each argued in the session:
   defined only `where ArgumentExt<L>: Default`** — a conditional bound-where-used
   (the `ClosedVocabulary` pattern): a std parser's knowledge about your ext *is*
   "nothing", and its bound says so; the bundle itself carries no `Default`.
+  Absent arguments store no ext (`ParsedArgument.ext: Option<ArgumentExt<L>>`;
+  the bundle constructor is `absent(spec)`).
 - **`SlotExt` is demanded at `ParsedSlot` construction**; generic preset machinery
   mints via `BodySlotExt::make_body()` ([§dd-dr:slot-roles]); custom
   `EnvironmentBehavior`s pass their values. No Lang hook, no `Default`.
@@ -2832,12 +2646,8 @@ annotations are for, not a reason to resurrect re-running hooks.
 
 #### `techy::transform`: the streaming restage driver [§dd-dr:restage]
 
-Status: DECIDED (user, API-review P4 session — direction, shape, and contracts;
-exact types/naming in the 2b T5 session; applied — Phase 3 S7: the
-`techy::transform` module with `restage`, `RestageVisitor` + closure blanket,
-`Restage::{Descend, Emit}`, `RestageContext` with the region ops and raw
-`builder()`, and the documented read-frozen/write-staged, single-pathway,
-and origin-by-convention contracts).
+Status: DECIDED (user, API-review session — direction, shape, and contracts; the
+exact op surface is [§dd-dr:restage-ops]).
 
 Tree→tree transformation is a **streaming restage**: an in-crate top-level module
 `techy::transform` whose driver walks the frozen input tree with a user callback
@@ -2854,19 +2664,21 @@ bulk-subtree-copy; the earlier public-`add_subtree` framing is superseded). Laye
   region extents recomputed under dropped/replaced/multiplied children). Bulk
   subtree copy is the degenerate recursion over it, not the primitive.
 - **The callback contract**: per node it returns
-  `Restage<B> { Continue(B), Emit(Vec<BuildId>) }`. `Continue(b)` = the driver
+  `Restage<B> { Descend(B), Emit(Vec<BuildId>) }`. `Descend(b)` = the driver
   restages this node over its children's results with annotation `b`, and **the
   visitor continues through every child subtree** — the safety invariant: the only
   way a child subtree goes unvisited is an explicit `Emit` for its ancestor (no
   shallow-keep exists to reach by accident). `Emit(nodes)` = the callback staged the
-  replacement itself (empty = drop); no automatic descent. (`Continue` kept as the
-  name for now; alternates recorded: `Descend`, `Keep`, `Retain`, `Auto`.)
+  replacement itself (empty = drop); no automatic descent. The name `Descend`
+  states the always-descends invariant in itself; `Continue` said too little,
+  `Keep`/`Retain` actively suggested the shallow-keep misreading, `Auto` was vague
+  (all four superseded).
 - **Annotations, single pathway** (user's redesign, replacing a run-level mapper
   closure): *every* restaged node's annotation passes through the visitor — as
   `Continue(b)` or as an explicit argument to the staging ops the callback invokes.
   Mandatory by construction: `A_old` and `A_new` are different types, so "keep the
   annotation" is not even expressible — good by design; the origin-id convention is
-  the one-liner `Continue(Ann { origin: node.id(), … })`.
+  the one-liner `Descend(Ann { origin: node.id(), … })`.
 - **Region-aware context ops** (the crate owns *all* region arithmetic):
   `restage_subtree(node)` (the full visitor over that subtree, its root included);
   `restage_children(node)`; `restage_argument(node, index_or_name)` /
@@ -2879,7 +2691,10 @@ bulk-subtree-copy; the earlier public-`add_subtree` framing is superseded). Laye
   transform trees). Raw `builder()` access underneath everything: the canned ops are
   conveniences, not the power boundary — arbitrary programmatic staging (and the
   explicit `make_node_ext` recipe for new nodes) is always available; merges are
-  parent-level callback takeover.
+  parent-level callback takeover. A `Descend`-restaged parent's `InChildrenOf`
+  content ranges are *translated* by the driver through its own replacements —
+  without this, an interior drop inside a `{…}` wrapper breaks the enclosing
+  record and kills the one-line strip pass.
 - **Read frozen / write staged**: callbacks inspect the *frozen input* — the full
   read API and the `techy::extract` tools — and produce staged output; the staged
   side is write-only. Verified no meaningful staged-side read need exists: decisions
@@ -2900,10 +2715,10 @@ bulk-subtree-copy; the earlier public-`add_subtree` framing is superseded). Laye
   `Arc<NodeTree>` references were rejected separately (type-chaining across stages;
   lifetime-pinning every pipeline stage alive). Vocabulary: **"original node"** —
   "provenance"/"origin" alone belong to the source model.
-- Riders: a **transform-tier validator** (structure + region tiling + `TextContent`
-  residency, *minus* the parse-law byte accounting) fills the gap between the
-  builder's checks and `check_tree_invariants`' parse-tree law; `NodeRef::tree()`
-  becomes public.
+- Riders: the **transform-tier validator** (structure + region tiling + `TextContent`
+  residency, *minus* the parse-law byte accounting) is `validate_tree` in
+  **`core::node`** — placement follows what it checks, not its commonest client
+  ([§dd-dr:tree-validation]); `NodeRef::tree()` is public.
 
 Rejected alternatives: a companion crate (version skew during co-evolution;
 `techy-totext` is the external-consumer proof instead); a fixed atomic-op vocabulary
@@ -2911,34 +2726,14 @@ Rejected alternatives: a companion crate (version skew during co-evolution;
 fixed job is only order mediation and region-preserving reassembly); a `finish()`
 BuildId→NodeId map (helps only callers who separately tracked BuildIds; the
 annotation channel is strictly more direct).
-Revisit if: the 2b T5 detailing finds the bundle shapes insufficient for a real FLM
-pass — the layering (primitive / driver / raw builder) is the stable part, the op
-signatures are not frozen until then.
-
-*(Amended — API-review T5 session: the revisit clause fired and the op surface is
-ruled — exact types in [§dd-dr:restage-ops]. `Restage::Continue` is finalized as
-**`Descend(B)`** — the name states the always-descends invariant in itself;
-`Continue` said too little, `Keep`/`Retain` actively suggested the shallow-keep
-misreading, `Auto` was vague (all four superseded). The transform-tier validator
-rider landed as `validate_tree` in **`core::node`**, not `techy::transform` —
-placement follows what it checks, not its commonest client
-([§dd-dr:tree-validation]).)*
+Revisit if: a real FLM pass finds the bundle shapes insufficient — the layering
+(primitive / driver / raw builder) is the stable part; the op signatures are
+[§dd-dr:restage-ops].
 
 #### Restage op surface: visitor trait, generic errors, constructible bundles [§dd-dr:restage-ops]
 
-Status: DECIDED (user, API-review T5 session; completes [§dd-dr:restage]'s deferred
-detailing; applied — Phase 3 S3 for the level-0 `restage_node` primitive, S7 for
-the visitor/ops/bundles/error surface. S7 application specifics, queued in the
-S7 report for sign-off: `RestageError` gained op-misuse variants beyond the
-ruled three — the ruled unknown-name `Err` and the panic policy force them —
-and a `RootNotSingular` entry-point variant; the `_with_content` helpers take
-an explicit `annotation: B` argument (the single-pathway rule needs a channel
-for the verbatim-restaged wrapper/noise copies); the driver *translates*
-`InChildrenOf` content ranges through a `Descend`-restaged parent's own
-replacements — without this, an interior drop inside a `{…}` wrapper breaks
-the enclosing record and kills the one-line strip pass — while the public
-level-0 keeps its verbatim-carry contract (it is the all-verbatim
-specialization of one shared crate-internal arithmetic)).
+Status: DECIDED (user, API-review session; completes [§dd-dr:restage]'s deferred
+detailing).
 
 The exact types of the restage driver:
 
@@ -2951,12 +2746,14 @@ The exact types of the restage driver:
   passes. **No `Send`/`Sync` bounds anywhere on visitors or `annotate()`
   callbacks** — the driver runs them synchronously on the calling thread; the bound
   would be a demand on callers buying techy nothing, and it would wall off
-  GIL-bound FFI callbacks (the primary T5 consumer). Parallel variants, if ever
+  GIL-bound FFI callbacks (the primary binding consumer). Parallel variants, if ever
   wanted, are new entry points with their own bounds (the `&mut` visitor contract
   is inherently serial).
 - **Errors generic, not boxed**: `restage(tree, visitor) -> Result<NodeTree<L, B>,
   RestageError<V::Error>>` with `RestageError<E> { Build(NodeBuildError),
-  ContentParentDropped { … }, Visitor(E) }` — the framework's own error type rides
+  ContentParentDropped { … }, Visitor(E), … }` — plus op-misuse variants (the
+  unknown-name `Err` and the panic policy force them) and a `RootNotSingular`
+  entry-point variant. The framework's own error type rides
   through typed; `Clone where E: Clone` keeps the uniform-Clone principle
   conditionally. Fixed `Arc<dyn Error>` boxing rejected (loses typing for nothing);
   infallible visitors rejected (panic policy).
@@ -2979,11 +2776,13 @@ The exact types of the restage driver:
   strip pass).
 - **Content-replacement helpers**: `restage_argument_with_content(node, i,
   content)` + `restage_slot_with_content` — wrapper syntax and noise restaged
-  verbatim *by contract*, content swapped, designation re-anchored. Changing noise
+  verbatim *by contract*, content swapped, designation re-anchored; they take an
+  explicit `annotation: B` argument (the single-pathway rule needs a channel for
+  the verbatim-restaged wrapper/noise copies). Changing noise
   uses the visitor op (noise flows through the visitor) or the hand-built bundle;
   a both-taking helper was rejected as a second path duplicating the constructor
-  modulo a one-line spec/ext transcription. P4's working name
-  `stage_argument_like` superseded.
+  modulo a one-line spec/ext transcription. The working name
+  `stage_argument_like` is superseded.
 - **Level-0 primitive**: `NodeTreeBuilder::restage_node(node, replacements:
   &[Vec<BuildId>], content_parents: impl Fn(NodeId) -> Option<BuildId>,
   annotation)` in `core::node` — positional per-child replacement slices (length
@@ -3007,110 +2806,70 @@ The exact types of the restage driver:
   attached content is one explicit visitor arm ([§dd-dr:slot-roles] amendment).
 
 Rejected alternatives are recorded inline per point.
-Revisit if: the closure blanket's `E` inference proves awkward at application —
+Revisit if: the closure blanket's `E` inference proves awkward in practice —
 the recorded fallback is the fixed-error shape; a flag-level change, not a
-re-session.
-
-*(Amended — API-review recompose session, vocabulary alignment: the recompose
-surface mirrors this entry deliberately — `RecomposeError` variants mirror
-`RestageError` exactly; `RecomposeContext`'s argument/slot helper roster mirrors
-the restage family; no `Send`/`Sync` bounds, same argument. One recorded contrast:
-a restage takeover stages its subtree explicitly, while a wrap-intended recomposer
-returns instructions that lower against the *outermost* recomposer and never
-descends explicitly — the wrapping contract; [§dd-dr:recompose-machinery].
-Applied — Phase 3 S8; the as-applied mirror-what-applies roster, incl. the
-variants omitted as analogue-free and the two the ruled recompose ops force, is
-recorded in [§dd-dr:recompose-machinery]'s application note.)*
+re-session. (The recompose surface mirrors this entry deliberately —
+[§dd-dr:recompose-machinery].)
 
 #### `techy::recompose`: recomposition as a downward-state fold [§dd-dr:recompose]
 
-Status: DECIDED (user, API-review P4 session — direction and scope; the dedicated
-session ruled the details — see the last amendment below; applied — Phase 3 S8,
-through [§dd-dr:recompose-machinery] and [§dd-dr:visit-engine]).
+Status: DECIDED (user, API-review session — direction and scope; recompose session
+— details. The detailed records are [§dd-dr:invocation-syntax] (the payload axis),
+[§dd-dr:recompose-machinery] (the fold machinery), and [§dd-dr:visit-engine] (the
+shared traversal engine)).
 
 Recomposition (tree → output text) is a generic fold in a top-level
 `techy::recompose` module: the consumer supplies per-node logic; a typed
 **recomposition state threads downward** into children; the framework is agnostic
-about *how* nodes recompose. Two shipped strategies prove the mechanism:
-**span-verbatim** (exact bytes via spans + gap-filling — the latexpp path, verified
-byte-faithful in the T5 walkthrough incl. tolerant-recovery nodes) and **node-data
-spelling** (reconstruction from recorded facts, pylatexenc's
-`latexnodes._latex_recomposer` precedent — the core provides the walk, the
-**latexlike preset provides the trigger spellings**, which are the only facts node
-data lacks; on a `materialize()`d tree this touches no `Source` at all — fully
-source-independent byte-faithful reconstruction). latex2text is "a recomposition
+about *how* nodes recompose.
+
+**Per-node recomposition doctrine (user):** spans give provenance, not output
+location — recomposition reconstructs each node from its **own recorded data** (a
+chars node contributes its content; a callable/environment its scaffolding from the
+recorded invocation-syntax payload) and never performs **inter-node** span
+arithmetic ("apparent gaps" between siblings resurrect deleted content on any
+transformed tree) nor reads source text beyond a node's own recorded content.
+"Span-verbatim" is deliberately *not* a shipped strategy: the recomposer never
+resolves span content, the node's own span included — no span fast path (a tree
+carries no reliable freshness signal to gate one); `span_content()` stays a public
+consumer affordance the recomposer simply never uses. Consequently there is **no
+framework-facing byte-reconstruction guarantee**: the parse-law byte accounting is
+an in-crate acceptance-suite *oracle* — reassembling the input from a fresh parse
+proves lossless parsing — and parse-output span semantics stay documented for the
+analyze-only/span-patch tooling architecture with the provenance warning
+(structural edits void inter-node span arithmetic). An interim
+`validate_parse_tree` proposal was withdrawn with the guarantee
+([§dd-dr:tree-validation]).
+
+The node-data strategy — reconstruction from recorded facts, pylatexenc's
+`latexnodes._latex_recomposer` precedent — is the ONE preset **`SourceRecomposer`**:
+the core provides the walk, the **latexlike preset provides the trigger
+spellings** via the invocation-syntax payload; on a `materialize()`d tree this
+touches no `Source` at all — fully source-independent byte-faithful
+reconstruction. latex2text is "a recomposition
 whose per-node logic emits text, not LaTeX": the **mechanism lives here, the content
 (handler databases, unicode tables, layout) in techy-totext** — consistent with
-rejecting elaborate in-techy plain-text extraction. Strategies key on `SlotRole`
-([§dd-dr:slot-roles]): verbatim skips `Attached` by definition (the invocation text
-*is* the recomposition; descending is the explicit expansion option); `Hidden` never
-participates.
-Open for the dedicated session: direct fold vs transform-to-chars-then-concatenate;
-state-threading model; output sink type; targeted-replacement integration.
-Revisit if: the dedicated session overturns details — the module, the two
-strategies, and mechanism-not-content are the ruled part.
+rejecting elaborate in-techy plain-text extraction. There is **no sink concept** in
+the machinery (value fold; streaming = a recomposer-held writer with
+`Piece = ()`). Strategies key on `SlotRole` ([§dd-dr:slot-roles]): source
+re-emission skips `Attached` by definition (the invocation text *is* the
+recomposition; descending is the explicit expansion option); `Hidden` never
+participates. The read-only structural walker (`enter(node, depth) -> VisitFlow
+{ Descend, SkipChildren, Stop }` + `exit(node)`) is the walk vocabulary, designed
+once and shared ([§dd-dr:visit-engine]); a `Descendants::with_depth()` iterator
+adapter was rejected because flat iteration loses structure — `descendants()`
+itself stays, legitimate for structure-free queries.
 
-*(Amended — API-review T4 session: the dedicated session also owns the read-only
-structural walker (`enter(node, depth) -> VisitFlow { Descend, SkipChildren,
-Stop }` + `exit(node)`) — a `Descendants::with_depth()` iterator adapter was
-rejected because flat iteration loses structure, and the walker is recompose's
-skeleton, so the walk vocabulary is designed once, there. `descendants()` itself
-stays: flat iteration is legitimate for structure-free queries.)*
-
-*(Amended — API-review T5 session, binding inputs for the dedicated session:
-(1) **Per-node recomposition doctrine** (user): spans give provenance, not output
-location — recomposition reconstructs each node from its **own recorded data** (a
-chars node contributes its content; a callable/environment its scaffolding from
-escape char + name + post_space + recorded delimiters) and never performs
-**inter-node** span arithmetic ("apparent gaps" between siblings resurrect
-deleted content on any transformed tree) nor reads source text beyond a node's
-own recorded content. The span-verbatim strategy above is re-examined under this
-constraint in the dedicated session — its sound domain is unmodified parse trees.
-(2) Consequently there is **no framework-facing byte-reconstruction guarantee**
-(the walkthrough-era gap-filling framing is not promised API): the parse-law byte
-accounting stays an in-crate acceptance-suite *oracle* — reassembling the input
-from a fresh parse proves lossless parsing — and parse-output span semantics stay
-documented for the analyze-only/span-patch tooling architecture with the
-provenance warning (structural edits void inter-node span arithmetic). The
-interim `validate_parse_tree` proposal was withdrawn with the guarantee
-([§dd-dr:tree-validation]). (3) Trigger-spelling residue on the session agenda:
-node data lacks some scaffolding spellings (pathological `\begin  {name}`
-spacing, multi-escape-char languages). The user's sketch — the environment
-parser storing the scaffolding noise as **`Hidden` slots** (e.g.
-`"begin_tokens"`/`"end_tokens"`, precise form TBD) — turns scaffolding spelling
-into node data, a further argument for the per-node direction.)*
-
-*(Amended — API-review recompose session: the dedicated session ruled; detailed
-records: [§dd-dr:invocation-syntax] (the payload axis), [§dd-dr:recompose-machinery]
-(the fold machinery), [§dd-dr:visit-engine] (the shared traversal engine).
-Superseded above: the **two-strategies sentence** — "span-verbatim" is retired as a
-named strategy (the recomposer never resolves span content, the node's own span
-included; no span fast path — a tree carries no reliable freshness signal to gate
-one; `span_content()` stays a public consumer affordance the recomposer simply never
-uses); the open sink question — there is **no sink concept** in the machinery (value
-fold; streaming = a recomposer-held writer with `Piece = ()`); and amendment (3)'s
-`Hidden`-slot scaffolding sketch — **rejected** together with the `CallSyntax` role:
-trigger spelling is recorded *payload* (`Lang::InvocationSyntax`), never slots. The
-node-data strategy survives as the ONE preset `SourceRecomposer`; the parse-law byte
-accounting stays an in-crate acceptance-suite oracle, now certifying payload
-completeness with no span crutch.)*
+Rejected alternatives: a `Hidden`-slot scaffolding store
+(`"begin_tokens"`/`"end_tokens"` noise slots) — rejected together with the
+`CallSyntax` role: trigger spelling is recorded *payload*
+(`Lang::InvocationSyntax`), never slots.
 
 #### Invocation syntax is recorded payload: `Lang::InvocationSyntax` [§dd-dr:invocation-syntax]
 
 Status: DECIDED (user, API-review recompose session; supersedes the
 reconstruct-don't-record half of [§dd-dr:environment-scaffolding] and the core
-`post_space` storage of [§dd-dr:span-invariants] invariant 3; applied — Phase 3
-S5: the core channel (`Lang::InvocationSyntax` bounded by the core
-`InvocationSyntax<L>` trait, `FromInvocation`, the `CallableData` field swap),
-the latexlike payload enum `InvocationSyntaxData` with the `EnvironmentSyntax`
-record contract and the fifth role trait `LatexlikeInvocationSyntax`, the
-paragraph-break name-as-written fix with the canonical `ParagraphBreakSpec`, and
-the parse-law payload pins; the reemit oracle suite landed with the recompose
-stage, S8 — `techy/tests/recompose_oracle.rs`, public-API-only, strict +
-tolerant + multi-source matrices ([§dd-dr:recompose-machinery] application
-note). **REVISED — S5 design-revision session, see the dated amendment note
-at the end of this entry**: name swap, `from_parsed` supersedes the accumulator
-shape, `&Source` threading, preset-side pins.)
+`post_space` storage of [§dd-dr:span-invariants] invariant 3).
 
 **Accuracy doctrine (user):** the *preset* (the `Lang`), not core, owns
 recomposition accuracy — byte-exact vs up-to-noise vs loose is the preset's choice,
@@ -3118,68 +2877,91 @@ implemented by what invocation-syntax information it records in node payload, in
 logical canonical form. Recomposition accuracy is thereby coupled to
 parse-recording accuracy: recomposition reads **raw node payload only** — no hidden
 slots, no side channels (extending [§dd-dr:recompose]'s per-node doctrine). The
-in-crate oracle acceptance suite (reemit == input; strict + tolerant matrices;
-multi-source rides the T5 I-18 obligation) certifies payload completeness with no
-span crutch — it can only pass once these recordings land (Phase 3 sequencing).
+in-crate oracle acceptance suite (`techy/tests/recompose_oracle.rs`,
+public-API-only: reemit == input over strict + tolerant + multi-source matrices)
+certifies payload completeness with no span crutch. One recorded-less-than-consumed
+recovery — the malformed environment terminator, whose `\end` is consumed alone and
+recorded nowhere — is excluded from the equality matrix and pinned by a dedicated
+elision test, per this entry's own accuracy coupling.
 
-The mechanism: a new Lang-associated invocation-syntax type,
+The mechanism: a Lang-associated invocation-syntax type,
 **`Lang::InvocationSyntax`**, stored as a `CallableData` field **replacing the core
 `post_space` field** (and no `escape_char` is ever added to core); minted by the
 invocation parser; a parse-level-syntax channel, distinct from the lang's node ext
 (preset-logic info). Two-trait split:
 
-- the **required core data-bound trait** on `Lang::InvocationSyntax`: `Clone +
-  Debug + Send + Sync + 'static` plus `materialized(&self, source_content) -> Self`
-  (the `()` impl is trivial) — final name at application, aligned with the
-  ext-bound family (fallback `InvocationSyntaxData`);
+- the **required core data-bound trait `InvocationSyntax<L>`** on
+  `Lang::InvocationSyntax` (L-parameterized — the `ParseDriver<L>` precedent):
+  `Clone + Debug + Send + Sync + 'static` plus
+  `materialized(&self, &Source) -> Self`
+  (the `()` impl is trivial; the `&Source` parameter — origin via
+  `L::SourceOrigin` — replaces a bare content `&str`, which was a multi-source
+  wrong-string hazard; `NodeTree::materialize` resolves each node against its own
+  span's source, and `TextContent::resolve`/`materialized` and the spelling
+  writers thread `&Source` the same way);
 - the **opt-in constructor trait `FromInvocation`** with `from_invocation`,
   consulted by the std staging sites (`StdInvocationParser` + the specials site)
   and implemented for `()` by techy.
 
-**The latexlike payload** is an enum with a type-parameter default,
-`InvocationSyntax<Env = StdEnvironmentSyntax<L>>`:
+**The latexlike payload** is the enum **`InvocationSyntaxData<Env =
+StdEnvironmentSyntax<L>>`** — it IS the data holder, the
+`CallableData`/`NodeData` family. (The trait/enum names were swapped relative to
+an earlier ruling; [§dd-dr:superseded-names] pins the old role assignments
+against returning.) The variants:
 
 - `Macro { escape_char, post_space }`.
 - `Environment(Env)` — the std record holds per side `{ escape_char, command_word,
   post_space, name_group_rule: Arc<GroupRule<L>> }`, the name group recorded as the
   **rule `Arc` cloned from the matched token** (user counterproposal, verified
-  sound: `TokenKind::GroupOpen` carries the matched rule Arc, token.rs:45–53; the
-  rule's open/close `String`s are the exact matched bytes, rules.rs:42–50; the name
+  sound: `TokenKind::GroupOpen` carries the matched rule Arc; the
+  rule's open/close `String`s are the exact matched bytes; the name
   group can never exist in delimiter-diverged form — a malformed begin takes the
-  chars-recovery path, environments.rs:478–493 — so rule == bytes always; the Arc
+  chars-recovery path — so rule == bytes always; the Arc
   is source-independent, hence exempt from `materialized`; and it records the group
   *class*, which byte-recording would lose). End-side facts are reported back by
-  the body parser (the terminator consumer, environments.rs:545–549).
-- `Specials` — a **unit variant**; Option 1 (user, reversing an earlier
+  the body parser (the terminator consumer).
+- `Specials` — a **unit variant**; ruled (user, reversing an earlier
   literal_form lean): `name` is the actual invocation spelling *always*, matching
   the macro rule (`\foo` vs `\fooooo`, both spec-resolved by prefix, both record
   the name as written) — no second field, no two-field rename hazard.
-  Paragraph-break `Specials` nodes record the actual whitespace run as `name`; the
-  canonical-`"\n\n"` contract is superseded; identification is by **spec
-  identity** — the definite, identifiable paragraph-break spec object (directive:
-  the latexlike driver must not mint an anonymous `SpecialsSpec::default()` per
-  break, driver.rs:127; that fix is now load-bearing, not hygiene).
+  Paragraph-break `Specials` nodes record the actual whitespace run as `name` (a
+  canonical-`"\n\n"` contract is superseded); identification is by **spec
+  identity** — the definite, canonical `ParagraphBreakSpec` object (the latexlike
+  driver must not mint an anonymous per-break spec; that rule is load-bearing,
+  not hygiene).
 
 **Env consolidation** (user): everything anchors on the Env type — a defaulted
 `LLL`-method tier was dropped (user worry upheld: too many customization entry
 points on `Lang`); the single customization entry is the Lang's choice of
-`InvocationSyntax` type. A new **`EnvironmentSyntax<L>` trait**, implemented by Env
-types, consolidates begin/end *scanning* and payload construction in the
-**accumulator shape (b)**: `parse_begin -> (NameInfo, Self)` with the end side
-empty; `parse_end(&mut self)` fills it — zero extra associated types, and the
-intermediate state doubles as the synthesis constructor's shape.
-`EnvironmentInvocationParser` becomes generic over `LLL`, delegating scanning to
-Env while resolution + argument parsing stay composition-owned (`parse_begin`
-returns the name info the composition needs). Same-record/different-tolerance is a
-newtype over `StdEnvironmentSyntax` (strict default; noise-tolerant swappable).
-Verbatim caveat (verified): the verbatim terminator is one literal `GroupClose`
-token (rules replaced; close = the full `\end{name}` string,
-verbatim_parser.rs:5–24, 106–123) — end-scanning delegation cannot apply to raw
-bodies; the verbatim path records std end facts from the matched literal via the
-one std-facts method the trait keeps. `EnvironmentSyntax` also carries the
-**spelling writers `write_begin`/`write_end`** — the Env type owns its own
-re-emission (the accuracy doctrine made literal); a `source_content` parameter
-resolves span-backed fields.
+`InvocationSyntax` type. **`EnvironmentSyntax<L>`**, implemented by Env
+types, is the **pure record contract**:
+`from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator:
+Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` plus the **spelling writer
+pair `write_begin`/`write_end`** — the Env type owns its own re-emission (the
+accuracy doctrine made literal; kept as a *pair* because `Concat` head/tail and
+the parse-law prefix/suffix pins need the two sides separately — a fused
+`recompose_environment` writer is a rejected shape; `write_end` on an empty end
+side returns `""`, since reemitting nothing reproduces the recovered input). The
+composition (`EnvironmentInvocationParser`, generic over `LLL`) owns ALL
+scanning — `read_rigid_name_group` called directly; resolution + argument
+parsing composition-owned — and constructs the payload exactly once, at staging;
+the body parser is the terminator consumer, its facts flowing back through
+core's two-sided facts channel (`EnvironmentBeginSyntaxData<L>` /
+`EnvironmentTerminatorSyntaxData<L>`; `StdEnvironmentSideSyntax` is the std
+record's own component type, off the trait surface). An accumulator trait shape
+(`parse_begin -> (NameInfo, Self)` + `parse_end(&mut self)`) was rejected: the
+body parser consumes the terminator, so `parse_end` never scanned anything, and
+mutate-in-place shape-locked custom Env types into the standard flow's call
+sequence. **Tolerance is a parser concern**: a family member wanting looser
+begin/end syntax swaps the invocation/body parser through the behavior door —
+the record records what its parser consumed; it does not encode a scanning
+policy. A non-command begin trigger is a documented-contract implementation
+error (no degenerate-spelling fallback arms): std environments are
+command-initiated, and a custom trigger shape needs its own composition + Env
+type. Verbatim caveat (verified): the verbatim terminator is one literal
+`GroupClose` token (rules replaced; close = the full `\end{name}` string) —
+end-scanning delegation cannot apply to raw bodies; the verbatim path records
+std end facts from the matched literal.
 
 **The fifth role trait** joins the [§dd-dr:latexlike-generalization] roster:
 `LatexlikeInvocationSyntax`, on the syntax type — `type Env:
@@ -3202,96 +2984,27 @@ spelling updates). With it fall the brief's `Hidden`-slot scaffolding storage
 builder change: `SlotRole` stays the ruled three-variant enum, `Hidden` stays
 reserved, and the builder tiling check stays as-is ([§dd-dr:slot-roles]).
 
+The parse-law payload pins live in the preset checker
+`check_latexlike_tree_invariants` (latexlike-side; one call = the core checker +
+the pins; core's callable arm is payload-blind — [§dd-dr:span-invariants]), which
+also pins foreign family members (downcast to
+`InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`, not just the default-Env
+enum). The body parser's pass-through-delta check is an implementation-error
+path, not an assert ([§dd-dr:panic-policy]).
+
 Revisit if: a construct's invocation syntax cannot be expressed as per-node
 recorded payload — that is a new axis to design, not a reason to resurrect
 slot-side scaffolding storage.
 
-*(Amended — 2026-08-04, S5 **design-revision session** (user-ruled, interactive,
-from the stage's sign-off questions; applied as S5-M6). Five revisions to the
-applied surface:*
-
-*(1) **Name swap.** The core bound trait is **`InvocationSyntax<L>`** —
-L-parameterized, the `ParseDriver<L>` precedent; its `materialized` speaks the
-lang's own source-origin type — and the latexlike payload enum is
-**`InvocationSyntaxData<Env>`** (it IS the data holder — the
-`CallableData`/`NodeData` family). Both names survive with swapped roles;
-[§dd-dr:superseded-names] pins the old role assignments against returning.*
-
-*(2) **Accumulator shape (b) SUPERSEDED by the `from_parsed` constructor
-shape.** The ruled accumulator contained an internal contradiction: the body
-parser is the terminator consumer, so the record's "end-side scanning"
-(`parse_end`) never scanned anything — only the begin-side scan was real — and
-the mutate-in-place accumulator shape-locked custom `Env` types into the
-standard flow's call sequence. `EnvironmentSyntax<L>` is now the pure record
-contract `from_parsed(begin: EnvironmentBeginSyntaxData<L>, terminator:
-Option<EnvironmentTerminatorSyntaxData<L>>) -> Self` plus the **writer pair**
-(kept as a pair — an adjustment of the user's single-writer sketch: S8's
-`Concat` head/tail and the parse-law prefix/suffix pins need the two sides
-separately; a fused `recompose_environment` writer is a rejected shape). The
-composition owns ALL scanning (`read_rigid_name_group` called directly) and
-constructs the payload exactly once, at staging. Core's facts channel covers
-both sides: the new `EnvironmentBeginSyntaxData<L>` beside the renamed
-`EnvironmentTerminatorSyntaxData<L>`; `parse_begin`/`parse_end`/
-`record_std_end_facts` die; `EnvironmentSideSyntax` →
-**`StdEnvironmentSideSyntax`** (off the trait surface entirely — the std
-record's own component type). `write_end` on an empty end side still returns
-`""` (reemitting nothing reproduces the recovered input).*
-
-*(3) **Tolerance is a parser concern** (amends this entry's
-same-record/different-tolerance newtype clause): a family member wanting looser
-begin/end syntax swaps the invocation/body parser through the behavior door —
-the record records what its parser consumed; it does not encode a scanning
-policy.*
-
-*(4) **A non-command begin trigger is a documented-contract implementation
-error** — both `'\u{0}'` degenerate-spelling fallback arms die: std
-environments are command-initiated, and a custom trigger shape needs its own
-composition + `Env` type (the contract is rustdoc'd on the composition).*
-
-*(5) **`&Source` threading.** `TextContent::resolve`/`materialized`, the core
-trait's `materialized`, and the writers take `&Source` (origin via
-`L::SourceOrigin`) instead of a bare content `&str` — a bare string was a
-multi-source wrong-string hazard; `NodeTree::materialize` resolves each node
-against its own span's source.*
-
-*Also ruled in the same session: the D-plan-12 strata tension resolves as
-**Option B** — the payload pins move out of core into the preset checker
-`check_latexlike_tree_invariants` (latexlike-side; one call = core
-`check_tree_invariants` + the pins; core's callable arm goes payload-blind),
-which as realized also pins foreign family members (downcast to
-`InvocationSyntaxData<StdEnvironmentSyntax<LLL>>`, not just the default-Env
-enum); and the S5-new `debug_assert!` on the body parser's pass-through delta
-became an implementation-error path per [§dd-dr:panic-policy] (the pre-existing
-sibling asserts are queued as an S10 rider).)*
-
 #### Recompose machinery: the meaning-free `Piece` fold with instruction lowering [§dd-dr:recompose-machinery]
 
 Status: DECIDED (user, API-review recompose session; completes [§dd-dr:recompose]'s
-deferred detailing; applied — Phase 3 S8. Application specifics, queued in the S8
-report for sign-off: the entry gained a mandatory root-state argument —
-`recompose(tree, state, recomposer)`, the ruled "argument-threaded S" made
-explicit, recomposer last per the restage visitor-last convention; the
-`RecomposeError` roster as applied mirrors what applies — `Recomposer(E)` named
-for the failing trait (the `RestageVisitor` → `Visitor` pattern), the op-misuse
-group verbatim, two variants the ruled ops force with no restage source
-(`UnknownSlotName`, `NoBodySlot`), and `Build`/`ContentParentDropped`/
-`ArgumentAbsent`/`RootNotSingular` omitted as analogue-free (the fold stages
-nothing, re-anchors nothing, has no `_with_content` helpers — an absent argument
-composes the empty piece — and always yields one piece); the ruled
-`_slot_content_named` op ships beside its positional `recompose_slot_content`
-sibling per the `_named` convention; `SourceRecomposer`'s specials arm emits
-name-as-head over the children rather than a bare name — specials specs can
-declare arguments whose regions must follow. The R15 oracle suite landed as
-`techy/tests/recompose_oracle.rs`, public-API-only: strict + tolerant matrices +
-multi-source over the S6 `\input` surface; the one recorded-less-than-consumed
-recovery — the malformed environment terminator, whose `\end` is consumed alone
-and recorded nowhere (the S5 flag) — is excluded from the equality matrix and
-pinned by a dedicated elision test, per this entry's own accuracy coupling.)
+deferred detailing).
 
 The recompose machinery is **meaning-free** (user decoupling directive): it
 composes generic *pieces* over the visit; source recomposition is ONE `Recomposer`
 implementation (latexlike's), never a machinery default. Architecture = **direct
-value fold** — the P4 transform-to-chars-then-concatenate alternative is dead as a
+value fold** — the transform-to-chars-then-concatenate alternative is dead as a
 mechanism, surviving only as the documented restage→recompose pipeline pattern.
 There is **no sink concept** in the machinery: streaming is a recomposer-held
 writer with `Piece = ()`.
@@ -3312,7 +3025,9 @@ writer with `Piece = ()`.
   argument transfers). State is consumer-defined and threaded downward by
   explicit descent; run-spanning state lives in the recomposer's `&mut self`
   fields (the three-channel discipline, [§dd-dr:visit-engine]). Entry:
-  `recompose::recompose(tree, recomposer)`.
+  `recompose::recompose(tree, state, recomposer)` — a mandatory root-state
+  argument (the argument-threaded `S` made explicit), recomposer last per the
+  restage visitor-last convention.
 - **Instruction enum** `Recompose { Emit(Piece), Concat(ConcatPieces) }`.
   `ConcatPieces` is the joiner payload — `head + child₁ + sep + … + childₙ +
   tail` (user amendment) — plus optional derived state and scope, built by
@@ -3335,19 +3050,27 @@ writer with `Piece = ()`.
   self-passing helper methods, surface kept minimal; the argument/slot roster
   mirrors the restage family — `recompose_argument` / `_argument_content` /
   `_named` variants (`Result`, per the `_named` convention) /
-  `_slot_content_named` / `recompose_body` — final spellings at application.
-  **`RecomposeError`** variants mirror `RestageError` exactly.
+  `recompose_slot_content` + `_slot_content_named` / `recompose_body`.
+  **`RecomposeError`** mirrors `RestageError` *for what applies*: `Recomposer(E)`
+  named for the failing trait (the `RestageVisitor` → `Visitor` pattern), the
+  op-misuse group verbatim, plus two variants the recompose ops force with no
+  restage source (`UnknownSlotName`, `NoBodySlot`);
+  `Build`/`ContentParentDropped`/`ArgumentAbsent`/`RootNotSingular` are omitted
+  as analogue-free — the fold stages nothing, re-anchors nothing, has no
+  `_with_content` helpers (an absent argument composes the empty piece), and
+  always yields one piece.
 - **`core_source_instruction`**: the instruction-returning free helper for the
   core-complete kinds (`B: ComposePiece + From<&str>`); it declines callables —
   their payload is Lang-owned ([§dd-dr:invocation-syntax]).
 - **`SourceRecomposer<LLL>`** (public; constructor `latexlike::
   source_recomposer()`): the preset source re-emission — `State = ()`,
   `Piece = String`, instruction-only, plus a coherence error variant
-  (variant/`callable_type` mismatch).
+  (variant/`callable_type` mismatch). Its specials arm emits name-as-head over
+  the children rather than a bare name — specials specs can declare arguments
+  whose regions must follow.
 - **Targeted replacement** = the wrapper pattern (a wrapping recomposer overrides
   the targeted nodes; no span fast path) + the documented restage→recompose
-  pipeline; the P4 integration question and the session's Attached-exclusion
-  point close here.
+  pipeline.
 - Naming: **`Piece`** over `Bit` (binary connotation; `Fragment` recorded
   considered — DocumentFragment precedent; `Part` considered; `Output` rejected —
   collides with `ConstructParser::Output`); the **`recompose::recompose` stutter
@@ -3364,18 +3087,19 @@ Revisit if: a real consumer's piece type cannot satisfy `Clone` — the per-gap
 #### `techy::visit`: one shared traversal engine for walk and recompose [§dd-dr:visit-engine]
 
 Status: DECIDED (user, API-review recompose session; realizes the read-only walker
-routed by [§dd-dr:recompose]'s T4 amendment; applied — Phase 3 S8. Application
-specifics, queued in the S8 report for sign-off: `walk` takes the start
-`NodeRef` — the veto was the *method* placement, and the walker's T4 origin
+routed by [§dd-dr:recompose]).
+
+Contract points: `walk` takes the start
+`NodeRef` — the earlier veto was the *method* placement, and the walker's origin
 demands subtree walks (whole tree = `walk(tree.root(), v)`); the walk is
-infallible (`enter` returns bare `VisitFlow` as sketched; error-carrying
+infallible (`enter` returns bare `VisitFlow`; error-carrying
 visitors `Stop` with the error in their own state); `exit` fires after a node's
 children for `Descend` and immediately for `SkipChildren`, receives the same
 `(node, cx)` pair as `enter`, and `Stop` aborts with no further calls;
 `VisitContext` carries exactly `depth()` + `tree()`. The one descent kernel is
 the crate-internal `scoped_children(node, include_attached, include_hidden)` —
 the walk calls it role-blind, the recompose driver with the `ConcatPieces`
-scope flags.)
+scope flags.
 
 The read-only structural walker and the recompose driver share **one traversal
 engine**, in direction **walker-on-recompose-core** (user challenge upheld: the
@@ -3414,20 +3138,8 @@ answer is the three-channel discipline, not context growth.
 
 #### Slot roles and trait-based body marking [§dd-dr:slot-roles]
 
-Status: DECIDED (user, API-review P4 session; amends
-[§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member;
-applied — Phase 3 S3 (record + roles + `BodySlotExt` + the preset's `BodyMarker`
-claim), the `LLL` genericization S4, the restage driver's role-uniform descent
-S7 ([§dd-dr:restage-ops]), the parse-law checker's byte-accounting
-scoping S6: children in an `Attached` slot's region are excluded from the
-including callable's children-in-source/contiguity checks and carry their own
-per-source accounting (one source per attached region, contiguous within it),
-while `Hidden`-region children carry no byte accounting at all — declaration
-replaces source-change inference, so the remaining children must be contiguous
-across the excluded regions; and the one role-*sensitive* site S8 — recompose's
-`Concat` default scope skips `Attached` AND `Hidden` slot children while the
-`visit` walk stays role-blind ([§dd-dr:recompose-machinery],
-[§dd-dr:visit-engine])).
+Status: DECIDED (user, API-review session; amends
+[§dd-dr:latexlike-generalization]'s "preset keeps `NodeExts = ()`" per-member).
 
 `ParsedSlot` gains `role: SlotRole { Content, Attached, Hidden }` (default
 `Content`). `Content` = constitutive — the node's meaning is incomplete without it
@@ -3437,7 +3149,12 @@ invocation itself (`\input`'s resolved content, [§dd-dr:input-attachment]);
 recomposition, no byte accounting; semantics via slot name + spec). Load-bearing
 consequence: **`Attached` slots are excluded from the parent's byte-tiling** —
 declaration replaces source-change inference in the validator — while structural
-child-list tiling stays role-independent.
+child-list tiling stays role-independent. Precisely: children in an `Attached`
+slot's region are excluded from the including callable's
+children-in-source/contiguity checks and carry their own per-source accounting
+(one source per attached region, contiguous within it); `Hidden`-region children
+carry no byte accounting at all; the remaining children must be contiguous
+across the excluded regions.
 Body-ness is a **separate axis** on the slot *ext*:
 `trait BodySlotExt { fn is_body(&self) -> bool; fn make_body() -> Self; }` —
 environment machinery mints body slots via `make_body()` (the trait is also the
@@ -3448,13 +3165,7 @@ load-bearing. A framework forking the ext bundle implements the trait on its own
 `SlotExt` and every preset mechanism keeps working. Consequence, ruled consciously:
 `Latexlike` declares a real body-marker `SlotExt`, so the preset's `NodeExts` bundle
 is `()` per-member for node/argument only — **`SlotExt` is claimed by the preset**.
-Rejected alternatives: body-by-slot-name (the `"body"` string — stringly-typed);
-body-by-position (slot 0 — positional convention as API contract).
-Revisit if: 2b details (does `body()` also filter on `role == Content`? extract
-readers vs `Hidden`? `#[non_exhaustive]`? `Attached` vs `Derived` naming) change the
-edges — the enum, the exclusion rule, and the trait are the ruled part.
-
-*(Amended — API-review T5 session, the listed edges ruled: `body()` filters on
+Edge rulings: `body()` filters on
 the ext axis alone — no hidden `role == Content` conjunction (a framework's
 `Attached`-body choice must not become silently unfindable; one doc sentence
 instead); readers and extract stay **role-blind everywhere except recompose** —
@@ -3463,30 +3174,27 @@ reads (structural walks and `display_tree` show reality — debug honesty);
 `SlotRole` is **exhaustive** (match-heavy consumers — validators, recompose
 strategies, FFI mappings; a fourth role changes byte-accounting semantics and
 must be a conscious breaking change, the [§dd-dr:math-group-form] argument);
-**`Attached` confirmed** over `Derived` (T4's shipped door names
+**`Attached`** over `Derived` (the shipped door names
 `parse_attached_source`/`attach_source_reference` already teach the vocabulary);
 restage descends into `Attached`/`Hidden` children uniformly
-([§dd-dr:restage-ops]).)*
-
-*(Amended — API-review recompose session: a fourth **`CallSyntax` role was
+([§dd-dr:restage-ops]). A fourth **`CallSyntax` role was
 rejected outright** — `SlotRole` stays the three-variant enum, and techy itself
 mints NO `Hidden` slots (`Hidden` stays reserved for frameworks; trigger/scaffolding
 spelling is invocation-syntax *payload*, [§dd-dr:invocation-syntax]). The one
-role-sensitive site is made concrete: `Concat`'s default scope is plain children +
+role-sensitive site is concrete: `Concat`'s default scope is plain children +
 `Content` regions — `Attached` AND `Hidden` skipped, widening explicit via
 `include_attached()`/`include_hidden()` — while the walk stays role-blind
-([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).)*
+([§dd-dr:recompose-machinery], [§dd-dr:visit-engine]).
+
+Rejected alternatives: body-by-slot-name (the `"body"` string — stringly-typed);
+body-by-position (slot 0 — positional convention as API contract).
 
 #### `\input` attachment: same-builder sub-parse; multi-source trees are first-class [§dd-dr:input-attachment]
 
-Status: DECIDED (user, API-review P4 session — direction and tree-level
-consequences; engine wiring designed in the 2b T4 session, friction F8; applied
-— Phase 3 S6 via [§dd-dr:input-wiring]: the same-builder sub-parse door, the
-`Attached`-slot staging in the preset's `input_macro_spec`, and the parse-law
-checker's per-source byte-accounting scoping all landed; multi-source
-reconstruction pinned by the I-18 acceptance tests).
+Status: DECIDED (user, API-review session — direction and tree-level
+consequences; engine wiring: [§dd-dr:input-wiring]).
 
-The anticipated `\input` implementation: the callable's spec parser resolves the
+The `\input` implementation: the callable's spec parser resolves the
 reference and **sub-parses the resolved source into the same builder**, staged as an
 **`Attached` slot** of the `\input` callable. Decisive: copy-free, and semantically
 forced — included content must parse under the parsing state *at the `\input`
@@ -3506,67 +3214,84 @@ the session:
   ([§dd-dr:slot-roles]); recompose is per-source (verbatim emits `\input{file}`,
   not the content — expansion is an explicit strategy choice); `node_at`'s
   per-source descent already yields the right answers on both sides of the boundary.
-- **The resolver moves from `Language` to the `ParseDriver`** (direction recorded):
+- **The resolver lives on the `ParseDriver`**, not `Language`:
   resolution is parse-time instance behavior, which the placement doctrine
   ([§dd-dr:parse-driver]) puts on the driver — amending [§dd-dr:language-init]'s
-  expected surface (`Language` collapses toward the constructor alone; supersedes
-  the `with_resolver` remainder of [§dd-dr:source-resolver]'s wiring).
-Revisit if: the T4 wiring session finds the sub-parse-into-same-builder mechanics
-unworkable — the fallback is the restage-splice route, accepting its copy cost.
+  expected surface (`Language` collapses toward the constructor alone; cf.
+  [§dd-dr:source-resolver]).
 
-*(Amended — API-review T5 session: the caching parenthetical above is closed —
-input caching is neither implemented nor recommended. User-identified flaw in
-the cache-then-splice recipe: `\input` can return a **modified parsing state**
+**Input caching is neither implemented nor recommended** (user-identified flaw in
+the cache-then-splice recipe): `\input` can return a **modified parsing state**
 to the caller — the included content's delta sequence continues into the rest of
-the including document (the preamble-defines-macros case; preset-configurable
-via how the `\input` spec is defined) — so a document parsed with attachment off
-is wrongly-stated downstream of every state-modifying `\input`, and included
-files must in general be read on the spot at parse time. Phase 4's include
-chapter gets a short discussion of these challenges and presents the splice
-recipe only under the explicit precondition that the framework's `\input` does
-not modify caller state. Riders: the level-0 primitive stays the sanctioned
+the including document (the preamble-defines-macros case) — so a document parsed
+with attachment off is wrongly-stated downstream of every state-modifying
+`\input`, and included files must in general be read on the spot at parse time.
+The include documentation presents the splice recipe only under the explicit
+precondition that the framework's `\input` does not modify caller state. The
+state-feedback case is concrete in the shipped spec: `input_macro_spec` takes a
+mandatory **`persist_state: bool`**, realized as merged after-effect deltas
+returned by the door's outcome bundle and forwarded through the ordinary sibling
+channel ([§dd-dr:input-wiring]) — so the splice recipe's state-transparency
+precondition is a per-registration fact (`persist_state: false`), never a preset
+guarantee. Riders: the level-0 primitive stays the sanctioned
 cross-tree door ([§dd-dr:restage-ops]); latexpp's verbatim output path needs no
 splicing at all — recompose emits `\input{file}` per source, so per-file
-pipelines compose without tree merging.)*
+pipelines compose without tree merging.
 
-*(Amended — user-ruled 2026-08-04, S6 sign-off: the "preset-configurable"
-state-feedback case above is now concrete — `input_macro_spec` takes a
-mandatory **`persist_state: bool`**, realized as merged after-effect deltas
-returned by the door's outcome bundle and forwarded through the ordinary
-sibling channel (mechanism details: [§dd-dr:input-wiring]'s 2026-08-04
-amendment). This strengthens the no-caching stance: the shipped spec itself
-can feed state back, so the splice recipe's state-transparency precondition is
-now a per-registration fact (`persist_state: false`), not a preset guarantee.)*
+Revisit if: the sub-parse-into-same-builder mechanics prove
+unworkable — the fallback is the restage-splice route, accepting its copy cost.
 
 #### Parent links, `SourcePos` lookup, and read-side honesty [§dd-dr:tree-navigation]
 
-Status: DECIDED (user, API-review P4 session; applied — Phase 3 S3 with the 2b
-method spellings, incl. the amendments' whole-run single-source slice contract).
+Status: DECIDED (user, API-review session).
 
 - **Parent table stored**: the `Vec<u32>` that `finish()` already computes for
   region resolution is kept on the tree (4 bytes/node; reverses
-  [§dd-dr:iter-storage-order]'s decline now that consumers exist — the T5 FFI gap,
-  T4's F7 cursor wish, pass-style renderers). `NodeRef::parent()` and an O(1)
-  `index_in_parent()` (own index minus the parent's block start).
-- **`SourcePos<O> { source: Arc<Source<O>>, pos: usize }`** — a new source-model
+  [§dd-dr:iter-storage-order]'s decline now that consumers exist — the FFI gap,
+  the editor-cursor wish, pass-style renderers). `NodeRef::parent()` and an O(1)
+  `index_in_parent()` (own index minus the parent's block start), both
+  `Option`-returning; `ancestors()` REJECTED — tree visiting is top-down and an
+  ancestry walk has zero trap surface
+  (`iter::successors(node.parent(), |n| n.parent())`); the one-line recipe lives
+  in `parent()`'s rustdoc.
+- **`SourcePos<O> { source: Arc<Source<O>>, pos: usize }`** — a source-model
   type, analogous to `SourceSpan`, pointing to a *single location* (constructor,
-  accessors, `Debug`, line/col via `LineIndex`; `SourceSpan::start_pos()`/`end_pos()`
-  conveniences). Chosen over bare `(source, pos)` arguments (reads as two unrelated
-  bits) and over empty-`SourceSpan` encoding (reads oddly).
-- **Point lookup** `node_at(&SourcePos)`: the **deepest** node whose span contains
+  `source()`/`pos()` accessors, `Debug`, line/col via `LineIndex`;
+  `SourceSpan::start_pos()`/`end_pos()`
+  conveniences, with the exclusive-end doc sentence). Chosen over bare
+  `(source, pos)` arguments (reads as two unrelated
+  bits) and over empty-`SourceSpan` encoding (reads oddly). Vocabulary note: the
+  editor-cursor lookup here and the retired char-scanning `SourceCursor`
+  ([§dd-dr:source-cursor-retired]) are disjoint concepts sharing a word.
+- **Point lookup** `NodeTree::node_at(&SourcePos)`: the **deepest** node whose span contains
   the offset — half-open containment (`start ≤ pos < end`, empty spans never match);
   descend only into children whose span lies in the **query's source** (per-source
   answers on multi-source trees, [§dd-dr:input-attachment]); only exact per-node
   spans are trusted, never inferred covering spans — robust on transform-spliced
   trees, degrading to the shallowest honest answer. An offset inside a node but in
   none of its children (group delimiters, trigger spellings) resolves to that node;
-  ancestors come free via `parent()`. **Span lookup**: the minimal covering sibling
+  ancestors come free via `parent()`. **Span lookup**:
+  `NodeTree::covering_slice(&SourceSpan)` — the name carries the one fact callers
+  must know: the result may cover *more* than the query — returns the minimal
+  covering sibling
   run (`NodeSlice`, the node-list currency) within the deepest containing node list.
   Binary search over span-sorted siblings opportunistically, linear fallback.
-- **Honest slices**: `NodeSlice::span()`/`source_text()` verify per-run source
-  uniformity instead of trusting first/last-node agreement (a replaced *middle* node
-  no longer yields silently stale text); the `finish()` single-source flag is the
-  O(1) fast path.
+- **Honest slices** (contract-final): `NodeSlice::span()`/`source_text()` answer
+  only when the **whole run** lies in a
+  single source — uniformity verified across the run instead of trusting
+  first/last-node agreement (a replaced *middle* node
+  no longer yields silently stale text), with the `finish()` single-source flag as
+  the O(1) fast path; `source_text()` carries `span()`'s ordering guard so the two
+  contracts read identically; `None` = no single-source answer; per-node accessors
+  stay valid on any tree (a node's own span is its provenance). Doc-vocabulary
+  rule (user): the word "honest" must not appear in the rustdoc contracts — state
+  the concrete condition ("the run lies within a single source"); "honest slices"
+  stays internal design-record vocabulary.
+- `NodeRef::tree()` is public. The read-side structural walk is the free function
+  `walk` in the top-level `techy::visit` module — trait `NodeVisitor`
+  (enter/exit) + `VisitFlow`, one engine shared with the recompose driver; no
+  `NodeRef::walk` (strata: core cannot name the techy-level engine);
+  `descendants()` stays the flat stream ([§dd-dr:visit-engine]).
 Rejected alternatives: a build-on-demand `ParentMap` helper (the table is free at
 `finish()` and trees are immutable — no staleness to manage); an offset→node index
 table (premature); parent-dependent data in `make_node_ext` (impossible bottom-up —
@@ -3574,46 +3299,15 @@ see [§dd-dr:ext-minting]).
 Revisit if: profiling shows the per-node parent word or the honest-slice scans
 mattering — both have obvious opt-out designs, neither worth pre-building.
 
-*(Amended — API-review T4 session, names finalized:
-`NodeTree::node_at(&SourcePos)`; `NodeTree::covering_slice(&SourceSpan)` (the name
-carries the one fact callers must know — the result may cover *more* than the
-query); `NodeRef::parent()`/`index_in_parent()` → `Option`; `SourcePos` accessors
-`source()`/`pos()`; `SourceSpan::start_pos()`/`end_pos()` (exclusive-end doc
-sentence); `NodeRef::tree()` goes pub. `ancestors()` REJECTED — tree visiting is
-top-down and an ancestry walk has zero trap surface
-(`iter::successors(node.parent(), |n| n.parent())`); the one-line recipe lives in
-`parent()`'s rustdoc. Vocabulary note: F7's "cursor primitive" (this entry's
-editor-cursor lookup) and the retired char-scanning `SourceCursor`
-([§dd-dr:source-cursor-retired]) are disjoint concepts sharing a word. `Span`
-gains `contains(pos)` with the ruled empty-span semantics —
-[§dd-dr:span-extend-to]'s awaited consumer.)*
-
-*(Amended — API-review T5 session: the honest-slices bullet is contract-final —
-`NodeSlice::span()`/`source_text()` answer only when the **whole run** lies in a
-single source (uniformity verified across the run unless the `finish()`
-single-source flag short-circuits); `source_text()` gains `span()`'s ordering
-guard so the two contracts read identically; `None` = no single-source answer;
-per-node accessors stay valid on any tree (a node's own span is its provenance).
-Doc-vocabulary rule (user): the word "honest" must not appear in the rustdoc
-contracts — state the concrete condition ("the run lies within a single source");
-"honest slices" stays internal design-record vocabulary.)*
-
-*(Amended — API-review recompose session: the read-side structural walk (T4's
-routed walker) lands as the free function `walk` in the top-level `techy::visit`
-module — trait `NodeVisitor` (enter/exit) + `VisitFlow`, one engine shared with
-the recompose driver; no `NodeRef::walk` (strata: core cannot name the
-techy-level engine). `descendants()` stays the flat stream.
-[§dd-dr:visit-engine].)*
-
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
-*(Amended — descent-guard effort: the construct-parser return pair's delta side is
+*Section-wide note: the construct-parser return pair's delta side is
 **boxed** — `ConstructParser::parse` returns `(Self::Output,
 Option<Box<ParsingStateDelta<L>>>)`, and `NodesOutcome::after_effects` is
 `Option<Box<ParsingStateDelta<L>>>` — a decided per-frame stack-cost measure: the
 pass-through delta family dominated the recursion cycle's stack frames while
 nearly always carrying `None`. Rationale and scope: [§dd-dr:descent-guard].
-Entries below that spell the pair unboxed predate the boxing.)*
+Entries below that spell the pair unboxed predate the boxing.*
 
 #### Single-context parsing API (`ParseContext`) [§dd-dr:parse-context]
 
@@ -3712,7 +3406,7 @@ takeover post-space reposition idiom is expressed positionally:
 #### `Lang::finalize_node`: one centralized finalization hook in the builder [§dd-dr:finalize-node]
 
 Status: DECIDED (user; supersedes a spec-level `finalize_invocation` proposal —
-pylatexenc's `CallableSpec.finalize_node` precedent. **Superseded** — API-review P4:
+pylatexenc's `CallableSpec.finalize_node` precedent. **Superseded** — API review:
 replaced by parse-once ext minting, [§dd-dr:ext-minting]).
 
 Called inside `NodeTreeBuilder::add` for **all** nodes (every kind, not just callables),
@@ -3734,7 +3428,7 @@ drop unreachable); the builder grows a small staged-node read view (also wanted 
 node-based stop predicates, below).
 Rejected alternatives: spec-level finalize in core (callables-only; custom invocation parsers must
 remember to call it); a `ParseContext`-side helper (forgettable, and transforms bypass it).
-*(Superseded — API-review P4: the hook becomes the value-returning, parse-time-only
+*(Superseded — API review: the hook becomes the value-returning, parse-time-only
 `Lang::make_node_ext`; the idempotence contract and run-on-transforms behavior are
 deleted. The `ParseContext`-side placement rejected above is essentially the shape now
 adopted — its "forgettable" loophole closed by making `ParserSession::builder`
@@ -3819,7 +3513,7 @@ included). The *core* stages the returned kind with the token's span and the cur
 a `Lang` cannot stage nodes itself.
 Rationale: paragraph-break representation belongs to the preset;
 returning a `NodeKind` keeps callable-shaped paragraph breaks (FLM) expressible without a
-Phase 7 redesign, while the default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]).
+redesign, while the default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]).
 
 #### Stop conditions: reified values, tier-2 predicates; abnormal endings are data [§dd-dr:stop-conditions]
 
@@ -4106,7 +3800,7 @@ Rationale: one seam hides memo storage, gives transition provenance a place to r
 which no state-level hook can, by construction.
 *Costs accepted:* two derivation idioms coexist, separated by documented scope; Rust has no
 stable associated-type defaults, so every manual `Lang` impl writes `type SessionExt = ();`
-(`SimpleLang` absorbs it).
+(`TrivialLang` absorbs it).
 Rejected alternatives: `get_derived_state` naming (the crate's first `get_` prefix; `derived_state`
 chosen — adjective form matching `ParsingState::derived`); giving `finalize_transition`
 session access (forfeits the memo and breaks data-equivalence of out-of-session
@@ -4281,17 +3975,23 @@ table-reuse check compares it elementwise like `groups`; omitting that would reu
 stale table across a strip and keep tokenizing the dead delimiters (pinned by
 `temporary_group_rules_are_prefix_table_inputs`).
 
-#### `parse_scoped` and `probe_token` replace hand-rolled swap/restore [§dd-dr:parse-scoped]
+#### `parse_construct` and `probe_token` replace hand-rolled swap/restore [§dd-dr:parse-scoped]
 
 Status: DECIDED (user).
 
 The `cx.state` swap/restore protocol was correct at every one of its
 seven lib sites, but the correctness was per-site discipline (restore **before** the
 `?`), and the probe site had to hold a `Result` un-`?`-ed across the restore.
-`parse_scoped(state, &mut parser)` — the pylatexenc
+The scoped-parse entry point — the pylatexenc
 `walker.parse_content(parser, …, parsing_state)` analog, deliberately on the *context*
 (the session lacks tokens and source; the top-level drive later landed on `Language` —
-[§dd-dr:language-parse-api]) — makes the restore structural; the returned delta stays
+[§dd-dr:language-parse-api]) — makes the restore structural. It is
+**`parse_construct`**, the single normative descent
+entry point (with an optional frame and the descent-guard check,
+[§dd-dr:descent-guard]; `state: None` = clone the current state; the superseded
+name `parse_scoped` is pinned in [§dd-dr:superseded-names]); the closure-shaped
+scoping lives on as `with_parsing_state` — a state-scoping utility, not a descent
+point. The returned delta stays
 **unapplied** (the [§dd-dr:parsing-state]/[§dd-dr:parsers-engine] caller-applies law; an auto-applying driver would be wrong
 for group interiors). Frame-opening stays separate (`with_frame` composes around it;
 argument frames wrap two sub-operations, not one parse). The peek-shaped sites that are
@@ -4304,14 +4004,6 @@ public with it (custom parser code building its own `ParseError`s needs the trac
 `push_frame`/`pop_frame` stay crate-private — `with_frame` remains the only stack
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
-
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `parse_scoped` is
-renamed and generalized into **`parse_construct`**, the single normative descent
-entry point (adds the optional frame and the descent-guard check; `state: None` =
-clone the current state). The structural-restore argument above carries over
-unchanged; the closure-shaped scoping lives on as `with_parsing_state` — a
-state-scoping utility, not a descent point — and `probe_token` is untouched. The
-name `parse_scoped` goes to [§dd-dr:superseded-names].)*
 
 #### No spec-side slots: slots are pure record-level vocabulary [§dd-dr:no-spec-side-slots]
 
@@ -4446,8 +4138,7 @@ body-customization design finds it genuinely needs invocation-level takeover.
 
 #### Parser-library gap list settled; tack-on fields parse as a construct [§dd-dr:parity-gap-list]
 
-Status: DECIDED (user, parser-library survey; the full per-parser table lives in
-dev-docs/archive/ParserLibraryParity.md).
+Status: DECIDED (user, parser-library survey).
 
 Key rulings and their reasons:
 - **Tack-on information-field macros** (`\label` after `\section`, pylatexenc's
@@ -4481,13 +4172,12 @@ Revisit if: the tack-on parser's absorption of following siblings turns out to
 interact badly with enclosing stop conditions in practice, or a preset's interior-state
 plug proves to need more context than the group rule/class provides.
 
-#### The deferred parity parsers N2/N3/N4/N6 landed [§dd-dr:parity-parsers]
+#### The deferred parity argument parsers landed [§dd-dr:parity-parsers]
 
-Status: DECIDED (user; the full per-parser record lives in
-dev-docs/archive/ParserLibraryParity.md).
+Status: DECIDED (user).
 
 The decisions and their reasons:
-- **N3 record shape — one `ParsedArgument`, structure inside** (the survey's flagged
+- **Embellishment record shape — one `ParsedArgument`, structure inside** (the survey's flagged
   question): per-embellishment-char `ParsedArgument` entries are structurally
   unreachable — source order is free (`\op_{b}^{a}`) while `parse_declared_arguments`
   runs one spec at a time in declaration order, so a `^`-spec already reported absent
@@ -4497,7 +4187,7 @@ The decisions and their reasons:
   close empty), content = the wrapper run, and by-marker access as a *read-side*
   helper (`extract::split_embellishments`). Per-char access thus costs one helper
   call, not an API change.
-- **N3 matching semantics** (user): noise before a marker; between marker and
+- **Embellishment matching semantics** (user): noise before a marker; between marker and
   expression, plain **whitespace only** (revised — the first cut allowed nothing; pylatexenc's
   `allow_pre_space` and TeX's `x^ 2` decided the relaxation).
   The pair stays atomic: a violated pair (`\op^` at EOF, a comment or paragraph
@@ -4511,7 +4201,7 @@ The decisions and their reasons:
   Markers are `Char`-token sequences: a specials-claimed spelling does not match
   (state-dependent tokenization is the law — the latexlike `''` ligature outranks a
   `'` marker in text mode, not in math mode where the ligature is invisible).
-- **N2 folds into the existing argument parsers** (the user's own `### PhF` note:
+- **The multi-delimited form folds into the existing argument parsers** (the user's own `### PhF` note:
   `Rules(Vec<…>)` supersedes the scalar `Rule`): `GroupArgumentParser::any_of` /
   `OptionalGroupArgumentParser::any_of`, no new type — pylatexenc's separate
   multi-delim class dissolves. The ported contents subtlety maps onto the
@@ -4525,7 +4215,7 @@ The decisions and their reasons:
   Word codes `AnyDelimited`/`AnyDelimitedOptional` are **list-form-only** factory
   elements (a compact string would read `A` as a code; pylatexenc too only spells
   them as whole `arg_spec` strings).
-- **N4 `CharsGroupArgumentParser` — restriction is contents-only, math off is
+- **`CharsGroupArgumentParser` — restriction is contents-only, math off is
   data-driven, descent restores outer by default**: leading noise scans under the
   outer state (which is why the parser exists rather than
   `ArgumentSpec::parsing_state_delta` on a plain `m` argument — the spec delta covers
@@ -4540,7 +4230,7 @@ The decisions and their reasons:
   richness in braced values) — carried by the `ChildStateSpec` chars-except-groups
   policy the child-state session anticipated; `with_restricted_descent` keeps
   chars-only at depth. No argument code (pylatexenc has none; programmatic wiring).
-- **N6 `TackOnFieldsArgumentParser` — an ArgumentParser staging real `Callable`
+- **`TackOnFieldsArgumentParser` — an ArgumentParser staging real `Callable`
   nodes**: FLM's `label_arg` settles the integration (the tack-on parser is the
   callable's *last declared argument*; attachment = the argument's region, zero
   invocation-parser changes). Fields are configured `name → Arc<dyn CallableSpec>`
@@ -4584,7 +4274,7 @@ fully typed — no downcasts; generic code sees only the trait. The driver owns:
 - **the group descent-delta channel** — `group_interior_delta(prev, rule)`, pure per
   `(state, rule)`, merged into the memoized `session.group_interior_state` derivation
   (the cache stays in session; the hook runs on memo miss only). With [§dd-dr:parsing-state]'s parsing
-  mode this closes parity item N1;
+  mode this closes the group-interior-state parity gap;
 - **recovery policy** — `Recovery` leaves `ParserSession`, which returns to pure
   scratch/output (builder, diagnostics, frames, memo, `SessionExt`); overriding the
   driver's recover path admits richer policies than the strict/tolerant enum;
@@ -4599,9 +4289,14 @@ configuration that static `Lang` hooks never could. Accepted asymmetry: specials
 resolution stays `Lang` (token time); command resolution is driver (parse time).
 *`ParseContext` doctrine:* cx returns to a data struct (tokens, source, state, session,
 driver). Policy helpers (`recover`, `probe_token`) are defined on the driver with thin
-delegating sugar kept on cx; invariant-bearing plumbing (`parse_scoped`, `with_frame`,
+delegating sugar kept on cx; invariant-bearing plumbing (`parse_construct` — the
+single normative descent entry point, its frame folding absorbing the separate
+`with_frame` composition at descent sites — `with_frame`,
 `implementation_error`) stays as non-overridable cx methods — pairing invariants must
-not be overridable.
+not be overridable. The trait carries one required item, `type DescentGuard:
+DescentGuard;` ([§dd-dr:descent-guard]) — "defaulted methods only" reads "defaulted
+methods plus one required associated type"; `StdParseDriver` carries the choice as
+its third type parameter ([§dd-dr:command-resolver]).
 Rationale: the session-purity argument (user) — `ParserSession` is organized scratch
 space, and a parser *provider* conceptually drives the parse; it was misfiled there, as
 was `Recovery`. One seam for provision + one home for parse behavior + typed preset
@@ -4641,19 +4336,9 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
 
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `parse_scoped` is
-renamed and generalized into **`parse_construct`**, which takes over the
-invariant-bearing-plumbing doctrine seat named above — still a non-overridable
-`ParseContext` method, now also the single normative descent entry point (frame
-folding absorbed the separate `with_frame` composition at descent sites). And the
-trait gained its one required item, `type DescentGuard: DescentGuard;` — "defaulted
-methods only" above now reads "defaulted methods plus one required associated
-type"; `StdParseDriver` carries the choice as its third type parameter
-(`G = StdDescentGuard`, a private `PhantomData` field).)*
-
 #### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
 
-Status: SUPERSEDED (user, API-review Tier-C session) — the component struct is
+Status: SUPERSEDED (user, API review) — the component struct is
 replaced by a pluggable strategy parameter on the one canned driver:
 [§dd-dr:command-resolver]. The on-ramp analysis below (core cannot default
 `resolve_command`; the command-type field is the missing datum) carries over
@@ -4684,7 +4369,7 @@ single-field component then under-serves; today they write their own driver).
 
 #### `CommandResolver`: the pluggable resolve-command strategy on `StdParseDriver` [§dd-dr:command-resolver]
 
-Status: DECIDED (user, API-review Tier-C session; supersedes
+Status: DECIDED (user, API review; supersedes
 [§dd-dr:scopes-resolving-driver]).
 
 Command resolution plugs into the one canned driver as a strategy value instead of
@@ -4736,34 +4421,25 @@ generic (the erased-at-the-seam argument above); a three-argument
 fails type inference under a generic parameter — the setter shape never spells
 `None` at all).
 
+Final type shape: `StdParseDriver<R = (), O: SourceOrigin = Option<String>,
+G = StdDescentGuard>`. The second defaulted parameter exists because the
+`Option<Arc<dyn SourceResolver<…>>>` field needs the origin type while
+`type Driver = StdParseDriver` must stay annotation-free (decisive reason 3; the
+impl is `impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R,
+L::SourceOrigin>`; a standalone binding needs the alias-defaults annotation —
+`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`). The third
+is the `ParseDriver::DescentGuard` choice ([§dd-dr:descent-guard]), carried as a
+**private** `PhantomData` field — "fields stay `pub`" holds for the three real
+fields, but the private carrier means downstream struct-literal construction is
+not possible; the intended path is `new()` + `with_source_resolver`.
+
 Revisit if: languages with several command-syntax callable types appear (they
 write a custom `CommandResolver` — the point of the seam), or a second hook
 genuinely meets both proliferation-guard criteria.
 
-*(Applied — Phase 3 S2. Application details: the entry's `StdParseDriver<R = ()>`
-spelling gains a second defaulted origin parameter — `StdParseDriver<R = (),
-O: SourceOrigin = Option<String>>` — because the ruled `Option<Arc<dyn
-SourceResolver<…>>>` field needs the origin type while `type Driver =
-StdParseDriver` must stay annotation-free (decisive reason 3); the `ParseDriver`
-impl is `impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R,
-L::SourceOrigin>`. A standalone binding needs the alias-defaults annotation
-(`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`) — inside
-`Language::new`/`type Driver` positions the ruled annotation-free spelling
-holds.)*
-
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `StdParseDriver` gains
-a third defaulted parameter, `G = StdDescentGuard` (the
-`ParseDriver::DescentGuard` type choice), carried as a **private** `PhantomData`
-field. "Fields stay `pub`" above still holds for the three real fields, but the
-private carrier means downstream struct-literal construction of `StdParseDriver`
-is no longer possible — the intended path is `new()` + `with_source_resolver`.
-Recorded here because the semver baseline move for the descent-guard effort
-carries this break (cargo-semver-checks: `constructible_struct_adds_private_field`).)*
-
 #### Takeover staging sugar: `disable_all`, collection constructors, a committed invocation helper [§dd-dr:takeover-staging-sugar]
 
-Status: DECIDED (user, API-review T3 session; the invocation helper's signature is
-deliberately deferred to the T5 session).
+Status: DECIDED (user, API-review session).
 
 Three shorthand rulings on the takeover-parser ceremony — all shorter spellings of
 the same operations (the [§dd-dr:registration-ergonomics]
@@ -4773,70 +4449,52 @@ shorthand-not-second-path principle):
    `enable_*` gates `Some(false)`: the raw-state block every rest-of-line and
    verbatim-like parser hand-builds. Lives on the overrides type so it composes —
    `verbatim_state_delta` itself becomes `disable_all()` plus its terminator (one
-   source of truth), and parsers tweak fields afterwards.
+   source of truth), and parsers tweak fields afterwards. Feature-aware by
+   construction — it flips the gates of exactly the features the language
+   declares present, and can never fail ([§dd-dr:lang-features]).
 2. **`ParsedArguments::new(Vec)` / `ParsedSlots::new(Vec)`** — discoverable
-   constructors for what only `From<Vec<_>>` impls provide today (the walkthrough
+   constructors for what only `From<Vec<_>>` impls provided (the walkthrough
    found them by grepping, not on the types' doc pages); the `From`s stay as
    conversion plumbing.
-3. **A canned invocation-staging helper WILL exist** as a `ParseContext` method
-   wrapping the one staging door (`cx.stage_node`, [§dd-dr:ext-minting]) — sketch:
-   `cx.stage_invocation(&invocation, arguments, slots, children, end_pos)`,
-   building the `CallableData` (four of its seven fields are transcriptions from
-   the invocation and trigger), computing the node span, staging, returning the
-   id. Committed now; the *signature* is ruled in the T5 session together with the
-   transform-side `restage_invocation` bundles and builder ergonomics
-   ([§dd-dr:restage]), so the parse-side and transform-side spellings share field
-   vocabulary and region semantics — fixing it against the pre-ext-minting surface
-   would guarantee rework.
+3. **The canned invocation-staging helper** — a `ParseContext` method
+   wrapping the one staging door (`cx.stage_node`, [§dd-dr:ext-minting]):
+   `cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
+   ParsedSlots<L>, children: Vec<BuildId>, end_pos: Option<usize>) ->
+   ConstructParserResult<L, BuildId>` —
+   builds the `CallableData` (four of its seven fields are transcriptions from
+   the invocation and trigger), computes the node span, mints the
+   invocation-syntax payload via `FromInvocation`, stages, returns the id.
+   `end_pos: None` = the std rule — last staged
+   child's span end, else the trigger's end; `Some` serves takeovers whose consumed
+   extent outruns their last child (rest-of-line, heredoc shapes). **No
+   `callable_type`/`name` overrides**: the helper is the transcription-case
+   shorthand only — the environment takeover overrides both and its span outruns
+   its children ([§dd-dr:environment-scaffolding]), so environment-class
+   composition stays on the canonical `cx.stage_node` door (in-crate:
+   `StdInvocationParser` and the tack-on parser sit on the helper; the
+   environment parsers stay on the door). Parse-side/restage-side symmetry is by
+   **vocabulary, not arity** ([§dd-dr:restage-ops]): the parse side passes
+   caller-tiled records plus a flat child list, the restage side driver-tiled
+   bundles — who owns the region arithmetic differs by design, and the two
+   signatures are not to be "unified". No ext/annotation parameters (`stage_node`
+   mints the ext; parse annotations are `()`).
 
 Rejected alternatives: `all_off()`/`raw()` for the overrides constructor (the
 crate's off-vocabulary is "disable"; "raw" too clever); a terminator-less
 `verbatim_state_delta` sibling (the overrides constructor composes instead of
-multiplying delta helpers); ruling the helper signature now (above).
+multiplying delta helpers).
 
-Revisit if: the T5 restage detailing changes the staging-door shape itself (the
-helper follows it).
-
-*(Item 1 applied — Phase 3 S2: `TokenRulesOverrides::disable_all()` landed;
-`verbatim_state_delta` is `disable_all()` plus its terminator. Item 2 applied —
-Phase 3 S3 (`ParsedArguments::new`/`ParsedSlots::new`). Item 3 applied — Phase 3
-S5: `ParseContext::stage_invocation` per the T5 amendment below, minting the
-invocation-syntax payload via `FromInvocation`; in-crate `StdInvocationParser`
-and the expression-position tack-on site collapsed onto it, environment
-compositions staying on the canonical `stage_node` door.)*
-
-*(Item 1 amended — user ruling 2026-08-10, lang-features session: `disable_all()`
-is feature-aware by construction — it flips the gates of exactly the features the
-language declares present, and can never fail ([§dd-dr:lang-features] amendment).
-Under an all-features-present language, item 1's description is unchanged: all six
-gates `Some(false)`.)*
-
-*(Amended — API-review T5 session, the committed helper's signature ruled:
-`cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
-ParsedSlots<L>, children: Vec<BuildId>, end_pos: Option<usize>) ->
-ConstructParserResult<L, BuildId>`. `end_pos: None` = the std rule — last staged
-child's span end, else the trigger's end; `Some` serves takeovers whose consumed
-extent outruns their last child (rest-of-line, heredoc shapes). **No
-`callable_type`/`name` overrides**: the helper is the transcription-case
-shorthand only — the environment takeover overrides both and its span outruns
-its children ([§dd-dr:environment-scaffolding]), so environment-class
-composition stays on the canonical `cx.stage_node` door (in-crate:
-`StdInvocationParser` and the tack-on parser collapse onto the helper; the
-environment parsers stay on the door). Parse-side/restage-side symmetry is by
-**vocabulary, not arity** ([§dd-dr:restage-ops]): the parse side passes
-caller-tiled records plus a flat child list, the restage side driver-tiled
-bundles — who owns the region arithmetic differs by design, and the two
-signatures are not to be "unified". No ext/annotation parameters (`stage_node`
-mints the ext; parse annotations are `()`).)*
+Revisit if: the staging-door shape itself changes (the helper follows it).
 
 #### `\input` engine wiring: driver resolver accessor + the `parse_attached_source` door [§dd-dr:input-wiring]
 
-Status: DECIDED (user, API-review T4 session; realizes [§dd-dr:input-attachment]).
+Status: DECIDED (user, API-review session; realizes [§dd-dr:input-attachment]).
 
 - **Resolver surface**: defaulted accessor `ParseDriver::source_resolver(&self) ->
   Option<&dyn SourceResolver<L::SourceOrigin>>`, default `None` ("this language
-  resolves nothing"); shipped drivers gain an `Option<Arc<dyn …>>` field +
-  `with_resolver(…)`. Consequence ruled consciously: the field drops `Copy`/`Eq`
+  resolves nothing"); shipped drivers carry an `Option<Arc<dyn …>>` field + the
+  chainable `with_source_resolver(…)` builder ([§dd-dr:command-resolver]).
+  Consequence ruled consciously: the field drops `Copy`/`Eq`
   on resolver-carrying drivers (nothing relied on driver `Copy`; strikes the
   keep-`Copy`/`Eq` clause of [§dd-dr:preset-driver-pillars]). The
   behavior-method variant (a `resolve_reference` hook) lost: carriers still need
@@ -4849,9 +4507,10 @@ Status: DECIDED (user, API-review T4 session; realizes [§dd-dr:input-attachment
   session-global), local stray-close recovery (an included file's stray `}` never
   unwinds the includer), a traceback `Frame`. The door stages content nodes only —
   slot assembly stays the invocation parser's job (the one-staging-door doctrine
-  holds). Resolution stays OUTSIDE the door (accessor → free `resolve_source` →
-  door), so caching frameworks substitute either half; the free fn becomes the
-  canonical composition once `Language::resolve_source` leaves.
+  holds). Resolution stays OUTSIDE the door (accessor → free
+  `resolve_source_reference` →
+  door), so caching frameworks substitute either half; the free fn is the
+  canonical composition.
 - **`attach_source_reference(cx, reference, at, state, parser)`** (core, beside
   the door): the resolve-diagnose-attach bundle — kept despite its size as the
   single raising site for the two failure conditions, so diagnostics wording is
@@ -4863,85 +4522,62 @@ Status: DECIDED (user, API-review T4 session; realizes [§dd-dr:input-attachment
 - **`Language` collapses**: `with_resolver`, `resolver()`, and
   `Language::resolve_source` leave — completing [§dd-dr:language-init]'s expected
   surface (`new(driver, initial_state)` + `parse` + `parse_source` + accessors).
-- **The preset construct is opt-in, never preloaded**:
-  `latexlike::input_macro_spec::<LLL>()` (an always-on `\input` under a
+- **Door signature details**: the parser parameter is `&mut P where P:
+  ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` — the ruled return plus
+  the local stray-close recovery require the nodes-run outcome vocabulary. The
+  door returns **`AttachedSourceOutcome<L> { nodes: Vec<BuildId>, after_effects:
+  Option<Box<ParsingStateDelta<L>>> }`**: `NodesOutcome` exports the merged
+  record of the sibling after-effect deltas the run applied, each component
+  recorded in its **effective, as-applied** form — context-dependent events
+  lowered into their override patches before recording — merged last-writer-wins
+  per field with scope ops (and any context-free events) concatenated in
+  application order; the door merges across resumed runs. Both `after_effects`
+  channels are boxed ([§dd-dr:descent-guard]): the door's frame stays live
+  across the whole nested include parse, and moving the already-boxed
+  `NodesOutcome` record into the bundle removes an unbox/rebox round trip on the
+  persist path; the surfaces ruled NOT boxed — the driver hooks
+  (`group_interior_delta`/`resolve_state_event`),
+  `ArgumentSpec::parsing_state_delta`, `EnvironmentBehavior::body_state_delta` —
+  are consumed in frames that unwind before recursion descends, so boxing them
+  buys no per-level stack. `attach_source_reference` is a `ParseContext` method
+  returning `Option<AttachedSourceOutcome<L>>` (`None` =
+  diagnosed-and-recovered, nothing attached); `NoSourceResolver` carries the
+  `reference`.
+- **The preset construct is opt-in, never preloaded**: the public
+  `InputMacroSpec<LLL>` (the `MacroSpec` pattern), constructor
+  **`latexlike::input_macro_spec::<LLL>(persist_state: bool, attached_slot_ext:
+  SlotExt<LLL>)`** — both parameters mandatory, embedders decide consciously (an
+  always-on `\input` under a
   resolver-less driver would just diagnose every use); embedders insert it into
-  their own package. Its body is the brief form the helpers exist for — argument
+  their own package. `persist_state: true` forwards the bundle's merged delta as
+  the invocation's own after-effect through the existing sibling channel (the
+  preamble-defines-macros case; nested inclusions compose outward); `false`
+  keeps the transparent behavior. The attached slot is named `"attached"`,
+  `Attached` on the role axis; the shipped spec **mints no body-ness** — the
+  slot's ext is the embedder-supplied constructor value, cloned per invocation
+  (the preset recipe passes `BodyMarker::not_body()`; a body-marked ext remains
+  a framework option `body()` finds — [§dd-dr:slot-roles] — never the shipped
+  default). Its body is the brief form the helpers exist for — argument
   text → `attach_source_reference` → `Attached` slot — so `\input[options]{file}`
   / `\input*{f1,f2,f3}` variants are easy custom-spec work (the form-specific
   parts stay in the spec).
 
-Rejected alternatives: resolver as a per-parse argument (re-litigates the P4
+Rejected alternatives: resolver as a per-parse argument (re-litigates the ruled
 direction, and the construct parser mid-descent holds only `cx`);
 `cx.parse_source` as the door name (collides with `Language::parse_source` under
 a different contract — sibling-vocabulary rule); a core-generic
 resolve-then-attach *argument parser* (speculative before a second consumer — the
 door + bundle are the reusable parts).
 
-Revisit if: a framework needs several resolvers per driver (the accessor
-signature admits dispatch behind it), or the T5 restage detailing adds a
-splice-a-cached-parse affordance that changes the caching-framework route.
-
-*(Amended — API-review Tier-C session: the free composition is renamed
+The free resolve-and-diagnose composition is named
 **`resolve_source_reference`** (user: the fn drives the bookkeeping around a
-*delegated* resolution; the new name uses the ruled "source reference"
+*delegated* resolution; the name uses the ruled "source reference"
 vocabulary — family: `attach_source_reference`, `UnresolvableSourceReference` —
-and the resolver parameter carries the delegation visibly). The shipped-driver
-builder named `with_resolver` above becomes **`with_source_resolver`** — two
-resolvers now coexist on `StdParseDriver` ([§dd-dr:command-resolver]).)*
+and the resolver parameter carries the delegation visibly).
 
-*(Partially applied — Phase 3 S2, the resolver-surface bullet and the `Language`
-collapse only: the `ParseDriver::source_resolver` accessor, the shipped drivers'
-field + `with_source_resolver` builder, and `Language`'s resolver surface leaving.
-The door (`parse_attached_source`), the `attach_source_reference` bundle, the two
-failure conditions, and the preset `input_macro_spec` are stage S6.)*
-
-*(Fully applied — Phase 3 S6. Application notes: the door's parser parameter is
-`&mut P where P: ConstructParser<L, Output = NodesOutcome<L>> + ?Sized` — the
-ruled return plus the ruled local stray-close recovery require the
-nodes-run outcome vocabulary; the bundle is a `ParseContext` **method** (the
-T4-1c "on the `ParseContext` surface" home), returning `Option` (`None` =
-diagnosed-and-recovered, nothing attached); `NoSourceResolver` carries
-the `reference`; the preset spec type is the public `InputMacroSpec<LLL>` (the
-`MacroSpec` pattern), its attached slot named `"attached"`, `Attached` on the
-role axis.)*
-
-*(Amended — user-ruled 2026-08-04, the S6 sign-off design revisions: **outcome
-bundle + persist_state**. (1) The door returns
-**`AttachedSourceOutcome<L> { nodes: Vec<BuildId>, after_effects:
-Option<ParsingStateDelta<L>> }`** instead of bare `Vec<BuildId>` (amending the
-T4-B2 signature above): `NodesOutcome` now exports the merged record of the
-sibling after-effect deltas the run applied (the previously dormant
-merged-delta hook), each component recorded in its **effective, as-applied**
-form — context-dependent events lowered into their override patches before
-recording — merged last-writer-wins per field with scope ops (and any
-context-free events) concatenated in application order; the door merges across
-resumed runs, and `attach_source_reference` returns
-`Option<AttachedSourceOutcome<L>>`. (2) The preset constructor is
-**`input_macro_spec::<LLL>(persist_state: bool, attached_slot_ext:
-SlotExt<LLL>)`** — both parameters mandatory, embedders decide consciously.
-`persist_state: true` forwards the bundle's merged delta as the invocation's
-own after-effect through the existing sibling channel (the
-preamble-defines-macros case; nested inclusions compose outward);
-`false` keeps the transparent behavior. (3) The shipped spec **no longer
-mints body-ness**: the attached slot's ext is the embedder-supplied
-constructor value, cloned per invocation — the preset recipe passes
-`BodyMarker::not_body()` (retrieval by slot name `"attached"`); a body-marked
-ext remains a framework option `body()` finds ([§dd-dr:slot-roles]'s
-findability clause), never the shipped default.)*
-
-*(Amended — descent-guard effort ([§dd-dr:descent-guard]) and its follow-up
-ruling (user, 2026-08-10, after the Part 3 review): the merged record the
-previous note quotes from `NodesOutcome` is now exported **boxed**
-(`NodesOutcome::after_effects: Option<Box<ParsingStateDelta<L>>>`), and
-`AttachedSourceOutcome::after_effects` is boxed **likewise**
-(`Option<Box<ParsingStateDelta<L>>>`): the door's frame stays live across the
-whole nested include parse, and moving the already-boxed record into the bundle
-removes an unbox/rebox round trip on the persist path. The surfaces ruled NOT
-boxed — the driver hooks (`group_interior_delta`/`resolve_state_event`),
-`ArgumentSpec::parsing_state_delta`, `EnvironmentBehavior::body_state_delta` —
-are consumed in frames that unwind before recursion descends, so boxing them
-buys no per-level stack.)*
+Revisit if: a framework needs several resolvers per driver (the accessor
+signature admits dispatch behind it), or a
+splice-a-cached-parse affordance changes the caching-framework route.
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
@@ -4950,12 +4586,13 @@ staged deliberately: `ParserSession` alone shipped first, `Language` only once c
 demonstrated the need).
 
 `Language<L>` = `{ driver: L::Driver, initial_state:
-Arc<ParsingState<L>>, resolver: Arc<dyn SourceResolver<O>> }`, long-lived, owning no
+Arc<ParsingState<L>> }`, long-lived, owning no
 per-parse state ([§dd-dr:stateless-language]).
 - **Entry points are two named methods, not a `SourceInput` enum** (rejecting an older
   sketch's `parse(impl Into<SourceInput>)`): `parse(content: impl
   Into<String>)` mints an anonymous `Source`; `parse_source(Arc<Source<O>>)` takes a
-  pre-minted source (origin/provenance intact — the `resolve_source` round trip feeds
+  pre-minted source (origin/provenance intact — the `resolve_source_reference` round
+  trip feeds
   it). A conversion enum whose only job is overloading buys one method name at the
   price of a public type; named methods are self-documenting.
 - **Construction seeds from `Lang::initial_state_data()` and customizes by deriving**:
@@ -4970,7 +4607,7 @@ per-parse state ([§dd-dr:stateless-language]).
   mandatory `new` argument; the `new(driver)` + fallible-customizer shape described in
   this bullet is superseded.)*
 - **The advanced path is accessors, not a `session()` method**: `initial_state()`/
-  `driver()`/`resolver()`; the sketch's `session()` dropped — `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
+  `driver()`; the sketch's `session()` dropped — `ParserSession` carries no `Language` borrow and `ParserSession::new()` is
   argument-free, so a `Language::session()` would return exactly that (misleading
   discoverability sugar). `ParseResult` likewise stays borrow-free (nodes are
   self-contained; results outlive the bundle).
@@ -5055,12 +4692,12 @@ against future push semantics and against whatever `finalize_transition` does in
 derivation; the `Result` mirrors `with_seed_delta` honestly.
 *(Superseded — [§dd-dr:language-init]:
 `ParsingState::lang_initial_with_packages` is the infallible spelling of the same
-everyday operation at the seed itself, where no derivation runs. Application
-confirmed — Phase 3 S2: `with_provider` and `with_seed_delta` are removed.)*
+everyday operation at the seed itself, where no derivation runs; `with_provider`
+and `with_seed_delta` are removed.)*
 
 #### Language construction: explicit initial state, infallible seed+packages path [§dd-dr:language-init]
 
-Status: DECIDED (user, API-review policy session; applied — Phase 3 S2; supersedes the
+Status: DECIDED (user, API-review policy session; supersedes the
 construction bullet of [§dd-dr:language-parse-api] and [§dd-dr:with-provider]).
 
 `Language::new(driver, initial_state)` takes the initial `ParsingState` as a
@@ -5080,12 +4717,24 @@ transition choke point ([§dd-dr:state-option-c]) is untouched — packages-at-s
 a transition, and `freeze` rebuilds the derived caches from the augmented data; (3) **no
 shortcut accessors** that users must abandon the instant they need one more option — the
 constructor asks for the real inputs, kept cheap by the two `lang_initial*` helpers.
-Expected consequences (proposed; confirm at application): `with_provider` and
-`with_seed_delta` become redundant — seed customization moves *before* construction
-(`Language::new(driver, ParsingState::lang_initial().derived(delta)?)` covers the delta
-path), collapsing the builder surface to the constructor plus `with_resolver`
-(orthogonal: resolver, not state); the `Default` impl's fate and the packages argument's
-ergonomics (avoiding `Arc` noise) are application-time details.
+
+Consequences (the full collapse): `with_provider` and `with_seed_delta` are
+removed — seed customization moves *before* construction (the delta idiom is
+`Language::new(driver, ParsingState::lang_initial().derived(&delta)?)`); the
+resolver surface (`with_resolver`, `resolver()`, `Language::resolve_source`)
+leaves with the resolver's move to the driver ([§dd-dr:input-wiring]); `Default
+for Language<L>` is **removed** (it reintroduces the implicit seed by the back
+door, and the turbofish spelling was itself walkthrough friction), as are
+`LatexlikeDriver::default()` and `StdParseDriver::default()` (strict-vs-tolerant
+is the driver's one policy knob — it must be explicit; after the `Default for
+Language` removal no `L::Driver: Default` consumer remains — the spelling is
+`StdParseDriver::new(Recovery::Strict, ())`). The surface is
+`new(driver, initial_state)` + `parse` + `parse_source` + accessors. The
+packages argument takes the sealed `IntoSpecsProvider` conversion —
+`lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc
+noise ([§dd-dr:registration-ergonomics]); the infallibility argument is
+documented on the method.
+
 Rejected alternatives: preset-level `parse()`/`parse_tolerant()` facade functions and a
 configuration builder (shortcut accessors — abandoned at the first configuration need;
 fix the real constructor instead); keeping seed customization delta-only (buries the
@@ -5094,34 +4743,6 @@ everyday case can trigger).
 Revisit if: a Lang emerges whose seed coherence genuinely requires a finalize-style hook
 over the package-augmented seed — then that hook becomes an explicit, documented opt-in
 on the seed-construction path, not a return to mandatory delta routing.
-*(Amended — API-review P4: `with_resolver` is expected to leave `Language` too — the
-resolver moves to the driver ([§dd-dr:input-attachment]), collapsing the surface
-toward the constructor alone.)*
-
-*(Amended — API-review T1/T2 session, application details ruled: `Default for
-Language<L>` is **removed** (it reintroduces the implicit seed by the back door, and
-the turbofish spelling was itself walkthrough friction), as is
-`LatexlikeDriver::default()` (strict-vs-tolerant is the driver's one policy knob —
-it must be explicit; `StdParseDriver::default()` stays pending the language-designer
-session). The packages argument takes the sealed `IntoSpecsProvider` conversion —
-`lang_initial_with_packages([minidefs::minilatex_package(), my_pkg])`, no Arc noise
-([§dd-dr:registration-ergonomics]).)*
-
-*(Amended — API-review T3 session: `StdParseDriver::default()` is **removed** too —
-after the `Default for Language` removal no `L::Driver: Default` consumer remains,
-and `recovery` is the driver's only field, so a `Default` existed solely to hide
-the one policy knob. The spelling is `StdParseDriver::new(Recovery::Strict)`.)*
-
-*(Amended — API-review T4 session, collapse complete: `with_resolver`,
-`resolver()`, and `Language::resolve_source` leave with the resolver's move to the
-driver ([§dd-dr:input-wiring]) — the surface is `new(driver, initial_state)` +
-`parse` + `parse_source` + accessors.)*
-
-*(Applied — Phase 3 S2: `Language::new(driver, initial_state)` landed with the
-full collapse (no `Default`, no `with_*` builders, no resolver surface);
-`ParsingState::lang_initial()` + the infallible `lang_initial_with_packages`
-landed, with the infallibility argument documented on the method; the delta idiom
-is `ParsingState::lang_initial().derived(&delta)?`.)*
 
 #### The descent guard: one descent entry point, a per-parse recursion limiter [§dd-dr:descent-guard]
 
@@ -5300,7 +4921,7 @@ challenged against [§dd-dr:data-vs-traits]/[§dd-dr:one-generic-param] first.
 
 #### Panic policy: `Result` everywhere; panics only for verifiably unreachable invariants [§dd-dr:panic-policy]
 
-Status: DECIDED (user, Action-04 review; refines the original one-line CLAUDE.md constraint).
+Status: DECIDED (user, code review; refines the original one-line CLAUDE.md constraint).
 
 Four rules:
 
@@ -5320,14 +4941,18 @@ Four rules:
    documented panics **with non-panicking companions** (`NodeTree::get`, `Span::get`)
    — the std `Index`-vs-`get` convention: the panicking form for ids/spans the caller
    minted from this very tree/source, the `Option` form for values of unknown
-   provenance; (b) *always-on precondition asserts* (approved 2026-08-05) on the six
+   provenance; (b) *always-on precondition asserts* on the six
    deep value functions `Span::new`, `Span::extend_to`, `Token::new`,
    `SourceSpan::new`, `SourcePos::new`, and `skip_whitespace`: a documented-contract
    violation panics in every build — these functions are deliberately infallible (no
    `Err` channel exists to prefer), the checks are O(1), and the always-on panic keeps
    invalid values unrepresentable where the release alternative was unspecified
    misbehavior or a later cryptic panic far from the cause (the std str/slice-indexing
-   convention).
+   convention). Each of the six sites documents the all-builds panic in its rustdoc
+   with a pointer to rule 3, pinned by `should_panic` tests; invalid
+   `Span`/`Token`/`SourceSpan`/`SourcePos` values are thereby unrepresentable
+   through the public API (`TokenListReader::new` is `cfg(test)`-only test
+   infrastructure and keeps a debug assert).
 4. Everything else returns an error.
 
 Consequences applied with the decision:
@@ -5348,11 +4973,22 @@ Consequences applied with the decision:
   node-stop test treats a missing id as "condition did not fire"; invocation/body span
   read-backs fall back to the trigger/body start). No silently-wrong tree results: the
   bogus id still lands in `builder.add`'s child list, where it is diagnosed.
-- `skip_whitespace` panics on an invalid `pos` (rule-3(b); formerly a debug assert
-  with a return-unchanged release fallback — superseded 2026-08-05); `Span::len`'s
+- `skip_whitespace` panics on an invalid `pos` (rule-3(b); a debug assert
+  with a return-unchanged release fallback was consciously superseded); `Span::len`'s
   saturation is defensive only, since inverted spans are unrepresentable under
   rule-3(b)'s asserted constructors; `ParserSession::finish` returns
   `Result<ParseResult, NodeBuildError>`.
+- Every remaining guard on outer-layer input is an `Err`
+  implementation-error path: the environment-terminator re-peek and
+  reader-position guards, the driver-factory pass-through-delta and stop-cause
+  guards, the spec-author emptiness/distinctness guards of the standard argument
+  parsers (constructors stay infallible; the check runs where the parser runs),
+  the `Lang::scan_specials` match-end guard and a single reader-position
+  validation at `StdTokenReader::peek` (both as unrecoverable
+  `TokenErrorKind::Custom` implementation errors), and the chars-run contiguity
+  guards. The staged-id read-backs of the standard argument parsers (group,
+  optional-group, chars-group) follow the staged-id degradation rule through one
+  shared zero-child-answer helper.
 - `check_tree_invariants` is exempt: a documented test utility whose *purpose* is
   asserting — panicking is its API. `debug_assert!` remains fine for crate-internal
   invariants but is not a substitute for boundary validation of outer-layer input.
@@ -5361,47 +4997,16 @@ Rationale: an invariant assertion that can only fire on a core bug is better lou
 silently wrong; but a panic reachable through an extension author's mistake turns their bug
 into a crash of the host application — an error naming the violated contract is strictly
 more useful, in every build profile.
-Rejected alternatives: sanctioning the builder's panic-on-caller-bug policy (the Action-04 report's
-original recommendation) — it violates rule 2's "outer layers must not panic the core";
+Rejected alternatives: sanctioning the builder's panic-on-caller-bug policy (an earlier
+review recommendation) — it violates rule 2's "outer layers must not panic the core";
 `Option`-returning tree accessors everywhere — clutters every legitimate traversal for a
-misuse the `get` companions already cover.
+misuse the `get` companions already cover; keeping the six value functions
+debug-asserted with release fallbacks (superseded in a recorded reversal — the
+functions are deliberately infallible, so rule 2's "return an `Err` instead" has no
+channel to prefer, and the real release-mode alternative was unspecified misbehavior
+or a later cryptic panic).
 Revisit if: profiling shows the always-on builder validation measurably costs on the hot
 staging path (all checks are O(1) per region/payload today).
-
-*(Applied — API-review Phase 3 S10 full sweep (completing the S5 rider on
-pre-existing sibling asserts): every remaining guard on outer-layer input became an
-`Err` implementation-error path — the environment-terminator re-peek and
-reader-position guards, the driver-factory pass-through-delta and stop-cause
-guards, the spec-author emptiness/distinctness guards of the standard argument
-parsers (constructors stay infallible; the check runs where the parser runs), the
-`Lang::scan_specials` match-end guard and a single reader-position validation at
-`StdTokenReader::peek` (both as unrecoverable `TokenErrorKind::Custom`
-implementation errors), and the chars-run contiguity guards; the staged-id
-read-backs of the standard argument parsers (group, optional-group, chars-group)
-follow this entry's staged-id degradation rule through one shared
-zero-child-answer helper. Value-constructor
-debug asserts (`Span::new`, `SourceSpan::new`, `SourcePos::new`, `Token::new`,
-`TokenListReader::new`) stay under this entry's `skip_whitespace` pattern:
-debug-checked author aid, release behavior degrades to a downstream-diagnosed
-state. Full site-by-site table: the review's S10 stage report (a process file;
-this note is the durable record).)*
-
-*(Amended — post-Phase-3 user ruling, 2026-08-05: the value-function debug asserts
-were upgraded to **always-on `assert!`s** — the "stay debug-asserted" clause of the
-S10 note above and the `skip_whitespace` return-unchanged fallback are superseded.
-Rule 3 now records the governing principle in the user's words (exceptions stay few,
-user-escalated, in deep code primary users rarely call, on a std-standard policy) and
-the approved six-site register as family (b). Grounds: these functions are
-deliberately infallible, so rule 2's "return an `Err` instead" has no channel to
-prefer — the real release-mode alternative was unspecified misbehavior or a later
-cryptic panic; the checks are O(1) (the `skip_whitespace` bounds check was already
-always-on). Consequence: invalid `Span`/`Token`/`SourceSpan`/`SourcePos` values are
-unrepresentable through the public API, and the previously flagged
-`SourceSpan::content` implicit-indexing-panic follow-up is closed — every span it can
-see is valid by construction. `TokenListReader::new` is `cfg(test)`-only test
-infrastructure and keeps its debug assert. Each of the six sites documents the
-all-builds panic in its rustdoc with a pointer to rule 3; `should_panic` pins cover
-every assert.)*
 
 #### Errors carry Arc-based `SourceSpan`, not `'src` lifetimes [§dd-dr:arc-error-spans]
 
@@ -5521,7 +5126,7 @@ identifier or downcast. Severity stays a separate field (conditions do not choos
 recover funnel records errors), and the `Diagnostic*` nomenclature deliberately leaves room
 for warnings later. The contract-violation category noted above also gets its mechanism for
 free: ordinary condition types under e.g. `core.contract.*`.
-Rejected alternatives: promoting recurring conditions to enum variants (the original Action-01
+Rejected alternatives: promoting recurring conditions to enum variants (an earlier
 proposal — layering and extension flaws above); a `Lang(L::ErrorKind)` static arm (spreads
 `L` into `Diagnostic`/`ParseError`, blocking cross-language aggregation, and callables need
 dyn anyway since specs live as `Arc<dyn CallableSpec<L>>`); a message-override `String` on
@@ -5578,12 +5183,12 @@ Status: DECIDED (user + design sessions).
 
 In-process identity is the concrete type (downcast via `Any` — collision-proof, compiler-checked at producer and consumer); the string `identifier()` exists
 only for boundaries where types cannot go (JSON output, linter config, logs). Identifiers are
-hand-chosen, namespaced `<layer-or-preset>.<area>.<condition>` (provisional scheme:
-`core.token.*`, `core.nodes_parser.*`, … for library conditions, areas mirroring
-today's modules; `<preset-name>.<namespaced-name>` for presets and downstream languages),
+hand-chosen, namespaced `<layer-or-preset>.<area>.<condition>` (`core.token.*`,
+`core.groups.*`, … for library conditions, areas naming concepts;
+`<preset-name>.<namespaced-name>` for presets and downstream languages),
 exposed as `pub const IDENTIFIER` so consumers compare against the const rather than a
-literal. Identifiers and serialization field names are semver-stable API surface: although
-the provisional scheme mirrors today's module areas, the strings are frozen independently of
+literal. Identifiers and serialization field names are semver-stable API surface:
+the strings are frozen independently of
 future code moves.
 Rationale: no compiler mechanism yields a stable wire identity — `type_name` has an
 explicitly unstable format and encodes module paths (a refactor must not break a user's
@@ -5597,11 +5202,9 @@ derive macro will *require* the id attribute); method name `diagnostic_identifie
 [§dd-dr:naming]); a per-`Lang` `diagnostic_catalog()` with a uniqueness test (maintenance work to keep in
 sync, and namespace prefixes already prevent collisions — can be
 added later without breakage).
-
-*(Amended — API-review P5: the provisional module-mirroring areas are to be replaced by
-concept-named areas before the stability freeze; the full stability semantics
+The full stability semantics
 (identifier hard-stable, data keys additive, wording excluded) and the
-defining-vocabulary ownership rule are recorded in [§dd-dr:wire-identifier-stability].)*
+defining-vocabulary ownership rule are [§dd-dr:wire-identifier-stability].
 
 #### Serialization is a derived projection; the struct is the schema [§dd-dr:serialized-schema]
 
@@ -5652,13 +5255,14 @@ Rejected alternatives: frames in `ParsingState` (above); structured machine fiel
 the human-facing projection — machine data belongs in the condition payload; title + span is
 what tools need); wrapping-on-bubble (the tolerant path never bubbles).
 
-#### `Lang::refine_diagnostic` hook [§dd-dr:refine-diagnostic-hook]
+#### `ParseDriver::refine_diagnostic` hook [§dd-dr:refine-diagnostic-hook]
 
-Status: DECIDED (user + design sessions).
+Status: DECIDED (user + design sessions; the hook's home is the driver,
+[§dd-dr:parse-driver]).
 
 `fn refine_diagnostic(Box<dyn DiagnosticData>, &ParsingState<L>) -> Box<dyn DiagnosticData>`,
 default identity, applied exactly once in the recover funnel (at the `ParseContext` level,
-where the state is in scope). A `Lang` can replace a generic condition with its own — FLM
+where the state is in scope). A driver can replace a generic condition with its own — FLM
 maps a forbidden-`$` token condition to a `DollarMathDisabled { … }` whose `Display` explains
 the config option — and the replacement is *structured*, so tools see (and can attach
 quickfixes to) the refined condition, not just better prose. The original condition's fields
@@ -5711,11 +5315,7 @@ need — promote the cache if one appears).
 
 #### Wire identifiers: stable namespace, concept-named areas, owner = defining vocabulary [§dd-dr:wire-identifier-stability]
 
-Status: DECIDED (user, API-review policy session P5; the concrete area-rename slate was
-ruled in the API-review T4 session and is applied — Phase 3 S1; the slate's NEW
-`core.sources.*` conditions landed with the Phase 3 `\input`-wiring stage, S6 —
-`core.sources.no-resolver` / `core.sources.unresolvable-reference`, with
-identifier-asserting tests beside the condition types).
+Status: DECIDED (user, API-review policy session).
 
 `IDENTIFIER` strings are semver-stable under the same rubric and soft freeze as public
 paths ([§dd-dr:stability-rubric]) — they are wire/config material (match tables,
@@ -5731,15 +5331,12 @@ path break. Per condition, exactly this is the contract:
 
 Two naming rules complete the scheme `<owner>.<area>.<condition>`:
 
-1. **The `<area>` segment names a construct concept or subsystem** (`token`, `scopes`,
-   `environments`, `arguments`, …) — never a file, module, or type name. This repairs
-   friction F9: most current `core.*` identifiers use internal *file names* as areas
+1. **The `<area>` segment names a construct concept or subsystem** (`token`, `specs`,
+   `environments`, `arguments`, …) — never a file, module, or type name. This repaired
+   an earlier scheme whose `core.*` identifiers used internal *file names* as areas
    (`core.nodes_parser.*`, `core.argument_parsers.*`, …), contradicting the decoupling
-   promise documented on `IDENTIFIER` itself, and both API-review personas who guessed
-   identifiers guessed concept names and lost a cycle. The rename slate is decided in
-   the T4 session (the `nodes_parser` conditions interact with the deferred
-   resolution-family extraction, [§dd-dr:public-namespace-topology]) and lands with the
-   API-review application, before guides print any identifier.
+   promise documented on `IDENTIFIER` itself — both review personas who guessed
+   identifiers guessed concept names and lost a cycle.
 2. **The first segment names the *defining vocabulary*** — whoever declares the
    condition type: techy machinery `core.*`, the preset `latexlike.*`, a downstream
    language its own namespace (e.g. `flm.*`). Ruled explicitly: a foreign `Lang`
@@ -5758,44 +5355,42 @@ registry/doc story); a code-side identifier registry (rejected in
 plus a guide table serve the need); stable message wording (freezes prose for no
 consumer value — identifier plus payload is the contract).
 
-Revisit if: the soft-freeze condition of [§dd-dr:stability-rubric] arises; or a
-downstream language needs to re-namespace an inherited condition (that would need a
-deliberate identifier-mapping design, not an ad-hoc exception).
-
-*(Amended — API-review T4 session, THE SLATE RULED (frozen; lands in Phase 3
-before guides print). Area `specs` absorbs command resolution AND the former
-`scopes` area (user: "resolution of what?" — also disambiguates against *source*
-resolution, `core.sources.*`; the wire vocabulary now tracks the public
-`core::specs` home from [§dd-dr:resolution-extraction]; supersedes this entry's
-illustrative `scopes` example). Renames:
+**The frozen slate** (the guide table prints exactly these; identifier-asserting
+tests sit beside the condition types). Area `specs` absorbs command resolution AND
+a former `scopes` area (user: "resolution of what?" — it also disambiguates
+against *source* resolution, `core.sources.*`; the wire vocabulary tracks the
+public `core::specs` home from [§dd-dr:resolution-extraction]):
 `core.specs.{unresolvable-command, command-resolution-failed,
-callable-defined-as-error, scope-op-failed}`;
+callable-defined-as-error, scope-op-failed, provider-commands-shadowed-by-escape}`
+(the last is the parse-init warning, condition type
+`ProviderCommandsShadowedByEscape`);
 `core.groups.{unclosed-group, stray-group-close}`;
 `core.environments.{terminator-mismatch, malformed-terminator,
 missing-terminator}`;
 `core.arguments.{missing-mandatory-argument, expected-expression-argument,
-expression-callable-requires-content, repeated-tack-on-field}` (the last segment
-renamed from `repeated-field` — too vague outside its own area);
+expression-callable-requires-content, repeated-tack-on-field}` (a bare
+`repeated-field` was too vague outside its own area);
 `core.recovery.unusable-recovery-token`;
-`core.verbatim.{unterminated-verbatim, expected-verbatim-delimiter}`.
-Keeps: `core.token.end-of-stream-after-escape`, `core.token.forbidden-char`,
-`core.constructs.implementation-error`, `latexlike.environments.*` ×3. New:
-`core.sources.{no-resolver, unresolvable-reference}` ([§dd-dr:input-wiring]).
-Reserved: `core.specs.provider-commands-shadowed-by-escape` (the parse-init
-warning; wording at application — landed Phase 3 S9 with the condition type
-`ProviderCommandsShadowedByEscape` and its identifier-asserting test). The
-preset→core re-homing rider was verified empty. Segment policy: keep segments
-unchanged (self-descriptive when quoted alone). The guide table prints exactly
-these.)*
+`core.verbatim.{unterminated-verbatim, expected-verbatim-delimiter}`;
+`core.token.{end-of-stream-after-escape, forbidden-char}`;
+`core.constructs.implementation-error`;
+`core.sources.{no-resolver, unresolvable-reference}` ([§dd-dr:input-wiring]);
+`latexlike.environments.*` ×3. Segment policy: keep segments unchanged
+(self-descriptive when quoted alone). The preset→core re-homing rider was
+verified empty.
+
+Revisit if: the soft-freeze condition of [§dd-dr:stability-rubric] arises; or a
+downstream language needs to re-namespace an inherited condition (that would need a
+deliberate identifier-mapping design, not an ad-hoc exception).
 
 #### `Diagnostics::sorted_by_position()` — narrow, source-major [§dd-dr:diagnostics-position-sort]
 
-Status: DECIDED (user, API-review T1/T2 session; applied — Phase 3 S9: a
-borrowing view `-> Vec<&Diagnostic<O>>`, stable — equal positions keep recovery
-order; the collection itself keeps recovery order).
+Status: DECIDED (user, API review).
 
 Diagnostics arrive in recovery order, not source order; `sorted_by_position()`
-(returning-adjective form) sorts by (source in first-appearance order, span start),
+(returning-adjective form) is a borrowing view (`-> Vec<&Diagnostic<O>>`; the
+collection itself keeps recovery order) with a stable sort — equal positions keep
+recovery order — by (source in first-appearance order, span start),
 documented as source order *within each source*. Narrow by design: a total "position
 order" is ill-defined across multi-source parse trees, which are first-class
 ([§dd-dr:input-attachment]). Both `IntoIterator` impls already exist — the
@@ -5975,7 +5570,7 @@ re-opens a settled argument:
   vocabulary — restaging ([§dd-dr:restage]); node-level cross-tree tracking says
   *original node* — never "provenance"/"origin", which belong to the source model
   (`SourceProvenance`/`SourceOrigin`).
-- From the API-review T1/T2 session: `"base"` and `base_package()` — the seed
+- From the API review: `"base"` and `base_package()` — the seed
   package is `"_builtin"`/`builtin_package()` ([§dd-dr:base-package] amendment);
   minidefs fn name `package()` — it is `minilatex_package()`; `NodeKind::label()`/
   `kind_as_string()` — the accessor is `as_str()` ([§dd-dr:display-tree]);
@@ -5985,7 +5580,7 @@ re-opens a settled argument:
   not a factory; [§dd-dr:argument-factory-additions]); as *shapes*: per-`GroupRule`
   mode visibility and a `ParsingState` parent pointer
   ([§dd-dr:enclosing-state-stack]).
-- From the API-review T3 session: `SimpleLang` — renamed `TrivialLang` ("Simple"
+- From the API review: `SimpleLang` — renamed `TrivialLang` ("Simple"
   over-promised an on-ramp; [§dd-dr:trivial-lang]);
   `CommandResolution::resolve_via_scopes` (the associated-fn spelling, and the
   interim `resolve_command_via_scopes`) — the extracted resolver is
@@ -5995,7 +5590,7 @@ re-opens a settled argument:
   `r#macro()`/`macro_()`/`macro_kind()`/`macro_type()` — the family is
   `macro_callable()`/`environment_callable()`/`specials_callable()`;
   `text_mode()`/`is_text()` — trimmed from the mode role trait
-  ([§dd-dr:latexlike-generalization] amendment); constructor names `neutral()`/
+  ([§dd-dr:latexlike-generalization]); constructor names `neutral()`/
   `disabled()` — the empty starting values are `TokenRules::empty()`/
   `StateData::empty()`; `all_off()`/`raw()` — the gate-off overrides value is
   `disable_all()` ([§dd-dr:on-ramp-defaults], [§dd-dr:takeover-staging-sugar]);
@@ -6004,28 +5599,28 @@ re-opens a settled argument:
   move into `new(…, name)` ([§dd-dr:named-first-constructors]);
   `ScopeResolvingDriver`/`ScopesDriver`/`StdScopeDriver` — the component is
   `ScopesResolvingDriver` ([§dd-dr:scopes-resolving-driver]).
-- From the API-review T4 session: `techy::helpers` (a recipes module — the `util`
+- From the API review: `techy::helpers` (a recipes module — the `util`
   problem under another name; placement stays by logical function);
   `resolution` as a wire-identifier area (the area is `specs` — "resolution of
   what?") and the file-named areas `nodes_parser`/`environment_parser`/
   `argument_parsers`/`verbatim_parser`/`group_parser`/`tack_on_parser` (the
-  applied slate; [§dd-dr:wire-identifier-stability] amendment);
+  frozen slate; [§dd-dr:wire-identifier-stability]);
   `ancestors()`/`Ancestors` (rejected — `parent()` + `iter::successors`;
-  [§dd-dr:tree-navigation] amendment); `Descendants::with_depth()` (patched flat
+  [§dd-dr:tree-navigation]); `Descendants::with_depth()` (patched flat
   iteration's structure loss at the wrong layer — the read walker belongs to the
-  recompose session; [§dd-dr:recompose] amendment); `NodeRef::line_col()`/
+  recompose session; [§dd-dr:recompose]); `NodeRef::line_col()`/
   `SourceSpan::line_col()` and `LineIndex::line_range(line_no)`
   (rejected/skipped — [§dd-dr:line-col-ownership]); `LineIndexCacheProvider` —
   the seam is `LineColProvider` (provides answers, not caches);
   `cx.parse_source` as the sub-parse door name (collides with
   `Language::parse_source` under a different contract — the door is
   `parse_attached_source`; [§dd-dr:input-wiring]).
-- From the API-review T5 session: `stage_argument_like` — the content-replacement
+- From the API review: `stage_argument_like` — the content-replacement
   helper is `restage_argument_with_content` (+ the `_slot_` twin;
   [§dd-dr:restage-ops]); `Restage::Continue`/`Keep`/`Retain`/`Auto` — the
-  variant is `Descend` ([§dd-dr:restage] amendment); `StateStackView`/
+  variant is `Descend` ([§dd-dr:restage]); `StateStackView`/
   `StateStack` — the owning type is `ParsingStateStack`
-  ([§dd-dr:enclosing-state-stack] amendment); `Split` — the split result type is
+  ([§dd-dr:enclosing-state-stack]); `Split` — the split result type is
   `SplitAtChars`, and the interim `_with_annotations` spellings — the general
   callback form owns the bare producer name, shorthands carry
   `_drop_annotations`/`_keep_annotations` ([§dd-dr:extract-annotations]);
@@ -6039,11 +5634,11 @@ re-opens a settled argument:
   ([§dd-dr:invocation-syntax]); with them `escape_char` as a core `CallableData`
   field (rejected), and `post_space` as a core `CallableData` field — the fact
   moves into the invocation-syntax payload; "span-verbatim" — retired as a
-  strategy name (no named span strategy exists; [§dd-dr:recompose] amendment);
+  strategy name (no named span strategy exists; [§dd-dr:recompose]);
   the canonical-`"\n\n"` paragraph-break `name` — superseded by name-as-written +
   spec-identity identification; `CallableNodeInvocationSyntax` — the payload
-  type is `InvocationSyntaxData` (named `InvocationSyntax` until the S5
-  design-revision role swap, see below); `new_for_invocation` — the constructor
+  type is `InvocationSyntaxData` (named `InvocationSyntax` until the
+  recorded role swap, see below); `new_for_invocation` — the constructor
   trait/method is `FromInvocation`/`from_invocation`; `Bit`/`ComposeBit` — the
   piece vocabulary is `Piece`/`ComposePiece` (`Fragment`/`Part` recorded
   considered; `Output` rejected — collides with `ConstructParser::Output`);
@@ -6053,18 +5648,17 @@ re-opens a settled argument:
   `walk_tree`/`recompose_tree` — rejected on one-canonical-path (`visit::walk`,
   `recompose::recompose`; [§dd-dr:visit-engine],
   [§dd-dr:recompose-machinery]).
-- From the API-review Tier-C session: `ScopesResolvingDriver` — the component
+- From the API review: `ScopesResolvingDriver` — the component
   struct is replaced by the strategy parameter
   (`StdParseDriver<ScopesCommandResolver<…>>`; [§dd-dr:command-resolver]), and
   `NoCommandResolver` — the no-op command resolver is `()`; `resolve_source`
   (the free fn) — renamed `resolve_source_reference`, and the mechanism-first
   candidates `delegate_resolve_source`/`call_resolve_source` (a verb name says
-  what the caller gets, not the internal wiring; [§dd-dr:input-wiring]
-  amendment); `with_resolver` (the shipped-driver builder) —
+  what the caller gets, not the internal wiring; [§dd-dr:input-wiring]); `with_resolver` (the shipped-driver builder) —
   `with_source_resolver`; `NoResolver` — removed entirely (`None` is the
-  canonical "resolves nothing"; [§dd-dr:source-resolver] amendment).
-- From the S5 design-revision session ([§dd-dr:invocation-syntax] amendment,
-  applied as S5-M6) — **role-swap pins**: `InvocationSyntaxData` as the *core
+  canonical "resolves nothing"; [§dd-dr:source-resolver]).
+- From the invocation-syntax design revision ([§dd-dr:invocation-syntax]) —
+  **role-swap pins**: `InvocationSyntaxData` as the *core
   bound-trait* name, and `InvocationSyntax` as the *latexlike payload-enum*
   name — both names survive, with swapped roles (the trait is the
   L-parameterized `InvocationSyntax<L>`, the enum is the data holder
@@ -6077,7 +5671,7 @@ re-opens a settled argument:
   is composition-owned; `recompose_environment` (a single fused environment
   writer) — rejected shape: the writer PAIR stays (`Concat` head/tail and the
   parse-law prefix/suffix pins need the sides separately).
-- From the language-init revision ([§dd-dr:language-init], applied Phase 3 S2):
+- From the language-init revision ([§dd-dr:language-init]):
   `Language::with_provider`/`Language::with_seed_delta` — seed customization
   moves *before* construction (`ParsingState::lang_initial().derived(&delta)?`;
   packages via the infallible `lang_initial_with_packages`); `Default for
@@ -6085,7 +5679,7 @@ re-opens a settled argument:
   removed (an implicit seed by the back door, and the recovery knob — the
   driver's one mandatory policy input — must be an explicit `new` argument).
 - From the lang-features design session ([§dd-dr:lang-features]): `Gate` (trait)
-  with `On`/`Off` markers — the exploration document's spellings collide with the
+  with `On`/`Off` markers — an earlier sketch's spellings colliding with the
   runtime "feature gate" vocabulary (the `enable_*` flags), fusing the two axes
   the absent/disabled word split keeps apart; bare `Present`/`Absent`/`Has*`/
   `Features` spellings — too generic for the flat `techy::core` hub ("present
@@ -6191,8 +5785,7 @@ a `crates/` super-directory (needless nesting at three crates; plain siblings su
 
 #### Public export topology: facades, one canonical path, hub + extracted subsets [§dd-dr:public-namespace-topology]
 
-Status: DECIDED (user-led, API-review policy session; applied — Phase 3 S1, after the
-resolver-extraction design below closed the deferred placements).
+Status: DECIDED (user-led, API-review policy session).
 
 The public API is exported exclusively through **re-export facades** — internal src
 modules become private, so internal file organization is permanently invisible to
@@ -6200,8 +5793,9 @@ public paths — with **exactly one canonical path per item**, chosen by *logica
 function/use* (never by frequency of use, never mirroring internal layout). Layout:
 
 - `techy::source`, `techy::error` — the S0 data models, top-level.
-- `techy::extract` — consumer tool-library over node trees, top-level; future
-  `techy::transform` (tree-transformation infrastructure) joins it as a sibling.
+- `techy::extract`, `techy::transform` ([§dd-dr:restage]), `techy::visit`
+  ([§dd-dr:visit-engine]), `techy::recompose` ([§dd-dr:recompose]) — consumer tool
+  libraries over node trees, top-level.
   The top level is thus *role-based*: data models and consumer tool libraries up top,
   machinery in `core`, preset in `latexlike`.
 - `techy::core` — flat hub holding the mutually-recursive heart: `Lang`/state, token
@@ -6223,19 +5817,21 @@ engine types, token data vs runtime, the argument model, `Lang` itself). The
 hub-and-satellites shape keeps `Language::parse() → ParseResult` on one page, dissolves
 every forced coin-flip a full partition creates, and pre-absorbs the known revision
 candidates (spec+scopes now one public group; node read/build one group — required by
-the planned transformation surface, which consumes the read side and produces through
+the transformation surface, which consumes the read side and produces through
 the builder in one API).
 
 **The specs/hub boundary rule (user-endorsed): `specs` is author-side — what you write
 to define callables and organize definitions; the hub is run-side — state, tokens,
 engine, resolution.** Known judgment calls at that interface (`FrameRole`,
 `SearchedProviders`, `CallableQuery`) and the resolution family
-(`CommandResolution`/`ResolvedCallable`): their current ambiguity is read as a symptom
-of wiring, not taxonomy — the standard command-resolution-via-scopes is to be extracted
-into a single standalone function that `Lang`s opt into (expected home: `specs`), after
-which the ambiguous items rest naturally beside that resolver. Their final placement
-waits for that design. Likewise deferred: `ArgumentParser` trait in `specs` vs
-`constructs` (a case exists for `constructs`, beside `ConstructParser`). Cross-boundary
+(`CommandResolution`/`ResolvedCallable`): their ambiguity was read as a symptom
+of wiring, not taxonomy — the standard command-resolution-via-scopes is extracted
+into the standalone `resolve_command_in_scopes` (home: `specs`,
+[§dd-dr:resolution-extraction]), and the resolution family rests naturally beside
+that resolver. The `ArgumentParser` trait lives in `core::constructs`, beside
+`ConstructParser` and the shipped argument-parser implementations (a parsing
+contract; `ArgumentSpec`'s `Arc<dyn ArgumentParser>` is an accepted
+cross-boundary signature reference). Cross-boundary
 *signature* references (deltas naming `SpecsProvider`, state holding the scope stack)
 are accepted as unavoidable; what matters is that item placement itself is unambiguous.
 
@@ -6266,22 +5862,9 @@ re-exports losslessly — the facade model is what makes that lossless).
 
 ---
 
-*(Amended — API-review P4: `techy::recompose` (recomposition, [§dd-dr:recompose])
-joins `techy::transform` ([§dd-dr:restage]) in the role-based top level.)*
-
-*(Amended — API-review T3 session: both deferred placements are ruled — the
-resolution family moves to `core::specs` beside the extracted
-`resolve_command_in_scopes` ([§dd-dr:resolution-extraction]), and the
-`ArgumentParser` trait goes to `core::constructs`, beside `ConstructParser` and
-the shipped argument-parser implementations (a parsing contract; `ArgumentSpec`'s
-`Arc<dyn ArgumentParser>` is an accepted cross-boundary signature reference). The
-topology is fully specified; the Phase 3 application is unblocked.)*
-
----
-
 #### API stability rubric: one stability class, soft freeze until framework adoption [§dd-dr:stability-rubric]
 
-Status: DECIDED (user, API-review policy session P5).
+Status: DECIDED (user, API-review policy session).
 
 Everything `pub` — outside the `#[doc(hidden)] __private` derive plumbing — is **one
 stability class under one semver discipline**: no experimental/unstable tier, no
@@ -6304,6 +5887,17 @@ begins with that development, not with the review's end. Guides print paths and 
 identifiers only post-restructuring, so published material never teaches a
 pre-freeze name.
 
+Guards in place: `missing_docs` is a workspace `deny` lint (promoted at zero
+warnings), and the cargo-semver-checks baseline is realized the unpublished-crate
+way — a git revision, not a registry version: `scripts/check_semver.sh` runs
+`cargo semver-checks check-release -p techy --baseline-rev api-baseline`, where
+`api-baseline` is a git *branch* moved deliberately at each version bump (user
+ruling: a movable branch, not a tag, so the baseline follows deliberate API
+adjustments during the soft freeze); the script clears `RUSTDOCFLAGS` because the
+workspace's rustdoc-header injection uses a root-relative path that scratch
+builds cannot resolve. The per-item rulings this rubric's consequence clause
+called for are complete — [§dd-dr:public-visibility-sweep].
+
 Rejected alternatives: an unstable/experimental tier (an escape hatch that invites
 exactly the future restructuring the review exists to prevent, and a dual-status
 ambiguity against the one-canonical-path principle); a hard freeze at the end of the
@@ -6315,24 +5909,9 @@ module placement).
 Revisit if: a framework starts depending on techy in earnest — from that moment the
 freeze is hard and breaking changes need migration paths and dependent coordination.
 
-*(The per-item Tier-C rulings this rubric's consequence clause called for are
-complete — [§dd-dr:public-visibility-sweep].)*
-
-*(Applied — API-review Phase 3 S10: the guards are in place. `missing_docs` is a
-workspace `deny` lint (promoted at zero warnings). The cargo-semver-checks baseline
-is realized the unpublished-crate way — a git revision, not a registry version:
-`scripts/check_semver.sh` runs `cargo semver-checks check-release -p techy
---baseline-rev api-baseline`, where `api-baseline` is a git *branch* pointed at
-the commit where Phase 3 landed and moved deliberately at each version bump
-(user ruling at the S10 sign-off: a movable branch, not a tag, so the baseline
-follows deliberate API adjustments during the soft freeze); the script
-clears `RUSTDOCFLAGS` because the workspace's rustdoc-header injection uses a
-root-relative path that scratch builds cannot resolve. Verified against
-cargo-semver-checks 0.50.0 — 196 checks pass on the landed surface.)*
-
 #### The public-visibility sweep: pub-vs-pub(crate) rulings for the walkthrough-untouched items [§dd-dr:public-visibility-sweep]
 
-Status: DECIDED (user, API-review Tier-C session; completes the per-item ruling
+Status: DECIDED (user, API review; completes the per-item ruling
 clause of [§dd-dr:stability-rubric]).
 
 The 76 root re-exports untouched by all five persona walkthroughs were ruled
@@ -6342,15 +5921,16 @@ because it supports the keep rulings: "no usage signal" overwhelmingly meant
 *signature closure of the used API* — most items are forced pub (named in
 signatures of items the walkthroughs did use: returns, public fields,
 trait-method parameters) or doctrine-bound (shipped condition types under the
-frozen wire-identifier slate + typed matching + the implementors-page plan; the
-condition-defining surface the planned downstream `flm.*` vocabularies require).
+frozen wire-identifier slate + typed matching + the implementors-page doc story;
+the condition-defining surface the intended downstream `flm.*` vocabularies
+require).
 Notable per-item rationales:
 
 - **`NodeData` → `pub(crate)`**: the only node-module item in zero public
   signatures — `NodeRef` is the read API, the builder the write API; nothing
   reachable disappears.
 - **`check_tree_invariants` → `pub(crate)`**, re-implemented over
-  `validate_tree` ([§dd-dr:tree-validation] amendment).
+  `validate_tree` ([§dd-dr:tree-validation]).
 - **`VERSION` stays** the crate root's compile-time `&str` const — the ecosystem
   idiom when a crate exposes its own version; a `version()` getter is the
   wrapped-C-library idiom, and structured `(major, minor, patch)` consts have no
@@ -6375,7 +5955,7 @@ Notable per-item rationales:
   standard behavior); `Scope` in particular is the load-bearing carrier of
   runtime (`\newcommand`-class) definitions despite zero walkthrough use.
 - Free `resolve_source` renamed **`resolve_source_reference`**
-  ([§dd-dr:input-wiring] amendment); `Diagnostics::into_vec` — never existed;
+  ([§dd-dr:input-wiring]); `Diagnostics::into_vec` — never existed;
   recorded as reject-do-not-add (`iter().cloned().collect()` +
   `sorted_by_position()` cover it).
 
@@ -6445,28 +6025,27 @@ namespace or the manual discipline hurts.
 Status: DECIDED (user).
 
 `GroupType` has a *single* math class covering `$…$`, `$$…$$`, `\(…\)`, `\[…\]`; inline
-vs. display is neither a class nor a mode. Display-ness is a delimiter fact, read off the
-node's recorded delimiters by the preset sugar `NodeRef::math_style()` →
-`MathStyle::{Inline, Display}` (pylatexenc parity: `LatexMathNode.displaytype` is likewise
-delimiter-derived).
+vs. display is neither a class nor a mode. As first ruled, display-ness was a delimiter
+fact, read off the
+node's recorded delimiters by a table-backed preset sugar (pylatexenc parity:
+`LatexMathNode.displaytype` is likewise
+delimiter-derived) — since superseded, see the closing note.
 Rationale: the class taxonomy cuts at parse-behavior joints, and inline and display math
 parse identically — same interior `Mode::Math`, same definition visibility — so a split
 would do no parse-time work; it would also break the class/mode symmetry (three classes
 over two modes).
-Rejected alternatives: the plan sketch's `MathInline`/`MathDisplay` split (typed display-ness that a
+Rejected alternatives: a sketched `MathInline`/`MathDisplay` split (typed display-ness that a
 rule author declares — its one real advantage: embedder-registered math delimiters would
-classify themselves, where `math_style()`'s table answers `None`); a `Bracket` class and
+classify themselves, where the delimiter table answers `None`); a `Bracket` class and
 `[]` in the default rules — `[`/`]` are plain characters in LaTeX outside
 optional-argument positions (`a [b] c` is text), and `OptionalGroupArgumentParser`
 recognizes them through its own per-spec `temporary_groups` rule, so neither the class nor
-the base rule has a consumer (user-caught; the original plan listed both).
-Revisit if: a consumer needs typed display-ness on custom math delimiters (the split
-stays open under `#[non_exhaustive]`).
-*(Amended — the revisit condition fired during the API review (typed display-ness for
-custom/dynamic math delimiters; T5/FLM + preset generalization): display-ness is now
+the base rule has a consumer (user-caught; an earlier sketch listed both).
+The revisit condition (typed display-ness on custom math delimiters) fired during
+the API review: display-ness is now
 typed **class payload**, `Math(MathGroupForm)`, declared by the rule author, with
 parse wiring still single-armed; the `MathStyle` delimiter-table sugar is superseded.
-See [§dd-dr:math-group-form].)*
+See [§dd-dr:math-group-form].
 
 #### Inside math the math delimiters stop opening; a stray `$` is forbidden [§dd-dr:math-no-nesting]
 
@@ -6507,42 +6086,39 @@ Rejected alternatives: `Latex`-/`Latexlike`-prefixed enum names (length that doe
 work inside a namespaced preset); the `MACRO`/`ENVIRONMENT`/`SPECIALS` spelling (an
 artifact of the u32-const test era, not Rust variant style).
 
-#### The seed ships a `"base"` package: pylatexenc's default specials as data [§dd-dr:base-package]
+#### The seed ships a `"_builtin"` package; typography specials are definitions content [§dd-dr:base-package]
 
-Status: DECIDED (user; package name user-chosen).
+Status: DECIDED (user; the seed's scope was consciously narrowed during the API
+review — reversal recorded below).
 
-`Latexlike::initial_state_data()` seeds the scope stack with one package `"base"` holding
-zero-argument specials for `&`, `~`, ``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` `` —
-pylatexenc's default context (its *latex-base* + *nonascii-specials* categories). Droppable
-wholesale by name (`ScopeOp::Unload`), shadowable per-trigger by pushing a provider.
-Macro/environment definitions deliberately stay out until the std-DB port. The typography
-ligatures (``` `` ```, `''`, `--`, `---`, `` !` ``, `` ?` ``) are registered **text-mode
-only** (they carry no math meaning — inside `$…$` they stay plain chars); `&` and `~` are
-visible in every mode (the per-entry mode gate, [§dd-dr:mode-visibility]).
-`\begin`/`\end` stay all-modes so math environments still open in math.
-Rationale: out-of-the-box parity with pylatexenc's default node shapes for these
-triggers — with one deliberate exception: the `\n\n` paragraph-break special of
-pylatexenc's *latex-paragraph* category is omitted, so a multi-newline break is a
-whitespace chars node here (`enable_multi_newline_paragraphs`), not a specials node. The
-multi-character ligatures exercise the longest-match fold (`---` beats `--`) in real
-defaults rather than only in tests.
-Rejected alternatives: an empty seed stack (purest, but `~`/`&` would parse as plain chars out of the
-box — silent divergence from pylatexenc); seeding only `&`/`~` (leaves the fold's only
-real-data consumer test-side).
+`Latexlike::initial_state_data()` seeds the scope stack with one package
+**`"_builtin"`** (`builtin_package::<LLL>()`, `LLL`-generic) holding what any
+latexlike parse must preload — the `\begin`/`\end` dispatch, visible in all modes
+so math environments still open in math. Droppable wholesale by name
+(`ScopeOp::Unload`), shadowable per-trigger by pushing a provider.
+Macro/environment definitions deliberately stay out until the std-DB port.
 
-*(Amended — API-review T1/T2 session: the seed package is renamed **`"_builtin"`**
-and slimmed to what any latexlike parse must preload — the `\begin`/`\end` dispatch.
-`&` is removed from the preset's specials entirely; `~` and the ligatures move to
-`minidefs`'s `"minilatex"` package (same specs and mode visibilities). A base-only
-parse thus emits these triggers as plain chars — the deliberate positioning
-correction: typography interpretation is definitions content, not parsing substrate;
-pylatexenc default-shape parity for these triggers now requires loading minilatex.
-The fn follows the rename: `base_package()` → `builtin_package()`. The
-pylatexenc-parity rationale above is superseded to this extent.)*
-
-*(Amendment applied — Phase 3 S9: `builtin_package::<LLL>()` landed `LLL`-generic
-(the generalization routed from S4); specials/ligature tests moved to minidefs
-loading minilatex, and seed-default-shape pins assert the plain-chars behavior.)*
+The typography specials — `~` and the ligatures ``` `` ```, `''`, `--`, `---`,
+`` !` ``, `` ?` `` (pylatexenc's *latex-base* + *nonascii-specials* categories) —
+live in `minidefs`'s `"minilatex"` package, the ligatures registered **text-mode
+only** (they carry no math meaning — inside `$…$` they stay plain chars; the
+per-entry mode gate, [§dd-dr:mode-visibility]); `&` is not defined by the preset
+at all. A builtin-only parse emits these triggers as plain chars — the deliberate
+positioning: typography interpretation is definitions content, not parsing
+substrate; pylatexenc default-shape parity for these triggers requires loading
+minilatex (pinned by seed-default-shape tests). Reversal record: the seed first
+shipped as a `"base"` package carrying the typography specials itself, for
+out-of-the-box pylatexenc parity; that shape was consciously superseded by the
+positioning above, and the fn followed the rename (`base_package()` →
+`builtin_package()`). One deliberate parity exception either way: the `\n\n`
+paragraph-break special of pylatexenc's *latex-paragraph* category is omitted —
+a multi-newline break is a whitespace chars node here
+(`enable_multi_newline_paragraphs`), not a specials node. The multi-character
+ligatures exercise the longest-match fold (`---` beats `--`) in real defaults
+rather than only in tests.
+Rejected alternatives: an empty seed stack (`\begin`/`\end` must be preloaded for
+any latexlike parse); seeding only `&`/`~` (leaves the fold's only real-data
+consumer test-side).
 
 #### Per-definition mode visibility on `Package` — the fine gate under `set_visible_modes` [§dd-dr:mode-visibility]
 
@@ -6553,10 +6129,10 @@ Status: DECIDED (user).
 under the pre-existing package-level `set_visible_modes` — **both** gates must admit the
 mode (`None` = every mode the package is visible in). One loadable, unloadable package can
 then hold text-only ligatures and (later) math-only `^`/`_` scripts together.
-Rationale: the base package must keep `\begin`/`\end` visible in math while hiding the
-text ligatures there — package-level visibility alone cannot express that without splitting
-`"base"` into several names, which would break the single-name `Unload("base")` contract
-and the specials-as-one-category model. Per-entry visibility is the minimal mechanism that
+Rationale: a package must be able to keep `\begin`/`\end`-class entries visible in
+math while hiding text ligatures there — package-level visibility alone cannot express
+that without splitting one package into several names, which would break the
+single-name `Unload` contract and the specials-as-one-category model. Per-entry visibility is the minimal mechanism that
 keeps one package. The trigger-char union deliberately stays mode-blind (a hidden entry's
 first chars remain in the filter; its scan declines) — the established caching contract.
 Rejected alternatives: multiple mode-scoped seed packages (changes the unload semantics, multiplies
@@ -6581,32 +6157,29 @@ predicate — deferred as an unforced core-model change; revisit if real inputs 
 
 Status: DECIDED (user).
 
-The accessors (`is_math_group`, `math_style`, `macro_name`, `environment_name`,
-`specials_name`) are inherent methods on `NodeRef<'_, Latexlike>`, written in the preset
-module — legal because the preset shares the crate with `node`.
+The accessors (`is_math_group`, `math_form`, `macro_name`, `environment_name`,
+`specials_name`) are inherent methods, written in the preset
+module — legal because the preset shares the crate with `node` — and generic over
+the family (`impl<LLL: LatexlikeLang> NodeRef<'_, LLL, A>`), reading vocabulary
+through the role traits, so an in-crate family member gets the sugar with no
+extension trait either.
 Rationale: zero-import ergonomics on the majority path; an out-of-crate language (FLM)
 must use an extension trait regardless, and that pattern needs no in-tree demonstration.
 Rejected alternatives: a `LatexNodeRefExt` trait for the preset (a `use` tax on every consumer, buying
 only symmetry with a constraint the preset does not have).
 
-*(Amended — Phase 3 S4, with the preset generalization: the inherent impl is now
-generic over the family (`impl<LLL: LatexlikeLang> NodeRef<'_, LLL, A>`), reading
-vocabulary through the role traits — an in-crate family member gets the sugar
-with no extension trait either; `math_style` is `math_form`
-([§dd-dr:math-group-form]).)*
-
-#### `\begin`/`\end` dispatch is scope-stack data: ordinary `Macro` entries of `"base"` [§dd-dr:begin-end-dispatch]
+#### `\begin`/`\end` dispatch is scope-stack data: ordinary `Macro` entries of `"_builtin"` [§dd-dr:begin-end-dispatch]
 
 Status: DECIDED (user).
 
 `BeginSpec` (the environment composition) and `EndSpec` (orphan-`\end` diagnostics) are
 registered under `begin`/`end` in the seed package like any definition — resolvable
 through the unchanged `LatexlikeDriver::resolve_command`, shadowable, and unloadable
-(`Unload("base")` removes environments along with the specials; pinned in a test).
+(`Unload("_builtin")` removes the environment dispatch; pinned in a test).
 Consequence: the `Invocation` arrives typed `Macro`, so the composition stamps
 `CallableType::Environment` (and the environment's own name and spec) on the staged
 node itself — the dispatcher's identity appears nowhere in the tree.
-Rationale: the phase's direction is "everything through the stack" (even specials are
+Rationale: the direction is "everything through the stack" (even specials are
 data); a hardcoded `resolve_command` arm would be the one un-shadowable definition in
 the language.
 Rejected alternatives: the test-lang rehearsal's driver arm (`if name == "begin"`), which made
@@ -6641,7 +6214,7 @@ Status: DECIDED (user).
 
 Both are `StdCallableSpec`-shaped declarative types whose `stack_frame_title` speaks
 the preset vocabulary ("macro ‘\frac’", "argument #1 of macro ‘\frac’",
-"specials ‘~’"); `base_package()`'s specials switched to a shared `SpecialsSpec`.
+"specials ‘~’"); `builtin_package()`'s specials use a shared `SpecialsSpec`.
 Generic specs remain first-class everywhere.
 Rationale: functions returning `StdCallableSpec` would leave tracebacks saying
 "callable ‘…’" — the vocabulary hook exists precisely for presets — and concrete preset
@@ -6667,7 +6240,7 @@ second follow-up).
 
 #### The verbatim family: recipe → production parsers, group+chars shapes [§dd-dr:verbatim-family]
 
-Status: DECIDED (user; parity item N7).
+Status: DECIDED (user, parser-library survey).
 
 `constructs::verbatim_parser` promotes the pinned recipe ([§dd-dr:token-contract-hardening], item 5; the
 test-side `RawBlockParser`): `verbatim_state_delta(rule)` is the recipe as data (all six
@@ -6730,17 +6303,17 @@ field (the default parser knows its answer — make every producer say it).
 
 #### The argument-code factory: `latexlike::argument_specs` [§dd-dr:argument-specs-factory]
 
-Status: DECIDED (user; parity item N8).
+Status: DECIDED (user, parser-library survey).
 
 A preset **function**, `&str` in → `Result<Vec<Arc<ArgumentSpec>>, ArgumentCodeError>`
-out, eager, per the plan-session shape. The single code string concatenates codes
+out, eager. The single code string concatenates codes
 (pylatexenc's list form is not mirrored), so the grammar is pinned: optional whitespace
 *between* codes; parameters follow their code immediately and may not be whitespace;
 **`v` takes two delimiter characters exactly when a non-whitespace character follows
 directly** — a bare auto-`v` stands last or before whitespace (`"v {"`), and `"v{"` is
 a loud `TruncatedCode`, never a silent misparse. Per-code resolution as landed:
 
-- `m`/`{` → `GroupArgumentParser::new(Content)` — *refining the survey table's
+- `m`/`{` → `GroupArgumentParser::new(Content)` — *refining the survey's
   `ExpressionParser` row*: the class parser is the decided parse-time realization of
   pylatexenc's `'{'`+`unwrap_double_group` semantics (content = group children), is
   what every preset test/doctest already used, and carries `ExpressionParser` inside as
@@ -6759,7 +6332,7 @@ a loud `TruncatedCode`, never a silent misparse. Per-code resolution as landed:
 
 Factory specs carry no names and no per-argument deltas (attach via `ArgumentSpec`
 builders). No flyweight cache and no singletons: specs are built once per language.
-`e{…}` [N3] and `AnyDelimited` [N2] stay deferred with their parsers.
+`e{…}` embellishments and `AnyDelimited` stay deferred with their parsers.
 Rejected alternatives: accepting a `&[&str]` list-of-codes signature alongside (one grammar, one
 entry; the string form covers the deferred `e{…}` shape too when it arrives).
 (Reversed — the list form is now primary; cf.
@@ -6890,27 +6463,25 @@ definitions database that name suggests).
 Revisit if: a genuinely shared cross-framework definitions layer emerges — that would
 be its own crate with its own owner, not a techy module.
 
-*(Amended — API-review T1/T2 session, application ruling: one file
+Shape: one file
 `latexlike/minidefs.rs`; a single public item **`minilatex_package()`** — named for
-the package, not a generic `package()`, keeping room for future mini-siblings;
-target signature `LLL`-generic per [§dd-dr:latexlike-generalization] — returning a
-bare `Package`; activation always explicit. Specs: `\emph`/`\textbf`/`\textit` =
+the package, not a generic `package()`, keeping room for future mini-siblings —
+`LLL`-generic per [§dd-dr:latexlike-generalization], returning a
+bare `Package` (it carries the
+argument-code factory's `ArgumentExt<LLL>: Default` bound); activation always
+explicit. Specs: `\emph`/`\textbf`/`\textit` =
 `MacroSpec` `"m"` (fallback on); `itemize`/`enumerate` = `EnvironmentSpec` with a
 body delta pushing the inner `"minilatex.item"` package defining `\item` (`"o"`) —
-the body-scoped exemplar. Per the [§dd-dr:base-package] amendment, minilatex also
-carries `~` and the text-mode ligatures.)*
-
-*(Applied — Phase 3 S9, as ruled, with two application details: the fn carries the
-argument-code factory's `ArgumentExt<LLL>: Default` bound, and the ligatures'
-"text-mode-only" visibility is expressed generically as the language's **seed
+the body-scoped exemplar. Per [§dd-dr:base-package], minilatex also
+carries `~` and the ligatures, their
+"text-mode-only" visibility expressed generically as the language's **seed
 mode** (`LLL::initial_state_data().mode` — the mode role trait deliberately has no
-text-mode constructor, [§dd-dr:latexlike-generalization] amendment; for
-`Latexlike` the seed mode is `Mode::Text`, so the shipped visibility is exactly
-the ruled one).)*
+text-mode constructor, [§dd-dr:latexlike-generalization]; for
+`Latexlike` the seed mode is `Mode::Text`).
 
 #### Argument-code and factory additions: `BracedOnly`, named factory, text-restore event [§dd-dr:argument-factory-additions]
 
-Status: DECIDED (user, API-review T1/T2 session).
+Status: DECIDED (user, API review).
 
 Two additions to the latexlike argument vocabulary, and one reshaped wish:
 
@@ -6925,14 +6496,15 @@ Two additions to the latexlike argument vocabulary, and one reshaped wish:
    hand — the docs recommend names while the API fought them; a single
    tuple-accepting factory hits blanket-impl coherence walls, so the deliberate
    list/compact duality gains a named sibling.
-3. **Text-mode arguments are an event, not a factory.** The `\text{…}` recipe
-   becomes an `ArgumentSpec` state delta carrying a preset restore event — 
-   composable with every argument shape, optional included. The old guide recipe is
-   repaired: it statically reset `forbidden_chars` and `groups`, clobbering embedder
-   customizations. Restore semantics — nearest enclosing text-mode state (else the
-   outermost), whole `TokenRules` (since amended: minus the transient gates —
-   the 2026-08-04 note on [§dd-dr:enclosing-state-stack]) — and the public pillar
-   functions: [§dd-dr:enclosing-state-stack].
+3. **Text-mode arguments are an event, not a factory.** The `\text{…}` recipe is
+   an `ArgumentSpec` state delta carrying the preset event
+   `latexlike::Event::ExitMathContext` (the `.event(…)` argument recipe) —
+   composable with every argument shape, optional included. An older guide recipe
+   was repaired: it statically reset `forbidden_chars` and `groups`, clobbering
+   embedder customizations. The event's pillar is `exit_math_context_delta`,
+   restoring the first *non-math* enclosing context (never seeking a text-mode
+   state), minus the transient gates — semantics and pillar functions:
+   [§dd-dr:enclosing-state-stack].
 
 Rejected alternatives: a canned `text_mode_argument()` factory (composes with
 nothing — a text-mode *optional* argument would need a second factory; codifies the
@@ -6943,35 +6515,16 @@ deprecated *optional* brace group — actively misleading).
 
 Revisit if: compact-string parity for `BracedOnly` is demanded by real spec tables.
 
-*(Amended — API-review T3 session: item 3's restore semantics are re-specified —
-the event's pillar is `exit_math_context_delta`, restoring the first *non-math*
-enclosing context rather than seeking a text-mode state;
-[§dd-dr:enclosing-state-stack] amendment.)*
-
-*(Item 3 applied — Phase 3 S4: the preset event enum `latexlike::Event` with
-`ExitMathContext`, the `.event(…)` argument recipe, and the repaired guide
-chapter landed with the E4 machinery; items 1–2 land with the T1/T2 batch.)*
-
-*(Items 1–2 applied — Phase 3 S9: the `BracedOnly` word code (list-form only,
-with the loud fallback callout on `m`) and `argument_specs_named([(code,
-name), …])` — the scanning internals now yield parsers, and each entry point
-wraps them named (`ArgumentSpec::new`) or unnamed.)*
-
 #### The latexlike preset generalizes over a `Lang` family: role traits + `LatexlikeLang` [§dd-dr:latexlike-generalization]
 
-Status: DECIDED (user, API-review policy session P3 — direction and shape; detailed
-design in the 2b T3/T5 sessions; applied — Phase 3 S4 for the role traits, the
-umbrella, `default_token_rules::<LLL>`, `SpecialsSpec<LLL>`, the `NodeRef` sugar,
-the pillars, and `LatexlikeDriver<LLL>`; Phase 3 S5 for
-`MacroSpec<LLL>`/the environments machinery/`argument_specs` and the fifth role
-trait `LatexlikeInvocationSyntax` (the invocation-syntax stage);
-`base_package`/`minidefs` generalize with the preset-definitions stage).
+Status: DECIDED (user, API-review policy session — direction and shape; detailed
+design in later review sessions).
 
 Every latexlike preset component — `LatexlikeDriver`, `MacroSpec`/`SpecialsSpec`, the
 environments machinery (`EnvironmentSpec`/`BeginSpec`/`EndSpec`/`EnvironmentBehavior`/
-`VerbatimBehavior`), `argument_specs`, `default_token_rules`, `base_package`,
+`VerbatimBehavior`), `argument_specs`, `default_token_rules`, `builtin_package`,
 `minidefs`, the `NodeRef` sugar — becomes generic over a preset `Lang` family
-(conventional parameter `LLL`), erasing T5's **preset-fork cliff** (a language needing
+(conventional parameter `LLL`), erasing the **preset-fork cliff** (a language needing
 its own node exts/state/modes had to implement `Lang` and thereby forfeited every
 preset component; the ext system served only full forks). The audit finding that
 carried the shape: the preset's `Latexlike`-coupling is almost entirely *vocabulary
@@ -6981,12 +6534,33 @@ the math-delimiter table). Mechanism, three layers:
 - **Per-vocabulary role traits**, implemented by the vocabulary types themselves
   (method-based): `LatexlikeGroupType` (`content_group()`, `math_group(form)`,
   `verbatim_group()`, classifier `math_form()`, predicate `is_math()` —
-  [§dd-dr:math-group-form]), `LatexlikeCallableType` (macro/environment/specials
-  roles), `LatexlikeMode` (text/math roles). techy implements all three for its own
-  `GroupType`/`CallableType`/`Mode`, so a language adopting the preset enums as its
+  [§dd-dr:math-group-form]); `LatexlikeCallableType` — role accessors
+  **`macro_callable()` / `environment_callable()` / `specials_callable()`** with
+  predicates `is_macro`/`is_environment`/`is_specials` (the
+  role-plus-vocabulary-noun pattern, which dissolves the `macro` keyword problem
+  as a side effect — `r#macro`/`macro_`/`macro_kind`/`macro_type` rejected);
+  `LatexlikeMode` — trimmed to `math_mode()` + `is_math()`, deliberately no
+  text-mode constructor and no `is_text` (the only known consumer was the
+  restore-to-text pillar, re-specified as `exit_math_context_delta`,
+  [§dd-dr:enclosing-state-stack]); **`LatexlikeEvent`** — constructor +
+  recognizer for the exit-math-context event
+  (`exit_math_context()`/`is_exit_math_context()`, coherence contract mirroring
+  `math_form`), bound on `LatexlikeLang::Event`, because the exit-math delta is
+  an *event* the `LLL`-generic argument factory must mint in the host's own
+  `Event` type and the driver must recognize — a preset-side event wrapper would
+  violate vocabulary-stays-the-host's-own, and an event-less design cannot exist
+  (the patch depends on the enclosing stack at use time); and
+  **`LatexlikeInvocationSyntax`** — implemented by the Lang's invocation-syntax
+  payload type (`type Env: EnvironmentSyntax<L>`, form constructors, accessors —
+  [§dd-dr:invocation-syntax]) — so the preset's staging sites and
+  `SourceRecomposer` work over any `LLL`. techy implements all five for its own
+  `GroupType`/`CallableType`/`Mode`/`Event`/`InvocationSyntaxData`, so a language
+  adopting the preset vocabulary as its
   associated types satisfies the bounds with zero code; a language with extended
   vocabularies implements them itself, which *guarantees* the preset-required values
-  exist while leaving the enum open for its own additions.
+  exist while leaving the enum open for its own additions. `ClosedVocabulary` is
+  **not** a role-trait supertrait — "provide, don't require"
+  ([§dd-dr:iter-symbols]).
 - **`LatexlikeLang`**, the umbrella: `trait LatexlikeLang: Lang<GroupTypeId:
   LatexlikeGroupType, CallableTypeId: LatexlikeCallableType, ModeId: LatexlikeMode>`,
   carrying **defaulted behavior methods** for language-level statics (e.g. the
@@ -6994,23 +6568,25 @@ the math-delimiter table). Mechanism, three layers:
   forbidden set from the math-class rules being removed, never restate a literal
   `'$'`; the math-delimiter data behind `default_token_rules`). Deliberately **no
   blanket impl** (it would make the defaults un-overridable by coherence); opting in
-  is `impl LatexlikeLang for Flm {}`. Evolution posture (feeds the P5 rubric): the
+  is `impl LatexlikeLang for Flm {}`. Evolution posture (feeds the stability rubric): the
   initial required surface freezes at stabilization; future roles/behaviors arrive as
   defaulted methods delegating to existing ones (non-breaking); a fallback-less new
   role is a conscious breaking change.
 - **`Lang` stays whole; pillar functions are the composition mechanism.** The preset
   ships every `Lang`-hook behavior as a public `LLL`-generic function
   (`latexlike::initial_state_data`, the `finalize_node` spec-dispatch,
-  `default_token_rules`, `base_package`), and a framework's `Lang` impl delegates in
+  `default_token_rules`, `builtin_package`), and a framework's `Lang` impl delegates in
   one line per hook, augmenting freely (`finalize_node`: preset dispatch, then own ext
   attachment). The residue (~30 lines: associated types + one-line bodies) is
   irreducible by the strata rule — S1 never names a preset ([§dd-dr:three-strata]), so
   preset behavior can only enter core-called hooks through the framework's own bridge
   code; no trait topology removes it.
 
-The preset keeps `NodeExts = ()`: the whole ext budget belongs to the framework built
-on top; preset semantics encode in the *vocabulary* (role traits), never in the ext
-system.
+The preset keeps `NodeExts = ()` per-member for node/argument — the ext budget
+belongs to the framework built on top; preset semantics encode in the *vocabulary*
+(role traits), never in the ext system — while `SlotExt` is claimed by the preset
+for trait-based body marking ([§dd-dr:slot-roles]); the preset's `make_node_ext`
+is the trivial `()` mint.
 
 Rejected alternatives:
 
@@ -7020,7 +6596,7 @@ Rejected alternatives:
 - **Plugin-slot preset** (`Latexlike<X: LatexlikeExt = ()>`) — pure sugar once the
   role traits exist, walls off vocabulary extension, and adds a second way to be a
   latexlike-family language against the one-canonical-path ruling
-  ([§dd-dr:public-namespace-topology]). Reconsider at the 2b FLM probe only if the
+  ([§dd-dr:public-namespace-topology]). Reconsider at a real FLM probe only if the
   `Lang`-impl residue proves heavy.
 - **Decomposing `Lang` into facet traits** (`LangTypes` + `InitialStateDataProvider` +
   `StateTransitionFinalizer` + `SpecialsProvider` + `NodeFinalizer`), in all three
@@ -7029,14 +6605,14 @@ Rejected alternatives:
   `impl SpecialsProvider for MyLang {}` reaches only the core-neutral defaults the
   whole `Lang` already gives); *marker-gated blankets* (`impl<T: UseLatexlikeSpecials>
   SpecialsProvider for T`) have exactly one blanket slot per facet trait crate-wide
-  (competing with the `SimpleLang` quick-start blanket), are wholesale-only with a
+  (competing with the `TrivialLang` quick-start blanket), are wholesale-only with a
   coherence cliff at the first customization, and cannot be replicated by downstream
   frameworks for *their* extenders (orphan rule, uncovered type parameter); *strategy
   associated types* (`type Specials: SpecialsProvider<Self>` naming preset ZSTs)
   genuinely plug in but split the coherence-coupled hook pairs across authors (seed ↔
   `finalize_transition`, scan ↔ trigger-chars — "both hooks have the same author" is
   the documented soundness argument), founder on unstable associated-type defaults
-  (every non-`SimpleLang` language names 4–5 more types; the F10 on-ramp cliff
+  (every non-`TrivialLang` language names 4–5 more types; the on-ramp cliff
   steepens), and win nothing for the dominant preset-plus-own-additions mode
   (`finalize_node`), where a wrapper ZST wraps the same delegation body. Regret
   asymmetry: a framework can adopt the strategy pattern privately today with zero
@@ -7047,61 +6623,18 @@ Rejected alternatives:
   equality bounds freeze hosts to the preset enums (that shortcut falls out of the
   role traits for free via techy's own impls).
 
-Routed to 2b (T3/T5 unless noted): role-accessor naming incl. the `macro` keyword
-wrinkle ([§dd-arch:naming] session); `ClosedVocabulary` as role-trait supertrait?;
-`latexlike.*` wire identifiers emitted inside foreign-`Lang` parses (P5); generic
-`LatexlikeDriver<LLL>` vs extracted driver-core helpers; generic
-`minidefs::package::<LLL>()` (T1/T2). Acceptance test: re-run T5's FLM compile probe —
-a custom `Lang` with node exts reusing driver, spec types, token rules, and base
-package.
+Acceptance test: the FLM compile probe —
+a custom `Lang` with node exts reusing driver, spec types, token rules, and the
+builtin package.
 
 Revisit if: a real ecosystem of interchangeable facet implementations materializes
 (strategy traits are then addable without breakage), or a required role with no
 sensible default becomes unavoidable (accepted as a conscious breaking change).
 
-*(Amended — API-review P4: "the preset keeps `NodeExts = ()`" is restated per-member —
-the node and argument members stay `()`, while `SlotExt` is claimed by the preset for
-trait-based body marking. [§dd-dr:slot-roles].)*
-
-*(Amended — API-review T3 session, routed items ruled: role-accessor names are
-**`macro_callable()` / `environment_callable()` / `specials_callable()`** with
-predicates `is_macro`/`is_environment`/`is_specials` — the group trait's
-role-plus-vocabulary-noun pattern, which dissolves the `macro` keyword problem as
-a side effect (`r#macro`/`macro_`/`macro_kind`/`macro_type` rejected). The mode
-role trait is **trimmed to `math_mode()` + `is_math()`** — no text-mode
-constructor and no `is_text`: the only known text-mode-constructor consumer was
-the restore-to-text pillar, re-specified as `exit_math_context_delta`
-([§dd-dr:enclosing-state-stack] amendment). `ClosedVocabulary` is **not** a
-role-trait supertrait — "provide, don't require" ([§dd-dr:iter-symbols]
-amendment). The driver question is ruled in [§dd-dr:preset-driver-pillars].)*
-
-*(Amended — API-review T5 session: (1) the role-trait roster gains a fourth
-member, **`LatexlikeEvent`** — constructor + recognizer for the
-exit-math-context event (`exit_math_context()` / `is_exit_math_context()`,
-coherence contract mirroring `math_form`), bound on `LatexlikeLang::Event`.
-Without it the generalization re-opens a cliff of exactly the kind it exists to
-close: the E4 text-restore is an *event* the `LLL`-generic argument factory must
-mint in the host's own `Event` type and the driver must recognize
-([§dd-dr:enclosing-state-stack]); a preset-side event wrapper would violate
-vocabulary-stays-the-host's-own, and an event-less design cannot exist (the
-patch depends on the enclosing stack at use time — that context-dependence is
-the E4 design). (2) The pillar list's "the `finalize_node` spec-dispatch" is
-corrected: P4 deleted `finalize_node` ([§dd-dr:ext-minting]) — no such pillar
-exists; the preset's `make_node_ext` is the trivial `()` mint, and its only
-claimed ext is the `SlotExt` body marker ([§dd-dr:slot-roles]).)*
-
-*(Amended — API-review recompose session: the role-trait roster gains a fifth
-member, **`LatexlikeInvocationSyntax`** — implemented by the Lang's
-invocation-syntax payload type: `type Env: EnvironmentSyntax<L>`, form
-constructors (`macro_form`/`environment_form`/`specials_form`), accessors
-(`macro_syntax`/`environment_syntax`/`is_specials`) — so the preset's staging
-sites and `SourceRecomposer` work over any `LLL`; [§dd-dr:invocation-syntax].)*
-
 #### `GroupType::Math(MathGroupForm)`: inline/display is typed class payload [§dd-dr:math-group-form]
 
-Status: DECIDED (user, API-review policy session P3; supersedes the delimiter-fact
-half of [§dd-dr:group-taxonomy] — that entry's revisit condition fired; applied —
-Phase 3 S4).
+Status: DECIDED (user, API-review policy session; supersedes the delimiter-fact
+half of [§dd-dr:group-taxonomy] — that entry's revisit condition fired).
 
 `GroupType` becomes `{ Content, Math(MathGroupForm), Verbatim }`, with
 `MathGroupForm { Inline, Display }` a **closed (exhaustive) enum**; the rule author
@@ -7161,19 +6694,29 @@ Revisit if: a third math-group form with distinct downstream semantics is identi
 
 #### The preset driver: pillar functions + generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
 
-Status: DECIDED (user, API-review T3 session; detailing shared with the T5
-session; applied — Phase 3 S4; the FLM-probe acceptance re-run rides the
-invocation-syntax stage).
+Status: DECIDED (user, API-review session).
 
 The component the generalization ruling left open resolves as **both, layered** —
 the same shape [§dd-dr:latexlike-generalization] chose for `Lang` (whole type +
 pillar composition): the driver's behavior ships as public `LLL`-generic **pillar
 functions**, and **`LatexlikeDriver<LLL>`** is the canned assembly whose hook
-bodies are precisely the one-line delegations (`PhantomData<LLL>`; manual impls
-keep `Copy`/`Eq`). Pillar inventory: `math_group_interior_delta` (the math plug —
-forbidden set derived from the removed math-class rules, never a restated `'$'`),
-`exit_math_context_delta` ([§dd-dr:enclosing-state-stack] amendment),
-`make_paragraph_break_node`; `resolve_command` composes
+bodies are precisely the one-line delegations (`PhantomData<LLL>`; it carries
+exactly 7 one-line hook bodies; shipped drivers keep `Clone + Debug` — the
+optional source-resolver field drops `Copy`/`Eq`, on which nothing in-crate
+relied; the resolver field is private behind
+`with_source_resolver`/`source_resolver()`, the two policy knobs `pub`).
+Pillar inventory: `math_group_interior_delta` (the math plug —
+forbidden set derived from the removed math-class rules, never a restated `'$'`;
+its rustdoc documents the **two-component** math-interior obligation — the
+pillar's delta **plus** the engine's `expecting_group_close` descent invariant; a
+composed `…interior_state()` helper was rejected as a two-line composition,
+wrong for languages overriding the math plug),
+`exit_math_context_delta` (taking **`&ParsingStateStack`**,
+[§dd-dr:enclosing-state-stack] — constructible post-parse via
+`from_node_ancestors`, so post-parse state synthesis is served without a
+session), and
+`make_paragraph_break_node` (documented parse-side-only — synthesis stages
+`Chars` directly and never mints tokens); `resolve_command` composes
 `resolve_command_in_scopes` ([§dd-dr:resolution-extraction]) with the macro role —
 no separate pillar. Why both: structs cannot be partially overridden and subtraits
 cannot re-default supertrait methods (the recorded facet-decomposition flaw), so
@@ -7182,51 +6725,23 @@ preset-behavior-plus-one-custom-hook (FLM's documented `refine_diagnostic`
 posture); pillars alone would make the plain-Latexlike consumer hand-write ~30
 delegation lines for nothing. Not a dual path: component vs building blocks is the
 `StdCallableSpec`-vs-`impl CallableSpec` relationship — the struct contains no
-behavior the pillars don't. Scope split: the T3 session ruled the architecture
-(pillars + generic struct + the inventory); the T5 session keeps the FLM-probe
-acceptance run, extra framework knobs / extension seams, pillar-signature
-sufficiency for post-parse state synthesis, and restage interaction.
+behavior the pillars don't. Driver knobs: **nothing
+added** — `recovery`/`paragraph_break_style`/resolver are orthogonal config
+values and every other behavior difference is a different driver over the
+pillars; a `with_group_interior_delta` closure knob was rejected (re-grows a
+behavior-carrying driver; the pillars compose in a custom driver — one doc
+sentence at the struct). The FLM
+projection confirmed the pillar inventory covers every non-default hook body
+(25 code lines of Lang delegation residue, 7 driver delegation one-liners —
+both within envelope).
 
 Rejected alternatives: generic struct only (a customize-one-hook framework
 wraps-and-delegates ~12 trait methods or forks the bodies — the cliff returns one
 level up); pillars only (every adopt-wholesale consumer pays the delegation
 boilerplate for nothing).
 
-Revisit if: the T5 FLM probe finds a hook whose pillar signature cannot serve
+Revisit if: a real FLM build finds a hook whose pillar signature cannot serve
 post-parse state synthesis (the pillar, not the struct, is then the thing to fix).
-
-*(Amended — API-review T4 session: the keep-`Copy`/`Eq` clause is struck — the
-optional resolver field ([§dd-dr:input-wiring]) drops `Copy`/`Eq` on
-resolver-carrying drivers ("why would we want `Copy`/`Eq` on the driver?" — no
-in-crate reliance exists); shipped drivers keep `Clone + Debug`. The strike, the
-resolver field (private, behind `with_source_resolver`/`source_resolver()`, the
-two policy knobs `pub`), and the `Copy`/`Eq` drop were applied to the monomorphic
-`LatexlikeDriver` in Phase 3 S2; the `LLL`-generic assembly itself is a later
-stage.)*
-
-*(Amended — API-review T5 session, the shared-scope items ruled:
-`exit_math_context_delta` takes **`&ParsingStateStack`**
-([§dd-dr:enclosing-state-stack] amendment) — constructible post-parse via
-`from_node_ancestors`, so the state-synthesis rider is served without a session;
-the math-interior recipe is a documented **two-component** obligation on
-`math_group_interior_delta`'s rustdoc — the pillar's delta **plus** the engine's
-`expecting_group_close` descent invariant (a composed `…interior_state()` helper
-rejected: a two-line composition, and wrong for languages overriding the math
-plug); `make_paragraph_break_node` is documented parse-side-only (synthesis
-stages `Chars` directly and never mints tokens). Driver knobs: **nothing
-added** — `recovery`/`paragraph_break_style`/resolver are orthogonal config
-values and every other behavior difference is a different driver over the
-pillars; a `with_group_interior_delta` closure knob was rejected (re-grows a
-behavior-carrying driver; the pillars compose in a custom driver — one doc
-sentence at the struct); resolver field private behind
-`with_resolver`/`source_resolver()`, the two policy knobs stay `pub`. The T5 FLM
-projection confirmed the pillar inventory covers every non-default hook body
-(~30-line Lang + ~12-line driver residue; asserted by the Phase 3 S10
-acceptance audit — 25 code lines of Lang delegation residue on the FLM
-projection, 7 driver delegation one-liners, both within envelope; the shipped
-`LatexlikeDriver` itself carries exactly 7 one-line hook bodies); the
-[§dd-dr:latexlike-generalization] pillar list's "`finalize_node`
-spec-dispatch" is corrected there.)*
 
 ## Rejected patterns — do not reintroduce [§dd-dr:rejected-patterns]
 
