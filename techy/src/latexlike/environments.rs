@@ -510,14 +510,19 @@ where
         true
     }
 
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, LLL>,
-    ) -> Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
+        crate::error::ParseError<LLL::SourceOrigin>,
+    >
     where
         's: 'a,
     {
-        Box::new(EnvironmentInvocationParser { invocation })
+        Ok(Box::new(EnvironmentInvocationParser { invocation }))
     }
 
     /// `\begin` itself is macro-shaped; the environment's own name titles the frames
@@ -570,14 +575,19 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for EndSpec<LLL> {
         true
     }
 
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, LLL>,
-    ) -> Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
+        crate::error::ParseError<LLL::SourceOrigin>,
+    >
     where
         's: 'a,
     {
-        Box::new(OrphanEndParser { invocation })
+        Ok(Box::new(OrphanEndParser { invocation }))
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {

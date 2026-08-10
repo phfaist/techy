@@ -205,18 +205,23 @@ where
         frame_title("macro", role, name)
     }
 
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, LLL>,
-    ) -> alloc::boxed::Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
+    ) -> Result<
+        alloc::boxed::Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
+        crate::error::ParseError<LLL::SourceOrigin>,
+    >
     where
         's: 'a,
     {
-        alloc::boxed::Box::new(InputInvocationParser {
+        Ok(alloc::boxed::Box::new(InputInvocationParser {
             invocation,
             persist_state: self.persist_state,
             attached_slot_ext: &self.attached_slot_ext,
-        })
+        }))
     }
 }
 
@@ -289,9 +294,12 @@ where
         //    nodes-parse shape under the state at the `\input` point.
         let attached = match &reference {
             Some(reference) => {
+                // A factory Err aborts under any policy ("could not build the
+                // parser"), with the live traceback attached here.
                 let driver = cx.driver;
                 let mut parser = driver
-                    .make_nodes_parser(StopSpec::none(), ChildStateSpec::inherit());
+                    .make_nodes_parser(StopSpec::none(), ChildStateSpec::inherit())
+                    .map_err(|error| cx.attach_hook_frames(error))?;
                 cx.attach_source_reference(
                     reference,
                     &at,

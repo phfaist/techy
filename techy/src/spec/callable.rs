@@ -120,15 +120,36 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
     /// bundle); a trait method's clause cannot be per-implementation, so overriding
     /// takeovers inherit it — every language driving the standard dispatch
     /// satisfies it anyway (`()` and the latexlike payload are covered by techy).
+    ///
+    /// # Errors
+    ///
+    /// `Err` means **the parser could not be built** — what the factory needs
+    /// (spec-side definition data, an embedding's runtime) is broken or
+    /// unavailable — and **aborts the parse** under any recovery policy; the
+    /// dispatch site attaches the live traceback when the error carries no
+    /// frames of its own. Refusing to parse *deeper* is deliberately not this
+    /// channel's business: nesting depth belongs to the descent guard
+    /// ([`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded), raised
+    /// before any factory-built parser runs). Carry
+    /// [`HookFailed`](crate::error::HookFailed) for an operational failure,
+    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// violated library contract. An infallible implementation wraps its parser
+    /// in `Ok(...)` and that is the only change.
+    // The boxed-parser-or-abort pair is the decided factory signature; an alias
+    // would only rename it.
+    #[allow(clippy::type_complexity)]
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, L>,
-    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
+        crate::error::ParseError<L::SourceOrigin>,
+    >
     where
         's: 'a,
         L::InvocationSyntax: FromInvocation<L>,
     {
-        Box::new(StdInvocationParser::new(invocation))
+        Ok(Box::new(StdInvocationParser::new(invocation)))
     }
 
     /// Title of a parse-traceback frame covering this callable: called at *snapshot* time — only when a condition is recorded —

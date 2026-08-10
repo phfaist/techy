@@ -441,6 +441,7 @@ mod tests {
             StopSpec::none(),
             ChildStateSpec::inherit(),
         )
+        .expect("infallible factory")
     }
 
     #[test]
@@ -779,7 +780,8 @@ mod tests {
             &driver,
             StopSpec::none(),
             ChildStateSpec::inherit(),
-        );
+        )
+        .expect("infallible factory");
         let attached = cx
             .attach_source_reference("a.tex", &at, Arc::clone(&cx.state), &mut *parser)
             .unwrap();

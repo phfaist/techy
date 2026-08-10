@@ -102,18 +102,23 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
         &self.arguments
     }
 
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, LLL>,
-    ) -> Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
+        crate::error::ParseError<LLL::SourceOrigin>,
+    >
     where
         's: 'a,
     {
         let inner = StdInvocationParser::new(invocation);
-        match &self.after_effect {
+        Ok(match &self.after_effect {
             None => Box::new(inner),
             Some(delta) => Box::new(AfterEffectInvocationParser { inner, delta }),
-        }
+        })
     }
 
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {

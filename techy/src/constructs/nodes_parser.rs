@@ -739,9 +739,12 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         let frame = invocation_frame(cx, &invocation);
         cx.tokens.move_past(invocation.token, true);
         // The parser comes from the driver's interception seam (default: the spec's
-        // own factory) — Phase 7.2.
+        // own factory) — Phase 7.2. A factory Err aborts under any policy ("could
+        // not build the parser"), with the live traceback attached here.
         let driver = cx.driver;
-        let mut parser = driver.make_invocation_parser(invocation);
+        let mut parser = driver
+            .make_invocation_parser(invocation)
+            .map_err(|error| cx.attach_hook_frames(error))?;
         let result = cx.parse_construct(&mut *parser, Some(base), Some(frame));
         drop(parser);
         let (id, delta) = result?;
@@ -2960,11 +2963,11 @@ mod tests {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
                 invocation: Invocation<'a, 's, CmdLang>,
-            ) -> Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>
+            ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
             where
                 's: 'a,
             {
-                Box::new(DefParser { inner: StdInvocationParser::new(invocation) })
+                Ok(Box::new(DefParser { inner: StdInvocationParser::new(invocation) }))
             }
         }
 
@@ -3043,11 +3046,11 @@ mod tests {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
                 invocation: Invocation<'a, 's, CmdLang>,
-            ) -> Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>
+            ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
             where
                 's: 'a,
             {
-                Box::new(TakeParser { invocation })
+                Ok(Box::new(TakeParser { invocation }))
             }
         }
 
@@ -3924,9 +3927,12 @@ mod tests {
                 &'p self,
                 stop: StopSpec<'p, DriveLang>,
                 child_states: ChildStateSpec<'p, DriveLang>,
-            ) -> Box<dyn ConstructParser<DriveLang, Output = NodesOutcome<DriveLang>> + 'p> {
+            ) -> Result<
+                Box<dyn ConstructParser<DriveLang, Output = NodesOutcome<DriveLang>> + 'p>,
+                ParseError,
+            > {
                 self.nodes_parsers.fetch_add(1, Ordering::Relaxed);
-                Box::new(NodesParser::new(stop).with_child_states(child_states))
+                Ok(Box::new(NodesParser::new(stop).with_child_states(child_states)))
             }
 
             fn make_group_parser<'p>(
@@ -3934,15 +3940,16 @@ mod tests {
                 open_span: Span,
                 rule: Arc<GroupRule<DriveLang>>,
                 child_states: ChildStateSpec<'p, DriveLang>,
-            ) -> Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'p> {
+            ) -> Result<Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'p>, ParseError>
+            {
                 self.group_parsers.fetch_add(1, Ordering::Relaxed);
-                Box::new(GroupParser::new(open_span, rule).with_child_states(child_states))
+                Ok(Box::new(GroupParser::new(open_span, rule).with_child_states(child_states)))
             }
 
             fn make_invocation_parser<'a, 's>(
                 &'a self,
                 invocation: Invocation<'a, 's, DriveLang>,
-            ) -> Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'a>
+            ) -> Result<Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'a>, ParseError>
             where
                 's: 'a,
             {
@@ -4020,6 +4027,121 @@ mod tests {
         let after = result.tree.root().child(3).unwrap().child(0).unwrap();
         assert_eq!(after.chars(), Some("y"));
         assert_eq!(after.parsing_state().mode(), Mode::Text);
+    }
+
+    #[test]
+    fn a_failing_invocation_parser_factory_aborts_under_any_policy() {
+        // The hook-fallibility contract on the parser factories: a factory Err
+        // means "the parser could not be built" and stops the parse even in
+        // tolerant mode; the dispatch site attaches the live traceback (the
+        // factory has no session access). Distinct from a depth refusal — that
+        // stays the descent guard's business (`DescentLimitExceeded`).
+        #[derive(Debug)]
+        struct BrokenFactorySpec;
+        impl CallableSpec<CmdLang> for BrokenFactorySpec {
+            fn make_invocation_parser<'a, 's>(
+                &'a self,
+                _invocation: Invocation<'a, 's, CmdLang>,
+            ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
+            where
+                's: 'a,
+            {
+                let scratch: Arc<Source> = Arc::new(Source::new(""));
+                Err(ParseError::new(
+                    crate::error::HookFailed::new("parser backend unavailable", None),
+                    SourceSpan::new(&scratch, 0..0),
+                ))
+            }
+        }
+
+        let mut lib = Package::new("broken");
+        lib.insert(CT_MACRO, "fail", BrokenFactorySpec);
+        let mut scopes = ScopeStack::new();
+        scopes.push(Arc::new(lib));
+        let st: Arc<ParsingState<CmdLang>> =
+            Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
+
+        let content = "a {\\fail} b";
+        let mut reader = StdTokenReader::new(content);
+        let error =
+            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert_eq!(
+            error.message(),
+            "extension hook reported a failure: parser backend unavailable"
+        );
+        // The command sits inside a group: the group frame is on the traceback.
+        assert!(!error.frames().is_empty());
+    }
+
+    #[test]
+    fn a_failing_nodes_parser_factory_aborts_under_any_policy() {
+        // The same contract on the driver's content-loop factory, exercised at a
+        // group descent (the interior's nodes run is built through
+        // `ParseContext::parse_nodes`, which lifts the factory Err and attaches
+        // the live traceback).
+        #[derive(Debug, Clone, Copy)]
+        struct BrokenLang;
+        impl Lang for BrokenLang {
+            type Features = crate::state::AllLangFeatures;
+            type GroupTypeId = u32;
+            type CallableTypeId = u32;
+            type ModeId = ();
+            type StateExt = ();
+            type Event = ();
+            type SessionExt = ();
+            type SourceOrigin = Option<String>;
+            type NodeExts = ();
+            type InvocationSyntax = ();
+            type Driver = BrokenDriver;
+            fn make_node_ext(
+                _kind: &crate::node::NodeKind<Self>,
+                _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+                _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+                _children: crate::node::StagedChildren<'_, Self>,
+            ) {
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct BrokenDriver;
+        impl TestDriver for BrokenDriver {
+            fn with_recovery(_recovery: Recovery) -> Self {
+                BrokenDriver // tolerant by hand: recovery() below
+            }
+        }
+        impl ParseDriver<BrokenLang> for BrokenDriver {
+            type DescentGuard = crate::engine::StdDescentGuard;
+            fn recovery(&self) -> Recovery {
+                Recovery::Tolerant
+            }
+            fn make_nodes_parser<'p>(
+                &'p self,
+                _stop: StopSpec<'p, BrokenLang>,
+                _child_states: ChildStateSpec<'p, BrokenLang>,
+            ) -> Result<
+                Box<dyn ConstructParser<BrokenLang, Output = NodesOutcome<BrokenLang>> + 'p>,
+                ParseError,
+            > {
+                let scratch: Arc<Source> = Arc::new(Source::new(""));
+                Err(ParseError::new(
+                    crate::error::HookFailed::new("content-loop backend unavailable", None),
+                    SourceSpan::new(&scratch, 0..0),
+                ))
+            }
+        }
+
+        // The harness drives the root loop directly, so the factory is first
+        // consulted at the `{…}` descent — inside the group's frame.
+        let st = state_with(rules::<BrokenLang>());
+        let content = "{a}";
+        let mut reader = StdTokenReader::new(content);
+        let error =
+            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+                .unwrap_err();
+        assert_eq!(error.identifier(), "core.error.hook-failed");
+        assert!(!error.frames().is_empty());
     }
 
     // --- the scope stack in a driven parse (7.3): error specs, op failures, specials ---

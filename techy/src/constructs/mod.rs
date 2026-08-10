@@ -809,7 +809,11 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         L::InvocationSyntax: FromInvocation<L>,
     {
         let driver = self.driver;
-        let mut parser = driver.make_nodes_parser(stop, child_states);
+        // A factory Err aborts under any policy ("could not build the parser" —
+        // the hook fallibility contract), with the live traceback attached here.
+        let mut parser = driver
+            .make_nodes_parser(stop, child_states)
+            .map_err(|error| self.attach_hook_frames(error))?;
         self.parse_construct(&mut *parser, Some(state), None)
     }
 
@@ -840,7 +844,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         L::InvocationSyntax: FromInvocation<L>,
     {
         let driver = self.driver;
-        let mut parser = driver.make_group_parser(open_span, rule, child_states);
+        // A factory Err aborts under any policy, as in `parse_nodes`.
+        let mut parser = driver
+            .make_group_parser(open_span, rule, child_states)
+            .map_err(|error| self.attach_hook_frames(error))?;
         self.parse_construct(&mut *parser, Some(base), frame)
     }
 

@@ -386,8 +386,12 @@ where
     // Consume the trigger whole before the parser runs (the dispatch contract, [§dd-dr:parsers-engine]);
     // the parser comes from the driver's interception seam (Phase 7.2).
     cx.tokens.move_past(token, true);
+    // A factory Err aborts under any policy ("could not build the parser"), with
+    // the live traceback attached here.
     let driver = cx.driver;
-    let mut parser = driver.make_invocation_parser(invocation);
+    let mut parser = driver
+        .make_invocation_parser(invocation)
+        .map_err(|error| cx.attach_hook_frames(error))?;
     // The descent runs through the single entry point (its MUST contract); `None`
     // scopes a clone of the current state — same swap/restore as the content loop's
     // dispatch site.
@@ -2122,7 +2126,10 @@ mod tests {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
                 invocation: Invocation<'a, 's, ArgLang>,
-            ) -> alloc::boxed::Box<dyn ConstructParser<ArgLang, Output = BuildId> + 'a>
+            ) -> Result<
+                alloc::boxed::Box<dyn ConstructParser<ArgLang, Output = BuildId> + 'a>,
+                ParseError,
+            >
             where
                 's: 'a,
             {
@@ -2152,7 +2159,7 @@ mod tests {
                         Ok((id, Some(Box::new(delta))))
                     }
                 }
-                alloc::boxed::Box::new(DefParser { invocation })
+                Ok(alloc::boxed::Box::new(DefParser { invocation }))
             }
         }
 

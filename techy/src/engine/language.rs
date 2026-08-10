@@ -600,10 +600,13 @@ mod tests {
                 &'p self,
                 _stop: StopSpec<'p, BogusLang>,
                 _child_states: ChildStateSpec<'p, BogusLang>,
-            ) -> alloc::boxed::Box<
-                dyn ConstructParser<BogusLang, Output = NodesOutcome<BogusLang>> + 'p,
+            ) -> Result<
+                alloc::boxed::Box<
+                    dyn ConstructParser<BogusLang, Output = NodesOutcome<BogusLang>> + 'p,
+                >,
+                ParseError,
             > {
-                alloc::boxed::Box::new(BogusParser)
+                Ok(alloc::boxed::Box::new(BogusParser))
             }
         }
 

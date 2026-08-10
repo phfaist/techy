@@ -920,11 +920,11 @@ mod tests {
         fn make_invocation_parser<'a, 's>(
             &'a self,
             invocation: Invocation<'a, 's, EnvLang>,
-        ) -> Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>
+        ) -> Result<Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>, ParseError>
         where
             's: 'a,
         {
-            Box::new(EnvironmentInvocationParser { invocation })
+            Ok(Box::new(EnvironmentInvocationParser { invocation }))
         }
     }
 
@@ -1065,11 +1065,11 @@ mod tests {
         fn make_invocation_parser<'a, 's>(
             &'a self,
             invocation: Invocation<'a, 's, EnvLang>,
-        ) -> Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>
+        ) -> Result<Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>, ParseError>
         where
             's: 'a,
         {
-            Box::new(RawBlockParser { invocation })
+            Ok(Box::new(RawBlockParser { invocation }))
         }
     }
 

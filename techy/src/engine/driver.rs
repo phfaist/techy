@@ -433,15 +433,37 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// descent-state policies. A custom parser must uphold the `NodesParser` output
     /// contract its callers rely on (a [`NodesOutcome`] whose staged nodes tile the
     /// consumed extent; no pass-through delta).
+    ///
+    /// # Errors
+    ///
+    /// `Err` means **the parser could not be built** — what the factory needs
+    /// (configuration, definition data, an embedding's runtime) is broken or
+    /// unavailable — and **aborts the parse** under any recovery policy; the
+    /// descent site attaches the live traceback when the error carries no frames
+    /// of its own. Refusing to parse *deeper* is deliberately not this channel's
+    /// business: nesting depth belongs to the descent guard, which refuses with
+    /// [`DescentLimitExceeded`](crate::constructs::DescentLimitExceeded) inside
+    /// [`ParseContext::parse_construct`](crate::constructs::ParseContext::parse_construct),
+    /// before any factory-built parser runs. Carry
+    /// [`HookFailed`](crate::error::HookFailed) for an operational failure,
+    /// [`ImplementationError`](crate::constructs::ImplementationError) for a
+    /// violated library contract. An infallible implementation wraps its parser
+    /// in `Ok(...)` and that is the only change.
+    // The boxed-parser-or-abort pair is the decided factory signature; an alias
+    // would only rename it.
+    #[allow(clippy::type_complexity)]
     fn make_nodes_parser<'p>(
         &'p self,
         stop: StopSpec<'p, L>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Box<dyn ConstructParser<L, Output = NodesOutcome<L>> + 'p>
+    ) -> Result<
+        Box<dyn ConstructParser<L, Output = NodesOutcome<L>> + 'p>,
+        ParseError<L::SourceOrigin>,
+    >
     where
         L::InvocationSyntax: FromInvocation<L>,
     {
-        Box::new(NodesParser::new(stop).with_child_states(child_states))
+        Ok(Box::new(NodesParser::new(stop).with_child_states(child_states)))
     }
 
     /// The factory producing the parser for one group descent (the consumed
@@ -454,16 +476,29 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// [`group_interior_delta`](ParseDriver::group_interior_delta) merges in) — prefer
     /// the delta channel for state-shaped customization; override this factory only
     /// for structurally different group parses.
+    ///
+    /// # Errors
+    ///
+    /// `Err` means **the parser could not be built** and aborts the parse under
+    /// any recovery policy — never a depth refusal, which stays the descent
+    /// guard's business; the condition choice and the full contract are
+    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser)'s. An infallible
+    /// implementation wraps its parser in `Ok(...)` and that is the only change.
+    // The decided factory signature, as for `make_nodes_parser`.
+    #[allow(clippy::type_complexity)]
     fn make_group_parser<'p>(
         &'p self,
         open_span: Span,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
-    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'p>
+    ) -> Result<
+        Box<dyn ConstructParser<L, Output = BuildId> + 'p>,
+        ParseError<L::SourceOrigin>,
+    >
     where
         L::InvocationSyntax: FromInvocation<L>,
     {
-        Box::new(GroupParser::new(open_span, rule).with_child_states(child_states))
+        Ok(Box::new(GroupParser::new(open_span, rule).with_child_states(child_states)))
     }
 
     /// The interception point over
@@ -477,10 +512,25 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// [`StdInvocationParser`](crate::constructs::StdInvocationParser)'s
     /// documentation for the invocation-parser contract an implementation must
     /// uphold.
+    ///
+    /// # Errors
+    ///
+    /// `Err` means **the parser could not be built** and aborts the parse under
+    /// any recovery policy — never a depth refusal, which stays the descent
+    /// guard's business; the condition choice and the full contract are
+    /// [`make_nodes_parser`](ParseDriver::make_nodes_parser)'s. The default
+    /// passes the spec factory's own answer through unchanged
+    /// ([`CallableSpec::make_invocation_parser`]'s `Err` included). An infallible
+    /// implementation wraps its parser in `Ok(...)` and that is the only change.
+    // The decided factory signature, as for `make_nodes_parser`.
+    #[allow(clippy::type_complexity)]
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, L>,
-    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
+        ParseError<L::SourceOrigin>,
+    >
     where
         's: 'a,
         L::InvocationSyntax: FromInvocation<L>,

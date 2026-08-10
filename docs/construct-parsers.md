@@ -270,7 +270,7 @@ use techy::core::node::{
 };
 use techy::core::specs::{CallableSpec, Package};
 use techy::core::{GroupRule, Language, ParsingState, ParsingStateDelta, TokenKind};
-use techy::error::{DiagnosticInfo, Recovery};
+use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
 use techy::source::{SourceSpan, Span};
 
@@ -295,14 +295,20 @@ impl CallableSpec<Latexlike> for UntilSpec {
         true
     }
 
+    // An infallible factory wraps its parser in `Ok(...)` — the `Err` channel
+    // means "the parser could not be built" (never a depth refusal, which is the
+    // descent guard's business).
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, Latexlike>,
-    ) -> Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
+        ParseError,
+    >
     where
         's: 'a,
     {
-        Box::new(UntilParser { invocation })
+        Ok(Box::new(UntilParser { invocation }))
     }
 }
 

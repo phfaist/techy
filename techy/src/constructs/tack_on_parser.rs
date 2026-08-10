@@ -223,8 +223,12 @@ where
             };
             let frame = invocation_frame(cx, &invocation);
             cx.tokens.move_past(&token, true);
+            // A factory Err aborts under any policy ("could not build the
+            // parser"), with the live traceback attached here.
             let driver = cx.driver;
-            let mut parser = driver.make_invocation_parser(invocation);
+            let mut parser = driver
+                .make_invocation_parser(invocation)
+                .map_err(|error| cx.attach_hook_frames(error))?;
             // The descent runs through the single entry point (its MUST contract);
             // `None` scopes a clone of the current state — same swap/restore as the
             // content loop's dispatch site.

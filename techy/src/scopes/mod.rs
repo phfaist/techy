@@ -1408,14 +1408,19 @@ impl ErrorCallableSpec {
 }
 
 impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
+    /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
+    /// `Result`.
     fn make_invocation_parser<'a, 's>(
         &'a self,
         invocation: Invocation<'a, 's, L>,
-    ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a>
+    ) -> Result<
+        Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
+        crate::error::ParseError<L::SourceOrigin>,
+    >
     where
         's: 'a,
     {
-        Box::new(ErrorInvocationParser { invocation, detail: self.detail.as_deref() })
+        Ok(Box::new(ErrorInvocationParser { invocation, detail: self.detail.as_deref() }))
     }
 }
 

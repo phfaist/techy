@@ -712,7 +712,10 @@ mod tests {
         fn make_invocation_parser<'a, 's>(
             &'a self,
             invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
-        ) -> Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>
+        ) -> Result<
+            Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
+            crate::error::ParseError,
+        >
         where
             's: 'a,
         {
@@ -747,7 +750,7 @@ mod tests {
                     Ok((id, None))
                 }
             }
-            Box::new(RestOfLineParser { invocation })
+            Ok(Box::new(RestOfLineParser { invocation }))
         }
 
         fn stack_frame_title(&self, role: FrameRole, name: &str) -> alloc::string::String {
