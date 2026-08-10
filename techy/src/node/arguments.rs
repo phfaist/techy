@@ -148,7 +148,9 @@ impl ChildRegion {
     ///
     /// # Panics
     ///
-    /// Panics on a staged region (see [`ChildRegion`]).
+    /// Panics on a staged region (see [`ChildRegion`]); guard with
+    /// [`is_resolved`](ChildRegion::is_resolved) or read the staged form via
+    /// [`staged`](ChildRegion::staged).
     pub fn children(&self) -> Range<u32> {
         self.resolved().0.clone()
     }
@@ -159,7 +161,9 @@ impl ChildRegion {
     ///
     /// # Panics
     ///
-    /// Panics on a staged region (see [`ChildRegion`]).
+    /// Panics on a staged region (see [`ChildRegion`]); guard with
+    /// [`is_resolved`](ChildRegion::is_resolved) or read the staged form via
+    /// [`staged`](ChildRegion::staged).
     pub fn content_range(&self) -> Range<u32> {
         self.resolved().1.clone()
     }
@@ -171,7 +175,9 @@ impl ChildRegion {
     ///
     /// # Panics
     ///
-    /// Panics on a staged region (see [`ChildRegion`]).
+    /// Panics on a staged region (see [`ChildRegion`]); guard with
+    /// [`is_resolved`](ChildRegion::is_resolved) or read the staged form via
+    /// [`staged`](ChildRegion::staged).
     pub fn content_parent(&self) -> NodeId {
         let (_, _, content_parent, tree_tag) = self.resolved();
         NodeId::new(content_parent, tree_tag)
@@ -189,8 +195,15 @@ impl ChildRegion {
         }
     }
 
-    /// The staged form, if not yet resolved (builder-side validation).
-    pub(crate) fn staged(&self) -> Option<(&Range<u32>, &ContentNodes)> {
+    /// The staged form, if the region has not been resolved yet: the `children`
+    /// offset range into the callable's child list and the [`ContentNodes`]
+    /// designation, exactly as given to [`new`](ChildRegion::new) or
+    /// [`single`](ChildRegion::single). Answers `None` on a resolved region —
+    /// in particular on every region read from a finished tree. This is the
+    /// non-panicking companion to [`children`](ChildRegion::children),
+    /// [`content_range`](ChildRegion::content_range), and
+    /// [`content_parent`](ChildRegion::content_parent).
+    pub fn staged(&self) -> Option<(&Range<u32>, &ContentNodes)> {
         match &self.state {
             RegionState::Staged { children, content } => Some((children, content)),
             RegionState::Resolved { .. } => None,

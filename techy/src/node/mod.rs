@@ -359,6 +359,28 @@ mod tests {
         assert!(x.arguments().is_none());
     }
 
+    /// `staged()` is the non-panicking companion of the resolved-only accessors:
+    /// it answers the staged coordinates on a freshly constructed region and `None`
+    /// on a region read from a finished tree.
+    #[test]
+    fn staged_accessor_mirrors_resolution_state() {
+        // Freshly constructed regions are staged:
+        let region = ChildRegion::new(0..3, ContentNodes::InRegion(1..2));
+        assert!(!region.is_resolved());
+        let (children, content) = region.staged().unwrap();
+        assert_eq!(children.clone(), 0..3);
+        assert!(matches!(content, ContentNodes::InRegion(range) if range.clone() == (1..2)));
+        let single = ChildRegion::single(4);
+        assert_eq!(single.staged().unwrap().0.clone(), 4..5);
+
+        // Regions read from a finished tree are resolved: `staged()` answers `None`.
+        let tree = example_tree();
+        let frac = tree.root().child(1).unwrap();
+        let region0 = frac.arguments().unwrap().get(0).unwrap().region.as_ref().unwrap().clone();
+        assert!(region0.is_resolved());
+        assert!(region0.staged().is_none());
+    }
+
     #[test]
     fn absent_marker_and_named_arguments() {
         // \section*{t}-shaped: star marker provided (a Chars node — pylatexenc behavior),
