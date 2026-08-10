@@ -306,8 +306,10 @@ LangHasWhitespace`).
   drops it — reversion is structural, since the caller still holds the outer `Arc`.
   Outward propagation (`\newcommand`): the parser *returns* the delta; the caller
   applies it to its own state for subsequent siblings — a base the producer never saw.
-  Construct parsers accordingly return `(output, Option<ParsingStateDelta<L>>)`, and
-  the caller applies deltas — never the producer.
+  Construct parsers accordingly return `(output, Option<Box<ParsingStateDelta<L>>>)`
+  (boxed so the mostly-`None` pass-through delta rides the parse recursion as one
+  pointer — [§dd-dr:descent-guard]), and the caller applies deltas — never the
+  producer.
 - **Cross-cutting rules centralize in `Lang::finalize_transition`** — a pure function
   of (new data, previous state, events), run exactly once per unique derivation. Purity
   is what makes derivations memoizable. Mode changes are *initiated* by deltas (e.g.
@@ -554,7 +556,9 @@ session: [§dd-dr:invocation-syntax], [§dd-dr:recompose-machinery],
 Everything a parser needs rides in one context value: `ParseContext` bundles the token
 reader, the `Arc<Source>` (byte spans become `SourceSpan`s at this layer), the current
 state, the session, and the language's driver. `ConstructParser::parse(&mut self, cx)`
-returns `(output, Option<ParsingStateDelta<L>>)` — the caller-applies-deltas law.
+returns `(output, Option<Box<ParsingStateDelta<L>>>)` — the caller-applies-deltas law;
+the delta side is boxed so the mostly-`None` pass-through value rides the parse
+recursion as one pointer ([§dd-dr:descent-guard]).
 Construct parsers are **temporaries**: constructed with per-use configuration, working
 state in fields, dropped with the frame; stored behavior objects (specs, argument
 parsers) are immutable `Arc`-shared data — the two-tier ownership model
@@ -595,12 +599,35 @@ returns (nodes, StopCause) — the caller interprets the ending.
   (terminator command + rigid name group + invocation-name back-reference); a
   terminator mismatch closes without consuming, letting enclosing levels claim their
   own terminators ([§dd-dr:terminator-mismatch-recovery]).
-- **State scoping is structural**: `cx.parse_scoped(state, parser)` and the
-  closure-shaped `cx.with_parsing_state(state, f)` replace hand-rolled swap/restore
-  (both also maintain the session's enclosing-state stack;
-  `cx.with_derived_state(&delta, f)` composes derivation and scoping);
-  `cx.probe_token(&state)` is the public probe protocol ([§dd-dr:parse-scoped],
-  [§dd-dr:enclosing-state-stack]).
+- **Every descent goes through one entry point**:
+  `cx.parse_construct(parser, state, frame)` is the single, normative (MUST) way
+  one construct parser runs another — it scopes the state structurally
+  (`state: None` = clone the current state, identical scoping either way — never
+  "skip the scoping"), pushes the optional traceback frame around the whole
+  descent, maintains the session's enclosing-state stack, and asks the per-parse
+  `DescentGuard` whether the parse may go one level deeper.
+  `cx.parse_nodes`/`cx.parse_group` are one-line delegates (driver factory +
+  `parse_construct` fused — the uniform-routing contract). Plain-Rust recursion
+  bypassing the funnel is undetectable by design — a documented rule, not an
+  enforceable one ([§dd-dr:descent-guard], [§dd-dr:parse-scoped]).
+- **State scoping is structural**: the closure-shaped
+  `cx.with_parsing_state(state, f)` replaces hand-rolled swap/restore (a
+  state-scoping utility, not a descent point — it also maintains the session's
+  enclosing-state stack; `cx.with_derived_state(&delta, f)` composes derivation
+  and scoping); `cx.probe_token(&state)` is the public probe protocol
+  ([§dd-dr:parse-scoped], [§dd-dr:enclosing-state-stack]).
+- **Parsing depth is bounded by the descent guard** ([§dd-dr:descent-guard]): at
+  every `parse_construct` descent the session's per-parse guard is consulted — a
+  refusal aborts the parse with `DescentLimitExceeded` under any recovery policy
+  (past the limit there is no safe way to continue); under the unconfigured
+  built-in default, a one-time `DescentLimitApproaching` warning is recorded at
+  half the budget. `StdDescentGuard` measures estimated stack consumption against
+  a byte budget (`DEFAULT_STACK_BUDGET` = 250 KiB in all builds, deliberately
+  tight in debug; `ComputedStackBudget` resolves probe() − `HEADROOM`); its
+  `DepthLimit` mode counts engine descents (~2× the syntactic nesting depth) as
+  the deterministic alternative, and `off()` disables the bound. The budget
+  bounds the *parse* only — hand-built trees (`NodeTreeBuilder`) and consumer
+  traversals (`walk`/`recompose`) on smaller threads are outside it.
 - **Attached-source parsing** ([§dd-dr:input-wiring]): the
   `cx.parse_attached_source(source, state, parser)` door sub-parses an included
   source into the *same* session/builder over a fresh inner reader — the
@@ -630,8 +657,9 @@ Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:p
 [§dd-dr:stop-conditions], [§dd-dr:child-state-spec], [§dd-dr:slot-terminators],
 [§dd-dr:terminator-mismatch-recovery], [§dd-dr:optional-group-balancing],
 [§dd-dr:brace-protection-limits], [§dd-dr:temporary-group-rules],
-[§dd-dr:parse-scoped], [§dd-dr:emptiness-surface], [§dd-dr:parity-gap-list],
-[§dd-dr:parity-parsers], [§dd-dr:expression-fallback].
+[§dd-dr:parse-scoped], [§dd-dr:descent-guard] (the `parse_construct` funnel, the
+guard, the boxed pass-through delta), [§dd-dr:emptiness-surface],
+[§dd-dr:parity-gap-list], [§dd-dr:parity-parsers], [§dd-dr:expression-fallback].
 
 ## Engine and sessions [§dd-arch:engine]
 
@@ -659,11 +687,20 @@ hooks (`resolve_command` with its three-outcome `CommandResolution`
 `observe_parse_start` — parse-initialization diagnostics, e.g. the preset's
 all-escape-shadowed provider check). Drivers are instances, so behavior carries
 configuration static hooks never could; preset parsers reach preset helper methods
-fully typed.
+fully typed. The trait's one *required* item is the `DescentGuard` type choice
+(`type DescentGuard: DescentGuard;` — `StdDescentGuard` is the standard answer;
+`StdParseDriver`'s third type parameter `G` carries the choice as a private
+`PhantomData` field): the guard **type** is driver business, its per-language
+**configuration** travels on `Language` (`with_descent_guard_init`, mirroring
+seed-state placement), and the per-parse **instance** lives on the session —
+installed eagerly at parse entry, created lazily from `Default` on the
+hand-built-context path, with `ParserSession::install_descent_guard` as the
+public seam ([§dd-dr:descent-guard]).
 
 **`ParserSession` is pure per-parse scratch**: the node builder, the diagnostics sink,
 the live frame stack, the enclosing-state stack (lent to `resolve_state_event`;
-dies with the session), the derivation memo, and `L::SessionExt` (the parse-global
+dies with the session), the derivation memo, the per-parse `DescentGuard` instance
+([§dd-dr:descent-guard]), and `L::SessionExt` (the parse-global
 mutable extension). Session-mediated derivation is the in-parse standard
 ([§dd-dr:session-derivation]): `derived_state` is data-equivalent to
 `ParsingState::derived()` — it may dedup and observe, never alter; the
@@ -679,7 +716,8 @@ driver instance and the frozen initial state, both mandatory `new` arguments
 ([§dd-dr:language-init]: seeds come from `ParsingState::lang_initial()` /
 `lang_initial_with_packages(…)`, and further customization derives *before*
 construction — `lang_initial().derived(&delta)?`). The source resolver lives on the
-driver, not here ([§dd-dr:input-wiring]). Entry points are two named methods —
+driver, not here ([§dd-dr:input-wiring]); the descent-guard configuration lives
+here, set with the `with_descent_guard_init` builder ([§dd-dr:descent-guard]). Entry points are two named methods —
 `parse(content)` and `parse_source(Arc<Source>)` — plus accessors for the advanced
 path; the root drive loop diagnoses stray closes through the recover funnel, stages the
 consumed delimiter as a `Chars` node, threads the loop's evolved state through
@@ -688,7 +726,9 @@ diagnostics with no `Language` reference. "Define a language once, parse many
 documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
 Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
-state; infallible seed+packages construction), [§dd-dr:parse-driver], [§dd-dr:session-derivation],
+state; infallible seed+packages construction), [§dd-dr:parse-driver],
+[§dd-dr:descent-guard] (the driver's required `DescentGuard` type choice, the
+`Language`-held configuration, the session-held instance), [§dd-dr:session-derivation],
 [§dd-dr:state-memoization], [§dd-dr:memoized-derivations], [§dd-dr:finalize-node],
 [§dd-dr:resolve-command-hook], [§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
 [§dd-dr:paragraph-break-hook], [§dd-dr:language-parse-api], [§dd-dr:with-provider],
@@ -749,7 +789,9 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   state `Arc`s coherent through recovery by construction. Implementation bugs
   (`ImplementationError`) abort even under tolerant recovery: tolerance promises a
   best-effort tree for bad *input*, not tolerance of buggy extensions
-  ([§dd-dr:panic-policy]).
+  ([§dd-dr:panic-policy]); the descent guard's `DescentLimitExceeded` aborts
+  likewise under any policy — past the limit there is no safe way to continue
+  ([§dd-dr:descent-guard]).
 - **Tracebacks come from an explicit frame stack** on the session
   ([§dd-dr:parse-traceback]): allocation-free live frames, snapshotted into every
   diagnostic as rendered title + span, innermost first — pylatexenc-style "while

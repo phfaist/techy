@@ -605,6 +605,12 @@ Once a direction is chosen, this warrants a `DESIGN_RATIONALE.md` entry with an
 `ARCHITECTURE.md` reference (CLAUDE.md rule 7); as an exploration report it follows the
 `TechyParsingMemoryFootprint.md` precedent and adds none yet.
 
+**2026-08-10 — direction chosen and implemented; the durable record is
+[§dd-dr:descent-guard]** (which resolves the questions above). Shipped: the
+`parse_construct` descent funnel, the `DescentGuard` on driver/`Language`/session
+(measured stack budget as the mechanism, depth limit as deterministic policy), and
+the boxed pass-through deltas.
+
 ---
 
 ## 8. Reproducing

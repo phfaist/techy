@@ -1162,6 +1162,11 @@ S4 application initially implemented the literal reading, correct at the time);
 the derived state inherits both fields from its base as usual, and a following
 group descent installs its own expectation through the descent invariant.)*
 
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]): the S4 note's
+"`parse_scoped` is its parser-shaped sugar" now names `parse_construct` —
+`parse_scoped` was renamed and generalized into the single descent entry point,
+still maintaining the session stack through `with_parsing_state` underneath.)*
+
 #### `TrivialLang` (renamed from `SimpleLang`): the test lang, not an on-ramp [§dd-dr:trivial-lang]
 
 Status: DECIDED (user, API-review T3 session).
@@ -3595,6 +3600,14 @@ techy-level engine). `descendants()` stays the flat stream.
 
 ## Construct parsers, dispatch, engine [§dd-dr:parsers-engine]
 
+*(Amended — descent-guard effort: the construct-parser return pair's delta side is
+**boxed** — `ConstructParser::parse` returns `(Self::Output,
+Option<Box<ParsingStateDelta<L>>>)`, and `NodesOutcome::after_effects` is
+`Option<Box<ParsingStateDelta<L>>>` — a decided per-frame stack-cost measure: the
+pass-through delta family dominated the recursion cycle's stack frames while
+nearly always carrying `None`. Rationale and scope: [§dd-dr:descent-guard].
+Entries below that spell the pair unboxed predate the boxing.)*
+
 #### Single-context parsing API (`ParseContext`) [§dd-dr:parse-context]
 
 Status: DECIDED (implemented; formerly proposed).
@@ -4285,6 +4298,14 @@ public with it (custom parser code building its own `ParseError`s needs the trac
 mutation path. It is ordering enforcement, not unwind safety: the crate is `no_std`, an
 unwind tears down the borrowed context, and a `Drop` guard would be over-engineering.
 
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `parse_scoped` is
+renamed and generalized into **`parse_construct`**, the single normative descent
+entry point (adds the optional frame and the descent-guard check; `state: None` =
+clone the current state). The structural-restore argument above carries over
+unchanged; the closure-shaped scoping lives on as `with_parsing_state` — a
+state-scoping utility, not a descent point — and `probe_token` is untouched. The
+name `parse_scoped` goes to [§dd-dr:superseded-names].)*
+
 #### No spec-side slots: slots are pure record-level vocabulary [§dd-dr:no-spec-side-slots]
 
 Status: DECIDED (user, slots session; supersedes the same session's earlier
@@ -4613,6 +4634,16 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
 
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `parse_scoped` is
+renamed and generalized into **`parse_construct`**, which takes over the
+invariant-bearing-plumbing doctrine seat named above — still a non-overridable
+`ParseContext` method, now also the single normative descent entry point (frame
+folding absorbed the separate `with_frame` composition at descent sites). And the
+trait gained its one required item, `type DescentGuard: DescentGuard;` — "defaulted
+methods only" above now reads "defaulted methods plus one required associated
+type"; `StdParseDriver` carries the choice as its third type parameter
+(`G = StdDescentGuard`, a private `PhantomData` field).)*
+
 #### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
 
 Status: SUPERSEDED (user, API-review Tier-C session) — the component struct is
@@ -4712,6 +4743,15 @@ L::SourceOrigin>`. A standalone binding needs the alias-defaults annotation
 (`let d: StdParseDriver = StdParseDriver::new(Recovery::Strict, ())`) — inside
 `Language::new`/`type Driver` positions the ruled annotation-free spelling
 holds.)*
+
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]): `StdParseDriver` gains
+a third defaulted parameter, `G = StdDescentGuard` (the
+`ParseDriver::DescentGuard` type choice), carried as a **private** `PhantomData`
+field. "Fields stay `pub`" above still holds for the three real fields, but the
+private carrier means downstream struct-literal construction of `StdParseDriver`
+is no longer possible — the intended path is `new()` + `with_source_resolver`.
+Recorded here because the semver baseline move for the descent-guard effort
+carries this break (cargo-semver-checks: `constructible_struct_adds_private_field`).)*
 
 #### Takeover staging sugar: `disable_all`, collection constructors, a committed invocation helper [§dd-dr:takeover-staging-sugar]
 
@@ -4882,6 +4922,13 @@ constructor value, cloned per invocation — the preset recipe passes
 `BodyMarker::not_body()` (retrieval by slot name `"attached"`); a body-marked
 ext remains a framework option `body()` finds ([§dd-dr:slot-roles]'s
 findability clause), never the shipped default.)*
+
+*(Amended — descent-guard effort ([§dd-dr:descent-guard]): the merged record the
+previous note quotes from `NodesOutcome` is now exported **boxed**
+(`NodesOutcome::after_effects: Option<Box<ParsingStateDelta<L>>>`), and the door
+unboxes it into the bundle — `AttachedSourceOutcome::after_effects` deliberately
+**stays** `Option<ParsingStateDelta<L>>`: the bundle is a per-inclusion return
+value off the recursion cycle, not a slot in every descent frame.)*
 
 #### `Language<L>` + `parse()`: the runtime bundle's landed surface [§dd-dr:language-parse-api]
 
@@ -5062,6 +5109,147 @@ full collapse (no `Default`, no `with_*` builders, no resolver surface);
 `ParsingState::lang_initial()` + the infallible `lang_initial_with_packages`
 landed, with the infallibility argument documented on the method; the delta idiom
 is `ParsingState::lang_initial().derived(&delta)?`.)*
+
+#### The descent guard: one descent entry point, a per-parse recursion limiter [§dd-dr:descent-guard]
+
+Status: DECIDED (user, descent-guard design session).
+
+Parsing recursion was unbounded, and stack overflow is **not a catchable failure**:
+it aborts the process — no `Result`, no diagnostic — a strictly worse outcome than
+the input-triggered panics [§dd-dr:panic-policy] already forbids, and a
+denial-of-service vector for any embedder parsing untrusted input. The measurements
+(`dev-docs/extra/TechyParsingStackDepth.md`): one syntactic nesting level costs
+4.3–8.0 KB of stack in release and 35–48 KB in debug, so a plain `cargo test`
+aborts on 61 nested `{}`. Two structural decisions plus one storage decision close
+this:
+
+**1. `parse_construct` is the single normative descent entry point.**
+`ParseContext::parse_construct(parser, state, frame)` (the pylatexenc
+`walker.parse_content` analog) is the method every descent — one `ConstructParser`
+running another over the same input — MUST go through. One funnel is what lets the
+engine attach its per-descent bookkeeping (enclosing-state stack, optional
+traceback frame, the guard check) uniformly, with no per-site cooperation. The
+contract's stated limit: plain-Rust recursion that bypasses the funnel is
+undetectable by design — documented, not enforceable. Details ruled with it:
+- `state: None` means **clone the current state** — identical swap/restore scoping
+  and the same enclosing-state stack entry as `Some(Arc::clone(&cx.state))`, never
+  "skip the scoping": whether a sub-parse runs under a different state is decided
+  by the caller's argument, not by the presence of scoping (the caller-decides
+  law), and the enclosing-state stack stays uniform across every descent.
+- **Frame folding**: `frame: Option<Frame<L>>` is pushed around the whole descent
+  and popped on the `Ok` and `Err` paths alike (errors are values, not unwinds);
+  the former hand-composed `with_frame(frame, |cx| cx.parse_scoped(…))` sites
+  collapse into one call. `parse_scoped` is removed — its scoping role is absorbed
+  (`with_parsing_state` remains the non-descent state-scoping utility;
+  [§dd-dr:parse-scoped] amendment; the name goes to [§dd-dr:superseded-names]).
+- `parse_nodes`/`parse_group` stay as **one-line delegates**: driver factory +
+  `parse_construct` fused — the uniform-routing contract (one driver override
+  applies to every descent site) — with prominent thin-wrapper rustdoc.
+- The two remaining direct `ConstructParser::parse` dispatch sites under a
+  hand-pushed frame (the expression-position invocation dispatch and the tack-on
+  field dispatch) were migrated into `parse_construct(parser, None, Some(frame))`
+  under the MUST rule. Accepted behavior delta: each site now also pushes an
+  enclosing-state stack entry for the descent's duration — an `Arc`-identical
+  duplicate of the current state, harmless under `ParsingStateStack`'s documented
+  scan semantics — restoring the "same descent points as the frame stack" symmetry
+  those sites were missing.
+
+**2. `DescentGuard`: a per-parse object asked before every descent.** The guard
+*type* is a driver associated type (`ParseDriver::DescentGuard` — the trait's one
+required item; monomorphized, since the check runs on every descent); the init
+*value* lives on `Language` (`with_descent_guard_init`), mirroring seed-state
+placement — configuration on the long-lived bundle, behavior type on the driver. The
+per-parse *instance* lives on the session: `parse_source` installs it eagerly (the
+standard guard measures its stack reference point at true parse entry, on the
+parsing thread), a hand-built `ParseContext` gets a lazy `Default`-init fallback at
+the first descent, and `ParserSession::install_descent_guard` is the public seam
+for hand-built sessions that want a configured guard. A language needing swappable
+guards per `Lang` uses multiple `Lang` markers or a multiplexer driver type (the
+[§dd-dr:parse-driver] revisit clause's route).
+- **The measured stack budget is the mechanism; the depth limit is deterministic
+  policy.** `StdDescentGuard`'s budget modes estimate consumption by address
+  distance from the init-time reference point — bounding the resource that is
+  actually exhausted. The `DepthLimit` mode counts **engine descents**, which run
+  ~2× the syntactic nesting depth (a group costs its own descent plus the content
+  run over its interior) — deterministic across platforms and build profiles, the
+  right mode for tests and format policies, but silent on actual stack use.
+- **`StdDescentGuard::DEFAULT_STACK_BUDGET` = 250 KiB in all builds** —
+  deliberately tight in debug (roughly ten to fourteen syntactic levels): an
+  untuned deep parse fails early with a refusal that names
+  `with_descent_guard_init`, instead of consuming an unknown amount of stack.
+- **`StdDescentGuard::HEADROOM` = 64 KiB, library-owned, `ComputedStackBudget`
+  only**: budget = probe() − HEADROOM — reserve for the work between two descent
+  checks and for the error path after a refusal. The Fixed/Computed asymmetry is
+  deliberate: a computed budget is a *physical-stack measurement* that must leave
+  room to act on a refusal, while a fixed budget is a caller-chosen *consumption
+  cap* — subtracting library headroom from it would silently repurpose the
+  caller's number.
+- **The 50% early warning is latched and unconfigured-only**: at the first descent
+  crossing half the budget, only when running on the unconfigured built-in
+  default, once per parse — condition `DescentLimitApproaching`, warning severity,
+  emitted immediately at the current position (not at parse end), pointing at the
+  configuration entry point.
+- **A refusal is `DescentLimitExceeded` and aborts under any recovery policy** — a
+  distinct condition, not `ImplementationError` (it is an input/configuration
+  limit, not an extension bug), with the live traceback including the just-pushed
+  frame. No tolerant fallback in v1: past the limit there is no safe way to
+  continue.
+- Naming: "descent" is established public vocabulary; "Stack"-only names were
+  rejected (collision with the crate's data-stack vocabulary: scope stack, frame
+  stack, enclosing-state stack). Implementation note: `StdDescentGuardInit`'s four
+  ruled modes (`FixedStackBudget`/`ComputedStackBudget`/`DepthLimit`/`Off`) live on
+  a private enum behind snake_case constructors — Rust enum variants cannot carry
+  the required private "unconfigured" mark, so construction is constructor-only.
+
+**3. Delta boxing.** `ConstructParser::parse` returns `(Self::Output,
+Option<Box<ParsingStateDelta<L>>>)` and `NodesOutcome::after_effects` is
+`Option<Box<ParsingStateDelta<L>>>`: the pass-through delta family dominated the
+recursion cycle's frames (the measurement: 61% of `NodesParser::parse`'s debug
+frame) while nearly every slot carries `None` — boxing moves the 208-byte value
+behind a pointer exactly where it rides the recursion.
+`AttachedSourceOutcome::after_effects` deliberately stays unboxed: the bundle is a
+per-inclusion return value off the recursion cycle, not a slot in every descent
+frame (the ruled scope covers the pair and `NodesOutcome` only).
+
+Rejected alternatives: a depth limit as *the* mechanism (a level count says
+nothing about actual stack use — per-level cost varies ~8× across build profiles
+and targets, so any count is wrong in one of them; it survives as the
+deterministic policy mode); `dyn` guard storage on the session (the check runs on
+every descent — the associated type keeps it monomorphized at the cost of exactly
+one line per driver); a guard parameter on `Language::parse` (per-call
+configuration for a per-language policy; `Language` is the configuration home,
+mirroring the seed state); warning unconditionally rather than unconfigured-only
+(an explicitly configured limit is a deliberate choice — the warning exists to
+flag the untuned default, not to nag every deep legitimate parse);
+callback-owned headroom (every probe author would have to know the engine's
+between-checks consumption — that number is the library's to own); stacker-style
+stack *growing* (`stacker::maybe_grow` segments) — unavailable to a `no_std` core,
+and it enlarges the resource instead of enforcing a policy on untrusted input;
+trampolining / an explicit heap descent stack (a whole-engine restructuring that
+forfeits the plain recursive parser-authoring model — third-party
+`ConstructParser`s recurse in ordinary Rust regardless).
+
+Accepted costs: `ParseDriver` loses "empty impl is complete" by exactly one
+required line (`type DescentGuard = StdDescentGuard;`); the two migrated dispatch
+sites push an extra `Arc`-identical enclosing-state stack entry each (above); the
+unconfigured default warns at roughly five to eight syntactic levels in debug
+builds (the intended nudge, but visible in test suites — deep-nesting fixtures
+configure `depth_limit`/a larger budget/`off` explicitly); the guard cannot see
+plain-Rust recursion that bypasses the funnel; and `StdParseDriver` gained a third
+type parameter `G` carried as a **private** `PhantomData` field — downstream
+struct-literal construction of `StdParseDriver` is no longer possible; the
+intended path is `new()` + builders (baseline-visible break, recorded for the
+semver baseline move; [§dd-dr:command-resolver] amendment).
+
+Deferred, not rejected: a compile-time witness parameter on
+`ConstructParser::parse` (would make the funnel structurally unavoidable);
+tolerant per-site fallbacks for a refusal; consumer-traversal (`walk`/`recompose`)
+guards — the docs state that the parse-side budget does not bound hand-built trees
+or traversals run on smaller threads.
+
+Revisit if: a refusal shows up in legitimate documents under a properly computed
+budget (the headroom constant or the ~2× descent factor is then miscalibrated), or
+a framework needs the deferred witness parameter or traversal-side guards.
 
 ---
 
@@ -5889,6 +6077,12 @@ re-opens a settled argument:
   `FeaturePresent`/`FeatureAbsent`/`LangHas*`/`LangFeatures`; and "facet" as
   public vocabulary — banned from all public names and documentation (internal
   shorthand only; user ruling).
+- From the descent-guard design session ([§dd-dr:descent-guard]): `parse_scoped` —
+  superseded by **`parse_construct`**, the single descent entry point (the scoping
+  role without descent obligations is `with_parsing_state`); and "Stack"-only
+  names for the guard family — they collide with the crate's data-stack
+  vocabulary (scope stack, frame stack, enclosing-state stack); the vocabulary is
+  *descent* (`DescentGuard`, `DescentLimitExceeded`, `DescentLimitApproaching`).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 

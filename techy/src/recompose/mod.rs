@@ -119,6 +119,14 @@
 //! what the parse records is what recomposition can reproduce (the preset's
 //! accuracy rule,
 //! [`CallableData::invocation_syntax`](crate::core::node::CallableData::invocation_syntax)).
+//!
+//! The fold recurses once per tree nesting level (at a small, constant stack
+//! cost per level), and the parse-side descent-guard budget
+//! ([`DescentGuard`](crate::core::DescentGuard)) does not bound it: a very
+//! deep tree — hand-built through
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or recomposed on
+//! a thread with a smaller stack than the parse's — can still exhaust the
+//! thread's stack.
 
 use core::fmt;
 

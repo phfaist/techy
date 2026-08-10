@@ -67,6 +67,14 @@
 //! [`Concat`](crate::recompose::Recompose::Concat) default scope, which skips
 //! both roles: the read/compose asymmetry is part of the slot-role contract
 //! ([`SlotRole`]), not an accident of implementation.
+//!
+//! The walk recurses once per tree nesting level (at a small, constant stack
+//! cost per level), and the parse-side descent-guard budget
+//! ([`DescentGuard`](crate::core::DescentGuard)) does not bound it: a very
+//! deep tree — hand-built through
+//! [`NodeTreeBuilder`](crate::core::node::NodeTreeBuilder), or walked on a
+//! thread with a smaller stack than the parse's — can still exhaust the
+//! thread's stack.
 
 use core::fmt;
 use core::ops::ControlFlow;

@@ -15,6 +15,13 @@
 //! crashing — under any recovery policy, since past the limit there is no safe way
 //! to continue.
 //!
+//! The guard bounds the **parse** only. Trees built by hand through a
+//! [`NodeTreeBuilder`](crate::node::NodeTreeBuilder) can be deeper than any
+//! parse-side limit, and consumer traversals over a parsed tree
+//! ([`walk`](crate::visit::walk), [`recompose`](crate::recompose::recompose))
+//! recurse on their own thread's stack — running them on a thread with a smaller
+//! stack than the parse's can still exhaust that stack.
+//!
 //! Which guard *type* a language uses is part of its driver
 //! ([`ParseDriver::DescentGuard`](super::ParseDriver::DescentGuard)); the guard's
 //! *configuration* travels on the [`Language`](super::Language) value
