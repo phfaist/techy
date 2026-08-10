@@ -849,10 +849,7 @@ pub fn format_position_with<O: SourceOrigin>(
     let source = span.source();
     let pos_str = match line_cols.line_col(source, span.start()) {
         Some((line, col)) => format!("@ (line {}, col {})", line, col),
-        None => format!(
-            "@ char pos {} (no line info: line-index scan limit exceeded)",
-            span.start()
-        ),
+        None => format!("@ char pos {} (no line info)", span.start()),
     };
 
     match source.origin().label() {
@@ -1323,14 +1320,16 @@ mod tests {
 
     #[test]
     fn format_position_char_pos_fallback() {
-        // A source too large for line indexing falls back to raw byte positions, with a
-        // parenthetical explaining why no line/column is shown.
+        // A source too large for line indexing falls back to raw byte positions, with
+        // a parenthetical noting that no line/column is available. The parenthetical
+        // deliberately names no cause: a `None` from a `LineColProvider` can have any
+        // provider-specific reason.
         let content = "a\n".repeat(DEFAULT_MAX_TEST_LEN);
         let source = arc_source(&content);
         let span = SourceSpan::new(&source, 42..43);
 
         let formatted = format_position(&span);
-        assert_eq!(formatted, "@ char pos 42 (no line info: line-index scan limit exceeded)");
+        assert_eq!(formatted, "@ char pos 42 (no line info)");
     }
 
     // Exceeds the default max scan length of 500_000 bytes ("a\n" is 2 bytes).
