@@ -195,6 +195,27 @@ impl<'s, L: Lang> Token<'s, L> {
     }
 }
 
+impl<L: Lang> TokenKind<'_, L> {
+    /// The variant's static name — the bare name without the variant's data
+    /// (`"Char"`, `"GroupOpen"`, `"GroupClose"`, `"Command"`, `"Specials"`,
+    /// `"Comment"`, `"ParagraphBreak"`, or `"EndOfStream"`), following
+    /// [`NodeKind::as_str`](crate::node::NodeKind::as_str): for log labels and
+    /// name-keyed tables. Independent of the language parameter; the data is on
+    /// the variants themselves.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            TokenKind::Char(_) => "Char",
+            TokenKind::GroupOpen { .. } => "GroupOpen",
+            TokenKind::GroupClose { .. } => "GroupClose",
+            TokenKind::Command { .. } => "Command",
+            TokenKind::Specials { .. } => "Specials",
+            TokenKind::Comment { .. } => "Comment",
+            TokenKind::ParagraphBreak => "ParagraphBreak",
+            TokenKind::EndOfStream => "EndOfStream",
+        }
+    }
+}
+
 // Manual impls: derives would demand `L: Clone/Debug/PartialEq` bounds although no `L`
 // value is stored (only `Arc<dyn CallableSpec<L>>`).
 
@@ -382,6 +403,54 @@ mod tests {
     fn a_token_with_incoherent_pre_space_panics_in_all_builds() {
         // The approved always-on precondition assert ([§dd-dr:panic-policy] rule 3).
         let _ = Token::<PlainLang>::new(TokenKind::Char('a'), Span::new(5, 6), Span::empty(3));
+    }
+
+    #[test]
+    fn as_str_answers_the_bare_variant_name() {
+        use crate::spec::StdCallableSpec;
+        use crate::token::GroupRule;
+        use alloc::sync::Arc;
+        use alloc::vec;
+
+        // The duplicate name table below is deliberate and exhaustive (no `_` arm):
+        // adding or renaming a variant fails compilation here, keeping `as_str` in
+        // step.
+        fn expected(kind: &TokenKind<'_, PlainLang>) -> &'static str {
+            match kind {
+                TokenKind::Char(_) => "Char",
+                TokenKind::GroupOpen { .. } => "GroupOpen",
+                TokenKind::GroupClose { .. } => "GroupClose",
+                TokenKind::Command { .. } => "Command",
+                TokenKind::Specials { .. } => "Specials",
+                TokenKind::Comment { .. } => "Comment",
+                TokenKind::ParagraphBreak => "ParagraphBreak",
+                TokenKind::EndOfStream => "EndOfStream",
+            }
+        }
+
+        let rule: Arc<GroupRule<PlainLang>> =
+            Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        let kinds: vec::Vec<TokenKind<'_, PlainLang>> = vec![
+            TokenKind::Char('a'),
+            TokenKind::GroupOpen { delim: "{", rule },
+            TokenKind::GroupClose { delim: "}" },
+            TokenKind::Command { name: "frac", escape_char: '\\', post_space: Span::empty(5) },
+            TokenKind::Specials {
+                callable_type: 0,
+                name: "~",
+                spec: Arc::new(StdCallableSpec::default()),
+            },
+            TokenKind::Comment {
+                start: Span::new(0, 1),
+                content: " note",
+                post_space: Span::empty(6),
+            },
+            TokenKind::ParagraphBreak,
+            TokenKind::EndOfStream,
+        ];
+        for kind in &kinds {
+            assert_eq!(kind.as_str(), expected(kind));
+        }
     }
 
     #[test]

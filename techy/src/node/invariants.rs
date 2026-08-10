@@ -411,6 +411,41 @@ pub enum TreeViolationKind {
     },
 }
 
+impl TreeViolationKind {
+    /// The variant's static name — the bare name without the variant's data
+    /// (`"Empty"`, `"ChildrenOutOfBounds"`, …), following
+    /// [`NodeKind::as_str`](super::NodeKind::as_str): for log labels and name-keyed
+    /// tables that must not fall out of step when a variant is added or renamed
+    /// (the enum is `#[non_exhaustive]`). The full detail is the
+    /// [`Display`](core::fmt::Display) rendering; the data is on the variants
+    /// themselves.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            TreeViolationKind::Empty => "Empty",
+            TreeViolationKind::ChildrenOutOfBounds { .. } => "ChildrenOutOfBounds",
+            TreeViolationKind::ChildrenNotAfterParent { .. } => "ChildrenNotAfterParent",
+            TreeViolationKind::MultipleParents { .. } => "MultipleParents",
+            TreeViolationKind::RootHasParent { .. } => "RootHasParent",
+            TreeViolationKind::Unreachable => "Unreachable",
+            TreeViolationKind::LeafWithChildren { .. } => "LeafWithChildren",
+            TreeViolationKind::UnresolvedRegion { .. } => "UnresolvedRegion",
+            TreeViolationKind::RegionNotTiling { .. } => "RegionNotTiling",
+            TreeViolationKind::ChildrenNotInRegions { .. } => "ChildrenNotInRegions",
+            TreeViolationKind::ContentOutsideRegion { .. } => "ContentOutsideRegion",
+            TreeViolationKind::ContentOutsideContentParent { .. } => {
+                "ContentOutsideContentParent"
+            }
+            TreeViolationKind::ContentParentOutsideSubtree { .. } => {
+                "ContentParentOutsideSubtree"
+            }
+            TreeViolationKind::ContentParentOutsideRegion { .. } => {
+                "ContentParentOutsideRegion"
+            }
+            TreeViolationKind::SpannedContentInvalid { .. } => "SpannedContentInvalid",
+        }
+    }
+}
+
 impl fmt::Display for TreeViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.node {
@@ -877,6 +912,82 @@ mod tests {
             alloc::vec![a, group, d], (), (),
         ).unwrap();
         builder.finish(root).unwrap()
+    }
+
+    #[test]
+    fn as_str_answers_the_bare_variant_name() {
+        // The duplicate name table below is deliberate and exhaustive (no `_` arm):
+        // adding or renaming a variant fails compilation here, keeping `as_str` in
+        // step.
+        fn expected(kind: &TreeViolationKind) -> &'static str {
+            match kind {
+                TreeViolationKind::Empty => "Empty",
+                TreeViolationKind::ChildrenOutOfBounds { .. } => "ChildrenOutOfBounds",
+                TreeViolationKind::ChildrenNotAfterParent { .. } => "ChildrenNotAfterParent",
+                TreeViolationKind::MultipleParents { .. } => "MultipleParents",
+                TreeViolationKind::RootHasParent { .. } => "RootHasParent",
+                TreeViolationKind::Unreachable => "Unreachable",
+                TreeViolationKind::LeafWithChildren { .. } => "LeafWithChildren",
+                TreeViolationKind::UnresolvedRegion { .. } => "UnresolvedRegion",
+                TreeViolationKind::RegionNotTiling { .. } => "RegionNotTiling",
+                TreeViolationKind::ChildrenNotInRegions { .. } => "ChildrenNotInRegions",
+                TreeViolationKind::ContentOutsideRegion { .. } => "ContentOutsideRegion",
+                TreeViolationKind::ContentOutsideContentParent { .. } => {
+                    "ContentOutsideContentParent"
+                }
+                TreeViolationKind::ContentParentOutsideSubtree { .. } => {
+                    "ContentParentOutsideSubtree"
+                }
+                TreeViolationKind::ContentParentOutsideRegion { .. } => {
+                    "ContentParentOutsideRegion"
+                }
+                TreeViolationKind::SpannedContentInvalid { .. } => "SpannedContentInvalid",
+            }
+        }
+
+        let tree = build_valid();
+        let id = tree.root().id();
+        let kinds = alloc::vec![
+            TreeViolationKind::Empty,
+            TreeViolationKind::ChildrenOutOfBounds { children: 0..9, node_count: 5 },
+            TreeViolationKind::ChildrenNotAfterParent { children: 0..1 },
+            TreeViolationKind::MultipleParents { first_parent: id, second_parent: id },
+            TreeViolationKind::RootHasParent { parent: id },
+            TreeViolationKind::Unreachable,
+            TreeViolationKind::LeafWithChildren { kind: "Chars" },
+            TreeViolationKind::UnresolvedRegion { region: 0 },
+            TreeViolationKind::RegionNotTiling {
+                region: 0,
+                children: 1..2,
+                block: 1..2,
+                expected_start: 1,
+            },
+            TreeViolationKind::ChildrenNotInRegions { unassigned: 1..2 },
+            TreeViolationKind::ContentOutsideRegion {
+                region: 0,
+                content: 1..2,
+                region_children: 1..2,
+            },
+            TreeViolationKind::ContentOutsideContentParent {
+                region: 0,
+                content: 1..2,
+                parent_children: 1..2,
+            },
+            TreeViolationKind::ContentParentOutsideSubtree { region: 0, content_parent: id },
+            TreeViolationKind::ContentParentOutsideRegion {
+                region: 0,
+                content_parent: id,
+                region_children: 1..2,
+            },
+            TreeViolationKind::SpannedContentInvalid {
+                what: "chars content",
+                span: Span::new(0, 1),
+                content_len: 1,
+            },
+        ];
+        for kind in &kinds {
+            assert_eq!(kind.as_str(), expected(kind));
+        }
     }
 
     /// Assemble a tree directly from node data, bypassing the builder's validation —
