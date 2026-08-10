@@ -38,6 +38,7 @@ use techy::latexlike::{
 };
 use techy::recompose::{recompose, Recompose, RecomposeContext, RecomposeError, Recomposer};
 use techy::source::MapResolver;
+use techy::transform::{restage, Restage, RestageContext};
 
 use techy::core::specs::Package;
 
@@ -308,6 +309,41 @@ fn tolerant_malformed_terminator_elides_the_consumed_end_spelling() {
     // The consumed-alone spelling is the command plus its post-space:
     let expected = "\\begin{A}xy";
     assert_eq!(reemit(Recovery::Tolerant, true, input), expected);
+}
+
+// --- the falsifiability check -------------------------------------------------------------
+
+/// The equality matrices above are also satisfied by the forbidden span-copying
+/// implementation: on an unedited tree, "emit the recorded payload" and "copy
+/// the node's span content" produce the same bytes. This test separates the
+/// two: drop one middle node via [`techy::transform::restage`], then reemit —
+/// payload-driven recomposition emits the surviving nodes' recorded text only,
+/// while a span-copying recomposer would resurrect the dropped bytes from an
+/// enclosing span.
+#[test]
+fn dropping_a_middle_node_drops_exactly_its_text() {
+    let input = "one \\emph{two} three";
+    let result = language(Recovery::Strict).parse(input).expect("oracle inputs parse");
+    assert!(result.diagnostics.is_empty());
+
+    // Drop the `\emph` invocation — a middle child of the root list; every
+    // other node restages unchanged.
+    let restaged = restage(
+        &result.tree,
+        &mut |node: NodeRef<'_, Latexlike>,
+              _cx: &mut RestageContext<'_, Latexlike, (), ()>| {
+            Ok::<_, std::convert::Infallible>(if node.name() == Some("emph") {
+                Restage::Emit(Vec::new())
+            } else {
+                Restage::Descend(())
+            })
+        },
+    )
+    .unwrap();
+
+    let out = recompose(&restaged, (), &mut source_recomposer()).unwrap();
+    // The input minus exactly the dropped node's text (`\emph{two}`).
+    assert_eq!(out, "one  three");
 }
 
 // --- the multi-source matrix (rides the S6 `\input` surface) ----------------------------
