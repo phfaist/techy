@@ -190,10 +190,12 @@ pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
         /// The matched rigid name group (span, end, and the matched rule).
         name_group: NameGroup<L>,
     },
-    /// A raw body consumed its terminator as one **literal** string (the verbatim
-    /// path — the whole `\end{name}` spelling is a single expected-close token, so
-    /// no tokenized scan exists to report): only the matched literal's span is
-    /// known; the driving composition records standard-shaped end facts itself.
+    /// A body consumed its terminator as one **literal** string it was given no
+    /// finer description of ([`VerbatimBodyTerminator::Literal`](super::VerbatimBodyTerminator::Literal)):
+    /// the matched span is the only fact there is to report. A raw body whose
+    /// terminator *was* described piecewise reports
+    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) instead, even though it
+    /// too consumed the terminator as a single token.
     Literal {
         /// The consumed literal terminator's span.
         span: Span,

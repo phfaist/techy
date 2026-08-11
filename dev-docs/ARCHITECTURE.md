@@ -981,9 +981,12 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   time with content-preserving recovery ([§dd-dr:orphan-end-recovery]).
 - **Verbatim** ([§dd-dr:verbatim-family]): the features-disabled + expected-close
   recipe as data (`verbatim_state_delta`), with `VerbatimArgumentParser` (`\verb|…|`) and
-  `VerbatimBodyParser` (literal-terminator environment contents, pluggable via
-  `make_body_parser`); body content designation keeps every byte while gobbling the
-  post-`\begin{verbatim}` newline out of the content
+  `VerbatimBodyParser` (raw environment contents up to a terminator, pluggable via
+  `make_body_parser`); the terminator is given as a `VerbatimBodyTerminator` — a bare
+  literal string, or the pieces of a stop command back-referencing the invocation name
+  (`\end{verbatim}`), which the parser composes into the one raw string it reads up to
+  and reports back as standard `Scanned` end facts; body content designation keeps
+  every byte while gobbling the post-`\begin{verbatim}` newline out of the content
   ([§dd-dr:environment-body-content]).
 - **The argument-code factory** (`argument_specs`, list-primary;
   `argument_specs_named` for `(code, name)` pairs;

@@ -60,12 +60,11 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use alloc::format;
-
 use crate::constructs::{
     parse_declared_arguments, read_rigid_name_group, ConstructParser,
     ConstructParserResult, EnvironmentBeginSyntaxData, EnvironmentBody,
     EnvironmentBodyParser, Invocation, ParseContext, VerbatimBodyParser,
+    VerbatimBodyTerminator,
 };
 use crate::error::{DiagnosticInfo, ParseError};
 use crate::node::{
@@ -78,6 +77,7 @@ use crate::scopes::{CallableQuery, CallableSyntax};
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
+use crate::token::GroupRule;
 
 use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{
@@ -289,9 +289,11 @@ impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
 /// `LatexVerbatimEnvironmentContentsParser` wired as an [`EnvironmentBehavior`]):
 /// declared arguments parse normally — tokenized, before the raw region begins
 /// (`lstlisting`-style options) — and the **body is raw text**, read by the core
-/// [`VerbatimBodyParser`] up to the literal `\end{name}` terminator (composed per
-/// invocation with the preset's canonical `\` escape and `{…}` name group, the same
-/// spellings the `\begin` composition itself is built on). The single newline right
+/// [`VerbatimBodyParser`] up to the `\end{name}` terminator, given to it as a
+/// [`StopEnvironmentCommand`](VerbatimBodyTerminator::StopEnvironmentCommand)
+/// terminator built from the invocation's own spellings (the escape character it was
+/// written with and its name group's delimiters, the same spellings the `\begin`
+/// composition itself is built on). The single newline right
 /// after the begin syntax is staged but designated out of the body content
 /// (the gobble rule — see [`VerbatimBodyParser`]).
 ///
@@ -349,21 +351,26 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for VerbatimBehavior<LLL> {
         &'p self,
         invocation: EnvironmentInvocation<'p>,
     ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
-        // The literal terminator, composed from the invocation's own spellings
-        // (the begin trigger's escape char and the begin name group's
-        // delimiters) — the same bytes the standard end facts are recorded from.
+        // The terminator's pieces, taken from the invocation's own spellings (the
+        // begin trigger's escape char and the begin name group's delimiters): the
+        // parser composes `\end{name}` from them to read the body up to, and reports
+        // the very same pieces back as the standard end facts. The name group rule is
+        // minted here rather than carried off the matched begin token — the delimiter
+        // bytes and the group class are all that is recorded from it.
         Box::new(
             VerbatimBodyParser::new(
                 invocation.trigger_span,
                 invocation.name,
-                format!(
-                    "{}{}{}{}{}",
-                    invocation.escape_char,
-                    END_COMMAND_NAME,
-                    invocation.name_group_open,
-                    invocation.name,
-                    invocation.name_group_close,
-                ),
+                VerbatimBodyTerminator::StopEnvironmentCommand {
+                    escape_char: invocation.escape_char,
+                    invocation_name: invocation.name,
+                    stop_command_name: END_COMMAND_NAME,
+                    name_group_rule: Arc::new(GroupRule {
+                        group_type: LLL::GroupTypeId::content_group(),
+                        open: invocation.name_group_open.into(),
+                        close: invocation.name_group_close.into(),
+                    }),
+                },
                 LLL::GroupTypeId::verbatim_group(),
             )
             .with_invocation_name_span(invocation.name_span),
@@ -806,11 +813,11 @@ where
 
         // The payload, constructed once at staging time: the begin facts the
         // composition scanned plus the terminator facts the body parser (the
-        // terminator consumer) reported back — a tokenized terminator carries its
-        // full spelling; a raw (verbatim) body consumed its terminator as one
-        // literal token (std-shaped facts synthesized by the record); a body that
-        // closed without a terminator (mismatch, malformed, end of input) leaves
-        // the end side empty.
+        // terminator consumer) reported back — the full command-plus-name-group
+        // spelling for a tokenized terminator, and for a raw (verbatim) body too,
+        // which consumed its terminator as one token but was given its pieces; a
+        // body that closed without a terminator (mismatch, malformed, end of input)
+        // leaves the end side empty.
         let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator);
 
         let offset = children.len() as u32;

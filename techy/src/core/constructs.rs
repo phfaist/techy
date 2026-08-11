@@ -70,6 +70,6 @@ pub use crate::constructs::{
     TokenStopCondition, TokenStopKind, UnclosedGroup, UnclosedGroupFound,
     UnresolvableCommand, UnresolvableSourceReference, UnterminatedVerbatim,
     UnusableRecoveryToken, UnusableRecoveryTokenKind, VerbatimArgumentParser,
-    VerbatimBodyParser,
+    VerbatimBodyParser, VerbatimBodyTerminator,
 };
 pub use crate::spec::{ArgumentParser, ParsedArgumentNodes};

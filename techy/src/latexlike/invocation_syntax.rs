@@ -293,9 +293,11 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// Build the record from the parsed facts: the begin side's
     /// [`EnvironmentBeginSyntaxData`] (validated command trigger + matched rigid
     /// name group) and the terminator facts the body parser reported back —
-    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a tokenized
-    /// terminator, [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a
-    /// raw (verbatim) body's one-token literal terminator, `None` when the body
+    /// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a terminator whose
+    /// command-plus-name-group pieces are known (a tokenized one, and a raw body's
+    /// too when it was given the pieces),
+    /// [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a raw body given
+    /// nothing but a terminator string, `None` when the body
     /// closed without consuming one (mismatch, malformed terminator, end of
     /// input) — the end side then stays empty.
     fn from_parsed(
@@ -359,13 +361,15 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
     ///   span-backed);
     /// - a [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) terminator
     ///   transcribes the end side the same way;
-    /// - a [`Literal`](EnvironmentTerminatorSyntaxData::Literal) terminator (the
-    ///   verbatim path — the whole `\end{name}` spelling was one expected-close
-    ///   token, so no tokenized facts exist) synthesizes a **standard-shaped**
-    ///   end side from the begin side's facts and the preset's `end` command
-    ///   word: same escape character and name-group rule, owned command word,
-    ///   empty post-space — exactly the spelling the literal terminator was
-    ///   composed from;
+    /// - a [`Literal`](EnvironmentTerminatorSyntaxData::Literal) terminator has no
+    ///   command-plus-name-group spelling to transcribe, and this record has
+    ///   nowhere to keep the literal instead (the type docs): the end side is
+    ///   filled with a placeholder command word that re-emits visibly wrong, so a
+    ///   record built this way is never mistaken for an accurate one. The preset's
+    ///   own verbatim environments do not take this path — they hand
+    ///   [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser) a
+    ///   [`StopEnvironmentCommand`](crate::core::constructs::VerbatimBodyTerminator::StopEnvironmentCommand)
+    ///   terminator, which reports `Scanned` facts;
     /// - `None` leaves the end side empty.
     fn from_parsed(
         begin: EnvironmentBeginSyntaxData<L>,
@@ -623,21 +627,30 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_environments_synthesize_std_end_facts_from_the_literal() {
+    fn verbatim_environments_record_std_end_facts_from_the_terminator() {
         let language = env_language();
         let content = "\\begin{verbatim}\na % b\n\\end{verbatim}";
         let result = parse_ok(&language, content);
         let env = result.tree.root().child(0).unwrap();
         let syntax = env_payload(env);
 
-        // The raw body consumed its terminator as one literal token; the record
-        // holds standard-shaped end facts (begin's escape char + rule, owned
-        // command word, empty post-space).
-        let end = syntax.end.as_ref().expect("the literal terminator was consumed");
+        // The raw body consumed its terminator as one token, but it was *given*
+        // the terminator piecewise (`VerbatimBodyTerminator::StopEnvironmentCommand`)
+        // and reports those pieces back as standard `Scanned` facts — span-backed
+        // like a tokenized terminator's, not synthesized.
+        let end = syntax.end.as_ref().expect("the terminator was consumed");
         assert_eq!(end.escape_char, '\\');
         let source = src(content);
+        let evpos = content.find("\\end{verbatim}").unwrap();
+        let TextContent::Spanned(command_word) = end.command_word else {
+            panic!("the end command word is span-backed, got {:?}", end.command_word);
+        };
+        assert_eq!(command_word.range(), evpos + 1..evpos + 4);
         assert_eq!(end.command_word.resolve(&source), "end");
-        assert!(end.command_word.is_owned());
+        let TextContent::Spanned(post_space) = end.post_space else {
+            panic!("the end post-space is span-backed, got {:?}", end.post_space);
+        };
+        assert_eq!(post_space.range(), evpos + 4..evpos + 4);
         assert_eq!(end.post_space.resolve(&source), "");
         assert_eq!(syntax.write_end("verbatim", &source), "\\end{verbatim}");
     }

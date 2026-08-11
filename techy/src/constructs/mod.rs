@@ -75,7 +75,7 @@ pub use nodes_parser::{
 };
 pub use verbatim_parser::{
     verbatim_state_delta, ExpectedVerbatimDelimiter, UnterminatedVerbatim,
-    VerbatimArgumentParser, VerbatimBodyParser,
+    VerbatimArgumentParser, VerbatimBodyParser, VerbatimBodyTerminator,
 };
 
 use alloc::boxed::Box;

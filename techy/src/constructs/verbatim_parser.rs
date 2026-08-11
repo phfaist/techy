@@ -18,9 +18,10 @@
 //! - [`VerbatimArgumentParser`] — delimited verbatim in argument position
 //!   (`\verb|…|`; `LatexDelimitedVerbatimParser`): auto-matched or fixed delimiters,
 //!   depth counter for paired delimiters.
-//! - [`VerbatimBodyParser`] — a verbatim environment body: raw content up to a literal
-//!   terminator string (`\end{verbatim}`), the single newline after the opening
-//!   scaffolding gobbled out of the designated content.
+//! - [`VerbatimBodyParser`] — a verbatim environment body: raw content up to its
+//!   terminator ([`VerbatimBodyTerminator`] — a literal string, or a stop command
+//!   back-referencing the invocation name, `\end{verbatim}`), the single newline after
+//!   the opening scaffolding gobbled out of the designated content.
 //!
 //! # Node shapes
 //!
@@ -59,7 +60,7 @@ use crate::token::{GroupRule, Token, TokenKind};
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
     EnvironmentBody, EnvironmentTerminatorSyntaxData, MissingEnvironmentTerminator,
-    MissingTerminatorFound,
+    MissingTerminatorFound, NameGroup,
 };
 use super::{ConstructParser, ConstructParserResult, ParseContext};
 
@@ -452,15 +453,35 @@ impl<L: Lang> fmt::Debug for VerbatimArgumentParser<L> {
 }
 
 /// Specification of upon which tokens the verbatim-body-parser should terminate.
-/// One either specifies a full literal terminator syntax that is expected, or 
+/// One either specifies a full literal terminator syntax that is expected, or
 /// a sequence of the type `<ESC-CHAR><END-COMMAND>{<NAME>}`, such as
 /// `\end{verbatim}`.
+///
+/// Both shapes are **read** identically: [`VerbatimBodyParser`] composes one raw
+/// terminator string out of the variant's fields and installs it as the body state's
+/// expected group close ([`verbatim_state_delta`]), so the whole terminator arrives
+/// as a single token — a raw body never tokenizes its terminator, whatever its shape.
+/// The two shapes differ in the facts the parser reports back for the consumed
+/// terminator ([`EnvironmentBody::terminator`]): a literal one has no structure to
+/// report beyond its span
+/// ([`Literal`](EnvironmentTerminatorSyntaxData::Literal)), whereas a stop-command
+/// one was composed from known pieces and reports them as
+/// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) facts — the same shape
+/// [`EnvironmentBodyParser`](super::EnvironmentBodyParser) reports after its
+/// tokenized scan, so a recording consumer needs no separate raw-body arm.
 pub enum VerbatimBodyTerminator<'p, L : Lang> {
+    /// The terminator given as one raw string, with no further structure to it.
     Literal {
         /// The terminator, as literal raw text (e.g. `|END_VERBATIM_HERE|`)
         terminator : String
     },
+    /// The terminator given as an environment-terminating command back-referencing
+    /// the invocation's name — `\end{verbatim}`, spelled out piece by piece.
     StopEnvironmentCommand {
+        /// The escape character the terminator command is written with (`\` for
+        /// `\end{verbatim}`) — the canonical spelling the composing caller uses,
+        /// ordinarily the one its own opening command was written with.
+        escape_char: char,
         /// The invocation name the terminator must back-reference (`lstlisting` for
         /// `\begin{lstlisting} … \end{lstlisting}`), and the name diagnostics call
         /// the environment.
@@ -473,6 +494,91 @@ pub enum VerbatimBodyTerminator<'p, L : Lang> {
     }
 }
 
+impl<L: Lang> VerbatimBodyTerminator<'_, L> {
+    /// The raw terminator string the body is read up to: the literal as given, or
+    /// the stop command's spelling composed piece by piece — escape character,
+    /// command name, name group open delimiter, invocation name, name group close
+    /// delimiter (`\end{verbatim}`). No whitespace is tolerated anywhere inside it:
+    /// the composed string is matched byte for byte, so `\end {verbatim}` does not
+    /// end the body.
+    fn text(&self) -> String {
+        match self {
+            VerbatimBodyTerminator::Literal { terminator } => terminator.clone(),
+            VerbatimBodyTerminator::StopEnvironmentCommand {
+                escape_char,
+                invocation_name,
+                stop_command_name,
+                name_group_rule,
+            } => {
+                let mut text = String::new();
+                text.push(*escape_char);
+                text.push_str(stop_command_name);
+                text.push_str(&name_group_rule.open);
+                text.push_str(invocation_name);
+                text.push_str(&name_group_rule.close);
+                text
+            }
+        }
+    }
+
+    /// The spelling facts reported for a consumed terminator occupying `span` —
+    /// the arm matching this terminator's own shape (the type docs). The
+    /// stop-command arm's spans are the pieces [`text`](Self::text) composed the
+    /// matched string from, laid out from `span`'s start in that same order; the
+    /// post-space span is empty, the composed spelling having no gap to record.
+    fn syntax_data(&self, span: Span) -> EnvironmentTerminatorSyntaxData<L> {
+        match self {
+            VerbatimBodyTerminator::Literal { .. } => {
+                EnvironmentTerminatorSyntaxData::Literal { span }
+            }
+            VerbatimBodyTerminator::StopEnvironmentCommand {
+                escape_char,
+                invocation_name,
+                stop_command_name,
+                name_group_rule,
+            } => {
+                let command_word_start = span.start() + escape_char.len_utf8();
+                let command_word_end = command_word_start + stop_command_name.len();
+                let name_start = command_word_end + name_group_rule.open.len();
+                let name_end = name_start + invocation_name.len();
+                EnvironmentTerminatorSyntaxData::Scanned {
+                    escape_char: *escape_char,
+                    command_word: Span::new(command_word_start, command_word_end),
+                    post_space: Span::empty(command_word_end),
+                    name_group: NameGroup {
+                        name_span: Span::new(name_start, name_end),
+                        end: span.end(),
+                        rule: Arc::clone(name_group_rule),
+                    },
+                }
+            }
+        }
+    }
+}
+
+// Manual impl: a derive would demand `L: Debug` although only an `Arc` to rule data
+// is stored.
+impl<L: Lang> fmt::Debug for VerbatimBodyTerminator<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VerbatimBodyTerminator::Literal { terminator } => {
+                f.debug_struct("Literal").field("terminator", terminator).finish()
+            }
+            VerbatimBodyTerminator::StopEnvironmentCommand {
+                escape_char,
+                invocation_name,
+                stop_command_name,
+                name_group_rule,
+            } => f
+                .debug_struct("StopEnvironmentCommand")
+                .field("escape_char", escape_char)
+                .field("invocation_name", invocation_name)
+                .field("stop_command_name", stop_command_name)
+                .field("name_group_rule", name_group_rule)
+                .finish(),
+        }
+    }
+}
 
 /// The verbatim environment-body parser: reads the body as **raw text** up to the
 /// given `terminator` (cf. [`VerbatimBodyTerminator`]),
@@ -491,6 +597,12 @@ pub enum VerbatimBodyTerminator<'p, L : Lang> {
 /// At end of input before the terminator, [`MissingEnvironmentTerminator`] is
 /// diagnosed (anchored at the invocation trigger, like the tokenized body parser) and
 /// the body closes at the input's end.
+///
+/// The consumed terminator's facts are reported back on
+/// [`EnvironmentBody::terminator`] in the arm matching the terminator's own shape —
+/// [`Literal`](EnvironmentTerminatorSyntaxData::Literal) for a literal string,
+/// [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) for a stop command
+/// ([`VerbatimBodyTerminator`]).
 ///
 /// Requires a language with the groups feature ([`LangHasGroups`]): the terminator is
 /// carried by a minted group rule installed as the expected group close.
@@ -514,8 +626,9 @@ pub struct VerbatimBodyParser<'p, L: Lang> {
 
 impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
     /// A verbatim body parser for the environment invoked as `invocation_name`
-    /// (trigger token span `trigger_span`), terminated by the literal `terminator`
-    /// text, minting its expected-close rule under `group_type`.
+    /// (trigger token span `trigger_span`), ended by `terminator`
+    /// ([`VerbatimBodyTerminator`]), minting its expected-close rule under
+    /// `group_type`.
     pub fn new(
         trigger_span: Span,
         invocation_name: &'p str,
@@ -575,13 +688,14 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         let body_start = cx.tokens.pos();
-        // FIXME....... HERE ON............
+        // Whatever shape the terminator was given in, the body reads up to one raw
+        // string ([`VerbatimBodyTerminator::text`]).
         let close_rule = Arc::new(GroupRule {
             group_type: self.group_type,
             // The rule exists solely as the expected-close carrier; the construct's
             // opener is the `\begin{name}` scaffolding the composition already read.
             open: String::new(),
-            close: self.terminator.clone(),
+            close: self.terminator.text(),
         });
         let verbatim_state = cx.derive_state(&verbatim_state_delta(close_rule))?;
 
@@ -645,11 +759,12 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                 body,
                 end,
                 content: ContentNodes::InChildrenOf(body, content_designation_start..child_count),
-                // The matched literal's span — the composition records standard
-                // end facts from it (no tokenized scan exists for a raw body).
-                terminator: raw_end
-                    .terminator
-                    .map(|span| EnvironmentTerminatorSyntaxData::Literal { span }),
+                // The facts of the matched terminator, in the arm matching the shape
+                // it was given in: a bare span for a literal, the standard
+                // command-plus-name-group spelling for a stop command (no tokenized
+                // scan exists either way — the pieces are the ones the terminator
+                // string was composed from).
+                terminator: raw_end.terminator.map(|span| self.terminator.syntax_data(span)),
             },
             None,
         ))
@@ -1150,12 +1265,42 @@ mod tests {
         end: usize,
         content: ContentNodes,
         body_id: BuildId,
+        terminator: Option<EnvironmentTerminatorSyntaxData<VerbLang>>,
+    }
+
+    /// `\end{verbatim}` spelled out as one literal string.
+    fn literal_terminator() -> VerbatimBodyTerminator<'static, VerbLang> {
+        VerbatimBodyTerminator::Literal { terminator: "\\end{verbatim}".into() }
+    }
+
+    /// The same `\end{verbatim}` given piecewise, as the preset's environment
+    /// composition gives it: `\` + `end` + the `{…}` name group around `verbatim`.
+    fn command_terminator() -> VerbatimBodyTerminator<'static, VerbLang> {
+        VerbatimBodyTerminator::StopEnvironmentCommand {
+            escape_char: '\\',
+            invocation_name: "verbatim",
+            stop_command_name: "end",
+            name_group_rule: Arc::new(GroupRule {
+                group_type: GT_BRACE,
+                open: "{".into(),
+                close: "}".into(),
+            }),
+        }
     }
 
     fn run_body(
         content: &str,
         recovery: Recovery,
         gobble: bool,
+    ) -> Result<BodyRun, ParseError> {
+        run_body_with(content, recovery, gobble, literal_terminator())
+    }
+
+    fn run_body_with(
+        content: &str,
+        recovery: Recovery,
+        gobble: bool,
+        terminator: VerbatimBodyTerminator<'_, VerbLang>,
     ) -> Result<BodyRun, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let state = plain_state();
@@ -1170,7 +1315,7 @@ mod tests {
             &driver,
         );
         let mut parser =
-            VerbatimBodyParser::new(Span::empty(0), "verbatim", "\\end{verbatim}", GT_VERB)
+            VerbatimBodyParser::new(Span::empty(0), "verbatim", terminator, GT_VERB)
                 .with_gobble_leading_newline(gobble);
         let (body, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none());
@@ -1189,7 +1334,13 @@ mod tests {
             .unwrap();
         let result = session.finish(root).unwrap();
         check_tree_invariants(&result.tree);
-        Ok(BodyRun { result, end: body.end, content: body.content, body_id: body.body })
+        Ok(BodyRun {
+            result,
+            end: body.end,
+            content: body.content,
+            body_id: body.body,
+            terminator: body.terminator,
+        })
     }
 
     #[test]
@@ -1257,6 +1408,82 @@ mod tests {
         let list = run.result.tree.root().child(0).unwrap();
         assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..]));
         assert_eq!(run.end, text.len());
+        // Nothing was consumed, so no terminator facts are reported.
+        assert!(run.terminator.is_none());
+    }
+
+    // --- the terminator's two shapes: same bytes read, different facts reported -----
+
+    #[test]
+    fn a_literal_terminator_reports_its_span_alone() {
+        let text = "\nxyz\n\\end{verbatim}";
+        let evpos = text.find("\\end{verbatim}").unwrap();
+        let run = run_body_with(text, Recovery::Strict, true, literal_terminator()).unwrap();
+        assert!(run.result.diagnostics.is_empty());
+        match run.terminator.expect("a consumed terminator") {
+            EnvironmentTerminatorSyntaxData::Literal { span } => {
+                assert_eq!(span.range(), evpos..text.len());
+            }
+            other => panic!("expected literal terminator facts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_stop_command_terminator_reads_the_same_bytes() {
+        // The composed `\end{verbatim}` is matched exactly as the literal one is:
+        // same content read, same end position.
+        let text = "\nHello.\n\\end{verbatim}\n";
+        let evpos = text.find("\\end{verbatim}").unwrap();
+        let run = run_body_with(text, Recovery::Strict, true, command_terminator()).unwrap();
+        assert!(run.result.diagnostics.is_empty());
+        let list = run.result.tree.root().child(0).unwrap();
+        assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..evpos]));
+        assert_eq!(run.end, evpos + "\\end{verbatim}".len());
+    }
+
+    #[test]
+    fn a_stop_command_terminator_reports_scanned_facts() {
+        //                       0....5....1....1....2
+        //                            0    5    0
+        let text = "\nxyz\n\\end{verbatim}";
+        let evpos = text.find("\\end{verbatim}").unwrap();
+        let run = run_body_with(text, Recovery::Strict, true, command_terminator()).unwrap();
+        assert!(run.result.diagnostics.is_empty());
+        match run.terminator.expect("a consumed terminator") {
+            EnvironmentTerminatorSyntaxData::Scanned {
+                escape_char,
+                command_word,
+                post_space,
+                name_group,
+            } => {
+                // The pieces the terminator string was composed from, laid back out
+                // over the matched span: `\` `end` `{` `verbatim` `}`, no gap.
+                assert_eq!(escape_char, '\\');
+                assert_eq!(&text[command_word.range()], "end");
+                assert_eq!(post_space.range(), command_word.end()..command_word.end());
+                assert_eq!(&text[name_group.name_span.range()], "verbatim");
+                assert_eq!(name_group.end, text.len());
+                assert_eq!(name_group.rule.group_type, GT_BRACE);
+                assert_eq!((&*name_group.rule.open, &*name_group.rule.close), ("{", "}"));
+                // The whole terminator is exactly the span the pieces tile.
+                assert_eq!(
+                    command_word.start() - escape_char.len_utf8(),
+                    evpos
+                );
+            }
+            other => panic!("expected scanned terminator facts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_stop_command_terminator_tolerates_no_whitespace() {
+        // The composed string is matched byte for byte: `\end {verbatim}` is not it.
+        let text = "\nxyz\n\\end {verbatim}";
+        let run = run_body_with(text, Recovery::Tolerant, true, command_terminator()).unwrap();
+        assert_eq!(run.result.diagnostics.len(), 1);
+        assert!(run.terminator.is_none());
+        let list = run.result.tree.root().child(0).unwrap();
+        assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..]));
     }
 
     #[test]

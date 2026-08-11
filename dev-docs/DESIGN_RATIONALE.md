@@ -2973,8 +2973,15 @@ error (no degenerate-spelling fallback arms): std environments are
 command-initiated, and a custom trigger shape needs its own composition + Env
 type. Verbatim caveat (verified): the verbatim terminator is one literal
 `GroupClose` token (rules replaced; close = the full `\end{name}` string) —
-end-scanning delegation cannot apply to raw bodies; the verbatim path records
-std end facts from the matched literal.
+end-scanning delegation cannot apply to raw bodies. The facts channel still
+carries std `Scanned` end facts across it: `VerbatimBodyParser` is *given* the
+terminator's pieces and reports them back itself ([§dd-dr:verbatim-family]), so
+`StdEnvironmentSyntax` transcribes one arm and synthesizes nothing. Its other
+arm — a bare `Literal` terminator, which a custom `make_body_parser` may still
+report — has no command-plus-name-group spelling to transcribe and no field to
+keep the literal in: it records a placeholder command word that re-emits
+visibly wrong, rather than a plausible-looking guess (a record whose end side
+cannot be accurate must not look accurate).
 
 **The fifth role trait** joins the [§dd-dr:latexlike-generalization] roster:
 `LatexlikeInvocationSyntax`, on the syntax type — `type Env:
@@ -6530,8 +6537,8 @@ feature off via `disable_all()` — the six gates and the cleared forbidden set
 ([§dd-dr:takeover-staging-sugar]) — and
 `expecting_group_close` **replaced**), and the two production
 parsers drive it — `VerbatimArgumentParser` (delimited `\verb|…|`; `ArgumentParser`,
-the `v` codes) and `VerbatimBodyParser` (environment contents up to a **literal**
-terminator string; produces `EnvironmentBody`, pluggable via `make_body_parser`).
+the `v` codes) and `VerbatimBodyParser` (raw environment contents up to a terminator;
+produces `EnvironmentBody`, pluggable via `make_body_parser`).
 Points settled in flight:
 
 - *Delimiter discovery reads one raw char under a second, narrower delta*: whitespace
@@ -6550,10 +6557,25 @@ Points settled in flight:
   `Char`s under the recipe state) deepen and closes (`GroupClose`s) surface —
   `\verb{a{b}c}` is one region; identical delimiters end at the first closer.
 - *Terminator matching is literal*: `\end {verbatim}` does not terminate (string-search
-  parity), and verbatim does not nest. The preset's `VerbatimBehavior` composes the
-  terminator as `\` + `end{name}` — the preset's canonical spellings, same doctrine as
-  `BEGIN_COMMAND_NAME`; a language re-ruling the escape char must supply its own
-  behavior.
+  parity), and verbatim does not nest. Whatever shape a caller states the terminator
+  in, the parser reads up to **one raw string** — the terminator is an expected group
+  close, so a raw body never tokenizes it.
+- *The terminator is stated in pieces, not pre-composed* (`VerbatimBodyTerminator`,
+  ruled 2026-08-11): a caller supplies either a bare `Literal` string, or a
+  `StopEnvironmentCommand` — escape character, stop command name, name group rule,
+  and the invocation name the terminator back-references. The parser composes the
+  raw string from the pieces *and* reports them back on `EnvironmentBody::terminator`
+  as `EnvironmentTerminatorSyntaxData::Scanned` facts (spans laid over the matched
+  terminator in composition order, empty post-space), the same arm the tokenized
+  `EnvironmentBodyParser` reports — so a recording consumer needs no raw-body arm and
+  keeps span-backed end facts ([§dd-dr:invocation-syntax]). A `Literal` terminator has
+  no such structure and reports only its span; a record that cannot store a bare
+  literal (latexlike's `StdEnvironmentSyntax`) is then inaccurate by construction,
+  which is why the preset's `VerbatimBehavior` states the pieces instead. It takes
+  the escape character and the name group delimiters from the invocation *as
+  written*, so a language re-ruling either needs no behavior of its own; only the
+  stop command name is a preset constant (`END_COMMAND_NAME`, same doctrine as
+  `BEGIN_COMMAND_NAME`), so a language renaming `\end` does.
 - *A tolerated unreadable token* inside a committed verbatim region ends it like
   EOF (diagnosed unterminated/missing-terminator); the enclosing loop re-reads the
   error and applies its own token recovery — the probe protocol, two true

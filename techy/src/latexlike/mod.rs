@@ -1249,7 +1249,7 @@ mod tests {
         // for the foreign member dispatch the composition; the payload records
         // begin/end facts in the member's own record type
         // (`StdEnvironmentSyntax<Flavored>`); a verbatim behavior reads the body
-        // raw and records standard end facts from its literal terminator. The
+        // raw and still reports standard end facts for its terminator. The
         // body slot resolves through the `()` slot ext (`is_body()` is true —
         // slot 0 degenerates to the body).
         let mut package: Package<Flavored> = Package::new("defs");
@@ -1299,7 +1299,8 @@ mod tests {
         assert_eq!(syntax.write_end("itemize", &source), "\\end{itemize}");
 
         // The verbatim takeover body: raw content (comment/escape chars inert),
-        // standard end facts synthesized from the literal terminator.
+        // standard end facts reported by the body parser for the terminator it was
+        // given piecewise.
         let content = "\\begin{verbatim}\na % b \\x{\n\\end{verbatim}";
         let result = language.parse(content).unwrap();
         check_latexlike_tree_invariants(&result.tree);
@@ -1312,8 +1313,8 @@ mod tests {
         else {
             panic!("expected the Environment arm");
         };
-        let end = syntax.end.as_ref().expect("the literal terminator was consumed");
-        assert!(end.command_word.is_owned());
+        let end = syntax.end.as_ref().expect("the terminator was consumed");
+        assert!(!end.command_word.is_owned());
         assert_eq!(
             syntax.write_end("verbatim", &crate::source::Source::new(content)),
             "\\end{verbatim}"
