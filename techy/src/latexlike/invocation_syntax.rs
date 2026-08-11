@@ -171,11 +171,10 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
 }
 
 /// One side of the **standard** environment record's begin/end syntax
-/// ([`StdEnvironmentSyntax`]'s component type) — the spelling facts of a
+/// ([`StdEnvironmentSyntax`]'s component type) — the spelling of a
 /// `\begin{name}`-shaped or `\end{name}`-shaped command-plus-name-group, as
 /// written:
-///
-/// the escape character, the command word (`begin`/`end` as written), the command
+/// The escape character, the command word (`begin`/`end` as written), the command
 /// token's own syntactic post-space (`\begin {itemize}`'s tolerated inline
 /// whitespace — recorded, no longer normalized away), and the **name-group rule**
 /// — the [`GroupRule`] `Arc` cloned from the matched token, whose `open`/`close`
@@ -185,6 +184,18 @@ impl<LLL: LatexlikeLang, Env: EnvironmentSyntax<LLL>> LatexlikeInvocationSyntax<
 /// recording would lose. The rule `Arc` is source-independent, hence exempt from
 /// materialization. The environment's *name* is not here — it is the node's
 /// [`name`](crate::node::CallableData::name).
+/// 
+/// In Latexlike, the end terminator is always of the form `\end{environmentname}`,
+/// even though the core construct parsers offer more general terminator syntax for
+/// some environment-type-helper parsers like
+/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser).
+/// NOTE: `StdEnvironmentSideSyntax` is **not capable** of storing the terminoator
+/// syntax of such more general parsers.  If your custom
+/// [`EnvironmentBehavior::make_body_parser()`](crate::latexlike::EnvironmentBehavior::make_body_parser())
+/// reports a terminator syntax based on
+/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal),
+/// then the recorded syntax will be incomplete, and
+/// [source recomposition](techy::recompose) will fail.
 pub struct StdEnvironmentSideSyntax<L: Lang> {
     /// The escape character as written.
     pub escape_char: char,
@@ -309,6 +320,18 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
 /// terminator facts at construction
 /// ([`from_parsed`](EnvironmentSyntax::from_parsed)), or left empty on the
 /// recovery paths (mismatch, malformed terminator, end of input).
+/// 
+/// In Latexlike, the end terminator is always of the form `\end{environmentname}`,
+/// even though the core construct parsers offer more general terminator syntax for
+/// some environment-type-helper parsers like
+/// [`VerbatimBodyParser`](crate::core::constructs::VerbatimBodyParser).
+/// NOTE: `StdEnvironmentSyntax` is **not capable** of storing the terminoator
+/// syntax of such more general parsers.  If your custom
+/// [`EnvironmentBehavior::make_body_parser()`](crate::latexlike::EnvironmentBehavior::make_body_parser())
+/// reports a terminator syntax based on
+/// [`EnvironmentTerminatorSyntaxData::Literal`](crate::core::constructs::EnvironmentTerminatorSyntaxData::Literal),
+/// then the recorded syntax will be incomplete, and
+/// [source recomposition](techy::recompose) will fail.
 pub struct StdEnvironmentSyntax<L: Lang> {
     /// The `\begin{name}` side's facts.
     pub begin: StdEnvironmentSideSyntax<L>,
@@ -378,11 +401,12 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
                 name_group,
             )),
             Some(EnvironmentTerminatorSyntaxData::Literal { .. }) => {
+                // In latexlike, environments should NOT report a Literal terminator if we
+                // want an accurate StdEnvironmentSyntax.
+                // If you report a Literal terminator, we store garbage.
                 Some(StdEnvironmentSideSyntax {
                     escape_char: begin_side.escape_char,
-                    command_word: TextContent::from(String::from(
-                        super::environments::END_COMMAND_NAME,
-                    )),
+                    command_word: TextContent::from(String::from("??END_SYNTAX_NOT_AVAILABLE??")),
                     post_space: TextContent::empty(),
                     name_group_rule: Arc::clone(&begin_side.name_group_rule),
                 })

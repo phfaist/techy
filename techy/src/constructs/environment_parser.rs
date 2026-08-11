@@ -1,54 +1,3 @@
-//! [`EnvironmentBodyParser`]: parses an environment-shaped callable's body — content up
-//! to and including the rigid `\end{name}` terminator — staging it as one body `List`
-//! node (pylatexenc's environment body handling, expressed as a parameterized core
-//! parser).
-//!
-//! # Design
-//!
-//! **Slot terminators are parser business** — and slots have no spec-side declaration
-//! at all: the terminator data (the stop command's
-//! name, the name group's class, whether the name must back-reference the invocation)
-//! parameterizes this parser, and the composition driving it mints the
-//! [`ParsedSlot`](crate::node::ParsedSlot) records directly. A body state delta
-//! (pylatexenc's `make_body_parsing_state_delta`) lives as an ordinary field on the
-//! preset spec type that drives the parse (the preset's `EnvironmentSpec`) — the core
-//! never interprets it. Environments stay zero-custom-code for spec authors.
-//!
-//! **The scaffolding is rigid and reconstructed, not recorded** (decision 6): the
-//! terminator is the stop command followed **immediately** by its name group — no
-//! comments, no paragraph breaks, no whitespace inside the name; the command token's own
-//! syntactic post-space (`\end {name}`) is the one tolerated, unrecorded gap. The
-//! consumed terminator bytes appear in no node: they are the reconstructible complement
-//! between the body `List`'s end and the callable's span end.
-//!
-//! **The caller scopes the body's state**: `cx.state` is the slot's state — the driving
-//! invocation parser stacks the slot's `parsing_state_delta` on the invocation's base
-//! (session-mediated) and reverts structurally, exactly as for arguments. Both the body
-//! content *and the terminator* are read under it; a slot state that cannot tokenize the
-//! stop command runs the body to end of input (a known pitfall — environments do not
-//! self-heal the way group closes do).
-//!
-//! # Recovery (decision 8)
-//!
-//! - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`): diagnostic + close the body
-//!   **without consuming** the terminator — the unwinding lets the enclosing
-//!   environment's parser find and consume its own `\end{A}`; an orphan terminator
-//!   eventually reaches the root loop as an ordinary command and takes the
-//!   unresolvable-command recovery.
-//! - *Malformed terminator* (no rigid name group after the stop command): diagnostic +
-//!   consume the command **alone** + close — leaving it unconsumed would cascade the
-//!   same malformed token through every enclosing level; what follows it is left as
-//!   enclosing content.
-//! - *End of input*: missing-terminator diagnostic (anchored at the invocation trigger,
-//!   the group parser's unclosed-at-open precedent) + close.
-//! - *Unexpected group close in the body*: diagnostic + close without consuming — every
-//!   level consumes or unwinds, and the stray close is left for an enclosing level (or
-//!   the root) to claim.
-//!
-//! Under [`Recovery::Strict`](crate::error::Recovery) each condition aborts instead.
-//! "Was this environment properly terminated?" lives in the diagnostics, not on the
-//! node — a preset wanting it on the node computes it in ext via `Lang::make_node_ext`.
-
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -224,6 +173,7 @@ impl<L: Lang> fmt::Debug for EnvironmentBeginSyntaxData<L> {
 /// ([`CallableData::invocation_syntax`](crate::node::CallableData::invocation_syntax)):
 /// the driving composition hands these facts, together with the begin side's
 /// [`EnvironmentBeginSyntaxData`], to the environment record's constructor.
+/// See also [`EnvironmentBodyParser`].
 #[non_exhaustive]
 pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
     /// The tokenized flow consumed a well-formed terminator — the stop command
@@ -397,7 +347,7 @@ pub struct EnvironmentBody<L: Lang> {
     /// staged the body is the one that knows, exactly as for arguments
     /// (parse-time designation).
     pub content: ContentNodes,
-    /// The consumed terminator's spelling facts ([`EnvironmentTerminatorSyntaxData`]),
+    /// The consumed terminator's spelling ([`EnvironmentTerminatorSyntaxData`]),
     /// `None` when the body closed without consuming one (name mismatch, malformed
     /// terminator, unexpected group close, end of input) — the end-side channel of
     /// the invocation-syntax recording: the driving composition hands these facts
@@ -434,13 +384,69 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
 /// invocation parser driving the environment shape, parameterized by the terminator
 /// data (the stop command's name, the name group's class, whether the name must
 /// back-reference the invocation).
+/// 
+/// Techy's core has no builtin concept of an "environment".  Instead, it provides a
+/// collection of parsers that language presets (cf. e.g. [`techy::latexlike`]) can
+/// use to build their language constructs.  Specifically, the latexlike preset defines
+/// "environments" as a construct of the type `\begin{name} ... \end{name}` with
+/// two commands `\begin` and `\end` with matching environment names.  Techy provides
+/// helpers to parse the contents of such a construct.  The [`EnvironmentBodyParser`]
+/// can be used to parse the environment's "body", i.e., the ` ... \end{name}` part
+/// of the environment call.  The parser needs to know the end command name (`\end`)
+/// and the environment name (`name`) to know when the environment was closed.
+/// See also the related [`VerbatimBodyParser`](super::VerbatimBodyParser) parser,
+/// which parses a similar type of construct but treating the environment contents
+/// as a verbatim string with no special language-specific meaning.
 ///
-/// Runs at the position right after the environment's `\begin{name}` syntax and
-/// arguments; parses sibling content up to the terminator command, handles the
-/// terminator (each problem's recovery is documented on its condition type:
+/// This parser parses sibling content up to the terminator command, and handles the
+/// terminator.  Possible conditions that can arise:
 /// [`EnvironmentTerminatorMismatch`], [`MalformedEnvironmentTerminator`],
-/// [`MissingEnvironmentTerminator`]), and stages the body `List`. Returns no
+/// [`MissingEnvironmentTerminator`].  The parser stages the body `List`. Returns no
 /// after-effect delta.
+/// 
+///
+/// # Design
+///
+/// **Slot terminators are parser business** — and slots have no spec-side declaration
+/// at all: the terminator data (the stop command's
+/// name, the name group's class, whether the name must back-reference the invocation)
+/// parameterizes this parser, and the composition driving it mints the
+/// [`ParsedSlot`](crate::node::ParsedSlot) records directly. A body state delta
+/// (pylatexenc's `make_body_parsing_state_delta`) lives as an ordinary field on the
+/// preset spec type that drives the parse (the preset's `EnvironmentSpec`) — the core
+/// never interprets it. Environments stay zero-custom-code for spec authors.
+///
+/// **The scaffolding is rigid and reconstructed, not recorded** : the
+/// terminator is the stop command followed **immediately** by its name group — no
+/// comments, no paragraph breaks, no whitespace inside the name; the command token's own
+/// syntactic post-space (`\end {name}`) is the one tolerated, unrecorded gap. The
+/// consumed terminator bytes appear in no node: they are the reconstructible complement
+/// between the body `List`'s end and the callable's span end.
+///
+/// **The caller scopes the body's state**: `cx.state` is the slot's state — the driving
+/// invocation parser stacks the slot's `parsing_state_delta` on the invocation's base
+/// (session-mediated) and reverts structurally, exactly as for arguments. Both the body
+/// content *and the terminator* are read under it; a slot state that cannot tokenize the
+/// stop command runs the body to end of input (a known pitfall — environments do not
+/// self-heal the way group closes do).
+///
+/// # Recovery
+///
+/// - *Name mismatch* (`\begin{A}…\begin{B}…\end{A}`): diagnostic + close the body
+///   **without consuming** the terminator — the unwinding lets the enclosing
+///   environment's parser find and consume its own `\end{A}`; an orphan terminator
+///   eventually reaches the root loop as an ordinary command and takes the
+///   unresolvable-command recovery.
+/// - *Malformed terminator* (no rigid name group after the stop command): diagnostic +
+///   consume the command **alone** + close — leaving it unconsumed would cascade the
+///   same malformed token through every enclosing level; what follows it is left as
+///   enclosing content.
+/// - *End of input*: missing-terminator diagnostic (anchored at the invocation trigger,
+///   the group parser's unclosed-at-open precedent) + close.
+/// - *Unexpected group close in the body*: diagnostic + close without consuming — every
+///   level consumes or unwinds, and the stray close is left for an enclosing level (or
+///   the root) to claim.
+///
 pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{name}`'s command token), anchoring the
     /// missing-terminator diagnostic (the group parser's unclosed-at-open precedent).

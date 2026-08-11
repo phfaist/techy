@@ -8,25 +8,21 @@
 //! close expectation inherited
 //! from an enclosing group, so it is the single recognizer left active: the body
 //! arrives as pure [`Char`](TokenKind::Char) tokens and the terminator — multi-character
-//! strings included — as one [`GroupClose`](TokenKind::GroupClose). No char-level
-//! reader API exists or is needed (unlike pylatexenc's `next_chars()`); these parsers
-//! read through the ordinary [`TokenReader`](crate::token::TokenReader) protocol, so
+//! strings included — as one [`GroupClose`](TokenKind::GroupClose). These parsers
+//! read through the ordinary [`TokenReader`](crate::token::TokenReader) protocol;
 //! they need a **scanning** reader (a pre-scanned token list cannot re-tokenize under
 //! the verbatim state — `TokenListReader`'s documented fidelity limit).
-//!
-//! Three pieces (pylatexenc's `_verbatim.py` family):
 //!
 //! - [`verbatim_state_delta`] — the recipe as data: the base piece custom raw-content
 //!   parsers start from (`LatexVerbatimBaseParser`'s reusable core).
 //! - [`VerbatimArgumentParser`] — delimited verbatim in argument position
 //!   (`\verb|…|`; `LatexDelimitedVerbatimParser`): auto-matched or fixed delimiters,
 //!   depth counter for paired delimiters.
-//! - [`VerbatimBodyParser`] — a verbatim environment body
-//!   (`LatexVerbatimEnvironmentContentsParser`): raw content up to a literal
+//! - [`VerbatimBodyParser`] — a verbatim environment body: raw content up to a literal
 //!   terminator string (`\end{verbatim}`), the single newline after the opening
 //!   scaffolding gobbled out of the designated content.
 //!
-//! # Node shapes (modern-pylatexenc parity, techy regions)
+//! # Node shapes
 //!
 //! The delimited form stages a [`Group`](crate::node::NodeKind::Group) node — the
 //! delimiters recorded as written, class = the configured
@@ -36,12 +32,10 @@
 //! stages the standard body `List` holding the raw-content `Chars` node; a gobbled
 //! newline is **kept as a leading whitespace `Chars` node but designated out of the
 //! content** ([`EnvironmentBody::content`]) — techy trees keep every byte (the
-//! partition invariants), so pylatexenc's byte-dropping gobble becomes a designation
-//! fact, not a missing node.
+//! partition invariants).
 //!
-//! The raw-content `Chars` nodes record the **verbatim state** they were read under
-//! (features disabled — pylatexenc marks its verbatim chars nodes the same way); the
-//! group/list wrappers record the surrounding state.
+//! The raw-content `Chars` nodes record the **verbatim state** they were read
+//! under; the group/list wrappers record the surrounding state.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -209,16 +203,15 @@ fn read_raw_content<L: Lang>(
     }
 }
 
-/// The default auto-matched delimiter pairs of [`VerbatimArgumentParser`] (pylatexenc's
-/// table): `{`→`}`, `[`→`]`, `<`→`>`, `(`→`)`; any other opening character closes with
+/// The default auto-matched delimiter pairs of [`VerbatimArgumentParser`]:
+/// `{`→`}`, `[`→`]`, `<`→`>`, `(`→`)`; any other opening character closes with
 /// itself.
 fn default_auto_delimiters() -> Vec<(char, char)> {
     vec![('{', '}'), ('[', ']'), ('<', '>'), ('(', ')')]
 }
 
-/// The delimited-verbatim argument parser (pylatexenc's `LatexDelimitedVerbatimParser`,
-/// the `v` argument code): the argument is a raw-text region between two delimiter
-/// characters, `\verb|…|`-style.
+/// The delimited-verbatim argument parser (the `v` argument code): the argument
+/// is a raw-text region between two delimiter characters, `\verb|…|`-style.
 ///
 /// The opening delimiter is the first character after optional whitespace — **any**
 /// character, read raw under a derived state where only whitespace scanning is left
@@ -231,7 +224,7 @@ fn default_auto_delimiters() -> Vec<(char, char)> {
 /// position diagnoses [`ExpectedVerbatimDelimiter`] and reports the argument absent,
 /// consuming nothing.
 ///
-/// **Pairing rule** (pylatexenc parity): when the delimiters differ, nested occurrences
+/// **Pairing rule**: when the delimiters differ, nested occurrences
 /// of the opening character deepen a depth counter and matching closers close it —
 /// `\verb{a{b}c}` reads `a{b}c` whole; with identical delimiters the first closer ends
 /// the region.
@@ -458,15 +451,37 @@ impl<L: Lang> fmt::Debug for VerbatimArgumentParser<L> {
     }
 }
 
-/// The verbatim environment-body parser (pylatexenc's
-/// `LatexVerbatimEnvironmentContentsParser`): reads the body as **raw text** up to the
-/// literal `terminator` string (e.g. `\end{verbatim}` — spelled out in full, the
-/// preset composes it), consumes the terminator, and stages the standard body `List`
+/// Specification of upon which tokens the verbatim-body-parser should terminate.
+/// One either specifies a full literal terminator syntax that is expected, or 
+/// a sequence of the type `<ESC-CHAR><END-COMMAND>{<NAME>}`, such as
+/// `\end{verbatim}`.
+pub enum VerbatimBodyTerminator<'p, L : Lang> {
+    Literal {
+        /// The terminator, as literal raw text (e.g. `|END_VERBATIM_HERE|`)
+        terminator : String
+    },
+    StopEnvironmentCommand {
+        /// The invocation name the terminator must back-reference (`lstlisting` for
+        /// `\begin{lstlisting} … \end{lstlisting}`), and the name diagnostics call
+        /// the environment.
+        invocation_name: &'p str,
+        /// The terminator command's name (`end`), the body loop's stop condition.
+        stop_command_name: &'p str,
+        /// The group rule in which we demand the terminator environment name to be
+        /// enclosed.  (In `\end{xyz}`, this is the `{`/`}` group rule.)
+        name_group_rule: Arc<GroupRule<L>>,
+    }
+}
+
+
+/// The verbatim environment-body parser: reads the body as **raw text** up to the
+/// given `terminator` (cf. [`VerbatimBodyTerminator`]),
+/// consumes the terminator, and stages the standard body `List`
 /// with the content as one raw `Chars` node — a drop-in
 /// [`EnvironmentBodyParser`](super::EnvironmentBodyParser) replacement for
 /// `make_body_parser`-style spec hooks (it produces the same [`EnvironmentBody`]).
 ///
-/// **Newline gobbling** (on by default; pylatexenc parity): a newline immediately at
+/// **Newline gobbling** (on by default): a newline immediately at
 /// the body's start — the one right after `\begin{verbatim}` — is *staged* as a
 /// leading whitespace `Chars` node but **designated out of the content**
 /// ([`EnvironmentBody::content`]): trees keep every byte, content extraction starts at
@@ -485,9 +500,8 @@ pub struct VerbatimBodyParser<'p, L: Lang> {
     trigger_span: Span,
     /// The invocation name diagnostics call the environment.
     invocation_name: &'p str,
-    /// The terminator, as literal raw text (`\end{verbatim}`); owned — the driving
-    /// spec hook typically composes it per invocation from the environment's name.
-    terminator: String,
+    /// The terminator specification.
+    terminator: VerbatimBodyTerminator<'p, L>,
     /// The class of the minted expected-close rule (a language's verbatim group
     /// class); recorded nowhere — the body stages a `List`, not a group.
     group_type: L::GroupTypeId,
@@ -505,13 +519,13 @@ impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
     pub fn new(
         trigger_span: Span,
         invocation_name: &'p str,
-        terminator: impl Into<String>,
+        terminator: VerbatimBodyTerminator<'p, L>,
         group_type: L::GroupTypeId,
     ) -> VerbatimBodyParser<'p, L> {
         VerbatimBodyParser {
             trigger_span,
             invocation_name,
-            terminator: terminator.into(),
+            terminator,
             group_type,
             gobble_leading_newline: true,
             invocation_name_span: None,
@@ -561,6 +575,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         let body_start = cx.tokens.pos();
+        // FIXME....... HERE ON............
         let close_rule = Arc::new(GroupRule {
             group_type: self.group_type,
             // The rule exists solely as the expected-close carrier; the construct's
