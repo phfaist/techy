@@ -524,19 +524,28 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// seeds the same dispatch pair under its own vocabulary (the bound is
 /// [`BeginSpec`]'s — the composition marks environment body slots through the
 /// language's [`BodySlotExt`]).
+///
+/// The two names are this function's own choice, not the machinery's: the opening
+/// command is named by its registration, the terminator by
+/// [`BeginSpec::new`]'s argument, and a package spelling the pair differently is an
+/// ordinary package ([`BeginSpec`]).
 pub fn builtin_package<LLL: LatexlikeLang>() -> Package<LLL>
 where
     crate::node::SlotExt<LLL>: BodySlotExt,
 {
+    // One binding for the terminator's name: the body parsers stop on it (through
+    // `BeginSpec`) and the orphan diagnoser is resolved under it (through the
+    // registration) — two uses that must agree.
+    let end_command_name = "end";
     let mut package = Package::new("_builtin");
     package.insert(
         LLL::CallableTypeId::macro_callable(),
-        environments::BEGIN_COMMAND_NAME,
-        BeginSpec::<LLL>::new(),
+        "begin",
+        BeginSpec::<LLL>::new(end_command_name),
     );
     package.insert(
         LLL::CallableTypeId::macro_callable(),
-        environments::END_COMMAND_NAME,
+        end_command_name,
         EndSpec::<LLL>::new(),
     );
     package
@@ -1255,12 +1264,12 @@ mod tests {
         let mut package: Package<Flavored> = Package::new("defs");
         package.insert(
             CallableType::Macro,
-            environments::BEGIN_COMMAND_NAME,
-            Arc::new(BeginSpec::<Flavored>::new()),
+            "begin",
+            Arc::new(BeginSpec::<Flavored>::new("end")),
         );
         package.insert(
             CallableType::Macro,
-            environments::END_COMMAND_NAME,
+            "end",
             Arc::new(EndSpec::<Flavored>::new()),
         );
         package.insert(

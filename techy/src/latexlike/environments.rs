@@ -22,6 +22,12 @@
 //!   `EnvironmentSpec.make_body_parser` precedent; [`VerbatimBehavior`] overrides it
 //!   for raw bodies).
 //!
+//! Neither command name of the pair is fixed here: the opening one is whatever the
+//! [`BeginSpec`] entry is registered under, and the terminator one is
+//! [`BeginSpec::new`]'s argument — `\begin`/`\end` is what
+//! [`builtin_package`](super::builtin_package) happens to register. The diagnostics
+//! this module raises quote the spellings the source used.
+//!
 //! An environment spec's own
 //! [`make_invocation_parser`](CallableSpec::make_invocation_parser) is never invoked —
 //! the permanent boundary decided with the composition's rehoming: per-environment
@@ -86,21 +92,16 @@ use super::lang::{
 use super::spec::frame_title;
 use super::Latexlike;
 
-/// The command name that introduces every environment (`\begin`), under which
-/// [`BeginSpec`] is registered in the [`builtin_package`](super::builtin_package).
-pub(crate) const BEGIN_COMMAND_NAME: &str = "begin";
-
-/// The terminator command name (`\end`): the body parser's stop condition, and the
-/// [`builtin_package`](super::builtin_package) registration of [`EndSpec`].
-pub(crate) const END_COMMAND_NAME: &str = "end";
-
 // --- conditions --------------------------------------------------------------------
 
-/// Condition: `\begin` was not followed immediately by its rigid name group
-/// (`\begin [x]`, `\begin{ itemize }`). Tolerant recovery stages the trigger alone —
-/// its syntactic post-space included, keeping the sibling partition exact — as a
-/// `Chars` node (the accepted markup-in-chars recovery artifact) and consumes
-/// nothing past it.
+/// Condition: the environment-opening command was not followed immediately by its
+/// rigid name group (`\begin [x]`, `\begin{ itemize }`). Tolerant recovery stages the
+/// trigger alone — its syntactic post-space included, keeping the sibling partition
+/// exact — as a `Chars` node (the accepted markup-in-chars recovery artifact) and
+/// consumes nothing past it.
+///
+/// The message quotes the command as it was written: the opening command's name is
+/// [`BeginSpec`]'s registration name, `\begin` only by convention.
 ///
 /// Like every condition, it is constructible outside the crate (e.g. for
 /// manufacturing diagnostics in an embedding's own tests):
@@ -108,17 +109,21 @@ pub(crate) const END_COMMAND_NAME: &str = "end";
 /// ```
 /// use techy::latexlike::MalformedBegin;
 ///
-/// let condition = MalformedBegin::new();
-/// assert_eq!(condition, MalformedBegin::new());
+/// let condition = MalformedBegin::new("\\begin");
+/// assert_eq!(condition, MalformedBegin::new("\\begin"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(
     id = "latexlike.environments.malformed-begin",
-    message = "malformed ‘\\begin’: expected the environment's name group immediately \
-               after the command"
+    message = "malformed ‘{command}’: expected the environment's name group \
+               immediately after the command"
 )]
-pub struct MalformedBegin;
+pub struct MalformedBegin {
+    /// The opening command as written, escape character included and the trigger's
+    /// syntactic post-space excluded (`\begin`).
+    pub command: String,
+}
 
 /// Condition: `\begin{name}` named an environment no provider of the scope stack
 /// defines. Tolerant recovery parses on with an argument-less body-only fallback
@@ -134,28 +139,37 @@ pub struct UnknownEnvironment {
     pub name: String,
 }
 
-/// Condition: an `\end` with no environment open at its level. Inside a body the
-/// terminator is consumed by the body parser before command resolution, so a
-/// dispatched `\end` is always an orphan ([`EndSpec`]). Tolerant recovery stages the
-/// consumed extent — `\end{name}` whole, or `\end` alone when the name group is
-/// malformed — as a `Chars` node.
+/// Condition: an environment terminator with no environment open at its level.
+/// Inside a body the terminator is consumed by the body parser before command
+/// resolution, so a dispatched terminator is always an orphan ([`EndSpec`]). Tolerant
+/// recovery stages the consumed extent — `\end{name}` whole, or the command alone when
+/// the name group is malformed — as a `Chars` node.
+///
+/// The message quotes the terminator as it was written; nothing here spells the
+/// *opening* command, which this site has no way to know (the pairing is
+/// [`BeginSpec`]'s, and only in the opening direction).
 #[derive(Debug, Clone, PartialEq, Eq, DiagnosticInfo)]
 #[non_exhaustive]
 #[diagnostic(id = "latexlike.environments.orphan-end")]
 pub struct OrphanEnd {
     /// The environment named by the terminator, when its name group parsed.
     pub name: Option<String>,
+    /// The terminator as written: the whole consumed extent (`\end{align}`), or the
+    /// command alone — post-space excluded — when its name group was malformed
+    /// (`\end`).
+    pub terminator: String,
 }
 
-// Hand-written wording: the message quotes the name group only when it parsed (a
-// match, which the message format string cannot express).
+// Hand-written wording: the message names the environment only when the name group
+// parsed (a match, which the message format string cannot express).
 impl fmt::Display for OrphanEnd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let terminator = &self.terminator;
         match &self.name {
             Some(name) => {
-                write!(f, "orphan ‘\\end{{{name}}}’: no matching ‘\\begin{{{name}}}’")
+                write!(f, "orphan ‘{terminator}’: no environment ‘{name}’ is open here")
             }
-            None => write!(f, "orphan ‘\\end’: no matching ‘\\begin’"),
+            None => write!(f, "orphan ‘{terminator}’: no environment is open here"),
         }
     }
 }
@@ -185,6 +199,10 @@ pub struct EnvironmentInvocation<'p> {
     pub name_group_open: &'p str,
     /// The begin name group's close delimiter as written.
     pub name_group_close: &'p str,
+    /// The terminator command's name (`end`), from the dispatching
+    /// [`BeginSpec`](BeginSpec::end_command_name): the body's stop condition, and the
+    /// command word a takeover body composes its terminator spelling from.
+    pub end_command_name: &'p str,
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the wrapper's inner
@@ -250,7 +268,8 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
 
 /// The default body of [`EnvironmentBehavior::make_body_parser`], shared with the
 /// composition's non-[`EnvironmentSpec`] fallback: the core [`EnvironmentBodyParser`]
-/// over the preset's terminator shape.
+/// over the preset's terminator shape, stopping on the invocation's own terminator
+/// command.
 fn default_body_parser<'p, LLL: LatexlikeLang>(
     invocation: EnvironmentInvocation<'p>,
 ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
@@ -258,7 +277,7 @@ fn default_body_parser<'p, LLL: LatexlikeLang>(
         EnvironmentBodyParser::new(
             invocation.trigger_span,
             invocation.name,
-            END_COMMAND_NAME,
+            invocation.end_command_name,
             LLL::GroupTypeId::content_group(),
         )
         .with_invocation_name_span(invocation.name_span),
@@ -292,8 +311,9 @@ impl<LLL: LatexlikeLang> fmt::Debug for StdEnvironmentBehavior<LLL> {
 /// [`VerbatimBodyParser`] up to the `\end{name}` terminator, given to it as a
 /// [`StopEnvironmentCommand`](VerbatimBodyTerminator::StopEnvironmentCommand)
 /// terminator built from the invocation's own spellings (the escape character it was
-/// written with and its name group's delimiters, the same spellings the `\begin`
-/// composition itself is built on). The single newline right
+/// written with, its name group's delimiters, and the terminator command name the
+/// dispatching [`BeginSpec`] carries — the same spellings the `\begin` composition
+/// itself is built on). The single newline right
 /// after the begin syntax is staged but designated out of the body content
 /// (the gobble rule — see [`VerbatimBodyParser`]).
 ///
@@ -364,7 +384,7 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for VerbatimBehavior<LLL> {
                 VerbatimBodyTerminator::StopEnvironmentCommand {
                     escape_char: invocation.escape_char,
                     invocation_name: invocation.name,
-                    stop_command_name: END_COMMAND_NAME,
+                    stop_command_name: invocation.end_command_name,
                     name_group_rule: Arc::new(GroupRule {
                         group_type: LLL::GroupTypeId::content_group(),
                         open: invocation.name_group_open.into(),
@@ -505,14 +525,36 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 /// resolves the environment's own definition, parses its declared arguments and its
 /// body ([`EnvironmentBodyParser`](crate::constructs::EnvironmentBodyParser)), and
 /// stages the environment node.
+///
+/// The spec carries the **terminator command's name** — the `end` of `\end{name}` —
+/// rather than assuming it: the opening command's own name is whatever the definition
+/// is registered under, and the closing one is this field, so a language spelling the
+/// pair `\open`/`\shut` registers `BeginSpec::new("shut")` under `"open"` and needs no
+/// code of its own. The name reaches the body parsers through
+/// [`EnvironmentInvocation::end_command_name`].
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
+    end_command_name: String,
     lang: PhantomData<fn() -> LLL>,
 }
 
 impl<LLL: LatexlikeLang> BeginSpec<LLL> {
-    /// The `\begin` dispatcher spec.
-    pub fn new() -> BeginSpec<LLL> {
-        BeginSpec { lang: PhantomData }
+    /// The environment dispatcher spec whose bodies end at the command
+    /// `end_command_name` (`"end"` for `\end{name}` — written without the escape
+    /// character, which is the invocation's).
+    ///
+    /// The name must be the one the terminator command is *recognized* under: the
+    /// body parsers match it against the command token's name, so a name no command
+    /// token can carry leaves every body running to the end of its input (diagnosed
+    /// as a missing terminator). Registering an [`EndSpec`] under the same name is
+    /// what turns a stray terminator into an [`OrphanEnd`] diagnostic rather than an
+    /// unknown command; nothing enforces the pairing.
+    pub fn new(end_command_name: impl Into<String>) -> BeginSpec<LLL> {
+        BeginSpec { end_command_name: end_command_name.into(), lang: PhantomData }
+    }
+
+    /// The terminator command's name, as given to [`new`](BeginSpec::new).
+    pub fn end_command_name(&self) -> &str {
+        &self.end_command_name
     }
 }
 
@@ -544,7 +586,10 @@ where
     where
         's: 'a,
     {
-        Ok(Box::new(EnvironmentInvocationParser { invocation }))
+        Ok(Box::new(EnvironmentInvocationParser {
+            invocation,
+            end_command_name: &self.end_command_name,
+        }))
     }
 
     /// `\begin` itself is macro-shaped; the environment's own name titles the frames
@@ -554,23 +599,20 @@ where
     }
 }
 
-impl<LLL: LatexlikeLang> Default for BeginSpec<LLL> {
-    fn default() -> Self {
-        BeginSpec::new()
-    }
-}
-
+// No `Default`/`Copy`: the terminator command name has no default worth assuming
+// (that assumption is what this field exists to remove), and an owned name is not a
+// `Copy` value. `Clone` stays — a spec is registration data.
 impl<LLL: LatexlikeLang> Clone for BeginSpec<LLL> {
     fn clone(&self) -> Self {
-        BeginSpec::new()
+        BeginSpec::new(self.end_command_name.clone())
     }
 }
-
-impl<LLL: LatexlikeLang> Copy for BeginSpec<LLL> {}
 
 impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeginSpec").finish()
+        f.debug_struct("BeginSpec")
+            .field("end_command_name", &self.end_command_name)
+            .finish()
     }
 }
 
@@ -579,12 +621,16 @@ impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
 /// parser diagnoses [`OrphanEnd`] and recovers. An ordinary
 /// [`Macro`](super::CallableType::Macro) entry of the [`builtin_package`](super::builtin_package),
 /// alongside [`BeginSpec`].
+///
+/// The spec carries no name of its own — it diagnoses whatever command it was
+/// registered under, and that name should be the one the paired
+/// [`BeginSpec`](BeginSpec::new) was given as its terminator.
 pub struct EndSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,
 }
 
 impl<LLL: LatexlikeLang> EndSpec<LLL> {
-    /// The orphan-`\end` diagnoser spec.
+    /// The orphan-terminator diagnoser spec.
     pub fn new() -> EndSpec<LLL> {
         EndSpec { lang: PhantomData }
     }
@@ -656,6 +702,9 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
 /// ([`EnvironmentBeginSyntaxData`]) are command-spelling facts by construction.
 struct EnvironmentInvocationParser<'a, 's, LLL: LatexlikeLang> {
     invocation: Invocation<'a, 's, LLL>,
+    /// The dispatching [`BeginSpec`]'s terminator command name, passed on to the
+    /// body parsers through [`EnvironmentInvocation::end_command_name`].
+    end_command_name: &'a str,
 }
 
 impl<LLL: LatexlikeLang> ConstructParser<LLL> for EnvironmentInvocationParser<'_, '_, LLL>
@@ -699,7 +748,18 @@ where
         let Some(name_group) =
             read_rigid_name_group(cx, LLL::GroupTypeId::content_group())?
         else {
-            cx.recover(MalformedBegin, SourceSpan::new(&cx.source, trigger.span))?;
+            // The condition quotes the command as written — escape character
+            // included, the trigger's own post-space excluded (`\begin` out of
+            // `\begin [x]`) — since the opening command's name is this spec's
+            // registration name, not a fixed spelling.
+            let command = String::from(
+                &cx.source.content()
+                    [Span::new(trigger.span.start(), post_space.start()).range()],
+            );
+            cx.recover(
+                MalformedBegin::new(command),
+                SourceSpan::new(&cx.source, trigger.span),
+            )?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
             // accepted tolerant-recovery artifact); nothing past it is consumed.
             let id = cx.stage_node(
@@ -768,7 +828,8 @@ where
         // The invocation facts handed to the behavior hooks, spelling pieces
         // included (a takeover body composes its terminator from them). The rule
         // `Arc` clone pins the delimiter strings for the borrow; the escape char
-        // transcribes from the already-validated command trigger.
+        // transcribes from the already-validated command trigger; the terminator
+        // command name comes from the dispatching spec.
         let name_group_rule = Arc::clone(&name_group.rule);
         let env_invocation = EnvironmentInvocation {
             trigger_span: trigger.span,
@@ -777,6 +838,7 @@ where
             escape_char,
             name_group_open: &name_group_rule.open,
             name_group_close: &name_group_rule.close,
+            end_command_name: self.end_command_name,
         };
 
         // The body: parsed under the behavior's state delta stacked on the
@@ -876,17 +938,34 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
     {
         let trigger = self.invocation.token;
         let source = Arc::clone(&cx.source);
-        let (name, end) =
+        // The command word's end, for the quoted spelling of a terminator whose name
+        // group never parsed: a command trigger's own post-space is consumed with it
+        // and would read as a trailing blank inside the quotes. Any other trigger
+        // shape (this spec is registrable under any syntax) quotes its whole extent.
+        let command_end = match &trigger.kind {
+            crate::token::TokenKind::Command { post_space, .. } => post_space.start(),
+            _ => trigger.span.end(),
+        };
+        let (name, end, quoted_end) =
             match read_rigid_name_group(cx, LLL::GroupTypeId::content_group())? {
             Some(group) => (
                 Some(String::from(&source.content()[group.name_span.range()])),
                 group.end,
+                group.end,
             ),
             // Malformed name group: nothing past the trigger was consumed.
-            None => (None, trigger.span.end()),
+            None => (None, trigger.span.end(), command_end),
         };
         let span = Span::new(trigger.span.start(), end);
-        cx.recover(OrphanEnd::new(name), SourceSpan::new(&cx.source, span))?;
+        // The condition quotes the terminator as written — its command name is this
+        // spec's registration name, not a fixed spelling.
+        let terminator = String::from(
+            &source.content()[Span::new(trigger.span.start(), quoted_end).range()],
+        );
+        cx.recover(
+            OrphanEnd::new(name, terminator),
+            SourceSpan::new(&cx.source, span),
+        )?;
         let id = cx.stage_node(
                 NodeKind::chars(span),
                 SourceSpan::new(&cx.source, span),
@@ -908,8 +987,9 @@ mod tests {
     };
     use crate::engine::{Language, ParseResult};
     use crate::error::Recovery;
-    use crate::latexlike::check_latexlike_tree_invariants;
+    use crate::latexlike::{check_latexlike_tree_invariants, source_recomposer};
     use crate::node::NodeRef;
+    use crate::recompose::TreeRecomposer;
     use crate::scopes::{Package, ScopeOp};
     use crate::state::{CommentOverrides, ParsingState, TokenRulesOverrides};
     use crate::token::GroupRule;
@@ -1254,6 +1334,106 @@ mod tests {
         assert_eq!(root_shapes(&result), ["chars(\\begin)", "group(Content { })"]);
     }
 
+    // --- the dispatch pair's names -----------------------------------------------------
+
+    /// The `\open{name} … \shut{name}` language: the opening command is named by its
+    /// registration and the terminator by [`BeginSpec::new`]'s argument, so a renamed
+    /// pair is definitions, not code. The seed `_builtin` pair is unloaded — nothing
+    /// in this language answers to `\begin`.
+    fn renamed_pair_language(recovery: Recovery) -> Language<Latexlike> {
+        let mut package = Package::new("renamed");
+        package.insert(CallableType::Macro, "open", BeginSpec::<Latexlike>::new("shut"));
+        package.insert(CallableType::Macro, "shut", EndSpec::<Latexlike>::new());
+        package.insert(CallableType::Environment, "itemize", env(vec![]));
+        package.insert(
+            CallableType::Environment,
+            "verbatim",
+            Arc::new(EnvironmentSpec::from_behavior(Arc::new(
+                VerbatimBehavior::default(),
+            ))),
+        );
+        let seed = ParsingState::<Latexlike>::lang_initial_with_packages([package])
+            .expect("seed state")
+            .derived(&ParsingStateDelta::new().scope_op(ScopeOp::Unload {
+                name: "_builtin".into(),
+            }))
+            .unwrap();
+        Language::new(LatexlikeDriver::new(recovery), seed)
+    }
+
+    /// Strict parse expected clean, then reemitted: the recorded begin/end spellings
+    /// must give the input back byte for byte.
+    fn parse_and_reemit(language: &Language<Latexlike>, input: &str) -> ParseResult<Latexlike> {
+        let result = language.parse(input).unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert!(
+            result.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let out = TreeRecomposer::new(&mut source_recomposer())
+            .recompose(&result.tree, ())
+            .unwrap();
+        assert_eq!(out, input);
+        result
+    }
+
+    #[test]
+    fn a_renamed_dispatch_pair_parses_environments() {
+        assert_eq!(BeginSpec::<Latexlike>::new("shut").end_command_name(), "shut");
+
+        let language = renamed_pair_language(Recovery::Strict);
+        let result = parse_and_reemit(&language, "\\open{itemize} a \\shut{itemize}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.callable_type(), Some(CallableType::Environment));
+        assert_eq!(env.environment_name(), Some("itemize"));
+        assert_eq!(body_shapes(env), ["chars( a )"]);
+
+        // The pair is this package's alone: `\begin` resolves to nothing here.
+        let tolerant = renamed_pair_language(Recovery::Tolerant);
+        let result = tolerant.parse("\\begin{itemize}\\end{itemize}").unwrap();
+        let all = messages(&result);
+        assert!(all[0].contains("cannot resolve command ‘\\begin’"), "{all:?}");
+    }
+
+    #[test]
+    fn a_renamed_dispatch_pair_terminates_verbatim_bodies() {
+        // The raw body reads up to the literal terminator composed from the
+        // invocation's own spellings — the renamed command word included — and
+        // reports it back as standard end facts, so the reemission is exact here too.
+        let language = renamed_pair_language(Recovery::Strict);
+        let result =
+            parse_and_reemit(&language, "\\open{verbatim}\na % b \\x{\n\\shut{verbatim}");
+        let env = result.tree.root().child(0).unwrap();
+        assert_eq!(env.environment_name(), Some("verbatim"));
+        let body: Vec<_> = env.body().unwrap().iter().collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].chars(), Some("a % b \\x{\n"));
+    }
+
+    #[test]
+    fn the_environment_conditions_quote_the_source_spelling() {
+        // Neither condition spells a canonical `\begin`/`\end`: the malformed opening
+        // quotes the command it was written with, and the orphan terminator quotes
+        // its own consumed extent.
+        let language = renamed_pair_language(Recovery::Tolerant);
+
+        let result = language.parse("\\open x").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(
+            messages(&result),
+            ["malformed ‘\\open’: expected the environment's name group immediately \
+              after the command"]
+        );
+
+        let result = language.parse("\\shut{itemize}").unwrap();
+        check_latexlike_tree_invariants(&result.tree);
+        assert_eq!(
+            messages(&result),
+            ["orphan ‘\\shut{itemize}’: no environment ‘itemize’ is open here"]
+        );
+    }
+
     // --- recovery matrix ---------------------------------------------------------------
 
     #[test]
@@ -1362,7 +1542,7 @@ mod tests {
         let result = parse_tolerant("a\\end{itemize}b");
         assert_eq!(
             messages(&result),
-            ["orphan ‘\\end{itemize}’: no matching ‘\\begin{itemize}’"]
+            ["orphan ‘\\end{itemize}’: no environment ‘itemize’ is open here"]
         );
         assert_eq!(
             root_shapes(&result),
@@ -1376,7 +1556,9 @@ mod tests {
     #[test]
     fn orphan_end_without_a_name_group() {
         let result = parse_tolerant("\\end x");
-        assert_eq!(messages(&result), ["orphan ‘\\end’: no matching ‘\\begin’"]);
+        // The quoted spelling stops at the command word: the trigger's post-space is
+        // consumed with it (and staged), but reads as a stray blank inside quotes.
+        assert_eq!(messages(&result), ["orphan ‘\\end’: no environment is open here"]);
         assert_eq!(root_shapes(&result), ["chars(\\end )", "chars(x)"]);
     }
 
@@ -1385,7 +1567,7 @@ mod tests {
         let result = parse_tolerant("{\\end{itemize}}");
         assert_eq!(
             messages(&result),
-            ["orphan ‘\\end{itemize}’: no matching ‘\\begin{itemize}’"]
+            ["orphan ‘\\end{itemize}’: no environment ‘itemize’ is open here"]
         );
         let group = result.tree.root().child(0).unwrap();
         assert!(group.is_group());
@@ -1441,6 +1623,7 @@ mod tests {
             escape_char: '\\',
             name_group_open: "{",
             name_group_close: "}",
+            end_command_name: "end",
         }
     }
 

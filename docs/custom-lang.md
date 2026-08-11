@@ -522,5 +522,15 @@ with your types, implement the role traits, opt into
 preset components over your language. Forking the preset is the
 alternative the family exists to avoid.
 
+The environment pair's own spelling is data too, and needs no custom language
+at all: the opening command is named by the entry it is registered under, and
+the terminator by the argument to
+[`BeginSpec::new`](crate::latexlike::BeginSpec::new). A language writing its
+environments `\open{name} … \shut{name}` registers
+`BeginSpec::new("shut")` under `"open"` and an
+[`EndSpec`](crate::latexlike::EndSpec) under `"shut"`, in a package of its
+own — everything downstream, including verbatim bodies and the re-emitted
+source, follows those names.
+
 Read next: [Integration: tooling, embedding, and bindings](crate::guide::integration)
 — the facts that matter when techy runs inside a larger system.

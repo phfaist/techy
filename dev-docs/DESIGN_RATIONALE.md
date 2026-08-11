@@ -6474,6 +6474,56 @@ the language.
 Rejected alternatives: the test-lang rehearsal's driver arm (`if name == "begin"`), which made
 `\begin` structural syntax.
 
+#### The environment pair's command names are definitions data [§dd-dr:environment-command-names]
+
+Status: DECIDED (user).
+
+`BeginSpec::new(end_command_name)` carries the terminator command's name (`"end"`);
+the opening command's name is the entry's own registration name. No machinery spells
+either: the composition hands the terminator name to the body parsers through
+`EnvironmentInvocation::end_command_name`, so both the tokenized
+`EnvironmentBodyParser`'s stop condition and the raw `VerbatimBodyParser`'s composed
+terminator follow the definition — the escape character and the name group delimiters
+already came from the invocation as written ([§dd-dr:verbatim-family]).
+`builtin_package` picks `begin`/`end` by writing those two names; a language spelling
+the pair `\open`/`\shut` is a package, not a fork.
+Rationale: the argument that made the dispatch pair scope-stack data
+([§dd-dr:begin-end-dispatch]) — a constant in preset code is the one part of the
+language no definition can shadow.
+
+The pairing is unenforced: the body parsers match the terminator name against command
+tokens, while `EndSpec` is reached by resolution under its registration name. A
+mismatch degrades to diagnosed outcomes (bodies run to the end of their input; stray
+terminators resolve as unknown commands), so the invariant is documented on
+`BeginSpec::new` rather than checked — nothing can check it before a parse, and at
+parse time it would fire on documents that never terminate anything.
+
+Consequently the preset's conditions quote **what the source said**, never a canonical
+spelling: `MalformedBegin` carries the opening command as written (escape character
+included, the trigger's post-space excluded) and `OrphanEnd` the terminator's whole
+consumed extent. `OrphanEnd` no longer names the opening command at all ("no
+environment ‘align’ is open here", not "no matching `\begin{align}`") — the orphan
+site knows its own name only, the pairing running in the opening direction alone.
+Core's environment conditions need nothing: they name environments (`{expected}`,
+`{environment}`) and spell no command. `MissingEnvironmentTerminator` keeps that
+silence deliberately — `EnvironmentBodyParser` knows the stop *word* but never the
+escape character or name group delimiters (those exist only in a terminator actually
+read), so it cannot quote the terminator it wanted.
+
+Rejected alternatives: an associated const on `LatexlikeLang` (compile-time, hence
+unshadowable and unable to serve two pairs in one language — [§dd-dr:data-vs-traits]);
+the name on `EnvironmentBehavior` (per-environment variation of the *terminator* buys
+nothing, and would let one environment's body stop on a word no other recognizes); a
+symmetric `EndSpec::new(begin_command_name)` so `OrphanEnd` can keep naming `\begin`
+(a second unenforced pairing bought purely for message wording); conditions
+reconstructing their spelling from pieces (escape character + word + delimiters — four
+fields that can still drift from the bytes, where the anchored source slice is exact by
+construction).
+
+Revisit if: a language needs the terminator's name to vary per environment, or
+begin/end mismatches prove hard enough to diagnose that a registration-time check earns
+its place.
+
 #### `EnvironmentSpec` wraps a dyn `EnvironmentBehavior`; `with_body_delta` adapts [§dd-dr:environment-spec-surface]
 
 Status: DECIDED (user; executes the [§dd-dr:spec-downcasting] funnel and
@@ -6484,7 +6534,9 @@ The concrete wrapper `EnvironmentSpec` is the registration/downcast target (impl
 carries the behavior as defaulted methods — `arguments()`, `body_state_delta(…)`
 (owned return: behaviors may compute it), `make_body_parser(…)` (default: the core
 `EnvironmentBodyParser` through the rigid `\end{name}` terminator). Hooks receive an
-`EnvironmentInvocation` facts struct (`trigger_span`, `name`, `name_span`) —
+`EnvironmentInvocation` facts struct (`trigger_span`, `name`, `name_span`, plus the
+spellings a takeover body composes its terminator from: `escape_char`,
+`name_group_open`/`name_group_close`, `end_command_name`) —
 `#[non_exhaustive]`, grown by field as consumers demand; the parsed arguments were
 deliberately left out until a behavior needs them (pylatexenc's `nodeargd` precedent
 noted; adding a field is non-breaking). `EnvironmentSpec::new(arguments)` builds a
@@ -6515,7 +6567,8 @@ Status: DECIDED (user).
 
 Inside a body, `\end` is the stop condition and never reaches resolution, so a
 *dispatched* `\end` is always an orphan: `EndSpec`'s parser reads the rigid name group
-when present, records `OrphanEnd` (message quoting `\end{name}` when the name parsed),
+when present, records `OrphanEnd` (quoting the terminator as written and naming the
+environment when the name parsed, [§dd-dr:environment-command-names]),
 and tolerantly stages the consumed extent as one `Chars` node — `\end{name}` whole, so
 `{name}` is not re-parsed as a stray group. Preset condition ids are namespaced
 **`latexlike.environments.*`** (`malformed-begin`, `unknown-environment`, `orphan-end`;
@@ -6571,11 +6624,11 @@ Points settled in flight:
   keeps span-backed end facts ([§dd-dr:invocation-syntax]). A `Literal` terminator has
   no such structure and reports only its span; a record that cannot store a bare
   literal (latexlike's `StdEnvironmentSyntax`) is then inaccurate by construction,
-  which is why the preset's `VerbatimBehavior` states the pieces instead. It takes
-  the escape character and the name group delimiters from the invocation *as
-  written*, so a language re-ruling either needs no behavior of its own; only the
-  stop command name is a preset constant (`END_COMMAND_NAME`, same doctrine as
-  `BEGIN_COMMAND_NAME`), so a language renaming `\end` does.
+  which is why the preset's `VerbatimBehavior` states the pieces instead. Every piece
+  comes off the invocation — the escape character and the name group delimiters *as
+  written*, the stop command name from the dispatching spec
+  ([§dd-dr:environment-command-names]) — so a language re-ruling the escape character
+  or renaming its terminator needs no behavior of its own.
 - *A tolerated unreadable token* inside a committed verbatim region ends it like
   EOF (diagnosed unterminated/missing-terminator); the enclosing loop re-reads the
   error and applies its own token recovery — the probe protocol, two true

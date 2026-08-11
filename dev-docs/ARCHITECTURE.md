@@ -954,7 +954,10 @@ privileged concepts, and the pattern FLM will follow (as a separate crate).
   [§dd-dr:base-package]): exactly what any latexlike parse must have
   preloaded — the environment dispatch pair `begin`/`end` registered as ordinary
   entries ([§dd-dr:begin-end-dispatch]) — everything goes through the stack; nothing
-  is hardcoded, everything is shadowable and unloadable. Typography specials are
+  is hardcoded, everything is shadowable and unloadable. Both names are this
+  package's data: the opening command is named by its registration, the terminator by
+  `BeginSpec::new`'s argument, and the preset's conditions quote whichever spellings a
+  source used ([§dd-dr:environment-command-names]). Typography specials are
   definitions content, not substrate: they live in `minidefs` (below); `&` was
   removed from the shipped definitions entirely.
 - **`latexlike::minidefs`** ([§dd-dr:minidefs]): the opt-in toy package
