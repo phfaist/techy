@@ -15,6 +15,9 @@ the progress log; escalate to the user in case of doubt. Agent sessions must not
 silently deviate from a D-number. The design conversations behind this plan are NOT
 required reading — §3 is the complete decision record; if §3 seems ambiguous, that is
 a plan bug: fix the plan, escalating to the user if the ambiguity is substantive.
+A non-normative companion, `design_session_report.md` (same folder), records the
+philosophies, rejected patterns, and false routes behind these decisions — read it
+before proposing any design change, so dead ends are not re-walked.
 
 ---
 
@@ -22,8 +25,9 @@ a plan bug: fix the plan, escalating to the user if the ambiguity is substantive
 
 Provide serialization/deserialization for the objects techy consumers handle — node
 trees (with annotations), parsing states, sources, specs/providers, diagnostics — via
-serde, behind an optional `serde` cargo feature, with a schema that will become public
-and frozen at v1 (not frozen yet).
+serde, behind an optional `serde` cargo feature (which gates the serde dependency and
+rendering only — the capability itself is unconditional, D1), with a schema that will
+become public and frozen at v1 (not frozen yet).
 
 ### Canonical use cases (the design must serve all six)
 
@@ -99,8 +103,11 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   [§dd-dr:wire-identifier-stability]; implementer payload keys are the implementer's
   stability obligation.
 - **D3 — No serde derives on live model types.** Live types never gain serde bounds;
-  serialization goes through the wire model. Derives are allowed on: wire structs,
-  `SerialValue`, index newtypes, vocabulary types, implementer payload structs.
+  serialization goes through the wire model. Serde derives are allowed on:
+  `SerialValue`/`Segment` (feature-gated impls), index newtypes, vocabulary types,
+  and implementer payload structs. Core wire structs do NOT carry serde derives —
+  their only conversion mechanism is the internal derive (D8); `Segment` alone is
+  the public wire type with serde impls.
 - **D4 — Vocabulary: "segment" and "stream"; the word "document" is banned** (in API,
   rustdoc, and prose — FLM owns it). A stream is a sequence of ≥1 segments; indices
   are stream-scoped. "resurrect/dump/load/revive" are banned from public API and
@@ -116,13 +123,19 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   poison equality/dedup/golden files; the bridge maps every Rust int width onto `Int`
   with range checks. `Bytes` renders as base64 in JSON (exact canonical form: Q3).
   `DiagnosticValue` is unchanged (it gains only a feature-gated `Serialize` impl).
+  `TableId` is a foundation ordinal newtype (`TableId(u32)`), assigned by the
+  session in deterministic table-registration order; whether the JSON rendering of
+  `Index` shows the ordinal or the table name is Q3 — the in-memory type is fixed
+  either way, so M0 is not blocked on Q3.
 - **D6 — `SerialEntry { identifier: Cow<'static, str>, data: SerialValue }`** — the
   in-memory return of every write. `Cow<'static, str>`: zero-cost for the static
   literal common case, owned escape hatch for instance-derived identifiers (dynamic
   adapter types); borrowed-from-self is impossible (entries outlive the call) and
   `Arc<str>` would allocate for literals to optimize cloning that never happens.
   Homogeneous table drivers omit the identifier from the wire (the table implies the
-  type); heterogeneous drivers write `{identifier, data}`.
+  type); heterogeneous drivers write `{identifier, data}`. Homogeneous core types
+  still return a real constant identifier (e.g. `"core.state"`; exact strings Q3) —
+  never an empty string — which their drivers may debug-assert and do not emit.
 - **D7 — The bridge** (feature-gated): `SerialValue` implements serde's
   `Serializer`/`Deserializer` over itself (the `serde_json::Value` pattern), exposed
   as `to_value<T: Serialize>` / `from_value<T: DeserializeOwned>`. Index newtypes and
@@ -144,26 +157,38 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   then appending is the natural flow (use case 1): absorb segments, add trees, emit a
   segment containing only new entries. Construction requires `L: SerializableLang`.
   Core ships a standard-tables constructor (sources, states, specs, providers, trees,
-  diagnostics pre-wired); presets/frameworks extend it.
+  diagnostics pre-wired); presets/frameworks extend it. `SerdeSession::<L>::new()` IS
+  that standard-tables constructor (§6 usage); if M2 finds a need for empty/custom
+  composition, that is a separate constructor to name then.
 - **D10 — Segments.** The unit of emission contains only table entries new since the
   previous emission, plus the trees/diagnostics added in it. Indices are stream-scoped,
   append-only, assigned in deterministic insertion order (never hash order — `Package`
-  internals are hashbrown; anything derived from them must be explicitly ordered:
-  D-determinism applies to every driver). Segment methods (provisional, finalized M2):
+  internals are hashbrown; anything derived from them must be explicitly ordered —
+  this determinism rule binds every driver, core and custom). Segment methods (provisional, finalized M2):
   `take_segment()` / `push_segment(...)`. JSONL is the canonical stream rendering;
   segments may equally be separate files/payloads consumed in order. `Segment` is the
   one public wire struct (feature-gated serde impls).
 - **D11 — `ObjectSerdeDriver`: one per table, uniform method names**
   (`serialize_object` / `deserialize_object` — names never vary by object kind).
-  Associated `type SerializedIndex`: a `Copy` `u32` newtype (`SerialIndex` bound), so
-  the scaffolding's `SourceIndex`/`StateIndex`/`SpecIndex`/`ProviderIndex`/`TreeIndex`
-  are compile-checked while the foundation sees only `u32`s and the single wire
-  `Index{table, index}` form. Homogeneous tables (sources, states, trees, diagnostics)
-  implement the driver directly; trait-object tables (`dyn CallableSpec`,
-  `dyn SpecsProvider`) instantiate a generic dispatching driver (write: call the
-  object's own vtable method; read: identifier registry + resolvers). Custom tables:
-  implementers register additional drivers (framework-shared resources referenced from
-  annotations/ext payloads); table names follow identifier stability discipline.
+  Associated `type Index`: a `u32` newtype satisfying the `SerialIndex` bound
+  (`Copy + Eq + Hash + Debug` + to/from-`u32` conversions; the bound trait's full
+  item list is M2's to pin). (Audit fix: the earlier spelling `SerializedIndex`
+  violated the §3.G naming families; the associated type is `Index`, its bound is
+  `SerialIndex`.) The typed newtypes
+  (`SourceIndex`/`StateIndex`/`SpecIndex`/`ProviderIndex`/`TreeIndex`) are defined by
+  the SCAFFOLDING layer next to its drivers (M2/M3) — never in foundation `value.rs`,
+  which stays type-blind and holds only `TableId`, the `SerialIndex` bound, and the
+  wire `Index{table, index}` form. Homogeneous tables (sources, states, trees,
+  diagnostics) implement the driver directly; trait-object tables
+  (`dyn CallableSpec`, `dyn SpecsProvider`) instantiate a generic dispatching driver
+  (write: call the object's own vtable method; read: identifier registry +
+  resolvers). The driver's `serialize_object`/`deserialize_object` deliberately
+  mirror the object-level method names — the same conceptual operation at two
+  levels: a dispatching driver's implementation calls the object's own
+  `SerializableObject::serialize_object`; homogeneous drivers do the work directly.
+  Custom tables: implementers register additional drivers (framework-shared
+  resources referenced from annotations/ext payloads); table names follow identifier
+  stability discipline.
 - **D12 — Cycle rules.** The live strong-Arc graph is acyclic by construction
   (back-edges are `Weak`, D19). The wire reference graph must also be acyclic
   (read-side materialization of immutable values cannot tie knots): pairing convention
@@ -217,7 +242,13 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   map. A framework registers ONE resolver for its identifier prefix
   (`register_resolver("mycustom.", …)`); a resolver returns the same erased entry
   currency the exact map holds, and the driver memoizes it per identifier (expensive
-  definition loading happens once per stream). Dynamic type loading (an identifier
+  definition loading happens once per stream). The "entry currency" is a concrete
+  foundation type — a **read entry**: an erased handle (working name `ReadEntry`;
+  final name M2) wrapping one deserialize function for one identifier, produced
+  EITHER by `register_type::<C>()` from `C`'s `DeserializableObject` impl OR
+  constructed by a resolver (e.g. wrapping a dynamically loaded definition in an
+  adapter type). §3.J's rejection of "closure-pair registries" targets hand-written
+  `ser_fn`/`de_fn` pairs as the PUBLIC registration API, not this internal currency. Dynamic type loading (an identifier
   like `"mycustom.packagexyz.yyy"` → look up package, load symbol definition, build an
   adapter entry) lives entirely in resolvers: core never loads anything; each resolver
   enforces its own trust policy for its namespace; no resolvers registered = clean
@@ -245,7 +276,14 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   serialization stores no lang-carried data. M0 carries a compile test pinning
   vacant-vtable behavior (`dyn CallableSpec<L>` for non-serializable `L`) at MSRV
   1.86; fallback if it ever failed: drop the where-clause, rely on context
-  unconstructibility alone (same practical semantics).
+  unconstructibility alone (same practical semantics). Sequencing: M0 lands
+  `SerializableLang` as a bare marker (`pub trait SerializableLang: Lang {}`); M3
+  adds its items — the codec surface for the lang's closed vocabulary types and its
+  ext types (reached via the `Lang::NodeExts: NodeExtTypes` bundle and `StateExt` —
+  see the state/lang.rs anchor), plus `InvocationSyntax`. Throughout this plan,
+  "vocabulary types" means the lang's closed enums — its `CallableTypeId`/
+  `GroupTypeId`/`ModeId`/`Event` types (the `ClosedVocabulary` impls; for latexlike:
+  `CallableType`, `GroupType`, `MathGroupForm`, `Mode`, `Event`).
 
 ### E. Specs & providers
 
@@ -282,16 +320,23 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   `serialize_argument_spec(index, &Arc<ArgumentSpec<L>>, cx) ->
   Result<Option<SerialValue>, _>` and `deserialize_argument_spec(index,
   Option<&SerialValue>, cx) -> Result<Arc<ArgumentSpec<L>>, _>` (the latter runs on
-  the freshly materialized spec). Out-of-band argument specs without an override = v1
-  write error naming node and callable. `ParsedSlot` is structural — no hook.
+  the freshly materialized spec). The DEFAULT BODIES implement the rule themselves,
+  not the tree driver: the write default pointer-compares against
+  `self.arguments().get(index)` and returns `Ok(None)` on match / the out-of-band
+  error on mismatch; the read default is `self.arguments().get(index).cloned()`
+  with a bounds error. `index: usize` in signatures (the wire stores `u32`).
+  Out-of-band argument specs without an override = v1 write error naming node and
+  callable. `ParsedSlot` is structural — no hook.
 
 ### F. Trees, states, sources, diagnostics
 
 - **D22 — Tree tags are never wire material** (existing law [§dd-dr:tree-tags],
   tree.rs doc). Drop on write; the reader mints a fresh tag via the normal path and
   restamps `RegionState::Resolved.tree_tag`. The wire stores regions in staged-like
-  form (child ranges); the reader re-runs builder-style resolution so region
-  invariants are re-established by construction. Parent table and `single_source`
+  form — the FULL staged information: child ranges AND the content designation (the
+  `ContentNodes`-equivalent; exact wire shape is M4 design inside this rule); the
+  reader re-runs builder-style resolution so region invariants are re-established by
+  construction. Parent table and `single_source`
   recomputed, never trusted. Consumer `NodeId`s do not survive round-trips (durable
   node identity rides in annotations). Everything read is untrusted: bounds checks,
   invariant validation, typed errors, no panics (panic policy rule 3 in full).
@@ -320,7 +365,11 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
 - **D26 — Diagnostics.** Wire = severity + identifier + `DiagnosticValue` data (the
   existing `serializable_data()` channel) + span + rendered trace frames. Revive as an
   adapter `DiagnosticData` keyed by identifier (anticipated by error.rs). Same
-  stream/tables as the trees they belong to (shared sources). `ParseResult`
+  stream/tables as the trees they belong to (shared sources). `DiagnosticValue` is a
+  strict subset of `SerialValue` (no `Bytes`/`Index`): core provides an
+  unconditional, infallible `DiagnosticValue → SerialValue` embedding used by this
+  driver; the reverse conversion exists only inside this driver and rejects
+  `Bytes`/`Index` inputs as validation errors. `ParseResult`
   (tree + diagnostics + session ext) gets a convenience wrapper (multi-tree root
   underneath).
 
@@ -332,7 +381,12 @@ Three families, applied strictly:
 |---|---|---|
 | `Serde*` | genuinely bidirectional machinery | `SerdeSession`, `ObjectSerdeDriver`, dispatching drivers (`SpecSerdeDriver`, `ProviderSerdeDriver`) |
 | `Serializable*` / `Deserializable*` | one-directional capabilities | `SerializableObject`, `DeserializableObject`, `SerializableLang` |
-| `Serial*` | wire-side data | `SerialValue`, `SerialEntry`, `SerialIndex` (bound), typed indices |
+| `Serial*` | wire-side data | `SerialValue`, `SerialEntry`, `SerialIndex` (the bound trait) |
+
+Typed table positions form a fourth, suffix-based family: `…Index` newtypes
+(`SourceIndex`, `SpecIndex`, …) named by table, satisfying `SerialIndex`; the
+driver's associated type is `type Index` (see D11 — `SerializedIndex` was an audit-
+caught family violation and is superseded).
 
 Also settled: contexts `SerializeContext`/`DeserializeContext` (house "…Context"
 suffix per RestageContext/RecomposeContext/VisitContext); errors `SerializeError` /
@@ -454,10 +508,17 @@ stream contains only new table entries plus new trees, referencing earlier indic
 ### Module layout
 
 - `techy/src/serialize/` (pub(crate) internal module; public facade `techy::serialize`
-  in lib.rs). **Unconditional** (D1): `value.rs` (SerialValue, SerialEntry, indices),
-  `error.rs`, `object.rs` (SerializableObject, DeserializableObject,
+  in lib.rs — a re-export facade, one canonical path per item, per
+  [§dd-dr:public-namespace-topology]). **Unconditional** (D1): `value.rs`
+  (SerialValue, SerialEntry, TableId, the SerialIndex bound — NOT the typed index
+  newtypes, which live beside their drivers per D11), `error.rs` (SerializeError,
+  DeserializeError, SerialValueError — SerialValueError's variants land with the
+  bridge in M1), `object.rs` (SerializableObject, DeserializableObject,
   SerializableLang), `engine/` (SerdeSession, tables, ObjectSerdeDriver, segments,
-  contexts, interning, resolvers, cycle/depth guards), `wire/` (core wire structs +
+  contexts, interning, resolvers, cycle/depth guards — M0 lands
+  `SerializeContext`/`DeserializeContext` here as opaque shells with no public API
+  so `object.rs` signatures compile; M2 gives them their real surface), `wire/`
+  (core wire structs +
   internal-derive conversions), `drivers/` (source/state/tree/diagnostic drivers;
   spec/provider dispatching drivers; context extension traits). **Feature-gated**:
   `bridge.rs` (serde Serializer/Deserializer over SerialValue, to_value/from_value),
@@ -476,6 +537,9 @@ pub enum SerialValue { Null, Bool(bool), Int(i64), Str(String), Bytes(Vec<u8>),
                        List(Vec<SerialValue>), Map(Vec<(String, SerialValue)>),
                        Index { table: TableId, index: u32 } }
 pub struct SerialEntry { pub identifier: Cow<'static, str>, pub data: SerialValue }
+pub struct TableId(u32);                 // session-assigned, registration order (D5)
+pub trait SerialIndex: Copy + Eq + Hash /* + Debug, to/from u32; M2 pins items */ {}
+pub trait SerializableLang: Lang { /* M0: bare marker; M3 adds vocab/ext codecs (D17) */ }
 
 pub trait SerializableObject<L: Lang> {
     fn serialize_object(&self, cx: &mut SerializeContext<'_, L>)
@@ -536,7 +600,14 @@ let tree = r.tree(tree_index)?;
 - latexlike: `techy/src/latexlike/mod.rs` vocab enums :169-283;
   `invocation_syntax.rs` :74/:199 (`Arc<GroupRule>` inside node payload);
   `environments.rs` `EnvironmentSpec` :464.
-- Facade wiring: `techy/src/lib.rs` :141-159 (facades), :235 (`__private`).
+- Facade wiring: `techy/src/lib.rs` :145-155 (facades), :235 (`__private`).
+- Lang trait & ext bundling: `techy/src/state/lang.rs` — `Lang` trait,
+  `NodeExtTypes` bundle :43-64/:244, `ClosedVocabulary` :563 (the D17 codec surface
+  mirrors these; ext types are reached through the bundle, not flat associated
+  types).
+- Manifests: root `Cargo.toml` (`rust-version = "1.86"` — the D17 MSRV claim),
+  `techy/Cargo.toml` (currently NO `[features]` section — M0 creates it; dev-deps =
+  proptest only, so the M0 vtable test is a plain `#[test]`, no trybuild).
 - Background only (do not replicate): FLM's round-trip serializer
   `~/Research/util/flm/flm/flmdump.py` (adopted/rejected tricks are already folded
   into §3); pylatexenc sources `~/Research/util/pylatexenc/`.
@@ -560,16 +631,29 @@ agents editing the same files), merged back into `techy-serialize` promptly. Wor
 in worktrees, never the primary checkout. Each milestone is reviewed by a reviewer
 agent against this plan before the next begins, and ends with: tests green both with
 and without the feature, `cargo docs` clean, progress log updated. `techy-serialize`
-merges into main at project completion (M7), per the local rebase + ff-merge practice
-(no PRs).
+merges into main at project completion (M7), per the local practice: rebase
+`techy-serialize` onto `main`, then fast-forward-merge into `main` — no PRs; run the
+merge outside the sandboxed primary checkout.
 
 - **M0 — Capability traits & gating skeleton.** Cargo feature wiring (rendering-only,
   D1); `value.rs` types + `error.rs` (unconditional); `SerializableObject`/
-  `DeserializableObject`/`SerializableLang` definitions; supertraits added to
-  `CallableSpec`/`SpecsProvider` + stub impls crate-wide; the D21 method pair
-  (defaulted); **the vacant-vtable compile test** (`dyn CallableSpec<L>`,
-  non-serializable `L`, MSRV 1.86 — D17). Acceptance: builds + tests green both
-  feature states; stubs compile for every in-crate spec/provider type.
+  `DeserializableObject` definitions; `SerializableLang` as the D17 bare marker;
+  `SerializeContext`/`DeserializeContext` as opaque engine shells (§6); supertraits
+  added to `CallableSpec` (spec/callable.rs:76) and `SpecsProvider`
+  (scopes/mod.rs:460) + stub impls crate-wide — that means the ~12 non-test
+  spec/provider types AND the ~16 impls inside `#[cfg(test)]` modules (`cargo test`
+  must compile; generic forms vary, e.g.
+  `impl<LLL: LatexlikeLang> SerializableObject<LLL> for MacroSpec<LLL> {}`); the D21
+  method pair (defaulted per D21's pinned bodies); **the vacant-vtable test**: a
+  plain compile-pass `#[test]` (no trybuild — not in deps) defining a permanent
+  test-only `NeverSerializableLang` documented as never implementing
+  `SerializableLang`, coercing a stub spec to
+  `&dyn CallableSpec<NeverSerializableLang>` and calling a non-gated method — this
+  pins D17's vacant-vtable behavior and stays meaningful after M5 precisely because
+  that lang never opts in. Rustdoc caution: root lints deny broken intra-doc links,
+  so M0 doc comments must not forward-reference M2+ types. Acceptance: builds +
+  tests green both feature states; stubs compile for every in-crate spec/provider
+  type including test modules; the vtable test passes.
 - **M1 — Bridge & internal derive.** serde Serializer/Deserializer over SerialValue;
   index/bytes newtype interception; policy errors (floats, keys, overflow); the
   techy-derive internal to/from-SerialValue derive for wire structs (D8). Acceptance:
@@ -602,8 +686,10 @@ merges into main at project completion (M7), per the local rebase + ff-merge pra
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
   schema description (input for the v1 freeze).
 - **M7 — Hardening + permanent docs.** Golden files; proptest round-trip properties;
-  rustdoc pass (docs-clarity rules; exhaustive error sections; no panics on any
-  input); performance sanity (large stream, many segments). Then, with user review:
+  rustdoc pass per the user's documentation-clarity rules (user-facing rustdoc: no
+  metaphors, no undefined jargon, coined terms defined on first use; error/Panics
+  sections exhaustive — target: no panics on any input); performance sanity (large
+  stream, many segments). Then, with user review:
   DESIGN_RATIONALE entries + ARCHITECTURE sections/cross-references (including the
   §3.J reversals as superseded-decisions), CLAUDE.md pointer updates if warranted,
   delete `dev-docs/serialization/`.
@@ -624,7 +710,8 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
   reports, not diffs), relays child reports, nudges stalled children. Implementers:
   scoped tasks with explicit file lists + the relevant D-numbers from §3. Reviewers:
   verify each stage diff against this plan + naming principles + panic policy +
-  docs-clarity rules; produce compact findings reports.
+  the documentation-clarity rules (as spelled out in M7 — no metaphors, no undefined
+  jargon in user-facing rustdoc); produce compact findings reports.
 - **Token discipline.** Briefs point to plan sections by number instead of restating
   them; implementers read only the files their task touches; reviewers get diffs and
   the D-register, not the conversation history; supervisors summarize child output
@@ -635,6 +722,9 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
   for progress-log entries.
 - **Escalation.** OPEN questions (§4), any new design fork, any deviation from a
   D-number → user, not agent discretion. Naming of public items → user (Q3).
+  Note: CLAUDE.md rule 7 (record design outcomes in DESIGN_RATIONALE immediately) is
+  deliberately deferred to M7 for this project — this plan is the interim record; do
+  not "fix" that by editing the permanent docs early.
 
 ---
 
@@ -643,6 +733,18 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-14 — cold-read audit by a context-free agent (grade B) + patches: pinned
+  `TableId`, `SerializableLang` M0-marker/M3-items sequencing, M0 context shells,
+  the read-entry ("entry currency") definition, D21 default bodies, staged-region
+  wire content, DiagnosticValue→SerialValue embedding, homogeneous identifier
+  contract, `type Index`/`SerialIndex` naming fix (was `SerializedIndex` — §3.G
+  family violation), typed-indices stratum (scaffolding, not value.rs), M0 stub
+  scope incl. `#[cfg(test)]` impls, vacant-vtable test specified
+  (`NeverSerializableLang`, plain #[test]), docs-clarity rules spelled out inline
+  (they lived outside the repo), ff-merge practice defined, anchors extended
+  (state/lang.rs, manifests) and lib.rs range corrected. Companion
+  `design_session_report.md` added (non-normative: philosophies, rejected patterns,
+  false routes). Next: open M0.
 - 2026-08-13 — full plan rewritten around the converged architecture (capability
   traits `SerializableObject`/`DeserializableObject` with supertrait write dispatch;
   unified `SerdeSession`; resolver-based read dispatch; `SerializableLang` gate;
