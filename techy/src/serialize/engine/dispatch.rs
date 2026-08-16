@@ -42,8 +42,12 @@ use super::session::SerdeSession;
 /// is `None`): entries carry their identifier on the wire.
 pub struct DispatchingSerdeDriver<L, T: ?Sized, I> {
     table_name: &'static str,
-    types: PhantomData<fn() -> (L, Arc<T>, I)>,
+    types: PhantomData<DriverMarker<L, T, I>>,
 }
+
+/// The variance-and-`Send`/`Sync` marker of [`DispatchingSerdeDriver`]'s phantom data
+/// (kept out of the field type so the field stays simple).
+type DriverMarker<L, T, I> = fn() -> (L, Arc<T>, I);
 
 impl<L, T: ?Sized, I> DispatchingSerdeDriver<L, T, I> {
     /// The driver of the heterogeneous table named `table_name` (a deliberately
@@ -102,8 +106,12 @@ where
 /// — how a resolver wraps a definition it loaded dynamically). Cheap to clone (the
 /// routine is shared).
 pub struct ObjectReader<L: SerializableLang, T: ?Sized> {
-    read: Arc<dyn Fn(&SerialValue, &mut DeserializeContext<'_, L>) -> Result<Arc<T>, DeserializeError> + Send + Sync>,
+    read: Arc<ReadFn<L, T>>,
 }
+
+/// The deserialization routine an [`ObjectReader`] wraps.
+type ReadFn<L, T> =
+    dyn Fn(&SerialValue, &mut DeserializeContext<'_, L>) -> Result<Arc<T>, DeserializeError> + Send + Sync;
 
 impl<L: SerializableLang, T: ?Sized + Send + Sync + 'static> ObjectReader<L, T> {
     /// A reader from a routine: called with the entry's data and the context, it
@@ -222,7 +230,9 @@ fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
             .filter(|(prefix, _)| identifier.starts_with(prefix.as_str()))
             .map(|(prefix, resolver)| (prefix.len(), Arc::clone(resolver)))
             .collect();
-        matching.sort_by(|a, b| b.0.cmp(&a.0));
+        // Longest prefix first; `sort_by_key` is stable, so registration order decides
+        // among equal lengths.
+        matching.sort_by_key(|(len, _)| core::cmp::Reverse(*len));
         matching.into_iter().map(|(_, resolver)| resolver).collect()
     };
     for resolver in candidates {

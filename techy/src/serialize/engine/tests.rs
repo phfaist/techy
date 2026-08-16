@@ -909,3 +909,86 @@ fn cause_is_cycle(err: &DeserializeError) -> bool {
 fn cause_is_depth(err: &DeserializeError) -> bool {
     matches!(cause_of(err), DeserializeError::DescentLimitExceeded { .. })
 }
+
+// --- feature-gated: serde rendering of segments and typed positions -------------------
+
+#[cfg(feature = "serde")]
+mod serde_rendering {
+    use super::*;
+
+    /// A segment round-trips through JSON, and its rendering is pinned.
+    #[test]
+    fn a_segment_round_trips_through_json_with_a_pinned_shape() {
+        let (mut session, tables) = full_session();
+        let leaf = session.intern(tables.leaves, &Arc::new(Leaf { text: "hi".into() })).unwrap();
+        let square: Arc<dyn Shape> = Arc::new(Square { side: 2 });
+        let shape = session.intern(tables.shapes, &square).unwrap();
+        let node = Arc::new(Node { leaves: Vec::from([leaf]), shape });
+        session.intern(tables.nodes, &node).unwrap();
+        let segment = session.take_segment();
+
+        let json = serde_json::to_string(&segment).unwrap();
+        // Pinned rendering: homogeneous tables (leaves, nodes) store bare data;
+        // the heterogeneous table (shapes) stores `{id, data}`; positions render as
+        // `{"$index":[table, index]}`.
+        assert_eq!(
+            json,
+            concat!(
+                r#"{"version":1,"tables":["#,
+                r#"{"name":"leaves","id":0,"start":0,"entries":["hi"]},"#,
+                r#"{"name":"shapes","id":1,"start":0,"entries":[{"id":"toy.square","data":{"side":2}}]},"#,
+                r#"{"name":"nodes","id":2,"start":0,"entries":[{"leaves":[{"$index":[0,0]}],"shape":{"$index":[1,0]}}]}"#,
+                r#"]}"#,
+            )
+        );
+
+        // And it reads back and re-absorbs, sharing preserved.
+        let back: Segment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, segment);
+        let (mut reader, rt) = full_session();
+        reader.push_segment(back).unwrap();
+        let read_node = reader.resolve(rt.nodes, NodeIndex::from_parts(rt.nodes.id(), 0)).unwrap();
+        assert_eq!(reader.resolve(rt.leaves, read_node.leaves[0]).unwrap().text, "hi");
+        assert_eq!(reader.resolve(rt.shapes, read_node.shape).unwrap().area(), 4);
+    }
+
+    /// A segment also round-trips through a compact (non-human-readable) format.
+    #[test]
+    fn a_segment_round_trips_through_postcard() {
+        let (mut session, tables) = full_session();
+        session.intern(tables.leaves, &Arc::new(Leaf { text: "x".into() })).unwrap();
+        let square: Arc<dyn Shape> = Arc::new(Square { side: 9 });
+        session.intern(tables.shapes, &square).unwrap();
+        let segment = session.take_segment();
+        let bytes = postcard::to_allocvec(&segment).unwrap();
+        let back: Segment = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back, segment);
+    }
+
+    /// A typed position type (from `serial_index!`) converts to a
+    /// `SerialValue::Index` through the bridge; a position that travels inside a
+    /// `SerialValue` therefore renders as `{"$index":[…]}` in JSON (as in a segment).
+    /// Serialized directly by a serde format (not through the bridge), a position is
+    /// its underlying newtype pair — that path is never how positions reach the wire
+    /// in this crate, since they always ride inside a `SerialValue`.
+    #[test]
+    fn a_typed_position_converts_to_an_index() {
+        use crate::serialize::{from_value, to_value, SerialIndex, SerialValue, TableId};
+        let position = LeafIndex::from_parts(TableId::new(3), 7);
+        let value = to_value(&position).unwrap();
+        assert_eq!(value, SerialValue::Index { table: TableId::new(3), index: 7 });
+        assert_eq!(from_value::<LeafIndex>(&value).unwrap(), position);
+        // Inside a `SerialValue`, the position renders as `{"$index":[…]}`.
+        assert_eq!(serde_json::to_string(&value).unwrap(), r#"{"$index":[3,7]}"#);
+        assert_eq!(
+            from_value::<LeafIndex>(&serde_json::from_str::<SerialValue>(r#"{"$index":[3,7]}"#).unwrap()).unwrap(),
+            position
+        );
+        // Serialized directly, it is the bare newtype pair (never a wire path here).
+        assert_eq!(serde_json::to_string(&position).unwrap(), "[3,7]");
+        assert_eq!(serde_json::from_str::<LeafIndex>("[3,7]").unwrap(), position);
+        // Through a compact format, likewise the pair, and it round-trips.
+        let bytes = postcard::to_allocvec(&position).unwrap();
+        assert_eq!(postcard::from_bytes::<LeafIndex>(&bytes).unwrap(), position);
+    }
+}

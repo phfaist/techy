@@ -29,9 +29,9 @@
 /// and from a [`SerialValue::Index`](crate::serialize::SerialValue::Index) (so the
 /// type can be a field of the crate's serialized structures), and — with the `serde`
 /// cargo feature — serde's `Serialize` and `Deserialize`, through which the type
-/// converts to and from a `SerialValue::Index` in the bridge
-/// ([`to_value`](crate::serialize::to_value) / [`from_value`](crate::serialize::from_value))
-/// and renders as the two-integer pair `(table ordinal, index)` in any other format.
+/// converts to and from a `SerialValue::Index` in the bridge (`to_value` /
+/// `from_value`) and renders as the two-integer pair `(table ordinal, index)` in any
+/// other format.
 /// A position type has no other constructor than
 /// [`SerialIndex::from_parts`](crate::serialize::SerialIndex::from_parts); the
 /// session mints positions when objects are interned.
