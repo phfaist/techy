@@ -287,16 +287,6 @@ impl<L: SerializableLang> SerdeSession<L> {
         self.user_data.as_ref()?.downcast_ref::<T>()
     }
 
-    /// The caller's user data, mutably, if set and of type `T`.
-    pub fn user_data_mut<T: Any>(&mut self) -> Option<&mut T> {
-        self.user_data.as_mut()?.downcast_mut::<T>()
-    }
-
-    /// Remove and return the caller's user data, if set.
-    pub fn take_user_data(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
-        self.user_data.take()
-    }
-
     // --- writing ------------------------------------------------------------------------
 
     /// Intern `object` into the table `table`, returning its typed position — the
