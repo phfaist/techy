@@ -250,7 +250,9 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   Supertrait on `CallableSpec` and `SpecsProvider` (unconditionally — that puts the
   method in the vtable for type-erased dispatch; additivity-safe because everything is
   defaulted and dependency-free). Plain trait impls on concrete core types
-  (`ParsingState`, `Source`, `NodeTree`, `Diagnostic`). Non-participating types owe a
+  (`ParsingState`, `NodeTree`, `Diagnostic`; NOT `Source` — settled at M3: the
+  embed/reference decision is source-driver configuration, so the homogeneous
+  source driver does the work directly per D11 and `Source` carries no plain impl). Non-participating types owe a
   one-line stub impl (`impl<L: Lang> SerializableObject<L> for BeginSpec<L> {}`),
   greppable and self-documenting. **Write-side registration does not exist**; ALL
   writing goes through this method, called by each table's driver. A blanket impl is
@@ -511,7 +513,10 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 
 - **Q3 (M6) — Wire vocabulary naming pass** (freeze-relevant, pre-v1): every public
   field name and enum string (core + latexlike), the `Index` table discriminant
-  rendering (name string vs ordinal), the canonical base64 form for `Bytes`; also
+  rendering (name string vs ordinal), the canonical base64 form for `Bytes`; the
+  `Option` asymmetry between derive-omitted keys and verbatim `SerialValue` fields
+  (`WireSource.origin` `None` renders `null` while `digest: Option` omits its key —
+  M3 review); also
   whether `TableId` keeps its name (§3.G says `…Id` = process-local identity, yet a
   `TableId` travels on the wire inside `SerialValue::Index` AND as
   `SegmentTable::id` — reviewer-noted tension, 2026-08-16).
@@ -802,6 +807,10 @@ merge outside the sandboxed primary checkout.
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
   schema description (input for the v1 freeze).
 - **M7 — Hardening + permanent docs.** Golden files; proptest round-trip properties;
+  cost bounds on wire-controlled quantities (M3 review: the prefix table build is
+  O(n²) in the number of group rules — dedup via hash map or bound the rule count;
+  line/column offsets read unvalidated — sanity bound or saturating arithmetic in
+  `LineIndex`);
   a nesting-depth bound for `SerialValue`'s serde `Deserialize` (and `Segment`'s,
   AND the unconditional `Segment::from_serial_value` — recursive clone/drop of deep
   values, M2 review) so formats without their own recursion limit (binary use case
@@ -1202,6 +1211,14 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M3 reviewed (Opus 5; APPROVE WITH NITS,
+  hostile-input harness clean; nits folded into the M4 brief). Plan patches: D13
+  `Source` has no plain impl (driver-direct), M7 cost bounds (prefix table O(n²),
+  offsets), Q3 `Option`-rendering asymmetry note. M5 forward risk recorded for its
+  brief: `L::specials_trigger_chars` runs on wire-controlled `StateData` once a
+  preset opts in — must be total. Naming taste question queued for the user:
+  `StandardTableInterning`/`StandardTableReading` (activity nouns) vs the house's
+  agent/capability trait names. Next: M4 (trees).
 - 2026-08-17 — supervisor (main session) — M2 reviewed by an Opus 5 reviewer
   (REQUEST CHANGES: poisoned-slot bug, untested table remapping, session-scoped
   positions undocumented) → fix pass landed (see its entry) → re-verification.
