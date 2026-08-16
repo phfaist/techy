@@ -18,7 +18,7 @@ use super::super::object::{DeserializableObject, SerializableLang, SerializableO
 use super::super::value::{SerialEntry, SerialIndex, SerialValue};
 use super::context::{DeserializeContext, SerializeContext};
 use super::driver::{ObjectSerdeDriver, TableHandle};
-use super::session::{ReadDispatchState, SerdeSession};
+use super::session::{SerdeSession, TableRegistry};
 
 /// The driver of a *heterogeneous* table: a table whose objects are trait objects
 /// (`Arc<T>` with `T = dyn …`) of several concrete types, each with its own
@@ -217,7 +217,7 @@ impl<L: SerializableLang, T: ?Sized> Default for ReadDispatch<L, T> {
     }
 }
 
-impl<L: SerializableLang, T: ?Sized + Send + Sync + 'static> ReadDispatchState for ReadDispatch<L, T> {
+impl<L: SerializableLang, T: ?Sized + Send + Sync + 'static> TableRegistry for ReadDispatch<L, T> {
     fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
         self
     }
@@ -246,7 +246,7 @@ fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
     };
     let candidates: Vec<Arc<dyn IdentifierResolver<L, T>>> = {
         let session = cx.session_mut();
-        let Some(dispatch) = session.dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal) else {
+        let Some(dispatch) = session.registry_mut::<ReadDispatch<L, T>>(ordinal) else {
             return Err(unknown());
         };
         if let Some(reader) = dispatch.readers.get(identifier) {
@@ -276,7 +276,7 @@ fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
         }
     }
     let session = cx.session_mut();
-    if let Some(dispatch) = session.dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal) {
+    if let Some(dispatch) = session.registry_mut::<ReadDispatch<L, T>>(ordinal) {
         dispatch.memo.insert(String::from(identifier), answer.clone());
         session.record_memo(ordinal, identifier);
     }
@@ -323,7 +323,7 @@ where
         let table = session.table_name(ordinal);
         let identifier: Cow<'static, str> = identifier.into();
         let dispatch = session
-            .dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal)
+            .registry_mut::<ReadDispatch<L, T>>(ordinal)
             .ok_or(RegistrationError::UnknownTable { table: self.id() })?;
         let kept_reader = matches!(dispatch.memo.get(&*identifier), Some(Some(_)));
         if dispatch.readers.contains_key(&*identifier) || kept_reader {
@@ -353,7 +353,7 @@ where
     ) -> Result<(), RegistrationError> {
         let ordinal = session.table_index(self).map_err(|table| RegistrationError::UnknownTable { table })?;
         let dispatch = session
-            .dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal)
+            .registry_mut::<ReadDispatch<L, T>>(ordinal)
             .ok_or(RegistrationError::UnknownTable { table: self.id() })?;
         dispatch.resolvers.push((prefix.into(), resolver));
         Ok(())

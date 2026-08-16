@@ -20,7 +20,8 @@ use super::super::error::{DeserializeError, SerializeError};
 use super::super::object::SerializableLang;
 use super::source::{SourceIndex, SourceSerdeDriver};
 use super::state::{StateIndex, StateSerdeDriver};
-use super::{PROVIDERS_TABLE, SOURCES_TABLE, SPECS_TABLE, STATES_TABLE};
+use super::tree::TreeSerdeDriver;
+use super::{PROVIDERS_TABLE, SOURCES_TABLE, SPECS_TABLE, STATES_TABLE, TREES_TABLE};
 
 crate::serial_index! {
     /// A position in the specs table — the `Index` type of [`SpecSerdeDriver`]: the
@@ -68,6 +69,8 @@ pub struct StandardTables<L: SerializableLang> {
     pub specs: TableHandle<SpecSerdeDriver<L>>,
     /// The providers table.
     pub providers: TableHandle<ProviderSerdeDriver<L>>,
+    /// The trees table.
+    pub trees: TableHandle<TreeSerdeDriver<L>>,
 }
 
 impl<L: SerializableLang> Clone for StandardTables<L> {
@@ -85,6 +88,7 @@ impl<L: SerializableLang> fmt::Debug for StandardTables<L> {
             .field("states", &self.states)
             .field("specs", &self.specs)
             .field("providers", &self.providers)
+            .field("trees", &self.trees)
             .finish()
     }
 }
@@ -94,16 +98,21 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// sources table ([`SourceSerdeDriver`], with its defaults — every source
     /// embedded, no supplier of referenced source text), the states table
     /// ([`StateSerdeDriver`]), the specs table ([`SpecSerdeDriver`]), the providers
-    /// table ([`ProviderSerdeDriver`]). Their handles are
+    /// table ([`ProviderSerdeDriver`]), the trees table ([`TreeSerdeDriver`], with the
+    /// unit annotation pre-registered). Their handles are
     /// [`standard_tables`](SerdeSession::standard_tables); the interning and reading
     /// accessors by kind are the [`StandardTableInterning`] and
-    /// [`StandardTableReading`] extension traits. To configure the source driver, use
+    /// [`StandardTableReading`] extension traits, and, for trees, the
+    /// [`TreeSerialization`](crate::serialize::TreeSerialization) extension trait. To
+    /// configure the source driver, use
     /// [`with_source_driver`](SerdeSession::with_source_driver); to compose a session
     /// from other tables, [`empty`](SerdeSession::empty).
     ///
     /// The readers of the specs and providers tables (heterogeneous tables) are not
     /// registered here: a language or framework registers its own, or its resolver,
-    /// on the handles ([`TableHandle::register_type`] and its siblings).
+    /// on the handles ([`TableHandle::register_type`] and its siblings). The trees
+    /// table has the unit annotation registered; other annotation types are registered
+    /// with [`TableHandle::register_annotation`].
     pub fn new() -> SerdeSession<L> {
         SerdeSession::with_source_driver(SourceSerdeDriver::new())
     }
@@ -121,6 +130,9 @@ impl<L: SerializableLang> SerdeSession<L> {
         session.register_table(StateSerdeDriver::new()).expect(ACCEPTED);
         session.register_table(SpecSerdeDriver::<L>::new(SPECS_TABLE)).expect(ACCEPTED);
         session.register_table(ProviderSerdeDriver::<L>::new(PROVIDERS_TABLE)).expect(ACCEPTED);
+        let trees = session.register_table(TreeSerdeDriver::<L>::new()).expect(ACCEPTED);
+        // The unit annotation is pre-registered; a fresh trees table accepts it.
+        trees.register_core_tree(&mut session).expect("a fresh trees table accepts the unit annotation");
         session
     }
 
@@ -135,6 +147,7 @@ impl<L: SerializableLang> SerdeSession<L> {
             states: self.table_handle(STATES_TABLE)?,
             specs: self.table_handle(SPECS_TABLE)?,
             providers: self.table_handle(PROVIDERS_TABLE)?,
+            trees: self.table_handle(TREES_TABLE)?,
         })
     }
 }

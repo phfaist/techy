@@ -749,6 +749,14 @@ pub enum RegistrationError {
         /// The table's name.
         table: &'static str,
     },
+    /// A codec for that annotation type is already registered in the trees table
+    /// ([`TableHandle::register_annotation`](crate::serialize::TableHandle::register_annotation)):
+    /// a tree annotation type is registered once (the unit annotation is
+    /// pre-registered).
+    DuplicateAnnotationType {
+        /// The trees table's name.
+        table: &'static str,
+    },
 }
 
 impl fmt::Display for RegistrationError {
@@ -775,6 +783,11 @@ impl fmt::Display for RegistrationError {
                 "the driver of table `{table}` declares the empty string as its homogeneous \
                  identifier (an identifier is a non-empty string; a heterogeneous table \
                  declares none)"
+            ),
+            RegistrationError::DuplicateAnnotationType { table } => write!(
+                f,
+                "a codec for that annotation type is already registered in table `{table}` \
+                 (a tree annotation type is registered once)"
             ),
         }
     }

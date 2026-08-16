@@ -448,6 +448,7 @@ pub(crate) fn expect_data_variant<'a>(
 
 pub(crate) mod source;
 pub(crate) mod state;
+pub(crate) mod tree;
 
 #[cfg(test)]
 mod tests;

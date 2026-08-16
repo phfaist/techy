@@ -269,9 +269,10 @@ fn new_registers_the_standard_tables_in_canonical_order() {
     assert_eq!(tables.states.id().ordinal(), 1);
     assert_eq!(tables.specs.id().ordinal(), 2);
     assert_eq!(tables.providers.id().ordinal(), 3);
+    assert_eq!(tables.trees.id().ordinal(), 4);
     let segment = session.take_segment();
     let names: Vec<String> = segment.tables().iter().map(|t| String::from(t.name())).collect();
-    assert_eq!(names, ["sources", "states", "specs", "providers"]);
+    assert_eq!(names, ["sources", "states", "specs", "providers", "trees"]);
     // The default is the same session.
     assert!(SerdeSession::<ToyLang>::default().standard_tables().is_some());
 }

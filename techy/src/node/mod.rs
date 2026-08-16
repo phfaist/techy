@@ -60,9 +60,9 @@ pub use tree::{NodeId, NodeTree, TreeTag};
 
 // `NodeData` is deliberately NOT re-exported publicly ([§dd-dr:public-visibility-sweep]
 // Theme C): it is crate-internal — zero public signatures use it; `NodeRef` is the
-// read API. The crate-internal alias below serves in-crate checkers only (the
-// latexlike parse-law checker's payload pins).
-#[cfg(test)]
+// read API. The crate-internal alias below serves in-crate consumers of the flat
+// storage: the latexlike parse-law checker's payload pins (test), and the tree
+// serialization driver, which walks the storage-order node slice.
 pub(crate) use tree::NodeData;
 // Crate-internal subtree copying, shared with `crate::extract`'s builder helpers,
 // and the content-parent mapping parameter of the transform driver's record

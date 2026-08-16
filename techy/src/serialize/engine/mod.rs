@@ -18,5 +18,9 @@ pub use driver::{ObjectSerdeDriver, TableHandle};
 pub use segment::{Segment, SegmentTable};
 pub use session::SerdeSession;
 
+// Crate-internal: the per-table registry trait a custom driver (the trees table)
+// keeps its own registrations behind.
+pub(crate) use session::TableRegistry;
+
 #[cfg(test)]
 mod tests;

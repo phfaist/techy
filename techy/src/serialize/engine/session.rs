@@ -161,22 +161,24 @@ pub(super) struct TableState<L: SerializableLang> {
     /// The serialized forms of the entries interned since the previous emission, in
     /// position order — always the tail of `slots`.
     outbox: Vec<SerialValue>,
-    /// The readers and resolvers of a heterogeneous table (a `ReadDispatch<L, T>`),
-    /// created on first use.
-    pub(super) dispatch: Option<Box<dyn ReadDispatchState>>,
+    /// The registrations the session keeps for this table's driver (the readers and
+    /// resolvers of a heterogeneous table — a `ReadDispatch<L, T>`; the annotation
+    /// codecs of the trees table), created on first use.
+    pub(super) registry: Option<Box<dyn TableRegistry>>,
 }
 
-/// The read-side registrations of a heterogeneous table — the readers by identifier,
-/// the resolvers, the memoized resolver answers — as the type-blind session holds
-/// them: created on first use through
-/// [`dispatch_registry_mut`](SerdeSession::dispatch_registry_mut), which downcasts to
-/// the concrete registry type, and asked to forget memoized answers when a push is
-/// rolled back.
-pub(super) trait ReadDispatchState: Any + Send + Sync {
+/// The registrations of one table, as the type-blind session holds them for the
+/// table's driver — the readers by identifier, the resolvers, and the memoized
+/// resolver answers of a heterogeneous table; the annotation codecs of the trees
+/// table: created on first use through
+/// [`registry_mut`](SerdeSession::registry_mut), which downcasts to the concrete
+/// registry type, and asked to forget memoized answers when a push is rolled back.
+pub(crate) trait TableRegistry: Any + Send + Sync {
     /// The registry as `dyn Any`, for the typed downcast.
     fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync);
 
-    /// Forget the memoized resolver answer for `identifier`, if any.
+    /// Forget the memoized resolver answer for `identifier`, if any (a registry that
+    /// memoizes nothing does nothing).
     fn forget_memo(&mut self, identifier: &str);
 }
 
@@ -277,7 +279,7 @@ impl<L: SerializableLang> SerdeSession<L> {
             slots: Vec::new(),
             by_pointer: HashMap::new(),
             outbox: Vec::new(),
-            dispatch: None,
+            registry: None,
         });
         Ok(TableHandle::new(TableId::new(ordinal)))
     }
@@ -298,7 +300,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// The ordinal of the table `handle` names, if the handle is one of this
     /// session's: the table exists and is registered with driver type `D`. `Err` is
     /// the handle's id, for the caller's `UnknownTable` error.
-    pub(super) fn table_index<D: 'static>(&self, handle: TableHandle<D>) -> Result<usize, TableId> {
+    pub(crate) fn table_index<D: 'static>(&self, handle: TableHandle<D>) -> Result<usize, TableId> {
         let ordinal = usize::try_from(handle.id().ordinal()).map_err(|_| handle.id())?;
         match self.tables.get(ordinal) {
             Some(table) if table.driver_type == handle.driver_type_id() => Ok(ordinal),
@@ -307,25 +309,23 @@ impl<L: SerializableLang> SerdeSession<L> {
     }
 
     /// The name of table `ordinal` (a valid ordinal).
-    pub(super) fn table_name(&self, ordinal: usize) -> &'static str {
+    pub(crate) fn table_name(&self, ordinal: usize) -> &'static str {
         self.tables.get(ordinal).map_or("?", |table| table.name)
     }
 
     /// The ordinal of the table named `name`, if registered.
-    pub(super) fn table_ordinal_by_name(&self, name: &str) -> Option<usize> {
+    pub(crate) fn table_ordinal_by_name(&self, name: &str) -> Option<usize> {
         self.tables.iter().position(|table| table.name == name)
     }
 
-    /// The table `ordinal`'s dispatch registry, typed — created on first use. `None`
-    /// when the table's registry was created for another object type.
-    pub(super) fn dispatch_registry_mut<R: ReadDispatchState + Default>(
-        &mut self,
-        ordinal: usize,
-    ) -> Option<&mut R> {
+    /// The table `ordinal`'s registry, typed — created on first use. `None` when the
+    /// table's registry was created for another registry type (or the ordinal names
+    /// no table).
+    pub(crate) fn registry_mut<R: TableRegistry + Default>(&mut self, ordinal: usize) -> Option<&mut R> {
         let table = self.tables.get_mut(ordinal)?;
         table
-            .dispatch
-            .get_or_insert_with(|| Box::new(R::default()) as Box<dyn ReadDispatchState>)
+            .registry
+            .get_or_insert_with(|| Box::new(R::default()) as Box<dyn TableRegistry>)
             .as_any_mut()
             .downcast_mut::<R>()
     }
@@ -591,8 +591,8 @@ impl<L: SerializableLang> SerdeSession<L> {
             }
             // The resolver answers recorded during the push are part of what it did.
             for (ordinal, identifier) in memoized {
-                if let Some(dispatch) = self.tables.get_mut(ordinal).and_then(|table| table.dispatch.as_mut()) {
-                    dispatch.forget_memo(&identifier);
+                if let Some(registry) = self.tables.get_mut(ordinal).and_then(|table| table.registry.as_mut()) {
+                    registry.forget_memo(&identifier);
                 }
             }
         }

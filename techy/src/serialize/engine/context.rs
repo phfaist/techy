@@ -66,6 +66,12 @@ impl<'a, L: SerializableLang> SerializeContext<'a, L> {
     pub fn table_handle<D: ObjectSerdeDriver<L>>(&self, name: &str) -> Option<TableHandle<D>> {
         self.session.table_handle::<D>(name)
     }
+
+    /// The session, for crate-internal operations (a driver's lookup of the
+    /// registrations the session keeps for its table).
+    pub(crate) fn session_mut(&mut self) -> &mut SerdeSession<L> {
+        self.session
+    }
 }
 
 impl<L: SerializableLang> fmt::Debug for SerializeContext<'_, L> {
@@ -143,8 +149,9 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
     }
 
     /// The session, for crate-internal operations (the dispatching driver's reader
-    /// lookup).
-    pub(super) fn session_mut(&mut self) -> &mut SerdeSession<L> {
+    /// lookup, a driver's lookup of the registrations the session keeps for its
+    /// table).
+    pub(crate) fn session_mut(&mut self) -> &mut SerdeSession<L> {
         self.session
     }
 }

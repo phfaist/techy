@@ -121,7 +121,7 @@ pub use drivers::{
     ProviderIndex, ProviderSerdeDriver, ReferencedSource, SourceDigest, SourceIndex,
     SourceSerdeDriver, SourceTextForm, SourceTextPolicy, SourceTextSupplier, SpecIndex,
     SpecSerdeDriver, StandardTableInterning, StandardTableReading, StandardTables, StateIndex,
-    StateSerdeDriver,
+    StateSerdeDriver, TreeIndex, TreeSerdeDriver, TreeSerialization,
 };
 pub use engine::{
     DeserializeContext, DispatchingSerdeDriver, IdentifierResolver, ObjectReader,
