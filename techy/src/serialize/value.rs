@@ -50,6 +50,24 @@ pub enum SerialValue {
     },
 }
 
+impl SerialValue {
+    /// The name of this value's kind — `null`, `bool`, `int`, `str`, `bytes`, `list`,
+    /// `map`, or `index` — as error messages report it (the `found` of a
+    /// [`SerialValueError::TypeMismatch`](crate::serialize::SerialValueError::TypeMismatch)).
+    pub(crate) fn kind_name(&self) -> &'static str {
+        match self {
+            SerialValue::Null => "null",
+            SerialValue::Bool(_) => "bool",
+            SerialValue::Int(_) => "int",
+            SerialValue::Str(_) => "str",
+            SerialValue::Bytes(_) => "bytes",
+            SerialValue::List(_) => "list",
+            SerialValue::Map(_) => "map",
+            SerialValue::Index { .. } => "index",
+        }
+    }
+}
+
 /// The result of serializing one object: the object's identifier and its data.
 ///
 /// The `identifier` names the kind of object `data` describes: a deliberately chosen,
@@ -77,10 +95,17 @@ pub struct TableId(u32);
 impl TableId {
     /// A table id with the given ordinal. Crate-internal: table ids are assigned by
     /// the machinery that registers tables, in registration order.
-    // No in-crate caller yet: the session that registers tables (M2) is the minter.
-    #[allow(dead_code)]
+    // Unconditional callers arrive with the session that registers tables; until then
+    // only the feature-gated rendering and the tests call this.
+    #[cfg_attr(not(feature = "serde"), allow(dead_code))]
     pub(crate) fn new(ordinal: u32) -> TableId {
         TableId(ordinal)
+    }
+
+    /// The table's ordinal. Crate-internal: the wire form of an index carries it.
+    #[cfg_attr(not(feature = "serde"), allow(dead_code))]
+    pub(crate) fn ordinal(self) -> u32 {
+        self.0
     }
 }
 

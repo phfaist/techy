@@ -39,10 +39,22 @@ mod error;
 mod object;
 mod value;
 
+#[cfg(feature = "serde")]
+mod base64;
+#[cfg(feature = "serde")]
+mod bridge;
+#[cfg(feature = "serde")]
+mod render;
+
 pub use engine::{DeserializeContext, SerializeContext};
-pub use error::{DeserializeError, SerializeError};
+pub use error::{DeserializeError, SerialValueError, SerializeError};
 pub use object::{DeserializableObject, SerializableLang, SerializableObject};
 pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
 
+#[cfg(feature = "serde")]
+pub use bridge::{from_value, serial_bytes, to_value};
+
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests;

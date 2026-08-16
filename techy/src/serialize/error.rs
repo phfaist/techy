@@ -1,6 +1,9 @@
-//! The serialization error types: [`SerializeError`] (write side) and
-//! [`DeserializeError`] (read side).
+//! The serialization error types: [`SerializeError`] (write side),
+//! [`DeserializeError`] (read side), and [`SerialValueError`] (conversion of plain
+//! data to and from a [`SerialValue`](crate::serialize::SerialValue)).
 
+use alloc::borrow::Cow;
+use alloc::string::String;
 use core::fmt;
 
 /// Error of the write side: what a
@@ -114,3 +117,119 @@ impl fmt::Display for DeserializeError {
 }
 
 impl core::error::Error for DeserializeError {}
+
+/// Error of converting plain data to or from a
+/// [`SerialValue`](crate::serialize::SerialValue): what the serde bridge
+/// (`to_value`/`from_value`, available with the `serde` cargo feature) and the crate's
+/// own conversions of its wire structures report. Writes fail on data the value model
+/// cannot hold — floating-point numbers, integers outside `i64`, maps with non-string
+/// keys. Reads treat the value as untrusted input: a value of the wrong kind, an
+/// unknown, missing, or repeated map key, or an unknown enum variant is an error,
+/// never a panic. The type is available without the `serde` feature: the crate's own
+/// conversions use it too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SerialValueError {
+    /// A floating-point number was to be written or read; the value model has no
+    /// floating-point variant.
+    FloatRejected,
+    /// A map key that is not a string was to be written; the value model's maps are
+    /// string-keyed.
+    NonStringMapKey,
+    /// An integer does not fit its target: on writing, an integer outside the `i64`
+    /// range of [`Int`](crate::serialize::SerialValue::Int); on reading, an integer
+    /// outside the range of the integer type being read.
+    IntegerOutOfRange {
+        /// The integer, in decimal.
+        value: String,
+        /// The type it does not fit (`"i64"` on writing; the type being read on
+        /// reading).
+        target: &'static str,
+    },
+    /// A value of one kind was found where another was expected: `expected`
+    /// describes what was expected, `found` names the kind of value found (`null`,
+    /// `bool`, `int`, `str`, `bytes`, `list`, `map`, or `index`).
+    TypeMismatch {
+        /// What was expected, in words.
+        expected: Cow<'static, str>,
+        /// The kind of value found.
+        found: &'static str,
+    },
+    /// A map lacks a required key.
+    MissingField {
+        /// The missing key.
+        name: &'static str,
+    },
+    /// A map has a key that is not one of the keys expected of it.
+    UnknownField {
+        /// The unexpected key.
+        name: String,
+        /// The keys that were expected.
+        expected: &'static [&'static str],
+    },
+    /// A map has the same key twice.
+    DuplicateField {
+        /// The repeated key.
+        name: String,
+    },
+    /// An enum value names a variant the enum does not have.
+    UnknownVariant {
+        /// The variant name found.
+        name: String,
+        /// The variant names the enum has.
+        expected: &'static [&'static str],
+    },
+    /// Any other failure, described in words — what a serde `Serialize` or
+    /// `Deserialize` implementation reports through serde's `Error::custom`.
+    Custom(String),
+}
+
+impl fmt::Display for SerialValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SerialValueError::FloatRejected => {
+                write!(f, "floating-point numbers have no serialized value form")
+            }
+            SerialValueError::NonStringMapKey => {
+                write!(f, "map keys must be strings in the serialized value form")
+            }
+            SerialValueError::IntegerOutOfRange { value, target } => {
+                write!(f, "integer {value} does not fit {target}")
+            }
+            SerialValueError::TypeMismatch { expected, found } => {
+                write!(f, "expected {expected}, found {found}")
+            }
+            SerialValueError::MissingField { name } => write!(f, "missing key `{name}`"),
+            SerialValueError::UnknownField { name, expected } => {
+                write!(f, "unknown key `{name}`; expected ")?;
+                write_name_list(f, expected)
+            }
+            SerialValueError::DuplicateField { name } => write!(f, "repeated key `{name}`"),
+            SerialValueError::UnknownVariant { name, expected } => {
+                write!(f, "unknown variant `{name}`; expected ")?;
+                write_name_list(f, expected)
+            }
+            SerialValueError::Custom(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Writes `one of `a`, `b``, or the single name, or `none` for an empty list.
+fn write_name_list(f: &mut fmt::Formatter<'_>, names: &[&str]) -> fmt::Result {
+    match names {
+        [] => write!(f, "none"),
+        [only] => write!(f, "`{only}`"),
+        _ => {
+            write!(f, "one of ")?;
+            for (i, name) in names.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "`{name}`")?;
+            }
+            Ok(())
+        }
+    }
+}
+
+impl core::error::Error for SerialValueError {}

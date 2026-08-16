@@ -39,3 +39,8 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 proptest = "1.0"
+# Format crates for the tests of the `serde` rendering layer only (runtime deps stay
+# serde-only): serde_json pins the canonical JSON rendering; postcard exercises the
+# compact (non-human-readable) rendering.
+serde_json = "1"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
