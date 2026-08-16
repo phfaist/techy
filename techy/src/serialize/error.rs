@@ -17,6 +17,19 @@ use super::value::TableId;
 /// `Clone`.
 type SharedCause = Arc<dyn core::error::Error + Send + Sync + 'static>;
 
+/// Renders a source's optional origin label in error messages: `` `label` `` or
+/// `(no origin)`.
+struct OriginLabel<'a>(&'a Option<String>);
+
+impl fmt::Display for OriginLabel<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(label) => write!(f, "`{label}`"),
+            None => f.write_str("(no origin)"),
+        }
+    }
+}
+
 /// Error of the write side: what a
 /// [`serialize_object`](crate::serialize::SerializableObject::serialize_object) call,
 /// a [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec)
@@ -72,6 +85,17 @@ pub enum SerializeError {
     UnknownTable {
         /// The id the handle carries.
         table: TableId,
+    },
+    /// The session has no table of that name registered with the expected driver
+    /// type: an accessor of the crate's standard tables (see
+    /// [`StandardTableInterning`](crate::serialize::StandardTableInterning)) was
+    /// used on a session that lacks the table — a session built with
+    /// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) rather than
+    /// [`SerdeSession::new`](crate::serialize::SerdeSession::new), or one that
+    /// registered another driver under that name.
+    UnknownTableName {
+        /// The table's name.
+        name: String,
     },
     /// The table has reached the maximum number of entries (`u32::MAX`), so no
     /// further object can be interned into it.
@@ -192,6 +216,11 @@ impl fmt::Display for SerializeError {
                 "table #{} is not registered in this session (the handle comes from another \
                  session, or the table was registered with a different driver type)",
                 table.ordinal()
+            ),
+            SerializeError::UnknownTableName { name } => write!(
+                f,
+                "no table named `{name}` is registered in this session with the expected \
+                 driver type"
             ),
             SerializeError::TableFull { table } => {
                 write!(f, "table `{table}` is full (u32::MAX entries)")
@@ -357,10 +386,73 @@ pub enum DeserializeError {
         /// The version this crate reads.
         expected: u32,
     },
-    /// The segment lists a table by a name the reading session has not registered.
+    /// A table was looked up by a name the session has not registered (with the
+    /// expected driver type): the segment being absorbed lists such a table, or an
+    /// accessor of the crate's standard tables (see
+    /// [`StandardTableReading`](crate::serialize::StandardTableReading)) was used on a
+    /// session that lacks the table — one built with
+    /// [`SerdeSession::empty`](crate::serialize::SerdeSession::empty) rather than
+    /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
     UnknownTableName {
-        /// The name in the segment.
+        /// The table's name.
         name: String,
+    },
+    /// A serialized span does not fit its source: the byte range `start..end` is not
+    /// within the source's `len` bytes (or `start > end`).
+    SpanOutOfBounds {
+        /// The span's start (byte offset, inclusive).
+        start: usize,
+        /// The span's end (byte offset, exclusive).
+        end: usize,
+        /// The source's length in bytes.
+        len: usize,
+    },
+    /// A serialized span's `start` or `end` byte offset falls inside a multi-byte
+    /// character of its source: the range cannot delimit text.
+    SpanNotOnCharBoundary {
+        /// The span's start (byte offset, inclusive).
+        start: usize,
+        /// The span's end (byte offset, exclusive).
+        end: usize,
+    },
+    /// The serialized data uses a parsing feature the reading language declares
+    /// absent ([`Lang::Features`](crate::state::Lang::Features)): a state's rules carry
+    /// the section of that feature, or its scope stack is non-empty for a language
+    /// without the scope stack. The language reading the data is not the one that
+    /// wrote it — or not one with the same feature declarations.
+    FeatureAbsent {
+        /// The feature's name (`whitespace`, `paragraphs`, `groups`, `commands`,
+        /// `comments`, `specials`, `forbidden_chars`, `scopes`).
+        feature: &'static str,
+    },
+    /// A source's entry describes the source by reference — its text is not embedded
+    /// — but the session's source driver has no supplier of referenced source text
+    /// configured
+    /// ([`SourceSerdeDriver::with_text_supplier`](crate::serialize::SourceSerdeDriver::with_text_supplier)),
+    /// so the text cannot be obtained.
+    NoSourceTextSupplier {
+        /// The source's origin label, when it has one.
+        origin: Option<String>,
+    },
+    /// The text supplied for a referenced source has a length other than the one its
+    /// entry records: the text is not the one that was serialized (a changed file).
+    SourceLengthMismatch {
+        /// The source's origin label, when it has one.
+        origin: Option<String>,
+        /// The length in bytes the entry records.
+        expected: usize,
+        /// The length in bytes of the text supplied.
+        found: usize,
+    },
+    /// The text supplied for a referenced source does not match the digest its entry
+    /// records (the supplier's
+    /// [`digest_matches`](crate::serialize::SourceTextSupplier::digest_matches)
+    /// answered no): the text is not the one that was serialized (a changed file).
+    SourceDigestMismatch {
+        /// The source's origin label, when it has one.
+        origin: Option<String>,
+        /// The digest's algorithm name, as the entry records it.
+        algorithm: String,
     },
     /// The segment lists the same table twice, or two of its tables carry the same
     /// writer-side table id.
@@ -531,7 +623,40 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::UnknownTableName { name } => write!(
                 f,
-                "the segment lists table `{name}`, which is not registered in this session"
+                "no table named `{name}` is registered in this session with the expected \
+                 driver type"
+            ),
+            DeserializeError::SpanOutOfBounds { start, end, len } => write!(
+                f,
+                "serialized span {start}..{end} does not fit its source ({len} bytes)"
+            ),
+            DeserializeError::SpanNotOnCharBoundary { start, end } => write!(
+                f,
+                "serialized span {start}..{end} does not fall on character boundaries of \
+                 its source"
+            ),
+            DeserializeError::FeatureAbsent { feature } => write!(
+                f,
+                "the serialized data uses the `{feature}` feature, which the reading \
+                 language declares absent"
+            ),
+            DeserializeError::NoSourceTextSupplier { origin } => write!(
+                f,
+                "source {} is serialized by reference (its text is not embedded), but no \
+                 supplier of referenced source text is configured",
+                OriginLabel(origin)
+            ),
+            DeserializeError::SourceLengthMismatch { origin, expected, found } => write!(
+                f,
+                "the text supplied for source {} is {found} bytes long, but the entry \
+                 records {expected} bytes",
+                OriginLabel(origin)
+            ),
+            DeserializeError::SourceDigestMismatch { origin, algorithm } => write!(
+                f,
+                "the text supplied for source {} does not match its recorded `{algorithm}` \
+                 digest",
+                OriginLabel(origin)
             ),
             DeserializeError::DuplicateSegmentTable { name } => write!(
                 f,

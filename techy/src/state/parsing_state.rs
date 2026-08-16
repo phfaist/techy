@@ -156,11 +156,14 @@ impl<L: Lang> ParsingState<L> {
         Ok(ParsingState::freeze(data))
     }
 
-    /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`].
-    /// Test-internal: tests assemble ad-hoc states; the public paths are
+    /// Create a state directly from raw data, bypassing [`Lang::finalize_transition`]:
+    /// freezes `data` and rebuilds the derived caches. Crate-internal, for two
+    /// callers: the deserialization of a serialized state (whose data already passed
+    /// the choke point when the state was first built — the serialized form holds
+    /// finalized data, and rebuilding it must not run the customizer again), and tests
+    /// assembling ad-hoc states. The public paths are
     /// [`lang_initial()`](ParsingState::lang_initial) (+ the packages form) and
     /// [`derived()`](ParsingState::derived), which keep the choke point airtight.
-    #[cfg(test)]
     pub(crate) fn new(data: StateData<L>) -> ParsingState<L> {
         ParsingState::freeze(data)
     }

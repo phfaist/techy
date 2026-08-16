@@ -76,6 +76,7 @@
 //! providers, diagnostics — are not yet present, so a session currently holds only
 //! the tables its user registers.
 
+mod drivers;
 mod engine;
 mod error;
 mod object;
@@ -90,6 +91,12 @@ pub(crate) mod bridge;
 #[cfg(feature = "serde")]
 mod render;
 
+pub use drivers::{
+    ProviderIndex, ProviderSerdeDriver, ReferencedSource, SourceDigest, SourceIndex,
+    SourceSerdeDriver, SourceTextForm, SourceTextPolicy, SourceTextSupplier, SpecIndex,
+    SpecSerdeDriver, StandardTableInterning, StandardTableReading, StandardTables, StateIndex,
+    StateSerdeDriver,
+};
 pub use engine::{
     DeserializeContext, DispatchingSerdeDriver, IdentifierResolver, ObjectReader,
     ObjectSerdeDriver, SerdeSession, Segment, SegmentTable, SerializeContext, TableHandle,

@@ -1533,6 +1533,19 @@ impl<L: Lang> ScopeStack<L> {
         ScopeStack { stack: <L::Features as LangFeatures>::Scopes::store_with(Vec::new) }
     }
 
+    /// A stack over `providers` (outermost first), for any language: the
+    /// deserialization path, which rebuilds a stack from serialized data under a
+    /// generic `L` and so cannot use [`push`](ScopeStack::push) (bounded on the
+    /// feature). `None` when the language declares the scope stack absent and
+    /// `providers` is non-empty — such a stack cannot exist; an empty list yields the
+    /// empty stack for every language.
+    pub(crate) fn from_providers(providers: Vec<Arc<dyn SpecsProvider<L>>>) -> Option<ScopeStack<L>> {
+        if !<L::Features as LangFeatures>::Scopes::PRESENT && !providers.is_empty() {
+            return None;
+        }
+        Some(ScopeStack { stack: <L::Features as LangFeatures>::Scopes::store_with(|| providers) })
+    }
+
     /// The provider list through the storage projection: the stored entries, or the
     /// empty slice when the language declares the scope stack absent (the stack is
     /// then permanently empty). Every read-only method routes through this, so each

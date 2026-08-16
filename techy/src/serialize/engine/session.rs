@@ -280,6 +280,19 @@ impl<L: SerializableLang> SerdeSession<L> {
         Ok(TableHandle::new(TableId::new(ordinal)))
     }
 
+    /// The handle of the table named `name`, if this session has a table of that name
+    /// registered with driver type `D` — how code that did not register a table finds
+    /// it (a driver referring to another table, or the accessors of the crate's own
+    /// standard tables), given the table's name (the driver's
+    /// [`table_name`](ObjectSerdeDriver::table_name)) and driver type. `None` when no
+    /// table of that name is registered, or when it is registered with a different
+    /// driver type.
+    pub fn table_handle<D: ObjectSerdeDriver<L>>(&self, name: &str) -> Option<TableHandle<D>> {
+        let ordinal = self.table_ordinal_by_name(name)?;
+        let table = self.tables.get(ordinal)?;
+        (table.driver_type == TypeId::of::<D>()).then(|| TableHandle::new(TableId::new(ordinal as u32)))
+    }
+
     /// The ordinal of the table `handle` names, if the handle is one of this
     /// session's: the table exists and is registered with driver type `D`. `Err` is
     /// the handle's id, for the caller's `UnknownTable` error.
