@@ -57,14 +57,16 @@ use super::segment::{Segment, SegmentTable, WireEntry};
 /// reference cycles are detected on both sides and reported as errors, never
 /// followed.
 ///
-/// A session exists only for a [`SerializableLang`]. This constructor,
-/// [`empty`](SerdeSession::empty), starts with no tables; a constructor with the
-/// standard tables of the crate's own object kinds pre-registered is not part of the
-/// crate at this stage.
+/// A session exists only for a [`SerializableLang`]. [`new`](SerdeSession::new)
+/// registers the crate's standard tables (sources, states, specs, providers — see
+/// [`StandardTables`](crate::serialize::StandardTables)); [`empty`](SerdeSession::empty)
+/// starts with no tables, for a session composed of other tables.
 ///
 /// # Example
 ///
-/// A table of one kind of object, written by one session and read by another:
+/// A table of one kind of object, written by one session and read by another (an
+/// [`empty`](SerdeSession::empty) session with a custom table, so that the example is
+/// self-contained; the crate's own object kinds go through the standard tables):
 ///
 /// ```
 /// use std::sync::Arc;

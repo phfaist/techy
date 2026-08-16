@@ -49,10 +49,11 @@ crate::serial_index! {
 /// caches of a state (the delimiter prefix table, the specials trigger characters)
 /// are not written: the reading side rebuilds them when it freezes the state.
 ///
-/// Reading is fail-closed on features: a section for a feature the reading language
-/// declares absent, or a non-empty scope stack for a language without the scope
-/// stack, is [`DeserializeError::FeatureAbsent`]; a missing section for a present
-/// feature reads as that feature's empty rules (the section is optional on the wire).
+/// Reading refuses what the language cannot hold: a section for a feature the
+/// reading language declares absent, or a non-empty scope stack for a language
+/// without the scope stack, is [`DeserializeError::FeatureAbsent`]; a missing section
+/// for a present feature reads as that feature's empty rules (every section is
+/// optional in the serialized form).
 /// A state is written once however many nodes refer to it, and read back as one
 /// `Arc<ParsingState>` — sharing survives the round trip; a state serialized on its
 /// own, without any tree, is an ordinary entry.

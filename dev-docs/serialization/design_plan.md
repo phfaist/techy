@@ -855,6 +855,159 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M3 implementer agent — **M3 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `1d25304` the D17 REVISED value
+  traits + `SerializableLang` bounds; `f401f3b` source & state drivers, standard
+  tables, by-kind accessors, tests; plus the docs commit carrying this entry.
+  Verified: `cargo build`/`test` green with and without `--features serde` (897/924
+  unit incl. the 19/20-test drivers battery, 30+8+13+23+1 integration, 72/73
+  doctests); `rm -rf target/doc && cargo docs` clean both states; clippy clean on
+  the new code (pre-existing findings elsewhere untouched). **What M3 built:**
+  - **Part 0 (D17 REVISED):** `SerializableValue<L: Lang>` /
+    `DeserializableValue<L: Lang>` in `serialize/object.rs`, core impls blanket over
+    `L: Lang` for `()`↔`Null`, `bool`, every integer width (`Int`, range-checked on
+    read), `String`↔`Str`, `Option<T>` (`None`↔`Null`, `Some`↔`T`'s form — covers the
+    default `SourceOrigin`), `Vec<T>`↔`List`. `SerializableLang` now carries the
+    associated-type bounds in supertrait position, nested `NodeExts: NodeExtTypes<…>`
+    form included. **Probe result:** the nested form compiles AND elaborates on the
+    installed rustc 1.97 (a fn bounded only by `SerializableLang` calls
+    `serialize_value` on `L::ModeId` and on the bundle's exts; a lang whose `ModeId`
+    lacks the codec cannot opt in — E0277) — no where-clause fallback needed; MSRV
+    1.86 still not locally verifiable (no 1.86 toolchain; the feature is stable since
+    1.79). `TrivialLang`-based langs opt in with an empty impl (M2's `ToyLang`, M0's
+    `OptedInLang` unchanged; `NeverSerializableLang` still does not implement it).
+    Also `SourceSpan<L::SourceOrigin>` implements both value traits (its source
+    interned by position, range validated on read) — the first value that refers to
+    a table object, and what D23's span-shaped annotations will use.
+  - **Sources (D25)** — `serialize/drivers/source.rs` + `wire/source.rs`:
+    `SourceSerdeDriver<L>` (table `"sources"`, identifier `"core.source"`,
+    `SourceIndex`); wire struct `{origin, provenance, line_number_offset,
+    column_number_offset, text}` with `provenance = "primary" | {"resolved":
+    {reference, triggered_at}} | {"synthesized": {description, triggered_at}}`,
+    `triggered_at = {source: <position>, start, end}` (provenance chains are
+    source references, acyclic; the parent source is interned first — post-order),
+    and `text = {"embedded": <str>} | {"referenced": {length, digest?}}`,
+    `digest = {algorithm, bytes: <Bytes>}` (an enum field, so "exactly one form" is
+    validated by the derive). Caller-supplied, on the driver: `SourceTextPolicy<O>`
+    (`text_form(&Source<O>) -> Result<SourceTextForm, SerializeError>`;
+    `SourceTextForm::{Embedded, Referenced { digest: Option<SourceDigest> }}`;
+    `SourceDigest { algorithm: String, bytes: Vec<u8> }`) and
+    `SourceTextSupplier<O>` (`source_text(&ReferencedSource<O>) -> Result<String,
+    DeserializeError>` + `digest_matches(&SourceDigest, &str) -> Result<bool,
+    DeserializeError>` — `Ok(false)` = mismatch (the driver mints the typed error),
+    `Err` = cannot check, e.g. unknown algorithm); `ReferencedSource<O>` = origin,
+    provenance (already rebuilt), length, digest, offsets (getters). Defaults: embed
+    all; referenced source without a supplier → `NoSourceTextSupplier`. The driver
+    checks `text.len() == length` itself. Reads rebuild
+    `Source::new(text).with_origin(..).with_provenance(..).with_line_column_number_offsets(..)`;
+    every span is validated (`start <= end <= len`, both on char boundaries) BEFORE
+    `SourceSpan::new`. `Arc` interning preserves `same_source` across the stream.
+    **No plain-trait `SerializableObject`/`DeserializableObject` impls for `Source`:**
+    the embed/reference decision is driver configuration (policy/supplier), so an
+    object-level impl would either ignore it or reach into the driver — the driver
+    does the work directly (D11's homogeneous route). `ParsingState<L>` DOES carry
+    both plain-trait impls (`Output = ParsingState<L>`); the state driver delegates.
+  - **States (D24)** — `drivers/state.rs` + `wire/state.rs`: `StateSerdeDriver<L>`
+    (table `"states"`, identifier `"core.state"`, `StateIndex`); wire struct
+    `{rules, mode, ext, scopes}` — `rules` = the seven sections, each `Option`al
+    and written only when the lang's feature store is present (`whitespace {enabled,
+    chars}`, `paragraphs {enabled}`, `groups {enabled, rules: [{group_type, open,
+    close}], temporary: [..], expecting_close?: {…}}`, `commands {enabled, rules:
+    [{escape_char (one-char string), name_chars}]}`, `comments {enabled, rules:
+    [{start}]}`, `specials {enabled}`, `forbidden_chars {chars}`); `mode`/`ext`/
+    `group_type` are `SerialValue`s produced by the lang's value conversions
+    (the internal derive has no generics, so lang-typed parts ride as verbatim
+    `SerialValue` fields); `scopes: [<provider position>]` outermost first (insertion
+    order). Read: a section for a feature the target lang declares absent →
+    `DeserializeError::FeatureAbsent { feature }`; a MISSING section for a present
+    feature → that section's `empty()` (decided: the plan says all sections are
+    optional; the empty block is the neutral value and what a lang without data
+    would have written) — documented on the driver; rebuild via
+    `ParsingState::new(data)` (promoted from `#[cfg(test)]` to plain `pub(crate)`,
+    docs updated) — freezes and rebuilds `prefix_table`/`trigger_chars`, does NOT run
+    `finalize_transition`; scope stack via new `pub(crate)
+    ScopeStack::from_providers(Vec<Arc<dyn SpecsProvider<L>>>) -> Option<_>` (`None`
+    for a non-empty stack under a scopes-less lang → `FeatureAbsent { feature:
+    "scopes" }`); `expecting_close` re-linked to the value-equal rebuilt `Arc` in
+    `temporary` (searched first) then `rules` (the nice-to-have — done; the derived
+    temporary-scope check works on a rebuilt state, tested). `ParsingStateDelta`
+    and the derived caches never hit the wire. Wire traits gained `char` (a
+    one-character string; strict on read).
+  - **Standard tables (D9)** — `drivers/standard.rs`: `SerdeSession::<L>::new()`
+    registers `"sources"`(0), `"states"`(1), `"specs"`(2), `"providers"`(3) — the
+    last two `DispatchingSerdeDriver` instances over `dyn CallableSpec<L>` /
+    `dyn SpecsProvider<L>` behind the type aliases `SpecSerdeDriver<L>` /
+    `ProviderSerdeDriver<L>` (§3.G's dispatching-driver names) with `SpecIndex` /
+    `ProviderIndex`; NO readers registered (M5's job; M3 tests register a toy
+    provider through `register_type`). `SerdeSession::with_source_driver(driver)`
+    is the same constructor with a configured source driver (house precedent for
+    `with_x(arg)` constructors: `Diagnostics::with_limit`, `GroupArgumentParser::with_rule`);
+    `impl Default for SerdeSession` = `new()`. `SerdeSession::standard_tables() ->
+    Option<StandardTables<L>>` (`#[non_exhaustive]` struct of the four handles,
+    Copy) — found by name+driver type through the new generic
+    `SerdeSession::table_handle::<D>(name) -> Option<TableHandle<D>>` (also on
+    both contexts): the one lookup mechanism, usable by any custom driver that
+    refers to another table without holding its handle. `empty()` kept.
+  - **Context/session extension traits (§2 sugar):** `StandardTableInterning<L>`
+    (`intern_source`, `intern_state`, `intern_spec`, `intern_provider`) implemented
+    for `SerdeSession<L>` AND `SerializeContext<'_, L>`; `StandardTableReading<L>`
+    (`source`, `state`, `spec`, `provider`) for `SerdeSession<L>` AND
+    `DeserializeContext<'_, L>` — thin wrappers looking the standard table up by
+    name; a missing table is the new `SerializeError::UnknownTableName { name }` /
+    the (doc-generalized) `DeserializeError::UnknownTableName { name }`. The
+    standard drivers themselves use these accessors (no handles stored in drivers),
+    so they work in any session that registers the standard tables by name.
+  - **New errors (D27):** `SerializeError::UnknownTableName { name: String }`;
+    `DeserializeError::{SpanOutOfBounds { start, end, len }, SpanNotOnCharBoundary
+    { start, end }, FeatureAbsent { feature: &'static str }, NoSourceTextSupplier {
+    origin: Option<String> }, SourceLengthMismatch { origin, expected, found },
+    SourceDigestMismatch { origin, algorithm }}` — every source failure names the
+    origin label; the session's `InEntry` wrapper adds table + position. Supplier
+    errors pass through unwrapped (their own words, inside `InEntry`).
+  - **Tests** (`drivers/tests.rs`, both feature states): embedded round trip
+    (origin, offsets, provenance, same-Arc reads); provenance chains (A ← B ← C, D
+    also ← A; post-order positions; `same_source` and `Arc::ptr_eq` after read;
+    chain iterators); referenced round trips with/without a toy `toy-sum` digest via
+    a toy supplier; the supplier receives everything the entry recorded; typed
+    failures (no supplier, length mismatch, digest mismatch, supplier failure,
+    refused algorithm, failing write policy, `InEntry`/`InTable` locations); hostile
+    spans/shapes (end beyond, start > end, inside a char, negative offset, position
+    beyond the table, wrong table, bad text-form variant, unknown key, non-map);
+    `SourceSpan` as a value (two spans → one entry); full-state round trip (all
+    seven sections incl. temporary + expecting_close, `TokenRules ==`, re-linked
+    `expecting_close`, providers identity-resolved from user data, prefix table
+    and trigger chars rebuilt, further derivation drops temporaries); seed/empty
+    state; shared states/providers keep identity; feature-absent refusals
+    (`whitespace` section into `NoLangFeatures`, non-empty scopes into a scopes-less
+    lang; a no-section state reads fine; a `NoLangFeatures` writer writes no
+    section); bad provider references (`IndexOutOfRange`, `UnknownIdentifier`,
+    environment miss); hostile state shapes; determinism (two sessions → equal
+    segments); core value impls incl. range checks; `new()` order + `empty()`
+    accessors; pinned JSON rendering of one source (referenced + digest, plus a
+    synthesized child) and one state under the feature.
+  **Provisional wire names (Q3):** tables `sources`/`states`/`specs`/`providers`;
+  identifiers `core.source`/`core.state`; source keys `origin`, `provenance`
+  (`primary`/`resolved`/`synthesized`, `reference`, `description`, `triggered_at`,
+  span keys `source`/`start`/`end`), `line_number_offset`, `column_number_offset`,
+  `text` (`embedded`/`referenced`, `length`, `digest`, `algorithm`, `bytes`); state
+  keys `rules` (`whitespace`, `paragraphs`, `groups`, `commands`, `comments`,
+  `specials`, `forbidden_chars`; `enabled`, `chars`, `rules`, `temporary`,
+  `expecting_close`, `group_type`, `open`, `close`, `escape_char`, `name_chars`,
+  `start`), `mode`, `ext`, `scopes`. **Public API surface (new):**
+  `SerializableValue`, `DeserializableValue` (+ `SerializableLang` bounds);
+  `SourceSerdeDriver` (`new`, `with_text_policy`, `with_text_supplier`, `Default`),
+  `SourceIndex`, `SourceTextForm`, `SourceTextPolicy`, `SourceTextSupplier`,
+  `ReferencedSource` (getters), `SourceDigest` (`new`, pub fields);
+  `StateSerdeDriver` (`new`, `Default`), `StateIndex`; `SpecSerdeDriver`,
+  `ProviderSerdeDriver` (aliases), `SpecIndex`, `ProviderIndex`; `StandardTables`;
+  `SerdeSession::{new, with_source_driver, standard_tables, table_handle}`,
+  `Default for SerdeSession`; `SerializeContext::table_handle`,
+  `DeserializeContext::table_handle`; `StandardTableInterning`,
+  `StandardTableReading`; the error variants above; value-trait impls on
+  `SourceSpan`, object-trait impls on `ParsingState`. Next: M3 review → M4 (trees;
+  `serialize_span`/`deserialize_span` in `drivers/source.rs` are the `pub(crate)`
+  span helpers for node spans) → M5 (real spec/provider impls; readers on the
+  specs/providers tables). Blockers: none.
 - 2026-08-16 — M2 fix-pass agent — **M2 fix pass** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`), applying the M2 review's three blocking
   findings, the user-approved rename, and the nits. Commits: `0ee9b20`

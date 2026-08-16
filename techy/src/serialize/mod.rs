@@ -32,19 +32,27 @@
 //! name and its `u32` index — see [`SerialIndex`]). Every serialized object carries
 //! an *identifier*: a deliberately chosen, stable string naming what kind of object
 //! the value describes (never a Rust type name), returned as part of a
-//! [`SerialEntry`]. The *reading environment* is the set of live objects —
+//! [`SerialEntry`]. An *object* is what a table holds — a table entry, referred to
+//! by position from wherever it is used; a *value* is data embedded inline in an
+//! entry (a state's mode, a source's origin, a span), converted in place and never
+//! interned in a table of its own. The *reading environment* is the set of live objects —
 //! providers, specs, sources — that the deserializing program already holds and that
 //! serialized data can refer to by identity rather than describe in full (handed to
 //! the session as its user data); a value that refers to an object the reading
 //! environment lacks is a deserialization error.
 //!
-//! **The capability** is expressed as two traits: [`SerializableObject`] — the write
-//! side, which every callable spec and provider carries as a supertrait (defaulted, so
-//! a type that does not participate writes a one-line empty impl) — and
-//! [`DeserializableObject`], the opt-in read side implemented by concrete types only.
-//! Both are available only for a language that declares itself serializable by
-//! implementing [`SerializableLang`]: their calls receive a [`SerializeContext`] or a
-//! [`DeserializeContext`], which exist only for such languages.
+//! **The capability** is expressed as two pairs of traits. For objects:
+//! [`SerializableObject`] — the write side, which every callable spec and provider
+//! carries as a supertrait (defaulted, so a type that does not participate writes a
+//! one-line empty impl) — and [`DeserializableObject`], the opt-in read side
+//! implemented by concrete types only. For values: [`SerializableValue`] and
+//! [`DeserializableValue`], implemented by the owner of each value type (the crate
+//! covers `()`, `bool`, the integers, `String`, `Option<T>`, `Vec<T>`, and spans;
+//! a language covers its own vocabulary and ext types). All four are available only
+//! for a language that declares itself serializable by implementing
+//! [`SerializableLang`] — whose bounds require the value traits of every type the
+//! language plugs into the parse — since their calls receive a [`SerializeContext`]
+//! or a [`DeserializeContext`], which exist only for such languages.
 //!
 //! **The engine** is a [`SerdeSession`]: it holds the tables, each registered with
 //! an [`ObjectSerdeDriver`] (how the objects of that table are serialized and
@@ -70,11 +78,29 @@
 //! model's rules ([`SerialValueError`]); `serial_bytes` marks a byte-string field for
 //! it. The feature adds no obligation to any implementer of the traits here.
 //!
+//! **The standard tables.** [`SerdeSession::new`] registers the drivers of the
+//! crate's own object kinds — the sources table ([`SourceSerdeDriver`]), the states
+//! table ([`StateSerdeDriver`]), and the specs and providers tables
+//! ([`SpecSerdeDriver`], [`ProviderSerdeDriver`], dispatching tables whose readers a
+//! language or framework registers) — in that order; [`SerdeSession::standard_tables`]
+//! returns their handles ([`StandardTables`]), and the extension traits
+//! [`StandardTableInterning`] and [`StandardTableReading`] intern and read by kind
+//! (`cx.intern_source(…)`, `cx.state(…)`). A source's text is either *embedded* in
+//! its entry or *referenced* — kept outside the serialized form, described by its
+//! length and an optional *digest* (a fixed-size fingerprint of the text computed by
+//! a hash function the writer chooses, stored as the function's name and output:
+//! [`SourceDigest`]); the choice is a caller-supplied [`SourceTextPolicy`], the text
+//! and digest verification on reading a caller-supplied [`SourceTextSupplier`], and
+//! the crate implements no hash function itself. A state's entry carries its token
+//! rules, mode, ext, and scope stack; the derived caches are rebuilt on reading.
+//! Every state and every source is written once however often it is referred to,
+//! and read back as one shared object.
+//!
 //! **What exists so far.** This module provides the value model, the error types, the
-//! capability traits, the engine, and (with the feature) the rendering layer; the
-//! drivers for the crate's own object kinds — sources, states, trees, specs,
-//! providers, diagnostics — are not yet present, so a session currently holds only
-//! the tables its user registers.
+//! capability traits, the engine, the drivers of the sources, states, specs, and
+//! providers tables, and (with the feature) the rendering layer; the drivers of node
+//! trees and diagnostics, and the serialization of the crate's own spec and provider
+//! types, are not yet present.
 
 mod drivers;
 mod engine;

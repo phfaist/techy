@@ -110,8 +110,12 @@
 //! - [`serialize`] — serialization to and from a format-independent value model
 //!   ([`SerialValue`](serialize::SerialValue)): the write/read capability traits
 //!   ([`SerializableObject`](serialize::SerializableObject) +
-//!   [`DeserializableObject`](serialize::DeserializableObject)) and the
-//!   [`SerializableLang`](serialize::SerializableLang) declaration.
+//!   [`DeserializableObject`](serialize::DeserializableObject) for table objects,
+//!   [`SerializableValue`](serialize::SerializableValue) +
+//!   [`DeserializableValue`](serialize::DeserializableValue) for embedded values),
+//!   the [`SerializableLang`](serialize::SerializableLang) declaration, the session
+//!   ([`SerdeSession`](serialize::SerdeSession)) with the standard tables of
+//!   sources, states, specs, and providers.
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
 //!   [`ParseResult`](core::ParseResult)), with three submodules:
