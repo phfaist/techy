@@ -293,7 +293,9 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   `FeaturePresence` pays off only when data layouts change with presence —
   serialization stores no lang-carried data. M0 carries a compile test pinning
   vacant-vtable behavior (`dyn CallableSpec<L>` for non-serializable `L`) at MSRV
-  1.86; fallback if it ever failed: drop the where-clause, rely on context
+  1.86; fallback if it ever failed: drop the where-clause AND the contexts' struct
+  bound `L: SerializableLang` (the where-clauses are what make the bounded
+  context types well-formed in the signatures), relying on context
   unconstructibility alone (same practical semantics). Sequencing: M0 lands
   `SerializableLang` as a bare marker (`pub trait SerializableLang: Lang {}`); M3
   adds its items — the codec surface for the lang's closed vocabulary types and its
@@ -472,7 +474,10 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 
 - **Q3 (M6) — Wire vocabulary naming pass** (freeze-relevant, pre-v1): every public
   field name and enum string (core + latexlike), the `Index` table discriminant
-  rendering (name string vs ordinal), the canonical base64 form for `Bytes`.
+  rendering (name string vs ordinal), the canonical base64 form for `Bytes`; also
+  whether `TableId` keeps its name (§3.G says `…Id` = process-local identity, yet a
+  `TableId` travels on the wire inside `SerialValue::Index` — reviewer-noted tension,
+  2026-08-16).
 - **Q5 (M5) — Package-builder API shape** for provenance stamping (`new_cyclic`
   threading; whether core `Package` construction changes or only the latexlike
   builder).
@@ -531,9 +536,11 @@ stream contains only new table entries plus new trees, referencing earlier indic
 
 ### Module layout
 
-- `techy/src/serialize/` (pub(crate) internal module; public facade `techy::serialize`
-  in lib.rs — a re-export facade, one canonical path per item, per
-  [§dd-dr:public-namespace-topology]). **Unconditional** (D1): `value.rs`
+- `techy/src/serialize/` (the public `techy::serialize` facade module itself, on the
+  `source`/`error` own-facade pattern: `pub mod serialize` with private submodules and
+  re-exports at the module root — one canonical path per item, per
+  [§dd-dr:public-namespace-topology]; corrected 2026-08-16 — an earlier wording asked
+  for both `pub(crate) mod serialize` and `pub mod serialize`, which cannot coexist). **Unconditional** (D1): `value.rs`
   (SerialValue, SerialEntry, TableId, the SerialIndex bound — NOT the typed index
   newtypes, which live beside their drivers per D11), `error.rs` (SerializeError,
   DeserializeError, SerialValueError — SerialValueError's variants land with the
