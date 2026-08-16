@@ -504,7 +504,9 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// ([`ReferenceCycle`](DeserializeError::ReferenceCycle)), a reference beyond a
     /// table's end ([`IndexOutOfRange`](DeserializeError::IndexOutOfRange)) or into
     /// the wrong table ([`WrongTable`](DeserializeError::WrongTable)), or the descent
-    /// limit ([`DescentLimitExceeded`](DeserializeError::DescentLimitExceeded)).
+    /// limit ([`DescentLimitExceeded`](DeserializeError::DescentLimitExceeded)); and
+    /// [`Internal`](DeserializeError::Internal) should the session's own check after
+    /// rebuilding — every new entry holds its object — fail (a bug of this crate).
     pub fn push_segment(&mut self, segment: Segment) -> Result<(), DeserializeError> {
         let (version, tables) = segment.into_parts();
         if version != Segment::VERSION {
