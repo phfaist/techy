@@ -252,7 +252,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     ///
     /// # Errors
     ///
-    /// The default reports [`DeserializeError::ArgumentSpecPayloadUnexpected`] when
+    /// The default reports [`DeserializeError::UnexpectedArgumentSpecPayload`] when
     /// `value` is `Some(_)`, and [`DeserializeError::ArgumentIndexOutOfRange`] when
     /// `index` is beyond `self.arguments()` — the serialized data was written against
     /// a callable spec declaring more arguments than this one does. An override
@@ -269,7 +269,7 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     {
         let _ = cx;
         if value.is_some() {
-            return Err(DeserializeError::ArgumentSpecPayloadUnexpected { index });
+            return Err(DeserializeError::UnexpectedArgumentSpecPayload { index });
         }
         let declared = self.arguments();
         declared.get(index).cloned().ok_or(DeserializeError::ArgumentIndexOutOfRange {

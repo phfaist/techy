@@ -294,15 +294,55 @@ fn integers_out_of_i64_are_rejected() {
         to_value(&u128::MAX),
         Err(SerialValueError::IntegerOutOfRange { value: u128::MAX.to_string(), target: "i64" })
     );
-    // On reading, serde's own range checks apply to the target width.
-    assert!(matches!(
+    // On reading, the bridge range-checks against the target width itself.
+    assert_eq!(
         from_value::<u8>(&SerialValue::Int(300)),
-        Err(SerialValueError::Custom(_))
+        Err(SerialValueError::IntegerOutOfRange { value: "300".into(), target: "u8" })
+    );
+    assert_eq!(
+        from_value::<u32>(&SerialValue::Int(-1)),
+        Err(SerialValueError::IntegerOutOfRange { value: "-1".into(), target: "u32" })
+    );
+    assert_eq!(
+        from_value::<i16>(&SerialValue::Int(-40000)),
+        Err(SerialValueError::IntegerOutOfRange { value: "-40000".into(), target: "i16" })
+    );
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Narrow {
+        n: i8,
+    }
+    assert_eq!(
+        from_value::<Narrow>(&map([("n", SerialValue::Int(128))])),
+        Err(SerialValueError::IntegerOutOfRange { value: "128".into(), target: "i8" })
+    );
+    assert_eq!(from_value::<Narrow>(&map([("n", SerialValue::Int(-128))])), Ok(Narrow { n: -128 }));
+    // A non-integer where an integer is read is still a kind mismatch.
+    assert!(from_value::<u8>(&s("7")).is_err());
+}
+
+#[test]
+fn structs_read_from_maps_only() {
+    // A list is not read positionally into a struct.
+    assert!(matches!(
+        from_value::<Plain>(&list([
+            s("abc"),
+            SerialValue::Int(7),
+            SerialValue::Bool(true),
+            SerialValue::Null,
+            list([]),
+            list([SerialValue::Int(3), s("q")]),
+        ]))
+        .unwrap_err(),
+        SerialValueError::TypeMismatch { found: "list", .. }
     ));
     assert!(matches!(
-        from_value::<u32>(&SerialValue::Int(-1)),
-        Err(SerialValueError::Custom(_))
+        from_value::<Plain>(&SerialValue::Null).unwrap_err(),
+        SerialValueError::TypeMismatch { found: "null", .. }
     ));
+    // Tuples and tuple structs still read from lists.
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Pair(u8, u8);
+    assert_eq!(from_value::<Pair>(&list([SerialValue::Int(1), SerialValue::Int(2)])), Ok(Pair(1, 2)));
 }
 
 #[test]
@@ -331,7 +371,7 @@ fn non_string_map_keys_are_rejected() {
 fn shape_mismatches_are_reported() {
     assert_eq!(
         from_value::<Plain>(&s("not a map")).unwrap_err(),
-        SerialValueError::Custom("invalid type: string \"not a map\", expected struct Plain".into())
+        SerialValueError::TypeMismatch { expected: Cow::Borrowed("a map (struct Plain)"), found: "str" }
     );
     assert_eq!(
         from_value::<Option<u8>>(&s("x")).unwrap_err(),

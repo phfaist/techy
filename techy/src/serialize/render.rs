@@ -16,7 +16,8 @@
 //!   `$$`-escaped is an error.
 //! - **The compact rendering** (every other format): serde's externally tagged form of
 //!   the enum — variant index and name, then the payload; `Bytes` through the format's
-//!   byte-string channel, `Index` as the two-integer pair, `Map` as a serde map.
+//!   `serialize_bytes`/`deserialize_bytes` methods, `Index` as the two-integer pair,
+//!   `Map` as a serde map.
 //!
 //! Both renderings read back to the identical value. Through the bridge (`to_value` /
 //! `from_value`, `bridge.rs`), a `SerialValue` converts to itself unchanged: the impls
@@ -73,7 +74,8 @@ const INDEX_KEY: &str = "$index";
 /// documentation for both forms.
 impl Serialize for SerialValue {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // The wrapper is transparent in every serde format; the bridge intercepts it.
+        // JSON and the common binary formats render the wrapper as its content; the
+        // bridge intercepts it.
         serializer.serialize_newtype_struct(VALUE_SENTINEL, &Rendering(self))
     }
 }
@@ -149,7 +151,7 @@ fn serialize_compact<S: Serializer>(value: &SerialValue, serializer: S) -> Resul
     }
 }
 
-/// The `Bytes` payload of the compact rendering: the format's byte-string channel.
+/// The `Bytes` payload of the compact rendering: written with `serialize_bytes`.
 struct CompactBytes<'a>(&'a [u8]);
 
 impl Serialize for CompactBytes<'_> {
@@ -197,8 +199,8 @@ impl<'de> Deserialize<'de> for SerialValue {
     }
 }
 
-/// Unwraps the sentinel newtype struct (transparent in every serde format; the bridge
-/// intercepts it) and reads the rendering the format uses.
+/// Unwraps the sentinel newtype struct (JSON and the common binary formats read it as
+/// its content; the bridge intercepts it) and reads the rendering the format uses.
 struct RenderingVisitor;
 
 impl<'de> Visitor<'de> for RenderingVisitor {
@@ -322,7 +324,7 @@ fn out_of_range<E: de::Error, N: fmt::Display>(v: N) -> E {
 
 /// A capacity to preallocate from an untrusted size hint: bounded, so that a hostile
 /// hint cannot demand a huge allocation up front.
-fn cautious_capacity(hint: Option<usize>) -> usize {
+pub(super) fn cautious_capacity(hint: Option<usize>) -> usize {
     hint.map_or(0, |n| n.min(1024))
 }
 
@@ -449,8 +451,7 @@ impl<'de> Deserialize<'de> for CompactTag {
     }
 }
 
-/// The `Bytes` payload of the compact rendering, read through the format's
-/// byte-string channel.
+/// The `Bytes` payload of the compact rendering, read with `deserialize_byte_buf`.
 struct CompactBytesOwned(Vec<u8>);
 
 impl<'de> Deserialize<'de> for CompactBytesOwned {

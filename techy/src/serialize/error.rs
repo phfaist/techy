@@ -88,7 +88,7 @@ pub enum DeserializeError {
     /// [`deserialize_argument_spec`](crate::spec::CallableSpec::deserialize_argument_spec),
     /// which reads no such description: the reading environment's callable spec is
     /// not of the type that wrote the argument.
-    ArgumentSpecPayloadUnexpected {
+    UnexpectedArgumentSpecPayload {
         /// The serialized argument's index in invocation order.
         index: usize,
     },
@@ -104,10 +104,10 @@ impl fmt::Display for DeserializeError {
                 index.saturating_add(1),
                 count
             ),
-            DeserializeError::ArgumentSpecPayloadUnexpected { index } => write!(
+            DeserializeError::UnexpectedArgumentSpecPayload { index } => write!(
                 f,
                 "serialized argument #{} carries a description of its argument spec, but \
-                 the callable spec it is read against does not implement \
+                 the callable spec it is read against does not override \
                  deserialize_argument_spec to read one (the callable spec type that wrote \
                  the argument differs from the one reading it)",
                 index.saturating_add(1)

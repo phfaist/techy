@@ -5,7 +5,10 @@
 //! **Vocabulary used throughout this module.** *Serialization* converts a live object
 //! into a [`SerialValue`], a plain tree of values (booleans, integers, strings, byte
 //! strings, lists, string-keyed maps, table references) that depends on no encoding
-//! format; *deserialization* is the reverse. Objects that are shared — one parsing
+//! format; *deserialization* is the reverse. The *wire* is the serialized form
+//! itself — the data as it is written out and read back, as opposed to the live
+//! objects it describes; a "wire struct" or "wire name" is a structure or a key name
+//! of that form. Objects that are shared — one parsing
 //! state referenced by many nodes, one source referenced by many spans — are written
 //! once into a numbered *table* and referred to by their position in it, so sharing
 //! survives the round trip; a [`TableId`] names a table, and the position within it

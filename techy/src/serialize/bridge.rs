@@ -6,8 +6,8 @@
 //! outside `i64`, and maps with non-string keys are errors.
 //!
 //! Two kinds of data have dedicated variants that serde has no native notion of, and
-//! the bridge intercepts them: byte strings travel through serde's own bytes channel
-//! (`serialize_bytes` / `deserialize_bytes`, which derived types reach with the
+//! the bridge intercepts them: byte strings travel through serde's own
+//! `serialize_bytes` / `deserialize_bytes` methods (which derived types reach with the
 //! [`serial_bytes`] helper) and become [`SerialValue::Bytes`]; table positions travel
 //! as one fixed sentinel newtype struct ([`INDEX_SENTINEL`], written and read by
 //! [`serialize_index`] / [`deserialize_index`]) and become [`SerialValue::Index`].
@@ -26,7 +26,7 @@ use serde::de::{
 use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, Serializer};
 
 use super::error::SerialValueError;
-use super::render::{compact_variant_name, VALUE_SENTINEL};
+use super::render::{cautious_capacity, compact_variant_name, VALUE_SENTINEL};
 use super::value::{SerialValue, TableId};
 
 // --- serde's error traits ---------------------------------------------------------------
@@ -74,8 +74,8 @@ pub(crate) const INDEX_SENTINEL: &str = "techy::serialize::Index";
 
 /// Serialize the table position `(table, index)` so that the bridge produces
 /// [`SerialValue::Index`] and any other serde format writes the pair
-/// `(table ordinal, index)` as a newtype struct named [`INDEX_SENTINEL`] (transparent
-/// in every common format: a two-element sequence).
+/// `(table ordinal, index)` as a newtype struct named [`INDEX_SENTINEL`] (which JSON
+/// and the common binary formats render as the bare two-element sequence).
 pub(crate) fn serialize_index<S: Serializer>(
     table: TableId,
     index: u32,
@@ -154,10 +154,9 @@ pub(crate) fn deserialize_index<'de, D: Deserializer<'de>>(
 /// # Ok::<(), techy::serialize::SerialValueError>(())
 /// ```
 ///
-/// The functions use serde's byte-string channel (`serialize_bytes` /
-/// `deserialize_byte_buf`); through any serde format other than the bridge, the field
-/// takes that format's byte-string form. Reading accepts a byte string only, never a
-/// list of integers.
+/// The functions use serde's `serialize_bytes` / `deserialize_byte_buf` methods;
+/// through any serde format other than the bridge, the field takes that format's
+/// byte-string form. Reading accepts a byte string only, never a list of integers.
 pub mod serial_bytes {
     use alloc::vec::Vec;
     use core::fmt;
@@ -216,12 +215,22 @@ pub mod serial_bytes {
 /// [`serial_bytes`]) → [`Bytes`](SerialValue::Bytes); `()`, unit structs, and `None` →
 /// [`Null`](SerialValue::Null); `Some(x)` → `x`; sequences and tuples →
 /// [`List`](SerialValue::List); structs → [`Map`](SerialValue::Map) in field order;
-/// maps → `Map` (keys must be strings — `char` keys and unit enum variants count as
-/// their string form; anything else is an error); newtype structs → their content
-/// (except the table-position sentinel, which becomes [`Index`](SerialValue::Index));
-/// enums in serde's externally tagged form — a unit variant → `Str` of the variant
-/// name, a variant with data → a one-entry `Map` from the variant name to the data. A
+/// maps → `Map` (keys must be strings — `char` keys, unit enum variants, and newtype
+/// structs wrapping a string count as their string form; anything else is an error);
+/// newtype structs → their content (except the table-position sentinel, which becomes
+/// [`Index`](SerialValue::Index)); enums in serde's externally tagged form (the
+/// variant name, then its data) — a unit variant → `Str` of the variant name, a
+/// variant with data → a one-entry `Map` from the variant name to the data. A
 /// `SerialValue` converts to itself unchanged.
+///
+/// Two cautions for payload types that hold typed table positions: a position cannot
+/// cross a `#[serde(flatten)]` or `#[serde(untagged)]` boundary (serde buffers such
+/// content through `deserialize_any`, where an `Index` is a
+/// [`TypeMismatch`](SerialValueError::TypeMismatch)); and an `Option` field should
+/// carry `#[serde(skip_serializing_if = "Option::is_none")]` (with
+/// `#[serde(default)]` for reading) so that an absent value is an omitted key, as the
+/// crate's own serialized structures render it — a bare `None` field is otherwise
+/// written as an explicit `Null` value.
 ///
 /// # Errors
 ///
@@ -379,7 +388,7 @@ impl Serializer for ValueSerializer {
 
     fn serialize_seq(self, len: Option<usize>) -> Result<ListSerializer, SerialValueError> {
         Ok(ListSerializer {
-            items: Vec::with_capacity(len.unwrap_or(0)),
+            items: Vec::with_capacity(cautious_capacity(len)),
             human_readable: self.human_readable,
         })
     }
@@ -408,7 +417,7 @@ impl Serializer for ValueSerializer {
 
     fn serialize_map(self, len: Option<usize>) -> Result<MapSerializer, SerialValueError> {
         Ok(MapSerializer {
-            entries: Vec::with_capacity(len.unwrap_or(0)),
+            entries: Vec::with_capacity(cautious_capacity(len)),
             pending_key: None,
             human_readable: self.human_readable,
         })
@@ -754,6 +763,27 @@ pub fn from_value<'de, T: de::Deserialize<'de>>(value: &'de SerialValue) -> Resu
     T::deserialize(value)
 }
 
+/// The integer `deserialize_*` methods: an `Int` is range-checked against the target
+/// width and handed to the matching `visit_*` ([`SerialValueError::IntegerOutOfRange`]
+/// when it does not fit — the same error the crate's own conversions report); any
+/// other value goes to `deserialize_any`, so the visitor reports the kind mismatch.
+macro_rules! deserialize_checked_int {
+    ($($method:ident: $t:ty => $visit:ident),* $(,)?) => {$(
+        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, SerialValueError> {
+            match self {
+                SerialValue::Int(i) => match <$t>::try_from(*i) {
+                    Ok(v) => visitor.$visit(v),
+                    Err(_) => Err(SerialValueError::IntegerOutOfRange {
+                        value: i.to_string(),
+                        target: stringify!($t),
+                    }),
+                },
+                _ => self.deserialize_any(visitor),
+            }
+        }
+    )*};
+}
+
 /// `&SerialValue` is a serde `Deserializer` (available with the `serde` cargo feature):
 /// [`from_value`] is `T::deserialize(&value)`. Its `is_human_readable()` is `true`;
 /// see [`to_value`] for the mapping.
@@ -861,9 +891,33 @@ impl<'de> Deserializer<'de> for &'de SerialValue {
         visitor.visit_unit()
     }
 
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        _fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, SerialValueError> {
+        // A struct reads from a `Map` only — never positionally from a `List`.
+        match self {
+            SerialValue::Map(entries) => visit_entries(entries, visitor),
+            _ => Err(SerialValueError::TypeMismatch {
+                expected: Cow::Owned(alloc::format!("a map (struct {name})")),
+                found: self.kind_name(),
+            }),
+        }
+    }
+
+    deserialize_checked_int! {
+        deserialize_i8: i8 => visit_i8, deserialize_i16: i16 => visit_i16,
+        deserialize_i32: i32 => visit_i32, deserialize_i64: i64 => visit_i64,
+        deserialize_i128: i128 => visit_i128,
+        deserialize_u8: u8 => visit_u8, deserialize_u16: u16 => visit_u16,
+        deserialize_u32: u32 => visit_u32, deserialize_u64: u64 => visit_u64,
+        deserialize_u128: u128 => visit_u128,
+    }
+
     serde::forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 char str string
-        unit unit_struct seq tuple tuple_struct map struct identifier
+        bool char str string unit unit_struct seq tuple tuple_struct map identifier
     }
 }
 

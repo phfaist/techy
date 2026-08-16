@@ -27,8 +27,8 @@ use alloc::vec::Vec;
 ///
 /// With the `serde` cargo feature the type implements `Serialize` and `Deserialize`.
 /// Through a human-readable format (serde's `is_human_readable()`), the rendering is
-/// the canonical one — provisional until the wire vocabulary is finalized, and stated
-/// here for JSON: `Null` → `null`, `Bool` → boolean, `Int` → number, `Str` → string,
+/// the canonical one — provisional until the vocabulary of the serialized form (its
+/// key names and enum strings) is finalized, and stated here for JSON: `Null` → `null`, `Bool` → boolean, `Int` → number, `Str` → string,
 /// `List` → array, `Map` → object in entry order; `Bytes` → the one-entry object
 /// `{"$bytes": "<base64>"}` (standard alphabet, `=` padding, no line breaks); `Index`
 /// → the one-entry object `{"$index": [<table>, <index>]}` (two integers: the table's
@@ -37,9 +37,10 @@ use alloc::vec::Vec;
 /// object key beginning with `$` that is neither a reserved key nor `$$`-escaped is
 /// an error, as are floating-point numbers, integers outside `i64`, and malformed
 /// reserved objects. Through any other format the rendering is a compact one: the
-/// externally tagged form of this enum, `Bytes` through the format's byte-string
-/// channel, `Index` as the two-integer pair, `Map` as a serde map. Both renderings
-/// read back to the identical value.
+/// externally tagged form of this enum (the variant name, then its data), `Bytes`
+/// through the format's `serialize_bytes`/`deserialize_bytes` methods, `Index` as the
+/// two-integer pair, `Map` as a serde map. Both renderings read back to the identical
+/// value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SerialValue {
     /// The absent value.
