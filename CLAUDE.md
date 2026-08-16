@@ -28,8 +28,9 @@ modules are `pub(crate)` and invisible to public paths:
 - **techy::core::node**: AST storage (NodeTree, NodeKind, NodeRef, GroupData, CallableData, CommentData, NodeTreeBuilder)
 - **techy::latexlike**: The LaTeX-behavior preset (Latexlike lang, LatexlikeDriver, preset specs, the SourceRecomposer source re-emission; `latexlike::minidefs` = the opt-in toy `minilatex` package)
 
-Internal file layout (src/token, src/state, src/engine, src/spec, src/scopes, …) is
-organizational only — it never shows in public paths.
+Internal file layout (techy/src/token, techy/src/state, techy/src/engine,
+techy/src/spec, techy/src/scopes, …) is organizational only — it never shows in
+public paths.
 
 ## Critical Naming Conventions
 
@@ -104,4 +105,4 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
 7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion as a labeled entry in dev-docs/DESIGN_RATIONALE.md (follow its entry template and maintenance rules — including adding an ARCHITECTURE reference for the new entry).
 8. **Add tests** for new functionality
 9. **Keep it simple**: No over-engineering or premature optimization
-
+10. Use US English spelling and language standards.
