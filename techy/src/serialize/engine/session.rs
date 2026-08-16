@@ -463,6 +463,13 @@ impl<L: SerializableLang> SerdeSession<L> {
             return Err(DeserializeError::UnsupportedVersion { found: version, expected: Segment::VERSION });
         }
 
+        // A segment continues the stream the session has emitted so far: nothing
+        // interned since the last emission may still be pending (absorb every segment
+        // first, then append and emit — the read-then-append flow).
+        if let Some(table) = self.tables.iter().find(|table| !table.outbox.is_empty()) {
+            return Err(DeserializeError::UnemittedEntries { table: table.name });
+        }
+
         // Validate the table directory against this session, and plan the appends,
         // before touching any state.
         let mut writer_to_reader: HashMap<u32, usize> = HashMap::new();
@@ -481,9 +488,6 @@ impl<L: SerializableLang> SerdeSession<L> {
                 return Err(DeserializeError::DuplicateSegmentTable { name });
             }
             let table = &self.tables[ordinal];
-            if !table.outbox.is_empty() {
-                return Err(DeserializeError::UnemittedEntries { table: table.name });
-            }
             let len = table.slots.len() as u32;
             if start != len {
                 return Err(DeserializeError::SegmentOutOfOrder { table: table.name, expected: len, found: start });

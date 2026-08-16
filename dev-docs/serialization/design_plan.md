@@ -493,6 +493,38 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 - **Q6 (M2) — Segment/stream container details**: version placement (first segment
   only?), JSONL conventions, end-of-stream marker or not, `take_segment`/
   `push_segment` final names.
+  **PROPOSED (M2) — awaiting user confirmation:**
+  - **Version in EVERY segment.** `Segment { version, tables }`; a `pub const
+    Segment::VERSION: u32 = 1`; `push_segment` validates `version == VERSION` and
+    rejects any other with `DeserializeError::UnsupportedVersion { found, expected }`.
+    Rationale: every segment is then an independently valid, self-describing value —
+    a stream can be split into per-file/per-message pieces with no shared preamble,
+    and a truncated stream's surviving segments each still validate. The few bytes of
+    a repeated integer are negligible next to that (P7's canonical-form discipline
+    is unaffected — the version is real data, not representation).
+  - **JSONL = one segment per line; no end-of-stream marker.** The stream ends when
+    the input ends (EOF, connection close, last file); each line is a whole segment
+    read independently in order. No sentinel/footer record, so a stream can be
+    appended to by appending lines, and a partial write costs only its own last line.
+    The in-memory `Segment` type is format-agnostic; JSONL is a convention over it
+    (`serde_json::to_string(&seg)` per line), not a type — the engine emits/absorbs
+    `Segment` values and never touches an encoder.
+  - **Final method names kept: `take_segment` / `push_segment`.** `take_` matches the
+    house drain-and-advance sense (it drains the pending-emission tail and advances
+    the emitted mark); `push_` matches absorb-into-my-tables. `SerdeSession::empty()`
+    is the M2 constructor (D9 reserves `new()` for the standard-tables one).
+  - **Directory: every registered table appears, in registration order,** each with
+    its name, the writer's `TableId`, the start position, and its new entries (empty
+    list if none). The full directory (not just changed tables) lets the reader map
+    every writer table id that any entry references — including ids belonging to
+    tables with no new entries this segment — by name; the cost is a handful of
+    empty-entry records. A reader matches tables by NAME (registration order may
+    differ) and translates every `SerialValue::Index` from the writer's ids to its
+    own before materializing.
+  - **Additional invariant surfaced while implementing:** `push_segment` requires the
+    absorbing session to have NO entries pending emission (nothing interned since the
+    last `take_segment`) — a segment continues the stream the session has emitted, so
+    the natural order is absorb-all-then-append (`DeserializeError::UnemittedEntries`).
 - **Q7 (M6) — Read-side verification levels**: which optional sanity checks (e.g.
   argument-count evidence) are worth their wire bytes; bounds checks are the D21
   baseline.
@@ -777,6 +809,82 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-16 — M2 implementer agent — **M2 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `8cb629b` M1 review nits (bridge's
+  `&SerialValue` now implements the integer `deserialize_*` methods itself with range
+  checks → `IntegerOutOfRange { target }`; `deserialize_struct` requires a `Map`;
+  write-side length-hint preallocation capped like the read side; variant rename
+  `ArgumentSpecPayloadUnexpected`→`UnexpectedArgumentSpecPayload`, Display "does not
+  override"; doc wording — "wire" defined once, "byte-string channel" dropped,
+  "externally tagged" glossed, "transparent in every format" softened, `to_value`
+  payload cautions for `Index`/`Option`); `7f595ed` the engine; `b7ffcbf` feature-
+  gated segment/position rendering tests + clippy tidy. Verified: `cargo build`/`test`
+  green with and without `--features serde` (865/891 unit incl. the 24-test engine
+  battery, 30+8+13+23+1 integration, 72/73 doctests); `rm -rf target/doc && cargo
+  docs` clean both states; clippy clean on all new code (pre-existing `never_loop` in
+  latexlike untouched). **What M2 built** (foundation engine, plan §6 module layout —
+  `serialize/engine/{session,driver,context,dispatch,segment,tests}.rs`, plus
+  `serialize/serial_index.rs`):
+  - `SerdeSession<L>` (D9): tables in registration order, each a driver `Arc<dyn Any>`
+    + name + homogeneous-identifier + `Vec<Slot>` (Pending(wire)|InProgress|
+    Materialized(`Arc`)) + pointer→position map + pending-emission outbox; user-data
+    slot; per-run `StdDescentGuard` (shared with the parser's, configured via
+    `with_descent_guard_init`); write-side in-progress stack. Constructor `empty()`
+    (D9 keeps `new()` for the standard-tables one). `intern`/`resolve`/`take_segment`/
+    `push_segment`; `set_user_data`/`user_data`.
+  - `ObjectSerdeDriver<L>` (D11): `type Object: ?Sized`, `type Index: SerialIndex`,
+    `table_name`, `homogeneous_identifier`, `serialize_object`/`deserialize_object`.
+    `TableHandle<D>`: `TableId` + `PhantomData`, Copy/Eq/Hash, validated per session
+    (ordinal + driver `TypeId`). `TableId`s are registration ordinals (D5).
+  - Write path (D12): pointer hit → existing position; miss → in-progress marker,
+    driver call (may recurse), THEN assign position (post-order → backward refs);
+    re-entering an in-progress object → `ReferenceCycle` naming both tables.
+  - `Segment { version, tables: Vec<SegmentTable { name, id, start, entries }> }`
+    (D10): entries the STORED wire form (bare data homogeneous, `{id,data}` hetero via
+    an internal `WireEntry` derive); `take_segment` drains each table's outbox and
+    advances; `push_segment` validates (version==`Segment::VERSION`==1, table-by-NAME,
+    `start`==current len, no unemitted entries anywhere, table-full, dup-table),
+    rewrites every `SerialValue::Index` writer-id→reader-ordinal (iterative, no
+    recursion), appends Pending, materializes eagerly with lazy on-demand resolution;
+    ANY error rolls back (truncate slots, drop new pointer entries) and the session
+    stays usable. Unconditional to/from-`SerialValue`; feature-gated serde DELEGATES
+    to `SerialValue`'s impls (one rendering path).
+  - Read dispatch (D11/D15): `DispatchingSerdeDriver<L, dyn T, I>` — write via the
+    object's own `SerializableObject::serialize_object` (supertrait vtable); read =
+    registered `ObjectReader`s (exact map) → `IdentifierResolver`s (longest matching
+    prefix, then registration order; answer memoized per identifier) → fail-closed
+    `UnknownIdentifier`. `TableHandle::register_type::<C>(session, id, wrap)` /
+    `register_reader` / `register_resolver`. No write-side resolvers (D16).
+  - `SerialIndex` bound gained `from_parts`/`table`/`index`; the `serial_index!`
+    macro (crate-root export, canonical path `techy::serialize::serial_index`) defines
+    a position newtype with derives + the wire traits + feature-gated serde via M1's
+    index sentinel, reaching techy internals through `techy::__private` (promoted
+    `ToSerialValue`/`FromSerialValue`/`index_from_serial_value` and, feature-gated,
+    `serialize_index`/`deserialize_index`/`serde`). `TableId::ordinal()` now `pub`.
+  - Errors (D27): `SerializeError`/`DeserializeError` extended, `#[non_exhaustive]`,
+    each Display names the culprit; location wrappers `InTable`/`InEntry`; a `Failed
+    { detail, cause: Option<Arc<dyn Error>> }` variant mirroring `HookFailed` —
+    **this forfeits derived `PartialEq`/`Eq` on both error enums** (dropped; tests use
+    `matches!`), as D27/the brief permit. `From<SerialValueError>` both ways. New
+    `RegistrationError` (still `PartialEq`).
+  - Contexts (D17): `SerializeContext`/`DeserializeContext` now wrap the session
+    borrow + guard; public `intern`/`resolve` + `user_data`; still constructible only
+    for `L: SerializableLang`.
+  **Decisions / provisional shapes:** (1) `homogeneous_identifier` mismatch is a
+  runtime `UnexpectedIdentifier` error, not a debug-assert (stricter, panic-free —
+  driver bug reported, never panicked). (2) A typed position serialized DIRECTLY by a
+  serde format is its bare newtype pair (`[t,i]`); the `{"$index":[t,i]}` canonical
+  form appears only when the position rides inside a `SerialValue` (as it always does
+  on the wire, inside a `Segment`) — pinned by a test. (3) `push_segment` requires the
+  whole session to have no pending-emission entries (absorb-all-then-append); looser
+  per-table checking was considered and rejected as unclear. (4) Read dispatch
+  prefix rule fixed: longest matching prefix wins, registration order breaks ties
+  (documented). (5) Q6 PROPOSED (§4): version in every segment, JSONL one-per-line no
+  EOF marker, `take_segment`/`push_segment` kept, full directory every segment. Next:
+  M2 review → user naming check-in (the public API surface list is in the M2 report)
+  → M3 (sources & states) / M4 (trees), internally parallel. Blockers: none —
+  awaiting the user's naming confirmation on the new public items before M3/M4 lean on
+  them.
 - 2026-08-16 — M1 implementer agent — **M1 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `a987229` M0 review nits
   (saturating index Display, doc wording, "reading environment" defined in the
