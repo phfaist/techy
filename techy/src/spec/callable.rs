@@ -241,17 +241,23 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     /// argument was written: `None` under the index rule, `Some(_)` from an override.
     /// `cx` gives the call access to the state of the deserialization in progress.
     ///
-    /// The default implements the index rule: it returns a clone of
-    /// `self.arguments()[index]`, the declared argument spec at that position, and
-    /// ignores `value`. A spec that overrides `serialize_argument_spec` overrides this
-    /// method as well, rebuilding the argument spec from `value`.
+    /// The default implements the index rule: for `value == None` it returns a clone
+    /// of `self.arguments()[index]`, the declared argument spec at that position. It
+    /// reads no description: a `Some(_)` value reaching the default is an error, not
+    /// something to ignore — it was written by a callable spec type that overrides
+    /// `serialize_argument_spec`, so the reading environment's callable spec is not
+    /// of the type that wrote the argument. A spec that overrides
+    /// `serialize_argument_spec` overrides this method as well, rebuilding the
+    /// argument spec from `value`.
     ///
     /// # Errors
     ///
-    /// The default reports [`DeserializeError::ArgumentIndexOutOfRange`] when `index`
-    /// is beyond `self.arguments()` — the serialized data was written against a
-    /// callable spec declaring more arguments than this one does. An override returns
-    /// an error when `value` does not describe an argument spec it can rebuild.
+    /// The default reports [`DeserializeError::ArgumentSpecPayloadUnexpected`] when
+    /// `value` is `Some(_)`, and [`DeserializeError::ArgumentIndexOutOfRange`] when
+    /// `index` is beyond `self.arguments()` — the serialized data was written against
+    /// a callable spec declaring more arguments than this one does. An override
+    /// returns an error when `value` does not describe an argument spec it can
+    /// rebuild.
     fn deserialize_argument_spec(
         &self,
         index: usize,
@@ -261,7 +267,10 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     where
         L: SerializableLang,
     {
-        let _ = (value, cx);
+        let _ = cx;
+        if value.is_some() {
+            return Err(DeserializeError::ArgumentSpecPayloadUnexpected { index });
+        }
         let declared = self.arguments();
         declared.get(index).cloned().ok_or(DeserializeError::ArgumentIndexOutOfRange {
             index,

@@ -186,8 +186,9 @@ fn serialize_argument_spec_default_is_the_index_rule() {
     );
 }
 
-/// The read default: the declared `Arc` at that index (the same allocation), the
-/// value ignored; a bounds error beyond the declared count.
+/// The read default: for `None`, the declared `Arc` at that index (the same
+/// allocation); a bounds error beyond the declared count; and a `Some(_)` payload —
+/// written by an overriding spec type — is a fail-closed error, never ignored.
 #[test]
 fn deserialize_argument_spec_default_is_the_index_rule() {
     let mut cx = DeserializeContext::<OptedInLang>::shell();
@@ -197,15 +198,23 @@ fn deserialize_argument_spec_default_is_the_index_rule() {
     let rebuilt = spec.deserialize_argument_spec(1, None, &mut cx).unwrap();
     assert!(Arc::ptr_eq(&rebuilt, &declared[1]));
 
-    let ignored = SerialValue::Str("ignored".into());
-    let rebuilt = spec
-        .deserialize_argument_spec(0, Some(&ignored), &mut cx)
-        .unwrap();
-    assert!(Arc::ptr_eq(&rebuilt, &declared[0]));
-
     assert_eq!(
         spec.deserialize_argument_spec(2, None, &mut cx).map(|_| ()),
         Err(DeserializeError::ArgumentIndexOutOfRange { index: 2, count: 2 })
+    );
+
+    // A payload reaching the default: the writer's spec type overrode the pair, the
+    // reader's did not — even at an in-range index.
+    let payload = SerialValue::Str("custom".into());
+    assert_eq!(
+        spec.deserialize_argument_spec(0, Some(&payload), &mut cx).map(|_| ()),
+        Err(DeserializeError::ArgumentSpecPayloadUnexpected { index: 0 })
+    );
+    // The payload check comes first: an out-of-range index with a payload reports
+    // the payload.
+    assert_eq!(
+        spec.deserialize_argument_spec(5, Some(&payload), &mut cx).map(|_| ()),
+        Err(DeserializeError::ArgumentSpecPayloadUnexpected { index: 5 })
     );
 }
 
@@ -267,4 +276,6 @@ fn errors_display() {
     let out_of_range: &dyn core::error::Error =
         &DeserializeError::ArgumentIndexOutOfRange { index: 3, count: 2 };
     assert!(out_of_range.to_string().contains("argument #4"));
+    let unexpected = DeserializeError::ArgumentSpecPayloadUnexpected { index: usize::MAX }.to_string();
+    assert!(unexpected.contains("does not implement deserialize_argument_spec"), "{unexpected}");
 }

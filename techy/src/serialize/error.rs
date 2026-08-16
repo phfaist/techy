@@ -78,6 +78,17 @@ pub enum DeserializeError {
         /// The number of argument specs the callable spec declares.
         count: usize,
     },
+    /// A serialized argument carries a description of its argument spec — written by
+    /// a callable spec that overrides
+    /// [`serialize_argument_spec`](crate::spec::CallableSpec::serialize_argument_spec)
+    /// — but the callable spec it is read against uses the default
+    /// [`deserialize_argument_spec`](crate::spec::CallableSpec::deserialize_argument_spec),
+    /// which reads no such description: the reading environment's callable spec is
+    /// not of the type that wrote the argument.
+    ArgumentSpecPayloadUnexpected {
+        /// The serialized argument's index in invocation order.
+        index: usize,
+    },
 }
 
 impl fmt::Display for DeserializeError {
@@ -89,6 +100,14 @@ impl fmt::Display for DeserializeError {
                  but the callable spec declares only {} argument specs",
                 index.saturating_add(1),
                 count
+            ),
+            DeserializeError::ArgumentSpecPayloadUnexpected { index } => write!(
+                f,
+                "serialized argument #{} carries a description of its argument spec, but \
+                 the callable spec it is read against does not implement \
+                 deserialize_argument_spec to read one (the callable spec type that wrote \
+                 the argument differs from the one reading it)",
+                index.saturating_add(1)
             ),
         }
     }
