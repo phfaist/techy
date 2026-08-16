@@ -105,34 +105,51 @@ pub struct SerialEntry {
 
 /// The ordinal of a table: which numbered table a [`SerialValue::Index`] refers to.
 ///
-/// Tables are numbered in the order they are registered, deterministically, by the
-/// machinery that manages them; user code receives `TableId`s and passes them along
-/// but never mints them.
+/// Tables are numbered in the order they are registered with a
+/// [`SerdeSession`](crate::serialize::SerdeSession), deterministically; user code
+/// receives `TableId`s (inside typed table positions and on
+/// [`TableHandle`](crate::serialize::TableHandle)s) and passes them along but never
+/// mints them. A `TableId` is meaningful only relative to the session that assigned
+/// it: when a segment is read by another session, its table references are
+/// translated by table *name* (see [`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableId(u32);
 
 impl TableId {
     /// A table id with the given ordinal. Crate-internal: table ids are assigned by
-    /// the machinery that registers tables, in registration order.
-    // Unconditional callers arrive with the session that registers tables; until then
-    // only the feature-gated rendering and the tests call this.
-    #[cfg_attr(not(feature = "serde"), allow(dead_code))]
+    /// the session that registers tables, in registration order.
     pub(crate) fn new(ordinal: u32) -> TableId {
         TableId(ordinal)
     }
 
-    /// The table's ordinal. Crate-internal: the wire form of an index carries it.
-    #[cfg_attr(not(feature = "serde"), allow(dead_code))]
-    pub(crate) fn ordinal(self) -> u32 {
+    /// The table's ordinal: its position in the registration order of the session
+    /// that assigned it, from `0`.
+    pub fn ordinal(self) -> u32 {
         self.0
     }
 }
 
-/// The bound satisfied by every typed table position: a `Copy` value that can be
-/// compared, hashed, and printed. Each kind of table will have its own position
-/// type — a small value carrying both the [`TableId`] of its table and the `u32`
-/// position within it, the same two parts a [`SerialValue::Index`] holds — so that a
-/// position in one table cannot be mistaken for a position in another. No such
-/// position types exist yet; they will be defined next to the machinery that manages
-/// their tables.
-pub trait SerialIndex: Copy + Eq + core::hash::Hash + core::fmt::Debug {}
+/// The bound satisfied by every typed table position — the `Index` type of an
+/// [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver): a `Copy` value
+/// carrying both the [`TableId`] of its table and the `u32` position within it, the
+/// same two parts a [`SerialValue::Index`] holds, so that a position in one table
+/// cannot be mistaken for a position in another and so that its serialized form
+/// needs no further context.
+///
+/// Position types are defined with the [`serial_index!`](crate::serialize::serial_index)
+/// macro, which supplies this impl together with the conversions to and from the
+/// serialized form; each kind of table has its own position type, defined next to
+/// the driver of that table. Positions are minted only by the session (a
+/// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern) call
+/// returns one), so a position's two parts are always consistent on the writing side;
+/// on the reading side, the session validates them.
+pub trait SerialIndex: Copy + Eq + core::hash::Hash + core::fmt::Debug + Send + Sync + 'static {
+    /// The position `index` of table `table`.
+    fn from_parts(table: TableId, index: u32) -> Self;
+
+    /// The table this position refers into.
+    fn table(self) -> TableId;
+
+    /// The position within the table, from `0`.
+    fn index(self) -> u32;
+}

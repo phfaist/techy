@@ -27,7 +27,12 @@
 //! value, and the guard's early warning reaches the run's own visitor
 //! (its defaulted `observe_descent_warning` hook). Traversal descents track the
 //! tree directly: one descent per nesting level (a parse costs about two per
-//! syntactic level).
+//! syntactic level). Serialization is bounded the same way too: a
+//! [`SerdeSession`](crate::serialize::SerdeSession) creates a per-run guard for each
+//! interning, resolution, or segment absorption, one descent per nested object
+//! (an object's serialization interning the objects it refers to, an entry's
+//! deserialization resolving the entries it refers to); its early warning has no
+//! observer there and is dropped.
 //!
 //! Every guarded run uses the standard implementation, [`StdDescentGuard`]; its
 //! *configuration* ([`StdDescentGuardInit`]) travels on the run's long-lived
@@ -371,7 +376,7 @@ impl DescentGuard for StdDescentGuard {
                              (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
                              configuration was given — choose a limit explicitly with \
                              with_descent_guard_init (on Language, TreeWalker, \
-                             TreeRestager, or TreeRecomposer)",
+                             TreeRestager, TreeRecomposer, or SerdeSession)",
                             consumed,
                             StdDescentGuard::DEFAULT_STACK_BUDGET
                         )
@@ -396,8 +401,8 @@ impl DescentGuard for StdDescentGuard {
                              (StdDescentGuard::DEFAULT_STACK_BUDGET); no descent-guard \
                              configuration was given — deeper input will be refused; \
                              choose a limit explicitly with with_descent_guard_init \
-                             (on Language, TreeWalker, TreeRestager, or \
-                             TreeRecomposer)",
+                             (on Language, TreeWalker, TreeRestager, \
+                             TreeRecomposer, or SerdeSession)",
                             consumed,
                             StdDescentGuard::DEFAULT_STACK_BUDGET
                         ),

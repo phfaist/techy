@@ -243,18 +243,30 @@ pub mod guide {
     pub mod ai_guide_pylatexenc {}
 }
 
-/// Support module for `techy-derive`-generated code only: everything the generated code
-/// references — `alloc` paths spelled so they resolve from both `std` and `no_std`
-/// consumer crates, plus the diagnostics items the derives implement/construct. The
-/// derives emit only `::techy::__private::…` paths (the serde discipline), so the
-/// public topology never constrains, and is never constrained by, derive output.
-/// Not public API.
+/// Support module for generated code only — `techy-derive`'s derives and the
+/// `serial_index!` macro: everything the generated code references — `alloc` paths
+/// spelled so they resolve from both `std` and `no_std` consumer crates, the
+/// diagnostics items the derives implement/construct, and the serialization
+/// conversion traits and helpers a typed table position implements. The derives and
+/// the macro emit only `::techy::__private::…` / `$crate::__private::…` paths (the
+/// serde discipline), so the public topology never constrains, and is never
+/// constrained by, generated output. Not public API.
 #[doc(hidden)]
 pub mod __private {
     pub use alloc::string::String;
     pub use alloc::vec::Vec;
 
     pub use crate::error::{DiagnosticInfo, DiagnosticValue, ToDiagnosticValue};
+
+    // The `serial_index!` macro's expansion: the wire conversion traits it implements
+    // and the helpers it calls; with the `serde` feature, serde itself (a downstream
+    // crate need not depend on serde to define a position type) and the index
+    // sentinel helpers.
+    pub use crate::serialize::wire::{index_from_serial_value, FromSerialValue, ToSerialValue};
+    #[cfg(feature = "serde")]
+    pub use crate::serialize::bridge::{deserialize_index, serialize_index};
+    #[cfg(feature = "serde")]
+    pub use serde;
 }
 
 /// The version of the `techy` Cargo package (`CARGO_PKG_VERSION`); always a valid

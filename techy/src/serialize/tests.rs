@@ -7,6 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::constructs::{ConstructParserResult, ParseContext};
+use crate::engine::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use crate::scopes::{Package, SpecsProvider};
 use crate::spec::{
     ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes, StdCallableSpec,
@@ -14,8 +15,8 @@ use crate::spec::{
 use crate::state::{Lang, TrivialLang};
 
 use super::{
-    DeserializeContext, DeserializeError, SerialEntry, SerialValue, SerializableLang,
-    SerializableObject, SerializeContext, SerializeError, TableId,
+    DeserializeContext, DeserializeError, SerdeSession, SerialEntry, SerialValue,
+    SerializableLang, SerializableObject, SerializeContext, SerializeError, TableId,
 };
 
 // --- the two test langs ---------------------------------------------------------------
@@ -119,33 +120,44 @@ fn vacant_vtable_for_a_never_serializable_lang() {
 
 // --- the opted-in lang: defaults through the vtable ---------------------------------------
 
+/// A serialization context over an empty session, for calling the capability methods
+/// directly (the engine's own tests exercise the session; see `engine/tests.rs`).
+fn with_serialize_context<R>(f: impl FnOnce(&mut SerializeContext<'_, OptedInLang>) -> R) -> R {
+    let mut session = SerdeSession::<OptedInLang>::empty();
+    let mut guard = StdDescentGuard::init(&StdDescentGuardInit::default());
+    let mut cx = SerializeContext::new(&mut session, &mut guard);
+    f(&mut cx)
+}
+
+/// The deserialization counterpart of [`with_serialize_context`].
+fn with_deserialize_context<R>(f: impl FnOnce(&mut DeserializeContext<'_, OptedInLang>) -> R) -> R {
+    let mut session = SerdeSession::<OptedInLang>::empty();
+    let mut guard = StdDescentGuard::init(&StdDescentGuardInit::default());
+    let mut cx = DeserializeContext::new(&mut session, &mut guard, None);
+    f(&mut cx)
+}
+
 /// Through `dyn CallableSpec<L>` for an opted-in lang, the default `serialize_object`
 /// reports `Unsupported`, and an override is dispatched.
 #[test]
 fn serialize_object_defaults_to_unsupported_and_dispatches_overrides() {
-    let mut cx = SerializeContext::<OptedInLang>::shell();
+    with_serialize_context(|cx| {
+        let stub: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(StubSpec);
+        assert!(matches!(stub.serialize_object(cx), Err(SerializeError::Unsupported)));
+        assert!(matches!(SerializeError::unsupported(), SerializeError::Unsupported));
 
-    let stub: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(StubSpec);
-    assert_eq!(
-        stub.serialize_object(&mut cx),
-        Err(SerializeError::Unsupported)
-    );
-    assert_eq!(SerializeError::unsupported(), SerializeError::Unsupported);
+        let participating: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(ParticipatingSpec);
+        let entry = participating.serialize_object(cx).unwrap();
+        assert_eq!(entry.identifier, "test.participating");
+        assert_eq!(
+            entry.data,
+            SerialValue::Map(Vec::from([("k".into(), SerialValue::Int(7))]))
+        );
 
-    let participating: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(ParticipatingSpec);
-    let entry = participating.serialize_object(&mut cx).unwrap();
-    assert_eq!(entry.identifier, "test.participating");
-    assert_eq!(
-        entry.data,
-        SerialValue::Map(Vec::from([("k".into(), SerialValue::Int(7))]))
-    );
-
-    // A provider's default, through its own trait object.
-    let package: Arc<dyn SpecsProvider<OptedInLang>> = Arc::new(Package::<OptedInLang>::new("pkg"));
-    assert_eq!(
-        package.serialize_object(&mut cx),
-        Err(SerializeError::Unsupported)
-    );
+        // A provider's default, through its own trait object.
+        let package: Arc<dyn SpecsProvider<OptedInLang>> = Arc::new(Package::<OptedInLang>::new("pkg"));
+        assert!(matches!(package.serialize_object(cx), Err(SerializeError::Unsupported)));
+    });
 }
 
 // --- D21: the argument-spec index rule ----------------------------------------------------
@@ -155,35 +167,30 @@ fn serialize_object_defaults_to_unsupported_and_dispatches_overrides() {
 /// an out-of-range index and an equal-but-distinct allocation.
 #[test]
 fn serialize_argument_spec_default_is_the_index_rule() {
-    let mut cx = SerializeContext::<OptedInLang>::shell();
-    let spec: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(two_argument_spec::<OptedInLang>());
-    let declared = spec.arguments().to_vec();
+    with_serialize_context(|cx| {
+        let spec: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(two_argument_spec::<OptedInLang>());
+        let declared = spec.arguments().to_vec();
 
-    assert_eq!(
-        spec.serialize_argument_spec(0, &declared[0], &mut cx),
-        Ok(None)
-    );
-    assert_eq!(
-        spec.serialize_argument_spec(1, &declared[1], &mut cx),
-        Ok(None)
-    );
+        assert!(matches!(spec.serialize_argument_spec(0, &declared[0], cx), Ok(None)));
+        assert!(matches!(spec.serialize_argument_spec(1, &declared[1], cx), Ok(None)));
 
-    // Same content, other allocation: not the declared Arc.
-    let lookalike = Arc::new(ArgumentSpec::<OptedInLang>::new(StubParser, "first"));
-    assert_eq!(
-        spec.serialize_argument_spec(0, &lookalike, &mut cx),
-        Err(SerializeError::ArgumentSpecOutOfBand { index: 0, count: 2 })
-    );
-    // The declared Arc, but at the wrong position.
-    assert_eq!(
-        spec.serialize_argument_spec(0, &declared[1], &mut cx),
-        Err(SerializeError::ArgumentSpecOutOfBand { index: 0, count: 2 })
-    );
-    // Out of range.
-    assert_eq!(
-        spec.serialize_argument_spec(2, &declared[0], &mut cx),
-        Err(SerializeError::ArgumentSpecOutOfBand { index: 2, count: 2 })
-    );
+        // Same content, other allocation: not the declared Arc.
+        let lookalike = Arc::new(ArgumentSpec::<OptedInLang>::new(StubParser, "first"));
+        assert!(matches!(
+            spec.serialize_argument_spec(0, &lookalike, cx),
+            Err(SerializeError::ArgumentSpecOutOfBand { index: 0, count: 2 })
+        ));
+        // The declared Arc, but at the wrong position.
+        assert!(matches!(
+            spec.serialize_argument_spec(0, &declared[1], cx),
+            Err(SerializeError::ArgumentSpecOutOfBand { index: 0, count: 2 })
+        ));
+        // Out of range.
+        assert!(matches!(
+            spec.serialize_argument_spec(2, &declared[0], cx),
+            Err(SerializeError::ArgumentSpecOutOfBand { index: 2, count: 2 })
+        ));
+    });
 }
 
 /// The read default: for `None`, the declared `Arc` at that index (the same
@@ -191,31 +198,32 @@ fn serialize_argument_spec_default_is_the_index_rule() {
 /// written by an overriding spec type — is a fail-closed error, never ignored.
 #[test]
 fn deserialize_argument_spec_default_is_the_index_rule() {
-    let mut cx = DeserializeContext::<OptedInLang>::shell();
-    let spec: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(two_argument_spec::<OptedInLang>());
-    let declared = spec.arguments().to_vec();
+    with_deserialize_context(|cx| {
+        let spec: Arc<dyn CallableSpec<OptedInLang>> = Arc::new(two_argument_spec::<OptedInLang>());
+        let declared = spec.arguments().to_vec();
 
-    let rebuilt = spec.deserialize_argument_spec(1, None, &mut cx).unwrap();
-    assert!(Arc::ptr_eq(&rebuilt, &declared[1]));
+        let rebuilt = spec.deserialize_argument_spec(1, None, cx).unwrap();
+        assert!(Arc::ptr_eq(&rebuilt, &declared[1]));
 
-    assert_eq!(
-        spec.deserialize_argument_spec(2, None, &mut cx).map(|_| ()),
-        Err(DeserializeError::ArgumentIndexOutOfRange { index: 2, count: 2 })
-    );
+        assert!(matches!(
+            spec.deserialize_argument_spec(2, None, cx).map(|_| ()),
+            Err(DeserializeError::ArgumentIndexOutOfRange { index: 2, count: 2 })
+        ));
 
-    // A payload reaching the default: the writer's spec type overrode the pair, the
-    // reader's did not — even at an in-range index.
-    let payload = SerialValue::Str("custom".into());
-    assert_eq!(
-        spec.deserialize_argument_spec(0, Some(&payload), &mut cx).map(|_| ()),
-        Err(DeserializeError::UnexpectedArgumentSpecPayload { index: 0 })
-    );
-    // The payload check comes first: an out-of-range index with a payload reports
-    // the payload.
-    assert_eq!(
-        spec.deserialize_argument_spec(5, Some(&payload), &mut cx).map(|_| ()),
-        Err(DeserializeError::UnexpectedArgumentSpecPayload { index: 5 })
-    );
+        // A payload reaching the default: the writer's spec type overrode the pair, the
+        // reader's did not — even at an in-range index.
+        let payload = SerialValue::Str("custom".into());
+        assert!(matches!(
+            spec.deserialize_argument_spec(0, Some(&payload), cx).map(|_| ()),
+            Err(DeserializeError::UnexpectedArgumentSpecPayload { index: 0 })
+        ));
+        // The payload check comes first: an out-of-range index with a payload reports
+        // the payload.
+        assert!(matches!(
+            spec.deserialize_argument_spec(5, Some(&payload), cx).map(|_| ()),
+            Err(DeserializeError::UnexpectedArgumentSpecPayload { index: 5 })
+        ));
+    });
 }
 
 // --- the value model ------------------------------------------------------------------------

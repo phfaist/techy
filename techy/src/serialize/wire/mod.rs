@@ -35,24 +35,23 @@
 //! verbatim (how a wire struct holds a part encoded elsewhere, e.g. by a language's
 //! own codec); and any other type implementing the traits, wire structs included.
 
-// The first wire structs arrive with the drivers (sources and states onwards); until
-// then nothing outside this module's tests uses the traits and their support code.
-#![allow(dead_code)]
-
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use super::error::SerialValueError;
-use super::value::SerialValue;
+use super::value::{SerialValue, TableId};
 
 // The derives, next to the traits they implement (their generated code refers to
 // `crate::serialize::wire::…`).
-#[allow(unused_imports)]
 pub(crate) use techy_derive::{FromSerialValue, ToSerialValue};
 
 /// Conversion of a wire-layer value into its [`SerialValue`].
-pub(crate) trait ToSerialValue {
+///
+/// Declared `pub` so that the expansion of the `serial_index!` macro can implement it
+/// for typed table positions in other crates (reached through `techy::__private`);
+/// not otherwise nameable outside the crate, and not public API.
+pub trait ToSerialValue {
     /// This value's serialized form.
     ///
     /// # Errors
@@ -70,7 +69,9 @@ pub(crate) trait ToSerialValue {
 
 /// Conversion of a [`SerialValue`] back into a wire-layer value. Strict: `value` is
 /// untrusted input.
-pub(crate) trait FromSerialValue: Sized {
+///
+/// Declared `pub` for the same reason as [`ToSerialValue`]; not public API.
+pub trait FromSerialValue: Sized {
     /// Read the value from its serialized form.
     ///
     /// # Errors
@@ -235,6 +236,9 @@ impl<T: FromSerialValue> FromSerialValue for Vec<T> {
 /// A byte string field of a wire struct: converts to and from [`SerialValue::Bytes`]
 /// (a plain `Vec<u8>` field is a list of integers).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct SerialBytes(pub(crate) Vec<u8>);
 
 impl ToSerialValue for SerialBytes {
@@ -249,6 +253,30 @@ impl FromSerialValue for SerialBytes {
             SerialValue::Bytes(bytes) => Ok(SerialBytes(bytes.clone())),
             other => Err(mismatch("a byte string", other)),
         }
+    }
+}
+
+/// A table id is its ordinal (a segment's table directory carries them).
+impl ToSerialValue for TableId {
+    fn to_serial_value(&self) -> Result<SerialValue, SerialValueError> {
+        Ok(SerialValue::Int(i64::from(self.ordinal())))
+    }
+}
+
+impl FromSerialValue for TableId {
+    fn from_serial_value(value: &SerialValue) -> Result<Self, SerialValueError> {
+        u32::from_serial_value(value).map(TableId::new)
+    }
+}
+
+/// The two parts of a [`SerialValue::Index`], or the kind mismatch: what a typed
+/// table position's `FromSerialValue` impl (the `serial_index!` macro's expansion)
+/// reads. Declared `pub` for that expansion (reached through `techy::__private`); not
+/// public API.
+pub fn index_from_serial_value(value: &SerialValue) -> Result<(TableId, u32), SerialValueError> {
+    match value {
+        SerialValue::Index { table, index } => Ok((*table, *index)),
+        other => Err(mismatch("a table position", other)),
     }
 }
 
@@ -327,17 +355,26 @@ impl<'a> FieldReader<'a> {
 }
 
 /// The wire form of a unit variant.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn unit_variant(name: &'static str) -> SerialValue {
     SerialValue::Str(String::from(name))
 }
 
 /// The wire form of a variant with data.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn data_variant(name: &'static str, data: SerialValue) -> SerialValue {
     SerialValue::Map(Vec::from([(String::from(name), data)]))
 }
 
 /// Split an enum value into its variant name and payload, checking the name is one of
 /// `variants`; `what` names the enum for the error message.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn read_variant<'a>(
     value: &'a SerialValue,
     what: &'static str,
@@ -357,6 +394,9 @@ pub(crate) fn read_variant<'a>(
     Ok((name, payload))
 }
 
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 fn enum_mismatch(what: &'static str, found: &SerialValue) -> SerialValueError {
     SerialValueError::TypeMismatch {
         expected: Cow::Owned(alloc::format!(
@@ -368,11 +408,17 @@ fn enum_mismatch(what: &'static str, found: &SerialValue) -> SerialValueError {
 }
 
 /// The error for a variant name not among `variants`.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn unknown_variant(name: &str, variants: &'static [&'static str]) -> SerialValueError {
     SerialValueError::UnknownVariant { name: String::from(name), expected: variants }
 }
 
 /// A unit variant carries no data.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn expect_unit_variant(name: &'static str, payload: Option<&SerialValue>) -> Result<(), SerialValueError> {
     match payload {
         None => Ok(()),
@@ -384,6 +430,9 @@ pub(crate) fn expect_unit_variant(name: &'static str, payload: Option<&SerialVal
 }
 
 /// A variant with data comes with its payload.
+// Used by derived enum conversions and byte-string fields; the first non-test wire
+// types of those shapes arrive with the drivers of the crate's own object kinds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn expect_data_variant<'a>(
     name: &'static str,
     payload: Option<&'a SerialValue>,

@@ -74,9 +74,11 @@ pub(crate) const INDEX_SENTINEL: &str = "techy::serialize::Index";
 
 /// Serialize the table position `(table, index)` so that the bridge produces
 /// [`SerialValue::Index`] and any other serde format writes the pair
-/// `(table ordinal, index)` as a newtype struct named [`INDEX_SENTINEL`] (which JSON
-/// and the common binary formats render as the bare two-element sequence).
-pub(crate) fn serialize_index<S: Serializer>(
+/// `(table ordinal, index)` as a newtype struct named `INDEX_SENTINEL` (which JSON
+/// and the common binary formats render as the bare two-element sequence). Declared
+/// `pub` for the expansion of the `serial_index!` macro (reached through
+/// `techy::__private`); not public API.
+pub fn serialize_index<S: Serializer>(
     table: TableId,
     index: u32,
     serializer: S,
@@ -84,9 +86,10 @@ pub(crate) fn serialize_index<S: Serializer>(
     serializer.serialize_newtype_struct(INDEX_SENTINEL, &(table.ordinal(), index))
 }
 
-/// Deserialize a table position written by [`serialize_index`]: from the bridge, a
-/// [`SerialValue::Index`]; from any other format, the two-element pair.
-pub(crate) fn deserialize_index<'de, D: Deserializer<'de>>(
+/// Deserialize a table position written by `serialize_index`: from the bridge, a
+/// [`SerialValue::Index`]; from any other format, the two-element pair. Declared
+/// `pub` for the expansion of the `serial_index!` macro; not public API.
+pub fn deserialize_index<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<(TableId, u32), D::Error> {
     struct IndexPairVisitor;
