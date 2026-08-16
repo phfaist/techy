@@ -842,6 +842,58 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-16 — M2 fix-pass agent — **M2 fix pass** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`), applying the M2 review's three blocking
+  findings, the user-approved rename, and the nits. Commits: `0ee9b20`
+  `SerdeSession::resolve`/`DeserializeContext::resolve` → **`object`** ("returns the
+  object stored at a position, rebuilding it from its wire entry on first use" — now
+  defined in the module vocabulary; "resolve/resolver" means identifier resolution
+  only, `IdentifierResolver::resolve` stays), typed positions declared
+  **session-scoped** on `SerialIndex`/`TableId`/`TableHandle`/`Segment`/`object`/
+  `WrongTable` (a position travels between sessions as `(table name, u32)` —
+  `SerialIndex::index` + `ObjectSerdeDriver::table_name`), new
+  `TableHandle::position(index: u32) -> D::Index` (rebuild on the receiving side; no
+  bounds check, validated on use; `L` inferred from the driver's impl), remapping
+  tests (reader with a permuted registration order: every nested reference
+  translated, sharing preserved; read-then-append across a permuted reader into a
+  third order; `position` across two sessions); `961e366` **B1** — a failed
+  rebuilding restores `Slot::Pending(stored value)` on every error path (driver
+  error, malformed heterogeneous entry, driver downcast), so a nested failure a
+  referring driver swallows cannot poison the slot as `InProgress` (which misreported
+  as a self-naming `ReferenceCycle` and let `push_segment` return `Ok` with an
+  unrebuilt entry); the eager pass meets the still-pending entry in its own turn and
+  the push fails with the driver's error; post-pass defense-in-depth check → new
+  `DeserializeError::Internal { detail }` (a bug of this crate, reported not
+  panicked); test with a driver that swallows nested failures; `f2e72f8` read
+  dispatch memoizes resolver **declines** as well as readers (D15, memo map separate
+  from registered readers; a kept reader still makes a later registration a
+  `DuplicateIdentifier`, a kept decline does not), rollback of a failed push also
+  **forgets the memoized answers** recorded during it (session-level journal + erased
+  `ReadDispatchState::forget_memo`), `DispatchingSerdeDriver::deserialize_object`
+  finds its readers **by its own table name** in the context's session (works from
+  any deserialization context; `DeserializeContext::current()` dropped), "fail-closed"
+  and "namespace" defined at first use; `a167957` `register_table` refuses
+  `homogeneous_identifier() == Some("")` (new
+  `RegistrationError::EmptyHomogeneousIdentifier { table }`), `take_segment`
+  invariant explicit (`debug_assert!` + `saturating_sub`), `push_segment` doc states
+  the one-stream-in-order caller obligation (also in the module vocabulary and on
+  `Segment`), `Segment::to_serial_value`'s `expect` invariant stated in one line,
+  homogeneous/heterogeneous defined in the module vocabulary, test gaps filled
+  (`UnexpectedIdentifier`, write-side `DescentLimitExceeded`,
+  `DuplicateSegmentTable`, `DuplicateIdentifier`, longest-prefix-then-registration-
+  order with overlapping resolvers + registered-reader precedence, direct
+  `register_reader`/`ObjectReader::new`). **New public items** (for the naming
+  check-in): `TableHandle::position`, `DeserializeError::Internal { detail }`,
+  `RegistrationError::EmptyHomogeneousIdentifier { table }`. Verified: `cargo
+  build`/`test` green with and without `--features serde` (878/904 unit incl. the
+  34-test engine battery, 30+8+13+23+1 integration, 72/73 doctests); `rm -rf
+  target/doc && cargo docs` clean both states; clippy clean on the serialize code.
+  Deliberately unchanged: a segment listing an EMPTY part for a table the reader
+  has not registered is still `UnknownTableName` (a reader must know every table of
+  its writer by name — kept as M2 documented it; the new read-then-append test
+  registers the extra table on every side); the `UnknownTable` reports on the two
+  driver-downcast paths (unreachable by construction; not switched to `Internal`).
+  Next: M2 re-review of the fix pass → user naming check-in → M3/M4.
 - 2026-08-16 — M2 implementer agent — **M2 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `8cb629b` M1 review nits (bridge's
   `&SerialValue` now implements the integer `deserialize_*` methods itself with range
