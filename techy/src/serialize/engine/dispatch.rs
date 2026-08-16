@@ -7,6 +7,7 @@ use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt;
 use core::marker::PhantomData;
 
@@ -17,7 +18,7 @@ use super::super::object::{DeserializableObject, SerializableLang, SerializableO
 use super::super::value::{SerialEntry, SerialIndex, SerialValue};
 use super::context::{DeserializeContext, SerializeContext};
 use super::driver::{ObjectSerdeDriver, TableHandle};
-use super::session::SerdeSession;
+use super::session::{ReadDispatchState, SerdeSession};
 
 /// The driver of a *heterogeneous* table: a table whose objects are trait objects
 /// (`Arc<T>` with `T = dyn …`) of several concrete types, each with its own
@@ -29,12 +30,14 @@ use super::session::SerdeSession;
 /// readers registered on the table's handle
 /// ([`TableHandle::register_type`] / [`register_reader`](TableHandle::register_reader)),
 /// then the registered [`IdentifierResolver`]s
-/// ([`register_resolver`](TableHandle::register_resolver)) — a resolver's answer is
-/// kept, so it is asked once per identifier for the session's lifetime — and,
-/// when nothing recognizes the identifier, the fail-closed
-/// [`DeserializeError::UnknownIdentifier`]. Registrations belong to the session
-/// (the driver holds none), so a driver value can be registered in any number of
-/// sessions.
+/// ([`register_resolver`](TableHandle::register_resolver)) — each registered for a
+/// *namespace*, an identifier prefix owned by one framework or package; a
+/// resolver's answer, a reader or a decline, is kept, so it is asked once per
+/// identifier for the session's lifetime — and, when nothing recognizes the
+/// identifier, the error [`DeserializeError::UnknownIdentifier`]: reading *fails
+/// closed* — an unknown identifier is an error, never a guess. Registrations belong
+/// to the session (the driver holds none), so a driver value can be registered in
+/// any number of sessions.
 ///
 /// `T` is the trait object type; `I` the table's position type (a
 /// [`serial_index!`](crate::serialize::serial_index) type). The table is
@@ -88,12 +91,23 @@ where
         object.serialize_object(cx)
     }
 
+    /// Rebuild the object of `entry` through the reader for its identifier — the one
+    /// registered, in the session `cx` belongs to, on the table of this driver's
+    /// [`table_name`](ObjectSerdeDriver::table_name) (the readers are found by table
+    /// name, so the call works from any deserialization context of that session).
+    ///
+    /// # Errors
+    ///
+    /// [`DeserializeError::UnknownIdentifier`] when no reader is registered and no
+    /// resolver answers; a resolver's own error; the reader's failure; and
+    /// [`DeserializeError::Failed`] when the session has no table of this driver's
+    /// name (the driver was called with a context of another session).
     fn deserialize_object(
         &self,
         entry: &SerialEntry,
         cx: &mut DeserializeContext<'_, L>,
     ) -> Result<Arc<T>, DeserializeError> {
-        let reader = find_reader::<L, T>(cx, &entry.identifier)?;
+        let reader = find_reader::<L, T>(cx, self.table_name, &entry.identifier)?;
         reader.deserialize_object(&entry.data, cx)
     }
 }
@@ -162,13 +176,15 @@ impl<L: SerializableLang, T: ?Sized> fmt::Debug for ObjectReader<L, T> {
     }
 }
 
-/// A namespace's supplier of readers for a heterogeneous table: asked for an
-/// identifier no registered reader covers, it answers with the [`ObjectReader`] for
-/// it (constructed on demand — from a definition it loads, under its own trust
-/// policy) or declines. Registered with a prefix on the table's handle
+/// A namespace's supplier of readers for a heterogeneous table — a *namespace* being
+/// an identifier prefix owned by one framework or package: asked for an identifier no
+/// registered reader covers, it answers with the [`ObjectReader`] for it (constructed
+/// on demand — from a definition it loads, under its own trust policy) or declines.
+/// Registered with a prefix on the table's handle
 /// ([`TableHandle::register_resolver`]); a resolver is asked only for identifiers
-/// beginning with its prefix, and its answer for an identifier is kept by the session
-/// and never asked again.
+/// beginning with its prefix, and its answer for an identifier — a reader or a
+/// decline — is kept by the session, so it is never asked twice for one identifier
+/// (the answers recorded during a segment push that fails are dropped with it).
 pub trait IdentifierResolver<L: SerializableLang, T: ?Sized>: Send + Sync {
     /// The reader for `identifier`, or `None` to decline. `cx` gives access to the
     /// session — the caller's user data in particular.
@@ -186,44 +202,60 @@ pub trait IdentifierResolver<L: SerializableLang, T: ?Sized>: Send + Sync {
 }
 
 /// The read-side registrations of one heterogeneous table, kept by the session:
-/// the readers by identifier (registered ones and kept resolver answers) and the
-/// resolvers by prefix, in registration order.
+/// the readers by identifier (registered), the memoized resolver answers by
+/// identifier (a reader, or `None` for a decline), and the resolvers by prefix, in
+/// registration order.
 pub(super) struct ReadDispatch<L: SerializableLang, T: ?Sized> {
     readers: HashMap<String, ObjectReader<L, T>>,
+    memo: HashMap<String, Option<ObjectReader<L, T>>>,
     resolvers: Vec<(String, Arc<dyn IdentifierResolver<L, T>>)>,
 }
 
 impl<L: SerializableLang, T: ?Sized> Default for ReadDispatch<L, T> {
     fn default() -> Self {
-        ReadDispatch { readers: HashMap::new(), resolvers: Vec::new() }
+        ReadDispatch { readers: HashMap::new(), memo: HashMap::new(), resolvers: Vec::new() }
     }
 }
 
-/// The reader for `identifier` in the table of the entry `cx` is deserializing:
-/// registered reader, else the resolvers whose prefix matches — the longest prefix
-/// first, registration order among equal lengths — the first answer kept; else
-/// [`DeserializeError::UnknownIdentifier`].
+impl<L: SerializableLang, T: ?Sized + Send + Sync + 'static> ReadDispatchState for ReadDispatch<L, T> {
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
+        self
+    }
+
+    fn forget_memo(&mut self, identifier: &str) {
+        self.memo.remove(identifier);
+    }
+}
+
+/// The reader for `identifier` in the table named `table_name` of the session `cx`
+/// belongs to: registered reader, else the memoized resolver answer, else the
+/// resolvers whose prefix matches — the longest prefix first, registration order
+/// among equal lengths — the first answer memoized (a decline by all of them too);
+/// else [`DeserializeError::UnknownIdentifier`].
 fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
     cx: &mut DeserializeContext<'_, L>,
+    table_name: &'static str,
     identifier: &str,
 ) -> Result<ObjectReader<L, T>, DeserializeError> {
-    let unknown = |session: &SerdeSession<L>, ordinal: Option<usize>| DeserializeError::UnknownIdentifier {
-        table: ordinal.map_or("?", |ordinal| session.table_name(ordinal)),
-        identifier: String::from(identifier),
-    };
-    let Some((ordinal, _)) = cx.current() else {
-        return Err(unknown(cx.session_mut(), None));
+    let unknown = || DeserializeError::UnknownIdentifier { table: table_name, identifier: String::from(identifier) };
+    let Some(ordinal) = cx.session_mut().table_ordinal_by_name(table_name) else {
+        return Err(DeserializeError::failed(alloc::format!(
+            "the driver of table `{table_name}` was called with a context of a session that has \
+             no table of that name"
+        )));
     };
     let candidates: Vec<Arc<dyn IdentifierResolver<L, T>>> = {
         let session = cx.session_mut();
         let Some(dispatch) = session.dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal) else {
-            return Err(unknown(session, Some(ordinal)));
+            return Err(unknown());
         };
         if let Some(reader) = dispatch.readers.get(identifier) {
             return Ok(reader.clone());
         }
-        // The matching resolvers, longest prefix first (stable, so registration order
-        // decides among equal lengths); cloned out so the resolvers can use the context.
+        if let Some(answer) = dispatch.memo.get(identifier) {
+            return answer.clone().ok_or_else(unknown);
+        }
+        // The matching resolvers, cloned out so that they can use the context.
         let mut matching: Vec<(usize, Arc<dyn IdentifierResolver<L, T>>)> = dispatch
             .resolvers
             .iter()
@@ -235,16 +267,20 @@ fn find_reader<L: SerializableLang, T: ?Sized + Send + Sync + 'static>(
         matching.sort_by_key(|(len, _)| core::cmp::Reverse(*len));
         matching.into_iter().map(|(_, resolver)| resolver).collect()
     };
+    let mut answer = None;
     for resolver in candidates {
+        // A resolver's error is not an answer: nothing is memoized, the error propagates.
         if let Some(reader) = resolver.resolve(identifier, cx)? {
-            let session = cx.session_mut();
-            if let Some(dispatch) = session.dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal) {
-                dispatch.readers.entry(String::from(identifier)).or_insert_with(|| reader.clone());
-            }
-            return Ok(reader);
+            answer = Some(reader);
+            break;
         }
     }
-    Err(unknown(cx.session_mut(), Some(ordinal)))
+    let session = cx.session_mut();
+    if let Some(dispatch) = session.dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal) {
+        dispatch.memo.insert(String::from(identifier), answer.clone());
+        session.record_memo(ordinal, identifier);
+    }
+    answer.ok_or_else(unknown)
 }
 
 impl<L, T, I> TableHandle<DispatchingSerdeDriver<L, T, I>>
@@ -262,7 +298,7 @@ where
     ///
     /// [`RegistrationError::UnknownTable`] when the handle is not one of `session`'s;
     /// [`RegistrationError::DuplicateIdentifier`] when a reader for `identifier` is
-    /// already registered (or a resolver's answer for it was kept).
+    /// already registered (or a resolver's reader for it was kept).
     pub fn register_type<C: DeserializableObject<L>>(
         self,
         session: &mut SerdeSession<L>,
@@ -289,19 +325,22 @@ where
         let dispatch = session
             .dispatch_registry_mut::<ReadDispatch<L, T>>(ordinal)
             .ok_or(RegistrationError::UnknownTable { table: self.id() })?;
-        if dispatch.readers.contains_key(&*identifier) {
+        let kept_reader = matches!(dispatch.memo.get(&*identifier), Some(Some(_)));
+        if dispatch.readers.contains_key(&*identifier) || kept_reader {
             return Err(RegistrationError::DuplicateIdentifier { table, identifier: identifier.into_owned() });
         }
         dispatch.readers.insert(identifier.into_owned(), reader);
         Ok(())
     }
 
-    /// Register `resolver` for the identifiers beginning with `prefix` in this table
-    /// of `session`. Several resolvers may be registered, with any prefixes (the empty
-    /// prefix matches every identifier): for an identifier no registered reader
-    /// covers, the resolvers whose prefix matches are asked in order of decreasing
-    /// prefix length — the most specific first; registration order among equal
-    /// lengths — until one answers; the answer is kept for the session's lifetime.
+    /// Register `resolver` for the identifiers beginning with `prefix` — its
+    /// namespace — in this table of `session`. Several resolvers may be registered,
+    /// with any prefixes (the empty prefix matches every identifier): for an
+    /// identifier no registered reader covers, the resolvers whose prefix matches are
+    /// asked in order of decreasing prefix length — the most specific first;
+    /// registration order among equal lengths — until one answers; the answer (the
+    /// reader, or the decline of every matching resolver) is kept for the session's
+    /// lifetime, so no resolver is asked twice for one identifier.
     ///
     /// # Errors
     ///

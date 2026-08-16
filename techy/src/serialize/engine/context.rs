@@ -133,11 +133,6 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
     pub(super) fn session_mut(&mut self) -> &mut SerdeSession<L> {
         self.session
     }
-
-    /// The entry the call deserializes, if any.
-    pub(super) fn current(&self) -> Option<(usize, u32)> {
-        self.current
-    }
 }
 
 impl<L: SerializableLang> fmt::Debug for DeserializeContext<'_, L> {

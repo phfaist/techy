@@ -131,6 +131,11 @@ pub struct SerdeSession<L: SerializableLang> {
     /// objects whose serialization is in progress, outermost first — the write-side
     /// cycle check.
     write_stack: Vec<(usize, usize)>,
+    /// The resolver answers memoized during the segment push in progress —
+    /// `(table ordinal, identifier)` — forgotten again if the push fails (part of the
+    /// rollback). Entries are rebuilt only inside a push, so this is where every
+    /// memoization happens.
+    memo_journal: Vec<(usize, String)>,
     lang: PhantomData<fn() -> L>,
 }
 
@@ -156,7 +161,21 @@ pub(super) struct TableState<L: SerializableLang> {
     outbox: Vec<SerialValue>,
     /// The readers and resolvers of a heterogeneous table (a `ReadDispatch<L, T>`),
     /// created on first use.
-    pub(super) dispatch: Option<Box<dyn Any + Send + Sync>>,
+    pub(super) dispatch: Option<Box<dyn ReadDispatchState>>,
+}
+
+/// The read-side registrations of a heterogeneous table — the readers by identifier,
+/// the resolvers, the memoized resolver answers — as the type-blind session holds
+/// them: created on first use through
+/// [`dispatch_registry_mut`](SerdeSession::dispatch_registry_mut), which downcasts to
+/// the concrete registry type, and asked to forget memoized answers when a push is
+/// rolled back.
+pub(super) trait ReadDispatchState: Any + Send + Sync {
+    /// The registry as `dyn Any`, for the typed downcast.
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync);
+
+    /// Forget the memoized resolver answer for `identifier`, if any.
+    fn forget_memo(&mut self, identifier: &str);
 }
 
 /// One entry of a table.
@@ -200,6 +219,7 @@ impl<L: SerializableLang> SerdeSession<L> {
             user_data: None,
             descent_guard_init: StdDescentGuardInit::default(),
             write_stack: Vec::new(),
+            memo_journal: Vec::new(),
             lang: PhantomData,
         }
     }
@@ -270,14 +290,29 @@ impl<L: SerializableLang> SerdeSession<L> {
         self.tables.get(ordinal).map_or("?", |table| table.name)
     }
 
+    /// The ordinal of the table named `name`, if registered.
+    pub(super) fn table_ordinal_by_name(&self, name: &str) -> Option<usize> {
+        self.tables.iter().position(|table| table.name == name)
+    }
+
     /// The table `ordinal`'s dispatch registry, typed — created on first use. `None`
     /// when the table's registry was created for another object type.
-    pub(super) fn dispatch_registry_mut<R: Any + Default + Send + Sync>(
+    pub(super) fn dispatch_registry_mut<R: ReadDispatchState + Default>(
         &mut self,
         ordinal: usize,
     ) -> Option<&mut R> {
         let table = self.tables.get_mut(ordinal)?;
-        table.dispatch.get_or_insert_with(|| Box::new(R::default())).downcast_mut::<R>()
+        table
+            .dispatch
+            .get_or_insert_with(|| Box::new(R::default()) as Box<dyn ReadDispatchState>)
+            .as_any_mut()
+            .downcast_mut::<R>()
+    }
+
+    /// Record that the resolver answer for `identifier` in table `ordinal` was
+    /// memoized during the push in progress (forgotten again if the push fails).
+    pub(super) fn record_memo(&mut self, ordinal: usize, identifier: &str) {
+        self.memo_journal.push((ordinal, String::from(identifier)));
     }
 
     // --- user data ----------------------------------------------------------------------
@@ -512,13 +547,21 @@ impl<L: SerializableLang> SerdeSession<L> {
         }
 
         // Rebuild every new entry, eagerly and in order.
+        self.memo_journal.clear();
         let mut guard = StdDescentGuard::init(&self.descent_guard_init);
         let result = self.materialize_new_entries(&mut guard, &old_lens);
+        let memoized = core::mem::take(&mut self.memo_journal);
         if result.is_err() {
             for (table, &old_len) in self.tables.iter_mut().zip(&old_lens) {
                 table.slots.truncate(old_len);
                 let old_len = old_len as u32;
                 table.by_pointer.retain(|_, position| *position < old_len);
+            }
+            // The resolver answers recorded during the push are part of what it did.
+            for (ordinal, identifier) in memoized {
+                if let Some(dispatch) = self.tables.get_mut(ordinal).and_then(|table| table.dispatch.as_mut()) {
+                    dispatch.forget_memo(&identifier);
+                }
             }
         }
         result

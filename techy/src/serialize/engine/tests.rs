@@ -1027,20 +1027,23 @@ fn a_failed_push_rolls_back_and_the_session_stays_usable() {
     assert_eq!(leaf.text, "later");
 }
 
-/// A composite object whose driver treats its leaf reference as optional: a failure
-/// to read the leaf is swallowed and the leaf recorded as absent — a legitimate
-/// driver pattern, which must not let a broken entry slip through a push.
+/// A composite object whose driver treats its references as optional: a leaf or a
+/// shape that cannot be read is swallowed and dropped — a legitimate driver pattern,
+/// which must not let a broken entry slip through a push.
 #[derive(Debug)]
 struct TolerantNode {
-    leaf: Option<LeafIndex>,
+    leaves: Vec<LeafIndex>,
+    shapes: Vec<ShapeIndex>,
 }
 
 crate::serial_index! { pub struct TolerantIndex; }
 
+type ShapesHandle = crate::serialize::TableHandle<DispatchingSerdeDriver<ToyLang, dyn Shape, ShapeIndex>>;
+
 struct TolerantDriver {
-    /// The leaves table's handle, set after registration (this table is registered
-    /// first, so that the pass over the segment reaches it before the leaves).
-    leaves: Arc<Mutex<Option<crate::serialize::TableHandle<LeafDriver>>>>,
+    /// The leaves and shapes handles, set after registration (the tolerant table is
+    /// registered first, so that the pass over a segment reaches it before them).
+    targets: Arc<Mutex<Option<(crate::serialize::TableHandle<LeafDriver>, ShapesHandle)>>>,
 }
 
 impl ObjectSerdeDriver<ToyLang> for TolerantDriver {
@@ -1060,11 +1063,7 @@ impl ObjectSerdeDriver<ToyLang> for TolerantDriver {
         node: &Arc<TolerantNode>,
         _cx: &mut SerializeContext<'_, ToyLang>,
     ) -> Result<SerialEntry, SerializeError> {
-        let data = match node.leaf {
-            Some(leaf) => SerialValue::Index { table: leaf.table(), index: leaf.index() },
-            None => SerialValue::Null,
-        };
-        Ok(SerialEntry { identifier: "toy.tolerant".into(), data })
+        Ok(SerialEntry { identifier: "toy.tolerant".into(), data: tolerant_data(&node.leaves, &node.shapes) })
     }
 
     fn deserialize_object(
@@ -1072,33 +1071,70 @@ impl ObjectSerdeDriver<ToyLang> for TolerantDriver {
         entry: &SerialEntry,
         cx: &mut DeserializeContext<'_, ToyLang>,
     ) -> Result<Arc<TolerantNode>, DeserializeError> {
-        let leaves = self.leaves.lock().unwrap().unwrap();
-        let leaf = match &entry.data {
-            SerialValue::Index { table, index } => {
-                let index = LeafIndex::from_parts(*table, *index);
-                // The swallow: a leaf that cannot be read is treated as absent.
-                cx.object(leaves, index).ok().map(|_| index)
+        let (leaves, shapes) = self.targets.lock().unwrap().unwrap();
+        let indices = |name: &str| -> Result<Vec<&SerialValue>, DeserializeError> {
+            match field(&entry.data, name)? {
+                SerialValue::List(items) => Ok(items.iter().collect()),
+                _ => Err(DeserializeError::failed("expected a list")),
             }
-            _ => None,
         };
-        Ok(Arc::new(TolerantNode { leaf }))
+        // The swallow: a reference that cannot be read is dropped.
+        let mut node = TolerantNode { leaves: Vec::new(), shapes: Vec::new() };
+        for item in indices("leaves")? {
+            let index = as_index::<LeafIndex>(item)?;
+            if cx.object(leaves, index).is_ok() {
+                node.leaves.push(index);
+            }
+        }
+        for item in indices("shapes")? {
+            let index = as_index::<ShapeIndex>(item)?;
+            if cx.object(shapes, index).is_ok() {
+                node.shapes.push(index);
+            }
+        }
+        Ok(Arc::new(node))
     }
+}
+
+/// The wire data of a tolerant node: `{"leaves": [<index>…], "shapes": [<index>…]}`.
+fn tolerant_data(leaves: &[LeafIndex], shapes: &[ShapeIndex]) -> SerialValue {
+    fn list<I: SerialIndex>(indices: &[I]) -> SerialValue {
+        SerialValue::List(indices.iter().map(|i| SerialValue::Index { table: i.table(), index: i.index() }).collect())
+    }
+    SerialValue::Map(Vec::from([
+        (String::from("leaves"), list(leaves)),
+        (String::from("shapes"), list(shapes)),
+    ]))
+}
+
+/// A session with the tolerant table first (ordinal 0), then leaves (1) and shapes
+/// (2) — the shapes table with no readers registered.
+fn tolerant_session() -> (
+    SerdeSession<ToyLang>,
+    crate::serialize::TableHandle<TolerantDriver>,
+    crate::serialize::TableHandle<LeafDriver>,
+    ShapesHandle,
+) {
+    let mut session = SerdeSession::<ToyLang>::empty();
+    let targets = Arc::new(Mutex::new(None));
+    let tolerant = session.register_table(TolerantDriver { targets: Arc::clone(&targets) }).unwrap();
+    let leaves = session.register_table(LeafDriver).unwrap();
+    let shapes = session.register_table(shapes_driver()).unwrap();
+    *targets.lock().unwrap() = Some((leaves, shapes));
+    (session, tolerant, leaves, shapes)
 }
 
 #[test]
 fn a_nested_failure_swallowed_by_a_driver_still_fails_the_push() {
-    // The tolerant table is registered first (ordinal 0), the leaves table second: the
-    // pass over the segment rebuilds the tolerant node — which reads the broken leaf
-    // and swallows the failure — before it reaches the leaf itself.
-    let mut session = SerdeSession::<ToyLang>::empty();
-    let leaves_handle = Arc::new(Mutex::new(None));
-    let tolerant = session.register_table(TolerantDriver { leaves: Arc::clone(&leaves_handle) }).unwrap();
-    let leaves = session.register_table(LeafDriver).unwrap();
-    *leaves_handle.lock().unwrap() = Some(leaves);
+    // The tolerant table comes first: the pass over the segment rebuilds the tolerant
+    // node — which reads the broken leaf and swallows the failure — before it reaches
+    // the leaf itself.
+    let (mut session, tolerant, leaves, _shapes) = tolerant_session();
+    let node = |leaf: u32| tolerant_data(&[leaves.position(leaf)], &[]);
 
     // A segment with a tolerant node referring to leaf #0, and a malformed leaf #0.
     let hostile = two_table_segment(
-        ("tolerant", tolerant.id(), 0, Vec::from([SerialValue::Index { table: leaves.id(), index: 0 }])),
+        ("tolerant", tolerant.id(), 0, Vec::from([node(0)])),
         ("leaves", leaves.id(), 0, Vec::from([SerialValue::Int(7)])),
     );
     let err = session.push_segment(hostile).unwrap_err();
@@ -1115,13 +1151,79 @@ fn a_nested_failure_swallowed_by_a_driver_still_fails_the_push() {
     assert_eq!(session.table_len(0), 0);
     assert_eq!(session.table_len(1), 0);
     let good = two_table_segment(
-        ("tolerant", tolerant.id(), 0, Vec::from([SerialValue::Index { table: leaves.id(), index: 0 }])),
+        ("tolerant", tolerant.id(), 0, Vec::from([node(0)])),
         ("leaves", leaves.id(), 0, Vec::from([SerialValue::Str("fine".into())])),
     );
     session.push_segment(good).unwrap();
-    let node = session.object(tolerant, tolerant.position(0)).unwrap();
-    assert_eq!(node.leaf, Some(leaves.position(0)));
+    let read = session.object(tolerant, tolerant.position(0)).unwrap();
+    assert_eq!(read.leaves, Vec::from([leaves.position(0)]));
     assert_eq!(session.object(leaves, leaves.position(0)).unwrap().text, "fine");
+}
+
+#[test]
+fn a_declining_resolver_is_asked_once_per_identifier_within_a_push() {
+    // Two shape entries with the same identifier, which the resolver declines; a
+    // tolerant node refers to both (and swallows both failures) before the pass
+    // reaches the shapes themselves — so the identifier is looked up three times.
+    let (mut session, tolerant, _leaves, shapes) = tolerant_session();
+    let calls = Arc::new(AtomicUsize::new(0));
+    shapes.register_resolver(&mut session, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) })).unwrap();
+    let unknown = || {
+        SerialValue::Map(Vec::from([
+            (String::from("id"), SerialValue::Str("dyn.unknown".into())),
+            (String::from("data"), SerialValue::Null),
+        ]))
+    };
+    let hostile = two_table_segment(
+        ("tolerant", tolerant.id(), 0, Vec::from([tolerant_data(&[], &[shapes.position(0), shapes.position(1)])])),
+        ("shapes", shapes.id(), 0, Vec::from([unknown(), unknown()])),
+    );
+    let err = session.push_segment(hostile).unwrap_err();
+    assert!(matches!(cause_of(&err), DeserializeError::UnknownIdentifier { identifier, .. } if identifier == "dyn.unknown"));
+    // The decline was memoized: one call, not three.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The memoized decline was dropped with the failed push: pushing again asks once more.
+    let again = two_table_segment(
+        ("tolerant", tolerant.id(), 0, Vec::from([tolerant_data(&[], &[shapes.position(0)])])),
+        ("shapes", shapes.id(), 0, Vec::from([unknown()])),
+    );
+    assert!(session.push_segment(again).is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_resolver_answer_recorded_during_a_failed_push_is_forgotten() {
+    // The resolver supplies a reader for `dyn.triangle`; the push then fails on a
+    // second, unknown entry.
+    let (mut reader, rt) = full_session();
+    let calls = Arc::new(AtomicUsize::new(0));
+    rt.shapes.register_resolver(&mut reader, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) })).unwrap();
+    let triangle = SerialValue::Map(Vec::from([
+        (String::from("id"), SerialValue::Str("dyn.triangle".into())),
+        (String::from("data"), SerialValue::Int(3)),
+    ]));
+    let unknown = SerialValue::Map(Vec::from([
+        (String::from("id"), SerialValue::Str("toy.unknown".into())),
+        (String::from("data"), SerialValue::Null),
+    ]));
+    let hostile = one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([triangle.clone(), unknown]));
+    assert!(reader.push_segment(hostile).is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The reader the resolver supplied was dropped with the push: registering a type
+    // for that identifier now succeeds, and the resolver is not asked again for it.
+    rt.shapes
+        .register_type::<Square>(&mut reader, "dyn.triangle", |square| Arc::new(square) as Arc<dyn Shape>)
+        .unwrap();
+
+    // Contrast: after a SUCCESSFUL push in which the resolver answered, the reader
+    // it supplied is kept, and a registration for that identifier is a duplicate.
+    let (mut reader2, rt2) = full_session();
+    rt2.shapes.register_resolver(&mut reader2, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) })).unwrap();
+    reader2.push_segment(one_table_segment("shapes", rt2.shapes.id(), 0, Vec::from([triangle]))).unwrap();
+    assert!(matches!(
+        rt2.shapes.register_type::<Square>(&mut reader2, "dyn.triangle", |square| Arc::new(square) as Arc<dyn Shape>),
+        Err(RegistrationError::DuplicateIdentifier { table: "shapes", identifier }) if identifier == "dyn.triangle"
+    ));
 }
 
 #[test]
