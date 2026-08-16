@@ -24,6 +24,18 @@ workspace = true
 [dependencies]
 hashbrown = "0.15"
 techy-derive = { version = "0.1.0", path = "../techy-derive" }
+# serde is optional and rendering-only: the serialization capability (the value model
+# and the capability traits of `techy::serialize`, and what is built on them) is
+# unconditional plain Rust; enabling the `serde` feature only adds the serde impls that
+# encode those values through a serde format. Default features off (no_std + alloc);
+# `derive` for the payload/vocabulary derives.
+serde = { version = "1", optional = true, default-features = false, features = ["alloc", "derive"] }
+
+# `serde` — the optional rendering layer over the always-present serialization
+# capability (see the crate docs, "Cargo features"). Additive: enabling it adds no
+# obligation to any implementer.
+[features]
+serde = ["dep:serde"]
 
 [dev-dependencies]
 proptest = "1.0"
