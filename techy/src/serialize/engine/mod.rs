@@ -41,13 +41,17 @@ pub struct DeserializeContext<'a, L: SerializableLang> {
 #[cfg(test)]
 impl<L: SerializableLang> SerializeContext<'_, L> {
     pub(crate) fn shell() -> Self {
-        SerializeContext { _shell: PhantomData }
+        SerializeContext {
+            _shell: PhantomData,
+        }
     }
 }
 
 #[cfg(test)]
 impl<L: SerializableLang> DeserializeContext<'_, L> {
     pub(crate) fn shell() -> Self {
-        DeserializeContext { _shell: PhantomData }
+        DeserializeContext {
+            _shell: PhantomData,
+        }
     }
 }
