@@ -15,7 +15,14 @@ use super::super::wire::{FromSerialValue, ToSerialValue};
 /// it since the previous emission, together with the position they start at. A
 /// *stream* is the sequence of segments one session emits; positions are scoped to
 /// the stream, so a later segment's entries refer to earlier segments' entries by
-/// position, and a reading session absorbs the segments in order.
+/// position, and a reading session absorbs the segments of one stream only, in
+/// order (the session checks that each segment continues its tables, but it cannot
+/// tell a foreign stream's segment apart from the right one when the positions
+/// happen to line up — the obligation is the caller's). Inside a segment a position
+/// is a `u32` index scoped to the stream, paired with the writer's [`TableId`],
+/// which the reading session translates by table name; a typed position in Rust
+/// code (a [`SerialIndex`](crate::serialize::SerialIndex) value) is scoped further,
+/// to the session holding it.
 ///
 /// Every segment is self-describing: it carries the [`version`](Segment::version)
 /// of the layout it uses (a reading session accepts exactly

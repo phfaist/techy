@@ -10,18 +10,28 @@
 //! objects it describes; a "wire struct" or "wire name" is a structure or a key name
 //! of that form. Objects are written into *tables* — one table per kind of object,
 //! kept by a [`SerdeSession`] and numbered in registration order ([`TableId`]) —
-//! and referred to by their position in the table; *interning* an object writes it
-//! into its table once and returns its position, so that an object referred to from
-//! several places (one parsing state referenced by many nodes, one source referenced
-//! by many spans) is written once and the sharing survives the round trip; a
-//! position travels as a [`SerialValue::Index`] and, in Rust code, as a typed
-//! position type (a [`SerialIndex`] implementer, defined with [`serial_index!`]).
-//! A *segment* ([`Segment`]) is the unit a session emits and absorbs: the entries
-//! new since the previous emission, table by table; a *stream* is the sequence of
-//! segments one session emits, absorbed by another in order — positions are scoped
-//! to the stream, so later segments refer to earlier ones' entries. Every serialized
-//! object carries an *identifier*: a deliberately chosen, stable string naming what
-//! kind of object the value describes (never a Rust type name), returned as part of a
+//! and referred to by their position in the table; a table is *homogeneous* when it
+//! holds objects of one kind only (every entry has the same identifier, which the
+//! table then does not write out) and *heterogeneous* when it holds trait objects of
+//! several concrete types (every entry carries its own identifier). *Interning* an
+//! object writes it into its table once and returns its position, so that an object
+//! referred to from several places (one parsing state referenced by many nodes, one
+//! source referenced by many spans) is written once and the sharing survives the
+//! round trip; *reading an object back* ([`SerdeSession::object`],
+//! [`DeserializeContext::object`]) returns the object stored at a position,
+//! rebuilding it from its wire entry on first use, so that the same position always
+//! yields the same object. A position travels as a [`SerialValue::Index`] and, in
+//! Rust code, as a typed position type (a [`SerialIndex`] implementer, defined with
+//! [`serial_index!`]). A *segment* ([`Segment`]) is the unit a session emits and
+//! absorbs: the entries new since the previous emission, table by table; a *stream*
+//! is the sequence of segments one session emits. Positions are scoped to the
+//! stream — later segments refer to earlier ones' entries by position — so a reading
+//! session absorbs the segments of one stream only, in order; and a typed position
+//! held in Rust code is scoped further, to the session holding it (it carries that
+//! session's [`TableId`]; between sessions a position is exchanged as its table's
+//! name and its `u32` index — see [`SerialIndex`]). Every serialized object carries
+//! an *identifier*: a deliberately chosen, stable string naming what kind of object
+//! the value describes (never a Rust type name), returned as part of a
 //! [`SerialEntry`]. The *reading environment* is the set of live objects —
 //! providers, specs, sources — that the deserializing program already holds and that
 //! serialized data can refer to by identity rather than describe in full (handed to
@@ -39,8 +49,8 @@
 //! **The engine** is a [`SerdeSession`]: it holds the tables, each registered with
 //! an [`ObjectSerdeDriver`] (how the objects of that table are serialized and
 //! rebuilt) and addressed through its typed [`TableHandle`]; interns objects
-//! ([`SerdeSession::intern`], [`SerializeContext::intern`]) and resolves positions
-//! back to objects ([`SerdeSession::resolve`], [`DeserializeContext::resolve`]);
+//! ([`SerdeSession::intern`], [`SerializeContext::intern`]) and reads objects back
+//! from positions ([`SerdeSession::object`], [`DeserializeContext::object`]);
 //! emits and absorbs segments ([`SerdeSession::take_segment`],
 //! [`SerdeSession::push_segment`]). A table of trait objects of several concrete
 //! types uses the [`DispatchingSerdeDriver`], whose reading side dispatches on the

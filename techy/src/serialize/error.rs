@@ -237,8 +237,8 @@ impl core::error::Error for SerializeError {
 /// call, an [`ObjectSerdeDriver`](crate::serialize::ObjectSerdeDriver), an
 /// [`IdentifierResolver`](crate::serialize::IdentifierResolver), or the session
 /// driving them ([`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment),
-/// [`SerdeSession::resolve`](crate::serialize::SerdeSession::resolve),
-/// [`DeserializeContext::resolve`](crate::serialize::DeserializeContext::resolve))
+/// [`SerdeSession::object`](crate::serialize::SerdeSession::object),
+/// [`DeserializeContext::object`](crate::serialize::DeserializeContext::object))
 /// can report. Everything read is untrusted input: a malformed value, an index out of
 /// range, a reference cycle, or an unknown identifier is an error naming the culprit,
 /// never a panic. A failure inside a nested call is wrapped in
@@ -306,9 +306,11 @@ pub enum DeserializeError {
         /// The number of entries the table holds.
         len: u32,
     },
-    /// A typed table position was resolved against a table other than its own: the
-    /// position carries table id `found`, the handle it was resolved with names table
-    /// `expected`.
+    /// A typed table position was read through the handle of a table other than its
+    /// own: the position carries table id `found`, the handle names table `expected`.
+    /// A position minted by another session — one whose registration order differs —
+    /// has this effect: typed positions are scoped to the session that minted them
+    /// (see [`SerialIndex`](crate::serialize::SerialIndex)).
     WrongTable {
         /// The name of the table the handle names.
         expected: &'static str,
@@ -317,14 +319,14 @@ pub enum DeserializeError {
     },
     /// The serialized reference graph is cyclic: while entry `referrer_index` of table
     /// `referrer_table` was being deserialized, entry `index` of table `table` — whose
-    /// own deserialization is still in progress — was resolved again. Objects are
-    /// rebuilt from their references, which is impossible for a cycle.
+    /// own deserialization is still in progress — was read again. Objects are rebuilt
+    /// from their references, which is impossible for a cycle.
     ReferenceCycle {
         /// The table of the entry whose deserialization was still in progress.
         table: &'static str,
         /// The position of that entry.
         index: u32,
-        /// The table of the entry whose deserialization resolved it again.
+        /// The table of the entry whose deserialization read it again.
         referrer_table: &'static str,
         /// The position of that entry.
         referrer_index: u32,
@@ -495,14 +497,14 @@ impl fmt::Display for DeserializeError {
             ),
             DeserializeError::WrongTable { expected, found } => write!(
                 f,
-                "a position in table #{} was resolved against table `{expected}`",
+                "a position in table #{} was read through the handle of table `{expected}`",
                 found.ordinal()
             ),
             DeserializeError::ReferenceCycle { table, index, referrer_table, referrer_index } => {
                 write!(
                     f,
                     "serialized references form a cycle: entry #{index} of table `{table}`, \
-                     whose deserialization is in progress, was resolved again while \
+                     whose deserialization is in progress, was read again while \
                      deserializing entry #{referrer_index} of table `{referrer_table}`"
                 )
             }

@@ -34,7 +34,10 @@
 /// other format.
 /// A position type has no other constructor than
 /// [`SerialIndex::from_parts`](crate::serialize::SerialIndex::from_parts); the
-/// session mints positions when objects are interned.
+/// session mints positions when objects are interned, and
+/// [`TableHandle::position`](crate::serialize::TableHandle::position) rebuilds one
+/// from a bare `u32` index (typed positions are scoped to the session that minted
+/// them — see `SerialIndex`).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! serial_index {

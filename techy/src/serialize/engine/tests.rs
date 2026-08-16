@@ -253,11 +253,11 @@ impl ObjectSerdeDriver<ToyLang> for NodeDriver {
         for item in leaf_indices {
             let index = as_index::<LeafIndex>(item)?;
             // Force resolution — the shared leaf comes back as one Arc.
-            cx.resolve(self.leaves, index)?;
+            cx.object(self.leaves, index)?;
             leaves.push(index);
         }
         let shape = as_index::<ShapeIndex>(field(&entry.data, "shape")?)?;
-        cx.resolve(self.shapes, shape)?;
+        cx.object(self.shapes, shape)?;
         Ok(Arc::new(Node { leaves, shape }))
     }
 }
@@ -304,6 +304,46 @@ fn full_session() -> (SerdeSession<ToyLang>, Tables) {
     shapes.register_type::<Square>(&mut session, "toy.square", |square| Arc::new(square) as Arc<dyn Shape>).unwrap();
     shapes.register_type::<NamedShape>(&mut session, "toy.named", |shape| shape).unwrap();
     (session, Tables { leaves, shapes, nodes })
+}
+
+/// The tables of [`full_session`] plus an unrelated rings table, registered in the
+/// given order (`"leaves"`, `"shapes"`, `"nodes"`, `"rings"`; nodes after leaves and
+/// shapes, whose handles its driver holds), with the standard shape readers — for
+/// readers whose registration order differs from the writer's.
+fn session_in_order(order: [&str; 4]) -> (SerdeSession<ToyLang>, Tables) {
+    let mut session = SerdeSession::<ToyLang>::empty();
+    let (mut leaves, mut shapes, mut nodes) = (None, None, None);
+    for name in order {
+        match name {
+            "leaves" => leaves = Some(session.register_table(LeafDriver).unwrap()),
+            "shapes" => shapes = Some(session.register_table(shapes_driver()).unwrap()),
+            "nodes" => {
+                let (leaves, shapes) = (leaves.expect("leaves before nodes"), shapes.expect("shapes before nodes"));
+                nodes = Some(session.register_table(NodeDriver { leaves, shapes }).unwrap());
+            }
+            "rings" => {
+                let handle = Arc::new(Mutex::new(None));
+                let rings = session.register_table(RingDriver { handle: Arc::clone(&handle) }).unwrap();
+                *handle.lock().unwrap() = Some(rings);
+            }
+            other => panic!("unknown toy table `{other}`"),
+        }
+    }
+    let (leaves, shapes, nodes) = (leaves.unwrap(), shapes.unwrap(), nodes.unwrap());
+    shapes.register_type::<Square>(&mut session, "toy.square", |square| Arc::new(square) as Arc<dyn Shape>).unwrap();
+    shapes.register_type::<NamedShape>(&mut session, "toy.named", |shape| shape).unwrap();
+    (session, Tables { leaves, shapes, nodes })
+}
+
+/// [`session_in_order`] with shapes, rings, leaves, nodes: every ordinal differs
+/// from `full_session`'s (leaves 0→2, shapes 1→0, nodes 2→3).
+fn permuted_session() -> (SerdeSession<ToyLang>, Tables) {
+    let (session, tables) = session_in_order(["shapes", "rings", "leaves", "nodes"]);
+    assert_eq!(
+        (tables.shapes.id().ordinal(), tables.leaves.id().ordinal(), tables.nodes.id().ordinal()),
+        (0, 2, 3)
+    );
+    (session, tables)
 }
 
 // --- registration ---------------------------------------------------------------------
@@ -384,17 +424,17 @@ fn multi_segment_round_trip_preserves_sharing() {
     // Read it back in another session.
     let (mut reader, rt) = full_session();
     reader.push_segment(segment).unwrap();
-    let read_a = reader.resolve(rt.nodes, a).unwrap();
-    let read_b = reader.resolve(rt.nodes, b).unwrap();
+    let read_a = reader.object(rt.nodes, a).unwrap();
+    let read_b = reader.object(rt.nodes, b).unwrap();
 
     // The shared leaf is one Arc, referenced from both nodes.
-    let a_shared = reader.resolve(rt.leaves, read_a.leaves[0]).unwrap();
-    let b_shared = reader.resolve(rt.leaves, read_b.leaves[0]).unwrap();
+    let a_shared = reader.object(rt.leaves, read_a.leaves[0]).unwrap();
+    let b_shared = reader.object(rt.leaves, read_b.leaves[0]).unwrap();
     assert!(Arc::ptr_eq(&a_shared, &b_shared));
     assert_eq!(a_shared.text, "shared");
     // The square shape is shared too.
-    let a_shape = reader.resolve(rt.shapes, read_a.shape).unwrap();
-    let b_shape = reader.resolve(rt.shapes, read_b.shape).unwrap();
+    let a_shape = reader.object(rt.shapes, read_a.shape).unwrap();
+    let b_shape = reader.object(rt.shapes, read_b.shape).unwrap();
     assert!(Arc::ptr_eq(&a_shape, &b_shape));
     assert_eq!(a_shape.area(), 9);
 }
@@ -415,7 +455,7 @@ fn read_then_append_emits_only_new_entries() {
     // Session B absorbs seg1, interns a new node sharing the absorbed leaf, emits seg2.
     let (mut b, bt) = full_session();
     b.push_segment(seg1.clone()).unwrap();
-    let absorbed_leaf = b.resolve(bt.leaves, node1.leaves[0]).unwrap();
+    let absorbed_leaf = b.object(bt.leaves, node1.leaves[0]).unwrap();
     let square2: Arc<dyn Shape> = Arc::new(Square { side: 5 });
     let node2 = Arc::new(Node {
         leaves: Vec::from([b.intern(bt.leaves, &absorbed_leaf).unwrap()]),
@@ -438,11 +478,169 @@ fn read_then_append_emits_only_new_entries() {
     let (mut c, ct) = full_session();
     c.push_segment(seg1).unwrap();
     c.push_segment(seg2).unwrap();
-    let c_node1 = c.resolve(ct.nodes, n1).unwrap();
-    let c_node2 = c.resolve(ct.nodes, n2).unwrap();
-    let l1 = c.resolve(ct.leaves, c_node1.leaves[0]).unwrap();
-    let l2 = c.resolve(ct.leaves, c_node2.leaves[0]).unwrap();
+    let c_node1 = c.object(ct.nodes, n1).unwrap();
+    let c_node2 = c.object(ct.nodes, n2).unwrap();
+    let l1 = c.object(ct.leaves, c_node1.leaves[0]).unwrap();
+    let l2 = c.object(ct.leaves, c_node2.leaves[0]).unwrap();
     assert!(Arc::ptr_eq(&l1, &l2));
+}
+
+#[test]
+fn a_reader_with_a_different_registration_order_translates_every_reference() {
+    // The writer's graph: two nodes sharing a leaf and a square, plus a solo leaf.
+    let (mut writer, wt) = full_session();
+    let shared_leaf = Arc::new(Leaf { text: "shared".into() });
+    let solo_leaf = Arc::new(Leaf { text: "solo".into() });
+    let square: Arc<dyn Shape> = Arc::new(Square { side: 3 });
+    let node_a = Arc::new(Node {
+        leaves: Vec::from([
+            writer.intern(wt.leaves, &shared_leaf).unwrap(),
+            writer.intern(wt.leaves, &solo_leaf).unwrap(),
+        ]),
+        shape: writer.intern(wt.shapes, &square).unwrap(),
+    });
+    let a = writer.intern(wt.nodes, &node_a).unwrap();
+    let node_b = Arc::new(Node {
+        leaves: Vec::from([writer.intern(wt.leaves, &shared_leaf).unwrap()]),
+        shape: writer.intern(wt.shapes, &square).unwrap(),
+    });
+    let b = writer.intern(wt.nodes, &node_b).unwrap();
+    let segment = writer.take_segment();
+
+    // The reader numbers its tables differently; the segment is absorbed by name and
+    // every reference inside the entries is translated into the reader's numbering.
+    let (mut reader, rt) = permuted_session();
+    assert_ne!(rt.leaves.id(), wt.leaves.id());
+    assert_ne!(rt.shapes.id(), wt.shapes.id());
+    assert_ne!(rt.nodes.id(), wt.nodes.id());
+    reader.push_segment(segment).unwrap();
+
+    // The writer's typed positions carry the writer's table ids: handed over as they
+    // are, they name the wrong table in the reader. Positions travel between sessions
+    // as (table name, u32) and are rebuilt with `TableHandle::position`.
+    assert!(matches!(
+        reader.object(rt.nodes, a),
+        Err(DeserializeError::WrongTable { expected: "nodes", found }) if found == wt.nodes.id()
+    ));
+    let read_a = reader.object(rt.nodes, rt.nodes.position(a.index())).unwrap();
+    let read_b = reader.object(rt.nodes, rt.nodes.position(b.index())).unwrap();
+
+    // The nested references (inside the nodes' lists and maps) are in the reader's
+    // numbering, and every one reaches the right object.
+    assert!(read_a.leaves.iter().all(|leaf| leaf.table() == rt.leaves.id()));
+    assert_eq!(read_a.shape.table(), rt.shapes.id());
+    let a_shared = reader.object(rt.leaves, read_a.leaves[0]).unwrap();
+    let a_solo = reader.object(rt.leaves, read_a.leaves[1]).unwrap();
+    let b_shared = reader.object(rt.leaves, read_b.leaves[0]).unwrap();
+    assert_eq!(a_shared.text, "shared");
+    assert_eq!(a_solo.text, "solo");
+    assert!(Arc::ptr_eq(&a_shared, &b_shared));
+    assert!(!Arc::ptr_eq(&a_shared, &a_solo));
+    let a_shape = reader.object(rt.shapes, read_a.shape).unwrap();
+    let b_shape = reader.object(rt.shapes, read_b.shape).unwrap();
+    assert!(Arc::ptr_eq(&a_shape, &b_shape));
+    assert_eq!(a_shape.area(), 9);
+    // The reader's tables hold exactly the writer's entries: two leaves, one shape,
+    // two nodes; the unrelated rings table is untouched.
+    assert_eq!(reader.table_len(rt.leaves.id().ordinal() as usize), 2);
+    assert_eq!(reader.table_len(rt.shapes.id().ordinal() as usize), 1);
+    assert_eq!(reader.table_len(rt.nodes.id().ordinal() as usize), 2);
+    assert_eq!(reader.table_len(1), 0);
+}
+
+#[test]
+fn read_then_append_across_a_reader_with_a_different_registration_order() {
+    // Session A (standard order) emits seg1: one node over one leaf and one square.
+    let (mut a, at) = full_session();
+    let leaf = Arc::new(Leaf { text: "l".into() });
+    let square: Arc<dyn Shape> = Arc::new(Square { side: 2 });
+    let node1 = Arc::new(Node {
+        leaves: Vec::from([a.intern(at.leaves, &leaf).unwrap()]),
+        shape: a.intern(at.shapes, &square).unwrap(),
+    });
+    let n1 = a.intern(at.nodes, &node1).unwrap();
+    let seg1 = a.take_segment();
+
+    // Session B (permuted order) absorbs seg1, interns a new node sharing the
+    // absorbed leaf, and emits seg2 — in B's own numbering, with B's directory.
+    let (mut b, bt) = permuted_session();
+    b.push_segment(seg1.clone()).unwrap();
+    let absorbed_leaf = b.object(bt.leaves, bt.leaves.position(node1.leaves[0].index())).unwrap();
+    let square2: Arc<dyn Shape> = Arc::new(Square { side: 5 });
+    let node2 = Arc::new(Node {
+        leaves: Vec::from([b.intern(bt.leaves, &absorbed_leaf).unwrap()]),
+        shape: b.intern(bt.shapes, &square2).unwrap(),
+    });
+    // The absorbed leaf is not re-emitted: its position is the existing one, now in
+    // B's numbering.
+    assert_eq!(node2.leaves[0], bt.leaves.position(node1.leaves[0].index()));
+    let n2 = b.intern(bt.nodes, &node2).unwrap();
+    let seg2 = b.take_segment();
+    // seg2's directory is B's: table ids in B's registration order, and the node
+    // entry's references name B's leaves and shapes tables.
+    let seg2_nodes = seg2.tables().iter().find(|t| t.name() == "nodes").unwrap();
+    assert_eq!(seg2_nodes.id(), bt.nodes.id());
+    assert_eq!(seg2_nodes.start(), 1);
+    assert_eq!(seg2_nodes.entries().len(), 1);
+    match &seg2_nodes.entries()[0] {
+        SerialValue::Map(fields) => {
+            let leaves = fields.iter().find(|(key, _)| key == "leaves").map(|(_, value)| value).unwrap();
+            assert_eq!(
+                *leaves,
+                SerialValue::List(Vec::from([SerialValue::Index { table: bt.leaves.id(), index: 0 }]))
+            );
+            let shape = fields.iter().find(|(key, _)| key == "shape").map(|(_, value)| value).unwrap();
+            assert_eq!(*shape, SerialValue::Index { table: bt.shapes.id(), index: 1 });
+        }
+        other => panic!("a node entry is a map, got {other:?}"),
+    }
+    assert!(seg2.tables().iter().find(|t| t.name() == "leaves").unwrap().entries().is_empty());
+
+    // Session C (a third order: rings, leaves, shapes, nodes) absorbs seg1 + seg2 —
+    // each translated from its own writer's numbering — and sees the sharing across
+    // the two segments. (C registers the rings table too: a segment lists every table
+    // of its writer, and a reader must know each of them by name.)
+    let (mut c, ct) = session_in_order(["rings", "leaves", "shapes", "nodes"]);
+    assert_eq!((ct.leaves.id().ordinal(), ct.shapes.id().ordinal(), ct.nodes.id().ordinal()), (1, 2, 3));
+    c.push_segment(seg1).unwrap();
+    c.push_segment(seg2).unwrap();
+    let c_node1 = c.object(ct.nodes, ct.nodes.position(n1.index())).unwrap();
+    let c_node2 = c.object(ct.nodes, ct.nodes.position(n2.index())).unwrap();
+    let l1 = c.object(ct.leaves, c_node1.leaves[0]).unwrap();
+    let l2 = c.object(ct.leaves, c_node2.leaves[0]).unwrap();
+    assert!(Arc::ptr_eq(&l1, &l2));
+    assert_eq!(c.object(ct.shapes, c_node2.shape).unwrap().area(), 25);
+}
+
+#[test]
+fn a_position_is_rebuilt_from_its_index_on_the_receiving_side() {
+    // Writer: leaves then shapes; reader: shapes then leaves.
+    let mut writer = SerdeSession::<ToyLang>::empty();
+    let w_leaves = writer.register_table(LeafDriver).unwrap();
+    let _w_shapes = writer.register_table(shapes_driver()).unwrap();
+    let position = writer.intern(w_leaves, &Arc::new(Leaf { text: "x".into() })).unwrap();
+    let segment = writer.take_segment();
+
+    let mut reader = SerdeSession::<ToyLang>::empty();
+    let _r_shapes = reader.register_table(shapes_driver()).unwrap();
+    let r_leaves = reader.register_table(LeafDriver).unwrap();
+    reader.push_segment(segment).unwrap();
+
+    // The writer's typed position names table #0 — the reader's shapes table.
+    assert!(matches!(
+        reader.object(r_leaves, position),
+        Err(DeserializeError::WrongTable { expected: "leaves", found }) if found == TableId::new(0)
+    ));
+    // Exchanged as (table name, u32) and rebuilt on the reader's handle, it works.
+    let rebuilt = r_leaves.position(position.index());
+    assert_eq!(rebuilt, LeafIndex::from_parts(r_leaves.id(), 0));
+    assert_eq!(reader.object(r_leaves, rebuilt).unwrap().text, "x");
+    // No bounds check at rebuild time; the check happens on use.
+    let beyond = r_leaves.position(7);
+    assert!(matches!(
+        reader.object(r_leaves, beyond),
+        Err(DeserializeError::IndexOutOfRange { table: "leaves", index: 7, len: 1 })
+    ));
 }
 
 #[test]
@@ -469,7 +667,7 @@ fn named_shapes_resolve_against_the_environment() {
     let circle = Arc::new(NamedShape { name: "circle".into(), area: 7 });
     reader.set_user_data(ShapeEnvironment { shapes: Vec::from([Arc::clone(&circle)]) });
     reader.push_segment(segment).unwrap();
-    let resolved = reader.resolve(rt.shapes, shape).unwrap();
+    let resolved = reader.object(rt.shapes, shape).unwrap();
     assert_eq!(resolved.area(), 7);
 
     // Without the shape in the environment, absorption fails cleanly.
@@ -550,8 +748,8 @@ fn a_resolver_supplies_a_reader_and_is_asked_once_per_identifier() {
         .register_resolver(&mut reader, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) }))
         .unwrap();
     reader.push_segment(segment).unwrap();
-    let s1 = reader.resolve(rt.shapes, ShapeIndex::from_parts(rt.shapes.id(), 0)).unwrap();
-    let s2 = reader.resolve(rt.shapes, ShapeIndex::from_parts(rt.shapes.id(), 1)).unwrap();
+    let s1 = reader.object(rt.shapes, ShapeIndex::from_parts(rt.shapes.id(), 0)).unwrap();
+    let s2 = reader.object(rt.shapes, ShapeIndex::from_parts(rt.shapes.id(), 1)).unwrap();
     assert_eq!(s1.area(), 4);
     assert_eq!(s2.area(), 6);
     // Both entries share the identifier, so the resolver was asked once — its answer
@@ -613,7 +811,7 @@ impl ObjectSerdeDriver<ToyLang> for RingDriver {
         let next = match &entry.data {
             SerialValue::Null => None,
             SerialValue::Index { table, index } => {
-                Some(cx.resolve(handle, RingIndex::from_parts(*table, *index))?)
+                Some(cx.object(handle, RingIndex::from_parts(*table, *index))?)
             }
             _ => return Err(DeserializeError::failed("a ring's next is null or a position")),
         };
@@ -689,13 +887,13 @@ fn out_of_bounds_and_wrong_table() {
     // Out of bounds.
     let beyond = LeafIndex::from_parts(tables.leaves.id(), 5);
     assert!(matches!(
-        session.resolve(tables.leaves, beyond),
+        session.object(tables.leaves, beyond),
         Err(DeserializeError::IndexOutOfRange { table: "leaves", index: 5, len: 1 })
     ));
     // Wrong table: a position carrying a table id other than the handle's.
     let mislabeled = LeafIndex::from_parts(TableId::new(9), 0);
     assert!(matches!(
-        session.resolve(tables.leaves, mislabeled),
+        session.object(tables.leaves, mislabeled),
         Err(DeserializeError::WrongTable { expected: "leaves", .. })
     ));
 }
@@ -825,7 +1023,7 @@ fn a_failed_push_rolls_back_and_the_session_stays_usable() {
     let more = one_table_segment("leaves", tables.leaves.id(), 1, Vec::from([SerialValue::Str("later".into())]));
     session.push_segment(more).unwrap();
     assert_eq!(session.table_len(0), 2);
-    let leaf = session.resolve(tables.leaves, LeafIndex::from_parts(tables.leaves.id(), 1)).unwrap();
+    let leaf = session.object(tables.leaves, LeafIndex::from_parts(tables.leaves.id(), 1)).unwrap();
     assert_eq!(leaf.text, "later");
 }
 
@@ -947,9 +1145,9 @@ mod serde_rendering {
         assert_eq!(back, segment);
         let (mut reader, rt) = full_session();
         reader.push_segment(back).unwrap();
-        let read_node = reader.resolve(rt.nodes, NodeIndex::from_parts(rt.nodes.id(), 0)).unwrap();
-        assert_eq!(reader.resolve(rt.leaves, read_node.leaves[0]).unwrap().text, "hi");
-        assert_eq!(reader.resolve(rt.shapes, read_node.shape).unwrap().area(), 4);
+        let read_node = reader.object(rt.nodes, NodeIndex::from_parts(rt.nodes.id(), 0)).unwrap();
+        assert_eq!(reader.object(rt.leaves, read_node.leaves[0]).unwrap().text, "hi");
+        assert_eq!(reader.object(rt.shapes, read_node.shape).unwrap().area(), 4);
     }
 
     /// A segment also round-trips through a compact (non-human-readable) format.

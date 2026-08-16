@@ -110,8 +110,13 @@ pub struct SerialEntry {
 /// receives `TableId`s (inside typed table positions and on
 /// [`TableHandle`](crate::serialize::TableHandle)s) and passes them along but never
 /// mints them. A `TableId` is meaningful only relative to the session that assigned
-/// it: when a segment is read by another session, its table references are
-/// translated by table *name* (see [`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)).
+/// it — two sessions that register the same tables in different orders number them
+/// differently. Inside a segment, table references carry the writing session's ids
+/// and are translated by table *name* when another session absorbs the segment (see
+/// [`SerdeSession::push_segment`](crate::serialize::SerdeSession::push_segment)); a
+/// typed position held in Rust code is not translated, so it is exchanged between
+/// sessions as its table's name and its `u32` index (see
+/// [`SerialIndex`](crate::serialize::SerialIndex)).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableId(u32);
 
@@ -139,10 +144,24 @@ impl TableId {
 /// Position types are defined with the [`serial_index!`](crate::serialize::serial_index)
 /// macro, which supplies this impl together with the conversions to and from the
 /// serialized form; each kind of table has its own position type, defined next to
-/// the driver of that table. Positions are minted only by the session (a
+/// the driver of that table. Positions are minted by the session (a
 /// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern) call
-/// returns one), so a position's two parts are always consistent on the writing side;
-/// on the reading side, the session validates them.
+/// returns one) or rebuilt from a bare index with
+/// [`TableHandle::position`](crate::serialize::TableHandle::position); on the
+/// reading side, the session validates both parts.
+///
+/// **A typed position is scoped to the session that minted it.** Its `TableId` is
+/// that session's, and two sessions that register the same tables in different
+/// orders number them differently: a position minted by a writing session, handed as
+/// it is to a reading session, names the wrong table there
+/// ([`DeserializeError::WrongTable`](crate::serialize::DeserializeError::WrongTable)).
+/// Inside a segment, positions are `u32` indices scoped to the stream, with table
+/// references the reading session translates by table name — that is why references
+/// inside entries need no care; a position held in Rust code and passed from one
+/// session to another is exchanged as its table's name
+/// ([`ObjectSerdeDriver::table_name`](crate::serialize::ObjectSerdeDriver::table_name))
+/// and its `u32` index ([`index`](SerialIndex::index)), and rebuilt on the receiving
+/// side with `TableHandle::position`.
 pub trait SerialIndex: Copy + Eq + core::hash::Hash + core::fmt::Debug + Send + Sync + 'static {
     /// The position `index` of table `table`.
     fn from_parts(table: TableId, index: u32) -> Self;

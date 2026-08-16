@@ -96,11 +96,13 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
         DeserializeContext { session, guard, current }
     }
 
-    /// The object at position `index` of table `table`, rebuilt from its entry if it
-    /// has not been yet (a segment's entries are deserialized in table and position
-    /// order, and any entry referred to before its turn is deserialized on demand).
-    /// The same position always yields the same `Arc` — sharing survives the round
-    /// trip.
+    /// The object stored at position `index` of table `table`, rebuilt from its entry
+    /// if it has not been yet (a segment's entries are deserialized in table and
+    /// position order, and any entry referred to before its turn is deserialized on
+    /// demand). The same position always yields the same `Arc` — sharing survives
+    /// the round trip. The position is one of this session's own (typically read out
+    /// of the entry being deserialized, whose table references the session has
+    /// already translated into its own numbering).
     ///
     /// # Errors
     ///
@@ -110,12 +112,12 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
     /// refers back to itself ([`DeserializeError::ReferenceCycle`]); the nesting
     /// exceeds the descent limit ([`DeserializeError::DescentLimitExceeded`]); the
     /// driver's failure, wrapped in [`DeserializeError::InEntry`].
-    pub fn resolve<D: ObjectSerdeDriver<L>>(
+    pub fn object<D: ObjectSerdeDriver<L>>(
         &mut self,
         table: TableHandle<D>,
         index: D::Index,
     ) -> Result<Arc<D::Object>, DeserializeError> {
-        self.session.resolve_with_guard(self.guard, table, index, self.current)
+        self.session.object_with_guard(self.guard, table, index, self.current)
     }
 
     /// The caller's user data, set on the session with

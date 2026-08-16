@@ -1,6 +1,6 @@
 //! [`SerdeSession`]: the tables, their entries, both direction maps (object → position
-//! for writing, position → object for reading), the registrations, and the segment
-//! exchange.
+//! for writing, position → object for reading back), the registrations, and the
+//! segment exchange.
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -52,7 +52,7 @@ use super::segment::{Segment, SegmentTable, WireEntry};
 /// [`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver)).
 ///
 /// Nested calls — an object's serialization interning the objects it refers to, an
-/// entry's deserialization resolving the entries it refers to — are bounded by the
+/// entry's deserialization reading the objects it refers to — are bounded by the
 /// crate's descent guard ([`with_descent_guard_init`](SerdeSession::with_descent_guard_init));
 /// reference cycles are detected on both sides and reported as errors, never
 /// followed.
@@ -113,12 +113,14 @@ use super::segment::{Segment, SegmentTable, WireEntry};
 /// assert_eq!(writer.intern(labels, &shared)?, first);   // the same position again
 /// let segment = writer.take_segment();
 ///
-/// // Read: absorb the segment into another session and look the objects up.
+/// // Read: absorb the segment into another session and read the objects back. The
+/// // reader registered its tables in the writer's order, so the writer's positions
+/// // are valid in it as they are (see `TableHandle::position` for the general case).
 /// let mut reader = SerdeSession::<MyLang>::empty();
 /// let labels = reader.register_table(LabelDriver)?;
 /// reader.push_segment(segment)?;
-/// assert_eq!(reader.resolve(labels, first)?.0, "shared");
-/// assert_eq!(reader.resolve(labels, second)?.0, "other");
+/// assert_eq!(reader.object(labels, first)?.0, "shared");
+/// assert_eq!(reader.object(labels, second)?.0, "other");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct SerdeSession<L: SerializableLang> {
@@ -198,8 +200,8 @@ impl<L: SerializableLang> SerdeSession<L> {
 
     /// Configure the descent guard that bounds nested calls — an object's
     /// serialization interning the objects it refers to, an entry's deserialization
-    /// resolving the entries it refers to, each level one *descent* — for every
-    /// subsequent [`intern`](SerdeSession::intern), [`resolve`](SerdeSession::resolve),
+    /// reading the objects it refers to, each level one *descent* — for every
+    /// subsequent [`intern`](SerdeSession::intern), [`object`](SerdeSession::object),
     /// and [`push_segment`](SerdeSession::push_segment) call (each is one run with a
     /// fresh guard). The default is the crate-wide default ([`StdDescentGuardInit`]:
     /// a stack budget). The guard's early warning has no observer here and is
@@ -212,7 +214,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     // --- registration -----------------------------------------------------------------
 
     /// Register a table with its driver, returning the typed handle to intern and
-    /// resolve through. Tables are numbered in registration order; the id is the
+    /// read through. Tables are numbered in registration order; the id is the
     /// handle's [`id`](TableHandle::id).
     ///
     /// # Errors
@@ -412,7 +414,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     // --- reading ------------------------------------------------------------------------
 
     /// Absorb a segment: append its entries to the session's tables and rebuild every
-    /// object, so that they can be resolved ([`resolve`](SerdeSession::resolve)) and
+    /// object, so that they can be read back ([`object`](SerdeSession::object)) and
     /// interned again (an absorbed object interned into its table yields its existing
     /// position — no re-emission).
     ///
@@ -535,29 +537,37 @@ impl<L: SerializableLang> SerdeSession<L> {
         Ok(())
     }
 
-    /// The object at position `index` of table `table` — the top-level entry point of
-    /// the read side ([`DeserializeContext::resolve`] is the same operation from
-    /// inside a deserialization call). Every entry of an absorbed segment is rebuilt
-    /// when the segment is pushed, so this is a lookup; the same position always
-    /// yields the same `Arc`.
+    /// The object stored at position `index` of table `table` — the top-level entry
+    /// point of the read side ([`DeserializeContext::object`] is the same operation
+    /// from inside a deserialization call). Every entry of an absorbed segment is
+    /// rebuilt when the segment is pushed, so this is a lookup; the same position
+    /// always yields the same `Arc`.
+    ///
+    /// The position must be one of this session's own: a typed position carries the
+    /// [`TableId`] of the session that minted it (see [`SerialIndex`]), and a
+    /// position minted by another session — a writing session whose registration
+    /// order differs — names the wrong table here. Between sessions a position is
+    /// exchanged as its table's name and its bare `u32` index
+    /// ([`SerialIndex::index`]), and rebuilt on this side with
+    /// [`TableHandle::position`].
     ///
     /// # Errors
     ///
     /// The handle is not one of this session's ([`DeserializeError::UnknownTable`]);
     /// the position belongs to another table ([`DeserializeError::WrongTable`]) or
     /// lies beyond the table's end ([`DeserializeError::IndexOutOfRange`]).
-    pub fn resolve<D: ObjectSerdeDriver<L>>(
+    pub fn object<D: ObjectSerdeDriver<L>>(
         &mut self,
         table: TableHandle<D>,
         index: D::Index,
     ) -> Result<Arc<D::Object>, DeserializeError> {
         let mut guard = StdDescentGuard::init(&self.descent_guard_init);
-        self.resolve_with_guard(&mut guard, table, index, None)
+        self.object_with_guard(&mut guard, table, index, None)
     }
 
-    /// [`resolve`](SerdeSession::resolve) within a run whose guard is `guard`, from
+    /// [`object`](SerdeSession::object) within a run whose guard is `guard`, from
     /// the entry `referrer` (the entry being deserialized), if any.
-    pub(super) fn resolve_with_guard<D: ObjectSerdeDriver<L>>(
+    pub(super) fn object_with_guard<D: ObjectSerdeDriver<L>>(
         &mut self,
         guard: &mut StdDescentGuard,
         table: TableHandle<D>,

@@ -74,14 +74,14 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
 
     /// Rebuild the object of `entry`. `entry.identifier` is the entry's identifier
     /// (the fixed one, for a homogeneous table); `entry.data` its data. `cx` gives
-    /// access to the session: resolving the entries this one refers to
-    /// ([`DeserializeContext::resolve`]) and the caller's user data.
+    /// access to the session: reading the objects this one refers to
+    /// ([`DeserializeContext::object`]) and the caller's user data.
     ///
     /// # Errors
     ///
     /// The entry is untrusted input: a value of the wrong shape, a reference that
-    /// cannot be resolved, an unknown identifier, or an object the reading environment
-    /// lacks is an error, never a panic.
+    /// cannot be read (out of range, into the wrong table), an unknown identifier, or
+    /// an object the reading environment lacks is an error, never a panic.
     fn deserialize_object(
         &self,
         entry: &SerialEntry,
@@ -91,12 +91,18 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
 
 /// The typed handle of a table registered in a
 /// [`SerdeSession`](crate::serialize::SerdeSession): the table's [`TableId`] together
-/// with its driver type, so that interning and resolving through it are typed
+/// with its driver type, so that interning and reading through it are typed
 /// (`D::Object`, `D::Index`). Returned by
 /// [`SerdeSession::register_table`](crate::serialize::SerdeSession::register_table);
 /// `Copy`, and meaningful only for the session that issued it (a session validates
 /// every handle it is given: the table at that id must be registered with driver type
 /// `D`, else the call fails with the `UnknownTable` error of its kind).
+///
+/// The handle is also where a typed position is rebuilt from its bare `u32` index
+/// ([`position`](TableHandle::position)): typed positions are scoped to the session
+/// that minted them, so a position received from another session — whose table
+/// numbering may differ — travels as its table's name and its `u32` index and is
+/// rebuilt on this side (see [`SerialIndex`]).
 pub struct TableHandle<D> {
     id: TableId,
     driver: PhantomData<fn() -> D>,
@@ -111,6 +117,27 @@ impl<D> TableHandle<D> {
     /// The table's id: its ordinal in the session's registration order.
     pub fn id(self) -> TableId {
         self.id
+    }
+
+    /// The typed position `index` of this table, in the numbering of the session the
+    /// handle belongs to — how a position received from elsewhere (a writing session
+    /// whose registration order may differ, a stored `u32`) is rebuilt for use with
+    /// this session: `session.object(handle, handle.position(index))`. Positions
+    /// travel between sessions as `(table name, u32)` — [`SerialIndex::index`] on the
+    /// sending side, this method on the receiving side — never as typed positions,
+    /// which carry the minting session's [`TableId`].
+    ///
+    /// No bounds check: the position is validated when it is used (an index beyond
+    /// the table's end is [`DeserializeError::IndexOutOfRange`] there).
+    ///
+    /// The language parameter `L` is inferred from the driver type's
+    /// [`ObjectSerdeDriver`] impl (a driver implementing it for several languages
+    /// needs it spelled out).
+    pub fn position<L: SerializableLang>(self, index: u32) -> D::Index
+    where
+        D: ObjectSerdeDriver<L>,
+    {
+        D::Index::from_parts(self.id, index)
     }
 
     /// The `TypeId` of the driver type — what a session compares its registration
