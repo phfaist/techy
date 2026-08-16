@@ -2570,6 +2570,7 @@ mod tests {
         // chars like an unresolvable command.
         #[derive(Debug)]
         struct BrokenProvider;
+        impl crate::serialize::SerializableObject<CmdLang> for BrokenProvider {}
         impl SpecsProvider<CmdLang> for BrokenProvider {
             fn name(&self) -> &str {
                 "broken"
@@ -2975,6 +2976,7 @@ mod tests {
         // the later sibling `\late` resolves against the pushed library.
         #[derive(Debug)]
         struct DefSpec;
+        impl crate::serialize::SerializableObject<CmdLang> for DefSpec {}
         impl CallableSpec<CmdLang> for DefSpec {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
@@ -3058,6 +3060,7 @@ mod tests {
         // (comments disabled) as its after-effect.
         #[derive(Debug)]
         struct TakeSpec;
+        impl crate::serialize::SerializableObject<CmdLang> for TakeSpec {}
         impl CallableSpec<CmdLang> for TakeSpec {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
@@ -4229,6 +4232,7 @@ mod tests {
         // stays the descent guard's business (`DescentLimitExceeded`).
         #[derive(Debug)]
         struct BrokenFactorySpec;
+        impl crate::serialize::SerializableObject<CmdLang> for BrokenFactorySpec {}
         impl CallableSpec<CmdLang> for BrokenFactorySpec {
             fn make_invocation_parser<'a, 's>(
                 &'a self,

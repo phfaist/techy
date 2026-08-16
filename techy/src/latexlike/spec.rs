@@ -20,6 +20,7 @@ use crate::constructs::{
 };
 use crate::node::{ArgumentExt, BuildId};
 use crate::scopes::Package;
+use crate::serialize::SerializableObject;
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
@@ -96,6 +97,9 @@ impl<LLL: LatexlikeLang> MacroSpec<LLL> {
         self
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for MacroSpec<LLL> {}
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
@@ -199,6 +203,9 @@ impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
         SpecialsSpec { arguments }
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for SpecialsSpec<LLL> {}
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for SpecialsSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {

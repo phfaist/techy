@@ -1295,6 +1295,7 @@ mod tests {
 
     #[derive(Debug)]
     struct StubSpec;
+    impl crate::serialize::SerializableObject<SpecialsLang> for StubSpec {}
     impl CallableSpec<SpecialsLang> for StubSpec {}
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1434,6 +1435,7 @@ mod tests {
 
     #[derive(Debug)]
     struct BadEndStubSpec;
+    impl crate::serialize::SerializableObject<BadEndLang> for BadEndStubSpec {}
     impl CallableSpec<BadEndLang> for BadEndStubSpec {}
 
     #[test]

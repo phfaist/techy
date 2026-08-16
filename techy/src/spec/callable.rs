@@ -14,6 +14,10 @@ use core::fmt;
 
 use crate::constructs::{ConstructParser, FromInvocation, Invocation, StdInvocationParser};
 use crate::node::BuildId;
+use crate::serialize::{
+    DeserializeContext, DeserializeError, SerialValue, SerializableLang, SerializableObject,
+    SerializeContext, SerializeError,
+};
 use crate::state::Lang;
 
 use super::structure::ArgumentSpec;
@@ -73,7 +77,22 @@ pub enum FrameRole {
 /// third-party spec types) needs one extra move: register every spec behind one
 /// concrete wrapper (`FlmSpecBox(Arc<dyn FlmSpec>)` delegating to the inner value) and
 /// downcast to the wrapper.
-pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
+///
+/// **Serialization is part of the contract** ([`SerializableObject`] supertrait): a
+/// spec stored in a parsed tree must be writable through the `Arc<dyn CallableSpec<L>>`
+/// the node holds, so the write-side capability sits on every spec type. It is fully
+/// defaulted — a type that does not participate in serialization adds the one-line
+/// empty impl (`impl<L: Lang> SerializableObject<L> for MySpec<L> {}`) and nothing
+/// else; a participating type overrides
+/// [`serialize_object`](SerializableObject::serialize_object). The two
+/// argument-spec methods below ([`serialize_argument_spec`] and
+/// [`deserialize_argument_spec`]) belong to the same capability. All of it is
+/// callable only for a language that implements [`SerializableLang`]; for any other
+/// language these methods cannot be called.
+///
+/// [`serialize_argument_spec`]: CallableSpec::serialize_argument_spec
+/// [`deserialize_argument_spec`]: CallableSpec::deserialize_argument_spec
+pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableObject<L> {
     /// The declarative argument structure of an invocation, in invocation order.
     /// Default: no arguments.
     fn arguments(&self) -> &[Arc<ArgumentSpec<L>>] {
@@ -168,6 +187,86 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any {
             }
         }
     }
+
+    /// Serialize the argument spec a parsed argument of this callable was parsed
+    /// against — the [`ArgumentSpec`] `Arc` recorded on the parsed argument at
+    /// position `index` (invocation order). Called by the tree serialization for each
+    /// parsed argument of a callable node whose spec is `self`.
+    ///
+    /// **The index rule (the default).** Normally a parsed argument's spec *is* the
+    /// callable spec's declared one: the `Arc` on the parsed argument is the very same
+    /// allocation as `self.arguments()[index]`. The default checks exactly that
+    /// (`Arc::ptr_eq`, pointer identity — not structural equality) and returns
+    /// `Ok(None)`: nothing needs writing beyond the index, and reading rebuilds the
+    /// spec as `self.arguments()[index]` again (the default of
+    /// [`deserialize_argument_spec`](CallableSpec::deserialize_argument_spec)).
+    ///
+    /// **When to override.** A callable spec whose invocation parser hands parsed
+    /// arguments an argument spec that is *not* one of its declared ones — minted per
+    /// invocation, say, or chosen among alternatives — has *out-of-band* argument
+    /// specs; the default cannot serialize those. Such a spec overrides this method to
+    /// return `Ok(Some(value))` with whatever describes the argument spec, and
+    /// overrides `deserialize_argument_spec` to rebuild it from that value.
+    /// `argument_spec` is the parsed argument's own `Arc`, and `cx` gives the call
+    /// access to the state of the serialization in progress.
+    ///
+    /// # Errors
+    ///
+    /// The default reports [`SerializeError::ArgumentSpecOutOfBand`] when `index` is
+    /// beyond `self.arguments()` or the `Arc` at that index is not `argument_spec`
+    /// itself. An override returns an error when it cannot describe the argument spec.
+    fn serialize_argument_spec(
+        &self,
+        index: usize,
+        argument_spec: &Arc<ArgumentSpec<L>>,
+        cx: &mut SerializeContext<'_, L>,
+    ) -> Result<Option<SerialValue>, SerializeError>
+    where
+        L: SerializableLang,
+    {
+        let _ = cx;
+        let declared = self.arguments();
+        match declared.get(index) {
+            Some(spec) if Arc::ptr_eq(spec, argument_spec) => Ok(None),
+            _ => Err(SerializeError::ArgumentSpecOutOfBand { index, count: declared.len() }),
+        }
+    }
+
+    /// Rebuild the argument spec of a parsed argument of this callable from its
+    /// serialized form — the counterpart of
+    /// [`serialize_argument_spec`](CallableSpec::serialize_argument_spec), called on the
+    /// freshly rebuilt callable spec for each serialized argument at position `index`
+    /// (invocation order). `value` is what `serialize_argument_spec` returned when the
+    /// argument was written: `None` under the index rule, `Some(_)` from an override.
+    /// `cx` gives the call access to the state of the deserialization in progress.
+    ///
+    /// The default implements the index rule: it returns a clone of
+    /// `self.arguments()[index]`, the declared argument spec at that position, and
+    /// ignores `value`. A spec that overrides `serialize_argument_spec` overrides this
+    /// method as well, rebuilding the argument spec from `value`.
+    ///
+    /// # Errors
+    ///
+    /// The default reports [`DeserializeError::ArgumentIndexOutOfRange`] when `index`
+    /// is beyond `self.arguments()` — the serialized data was written against a
+    /// callable spec declaring more arguments than this one does. An override returns
+    /// an error when `value` does not describe an argument spec it can rebuild.
+    fn deserialize_argument_spec(
+        &self,
+        index: usize,
+        value: Option<&SerialValue>,
+        cx: &mut DeserializeContext<'_, L>,
+    ) -> Result<Arc<ArgumentSpec<L>>, DeserializeError>
+    where
+        L: SerializableLang,
+    {
+        let _ = (value, cx);
+        let declared = self.arguments();
+        declared.get(index).cloned().ok_or(DeserializeError::ArgumentIndexOutOfRange {
+            index,
+            count: declared.len(),
+        })
+    }
 }
 
 mod sealed {
@@ -247,6 +346,9 @@ impl<L: Lang> CallableSpec<L> for StdCallableSpec<L> {
         &self.arguments
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<L: Lang> SerializableObject<L> for StdCallableSpec<L> {}
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: Default` although only
 // `Arc`s to spec data are stored.

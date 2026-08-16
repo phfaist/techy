@@ -334,6 +334,7 @@ use techy::core::specs::{CallableSpec, Package};
 use techy::core::{GroupRule, Language, ParsingState, ParsingStateDelta, TokenKind};
 use techy::error::{DiagnosticInfo, ParseError, Recovery};
 use techy::latexlike::{BodyMarker, CallableType, GroupType, Latexlike, LatexlikeDriver};
+use techy::serialize::SerializableObject;
 use techy::source::{SourceSpan, Span};
 
 /// Condition: the terminating `;` never appeared.
@@ -349,6 +350,10 @@ struct MissingTerminator {
 /// `\until … ;` — the spec: a takeover, declaring no arguments.
 #[derive(Debug)]
 struct UntilSpec;
+
+// Every callable spec carries the serialization capability; this one does not
+// participate, which the empty impl states.
+impl SerializableObject<Latexlike> for UntilSpec {}
 
 impl CallableSpec<Latexlike> for UntilSpec {
     // No declared arguments, but material is consumed: say so, for the

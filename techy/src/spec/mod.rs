@@ -114,6 +114,7 @@ mod tests {
     fn default_trait_methods_are_the_neutral_callable() {
         #[derive(Debug)]
         struct Bare;
+        impl crate::serialize::SerializableObject<PlainLang> for Bare {}
         impl CallableSpec<PlainLang> for Bare {}
 
         let spec = Bare;
@@ -172,6 +173,7 @@ mod tests {
         // declares nothing, still takes material.
         #[derive(Debug)]
         struct TakeoverSpec;
+        impl crate::serialize::SerializableObject<PlainLang> for TakeoverSpec {}
         impl CallableSpec<PlainLang> for TakeoverSpec {
             fn requires_content(&self) -> bool {
                 true

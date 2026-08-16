@@ -24,6 +24,7 @@ use crate::constructs::{FromInvocation, Invocation};
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
+use crate::serialize::SerializableObject;
 use crate::source::{IntoSourceResolver, SourceResolver};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{
@@ -89,6 +90,9 @@ pub enum ParagraphBreakStyle {
 /// driver emission policy ([`ParagraphBreakStyle`]), not scope-stack data.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParagraphBreakSpec;
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for ParagraphBreakSpec {}
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for ParagraphBreakSpec {
     fn stack_frame_title(&self, role: FrameRole, name: &str) -> String {

@@ -2128,6 +2128,7 @@ mod tests {
         // leak to the enclosing loop: ` %c` is still a comment.
         #[derive(Debug)]
         struct DefSpec;
+        impl crate::serialize::SerializableObject<ArgLang> for DefSpec {}
         impl CallableSpec<ArgLang> for DefSpec {
             fn make_invocation_parser<'a, 's>(
                 &'a self,
@@ -2222,6 +2223,7 @@ mod tests {
     fn requires_content_override_guards_body_bearing_takeovers() {
         #[derive(Debug)]
         struct TakesBodySpec;
+        impl crate::serialize::SerializableObject<ArgLang> for TakesBodySpec {}
         impl CallableSpec<ArgLang> for TakesBodySpec {
             fn requires_content(&self) -> bool {
                 true

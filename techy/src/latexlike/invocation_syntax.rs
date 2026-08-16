@@ -744,6 +744,8 @@ mod tests {
     #[derive(Debug)]
     struct RestOfLineSpec;
 
+    impl crate::serialize::SerializableObject<Latexlike> for RestOfLineSpec {}
+
     impl CallableSpec<Latexlike> for RestOfLineSpec {
         fn requires_content(&self) -> bool {
             true
@@ -805,6 +807,8 @@ mod tests {
     struct BadEndSpec {
         end: usize,
     }
+
+    impl crate::serialize::SerializableObject<Latexlike> for BadEndSpec {}
 
     impl CallableSpec<Latexlike> for BadEndSpec {
         fn make_invocation_parser<'a, 's>(

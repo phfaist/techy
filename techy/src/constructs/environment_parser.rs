@@ -915,6 +915,8 @@ mod tests {
     #[derive(Debug)]
     struct BeginSpec;
 
+    impl crate::serialize::SerializableObject<EnvLang> for BeginSpec {}
+
     impl CallableSpec<EnvLang> for BeginSpec {
         /// The honest emptiness answer (slots session, decided direction 2): `\begin`
         /// declares nothing but reads an entire environment — bare use as a
@@ -1062,6 +1064,8 @@ mod tests {
     /// `GroupClose`.
     #[derive(Debug)]
     struct RawBlockSpec;
+
+    impl crate::serialize::SerializableObject<EnvLang> for RawBlockSpec {}
 
     impl CallableSpec<EnvLang> for RawBlockSpec {
         /// The `\verb`-shaped honest emptiness answer: declares nothing, consumes a
@@ -1254,6 +1258,8 @@ mod tests {
         arguments: Vec<Arc<ArgumentSpec<EnvLang>>>,
         body_delta: Option<ParsingStateDelta<EnvLang>>,
     }
+
+    impl crate::serialize::SerializableObject<EnvLang> for EnvSpec {}
 
     impl CallableSpec<EnvLang> for EnvSpec {
         fn arguments(&self) -> &[Arc<ArgumentSpec<EnvLang>>] {

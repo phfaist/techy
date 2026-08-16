@@ -60,6 +60,7 @@ use crate::node::{
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
 };
 use crate::engine::ParseDriver;
+use crate::serialize::SerializableObject;
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
@@ -191,6 +192,9 @@ where
         attached_slot_ext,
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for InputMacroSpec<LLL> {}
 
 impl<LLL> CallableSpec<LLL> for InputMacroSpec<LLL>
 where

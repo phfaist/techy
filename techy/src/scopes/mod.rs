@@ -58,6 +58,7 @@ use crate::constructs::{
 };
 use crate::error::{Diagnostic, DiagnosticInfo, Diagnostics};
 use crate::node::{BuildId, NodeKind};
+use crate::serialize::SerializableObject;
 use crate::source::{Source, SourceSpan, Span};
 use crate::spec::{CallableSpec, IntoCallableSpec};
 use crate::state::{
@@ -457,7 +458,17 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 /// **Downcasting is part of the contract** (`Any` supertrait; [`CallableSpec`]'s
 /// downcasting note applies): a consumer recovers a provider's concrete type from a
 /// stored `Arc<dyn SpecsProvider<L>>` or `&dyn SpecsProvider<L>`.
-pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any {
+///
+/// **Serialization is part of the contract** ([`SerializableObject`] supertrait;
+/// [`CallableSpec`]'s serialization note applies): a provider on a parsing state's
+/// scope stack must be writable through the `Arc<dyn SpecsProvider<L>>` the stack
+/// holds, so the write-side capability sits on every provider type. Fully defaulted:
+/// a type that does not participate in serialization adds the one-line empty impl
+/// (`impl<L: Lang> SerializableObject<L> for MyProvider<L> {}`); a participating type
+/// overrides [`serialize_object`](SerializableObject::serialize_object). Callable
+/// only for a language that implements
+/// [`SerializableLang`](crate::serialize::SerializableLang).
+pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableObject<L> {
     /// The provider's name: how definition ops target it ([`ScopeOp::Define`] routing),
     /// and how it appears in diagnostics (the miss detail of
     /// [`ScopeStack::searched_providers`], the provider context of a
@@ -1008,6 +1019,9 @@ impl<L: Lang> Package<L> {
     }
 }
 
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<L: Lang> SerializableObject<L> for Package<L> {}
+
 impl<L: Lang> SpecsProvider<L> for Package<L> {
     fn name(&self) -> &str {
         &self.name
@@ -1231,6 +1245,9 @@ impl<L: Lang> Scope<L> {
     }
 }
 
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<L: Lang> SerializableObject<L> for Scope<L> {}
+
 impl<L: Lang> SpecsProvider<L> for Scope<L> {
     fn name(&self) -> &str {
         &self.name
@@ -1335,6 +1352,9 @@ impl<L: Lang> FallbackProvider<L> {
     }
 }
 
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<L: Lang> SerializableObject<L> for FallbackProvider<L> {}
+
 impl<L: Lang> SpecsProvider<L> for FallbackProvider<L> {
     fn name(&self) -> &str {
         &self.name
@@ -1416,6 +1436,9 @@ impl ErrorCallableSpec {
         ErrorCallableSpec { detail: Some(detail.into()) }
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<L: Lang> SerializableObject<L> for ErrorCallableSpec {}
 
 impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
@@ -1987,6 +2010,7 @@ mod tests {
     fn provider_error_aborts_retrieval_with_the_providers_name() {
         #[derive(Debug)]
         struct Failing;
+        impl SerializableObject<PlainLang> for Failing {}
         impl SpecsProvider<PlainLang> for Failing {
             fn name(&self) -> &str {
                 "failing"
@@ -2037,6 +2061,7 @@ mod tests {
             backslash: Arc<dyn CallableSpec<PlainLang>>,
             hash: Arc<dyn CallableSpec<PlainLang>>,
         }
+        impl SerializableObject<PlainLang> for BySyntax {}
         impl SpecsProvider<PlainLang> for BySyntax {
             fn name(&self) -> &str {
                 "by-syntax"
@@ -2449,6 +2474,7 @@ mod tests {
     fn stack_specials_fold_propagates_provider_scan_errors() {
         #[derive(Debug)]
         struct FailingScan;
+        impl SerializableObject<PlainLang> for FailingScan {}
         impl SpecsProvider<PlainLang> for FailingScan {
             fn name(&self) -> &str {
                 "failing-scan"

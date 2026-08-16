@@ -80,6 +80,7 @@ use crate::node::{
 use core::marker::PhantomData;
 
 use crate::scopes::{CallableQuery, CallableSyntax};
+use crate::serialize::SerializableObject;
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
@@ -493,6 +494,9 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     }
 }
 
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for EnvironmentSpec<LLL> {}
+
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for EnvironmentSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
         self.behavior.arguments()
@@ -557,6 +561,9 @@ impl<LLL: LatexlikeLang> BeginSpec<LLL> {
         &self.end_command_name
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for BeginSpec<LLL> {}
 
 // The `SlotExt: BodySlotExt` clause is the body-marking contract: the composition
 // mints the environment's body slot ext through the generic `BodySlotExt`
@@ -635,6 +642,9 @@ impl<LLL: LatexlikeLang> EndSpec<LLL> {
         EndSpec { lang: PhantomData }
     }
 }
+
+// Does not participate in serialization yet — M5 gives it a real impl.
+impl<LLL: LatexlikeLang> SerializableObject<LLL> for EndSpec<LLL> {}
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for EndSpec<LLL> {
     /// Like `\begin`: declares nothing, reads material (its name group) — bare
