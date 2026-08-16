@@ -780,6 +780,56 @@ fn a_scope_stack_for_a_scopes_less_lang_is_refused() {
 }
 
 #[test]
+fn a_missing_section_reads_as_the_empty_rules_of_a_present_feature() {
+    // Written with every section; the reader (a lang with every feature) sees a
+    // segment whose `commands` and `comments` sections are missing.
+    let state = state_with(full_rules(), &[]);
+    let mut writer = SerdeSession::<ToyLang>::new();
+    writer.intern_state(&state).unwrap();
+    let segment = edited_segment(&writer.take_segment(), "states", 0, |entry| {
+        let SerialValue::Map(sections) = entry_field_mut(entry, &["rules"]) else { panic!() };
+        sections.retain(|(k, _)| k != "commands" && k != "comments");
+    });
+    let mut reader = SerdeSession::<ToyLang>::new();
+    reader.push_segment(segment).unwrap();
+    let back = reader.state(reader.standard_tables().unwrap().states.position(0)).unwrap();
+    let expected = TokenRules {
+        commands: CommandRules::empty(),
+        comments: CommentRules::empty(),
+        ..full_rules()
+    };
+    assert_eq!(*back.rules(), expected);
+    // The other sections came through as written.
+    assert_eq!(back.rules().group_rules().len(), 2);
+    assert!(back.rules().whitespace_enabled());
+}
+
+#[test]
+fn an_expected_close_matching_no_rule_is_accepted_with_a_fresh_handle() {
+    let state = state_with(full_rules(), &[]);
+    let mut writer = SerdeSession::<ToyLang>::new();
+    writer.intern_state(&state).unwrap();
+    // The expected close becomes a rule that is neither in `rules` nor in `temporary`.
+    let segment = edited_segment(&writer.take_segment(), "states", 0, |entry| {
+        *entry_field_mut(entry, &["rules", "groups", "expecting_close", "open"]) = SerialValue::Str("<".into());
+        *entry_field_mut(entry, &["rules", "groups", "expecting_close", "close"]) = SerialValue::Str(">".into());
+    });
+    let mut reader = SerdeSession::<ToyLang>::new();
+    reader.push_segment(segment).unwrap();
+    let back = reader.state(reader.standard_tables().unwrap().states.position(0)).unwrap();
+    let expecting = back.rules().expecting_group_close().unwrap();
+    assert_eq!((&*expecting.open, &*expecting.close), ("<", ">"));
+    // A fresh handle: shared with no rule of either list.
+    let shared = back
+        .rules()
+        .group_rules()
+        .iter()
+        .chain(back.rules().temporary_group_rules())
+        .any(|rule| Arc::ptr_eq(rule, expecting));
+    assert!(!shared);
+}
+
+#[test]
 fn bad_provider_references_are_typed_errors() {
     let providers = [ToyProvider::new("p")];
     let state = state_with(TokenRules::empty(), &providers);

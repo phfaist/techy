@@ -36,7 +36,7 @@ crate::serial_index! {
 /// held as `bytes` (the function's output). The crate neither chooses nor implements
 /// any hash function: a [`SourceTextPolicy`] computes digests when it decides to
 /// reference a source, and a [`SourceTextSupplier`] verifies them when the source is
-/// read back; the crate stores the pair and asks.
+/// read back; the crate stores the pair and asks the caller's supplier to verify it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceDigest {
     /// The hash function's name.

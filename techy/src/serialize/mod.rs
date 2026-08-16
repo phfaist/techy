@@ -51,7 +51,7 @@
 //! a language covers its own vocabulary and ext types). All four are available only
 //! for a language that declares itself serializable by implementing
 //! [`SerializableLang`] — whose bounds require the value traits of every type the
-//! language plugs into the parse — since their calls receive a [`SerializeContext`]
+//! language supplies to the parse — since their calls receive a [`SerializeContext`]
 //! or a [`DeserializeContext`], which exist only for such languages.
 //!
 //! **The engine** is a [`SerdeSession`]: it holds the tables, each registered with

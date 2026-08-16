@@ -143,10 +143,7 @@ impl FromSerialValue for char {
                 let mut chars = s.chars();
                 match (chars.next(), chars.next()) {
                     (Some(c), None) => Ok(c),
-                    _ => Err(SerialValueError::TypeMismatch {
-                        expected: Cow::Borrowed("a one-character string"),
-                        found: "str",
-                    }),
+                    _ => Err(mismatch("a one-character string", value)),
                 }
             }
             other => Err(mismatch("a one-character string", other)),

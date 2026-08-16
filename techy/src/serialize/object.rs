@@ -20,7 +20,7 @@ use super::value::{SerialEntry, SerialValue};
 /// `where L: SerializableLang` — can be called exactly for such languages.
 ///
 /// The trait has no items of its own. Its bounds require every type the language
-/// plugs into the parse — its closed vocabularies ([`ModeId`](Lang::ModeId),
+/// supplies to the parse — its closed vocabularies ([`ModeId`](Lang::ModeId),
 /// [`CallableTypeId`](Lang::CallableTypeId), [`GroupTypeId`](Lang::GroupTypeId),
 /// [`Event`](Lang::Event)), its extension types ([`StateExt`](Lang::StateExt),
 /// [`SessionExt`](Lang::SessionExt), the node-ext bundle [`NodeExts`](Lang::NodeExts)),
@@ -141,11 +141,11 @@ pub trait DeserializableObject<L: SerializableLang>: Sized {
 ///
 /// Implemented by the owner of the type, for every language: the crate implements it
 /// for `()`, `bool`, the integer types, `String`, `Option<T>` and `Vec<T>` (over an
-/// implementing `T`) — the types a language built on the crate's defaults plugs in;
+/// implementing `T`) — the types a language built on the crate's defaults supplies;
 /// a language implements it for its own vocabulary and ext types (typically as
 /// `impl<L: Lang> SerializableValue<L> for MyMode`, so that any language reusing the
 /// type gets the conversion). [`SerializableLang`] requires it of every type the
-/// language plugs into the parse. The method is available only when the language is
+/// language supplies to the parse. The method is available only when the language is
 /// a [`SerializableLang`], like [`SerializableObject::serialize_object`].
 pub trait SerializableValue<L: Lang> {
     /// Produce this value's serialized form. `cx` gives the call access to the state
