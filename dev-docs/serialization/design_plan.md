@@ -221,8 +221,15 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   (read-side materialization of immutable values cannot tie knots): pairing convention
   (identity-resolved providers ↔ provenance payloads on their specs; full-dumped
   providers ↔ self-contained recipe payloads), a writer cycle check per segment
-  (error names both entries), and reader-side in-progress + recursion-depth guards
-  (untrusted input).
+  (error names both entries — clarified 2026-08-16 after M2: on the WRITE side the
+  error names both TABLES plus identifiers when known, because post-order index
+  assignment means neither in-progress object has a position yet; the READ side
+  names both entries by position), and reader-side in-progress + recursion-depth
+  guards (untrusted input). Typed positions are SESSION-scoped values (D11
+  REVISED: they carry the holding session's `TableId`); a position crosses sessions
+  only as (table name, `u32`) and is rebuilt on the reading side with
+  `TableHandle::position(u32)` — M6's `ParseResult`/stream helpers hand out
+  reader-side positions.
 
 ### D. The capability traits (write and read halves)
 
@@ -506,15 +513,15 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
   field name and enum string (core + latexlike), the `Index` table discriminant
   rendering (name string vs ordinal), the canonical base64 form for `Bytes`; also
   whether `TableId` keeps its name (§3.G says `…Id` = process-local identity, yet a
-  `TableId` travels on the wire inside `SerialValue::Index` — reviewer-noted tension,
-  2026-08-16).
+  `TableId` travels on the wire inside `SerialValue::Index` AND as
+  `SegmentTable::id` — reviewer-noted tension, 2026-08-16).
 - **Q5 (M5) — Package-builder API shape** for provenance stamping (`new_cyclic`
   threading; whether core `Package` construction changes or only the latexlike
   builder).
 - **Q6 (M2) — Segment/stream container details**: version placement (first segment
   only?), JSONL conventions, end-of-stream marker or not, `take_segment`/
   `push_segment` final names.
-  **PROPOSED (M2) — awaiting user confirmation:**
+  **RESOLVED (M2 proposal, user-accepted 2026-08-16):**
   - **Version in EVERY segment.** `Segment { version, tables }`; a `pub const
     Segment::VERSION: u32 = 1`; `push_segment` validates `version == VERSION` and
     rejects any other with `DeserializeError::UnsupportedVersion { found, expected }`.
@@ -546,6 +553,10 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
     absorbing session to have NO entries pending emission (nothing interned since the
     last `take_segment`) — a segment continues the stream the session has emitted, so
     the natural order is absorb-all-then-append (`DeserializeError::UnemittedEntries`).
+  - **Stream identity is a caller obligation (v1):** the segments pushed into one
+    session must belong to ONE stream, in order; the engine checks contiguity
+    (`start == len`) but cannot detect a foreign segment whose `start` happens to
+    match. No stream-identity field in v1; revisit if a use case needs enforcement.
 - **Q7 (M6) — Read-side verification levels**: which optional sanity checks (e.g.
   argument-count evidence) are worth their wire bytes; bounds checks are the D21
   baseline.
@@ -671,7 +682,7 @@ let mut r = SerdeSession::<Latexlike>::new();
 r.set_user_data(env);
 latexlike::serialize::register(&mut r);              // resolver + std entries, one line
 r.push_segment(seg)?;                                // validate + materialize
-let tree = r.tree(tree_index)?;
+let tree = r.tree(trees.position(0))?;                  // positions are session-scoped: rebuilt on the reader side
 ```
 
 ### Key source anchors (as of 2026-08-13; line numbers drift — re-verify before edits)
@@ -791,10 +802,12 @@ merge outside the sandboxed primary checkout.
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
   schema description (input for the v1 freeze).
 - **M7 — Hardening + permanent docs.** Golden files; proptest round-trip properties;
-  a nesting-depth bound for `SerialValue`'s serde `Deserialize` (and `Segment`'s) so
-  formats without their own recursion limit (binary use case 1) cannot overflow the
-  stack on hostile input — depth-carrying `DeserializeSeed` or an equivalent (M1
-  review finding: serde_json's own limit protects JSON; postcard does not);
+  a nesting-depth bound for `SerialValue`'s serde `Deserialize` (and `Segment`'s,
+  AND the unconditional `Segment::from_serial_value` — recursive clone/drop of deep
+  values, M2 review) so formats without their own recursion limit (binary use case
+  1) cannot overflow the stack on hostile input — depth-carrying `DeserializeSeed`
+  or an equivalent (M1 review finding: serde_json's own limit protects JSON;
+  postcard does not);
   rustdoc pass per the user's documentation-clarity rules (user-facing rustdoc: no
   metaphors, no undefined jargon, coined terms defined on first use; error/Panics
   sections exhaustive — target: no panics on any input); performance sanity (large
@@ -1036,6 +1049,18 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M2 reviewed by an Opus 5 reviewer
+  (REQUEST CHANGES: poisoned-slot bug, untested table remapping, session-scoped
+  positions undocumented) → fix pass landed (see its entry) → re-verification.
+  User rulings: naming list accepted with `resolve` → `object` (session + context
+  read accessor; `IdentifierResolver::resolve` stays); Q6 accepted as proposed;
+  errors without `PartialEq` accepted. Plan patches: D12 write-side cycle wording +
+  session-scoped positions, Q6 stream-identity obligation, Q3 `TableId` note, M7
+  depth bound covers `Segment::from_serial_value`, §6 usage sketch. Open flags for
+  the user (non-blocking): `TableHandle::register_reader` (a direct read-entry
+  registration route beyond D15's two — kept), `serial_index!` having two public
+  paths (`macro_rules!` export limitation; alternative: proc-macro in techy-derive).
+  Next: M3.
 - 2026-08-16 — supervisor (main session) — user rulings folded in: D17 REVISED
   ("option B": `SerializableValue`/`DeserializableValue` value traits +
   `SerializableLang` as bounds — D17/D23/D28/§3.G/§6/M3 texts patched); reviewer
