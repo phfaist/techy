@@ -19,6 +19,15 @@
 //! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
 //! supplies all input.
 //!
+//! ## Cargo features
+//!
+//! - `serde` (off by default) — enables the optional [serde](https://serde.rs)
+//!   dependency for the rendering layer of [`serialize`]: encoding serialized values
+//!   through a serde format. The serialization capability itself — the value model and
+//!   the capability traits — is always present and dependency-free; the feature adds
+//!   only rendering, and adds no obligation to any implementer. (At this stage the
+//!   feature wires the dependency; the rendering layer itself is not yet present.)
+//!
 //! ## Panics
 //!
 //! Parsing never panics on document input: problems in the parsed content surface as
@@ -95,6 +104,11 @@
 //!   [`Recomposer`](recompose::Recomposer));
 //!   source re-emission is the preset's
 //!   [`source_recomposer`](latexlike::source_recomposer).
+//! - [`serialize`] — serialization to and from a format-independent value model
+//!   ([`SerialValue`](serialize::SerialValue)): the write/read capability traits
+//!   ([`SerializableObject`](serialize::SerializableObject) +
+//!   [`DeserializableObject`](serialize::DeserializableObject)) and the
+//!   [`SerializableLang`](serialize::SerializableLang) declaration.
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
 //!   [`ParseResult`](core::ParseResult)), with three submodules:
@@ -146,14 +160,15 @@ pub(crate) mod spec;
 pub(crate) mod state;
 pub(crate) mod token;
 
-// The public facades. `source` and `error` are their own facades (their submodules are
-// private); `extract`, `transform`, `visit`, `recompose`, and `latexlike` are ordinary
-// public modules.
+// The public facades. `source`, `error`, and `serialize` are their own facades (their
+// submodules are private); `extract`, `transform`, `visit`, `recompose`, and
+// `latexlike` are ordinary public modules.
 pub mod core;
 pub mod error;
 pub mod extract;
 pub mod latexlike;
 pub mod recompose;
+pub mod serialize;
 pub mod source;
 pub mod transform;
 pub mod visit;
