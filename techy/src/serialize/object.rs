@@ -69,14 +69,15 @@ pub trait SerializableObject<L: Lang> {
 
 /// The read side of the serialization capability: a type that can rebuild an object
 /// from its serialized data. Opt-in and implemented by concrete types only: it is
-/// never a supertrait (its associated type and receiverless constructor would make
-/// the spec/provider traits unusable as trait objects), and a type that does not
-/// participate implements nothing.
+/// never a supertrait (its associated type and its constructor — a function without a
+/// `self` argument — would make the spec/provider traits unusable as trait objects),
+/// and a type that does not participate implements nothing.
 ///
 /// [`Output`](Self::Output) is what the read produces: the type itself for a type
 /// rebuilt from a self-contained description, or a shared handle to an already
-/// existing object (`Arc<dyn …>`) for a type that is looked up in the reading
-/// environment rather than rebuilt.
+/// existing object (`Arc<dyn …>`) for a type that is looked up in the *reading
+/// environment* — the live objects the deserializing program already holds (see the
+/// [module documentation](crate::serialize)) — rather than rebuilt.
 pub trait DeserializableObject<L: SerializableLang>: Sized {
     /// What [`deserialize_object`](Self::deserialize_object) produces.
     type Output;
@@ -87,8 +88,8 @@ pub trait DeserializableObject<L: SerializableLang>: Sized {
     /// # Errors
     ///
     /// `value` is untrusted input: a value of the wrong shape, an index out of range,
-    /// or a reference to something the reading environment lacks is an error, never a
-    /// panic.
+    /// or a reference to an object the reading environment (the live objects the
+    /// deserializing program already holds) lacks is an error, never a panic.
     fn deserialize_object(
         value: &SerialValue,
         cx: &mut DeserializeContext<'_, L>,

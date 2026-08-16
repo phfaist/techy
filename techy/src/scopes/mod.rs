@@ -461,7 +461,7 @@ impl<L: Lang> fmt::Debug for ScopeOp<L> {
 ///
 /// **Serialization is part of the contract** ([`SerializableObject`] supertrait;
 /// [`CallableSpec`]'s serialization note applies): a provider on a parsing state's
-/// scope stack must be writable through the `Arc<dyn SpecsProvider<L>>` the stack
+/// scope stack must be serializable through the `Arc<dyn SpecsProvider<L>>` the stack
 /// holds, so the write-side capability sits on every provider type. Fully defaulted:
 /// a type that does not participate in serialization adds the one-line empty impl
 /// (`impl<L: Lang> SerializableObject<L> for MyProvider<L> {}`); a participating type

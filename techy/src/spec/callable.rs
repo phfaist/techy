@@ -79,8 +79,9 @@ pub enum FrameRole {
 /// downcast to the wrapper.
 ///
 /// **Serialization is part of the contract** ([`SerializableObject`] supertrait): a
-/// spec stored in a parsed tree must be writable through the `Arc<dyn CallableSpec<L>>`
-/// the node holds, so the write-side capability sits on every spec type. It is fully
+/// spec stored in a parsed tree must be serializable through the
+/// `Arc<dyn CallableSpec<L>>` the node holds, so the write-side capability sits on
+/// every spec type. It is fully
 /// defaulted — a type that does not participate in serialization adds the one-line
 /// empty impl (`impl<L: Lang> SerializableObject<L> for MySpec<L> {}`) and nothing
 /// else; a participating type overrides

@@ -11,9 +11,12 @@ use alloc::vec::Vec;
 ///
 /// The variant set is deliberately small so that every value has exactly one JSON
 /// rendering (JSON is the format the public serialization contract is stated in),
-/// and two values render identically exactly when they compare equal: there are no
-/// floating-point numbers and no sized-integer variants (every integer is an
-/// [`Int`](SerialValue::Int)); map keys are strings; maps preserve insertion order.
+/// and the rendering is designed so that two values render identically exactly when
+/// they compare equal: there are no floating-point numbers and no sized-integer
+/// variants (every integer is an [`Int`](SerialValue::Int)); map keys are strings;
+/// maps preserve insertion order; and the two variants without a native JSON form,
+/// [`Bytes`](SerialValue::Bytes) and [`Index`](SerialValue::Index), render as
+/// reserved object shapes that no other value can produce.
 ///
 /// [`Index`](SerialValue::Index) is a reference to an object stored in a numbered
 /// table: `table` names the table, `index` the position within it. Shared objects
@@ -82,7 +85,10 @@ impl TableId {
 }
 
 /// The bound satisfied by every typed table position: a `Copy` value that can be
-/// compared, hashed, and printed. Each kind of table has its own position type
-/// (a `u32` newtype), so that a position in one table cannot be mistaken for a
-/// position in another.
+/// compared, hashed, and printed. Each kind of table will have its own position
+/// type — a small value carrying both the [`TableId`] of its table and the `u32`
+/// position within it, the same two parts a [`SerialValue::Index`] holds — so that a
+/// position in one table cannot be mistaken for a position in another. No such
+/// position types exist yet; they will be defined next to the machinery that manages
+/// their tables.
 pub trait SerialIndex: Copy + Eq + core::hash::Hash + core::fmt::Debug {}

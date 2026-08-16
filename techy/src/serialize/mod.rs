@@ -12,6 +12,10 @@
 //! travels as a [`SerialValue::Index`]. Every serialized object carries an
 //! *identifier*: a deliberately chosen, stable string naming what kind of object the
 //! value describes (never a Rust type name), returned as part of a [`SerialEntry`].
+//! The *reading environment* is the set of live objects — providers, specs, sources —
+//! that the deserializing program already holds and that serialized data can refer
+//! to by identity rather than describe in full; a value that refers to an object the
+//! reading environment lacks is a deserialization error.
 //!
 //! The capability is expressed as two traits: [`SerializableObject`] — the write
 //! side, which every callable spec and provider carries as a supertrait (defaulted, so

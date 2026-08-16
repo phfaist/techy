@@ -49,7 +49,7 @@ impl fmt::Display for SerializeError {
                 "argument #{} was parsed against an argument spec its callable spec does \
                  not declare at that index ({} declared); the callable spec must \
                  implement serialize_argument_spec to serialize it",
-                index + 1,
+                index.saturating_add(1),
                 count
             ),
         }
@@ -69,7 +69,9 @@ impl core::error::Error for SerializeError {}
 pub enum DeserializeError {
     /// A serialized argument refers to its callable spec's declared argument spec by
     /// index, and the index is beyond the `count` argument specs the callable spec
-    /// declares in the reading environment.
+    /// declares in the reading environment (the live objects the deserializing
+    /// program already holds — here, the callable spec that was rebuilt or looked
+    /// up for the serialized one).
     ArgumentIndexOutOfRange {
         /// The serialized argument's index in invocation order.
         index: usize,
@@ -85,7 +87,7 @@ impl fmt::Display for DeserializeError {
                 f,
                 "serialized argument #{} refers to a declared argument spec by index, \
                  but the callable spec declares only {} argument specs",
-                index + 1,
+                index.saturating_add(1),
                 count
             ),
         }
