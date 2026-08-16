@@ -136,9 +136,12 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   type); heterogeneous drivers write `{identifier, data}`. Homogeneous core types
   still return a real constant identifier (e.g. `"core.state"`; exact strings Q3) —
   never an empty string — which their drivers may debug-assert and do not emit.
-- **D7 — The bridge** (feature-gated): `SerialValue` implements serde's
-  `Serializer`/`Deserializer` over itself (the `serde_json::Value` pattern), exposed
-  as `to_value<T: Serialize>` / `from_value<T: DeserializeOwned>`. Index newtypes and
+- **D7 — The bridge** (feature-gated): serde `Serializer`/`Deserializer` impls over
+  `SerialValue` (the `serde_json::Value` pattern: a private serializer type produces
+  a `SerialValue`; `&'de SerialValue` implements `Deserializer<'de>`), exposed as
+  `to_value<T: Serialize + ?Sized>(&T)` / `from_value<'de, T: Deserialize<'de>>(&'de SerialValue)`
+  (borrowed input is the primary form since `deserialize_object` receives
+  `&SerialValue`; settled at M1). Index newtypes and
   byte payloads are intercepted so they map to the dedicated variants (clarified
   2026-08-16: indices via ONE sentinel newtype-struct name wrapping the
   `(table, index)` pair — see the D11 revision; bytes via serde's native
@@ -153,6 +156,12 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   `ToDiagnosticValue` derive) generates to/from-`SerialValue` conversions for core's
   wire structs. Two mechanisms coexist by stratum: internal derive for core wire
   structs; serde bridge for implementer payloads (their crates enable the feature).
+  Rendering-parity convention (M1 review, 2026-08-16): an absent `Option` field is
+  an OMITTED key in both mechanisms — the internal derive omits it natively;
+  serde-derived payload/vocabulary structs must carry
+  `#[serde(skip_serializing_if = "Option::is_none")]` (+ `#[serde(default)]` on
+  read) on every `Option` field so both mechanisms render identically (P7). A present
+  `null` reads as `None` in both.
 
 ### C. Foundation engine
 
@@ -569,7 +578,7 @@ pub enum SerialValue { Null, Bool(bool), Int(i64), Str(String), Bytes(Vec<u8>),
                        Index { table: TableId, index: u32 } }
 pub struct SerialEntry { pub identifier: Cow<'static, str>, pub data: SerialValue }
 pub struct TableId(u32);                 // session-assigned, registration order (D5)
-pub trait SerialIndex: Copy + Eq + Hash /* + Debug, to/from u32; M2 pins items */ {}
+pub trait SerialIndex: Copy + Eq + Hash /* + Debug, to/from (TableId, u32) — D11 REVISED; M2 pins items */ {}
 pub trait SerializableLang: Lang { /* M0: bare marker; M3 adds vocab/ext codecs (D17) */ }
 
 pub trait SerializableObject<L: Lang> {
@@ -717,6 +726,10 @@ merge outside the sandboxed primary checkout.
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
   schema description (input for the v1 freeze).
 - **M7 — Hardening + permanent docs.** Golden files; proptest round-trip properties;
+  a nesting-depth bound for `SerialValue`'s serde `Deserialize` (and `Segment`'s) so
+  formats without their own recursion limit (binary use case 1) cannot overflow the
+  stack on hostile input — depth-carrying `DeserializeSeed` or an equivalent (M1
+  review finding: serde_json's own limit protects JSON; postcard does not);
   rustdoc pass per the user's documentation-clarity rules (user-facing rustdoc: no
   metaphors, no undefined jargon, coined terms defined on first use; error/Panics
   sections exhaustive — target: no panics on any input); performance sanity (large
@@ -830,6 +843,10 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-16 — supervisor (main session) — M1 reviewed (APPROVE WITH NITS; nits
+  folded into the M2 brief). Plan patches from the M1 review: D7 signature form
+  (borrowed `from_value`), §6 `SerialIndex` comment, D8 Option-omission parity
+  convention, M7 owns the `SerialValue` deserialize depth bound. Next: M2 (engine).
 - 2026-08-16 — supervisor (main session) — plan revisions folded in after user
   approval: D11 typed indices carry `{table: TableId, index: u32}` (bridge/derive
   context-freedom — see D11 text); D21 read default made fail-closed for a `Some(_)`
