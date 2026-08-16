@@ -38,6 +38,7 @@ mod engine;
 mod error;
 mod object;
 mod value;
+pub(crate) mod wire;
 
 #[cfg(feature = "serde")]
 mod base64;

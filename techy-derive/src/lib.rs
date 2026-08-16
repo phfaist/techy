@@ -9,8 +9,12 @@
 //!   `Display` impl from a message format string, and the `new()` constructor.
 //! - [`ToDiagnosticValue`](macro@ToDiagnosticValue) — on a field-less payload enum:
 //!   serializes as the kebab-cased variant name.
+//!
+//! The crate also carries techy-internal derives (`ToSerialValue` / `FromSerialValue`,
+//! hidden) whose generated code compiles only inside techy itself.
 
 mod diagnostic_info;
+mod serial_value;
 mod to_value;
 
 use proc_macro::TokenStream;
@@ -77,20 +81,47 @@ pub fn derive_to_diagnostic_value(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Rejects generic types: diagnostic payloads are concrete data structs
-/// (`DiagnosticInfo` requires `Any`, hence `'static`; and a generic payload has no
-/// single wire identity).
+/// Derives techy's crate-private `ToSerialValue` for a wire struct or enum. Internal
+/// to techy: the generated code refers to `crate::serialize::…` and compiles only
+/// inside the techy crate. Every field and variant carries `#[serial(name = "…")]`;
+/// see `techy/src/serialize/wire/mod.rs` for the traits and the wire shape.
+#[doc(hidden)]
+#[proc_macro_derive(ToSerialValue, attributes(serial))]
+pub fn derive_to_serial_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    serial_value::expand_to(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derives techy's crate-private `FromSerialValue` for a wire struct or enum — the
+/// read direction of [`ToSerialValue`](macro@ToSerialValue), same attributes, strict
+/// reads. Internal to techy.
+#[doc(hidden)]
+#[proc_macro_derive(FromSerialValue, attributes(serial))]
+pub fn derive_from_serial_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    serial_value::expand_from(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// The reason `DiagnosticInfo` / `ToDiagnosticValue` reject generic types.
+pub(crate) const DIAGNOSTIC_NO_GENERICS_REASON: &str =
+    "diagnostic payloads are concrete data structs (DESIGN_RATIONALE.md [§dd-dr:errors])";
+
+/// Rejects generic types, giving `reason` (for diagnostic payloads: `DiagnosticInfo`
+/// requires `Any`, hence `'static`, and a generic payload has no single wire identity;
+/// wire structs are concrete for the reason `serial_value.rs` gives).
 pub(crate) fn ensure_no_generics(
     generics: &syn::Generics,
     derive_name: &str,
+    reason: &str,
 ) -> syn::Result<()> {
     if !generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &generics.params,
-            format!(
-                "#[derive({derive_name})] does not support generic types: \
-                 diagnostic payloads are concrete data structs (DESIGN_RATIONALE.md [§dd-dr:errors])"
-            ),
+            format!("#[derive({derive_name})] does not support generic types: {reason}"),
         ));
     }
     if let Some(where_clause) = &generics.where_clause {

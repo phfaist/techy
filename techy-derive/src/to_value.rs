@@ -5,7 +5,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
 pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
-    crate::ensure_no_generics(&input.generics, "ToDiagnosticValue")?;
+    crate::ensure_no_generics(&input.generics, "ToDiagnosticValue", crate::DIAGNOSTIC_NO_GENERICS_REASON)?;
 
     let name = &input.ident;
     let data = match &input.data {

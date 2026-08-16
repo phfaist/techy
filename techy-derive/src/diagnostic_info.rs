@@ -6,7 +6,7 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Field, Fields, Ident, LitStr};
 
 pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
-    crate::ensure_no_generics(&input.generics, "DiagnosticInfo")?;
+    crate::ensure_no_generics(&input.generics, "DiagnosticInfo", crate::DIAGNOSTIC_NO_GENERICS_REASON)?;
 
     let name = &input.ident;
     let fields: Vec<&Field> = match &input.data {
