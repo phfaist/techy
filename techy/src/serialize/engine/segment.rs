@@ -106,9 +106,10 @@ impl Segment {
 
     /// The segment's serialized form (see the type documentation).
     pub fn to_serial_value(&self) -> SerialValue {
-        // A segment's fields — `u32`s, strings, lists, values — are always representable.
+        // Invariant: the conversion fails only for an integer outside `i64`, and a
+        // segment's integers are `u32`s — so it cannot fail here.
         ToSerialValue::to_serial_value(self)
-            .expect("a segment's fields are always representable as a SerialValue")
+            .expect("a segment's fields (u32s, strings, lists, values) always convert to a SerialValue")
     }
 
     /// Read a segment from its serialized form (see the type documentation). The value

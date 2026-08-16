@@ -53,7 +53,8 @@ pub trait ObjectSerdeDriver<L: SerializableLang>: Send + Sync + 'static {
     /// kind of object) — the driver's [`serialize_object`](Self::serialize_object)
     /// still returns it in every entry, and the session reports a different one as an
     /// error. `None` for a heterogeneous table, whose entries carry their identifier
-    /// on the wire.
+    /// on the wire. `Some("")` is not an identifier: the session refuses to register
+    /// such a driver ([`RegistrationError::EmptyHomogeneousIdentifier`](crate::serialize::RegistrationError::EmptyHomogeneousIdentifier)).
     fn homogeneous_identifier(&self) -> Option<&'static str>;
 
     /// Produce the entry for `object`. `cx` gives access to the session: interning

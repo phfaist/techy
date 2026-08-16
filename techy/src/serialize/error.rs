@@ -609,12 +609,20 @@ pub enum RegistrationError {
         table: TableId,
     },
     /// A reader is already registered for that identifier in the table (by an earlier
-    /// registration, or by a resolver whose answer was kept).
+    /// registration, or by a resolver whose reader was kept).
     DuplicateIdentifier {
         /// The table's name.
         table: &'static str,
         /// The identifier.
         identifier: String,
+    },
+    /// The driver's
+    /// [`homogeneous_identifier`](crate::serialize::ObjectSerdeDriver::homogeneous_identifier)
+    /// is `Some("")`: an identifier is a real, non-empty string, and a homogeneous
+    /// table's entries all carry it (a heterogeneous table answers `None`).
+    EmptyHomogeneousIdentifier {
+        /// The table's name.
+        table: &'static str,
     },
 }
 
@@ -636,6 +644,12 @@ impl fmt::Display for RegistrationError {
             RegistrationError::DuplicateIdentifier { table, identifier } => write!(
                 f,
                 "a reader is already registered for identifier `{identifier}` in table `{table}`"
+            ),
+            RegistrationError::EmptyHomogeneousIdentifier { table } => write!(
+                f,
+                "the driver of table `{table}` declares the empty string as its homogeneous \
+                 identifier (an identifier is a non-empty string; a heterogeneous table \
+                 declares none)"
             ),
         }
     }

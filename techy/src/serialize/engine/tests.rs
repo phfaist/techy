@@ -364,6 +364,62 @@ fn registration_numbers_tables_and_rejects_duplicates() {
 }
 
 #[test]
+fn an_empty_homogeneous_identifier_is_refused_at_registration() {
+    /// A driver declaring `Some("")` as its homogeneous identifier.
+    struct EmptyIdentifierDriver;
+    impl ObjectSerdeDriver<ToyLang> for EmptyIdentifierDriver {
+        type Object = Leaf;
+        type Index = LeafIndex;
+        fn table_name(&self) -> &'static str {
+            "empty-identifier"
+        }
+        fn homogeneous_identifier(&self) -> Option<&'static str> {
+            Some("")
+        }
+        fn serialize_object(
+            &self,
+            _leaf: &Arc<Leaf>,
+            _cx: &mut SerializeContext<'_, ToyLang>,
+        ) -> Result<SerialEntry, SerializeError> {
+            Ok(SerialEntry { identifier: "".into(), data: SerialValue::Null })
+        }
+        fn deserialize_object(
+            &self,
+            _entry: &SerialEntry,
+            _cx: &mut DeserializeContext<'_, ToyLang>,
+        ) -> Result<Arc<Leaf>, DeserializeError> {
+            Err(DeserializeError::failed("never"))
+        }
+    }
+    let mut session = SerdeSession::<ToyLang>::empty();
+    assert_eq!(
+        session.register_table(EmptyIdentifierDriver).unwrap_err(),
+        RegistrationError::EmptyHomogeneousIdentifier { table: "empty-identifier" }
+    );
+    // Nothing was registered.
+    assert!(session.take_segment().tables().is_empty());
+}
+
+#[test]
+fn registering_a_reader_twice_for_one_identifier_is_a_duplicate() {
+    let (mut session, tables) = full_session();
+    // `full_session` registered `toy.square` already.
+    assert!(matches!(
+        tables.shapes.register_type::<Square>(&mut session, "toy.square", |square| Arc::new(square) as Arc<dyn Shape>),
+        Err(RegistrationError::DuplicateIdentifier { table: "shapes", identifier }) if identifier == "toy.square"
+    ));
+    // The direct reader form is checked the same way.
+    assert!(matches!(
+        tables.shapes.register_reader(
+            &mut session,
+            "toy.named",
+            ObjectReader::new(|_value, _cx| Err(DeserializeError::failed("never")))
+        ),
+        Err(RegistrationError::DuplicateIdentifier { table: "shapes", identifier }) if identifier == "toy.named"
+    ));
+}
+
+#[test]
 fn a_handle_from_another_session_is_unknown() {
     let mut a = SerdeSession::<ToyLang>::empty();
     let leaves_a = a.register_table(LeafDriver).unwrap();
@@ -395,6 +451,46 @@ fn interning_the_same_arc_yields_the_same_position() {
     let other = session.intern(tables.leaves, &Arc::new(Leaf { text: "shared".into() })).unwrap();
     assert_ne!(first, other);
     assert_eq!(session.table_len(0), 2);
+}
+
+#[test]
+fn a_homogeneous_driver_producing_another_identifier_is_an_error() {
+    /// A homogeneous driver whose entries carry an identifier other than the table's.
+    struct MislabelingDriver;
+    impl ObjectSerdeDriver<ToyLang> for MislabelingDriver {
+        type Object = Leaf;
+        type Index = LeafIndex;
+        fn table_name(&self) -> &'static str {
+            "mislabeled"
+        }
+        fn homogeneous_identifier(&self) -> Option<&'static str> {
+            Some("toy.leaf")
+        }
+        fn serialize_object(
+            &self,
+            leaf: &Arc<Leaf>,
+            _cx: &mut SerializeContext<'_, ToyLang>,
+        ) -> Result<SerialEntry, SerializeError> {
+            Ok(SerialEntry { identifier: "toy.other".into(), data: SerialValue::Str(leaf.text.clone()) })
+        }
+        fn deserialize_object(
+            &self,
+            _entry: &SerialEntry,
+            _cx: &mut DeserializeContext<'_, ToyLang>,
+        ) -> Result<Arc<Leaf>, DeserializeError> {
+            Err(DeserializeError::failed("never"))
+        }
+    }
+    let mut session = SerdeSession::<ToyLang>::empty();
+    let table = session.register_table(MislabelingDriver).unwrap();
+    let err = session.intern(table, &Arc::new(Leaf { text: "x".into() })).unwrap_err();
+    assert!(matches!(
+        &err,
+        SerializeError::UnexpectedIdentifier { table: "mislabeled", expected: "toy.leaf", found } if found == "toy.other"
+    ));
+    // Nothing was appended.
+    assert_eq!(session.table_len(0), 0);
+    assert!(session.take_segment().is_empty());
 }
 
 #[test]
@@ -757,6 +853,116 @@ fn a_resolver_supplies_a_reader_and_is_asked_once_per_identifier() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
+/// A resolver answering every identifier of its prefix with a triangle whose area is
+/// scaled by `scale`, counting its invocations — to tell resolvers apart.
+struct ScalingResolver {
+    scale: u32,
+    calls: Arc<AtomicUsize>,
+}
+
+impl IdentifierResolver<ToyLang, dyn Shape> for ScalingResolver {
+    fn resolve(
+        &self,
+        _identifier: &str,
+        _cx: &mut DeserializeContext<'_, ToyLang>,
+    ) -> Result<Option<ObjectReader<ToyLang, dyn Shape>>, DeserializeError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let scale = self.scale;
+        Ok(Some(ObjectReader::new(move |value, _cx| {
+            let side = match value {
+                SerialValue::Int(i) => u32::try_from(*i).unwrap_or(0),
+                _ => return Err(DeserializeError::failed("a triangle is an integer")),
+            };
+            Ok(Arc::new(DynTriangle { side: side * scale }) as Arc<dyn Shape>)
+        })))
+    }
+}
+
+#[test]
+fn the_longest_matching_prefix_wins_then_registration_order() {
+    let triangle = |side: i64| {
+        SerialValue::Map(Vec::from([
+            (String::from("id"), SerialValue::Str("dyn.triangle".into())),
+            (String::from("data"), SerialValue::Int(side)),
+        ]))
+    };
+    // Two overlapping namespaces: `dyn.` registered first, the longer `dyn.tri`
+    // second — the longer prefix is asked first, whatever the registration order.
+    let (mut reader, rt) = full_session();
+    let (short_calls, long_calls) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    rt.shapes
+        .register_resolver(&mut reader, "dyn.", Arc::new(ScalingResolver { scale: 1, calls: Arc::clone(&short_calls) }))
+        .unwrap();
+    rt.shapes
+        .register_resolver(&mut reader, "dyn.tri", Arc::new(ScalingResolver { scale: 100, calls: Arc::clone(&long_calls) }))
+        .unwrap();
+    reader.push_segment(one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([triangle(4)]))).unwrap();
+    assert_eq!(reader.object(rt.shapes, rt.shapes.position(0)).unwrap().area(), 400);
+    assert_eq!((short_calls.load(Ordering::SeqCst), long_calls.load(Ordering::SeqCst)), (0, 1));
+
+    // Two resolvers with the same prefix: the first registered is asked first, and
+    // its answer ends the search.
+    let (mut reader, rt) = full_session();
+    let (first_calls, second_calls) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    rt.shapes
+        .register_resolver(&mut reader, "dyn.", Arc::new(ScalingResolver { scale: 10, calls: Arc::clone(&first_calls) }))
+        .unwrap();
+    rt.shapes
+        .register_resolver(&mut reader, "dyn.", Arc::new(ScalingResolver { scale: 1000, calls: Arc::clone(&second_calls) }))
+        .unwrap();
+    reader.push_segment(one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([triangle(4)]))).unwrap();
+    assert_eq!(reader.object(rt.shapes, rt.shapes.position(0)).unwrap().area(), 40);
+    assert_eq!((first_calls.load(Ordering::SeqCst), second_calls.load(Ordering::SeqCst)), (1, 0));
+
+    // A registered reader takes precedence over every resolver.
+    let (mut reader, rt) = full_session();
+    let calls = Arc::new(AtomicUsize::new(0));
+    rt.shapes
+        .register_resolver(&mut reader, "", Arc::new(ScalingResolver { scale: 7, calls: Arc::clone(&calls) }))
+        .unwrap();
+    rt.shapes
+        .register_reader(
+            &mut reader,
+            "dyn.triangle",
+            ObjectReader::new(|value, _cx| match value {
+                SerialValue::Int(i) => Ok(Arc::new(DynTriangle { side: u32::try_from(*i).unwrap_or(0) }) as Arc<dyn Shape>),
+                _ => Err(DeserializeError::failed("a triangle is an integer")),
+            }),
+        )
+        .unwrap();
+    reader.push_segment(one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([triangle(4)]))).unwrap();
+    assert_eq!(reader.object(rt.shapes, rt.shapes.position(0)).unwrap().area(), 4);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_reader_registered_directly_from_a_routine_rebuilds_its_objects() {
+    // Write a dynamic-identifier shape; the reader registers a routine for it
+    // directly (`register_reader` + `ObjectReader::new`), no resolver involved.
+    let (mut writer, wt) = full_session();
+    let t: Arc<dyn Shape> = Arc::new(DynTriangle { side: 6 });
+    let position = writer.intern(wt.shapes, &t).unwrap();
+    let segment = writer.take_segment();
+
+    let (mut reader, rt) = full_session();
+    rt.shapes
+        .register_reader(
+            &mut reader,
+            "dyn.triangle",
+            ObjectReader::new(|value, cx| {
+                // The routine has the context: the user data is reachable.
+                assert!(cx.user_data::<ShapeEnvironment>().is_some());
+                match value {
+                    SerialValue::Int(i) => Ok(Arc::new(DynTriangle { side: u32::try_from(*i).unwrap_or(0) }) as Arc<dyn Shape>),
+                    _ => Err(DeserializeError::failed("a triangle is an integer")),
+                }
+            }),
+        )
+        .unwrap();
+    reader.set_user_data(ShapeEnvironment::default());
+    reader.push_segment(segment).unwrap();
+    assert_eq!(reader.object(rt.shapes, rt.shapes.position(position.index())).unwrap().area(), 6);
+}
 
 // --- the failure battery --------------------------------------------------------------
 
@@ -847,6 +1053,35 @@ fn a_write_cycle_is_detected() {
             other => panic!("expected a reference cycle, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn a_deep_chain_hits_the_depth_guard_on_the_write_side() {
+    let (session, handle) = ring_session();
+    let mut session = session.with_descent_guard_init(StdDescentGuardInit::depth_limit(8));
+    // A chain of 40 rings (no cycle), each pointing at the next.
+    let mut head = Arc::new(Ring { next: Mutex::new(None) });
+    for _ in 0..40 {
+        head = Arc::new(Ring { next: Mutex::new(Some(head)) });
+    }
+    let err = session.intern(handle, &head).unwrap_err();
+    let mut current = &err;
+    loop {
+        match current {
+            SerializeError::DescentLimitExceeded { .. } => break,
+            SerializeError::InTable { cause, .. } => current = cause,
+            other => panic!("expected the descent limit, got {other:?}"),
+        }
+    }
+    // Post-order: no ring was appended (every level failed before assigning a position).
+    assert_eq!(session.table_len(0), 0);
+    // A chain within the limit interns fine afterwards.
+    let mut short = Arc::new(Ring { next: Mutex::new(None) });
+    for _ in 0..3 {
+        short = Arc::new(Ring { next: Mutex::new(Some(short)) });
+    }
+    session.intern(handle, &short).unwrap();
+    assert_eq!(session.table_len(0), 4);
 }
 
 #[test]
@@ -976,6 +1211,31 @@ fn version_unknown_table_and_out_of_order_segments() {
 }
 
 #[test]
+fn a_segment_listing_a_table_twice_is_an_error() {
+    let (mut reader, rt) = full_session();
+    // The same table name twice.
+    let twice = two_table_segment(
+        ("leaves", rt.leaves.id(), 0, Vec::from([SerialValue::Str("a".into())])),
+        ("leaves", rt.leaves.id(), 1, Vec::from([SerialValue::Str("b".into())])),
+    );
+    assert!(matches!(
+        reader.push_segment(twice),
+        Err(DeserializeError::DuplicateSegmentTable { name }) if name == "leaves"
+    ));
+    // Two different tables carrying the same writer-side id.
+    let same_id = two_table_segment(
+        ("leaves", TableId::new(0), 0, Vec::new()),
+        ("shapes", TableId::new(0), 0, Vec::new()),
+    );
+    assert!(matches!(
+        reader.push_segment(same_id),
+        Err(DeserializeError::DuplicateSegmentTable { name }) if name == "shapes"
+    ));
+    // Nothing was absorbed.
+    assert_eq!(reader.table_len(0), 0);
+}
+
+#[test]
 fn a_malformed_heterogeneous_entry_shape_is_an_error() {
     let (mut reader, rt) = full_session();
     // A shapes entry that is not the `{id, data}` map.
@@ -1040,10 +1300,14 @@ crate::serial_index! { pub struct TolerantIndex; }
 
 type ShapesHandle = crate::serialize::TableHandle<DispatchingSerdeDriver<ToyLang, dyn Shape, ShapeIndex>>;
 
+/// The leaves and shapes handles a [`TolerantDriver`] refers into, set after
+/// registration.
+type TolerantTargets = Arc<Mutex<Option<(crate::serialize::TableHandle<LeafDriver>, ShapesHandle)>>>;
+
 struct TolerantDriver {
     /// The leaves and shapes handles, set after registration (the tolerant table is
     /// registered first, so that the pass over a segment reaches it before them).
-    targets: Arc<Mutex<Option<(crate::serialize::TableHandle<LeafDriver>, ShapesHandle)>>>,
+    targets: TolerantTargets,
 }
 
 impl ObjectSerdeDriver<ToyLang> for TolerantDriver {

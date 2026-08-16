@@ -247,6 +247,9 @@ impl<L: SerializableLang> SerdeSession<L> {
     ///
     /// [`RegistrationError::DuplicateTableName`] when a table of the driver's
     /// [`table_name`](ObjectSerdeDriver::table_name) is already registered;
+    /// [`RegistrationError::EmptyHomogeneousIdentifier`] when the driver's
+    /// [`homogeneous_identifier`](ObjectSerdeDriver::homogeneous_identifier) is
+    /// `Some("")` (an identifier is a real, non-empty string);
     /// [`RegistrationError::TooManyTables`] at `u32::MAX` tables.
     pub fn register_table<D: ObjectSerdeDriver<L>>(
         &mut self,
@@ -255,6 +258,9 @@ impl<L: SerializableLang> SerdeSession<L> {
         let name = driver.table_name();
         if self.tables.iter().any(|table| table.name == name) {
             return Err(RegistrationError::DuplicateTableName { name });
+        }
+        if driver.homogeneous_identifier() == Some("") {
+            return Err(RegistrationError::EmptyHomogeneousIdentifier { table: name });
         }
         let ordinal = u32::try_from(self.tables.len()).map_err(|_| RegistrationError::TooManyTables)?;
         if ordinal == u32::MAX {
@@ -444,8 +450,11 @@ impl<L: SerializableLang> SerdeSession<L> {
             .enumerate()
             .map(|(ordinal, table)| {
                 let entries = core::mem::take(&mut table.outbox);
-                // The outbox is always the tail of the slots.
-                let start = (table.slots.len() - entries.len()) as u32;
+                // Invariant: the outbox is the tail of the slots (every interned entry
+                // pushes both), so the entries start where the slots minus the outbox
+                // end; slot counts stay below `u32::MAX` (the table-full checks).
+                debug_assert!(entries.len() <= table.slots.len(), "the outbox is the tail of the slots");
+                let start = table.slots.len().saturating_sub(entries.len()) as u32;
                 SegmentTable::new(String::from(table.name), TableId::new(ordinal as u32), start, entries)
             })
             .collect();
@@ -471,6 +480,12 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// The session must have no entries pending emission (interned since the last
     /// [`take_segment`](SerdeSession::take_segment)): a segment continues the stream
     /// the session has emitted so far.
+    ///
+    /// **The segments pushed into one session must all come from one stream, in
+    /// order** — the caller's obligation. The session checks that each segment
+    /// continues its tables (the start positions), which catches a skipped or
+    /// repeated segment; it cannot recognize a segment of another stream whose
+    /// positions happen to line up, and would absorb it as a continuation.
     ///
     /// On any error the session is left exactly as it was before the call — the
     /// segment's entries are dropped, and the session stays usable — and the error
