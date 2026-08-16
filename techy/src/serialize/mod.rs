@@ -95,7 +95,10 @@ pub use engine::{
     ObjectSerdeDriver, SerdeSession, Segment, SegmentTable, SerializeContext, TableHandle,
 };
 pub use error::{DeserializeError, RegistrationError, SerialValueError, SerializeError};
-pub use object::{DeserializableObject, SerializableLang, SerializableObject};
+pub use object::{
+    DeserializableObject, DeserializableValue, SerializableLang, SerializableObject,
+    SerializableValue,
+};
 pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
 
 // The typed-position macro is defined at the crate root (as every `macro_rules!`
