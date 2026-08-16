@@ -169,6 +169,12 @@ enum Slot {
     Materialized(Box<dyn Any + Send + Sync>),
 }
 
+impl Slot {
+    fn is_materialized(&self) -> bool {
+        matches!(self, Slot::Materialized(_))
+    }
+}
+
 /// The erased entry point of [`materialize`]: rebuild one pending entry.
 type MaterializeFn<L> = fn(
     &mut SerdeSession<L>,
@@ -519,6 +525,10 @@ impl<L: SerializableLang> SerdeSession<L> {
     }
 
     /// Rebuild every entry beyond `old_lens`, table by table, position by position.
+    /// Returns `Ok` only when every new entry is rebuilt: an entry whose rebuilding
+    /// failed is left pending (see [`materialize_entered`]), so a failure swallowed by
+    /// the driver of an entry that referred to it — a driver treating a reference as
+    /// optional — is met again here, in the entry's own turn, and fails the push.
     fn materialize_new_entries(
         &mut self,
         guard: &mut StdDescentGuard,
@@ -532,6 +542,22 @@ impl<L: SerializableLang> SerdeSession<L> {
                     materialize(self, guard, ordinal, position as u32, None)?;
                 }
                 position += 1;
+            }
+        }
+        // Defense in depth: after the pass, every new slot holds its object (a
+        // rebuilding that failed has returned the error above; none is still in
+        // progress once every call has returned). A slot found otherwise is a bug of
+        // this crate, reported rather than left to misreport later.
+        for (ordinal, &old_len) in old_lens.iter().enumerate() {
+            let table = &self.tables[ordinal];
+            if let Some(offset) = table.slots[old_len..].iter().position(|slot| !slot.is_materialized()) {
+                return Err(DeserializeError::Internal {
+                    detail: alloc::format!(
+                        "entry #{} of table `{}` was left unrebuilt after the segment's entries were processed",
+                        old_len.saturating_add(offset),
+                        table.name
+                    ),
+                });
             }
         }
         Ok(())
@@ -639,7 +665,10 @@ fn materialize<L: SerializableLang, D: ObjectSerdeDriver<L>>(
 }
 
 /// The granted-descent body of [`materialize`]: take the pending value out, rebuild,
-/// store.
+/// store. On any failure the slot is put back as pending, with its stored value: a
+/// failed rebuilding leaves no trace (the slot is neither poisoned as in-progress —
+/// which would misreport as a cycle later — nor emptied), so that a later attempt
+/// meets the entry again exactly as it was.
 fn materialize_entered<L: SerializableLang, D: ObjectSerdeDriver<L>>(
     session: &mut SerdeSession<L>,
     guard: &mut StdDescentGuard,
@@ -657,16 +686,23 @@ fn materialize_entered<L: SerializableLang, D: ObjectSerdeDriver<L>>(
             return Err(DeserializeError::IndexOutOfRange { table: name, index: position, len: 0 });
         }
     };
-    let entry = match session.tables[ordinal].homogeneous {
-        Some(identifier) => SerialEntry { identifier: Cow::Borrowed(identifier), data: value },
+    // The entry handed to the driver, and — for a heterogeneous table, whose stored
+    // form the entry is parsed out of — the stored value itself, kept to restore.
+    let (entry, stored) = match session.tables[ordinal].homogeneous {
+        Some(identifier) => (SerialEntry { identifier: Cow::Borrowed(identifier), data: value }, None),
         None => match WireEntry::from_serial_value(&value) {
-            Ok(wire) => SerialEntry { identifier: wire.identifier, data: wire.data },
-            Err(error) => return Err(DeserializeError::from(error).in_entry(name, position, None)),
+            Ok(wire) => (SerialEntry { identifier: wire.identifier, data: wire.data }, Some(value)),
+            Err(error) => {
+                session.tables[ordinal].slots[position as usize] = Slot::Pending(value);
+                return Err(DeserializeError::from(error).in_entry(name, position, None));
+            }
         },
     };
-    let driver = session
-        .driver::<D>(ordinal)
-        .ok_or(DeserializeError::UnknownTable { table: table_id })?;
+    let Some(driver) = session.driver::<D>(ordinal) else {
+        let SerialEntry { data, .. } = entry;
+        session.tables[ordinal].slots[position as usize] = Slot::Pending(stored.unwrap_or(data));
+        return Err(DeserializeError::UnknownTable { table: table_id });
+    };
     let result = {
         let mut cx = DeserializeContext::new(session, guard, Some((ordinal, position)));
         driver.deserialize_object(&entry, &mut cx)
@@ -678,7 +714,11 @@ fn materialize_entered<L: SerializableLang, D: ObjectSerdeDriver<L>>(
             table.by_pointer.entry(address(&object)).or_insert(position);
             Ok(object)
         }
-        Err(error) => Err(error.in_entry(name, position, Some(entry.identifier))),
+        Err(error) => {
+            let SerialEntry { identifier, data } = entry;
+            session.tables[ordinal].slots[position as usize] = Slot::Pending(stored.unwrap_or(data));
+            Err(error.in_entry(name, position, Some(identifier)))
+        }
     }
 }
 

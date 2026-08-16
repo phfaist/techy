@@ -401,6 +401,15 @@ pub enum DeserializeError {
         /// The table's name.
         table: &'static str,
     },
+    /// A check the session runs on its own bookkeeping failed: a bug in this crate,
+    /// not in the input and not in an implementation — `detail` says what was found.
+    /// Reported as an error rather than a panic; the operation that found it has
+    /// been undone (a segment being absorbed is dropped) and the session stays
+    /// usable.
+    Internal {
+        /// What the check found, in words, naming the entry.
+        detail: String,
+    },
     /// The failure happened while deserializing entry `index` of table `table`, whose
     /// identifier is `identifier` when it is known (a table holding one kind of object
     /// has a fixed identifier; an entry of any other table carries its own, unless the
@@ -548,6 +557,9 @@ impl fmt::Display for DeserializeError {
                 f,
                 "absorbing the segment would give table `{table}` more than u32::MAX entries"
             ),
+            DeserializeError::Internal { detail } => {
+                write!(f, "internal error of the serialization session (a bug in this crate): {detail}")
+            }
             DeserializeError::InEntry { table, index, identifier, cause } => match identifier {
                 Some(identifier) => write!(
                     f,

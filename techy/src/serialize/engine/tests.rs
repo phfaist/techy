@@ -1027,6 +1027,103 @@ fn a_failed_push_rolls_back_and_the_session_stays_usable() {
     assert_eq!(leaf.text, "later");
 }
 
+/// A composite object whose driver treats its leaf reference as optional: a failure
+/// to read the leaf is swallowed and the leaf recorded as absent — a legitimate
+/// driver pattern, which must not let a broken entry slip through a push.
+#[derive(Debug)]
+struct TolerantNode {
+    leaf: Option<LeafIndex>,
+}
+
+crate::serial_index! { pub struct TolerantIndex; }
+
+struct TolerantDriver {
+    /// The leaves table's handle, set after registration (this table is registered
+    /// first, so that the pass over the segment reaches it before the leaves).
+    leaves: Arc<Mutex<Option<crate::serialize::TableHandle<LeafDriver>>>>,
+}
+
+impl ObjectSerdeDriver<ToyLang> for TolerantDriver {
+    type Object = TolerantNode;
+    type Index = TolerantIndex;
+
+    fn table_name(&self) -> &'static str {
+        "tolerant"
+    }
+
+    fn homogeneous_identifier(&self) -> Option<&'static str> {
+        Some("toy.tolerant")
+    }
+
+    fn serialize_object(
+        &self,
+        node: &Arc<TolerantNode>,
+        _cx: &mut SerializeContext<'_, ToyLang>,
+    ) -> Result<SerialEntry, SerializeError> {
+        let data = match node.leaf {
+            Some(leaf) => SerialValue::Index { table: leaf.table(), index: leaf.index() },
+            None => SerialValue::Null,
+        };
+        Ok(SerialEntry { identifier: "toy.tolerant".into(), data })
+    }
+
+    fn deserialize_object(
+        &self,
+        entry: &SerialEntry,
+        cx: &mut DeserializeContext<'_, ToyLang>,
+    ) -> Result<Arc<TolerantNode>, DeserializeError> {
+        let leaves = self.leaves.lock().unwrap().unwrap();
+        let leaf = match &entry.data {
+            SerialValue::Index { table, index } => {
+                let index = LeafIndex::from_parts(*table, *index);
+                // The swallow: a leaf that cannot be read is treated as absent.
+                cx.object(leaves, index).ok().map(|_| index)
+            }
+            _ => None,
+        };
+        Ok(Arc::new(TolerantNode { leaf }))
+    }
+}
+
+#[test]
+fn a_nested_failure_swallowed_by_a_driver_still_fails_the_push() {
+    // The tolerant table is registered first (ordinal 0), the leaves table second: the
+    // pass over the segment rebuilds the tolerant node — which reads the broken leaf
+    // and swallows the failure — before it reaches the leaf itself.
+    let mut session = SerdeSession::<ToyLang>::empty();
+    let leaves_handle = Arc::new(Mutex::new(None));
+    let tolerant = session.register_table(TolerantDriver { leaves: Arc::clone(&leaves_handle) }).unwrap();
+    let leaves = session.register_table(LeafDriver).unwrap();
+    *leaves_handle.lock().unwrap() = Some(leaves);
+
+    // A segment with a tolerant node referring to leaf #0, and a malformed leaf #0.
+    let hostile = two_table_segment(
+        ("tolerant", tolerant.id(), 0, Vec::from([SerialValue::Index { table: leaves.id(), index: 0 }])),
+        ("leaves", leaves.id(), 0, Vec::from([SerialValue::Int(7)])),
+    );
+    let err = session.push_segment(hostile).unwrap_err();
+    // The push fails with the leaf driver's own error, located at the leaf — not with
+    // a cycle misreported from a slot left in progress, and not silently.
+    match &err {
+        DeserializeError::InEntry { table, index, cause, .. } => {
+            assert_eq!((*table, *index), ("leaves", 0));
+            assert!(matches!(**cause, DeserializeError::Failed { .. }), "{err:?}");
+        }
+        other => panic!("expected the leaf driver's failure, got {other:?}"),
+    }
+    // Rolled back cleanly: both tables empty, and the session stays usable.
+    assert_eq!(session.table_len(0), 0);
+    assert_eq!(session.table_len(1), 0);
+    let good = two_table_segment(
+        ("tolerant", tolerant.id(), 0, Vec::from([SerialValue::Index { table: leaves.id(), index: 0 }])),
+        ("leaves", leaves.id(), 0, Vec::from([SerialValue::Str("fine".into())])),
+    );
+    session.push_segment(good).unwrap();
+    let node = session.object(tolerant, tolerant.position(0)).unwrap();
+    assert_eq!(node.leaf, Some(leaves.position(0)));
+    assert_eq!(session.object(leaves, leaves.position(0)).unwrap().text, "fine");
+}
+
 #[test]
 fn unemitted_entries_block_a_push() {
     let (mut session, tables) = full_session();
@@ -1089,6 +1186,26 @@ fn one_table_segment(name: &str, id: TableId, start: u32, entries: Vec<SerialVal
     Segment::from_serial_value(&SerialValue::Map(Vec::from([
         (String::from("version"), SerialValue::Int(i64::from(Segment::VERSION))),
         (String::from("tables"), SerialValue::List(Vec::from([table]))),
+    ])))
+    .unwrap()
+}
+
+/// A two-table segment, for hand-built hostile input (see [`one_table_segment`]).
+fn two_table_segment(
+    first: (&str, TableId, u32, Vec<SerialValue>),
+    second: (&str, TableId, u32, Vec<SerialValue>),
+) -> Segment {
+    fn table((name, id, start, entries): (&str, TableId, u32, Vec<SerialValue>)) -> SerialValue {
+        SerialValue::Map(Vec::from([
+            (String::from("name"), SerialValue::Str(String::from(name))),
+            (String::from("id"), SerialValue::Int(i64::from(id.ordinal()))),
+            (String::from("start"), SerialValue::Int(i64::from(start))),
+            (String::from("entries"), SerialValue::List(entries)),
+        ]))
+    }
+    Segment::from_serial_value(&SerialValue::Map(Vec::from([
+        (String::from("version"), SerialValue::Int(i64::from(Segment::VERSION))),
+        (String::from("tables"), SerialValue::List(Vec::from([table(first), table(second)]))),
     ])))
     .unwrap()
 }
