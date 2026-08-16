@@ -764,6 +764,72 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-16 — M1 implementer agent — **M1 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `a987229` M0 review nits
+  (saturating index Display, doc wording, "reading environment" defined in the
+  module docs); `0b6914d` D21 read default fail-closed (`Some(_)` payload →
+  `DeserializeError::ArgumentSpecPayloadUnexpected { index }`, checked before the
+  bounds check); `3d2d4e9` `SerialValueError` (unconditional) + `bridge.rs` +
+  `render.rs` + `base64.rs` (feature-gated) + dev-deps `serde_json`/`postcard`
+  (tests only) + the serde test battery; `55171a6` wire traits + internal derives
+  (D8); `d9d8751` docs (lib.rs feature note, module overview, `SerialValue`
+  rendering section). Verified: `cargo build`/`test` green with and without
+  `--features serde` (844 / 866 unit incl. proptest identity, 74 integration, 70 /
+  71 doctests), `rm -rf target/doc && cargo docs` clean both states, clippy clean
+  on the new code (lib + tests). **Names picked:** bridge `to_value` / `from_value`
+  (`Deserializer<'de> for &'de SerialValue`, `is_human_readable() == true`); bytes
+  helper module `techy::serialize::serial_bytes` (`#[serde(with = …)]`; strict:
+  reads a byte string only); index sentinel `INDEX_SENTINEL =
+  "techy::serialize::Index"` + `pub(crate) serialize_index(table, index, s)` /
+  `deserialize_index(d) -> (TableId, u32)` (`TableId::ordinal()` added); value
+  sentinel `VALUE_SENTINEL = "techy::serialize::SerialValue"` (see below);
+  `SerialValueError` variants `FloatRejected`, `NonStringMapKey`,
+  `IntegerOutOfRange { value: String, target: &'static str }`, `TypeMismatch {
+  expected: Cow<'static, str>, found: &'static str }` (`found` = kind name via
+  `pub(crate) SerialValue::kind_name()`: null/bool/int/str/bytes/list/map/index),
+  `MissingField { name }`, `UnknownField { name, expected }`, `DuplicateField {
+  name }` (added beyond the brief's list — strict reads reject repeated keys),
+  `UnknownVariant { name, expected }`, `Custom(String)`; wire traits
+  `wire::ToSerialValue` / `wire::FromSerialValue` (crate-private, in
+  `serialize/wire/mod.rs`; the derives are re-exported there), attribute
+  `#[serial(name = "…")]`, byte-string field newtype `wire::SerialBytes(Vec<u8>)`.
+  **Decisions / provisional shapes:** (1) the bridge answers
+  `is_human_readable() == true` (the value model is the in-memory form of the
+  canonical JSON, so third-party types take their text forms); `SerialValue`'s own
+  serde impls wrap the value in the `VALUE_SENTINEL` newtype struct (transparent in
+  every format) and choose the rendering by the format's `is_human_readable()`; the
+  bridge intercepts the sentinel and re-serializes/reads the payload in
+  non-human-readable mode, unwrapping the compact form's enum name — so
+  `to_value(&v) == v` and `from_value::<SerialValue>(&v) == v` hold exactly (tested
+  by proptest), and a `SerialValue` field inside a payload is verbatim. (2) Canonical
+  JSON as briefed (`{"$bytes": b64}`, `{"$index": [table, index]}`, `$`→`$$` key
+  escaping, fail-closed reader; hand-written strict base64); compact = externally
+  tagged enum (`Bytes` via `serialize_bytes`, `Map` as a serde map, `Index` via the
+  index sentinel); postcard exercises it. (3) Bridge read strictness: `Bytes` are
+  read only from `Bytes` (a `Vec<u8>` without `serial_bytes` reads only a `List`);
+  `deserialize_f32/f64` → `FloatRejected` (symmetric with writes); an `Index`
+  reaching `deserialize_any` (foreign/untyped visitors) is a `TypeMismatch` (least
+  committing — a synthetic `$index` map was the alternative); trailing list
+  elements / map entries a visitor leaves unread are errors; the index sentinel
+  accepts only a real `Index` on read (not a `List` pair). (4) Internal derive:
+  `to_serial_value` is FALLIBLE (`Result<SerialValue, SerialValueError>`) so every
+  integer width can be a wire field with an error — never truncation — for values
+  outside `i64` (M2/M3: `SerializeError` will need a `From<SerialValueError>`
+  variant); `Option` omission is trait-based (`is_absent_field` /
+  `from_serial_field`), not syntactic, and a present `Null` also reads as `None`;
+  supported: named-field structs, enums with unit / newtype / struct variants
+  (tuple variants rejected — use named fields); generated code uses
+  `crate::serialize::…` paths (derive is techy-internal; `__private` untouched);
+  `ensure_no_generics` in techy-derive gained a `reason` argument. (5) D7 note: the
+  "by newtype-struct name" interception is the index sentinel; bytes use serde's
+  native bytes channel + `serial_bytes` (no `serde_bytes` dependency). (6) M2's
+  typed indices: implement serde via `serialize_index`/`deserialize_index` (feature
+  gated) and the wire traits by hand (`SerialValue::Index` ↔ `{table, index}`), as
+  the test doubles `TestIndex` (serde_tests.rs) and `TestPosition`
+  (wire/tests.rs) show. (7) The wire module carries a module-level
+  `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
+  fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
+  cache write). Next: M1 review → M2 (engine). Blockers: none.
 - 2026-08-16 — supervisor (main session) — plan revisions folded in after user
   approval: D11 typed indices carry `{table: TableId, index: u32}` (bridge/derive
   context-freedom — see D11 text); D21 read default made fail-closed for a `Some(_)`

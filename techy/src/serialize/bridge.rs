@@ -774,8 +774,8 @@ impl<'de> Deserializer<'de> for &'de SerialValue {
             SerialValue::List(items) => visit_list(items, visitor),
             SerialValue::Map(entries) => visit_entries(entries, visitor),
             SerialValue::Index { .. } => Err(mismatch(
-                "a value other than a table position (a position is read only into a \
-                 typed position type)",
+                "a value that is not a table position (a table position is read only \
+                 into a type made for one)",
                 self,
             )),
         }
