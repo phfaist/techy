@@ -139,10 +139,15 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
 - **D7 — The bridge** (feature-gated): `SerialValue` implements serde's
   `Serializer`/`Deserializer` over itself (the `serde_json::Value` pattern), exposed
   as `to_value<T: Serialize>` / `from_value<T: DeserializeOwned>`. Index newtypes and
-  byte payloads are intercepted by newtype-struct name so they map to the dedicated
-  variants. The bridge enforces D5 policy mechanically (floats, non-string map keys,
-  `u64` overflow → `SerialValueError`). Implementer payload structs use serde derives
-  + explicit renames.
+  byte payloads are intercepted so they map to the dedicated variants (clarified
+  2026-08-16: indices via ONE sentinel newtype-struct name wrapping the
+  `(table, index)` pair — see the D11 revision; bytes via serde's native
+  `serialize_bytes`/`deserialize_bytes` channel plus a techy-shipped
+  `#[serde(with = …)]` helper module, so no dependency such as `serde_bytes` is
+  needed). The bridge enforces D5 policy mechanically (floats, non-string map keys,
+  `u64` overflow → `SerialValueError`; `SerialValueError` is UNCONDITIONAL — the
+  internal derive's read conversions report shape failures through it too).
+  Implementer payload structs use serde derives + explicit renames.
 - **D8 — Core wire-struct conversions are unconditional** and therefore cannot use the
   bridge: a small internal derive in techy-derive (precedent: the existing
   `ToDiagnosticValue` derive) generates to/from-`SerialValue` conversions for core's
@@ -170,9 +175,22 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   one public wire struct (feature-gated serde impls).
 - **D11 — `ObjectSerdeDriver`: one per table, uniform method names**
   (`serialize_object` / `deserialize_object` — names never vary by object kind).
-  Associated `type Index`: a `u32` newtype satisfying the `SerialIndex` bound
-  (`Copy + Eq + Hash + Debug` + to/from-`u32` conversions; the bound trait's full
-  item list is M2's to pin). (Audit fix: the earlier spelling `SerializedIndex`
+  Associated `type Index`: a newtype satisfying the `SerialIndex` bound
+  (`Copy + Eq + Hash + Debug` + to/from-`(TableId, u32)` conversions; the bound
+  trait's full item list is M2's to pin). **REVISED 2026-08-16 (user-approved):**
+  typed index newtypes carry BOTH parts — `{table: TableId, index: u32}` — not a
+  bare `u32`. Reason: a session-assigned ordinal `TableId` (D5) cannot be known
+  statically by a `u32` newtype, so a context-free bridge (`to_value`, D7) and the
+  unconditional internal derive (D8) could not turn a bare `SpecIndex(u32)` into
+  `SerialValue::Index { table, index }`; carrying the table makes the conversion
+  trivial and context-free, and lets the reader validate `idx.table()` against the
+  table it expects (wrong-table index → clean `DeserializeError`). Typed indices are
+  minted only by the session (`cx.intern`), so the pair is always consistent on the
+  write side. The rejected alternative — a context-aware bridge with a table-name
+  registry threaded into `to_value`/the derive — made the free bridge second-class
+  and added a name-collision surface. Bridge mechanics: the newtypes' serde impls use
+  ONE fixed sentinel newtype-struct name wrapping the `(u32, u32)` pair; the bridge
+  intercepts that sentinel. (Audit fix: the earlier spelling `SerializedIndex`
   violated the §3.G naming families; the associated type is `Index`, its bound is
   `SerialIndex`.) The typed newtypes
   (`SourceIndex`/`StateIndex`/`SpecIndex`/`ProviderIndex`/`TreeIndex`) are defined by
@@ -324,7 +342,13 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   not the tree driver: the write default pointer-compares against
   `self.arguments().get(index)` and returns `Ok(None)` on match / the out-of-band
   error on mismatch; the read default is `self.arguments().get(index).cloned()`
-  with a bounds error. `index: usize` in signatures (the wire stores `u32`).
+  with a bounds error — **REVISED 2026-08-16 (user-approved), applied in M1 (small
+  follow-up to M0's default body):** the read default is fail-closed — a
+  `Some(value)` payload reaching the DEFAULT body is an error ("the writer's spec
+  serialized a custom argument-spec payload but this spec type has no override" — a
+  spec-type mismatch/environment drift, P5), so the default returns
+  `self.arguments().get(index).cloned()` only for `None` input. `index: usize` in
+  signatures (the wire stores `u32`).
   Out-of-band argument specs without an override = v1 write error naming node and
   callable. `ParsedSlot` is structural — no hook.
 
@@ -733,6 +757,14 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-16 — supervisor (main session) — plan revisions folded in after user
+  approval: D11 typed indices carry `{table: TableId, index: u32}` (bridge/derive
+  context-freedom — see D11 text); D21 read default made fail-closed for a `Some(_)`
+  payload (applied in M1); D7 wording clarified (index sentinel + native bytes
+  channel; `SerialValueError` unconditional). Process note: the supervisor role is
+  held by the main session itself (implementer + reviewer agents per milestone,
+  compact reports only). MSRV 1.86 not locally verifiable (only rustc 1.97
+  installed) — flagged, not acted on. Next: M0 review report → M1.
 - 2026-08-16 — M0 implementer agent — **M0 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `a6bd995` cargo `serde` feature
   (optional dep, `[features] serde = ["dep:serde"]`, nothing cfg-gated yet);
