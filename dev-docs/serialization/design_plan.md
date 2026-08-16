@@ -307,9 +307,28 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   context types well-formed in the signatures), relying on context
   unconstructibility alone (same practical semantics). Sequencing: M0 lands
   `SerializableLang` as a bare marker (`pub trait SerializableLang: Lang {}`); M3
-  adds its items — the codec surface for the lang's closed vocabulary types and its
-  ext types (reached via the `Lang::NodeExts: NodeExtTypes` bundle and `StateExt` —
-  see the state/lang.rs anchor), plus `InvocationSyntax`. Throughout this plan,
+  adds its BOUNDS. **REVISED 2026-08-16 (user-approved, "option B"):** the codecs are
+  supplied by ASSERTION, not by trait items. Two value-level capability traits,
+  parallel to D13/D14, cover values embedded inline in a payload (an *object* is a
+  table entry referenced by index; a *value* is embedded data):
+  `SerializableValue<L: Lang>` (`fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError> where L: SerializableLang`)
+  and `DeserializableValue<L: Lang>: Sized` (`fn deserialize_value(value: &SerialValue, cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError> where L: SerializableLang`).
+  Core implements both for `()`, `bool`, the integer widths, `String`,
+  `Option<String>` (the default `SourceOrigin`); a preset implements them for its own
+  vocabulary and ext types (blanket over `L: Lang`, so a lang reusing those types
+  gets the codecs free); `SerializableLang` becomes a marker with associated-type
+  bounds in supertrait position (`Lang<ModeId: SerializableValue<Self> +
+  DeserializableValue<Self>, CallableTypeId: …, GroupTypeId: …, Event: …, StateExt: …,
+  SessionExt: …, SourceOrigin: …, NodeExts: NodeExtTypes<NodeExt: …, ArgumentExt: …,
+  SlotExt: …>, InvocationSyntax: …>`; stable ≥1.79 ≤ MSRV 1.86 — M3 probes the nested
+  elaboration; fallback: restate the bounds as where-clauses on the scaffolding
+  drivers). Reasons: P3/P4 (type owners own codecs), D28(a) shrinks to an empty impl
+  block plus impls on the lang's own types, `TrivialLang`-style langs opt in with an
+  empty impl. Rejected: ~11 associated-fn pairs on `SerializableLang` (boilerplate
+  delegation for `()`/`Option<String>` in every preset; no useful defaults possible).
+  The codec surface still covers the lang's closed vocabulary types and its ext types
+  (reached via the `Lang::NodeExts: NodeExtTypes` bundle and `StateExt` — see the
+  state/lang.rs anchor), plus `InvocationSyntax`, `SourceOrigin`, `SessionExt`. Throughout this plan,
   "vocabulary types" means the lang's closed enums — its `CallableTypeId`/
   `GroupTypeId`/`ModeId`/`Event` types (the `ClosedVocabulary` impls; for latexlike:
   `CallableType`, `GroupType`, `MathGroupForm`, `Mode`, `Event`).
@@ -380,7 +399,8 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   `cx.intern_*` — a plain `A: Serialize` bound can never suffice. Mechanism: per-call
   or session-registered annotation codec (TypeId-keyed), with a serde-bridge default
   for plain-data `A`; lang ext types (NodeExt/ArgumentExt/SlotExt/StateExt,
-  InvocationSyntax) go through `SerializableLang`'s codecs. latexlike's
+  InvocationSyntax) implement `SerializableValue`/`DeserializableValue` (D17
+  REVISED). latexlike's
   `StdEnvironmentSideSyntax::name_group_rule` (`Arc<GroupRule>`) is inlined.
 - **D24 — States: always serialized, interned.** Per state: token rules in full (rule
   payloads are small; all sections optional on the wire — feature-agnostic; reader
@@ -415,7 +435,7 @@ Three families, applied strictly:
 | Family | Meaning | Members |
 |---|---|---|
 | `Serde*` | genuinely bidirectional machinery | `SerdeSession`, `ObjectSerdeDriver`, dispatching drivers (`SpecSerdeDriver`, `ProviderSerdeDriver`) |
-| `Serializable*` / `Deserializable*` | one-directional capabilities | `SerializableObject`, `DeserializableObject`, `SerializableLang` |
+| `Serializable*` / `Deserializable*` | one-directional capabilities | `SerializableObject`, `DeserializableObject`, `SerializableValue`, `DeserializableValue`, `SerializableLang` |
 | `Serial*` | wire-side data | `SerialValue`, `SerialEntry`, `SerialIndex` (the bound trait) |
 
 Typed table positions form a fourth, suffix-based family: `…Index` newtypes
@@ -446,8 +466,9 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 
 ### I. Preset / framework obligations (latexlike is the template)
 
-- **D28** — A preset/framework owes exactly: (a) a `SerializableLang` impl (vocab +
-  ext codecs); (b) `SerializableObject` impls for its participating spec/provider
+- **D28** — A preset/framework owes exactly: (a) an (empty) `SerializableLang` impl
+  plus `SerializableValue`/`DeserializableValue` impls for its vocabulary and ext
+  types (D17 REVISED); (b) `SerializableObject` impls for its participating spec/provider
   types + one-line stubs for the rest; (c) `DeserializableObject` impls for the same;
   (d) ONE namespace resolver + a `register(&mut session)` helper (which chains its
   dependencies' helpers); (e) the provenance-stamping package builder; (f) serde
@@ -611,7 +632,16 @@ pub enum SerialValue { Null, Bool(bool), Int(i64), Str(String), Bytes(Vec<u8>),
 pub struct SerialEntry { pub identifier: Cow<'static, str>, pub data: SerialValue }
 pub struct TableId(u32);                 // session-assigned, registration order (D5)
 pub trait SerialIndex: Copy + Eq + Hash /* + Debug, to/from (TableId, u32) — D11 REVISED; M2 pins items */ {}
-pub trait SerializableLang: Lang { /* M0: bare marker; M3 adds vocab/ext codecs (D17) */ }
+pub trait SerializableLang: Lang</* M3: associated-type bounds requiring SerializableValue + DeserializableValue on the vocab/ext types (D17 REVISED) */> {}
+
+pub trait SerializableValue<L: Lang> {                     // embedded values (D17 REVISED)
+    fn serialize_value(&self, cx: &mut SerializeContext<'_, L>) -> Result<SerialValue, SerializeError>
+        where L: SerializableLang;
+}
+pub trait DeserializableValue<L: Lang>: Sized {
+    fn deserialize_value(value: &SerialValue, cx: &mut DeserializeContext<'_, L>) -> Result<Self, DeserializeError>
+        where L: SerializableLang;
+}
 
 pub trait SerializableObject<L: Lang> {
     fn serialize_object(&self, cx: &mut SerializeContext<'_, L>)
@@ -735,9 +765,12 @@ merge outside the sandboxed primary checkout.
   check, depth guard, determinism. Tested standalone with toy object kinds. Resolve
   Q6. Acceptance: multi-segment round-trip with sharing preserved; read-then-append;
   cycle/bounds/depth failure tests; deterministic-output test.
-- **M3 — Sources & states.** Source driver (embed/reference, digest callbacks,
-  provenance edges), TextContent/Span handling; state driver (rules wire structs,
-  mode/ext via SerializableLang codecs, scope stacks as ProviderIndex); context
+- **M3 — Sources & states.** The `SerializableValue`/`DeserializableValue` traits +
+  core impls + `SerializableLang` bounds (D17 REVISED); source driver
+  (embed/reference, digest callbacks, provenance edges), TextContent/Span handling;
+  state driver (rules wire structs, mode/ext via the value traits, scope stacks as
+  ProviderIndex); the specs/providers tables instantiated (dispatching driver, no
+  real impls yet) and `SerdeSession::new()` with the standard tables so far; context
   extension traits; `SerializableObject`/`DeserializableObject` impls for
   `Source`/`ParsingState`. Acceptance: state + source round-trips with Arc identity
   preserved (`same_source`, shared states); digest-mismatch failure test.
@@ -951,6 +984,12 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-16 — supervisor (main session) — user rulings folded in: D17 REVISED
+  ("option B": `SerializableValue`/`DeserializableValue` value traits +
+  `SerializableLang` as bounds — D17/D23/D28/§3.G/§6/M3 texts patched); reviewer
+  agents run on the Opus 5 model from the M2 review on. M2 implementer reported
+  complete (see its entry); next: M2 review → user naming check-in on M2's public
+  API → M3.
 - 2026-08-16 — supervisor (main session) — M1 reviewed (APPROVE WITH NITS; nits
   folded into the M2 brief). Plan patches from the M1 review: D7 signature form
   (borrowed `from_value`), §6 `SerialIndex` comment, D8 Option-omission parity
