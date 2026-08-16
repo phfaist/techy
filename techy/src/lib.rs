@@ -22,11 +22,14 @@
 //! ## Cargo features
 //!
 //! - `serde` (off by default) — enables the optional [serde](https://serde.rs)
-//!   dependency for the rendering layer of [`serialize`]: encoding serialized values
-//!   through a serde format. The serialization capability itself — the value model and
-//!   the capability traits — is always present and dependency-free; the feature adds
-//!   only rendering, and adds no obligation to any implementer. (At this stage the
-//!   feature wires the dependency; the rendering layer itself is not yet present.)
+//!   dependency for the rendering layer of [`serialize`]: `Serialize`/`Deserialize`
+//!   impls for [`SerialValue`](serialize::SerialValue), so serialized values encode
+//!   through any serde format (JSON is the format the public rendering is stated in),
+//!   and the bridge `serialize::to_value` / `serialize::from_value`, which converts any
+//!   type implementing serde's traits to and from a `SerialValue`. The serialization
+//!   capability itself — the value model and the capability traits — is always present
+//!   and dependency-free; the feature adds only rendering, and adds no obligation to
+//!   any implementer.
 //!
 //! ## Panics
 //!

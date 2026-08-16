@@ -27,12 +27,17 @@
 //!
 //! **Cargo features.** Everything in this module is unconditional plain Rust with no
 //! external dependency (`no_std` + `alloc`). The optional `serde` cargo feature adds
-//! the rendering layer that encodes these values through a serde format; it adds no
-//! obligation to any implementer of the traits here.
+//! the rendering layer: `Serialize`/`Deserialize` impls for [`SerialValue`], which
+//! encode a value through any serde format (see the type's documentation for the
+//! rendering), and the bridge — `to_value` / `from_value` — which converts any type
+//! implementing serde's traits to and from a `SerialValue`, enforcing the value
+//! model's rules ([`SerialValueError`]); `serial_bytes` marks a byte-string field for
+//! it. The feature adds no obligation to any implementer of the traits here.
 //!
 //! **What exists so far.** This module currently provides the value model, the error
-//! types, and the capability traits; the machinery that walks whole trees and manages
-//! the tables is not yet present, and the contexts have no public operations yet.
+//! types, the capability traits, and (with the feature) the rendering layer; the
+//! machinery that walks whole trees and manages the tables is not yet present, and
+//! the contexts have no public operations yet.
 
 mod engine;
 mod error;

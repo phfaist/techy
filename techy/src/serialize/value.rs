@@ -22,6 +22,24 @@ use alloc::vec::Vec;
 /// table: `table` names the table, `index` the position within it. Shared objects
 /// are written into tables once and referred to by such indices, so identity and
 /// sharing survive a round trip.
+///
+/// # Rendering through serde
+///
+/// With the `serde` cargo feature the type implements `Serialize` and `Deserialize`.
+/// Through a human-readable format (serde's `is_human_readable()`), the rendering is
+/// the canonical one — provisional until the wire vocabulary is finalized, and stated
+/// here for JSON: `Null` → `null`, `Bool` → boolean, `Int` → number, `Str` → string,
+/// `List` → array, `Map` → object in entry order; `Bytes` → the one-entry object
+/// `{"$bytes": "<base64>"}` (standard alphabet, `=` padding, no line breaks); `Index`
+/// → the one-entry object `{"$index": [<table>, <index>]}` (two integers: the table's
+/// ordinal, then the position). A map key beginning with `$` is written with one
+/// extra leading `$` (`"$foo"` → `"$$foo"`) and unescaped on reading; on reading, an
+/// object key beginning with `$` that is neither a reserved key nor `$$`-escaped is
+/// an error, as are floating-point numbers, integers outside `i64`, and malformed
+/// reserved objects. Through any other format the rendering is a compact one: the
+/// externally tagged form of this enum, `Bytes` through the format's byte-string
+/// channel, `Index` as the two-integer pair, `Map` as a serde map. Both renderings
+/// read back to the identical value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SerialValue {
     /// The absent value.
