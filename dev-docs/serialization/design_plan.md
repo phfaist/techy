@@ -733,6 +733,42 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-16 — M0 implementer agent — **M0 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `a6bd995` cargo `serde` feature
+  (optional dep, `[features] serde = ["dep:serde"]`, nothing cfg-gated yet);
+  `00fed0f` `techy::serialize` module skeleton (value.rs / error.rs / object.rs /
+  engine/mod.rs; facade + crate-doc "Cargo features" note in lib.rs); `3d924e6`
+  `SerializableObject<L>` supertrait on `CallableSpec`/`SpecsProvider`, the D21 pair
+  with the pinned default bodies, one-line stubs on all 12 non-test types + 18
+  test-module types + the construct-parsers guide doctest; `dbdfadf` unit tests
+  (vacant vtable via `NeverSerializableLang`, gate defaults through `dyn` for an
+  opted-in test lang, D21 default bodies, value equality, error Display); plus this
+  log entry (docs wording pass on `SerialValue`). Verified: `cargo build`/`test`
+  green with and without `--features serde` (837 unit + 74 integration + 70
+  doctests), `cargo docs` clean both states, clippy reports nothing in the new code
+  (pre-existing findings elsewhere untouched). **Provisional shapes / decisions for
+  later milestones:** (1) module wiring — the plan's "`pub(crate) mod serialize` +
+  `pub mod serialize` facade" cannot both exist under one name at the crate root, so
+  `serialize` follows the `source`/`error` own-facade pattern (public module, private
+  submodules, re-exports; public paths unchanged: `techy::serialize::X`); (2)
+  `SerializeError { Unsupported, ArgumentSpecOutOfBand { index, count } }` and
+  `DeserializeError { ArgumentIndexOutOfRange { index, count } }`, both
+  `#[non_exhaustive]` + `Clone, Debug, PartialEq, Eq` + hand-written Display/Error;
+  the D27 "any implementer reason" variant is NOT added (no M0 caller) — M2 decides
+  its shape; note that `HookFailed`'s `detail + Option<Arc<dyn Error>>` shape would
+  forfeit derived `PartialEq`/`Eq`; (3) `TableId::new(u32)` is `pub(crate)` with
+  `#[allow(dead_code)]` until the session (M2) mints ids; no getter yet; (4) contexts
+  are `struct …Context<'a, L: SerializableLang> { _shell: PhantomData<&'a mut L> }`
+  with `#[cfg(test)] pub(crate) fn shell()` constructors — M2 replaces the field and
+  constructors with the session borrow; (5) the `deserialize_argument_spec` default
+  ignores `value` exactly as D21 pins; whether a `Some(_)` payload reaching the
+  default (writer overrode, reader's spec type did not — a spec-type mismatch) should
+  be a fail-closed error is a question for M4 (would be a D21 refinement, escalate);
+  (6) MSRV: the vacant-vtable test passes on rustc 1.97 (installed toolchain); no
+  1.86 toolchain was available offline, so the D17 MSRV claim is not locally
+  re-verified (vacant vtable slots for methods with unsatisfied where-clauses long
+  predate 1.86 — low risk; an MSRV CI check is the durable fix). Next: M0 review →
+  M1 (bridge + internal derive). Blockers: none.
 - 2026-08-14 — cold-read audit by a context-free agent (grade B) + patches: pinned
   `TableId`, `SerializableLang` M0-marker/M3-items sequencing, M0 context shells,
   the read-entry ("entry currency") definition, D21 default bodies, staged-region

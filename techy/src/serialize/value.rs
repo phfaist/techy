@@ -9,11 +9,11 @@ use alloc::vec::Vec;
 /// A serialized value: the in-memory, format-independent form that every
 /// serialization produces and every deserialization reads.
 ///
-/// The variant set is deliberately small so that every value has exactly one
-/// rendering in the canonical JSON form, and two values render identically exactly
-/// when they compare equal: there are no floating-point numbers and no sized-integer
-/// variants (every integer is an [`Int`](SerialValue::Int)); map keys are strings;
-/// maps preserve insertion order.
+/// The variant set is deliberately small so that every value has exactly one JSON
+/// rendering (JSON is the format the public serialization contract is stated in),
+/// and two values render identically exactly when they compare equal: there are no
+/// floating-point numbers and no sized-integer variants (every integer is an
+/// [`Int`](SerialValue::Int)); map keys are strings; maps preserve insertion order.
 ///
 /// [`Index`](SerialValue::Index) is a reference to an object stored in a numbered
 /// table: `table` names the table, `index` the position within it. Shared objects
@@ -25,13 +25,13 @@ pub enum SerialValue {
     Null,
     /// A boolean.
     Bool(bool),
-    /// An integer. The only numeric variant: every integer width is written as an
-    /// `i64` (a value that does not fit is a serialization error, never a
-    /// silent truncation).
+    /// An integer. The only numeric variant: integers of every width are represented
+    /// as `i64` (a value that does not fit is a serialization error, never a silent
+    /// truncation).
     Int(i64),
     /// A string.
     Str(String),
-    /// A byte string (rendered as base64 in the canonical JSON form).
+    /// A byte string (rendered as base64 text in JSON).
     Bytes(Vec<u8>),
     /// An ordered sequence of values.
     List(Vec<SerialValue>),
