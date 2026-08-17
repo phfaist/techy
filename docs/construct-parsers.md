@@ -56,15 +56,50 @@ the driver. Its methods are the parser's entire toolkit:
 
 **Token reading.** `cx.tokens` is the
 [`TokenReader`](crate::core::TokenReader): peek or consume tokens under an
-explicitly passed state, and reposition — at an edge of a token it read
-([`move_to`](crate::core::TokenReader::move_to)) or at a position it handed
-out earlier
-([`move_to_position`](crate::core::TokenReader::move_to_position)). Prefer
+explicitly passed state. Prefer
 [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token)
 over a raw peek: it maps tokenizer errors per the recovery policy (strict:
-abort; tolerant: report `None` so you treat the position as unusable, while
-the enclosing content loop takes care of diagnosing the token — the probe
-protocol is documented on the method).
+abort; tolerant: report `None` so you treat the place you stand as
+unusable, while the enclosing content loop takes care of diagnosing the
+token — the probe protocol is documented on the method).
+
+A token is an opaque value. Your parser holds it and passes it on; the
+reader that produced it answers every question about it, and there are
+three questions to ask:
+
+- *What is this token?*
+  [`cx.tokens.token_kind(&token)`](crate::core::TokenReader::token_kind)
+  answers with a [`TokenKind`](crate::core::TokenKind) — the character, the
+  command name and its escape character, the group delimiter and its rule,
+  and so on. The answer borrows from the token, and stays usable as long as
+  you hold it.
+- *Where is it in the text?*
+  [`cx.tokens.source_span_of(&token)`](crate::core::TokenReader::source_span_of)
+  answers with the token's own [`SourceSpan`](crate::source::SourceSpan) — a
+  source together with a byte range in it — and
+  [`source_span_between(&token, a, b)`](crate::core::TokenReader::source_span_between)
+  with the span between two of the token's *edges*.
+  [`TokenEdge`](crate::core::TokenEdge) names the five boundaries of a token
+  in reading order, from where its leading whitespace begins to where its
+  trailing whitespace ends.
+- *Where does the stream stand?* A **stream position** names a place in the
+  token stream. It is opaque as well, and the reader is the only source of
+  one: [`position_here()`](crate::core::TokenReader::position_here) for the
+  place the stream stands at, and
+  [`position_at(&token, edge)`](crate::core::TokenReader::position_at) for an
+  edge of a token. Two positions become a span through
+  [`cx.source_span_within(&begin, &end)`](crate::core::constructs::ParseContext::source_span_within),
+  which is how a construct reading several tokens computes the span it
+  stages its node with;
+  [`cx.here()`](crate::core::constructs::ParseContext::here) is the empty
+  span at the current position, the anchor for a problem reported where the
+  parser stands.
+
+Repositioning takes a token or a position:
+[`cx.tokens.move_to(&token, edge)`](crate::core::TokenReader::move_to) puts
+the stream at an edge of a token the reader read, and
+[`move_to_position(&position)`](crate::core::TokenReader::move_to_position)
+at a position it handed out earlier.
 
 **Node staging.**
 [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node)
@@ -521,8 +556,12 @@ object (registered once, `Arc`-shared) while `UntilParser` is the
 temporary; the trigger was consumed before `parse` ran; the raw state is
 derived through the context and passed to `probe_token` explicitly, without
 ever swapping `cx.state`; the condition is a custom derive-backed type that
-flows through the same diagnostics carriers as the library's own; and the
-staged chars node records the state it was actually read under.
+flows through the same diagnostics carriers as the library's own; the staged
+chars node records the state it was actually read under; and every location
+in the parser is an answer from the reader — the content's two stream
+positions turned into a span by `cx.source_span_within`, and the terminator's
+position handed to `stage_invocation` so that the node's span reaches past
+the `;`.
 
 Read next: back to the [Developer Guide](crate::guide#developer-guide) index —
 the other chapters on extending and embedding techy.
