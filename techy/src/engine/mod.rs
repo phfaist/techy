@@ -1468,7 +1468,6 @@ mod tests {
             ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, HelperLang> + 's> {
                 alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
             }
-
         }
         impl HelperDriver {
             /// An inherent helper — not on the `ParseDriver` trait.

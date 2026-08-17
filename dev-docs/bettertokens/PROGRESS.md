@@ -83,6 +83,42 @@ No §9 fallback is needed: the `TokenReader` trait is object-safe as spelled in 
   allocation.
 - No other §1.16 item was reached by Stage 0.
 
+### Review round 1 (fixes applied 2026-08-17)
+
+The stage came back NOT READY; every point below is addressed on the branch.
+
+1. `move_to_pos`'s rustdoc was a broken sentence after the `resume_pos` reference was
+   removed — rewritten as one clause.
+2. The trait's "a fuller example accompanies the token type itself" promised a page that
+   does not exist yet — sentence deleted (the full example arrives with `StdToken`).
+3. `StdTokenReader`'s default type parameter: **kept**, recorded as deviation 6.
+4. `TokenListReader`'s issued-position set is no longer pre-seeded with the listed
+   tokens' edges (see the decisions section); `move_to_pos` now issues the offset it is
+   given. No test trips the narrower guard.
+5. **A panic closed** (CLAUDE.md rule 4): the scan-error lift passed the hook's `Span`
+   straight into `SourceSpan::new`, so a `Lang::scan_specials` returning an out-of-range
+   or mid-character span would have panicked inside the reader. The new
+   `StdTokenReader::lift_specials_scan_error` validates the span first and otherwise
+   reports the hook's contract violation the way the reader reports every other one — an
+   unrecoverable `TokenErrorKind::Custom(ImplementationError)` naming `scan_specials` and
+   quoting the offending span, anchored at the empty span at `nearest_valid_offset(pos)`.
+   New test: `a_specials_scan_error_at_an_invalid_span_is_reported_not_panicked` (both
+   the out-of-bounds and the mid-character case; neither panics, both abort).
+   `SpecialsMatch::end` was **already** validated on the `Ok(Some(m))` path
+   (`m.end > pos && m.end <= s.len() && s.is_char_boundary(m.end)`, reported the same
+   way), so that hole was already closed — its test is
+   `scan_specials_invalid_match_end_is_an_unrecoverable_implementation_error`.
+6. New test `a_lifted_specials_scan_error_carries_no_recovery` pins the lift: the error
+   is qualified by the reader's source and `recovery()` is `None`.
+7. `SpecialsScanError` gained `Display` (condition wording plus the byte range — the only
+   locating information it carries) and `core::error::Error`; fields stay public.
+8. Contract clause 4 now carries its second half: the std reader cannot detect a foreign
+   token and answers from its offsets, while `TokenListReader` rejects what it did not
+   issue — which is what makes the lockstep suites a guard.
+9. Deviation 3 records that `nearest_valid_offset` also closes a latent panic.
+10. Cosmetics: `core/mod.rs`'s over-long re-export line re-wrapped; the stray blank line
+    inside `impl ParseDriver<HelperLang> for HelperDriver` removed.
+
 ### Open questions
 
 - **None opened by the probe.** Every shape §2 asked about is settled by the compiler,
@@ -136,9 +172,9 @@ abbaad4 source: add `SourceSpan::at(&SourcePos)`
 | File | Change |
 |---|---|
 | `techy/src/source/source.rs` | `SourceSpan::at(&SourcePos)` (§1.13) + doctest + unit test |
-| `techy/src/token/reader.rs` | `TokenEdge`, `StdStreamPosition`; `StdTokenReader<'s, O: SourceOrigin = Option<String>>` built from `&'s Arc<Source<O>>` (new `source()` accessor, `nearest_valid_offset` helper); the P8 impl header and the same bound on the scanning core; the eight new trait methods + contract clauses 1–6 + the custom-reader pattern in the trait rustdoc; error construction through `SourceSpan`; scan-error lift; five new unit tests |
+| `techy/src/token/reader.rs` | `TokenEdge`, `StdStreamPosition`; `StdTokenReader<'s, O: SourceOrigin = Option<String>>` built from `&'s Arc<Source<O>>` (new `source()` accessor, `nearest_valid_offset` helper); the P8 impl header and the same bound on the scanning core; the eight new trait methods + contract clauses 1–6 + the custom-reader pattern in the trait rustdoc; error construction through `SourceSpan`; scan-error lift; five new unit tests; `lift_specials_scan_error` validates the hook's span before qualifying it, with two more tests |
 | `techy/src/token/error.rs` | `TokenError::span: SourceSpan<L::SourceOrigin>` (`span()` returns `&SourceSpan`), `TokenRecovery::resume: L::StreamPosition` (was `resume_pos: usize`) with the reworded advancement contract |
-| `techy/src/token/specials.rs` | `SpecialsMatch<L>` (no lifetime, no `name`), new `SpecialsScanError { kind, span }` with the rationale in its rustdoc |
+| `techy/src/token/specials.rs` | `SpecialsMatch<L>` (no lifetime, no `name`), new `SpecialsScanError { kind, span }` with the rationale in its rustdoc, plus `Display` and `Error` |
 | `techy/src/token/token.rs` | `pub(crate) Token::edge_offset(TokenEdge)` |
 | `techy/src/token/list_reader.rs` | `new(source, tokens)`; the new trait methods; issued-token / issued-position validation (panicking) + its rustdoc section; lockstep test and two `#[should_panic]` negatives; test helpers take a source |
 | `techy/src/token/mod.rs` | facade: `TokenEdge`, `StdStreamPosition`, `SpecialsScanError`; module prose |
@@ -172,8 +208,8 @@ $ cargo build
 
 $ cargo test
      Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
-running 1025 tests
-test result: ok. 1025 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+running 1027 tests
+test result: ok. 1027 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
      Running tests/acceptance.rs
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/derive_conditions.rs
@@ -210,11 +246,11 @@ from 59 sites in `techy/src/constructs/nodes_parser.rs`; the suite that exercise
 ```
 $ cargo test -p techy --lib constructs::nodes_parser
 running 78 tests
-test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 947 filtered out; finished in 0.00s
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 949 filtered out; finished in 0.05s
 
 $ cargo test -p techy --lib token::list_reader
 running 11 tests
-test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 0.00s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1016 filtered out; finished in 0.01s
   (includes positions_and_spans_match_the_std_reader_in_lockstep and the two
    should-panic negatives)
 ```
@@ -225,7 +261,7 @@ Breaking changes are expected (soft freeze) and were not "fixed".
 
 ```
      Summary semver requires new major version: 9 major and 0 minor checks failed
-    Finished [   9.283s] techy
+    Finished [   2.790s] techy
 ```
 
 The nine failing lints:
@@ -258,10 +294,14 @@ The nine failing lints:
     (`pre_space` excluded), or when the token is `EndOfStream` (synthesized past the end
     of the list rather than served from it);
   - *positions*: accepted when the offset is in a `BTreeSet<usize>` of issued offsets,
-    seeded with the initial position **and every edge offset of every listed token**,
-    and extended by every peeked token's edge offsets and by every
-    `position_here`/`position_at` answer. The set lives behind a `RefCell` because the
-    position accessors take `&self`.
+    seeded with the **initial position alone** and extended by the four edge offsets of
+    every token the reader serves, by every `position_here`/`position_at` answer, and by
+    every offset the reader is moved to (`move_to_edge`/`move_to_pos`). The set lives
+    behind a `RefCell` because the position accessors take `&self`. (First implemented
+    with the listed tokens' edges pre-seeded; narrowed on review. **No legitimate test
+    trips the narrower guard** — the full suite and both lockstep suites pass unchanged
+    — so §9's "compare on span + kind" fallback was not needed for any position case;
+    it *is* what the token rule does, for the clipped-`pre_space` reason above.)
   - Violations `panic!` with "was handed a token/position it never issued" — test
     infrastructure only; no new panic in library code.
 - **The three test hooks that produced a `TokenRecovery`** (§3 step 5): only one was a
@@ -323,20 +363,30 @@ The nine failing lints:
    report at `peek` used `Span::empty(start.min(len))`, which is not a legal
    `SourceSpan` when `start` is mid-character — `SourceSpan::new`'s always-on assert
    fires. The error is now anchored at the nearest valid offset at or before the
-   offending one. No behavior change beyond the anchor.
+   offending one. No behavior change beyond the anchor — and it closes a latent panic:
+   on `main` a mid-character reader position could not be lifted to a source-qualified
+   anchor at all, so the same report would have asserted the moment the token layer
+   started building `SourceSpan`s.
 
 4. **`StdTokenReader::source()`** (new public inherent accessor) — the in-crate
    delegating test readers need the reader's source to build their own `TokenError`
    spans. It is the natural sibling of the existing `content()` accessor; say the word
    and it can be `pub(crate)`.
 
-5. **`TokenListReader` position validation seeds the issued set with the listed tokens'
-   edges** (not only with the initial position, as §1.8's parenthesis suggests).
-   Reason: `peek` clips `pre_space`, `move_to_pos` (still present in Stage 1) can put the
-   reader anywhere, and the harness compares readers run-by-run; seeding keeps every
-   legitimate lockstep test passing while a position taken from a place this reader never
-   served is still rejected (the negative test takes one from a std reader over a longer
-   stretch of the same source).
+5. ~~`TokenListReader` position validation seeds the issued set with the listed tokens'
+   edges~~ — **withdrawn on review**: the set is seeded with the initial position alone,
+   exactly as §1.8 prescribes, and grows only as the reader serves tokens, answers
+   positions, or is moved. Every test still passes; the forged-position negative (a
+   position taken from a std reader over a stretch this list reader never served) still
+   fails as it should.
+
+6. **`StdTokenReader<'s, O: SourceOrigin = Option<String>>` keeps a default type
+   parameter**, which §1.8 does not mention. Reason (orchestrator ruling, 2026-08-17):
+   it mirrors `Source<O = Option<String>>`, `SourceSpan<O = Option<String>>` and
+   `SourcePos<O = Option<String>>` — the whole S0 family defaults the origin the same
+   way — so `StdTokenReader<'s>` keeps reading as "the reader over an ordinary source",
+   and existing `StdTokenReader<'s>` type mentions (e.g. the test readers' `inner`
+   fields) stay spelled as they were.
 
 ### Open questions
 

@@ -60,9 +60,11 @@ use super::token::{Token, TokenKind};
 ///   from the list). `pre_space` is left out of the comparison because `peek` clips it
 ///   to the current position.
 /// - A **position** is accepted when its offset is one this reader handed out: the set
-///   starts with the initial position and every edge offset of every listed token, and
-///   grows with every peeked token's edge offsets and every position the reader
-///   answers.
+///   starts with the initial position alone and grows with the four edge offsets of
+///   every token the reader serves, with every position it answers
+///   (`position_here`/`position_at`), and with every offset it is moved to
+///   (`move_to_edge`/`move_to_pos`). A position taken from somewhere the reader never
+///   served is therefore rejected.
 pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
     tokens: Vec<Token<'s, L>>,
@@ -87,14 +89,10 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
             "tokens must be in source order with non-overlapping spans"
         );
         let pos = tokens.first().map(|t| t.pre_space.start()).unwrap_or(0);
-        let mut issued = BTreeSet::new();
-        issued.insert(pos);
-        for token in &tokens {
-            for edge in EVERY_EDGE {
-                issued.insert(token.edge_offset(edge));
-            }
-        }
-        TokenListReader { source, tokens, pos, issued: RefCell::new(issued) }
+        // Seeded with the initial position alone: every other offset becomes valid only
+        // by being served or answered (see the type's validation rules).
+        let issued = RefCell::new(BTreeSet::from([pos]));
+        TokenListReader { source, tokens, pos, issued }
     }
 
     /// Record `offset` as one this reader handed out.
@@ -209,6 +207,7 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
 
     fn move_to_pos(&mut self, pos: usize) {
         TokenListReader::move_to_pos(self, pos);
+        self.issue(pos);
     }
 
     fn pos(&self) -> usize {

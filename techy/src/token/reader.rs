@@ -30,6 +30,7 @@ use super::error::{
     TokenResult,
 };
 use super::rules::{CommandRule, TokenRules};
+use super::specials::SpecialsScanError;
 use super::token::{Token, TokenKind};
 
 /// One of the four boundaries of a token, in reading order.
@@ -141,7 +142,10 @@ impl StdStreamPosition {
 /// 4. **Interpretation stays with the issuing reader** (or a reader over the same
 ///    content): handing a token or a position to a reader that did not produce it is a
 ///    caller-contract violation. [`StdTokenReader`] cannot detect it and answers from
-///    the offsets the token carries.
+///    the offsets the token carries; the test-only `TokenListReader` does detect it and
+///    rejects tokens and positions it did not issue (its own documentation states the
+///    rules), which is what makes the two-reader lockstep suites a guard against a
+///    parser inventing either.
 /// 5. **Absent features yield no tokens:** a token kind belonging to a feature the
 ///    language declares absent ([`Lang::Features`]) must never be produced — no
 ///    `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
@@ -164,8 +168,7 @@ impl StdStreamPosition {
 /// content, produce tokens with it, and delegate the position and span methods to it.
 /// Because the inner reader is generic over the language, delegation goes through a
 /// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it (plain method
-/// syntax on the concrete inner reader cannot infer the language). A fuller example
-/// accompanies the token type itself.
+/// syntax on the concrete inner reader cannot infer the language).
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
@@ -178,10 +181,9 @@ pub trait TokenReader<'s, L: Lang> {
     /// is true the position lands before the token's preceding whitespace instead.
     fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool);
 
-    /// Move to an absolute byte position: a
-    /// an argument parser's absent-argument rewind target. The position must be one the reader can
-    /// meaningfully resume from (for text-scanning readers: on a `char` boundary, at
-    /// most the content's length).
+    /// Move to an absolute byte position — an argument parser's absent-argument rewind
+    /// target. The position must be one the reader can meaningfully resume from (for
+    /// text-scanning readers: on a `char` boundary, at most the content's length).
     ///
     /// Deliberately bidirectional — it also serves rewinds — so implementations assert
     /// nothing about the direction of the move. Superseded by
@@ -461,9 +463,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             // byte range, and knows nothing about this reader's tokens or positions, so
             // it cannot describe how to carry on ([`SpecialsScanError`]). The reader
             // qualifies the range with its own source and attaches no recovery.
-            let scanned = L::scan_specials(state, s, pos).map_err(|error| {
-                TokenError::new(error.kind, SourceSpan::new(self.source, error.span), None)
-            })?;
+            let scanned = L::scan_specials(state, s, pos)
+                .map_err(|error| self.lift_specials_scan_error(error, pos))?;
             if let Some(m) = scanned {
                 // A malformed `end` from the hook would yield a zero-width token (the
                 // dispatch loop would never advance) or a span that panics when
@@ -514,6 +515,42 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         }
 
         Ok(Token::new(TokenKind::Char(c), Span::new(pos, pos + c.len_utf8()), pre_space))
+    }
+
+    /// Turn a `Lang::scan_specials` failure into a token error qualified by this
+    /// reader's source, with no recovery (the hook cannot describe one).
+    ///
+    /// The hook is outer-layer code, so its span is *validated*, not trusted: a span
+    /// out of the content's bounds or cutting a character would make `SourceSpan::new`
+    /// assert. Such a span is itself a contract violation, reported the way every other
+    /// extension-contract violation in this reader is — an unrecoverable implementation
+    /// error, anchored where the scan was asked for ([§dd-dr:panic-policy]).
+    fn lift_specials_scan_error<
+        L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>,
+    >(
+        &self,
+        error: SpecialsScanError,
+        pos: usize,
+    ) -> TokenError<'s, L> {
+        let span = error.span;
+        let valid = span.end() <= self.content.len()
+            && self.content.is_char_boundary(span.start())
+            && self.content.is_char_boundary(span.end());
+        if !valid {
+            return TokenError::new(
+                TokenErrorKind::Custom(Box::new(ImplementationError::new(format!(
+                    "Lang::scan_specials reported an error at an invalid span {}..{} \
+                     for a scan at {} (content length {})",
+                    span.start(),
+                    span.end(),
+                    pos,
+                    self.content.len()
+                )))),
+                SourceSpan::new(self.source, Span::empty(self.nearest_valid_offset(pos))),
+                None,
+            );
+        }
+        TokenError::new(error.kind, SourceSpan::new(self.source, span), None)
     }
 
     /// A `ParagraphBreak` token if a `\n\s*\n` whitespace sequence starts at `pos` (which
@@ -1737,6 +1774,110 @@ mod tests {
     struct BadEndStubSpec;
     impl crate::serialize::SerializableObject<BadEndLang> for BadEndStubSpec {}
     impl CallableSpec<BadEndLang> for BadEndStubSpec {}
+
+    /// A lang whose scan hook always fails, with a span chosen by the trigger:
+    /// `!` reports a well-formed span, `?` a span past the end of the content, and `~`
+    /// a span cutting the two-byte character the test content starts with.
+    #[derive(Debug, Clone, Copy)]
+    struct ScanErrorLang;
+    impl Lang for ScanErrorLang {
+        type Features = crate::state::AllLangFeatures;
+        type GroupTypeId = u32;
+        type CallableTypeId = u32;
+        type ModeId = ();
+        type StateExt = ();
+        type Event = ();
+        type SessionExt = ();
+        type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
+        type NodeExts = ();
+        type InvocationSyntax = ();
+        type Driver = crate::engine::StdParseDriver;
+        fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
+            TriggerChars::Only("!?~".into())
+        }
+        fn scan_specials(
+            _state: &ParsingState<Self>,
+            content: &str,
+            pos: usize,
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
+            let span = match content[pos..].chars().next() {
+                Some('!') => Span::new(pos, pos + 1),
+                Some('?') => Span::new(0, 99), // out of the content's bounds
+                _ => Span::new(1, 2),          // cuts the leading two-byte character
+            };
+            Err(SpecialsScanError {
+                kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(
+                    String::from("the scan declined loudly"),
+                ))),
+                span,
+            })
+        }
+        fn make_node_ext(
+            _kind: &crate::node::NodeKind<Self>,
+            _span: &crate::source::SourceSpan<Self::SourceOrigin>,
+            _state: &alloc::sync::Arc<crate::state::ParsingState<Self>>,
+            _children: crate::node::StagedChildren<'_, Self>,
+        ) -> Result<(), crate::node::NodeBuildError> {
+            Ok(())
+        }
+    }
+
+    fn scan_error_state() -> Arc<ParsingState<ScanErrorLang>> {
+        let rules: TokenRules<ScanErrorLang> = latex_rules();
+        Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }))
+    }
+
+    #[test]
+    fn a_lifted_specials_scan_error_carries_no_recovery() {
+        let source = Arc::new(Source::new("!x"));
+        let mut tr = StdTokenReader::new(&source);
+        let err = TokenReader::peek(&mut tr, &scan_error_state()).unwrap_err();
+
+        // The reader qualifies the hook's range with its own source, and the failure is
+        // unrecoverable: the hook cannot describe how to carry on.
+        assert_eq!(err.span(), &SourceSpan::new(&source, sp(0, 1)));
+        assert!(err.into_recovery().is_none());
+    }
+
+    #[test]
+    fn a_specials_scan_error_at_an_invalid_span_is_reported_not_panicked() {
+        // The hook is outer-layer code: a span out of bounds or cutting a character
+        // must not reach `SourceSpan::new`'s assert ([§dd-dr:panic-policy]).
+        //                                    'é' occupies bytes 0..2, so 1 cuts it
+        for (content, at, trigger) in [("?x", 0, "out of bounds"), ("\u{e9}~", 2, "mid-character")]
+        {
+            let source = Arc::new(Source::new(content));
+            let mut tr = StdTokenReader::new(&source);
+            let st = scan_error_state();
+            tr.move_to_pos(at);
+
+            let err = TokenReader::peek(&mut tr, &st).unwrap_err();
+            match err.kind() {
+                TokenErrorKind::Custom(data) => {
+                    assert_eq!(
+                        data.identifier(),
+                        crate::constructs::ImplementationError::IDENTIFIER,
+                        "{trigger}"
+                    );
+                    assert!(
+                        data.to_string().contains("Lang::scan_specials"),
+                        "{trigger}: {}",
+                        data
+                    );
+                }
+                other => panic!("{trigger}: expected a Custom error, got {:?}", other),
+            }
+            // Anchored at a valid offset, and unrecoverable under either policy.
+            assert!(err.span().is_empty());
+            assert!(err.into_recovery().is_none());
+        }
+    }
 
     #[test]
     fn scan_specials_invalid_match_end_is_an_unrecoverable_implementation_error() {

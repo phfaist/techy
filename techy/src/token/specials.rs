@@ -84,6 +84,17 @@ pub struct SpecialsScanError {
     pub span: Span,
 }
 
+impl fmt::Display for SpecialsScanError {
+    /// The condition's own wording, followed by the byte range it was reported at —
+    /// the range is the only locating information this error carries (it names no
+    /// source: the scanned content is the reader's, not the hook's).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} (at bytes {}..{})", self.kind, self.span.start(), self.span.end())
+    }
+}
+
+impl core::error::Error for SpecialsScanError {}
+
 /// The characters that may start a specials trigger in some parsing state.
 ///
 /// Computed by `Lang::specials_trigger_chars(&StateData<L>)` when a state is frozen and
