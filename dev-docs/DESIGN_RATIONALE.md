@@ -5704,7 +5704,7 @@ with it. Don't.
 #### The value model and the canonical-rendering discipline; the feature gates rendering only [§dd-dr:serial-value-model]
 
 Status: DECIDED (user-led design sessions; `Map` order and the `$`-key rule ruled by
-the user at the vocabulary pass).
+the user).
 
 `SerialValue` holds exactly what the canonical JSON rendering round-trips
 distinguishably: null, bool, `i64` (every integer width; out of range is an error),
@@ -5730,7 +5730,7 @@ own recursion limit needs a different bound.
 #### Session-scoped positions, segments, and streams [§dd-dr:serialize-sessions-segments]
 
 Status: DECIDED (user-led design sessions; segment envelope, `main`, and `profile`
-ruled by the user at the vocabulary pass).
+ruled by the user).
 
 One `SerdeSession` type serves both directions: it interns by `Arc` identity into
 per-kind tables (write once, share on read), emits **segments** (the entries new since
