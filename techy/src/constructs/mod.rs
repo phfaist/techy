@@ -94,7 +94,7 @@ use crate::node::{
     StagedNodes,
 };
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge, TokenKind, TokenReader};
+use crate::token::{GroupRule, TokenEdge, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
@@ -1243,25 +1243,28 @@ pub trait ConstructParser<L: Lang> {
 /// post-space included) — see
 /// [`StdInvocationParser`]'s documentation for the full contract.
 ///
+/// The bundle is the **resolution result plus the token**: what the trigger *is*,
+/// where it lies, and every other detail of it are reader questions — ask
+/// `cx.tokens` (or, in [`FromInvocation::from_invocation`], the `tokens` parameter)
+/// about [`token`](Invocation::token):
+/// [`token_kind`](TokenReader::token_kind),
+/// [`source_span_of`](TokenReader::source_span_of),
+/// [`position_at`](TokenReader::position_at).
+///
 /// [`CallableSpec::make_invocation_parser`]: crate::spec::CallableSpec::make_invocation_parser
 pub struct Invocation<'a, L: Lang> {
     /// The invocation form the trigger resolved to.
     pub callable_type: L::CallableTypeId,
-    /// The trigger's invocation spelling, as written (from the trigger's
-    /// [`kind`](Invocation::kind)). The *standard* parser stores an owned copy on the
-    /// node; a takeover composition may store a name of its own (an environment node
-    /// records the environment's name, not `begin`).
+    /// The trigger's invocation spelling, as written (the name the resolver matched).
+    /// The *standard* parser stores an owned copy on the node; a takeover composition
+    /// may store a name of its own (an environment node records the environment's
+    /// name, not `begin`).
     pub name: &'a str,
     /// The behavior spec driving the parse.
     pub spec: &'a Arc<dyn CallableSpec<L>>,
     /// The trigger token. Only a [`TokenReader`] interprets it: hand it back to
-    /// `cx.tokens` to learn where the trigger is.
+    /// `cx.tokens` to learn what the trigger is and where it lies.
     pub token: &'a L::Token,
-    /// The view of the trigger token — what it *is*, carried along so a consumer needs
-    /// no second query. Where it is stays a reader question
-    /// ([`source_span_of`](TokenReader::source_span_of) on
-    /// [`token`](Invocation::token)).
-    pub kind: TokenKind<'a, L>,
 }
 
 impl<L: Lang> fmt::Debug for Invocation<'_, L> {
@@ -1271,7 +1274,6 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
             .field("name", &self.name)
             .field("spec", &self.spec)
             .field("token", &self.token)
-            .field("kind", &self.kind)
             .finish()
     }
 }
@@ -1287,10 +1289,9 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
 /// the preset's specials sites — under a bound-where-used
 /// (`where L::InvocationSyntax: FromInvocation<L>`): a standard parser's knowledge
 /// about a custom payload is exactly "what the invocation bundle shows", and the
-/// bound says so. The bundle carries the trigger's view
-/// ([`Invocation::kind`]) and its token, so the constructor sees precisely what was
-/// matched (spelling, escape character) and can ask the reader for the syntactic
-/// post-space.
+/// bound says so. The bundle carries the trigger token, and the reader arrives
+/// alongside, so the constructor can ask what was matched (spelling, escape
+/// character) and where — the syntactic post-space, say.
 ///
 /// Deliberately **separate from the required data bound**: a language whose
 /// payload cannot be built from an `Invocation` alone stages its callables through
@@ -1302,11 +1303,11 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
 /// and latexlike-family languages satisfy the bound out of the box.
 pub trait FromInvocation<L: Lang>: Sized {
     /// The payload recording `invocation`'s trigger spelling. Pure transcription:
-    /// reads the bundle — [`Invocation::kind`] for what the trigger is — and asks
-    /// `tokens` for any spelling *span* it records, since only the reader knows where
-    /// the trigger lies. Performs no parsing and consumes nothing; the reader arrives
-    /// as a shared borrow for the duration of the call, so the implementation cannot
-    /// move the stream.
+    /// asks `tokens` what the trigger token is
+    /// ([`token_kind`](TokenReader::token_kind)) and where any spelling it records
+    /// lies, since only the reader knows either. Performs no parsing and consumes
+    /// nothing; the reader arrives as a shared borrow for the duration of the call,
+    /// so the implementation cannot move the stream.
     fn from_invocation(
         invocation: &Invocation<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
@@ -1504,13 +1505,11 @@ mod tests {
             // The dispatch contract: the trigger is consumed before the parser runs.
             cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             let children = children(cx);
-            let kind = cx.tokens.token_kind(&token);
             let invocation = Invocation {
                 callable_type: 0u32,
                 name: "t",
                 spec: &spec,
                 token: &token,
-                kind,
             };
             let end = match end {
                 EndUnderTest::Standard => None,

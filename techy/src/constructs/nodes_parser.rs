@@ -89,7 +89,7 @@ use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::SourceSpan;
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{TokenEdge, TokenKind};
+use crate::token::{TokenEdge, TokenKind, TokenReader};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{comment_node_kind, ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
@@ -256,10 +256,13 @@ pub enum TokenStopKind<'p, L: Lang> {
     },
     /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
     ParagraphBreak,
-    /// Stop at any token whose view matches the predicate. Programmatic conditions
-    /// live only in tier-2 parser temporaries, never in spec data. The predicate sees
-    /// the token's [view](TokenKind) rather than the token: like every reader-less
-    /// hook, what it can know about a token is what the view says.
+    /// Stop at any token the predicate matches. Programmatic conditions live only in
+    /// tier-2 parser temporaries, never in spec data. The predicate receives the
+    /// peeked **token** and a shared, call-scoped reference to the **reader that
+    /// produced it**, so it can ask whatever it needs about the token —
+    /// [`token_kind`](crate::token::TokenReader::token_kind) for what it is,
+    /// [`source_span_of`](crate::token::TokenReader::source_span_of) for where — and
+    /// cannot move the stream.
     ///
     /// An `Err` from the predicate **aborts the parse** under any recovery policy —
     /// a predicate that cannot answer leaves no sound way to decide where the run
@@ -274,7 +277,10 @@ pub enum TokenStopKind<'p, L: Lang> {
     // behind an alias would only make callers look the signature up elsewhere.
     #[allow(clippy::type_complexity)]
     Predicate(
-        &'p dyn Fn(TokenKind<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>,
+        &'p dyn Fn(
+            &L::Token,
+            &dyn TokenReader<'_, L>,
+        ) -> Result<bool, ParseError<L::SourceOrigin>>,
     ),
 }
 
@@ -755,11 +761,13 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn token_stop(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKind<'_, L>,
+        token: &L::Token,
+        tokens: &dyn TokenReader<'_, L>,
     ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
         let Some(cond) = self.stop.token.as_ref() else {
             return Ok(None);
         };
+        let token_kind = tokens.token_kind(token);
         let matches = match &cond.kind {
             TokenStopKind::Command { name } => {
                 matches!(token_kind, TokenKind::Command { name: n, .. } if n == *name)
@@ -776,7 +784,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
             TokenStopKind::ParagraphBreak => {
                 matches!(token_kind, TokenKind::ParagraphBreak)
             }
-            TokenStopKind::Predicate(predicate) => predicate(token_kind)?,
+            TokenStopKind::Predicate(predicate) => predicate(token, tokens)?,
         };
         Ok(matches.then_some(cond.consume))
     }
@@ -951,7 +959,7 @@ where
 
             if !recovered {
                 if let Some(consume) = self
-                    .token_stop(&cx.state, kind)
+                    .token_stop(&cx.state, &token, &*cx.tokens)
                     .map_err(|error| cx.attach_hook_frames(error))?
                 {
                     self.flush_for_token_stop(cx, &token)?;
@@ -1097,7 +1105,7 @@ where
                         // A hook Err aborts under any policy (resolve_command's
                         // contract); the recoverable channels are the Ok values.
                         cx.driver
-                            .resolve_command(&cx.state, kind)
+                            .resolve_command(&cx.state, &token, &*cx.tokens)
                             .map_err(|error| cx.attach_hook_frames(error))?
                     };
                     match resolved {
@@ -1114,7 +1122,6 @@ where
                                 name,
                                 spec: &resolved.spec,
                                 token: &token,
-                                kind,
                             };
                             if self.dispatch_invocation(cx, invocation)? {
                                 return Ok((
@@ -1180,7 +1187,7 @@ where
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     let invocation =
-                        Invocation { callable_type, name, spec, token: &token, kind };
+                        Invocation { callable_type, name, spec, token: &token };
                     if self.dispatch_invocation(cx, invocation)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
@@ -1223,8 +1230,10 @@ where
                     let base = match &self.child_states.group {
                         GroupChildState::Inherit => Arc::clone(&cx.state),
                         GroupChildState::Fixed(state) => Arc::clone(state),
-                        GroupChildState::Compute(compute) => compute(&cx.state, kind)
-                            .map_err(|error| cx.attach_hook_frames(error))?,
+                        GroupChildState::Compute(compute) => {
+                            compute(&cx.state, &token, &*cx.tokens)
+                                .map_err(|error| cx.attach_hook_frames(error))?
+                        }
                     };
                     // Consume the trigger token here, at the site that peeked it and
                     // under the state that tokenized it (the at-match-time atomicity
@@ -1356,9 +1365,10 @@ mod tests {
     /// the latexlike preset share one query-and-dispatch implementation.
     fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
-        token_kind: TokenKind<'_, L>,
+        token: &L::Token,
+        tokens: &dyn TokenReader<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
-        Ok(resolve_command_in_scopes(state, token_kind, CT_MACRO))
+        Ok(resolve_command_in_scopes(state, token, tokens, CT_MACRO))
     }
 
     /// Test-side driver factory: the generic run helpers construct each lang's
@@ -1427,9 +1437,10 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<CmdLang>,
-            token_kind: TokenKind<'_, CmdLang>,
+            token: &StdToken<CmdLang>,
+            tokens: &dyn TokenReader<'_, CmdLang>,
         ) -> Result<CommandResolution<CmdLang>, ParseError> {
-            resolve_macro_in_scopes(state, token_kind)
+            resolve_macro_in_scopes(state, token, tokens)
         }
     }
 
@@ -2185,8 +2196,10 @@ mod tests {
     #[test]
     fn stop_at_a_token_predicate() {
         let st = state();
-        let predicate = |kind: TokenKind<'_, TestLang>| {
-            Ok(matches!(kind, TokenKind::Comment { .. }))
+        // The predicate reads the token through the reader it is handed.
+        let predicate = |token: &StdToken<TestLang>,
+                         tokens: &dyn TokenReader<'_, TestLang>| {
+            Ok(matches!(tokens.token_kind(token), TokenKind::Comment { .. }))
         };
         let parsed = run_both(
             "ab %c\nd",
@@ -2207,7 +2220,9 @@ mod tests {
         // leaves no sound way to decide where the run ends — and the consultation
         // site attaches the live traceback (the predicate has no session access).
         let st = state();
-        let failing = |_: TokenKind<'_, TestLang>| -> Result<bool, ParseError> {
+        let failing = |_: &StdToken<TestLang>,
+                       _: &dyn TokenReader<'_, TestLang>|
+         -> Result<bool, ParseError> {
             let scratch: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
                 crate::error::HookFailed::new("stop table unavailable", None),
@@ -3031,7 +3046,8 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<HintLang>,
-            _token_kind: TokenKind<'_, HintLang>,
+            _token: &StdToken<HintLang>,
+            _tokens: &dyn TokenReader<'_, HintLang>,
         ) -> Result<CommandResolution<HintLang>, ParseError> {
             Ok(CommandResolution::Unresolved {
                 detail: Some("load the {amsmath} library for this command".into()),
@@ -3100,7 +3116,8 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<AbortLang>,
-            _token_kind: TokenKind<'_, AbortLang>,
+            _token: &StdToken<AbortLang>,
+            _tokens: &dyn TokenReader<'_, AbortLang>,
         ) -> Result<CommandResolution<AbortLang>, ParseError> {
             let source: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
@@ -3595,9 +3612,10 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<ExtLang>,
-                token_kind: TokenKind<'_, ExtLang>,
+                token: &StdToken<ExtLang>,
+                tokens: &dyn TokenReader<'_, ExtLang>,
             ) -> Result<CommandResolution<ExtLang>, ParseError> {
-                resolve_macro_in_scopes(state, token_kind)
+                resolve_macro_in_scopes(state, token, tokens)
             }
         }
 
@@ -4042,8 +4060,9 @@ mod tests {
             TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
         let compute = |state: &Arc<ParsingState<TestLang>>,
-                       kind: TokenKind<'_, TestLang>| {
-            Ok(match kind {
+                       token: &StdToken<TestLang>,
+                       tokens: &dyn TokenReader<'_, TestLang>| {
+            Ok(match tokens.token_kind(token) {
                 TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
                     Arc::clone(&no_comments)
                 }
@@ -4090,7 +4109,8 @@ mod tests {
         // the derivation failure as the cause.
         let full = state_with(rules::<TestLang>());
         let compute = |state: &Arc<ParsingState<TestLang>>,
-                       _kind: TokenKind<'_, TestLang>| {
+                       _token: &StdToken<TestLang>,
+                       _tokens: &dyn TokenReader<'_, TestLang>| {
             // A derivation the policy needs, failing operationally (a scope op
             // against a provider name that does not exist).
             let delta = ParsingStateDelta::new()
@@ -4548,9 +4568,10 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
-                token_kind: TokenKind<'_, DriveLang>,
+                token: &StdToken<DriveLang>,
+                tokens: &dyn TokenReader<'_, DriveLang>,
             ) -> Result<CommandResolution<DriveLang>, ParseError> {
-                resolve_macro_in_scopes(state, token_kind)
+                resolve_macro_in_scopes(state, token, tokens)
             }
 
             fn group_interior_delta(

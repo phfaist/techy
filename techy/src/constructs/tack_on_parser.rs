@@ -220,7 +220,6 @@ where
                 name,
                 spec: &field.spec,
                 token: &token,
-                kind,
             };
             let frame = invocation_frame(cx, &invocation);
             cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);

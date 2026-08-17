@@ -66,7 +66,7 @@ use crate::state::{
     ParsingStateDelta,
 };
 use crate::token::{
-    SpecialsMatch, SpecialsScanError, TokenErrorKind, TokenKind, TriggerChars,
+    SpecialsMatch, SpecialsScanError, TokenErrorKind, TriggerChars,
 };
 
 mod provenance;
@@ -97,13 +97,12 @@ pub enum CallableSyntax {
 /// A callable resolution request: everything a [`SpecsProvider`] may dispatch on, minus
 /// the parsing state (passed alongside).
 ///
-/// `token_kind` is the **view** of the triggering token, present when resolution
-/// happens for an already-scanned token (the nodes parser resolving a `Command`) and
-/// `None` where no token exists yet (specials scan, synthesized invocations). The view
-/// is what a provider can know about the token: a provider has no reader, so it never
-/// sees spans or pre-space. `name` and `syntax` repeat the `Command` facts for
-/// providers that ignore the view — and plain data providers ignore everything but
-/// `callable_type` and `name`.
+/// Scopes and packages look a callable up by **name and callable syntax** (e.g. the
+/// escape character that fired); they never see the token. A language that must
+/// dispatch on token details does so in
+/// [`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command),
+/// which receives the token and its reader, before or instead of consulting the
+/// scopes.
 pub struct CallableQuery<'a, L: Lang> {
     /// The invocation form being resolved (e.g. the preset's macro form).
     pub callable_type: L::CallableTypeId,
@@ -112,24 +111,16 @@ pub struct CallableQuery<'a, L: Lang> {
     pub name: &'a str,
     /// The syntax context of the invocation.
     pub syntax: CallableSyntax,
-    /// The view of the triggering token, when one exists.
-    pub token_kind: Option<TokenKind<'a, L>>,
 }
 
 impl<'a, L: Lang> CallableQuery<'a, L> {
-    /// A query without token context.
+    /// A resolution request for `name` under `callable_type`, in `syntax`'s context.
     pub fn new(
         callable_type: L::CallableTypeId,
         name: &'a str,
         syntax: CallableSyntax,
     ) -> CallableQuery<'a, L> {
-        CallableQuery { callable_type, name, syntax, token_kind: None }
-    }
-
-    /// Attach the view of the triggering token.
-    pub fn with_token_kind(mut self, token_kind: TokenKind<'a, L>) -> CallableQuery<'a, L> {
-        self.token_kind = Some(token_kind);
-        self
+        CallableQuery { callable_type, name, syntax }
     }
 }
 
@@ -150,7 +141,6 @@ impl<L: Lang> fmt::Debug for CallableQuery<'_, L> {
             .field("callable_type", &self.callable_type)
             .field("name", &self.name)
             .field("syntax", &self.syntax)
-            .field("token_kind", &self.token_kind)
             .finish()
     }
 }
@@ -2092,24 +2082,6 @@ mod tests {
         assert!(Arc::ptr_eq(&previous, &first));
         assert!(package.get(ENVIRONMENT, "foo").is_none());
         assert_eq!(package.len(), 1);
-    }
-
-    #[test]
-    fn a_query_carries_the_triggering_tokens_view_or_nothing() {
-        // `new` leaves the token context empty (specials scan, synthesized
-        // invocations); `with_token_kind` attaches the trigger's view — which is all a
-        // provider, having no reader, can know about the token.
-        let query: CallableQuery<'_, PlainLang> =
-            CallableQuery::new(MACRO, "emph", CallableSyntax::Command { escape_char: '\\' });
-        assert!(query.token_kind.is_none());
-
-        let view = TokenKind::Command { name: "emph", escape_char: '\\' };
-        let query = query.with_token_kind(view);
-        assert_eq!(query.token_kind, Some(view));
-        // The query stays `Copy`, view included.
-        let copy = query;
-        assert_eq!(copy.token_kind, query.token_kind);
-        assert_eq!(copy.name, "emph");
     }
 
     #[test]

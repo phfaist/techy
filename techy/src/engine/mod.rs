@@ -626,8 +626,8 @@ mod tests {
     };
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
-        ParagraphRules, SpecialsRules, StdToken, TokenKind, TokenListReader,
-        TokenRules, WhitespaceRules,
+        CommandRule, ParagraphRules, SpecialsRules, StdToken, StdTokenReader, TokenKind,
+        TokenListReader, TokenReader, TokenRules, WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -912,15 +912,37 @@ mod tests {
 
     // --- the default driver's hook defaults ---------------------------------------------
 
+    /// The trigger token of `source`, and the reader that produced it — what a
+    /// resolver hook receives, since it reads the token through that reader. The scan
+    /// runs under rules recognizing `\name` commands; resolution then consults
+    /// whatever state the test built.
+    fn command_token<'s>(
+        source: &'s Arc<Source>,
+    ) -> (StdToken<PlainLang>, StdTokenReader<'s>) {
+        let mut rules: TokenRules<PlainLang> = min_rules();
+        rules.commands.rules = vec![Arc::new(CommandRule {
+            escape_char: '\\',
+            name_chars: "abcdefghijklmnopqrstuvwxyz".into(),
+        })];
+        let scan_state = Arc::new(ParsingState::new(StateData {
+            rules,
+            scopes: ScopeStack::new(),
+            mode: (),
+            ext: (),
+        }));
+        let mut reader = StdTokenReader::new(source);
+        let token = TokenReader::<'_, PlainLang>::next(&mut reader, &scan_state).unwrap();
+        (token, reader)
+    }
+
     #[test]
     fn default_resolve_command_reports_unimplemented_resolution() {
         let st = state();
-        // The view is a plain public enum: a resolver hook takes exactly this, so a
-        // test states the trigger's facts directly instead of scanning one.
-        let token_kind = TokenKind::Command { name: "foo", escape_char: '\\' };
+        let source: Arc<Source> = Arc::new(Source::new(r"\foo"));
+        let (token, reader) = command_token(&source);
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
         let resolved: CommandResolution<PlainLang> =
-            driver.resolve_command(&st, token_kind).unwrap();
+            driver.resolve_command(&st, &token, &reader).unwrap();
         match resolved {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("command resolution is not implemented"));
@@ -943,20 +965,21 @@ mod tests {
         let st = ParsingState::<PlainLang>::lang_initial_with_packages([package])
             .expect("seed state");
 
-        let token_kind =
-            TokenKind::<PlainLang>::Command { name: "foo", escape_char: '\\' };
+        let source: Arc<Source> = Arc::new(Source::new(r"\foo"));
+        let (token, reader) = command_token(&source);
         // Through the strategy value carried by StdParseDriver…
         let driver: StdParseDriver<ScopesCommandResolver<PlainLang>> = StdParseDriver::new(
             Recovery::Strict,
             ScopesCommandResolver::<PlainLang> { command_type: 0u32 },
         );
         assert!(matches!(
-            driver.resolve_command(&st, token_kind).unwrap(),
+            driver.resolve_command(&st, &token, &reader).unwrap(),
             CommandResolution::Resolved(_)
         ));
         // …and a clean miss carries the searched-providers detail.
-        let miss = TokenKind::<PlainLang>::Command { name: "bar", escape_char: '\\' };
-        match driver.resolve_command(&st, miss).unwrap() {
+        let other: Arc<Source> = Arc::new(Source::new(r"\bar"));
+        let (miss, miss_reader) = command_token(&other);
+        match driver.resolve_command(&st, &miss, &miss_reader).unwrap() {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("defs"));
             }

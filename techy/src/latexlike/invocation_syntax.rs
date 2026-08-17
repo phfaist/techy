@@ -111,8 +111,8 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 
 /// The standard-site constructor ([`FromInvocation`]): a
 /// [`Command`](TokenKind::Command) trigger records its
-/// [`Macro`](InvocationSyntaxData::Macro) facts from the trigger's view and the
-/// reader's answer for its syntactic post-space; every
+/// [`Macro`](InvocationSyntaxData::Macro) facts from the reader's answers — what the
+/// trigger is, and where its syntactic post-space lies; every
 /// other trigger (a specials token, a paragraph-break token at the preset's
 /// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
 /// [`Environment`](InvocationSyntaxData::Environment) arm is never minted here —
@@ -124,7 +124,7 @@ impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
         invocation: &Invocation<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Self {
-        match invocation.kind {
+        match tokens.token_kind(invocation.token) {
             TokenKind::Command { escape_char, .. } => {
                 // The post-space is a reader answer. Recording it as a bare span is
                 // sound because the node this payload rides on starts at this very
@@ -537,14 +537,16 @@ mod tests {
 
     #[test]
     fn from_invocation_takes_the_post_space_from_the_reader() {
-        // The constructor directly: the trigger's view says it is a command, the
-        // reader says where its syntactic post-space lies.
+        // The constructor directly: the reader says the trigger is a command, and
+        // where its syntactic post-space lies.
         use crate::token::{StdTokenReader, TokenReader};
         use alloc::sync::Arc;
 
-        let seed = ParsingState::<Latexlike>::lang_initial_with_packages([macro_package(
-            "t", "emph", None,
-        )])
+        // minilatex supplies the `~` specials trigger the second half needs.
+        let seed = ParsingState::<Latexlike>::lang_initial_with_packages([
+            super::super::minidefs::minilatex_package(),
+            macro_package("t", "emph", None),
+        ])
         .expect("seed state");
         let state = Arc::new(seed);
         let source: Arc<Source> = Arc::new(Source::new("\\emph  x"));
@@ -557,7 +559,6 @@ mod tests {
             name: "emph",
             spec: &spec,
             token: &token,
-            kind: tokens.token_kind(&token),
         };
         match InvocationSyntaxData::<StdEnvironmentSyntax<Latexlike>>::from_invocation(
             &invocation,
@@ -570,21 +571,27 @@ mod tests {
             other => panic!("expected the Macro arm, got {other:?}"),
         }
 
-        // A trigger that is not a command records the specials arm instead.
+        // A trigger that is not a command records the specials arm instead — read
+        // from a real specials token, since the arm is the reader's answer now.
+        let tilde_source: Arc<Source> = Arc::new(Source::new("~x"));
+        let mut tilde_reader = StdTokenReader::new(&tilde_source);
+        let tilde =
+            TokenReader::<'_, Latexlike>::next(&mut tilde_reader, &state).unwrap();
+        let tilde_tokens: &dyn TokenReader<'_, Latexlike> = &tilde_reader;
+        assert!(matches!(
+            tilde_tokens.token_kind(&tilde),
+            crate::token::TokenKind::Specials { .. }
+        ));
         let specials = crate::constructs::Invocation {
             callable_type: CallableType::Specials,
             name: "~",
             spec: &spec,
-            token: &token,
-            kind: crate::token::TokenKind::Specials {
-                callable_type: CallableType::Specials,
-                name: "~",
-                spec: &spec,
-            },
+            token: &tilde,
         };
         assert!(matches!(
             InvocationSyntaxData::<StdEnvironmentSyntax<Latexlike>>::from_invocation(
-                &specials, tokens
+                &specials,
+                tilde_tokens
             ),
             InvocationSyntaxData::Specials
         ));
@@ -1059,7 +1066,6 @@ mod tests {
             name: "emph",
             spec: &(Arc::new(MacroSpec::new(vec![])) as Arc<dyn CallableSpec<Latexlike>>),
             token: &crate::token::StdToken::end_of_stream(Span::empty(0)),
-            kind: TokenKind::EndOfStream,
         });
     }
 }

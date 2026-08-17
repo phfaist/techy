@@ -282,7 +282,7 @@ where
             // under any policy (resolve_command's contract).
             let resolved = cx
                 .driver
-                .resolve_command(&cx.state, kind)
+                .resolve_command(&cx.state, next, &*cx.tokens)
                 .map_err(|error| cx.attach_hook_frames(error))?;
             match resolved {
                 CommandResolution::Resolved(resolved) => {
@@ -291,7 +291,6 @@ where
                         name,
                         spec: &resolved.spec,
                         token: next,
-                        kind,
                     };
                     dispatch_expression_invocation(cx, nodes, invocation)
                 }
@@ -323,8 +322,7 @@ where
 
         TokenKind::Specials { callable_type, name, spec } => {
             // Recognition = resolution: the token carries the full resolution.
-            let invocation =
-                Invocation { callable_type, name, spec, token: next, kind };
+            let invocation = Invocation { callable_type, name, spec, token: next };
             dispatch_expression_invocation(cx, nodes, invocation)
         }
 
@@ -349,7 +347,7 @@ where
     if invocation.spec.requires_content() {
         // The trigger's written spelling, built only on this cold branch (the hot
         // dispatch path stays allocation-free).
-        let spelling = match invocation.kind {
+        let spelling = match cx.tokens.token_kind(token) {
             TokenKind::Command { name, escape_char } => {
                 format!("{}{}", escape_char, name)
             }
@@ -1052,8 +1050,8 @@ mod tests {
     use crate::state::{ParsingState, StateData};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdTokenReader, TokenKind, TokenListReader,
-        TokenReader, TokenRules, WhitespaceRules,
+        ParagraphRules, SpecialsRules, StdToken, StdTokenReader, TokenKind,
+        TokenListReader, TokenReader, TokenRules, WhitespaceRules,
     };
     use alloc::string::ToString;
     use alloc::vec;
@@ -1111,17 +1109,14 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<ArgLang>,
-            token_kind: TokenKind<'_, ArgLang>,
+            token: &StdToken<ArgLang>,
+            tokens: &dyn TokenReader<'_, ArgLang>,
         ) -> Result<CommandResolution<ArgLang>, crate::error::ParseError> {
-            let TokenKind::Command { name, escape_char } = token_kind else {
+            let TokenKind::Command { name, escape_char } = tokens.token_kind(token) else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
-            let query = CallableQuery::new(
-                CT_MACRO,
-                name,
-                CallableSyntax::Command { escape_char },
-            )
-            .with_token_kind(token_kind);
+            let query =
+                CallableQuery::new(CT_MACRO, name, CallableSyntax::Command { escape_char });
             Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })

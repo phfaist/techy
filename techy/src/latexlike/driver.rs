@@ -31,7 +31,7 @@ use crate::state::{
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, StdTokenReader, TokenKind, TokenReader};
+use crate::token::{GroupRule, StdTokenReader, TokenReader};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType,
@@ -447,11 +447,13 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     fn resolve_command(
         &self,
         state: &ParsingState<LLL>,
-        token_kind: TokenKind<'_, LLL>,
+        token: &LLL::Token,
+        tokens: &dyn TokenReader<'_, LLL>,
     ) -> Result<CommandResolution<LLL>, crate::error::ParseError<LLL::SourceOrigin>> {
         Ok(resolve_command_in_scopes(
             state,
-            token_kind,
+            token,
+            tokens,
             LLL::CallableTypeId::macro_callable(),
         ))
     }

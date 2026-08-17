@@ -881,9 +881,10 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<EnvLang>,
-            token_kind: TokenKind<'_, EnvLang>,
+            token: &StdToken<EnvLang>,
+            tokens: &dyn TokenReader<'_, EnvLang>,
         ) -> Result<CommandResolution<EnvLang>, crate::error::ParseError> {
-            let TokenKind::Command { name, escape_char } = token_kind else {
+            let TokenKind::Command { name, escape_char } = tokens.token_kind(token) else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
@@ -897,12 +898,8 @@ mod tests {
                     spec: Arc::new(BeginSpec),
                 }));
             }
-            let query = CallableQuery::new(
-                CT_MACRO,
-                name,
-                CallableSyntax::Command { escape_char },
-            )
-            .with_token_kind(token_kind);
+            let query =
+                CallableQuery::new(CT_MACRO, name, CallableSyntax::Command { escape_char });
             Ok(match state.scopes().retrieve_spec(&query, state) {
                 Ok(resolved) => resolved
                     .map(|spec| ResolvedCallable { callable_type: CT_MACRO, spec })

@@ -821,7 +821,7 @@ where
         // violation by whatever dispatched this composition — an implementation
         // error, not a source condition.
         let crate::token::TokenKind::Command { escape_char, .. } =
-            self.invocation.kind
+            cx.tokens.token_kind(trigger)
         else {
             return Err(cx.implementation_error(
                 "the std environment composition requires a Command trigger \
@@ -1038,7 +1038,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
         // group never parsed: a command trigger's own post-space is consumed with it
         // and would read as a trailing blank inside the quotes. Any other trigger
         // shape (this spec is registrable under any syntax) quotes its whole extent.
-        let command_end = match self.invocation.kind {
+        let command_end = match cx.tokens.token_kind(trigger) {
             crate::token::TokenKind::Command { .. } => TokenEdge::End,
             _ => TokenEdge::EndPastPostSpace,
         };
