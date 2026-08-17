@@ -911,6 +911,208 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M5 implementer agent — **M5 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `698f738` the M4 review leftovers
+  (two pinned hostile node-text span tests — a `Chars` content span out of range, a
+  group delimiter span off a char boundary, both builder-rejected at the node; the
+  dead `A: Clone` bound on `rebuild_tree` dropped; a `TreeSerdeDriver` Panics section
+  for the writer's `InvocationSyntax::materialized` on a live tree violating the
+  `Spanned` invariant); `fa1d821` provenance stamps, shared packages,
+  `KnownProviders`, the core and latexlike spec/provider serialization; `cd863bd`
+  the feature-gated vocab serde derives + the M5 test battery; `faae9b0` module docs,
+  the Scope/FallbackProvider notes, the `Flavored` (foreign family member) round
+  trip; plus the docs commit carrying this entry. Verified: `cargo build`/`test`
+  green with and without `--features serde` (972/1003 unit — 28/30 in
+  `latexlike/serialize_tests.rs`, +2 tree tests, +1 engine test, +1 latexlike test —,
+  30+8+13+23+1 integration, 75/76 doctests); `rm -rf target/doc && cargo docs` clean
+  both states; clippy clean on all new code. **What M5 built** (plan §7 M5, rulings
+  R1–R6):
+  - **Provenance (D19, Q5 RESOLVED as R2)** — `techy/src/scopes/provenance.rs`:
+    `SpecProvenance<L> { provider: Weak<dyn SpecsProvider<L>>, callable_type:
+    L::CallableTypeId, key: DefinitionKey }` (`new`, `provider()` (upgrade),
+    `callable_type()`, `key()`; `Clone`, `Debug` naming the provider) and
+    `DefinitionKey::{Name(Box<str>), Trigger(Box<str>)}` (`as_str`, `Display`) — a
+    name and a trigger are separate keys (separate package stores; no collision), so
+    the stamp records which. `Package::new_shared(name, build: impl FnOnce(&mut
+    Package<L>)) -> Arc<Package<L>>` (`Arc::new_cyclic`; the package keeps its own
+    `Weak<dyn SpecsProvider<L>>` in a private `self_weak` field), `is_shared()`,
+    `provenance_for(ct, name)` / `provenance_for_specials(ct, trigger)` (`None` for
+    an unshared package; nothing checks the key is defined — the caller inserts the
+    stamped spec under it), `get_specials(ct, trigger)`; `Package::clone` yields an
+    UNSHARED package (its stamps would name the original); `Debug` shows `shared`.
+    Concrete spec types carry `provenance: Option<SpecProvenance<L>>` +
+    `with_provenance(stamp) -> Self` + `provenance() -> Option<&_>`: latexlike
+    `MacroSpec`, `SpecialsSpec`, `EnvironmentSpec`, `BeginSpec`, `InputMacroSpec`
+    (private fields); core `StdCallableSpec` has a **`pub provenance` field** +
+    `with_provenance` (no getter) — **deviation from R2's "private field", recorded:**
+    a private field would have removed the documented struct-literal form
+    (`StdCallableSpec { arguments, .. }` — functional update needs every field
+    visible), which ~18 in-crate sites and external code use; the type is plain data
+    with a `pub arguments` field already, and the ruling's intent (a field the impl
+    reads, not a trait item, plus a builder) is met. `EndSpec` and
+    `ParagraphBreakSpec` carry **no** stamp field (unit types: their self-contained
+    form reproduces an equivalent instance; `EndSpec` keeps `Copy`) — R1's "may
+    prefer identity when stamped" applied to `BeginSpec` and `InputMacroSpec` only.
+    latexlike's `define_macro`/`define_environment` stamp automatically when the
+    package is shared (no stamp otherwise — nothing to stamp with); `builtin_package()`
+    and `minidefs::minilatex_package()` now return **`Arc<Package<LLL>>`** built with
+    `new_shared` and stamped (the `\begin` `BeginSpec` stamped; `EndSpec` unstamped;
+    minilatex's shared typography `SpecialsSpec` instance carries ONE stamp — the
+    tie's — since a stamp names one address of the instance and any address resolves
+    to it); new `minidefs::minilatex_item_package()` (a fresh, shared, stamped
+    `minilatex.item` per call; `minilatex_package()` nests one); call sites updated
+    (`[minilatex_package(), Arc::new(testdb())]`; `Latexlike::initial_state_data`
+    pushes the shared builtin; test_support's `macro_package` returns a shared Arc).
+    An unstamped spec of an identity-only type is `SerializeError::MissingProvenance
+    { spec: &'static str }` (names the type; "built outside a shared package — see
+    Package::new_shared"); a dead `Weak` is `SerializeError::ProviderDropped
+    { callable_type: String (Debug), key: DefinitionKey }`.
+  - **Core object impls (D20, R3, R4)** — `serialize/drivers/specs.rs` +
+    `serialize/wire/specs.rs`: `SpecProvenance<L>` implements `SerializableObject`
+    (the identity form: `{provider: ProviderIndex, callable_type: <value>, key:
+    {name: …} | {trigger: …}}` under **`core.provider-spec`**; interns the upgraded
+    provider) and `DeserializableObject` (`Output = Arc<dyn CallableSpec<L>>`: reads
+    the provider position, downcasts to `Package<L>` (`Any`), `get`/`get_specials` by
+    the key — the very Arc; a provider that is not a `Package` is
+    `DeserializeError::Failed` ("custom provider types register their own reader");
+    an absent definition is `DeserializeError::MissingDefinition { provider,
+    callable_type, key }`); the shared body `serialize_stamped_spec(provenance,
+    type_name, cx)` (crate-internal) serves `StdCallableSpec` and the latexlike
+    identity-only types. `Package`: identity `{name}` under **`core.package`**; read
+    → `cx.user_data::<KnownProviders<L>>()` → held provider by name, else its recipe
+    (built now; the session's providers slot IS the memo — every reference to that
+    entry shares the Arc; a second entry of the same name builds again), else
+    `DeserializeError::MissingProvider { name }` (also when no `KnownProviders` is
+    set). `Scope`: in full `{name, definitions: [{callable_type, name, spec:
+    SpecIndex}]}` under **`core.scope`**, BTreeMap order (ct, then name);
+    read → `Scope::new` + `insert`, a definition listed twice is `Failed`.
+    `FallbackProvider`: `{name, fallbacks: [{callable_type, spec}]}` under
+    **`core.fallback-provider`**; read → `new` + `set`, a duplicate ct is `Failed`.
+    `ErrorCallableSpec` (not generic over `L`, so it cannot hold a stamp; plain
+    data): self-contained `{detail?}` under **`core.error-spec`**. New public
+    accessors `Scope::definitions()` and `FallbackProvider::fallbacks()` (ordered
+    iterators) feed the writers.
+  - **The reading environment (R3)** — `KnownProviders<L>` (public,
+    `techy::serialize`): `new`, `insert(impl IntoSpecsProvider<L>)` (keyed by
+    `provider.name()`; returns the replaced Arc), `get(name)`,
+    `register_recipe(name, impl ProviderRecipe<L> + 'static)`, `recipe(name)`,
+    `resolve(name) -> Result<Option<Arc<dyn SpecsProvider<L>>>, _>` (held, else
+    built by recipe, else `None`), `provider_names()`, `recipe_names()`; `Default`,
+    `Debug`. `ProviderRecipe<L>: Send + Sync { fn build(&self) -> Result<Arc<dyn
+    SpecsProvider<L>>, DeserializeError> }` with a blanket impl for `F: Fn() -> P +
+    Send + Sync, P: IntoSpecsProvider<L>` — so a function item is a recipe
+    (`known.register_recipe("minilatex", minilatex_package::<Latexlike>)`); a
+    fallible recipe implements the trait itself. `SerdeSession::set_user_data` /
+    `user_data::<T>()` are now a **type-keyed map** (one value per type; setting a
+    type replaces that type's value only — the crate's `KnownProviders` and a
+    framework's own environment coexist). `register_core_readers(&mut SerdeSession<L>)
+    -> Result<(), RegistrationError>` (public, `techy::serialize`) registers the five
+    core readers on the specs/providers tables (`RegistrationError::UnknownTableName
+    { name: String }` NEW when a standard table is missing). **Decision:**
+    `SerdeSession::new()` does NOT pre-register them (plan §6 usage + D28(d): a
+    language's `register` helper chains its dependencies' — calling both a
+    language's helper and the core helper on one session is a `DuplicateIdentifier`
+    error, documented).
+  - **latexlike (D28, R5)** — `techy/src/latexlike/serialize.rs` (public module
+    `techy::latexlike::serialize`): `impl SerializableLang for Latexlike {}` (empty —
+    D17 REVISED); hand-written, unconditional value conversions blanket over `L:
+    Lang` for `CallableType` (`macro`/`environment`/`specials`), `MathGroupForm`
+    (`inline`/`display`), `GroupType` (`content` / `{math: <form>}` / `verbatim`),
+    `Mode` (`text`/`math`), `Event` (`exit-math-context`), `BodyMarker` (`{body:
+    bool}`), `InvocationSyntaxData<Env>` (`{macro: {escape_char, post_space}}` /
+    `{environment: <Env value>}` / `specials`; generic over `Env: SerializableValue +
+    DeserializableValue`), `StdEnvironmentSyntax<L>` (`{begin, end?}`; `end` omitted
+    when `None`), `StdEnvironmentSideSyntax<L>` (`{escape_char, command_word,
+    post_space, name_group_rule}` — the two texts through `TextContent`'s owned-only
+    conversion, the rule INLINED through `GroupRule<L>`'s and read back into a fresh
+    `Arc` — D23). Object impls: `MacroSpec`/`SpecialsSpec`/`EnvironmentSpec` identity
+    only (`MissingProvenance` otherwise); `BeginSpec` identity when stamped, else
+    **`latexlike.begin`** `{end_command_name}`; `EndSpec` **`latexlike.end`** `{}`;
+    `ParagraphBreakSpec` **`latexlike.paragraph-break`** `{}`; `InputMacroSpec`
+    identity when stamped, else **`latexlike.input`** `{persist_state,
+    attached_slot_ext: <SlotExt value>}` (rebuilt through `input_macro_spec`; new
+    getters `persist_state()`, `attached_slot_ext()`); the unit forms are the empty
+    map (read: any key is an error). `register<LLL>(&mut SerdeSession<LLL>) ->
+    Result<(), RegistrationError>` (bounds: `LLL: LatexlikeLang + SerializableLang`,
+    `SlotExt<LLL>: BodySlotExt`, `ArgumentExt<LLL>: Default` — the spec types'
+    `CallableSpec` bounds) calls `register_core_readers` then registers the four
+    latexlike readers; `register_package_recipes(&mut KnownProviders<LLL>)` adds the
+    `_builtin` recipe (`builtin_package::<LLL>`); **`minidefs::register_package_recipes`**
+    adds `minilatex` and `minilatex.item` (kept in `minidefs` so the module stays
+    dead-strippable — no other latexlike module references it). Recorded: a
+    recipe-built `minilatex.item` is a distinct instance from the one nested inside a
+    recipe-built `minilatex` (its `itemize` body delta) — consistent within the
+    reader, only observable by re-parsing with a rebuilt state; a program that wants
+    exact identity inserts the Arcs it holds. **D28(d) — no namespace resolver is
+    registered:** every identifier is static (`core.*`, `latexlike.*`), so `register`
+    satisfies (d) through `register_type`; no dynamic identifiers exist yet.
+    Feature-gated serde derives with explicit renames on `CallableType`, `GroupType`,
+    `MathGroupForm`, `Mode`, `Event`, `BodyMarker` (D28(f)); a test pins parity with
+    the value conversions (P7). `Flavored` (the test family member) opts in with the
+    empty impl and round-trips through `register::<Flavored>`.
+  - **`\newcommand` (R1, recorded):** whoever implements `\newcommand` owes a dedicated
+    spec type with a `{args, opt_default, body}` self-contained form (D20); no
+    argument-code recording was added to `ArgumentSpec`.
+  - **Tests** (`latexlike/serialize_tests.rs`, both feature states): the oracle
+    corpus through the M4 harness with a latexlike session factory (macros with and
+    without post-space, every argument shape incl. star/optional/absent and a core
+    `StdCallableSpec` in a latexlike package, environments incl. recorded spacing and
+    nesting, minilatex lists with `\item` resolved in the body-pushed item package
+    (the body state's innermost provider is `minilatex.item`; both `\item` nodes share
+    one spec), specials, groups/math/comments, verbatim env + `\verb`, paragraph
+    breaks in both styles (`ParagraphBreakSpec` rebuilt; one Arc per break, as
+    minted), the kitchen sink, tolerant recoveries, `\input` across sources with a
+    `MapResolver`); identity — stamped specs read back as the environment's package
+    instances (and the states' builtin is the environment's very Arc); recipes build
+    the providers the environment does not hold (`_builtin`/`minilatex`/
+    `minilatex.item`; the read spec is the built package's instance; a tie resolved by
+    trigger), a held provider takes precedence, a recipe is built once per entry and
+    shared by every reference (two trees, one stream); typed failures — missing
+    provider (with and without any `KnownProviders`), missing definition (an
+    environment package lacking the writer's definition), unregistered identifier (a
+    session without `register`), unstamped specs of every identity-only type
+    (`MacroSpec`, `SpecialsSpec`, `EnvironmentSpec`, `StdCallableSpec`), a dropped
+    provider; self-contained forms (`BeginSpec` custom pair, `EndSpec`, an unstamped
+    `\input` rebuilt fresh) and a stamped `BeginSpec` preferring identity; **D18 (R6)**
+    — a math-only definition (`insert_in_modes`) resolves by identity while the
+    text-mode query answers nothing, and a `CountingProvider` whose `retrieve_spec`
+    answers spec A once and spec B afterwards reads back the parsed instance A with
+    the counter untouched (its specs emit their own `test.counted` entries — the
+    custom-provider identity route); `Scope` + `FallbackProvider` in full inside a
+    real scope stack `[fallback, builtin, oracle, scope]` (identity survives inside
+    the scope; the error spec's detail; the tree's node holds the scope's Arc); a
+    duplicate scope definition rejected; a hostile state whose stack is [odd Scope,
+    FallbackProvider, recipe minilatex] freezes (`specials_trigger_chars` total), an
+    unknown callable type is a `Value` error, a spec identity naming a non-package
+    provider is refused; determinism; parity + a pinned JSON rendering under the
+    feature. Also `user_data_holds_one_value_per_type` (engine tests) and the M4
+    leftovers' two span tests.
+  **Provisional wire names (Q3):** identifiers `core.provider-spec`, `core.error-spec`,
+  `core.package`, `core.scope`, `core.fallback-provider`, `latexlike.begin`,
+  `latexlike.end`, `latexlike.paragraph-break`, `latexlike.input`; keys `provider`,
+  `callable_type`, `key` (`name` | `trigger`), `name`, `definitions`, `spec`,
+  `fallbacks`, `detail`, `end_command_name`, `persist_state`, `attached_slot_ext`,
+  `body`, `escape_char`, `post_space`, `begin`, `end`, `command_word`,
+  `name_group_rule`; vocab strings as listed above. **Public API surface (new):**
+  `core::specs::{SpecProvenance, DefinitionKey}`; `Package::{new_shared, is_shared,
+  provenance_for, provenance_for_specials, get_specials}`; `Scope::definitions`,
+  `FallbackProvider::fallbacks`; `StdCallableSpec::{provenance (pub field),
+  with_provenance}`; latexlike `MacroSpec/SpecialsSpec/EnvironmentSpec/BeginSpec/
+  InputMacroSpec::{with_provenance, provenance}`, `InputMacroSpec::{persist_state,
+  attached_slot_ext}`; `builtin_package`/`minilatex_package` now `-> Arc<Package<LLL>>`
+  (breaking; call sites updated), `minidefs::{minilatex_item_package,
+  register_package_recipes}`; `techy::latexlike::serialize::{register,
+  register_package_recipes}`; `techy::serialize::{KnownProviders, ProviderRecipe,
+  register_core_readers}`; `SerdeSession::set_user_data`/`user_data` semantics (map by
+  type); errors `SerializeError::{MissingProvenance, ProviderDropped}`,
+  `DeserializeError::{MissingProvider, MissingDefinition}`,
+  `RegistrationError::UnknownTableName`; `SerializableObject`/`DeserializableObject`
+  impls on `Package`, `Scope`, `FallbackProvider`, `ErrorCallableSpec`,
+  `SpecProvenance`, `StdCallableSpec`, and the seven latexlike spec types;
+  `SerializableValue`/`DeserializableValue` impls on the latexlike vocabulary, ext,
+  and invocation-syntax types; `impl SerializableLang for Latexlike`; feature-gated
+  serde derives on the vocab types + `BodyMarker`. Next: M5 review → M6
+  (diagnostics, ParseResult, streaming, Q3 naming pass). Blockers: none.
 - 2026-08-17 — M4 fix-pass agent — **M4 fix pass complete** on `techy-serialize`
   (worktree `.claude/worktrees/techy-serialize`). Commits: `953810c`
   `SerializeError::InNode` / `DeserializeError::InNode { node, callable, cause }`
