@@ -223,10 +223,10 @@ pub enum TokenKind<'t, L: Lang> {
   the coherence asserts, and the sentence above it ("**Precondition asserts.** Six value
   functions …", `docs/panics.md:9`) has its count corrected. Use the current rustdoc
   link spelling `[Panics list](techy::guide::panics)` on the constructors.
-  *(CLAUDE.md rule 4's parenthetical also names `Token::new` among the six approved
-  value functions. **No code stage edits CLAUDE.md** — open ruling **O-2** (§1.17),
-  **pending user ruling (orchestrator, 2026-08-17)**: an implementer who reaches it
-  stops and asks; do not edit CLAUDE.md and do not guess.)*
+  *(CLAUDE.md is the user's file: the user already removed its `Token::new` mention
+  themselves (`main`, 2026-08-17 — ruling O-2, §1.17). **No stage edits CLAUDE.md.**
+  Stage 4's final report lists any CLAUDE.md line that may deserve a refresh — e.g. the
+  `techy::core` topology line's token item list — for the user to decide.)*
 - `pub(crate)` accessors used by the two in-crate readers: `span()`, `pre_space()`,
   `post_space()`, `edge_offset(TokenEdge) -> usize`, `kind_data()`. **Not public**: a
   third-party reader over `StdToken`s interprets them by delegating to a
@@ -513,9 +513,33 @@ node-relative reading is sound.
 - `probe_token(&self, tokens: &mut dyn TokenReader<'_, L>, session, state) ->
   ConstructParserResult<L, Option<L::Token>>` — no `source` parameter; the error's
   location is `error.span()`.
-- `resolve_command(&self, state, name: &str, escape_char: char)` and
-  `CommandResolver::resolve_command` likewise; `resolve_command_in_scopes` likewise
-  (the token was only read for these two facts; hooks have no reader).
+- `resolve_command(&self, state: &ParsingState<L>, token_kind: TokenKind<'_, L>)
+  -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>` — the hook receives the
+  **view** of the triggering token (by value; the view is `Copy`), not the token: a
+  resolver has no reader, and the view is everything a reader-less party can know about
+  a token (ruling O-1, §1.17). `CommandResolver::resolve_command(&self, state,
+  token_kind: TokenKind<'_, L>)` likewise; `resolve_command_in_scopes(state, token_kind:
+  TokenKind<'_, L>, callable_type)` likewise — it matches `TokenKind::Command { name,
+  escape_char }` exactly as today (anything else → `Unresolved`), and builds the query
+  with `CallableQuery::new(callable_type, name, CallableSyntax::Command { escape_char })
+  .with_token_kind(token_kind)`. The caller in the nodes parser (`nodes_parser.rs:986`)
+  and in `argument_parsers.rs:281` obtains the view with `cx.tokens.token_kind(&token)`
+  and passes it down. Tests that call `driver.resolve_command(&st, &token)`
+  (`engine/mod.rs:922,956,965`) pass a view instead (either from a reader, or a literal
+  `TokenKind::Command { name: "…", escape_char: '\\' }` — the view is a plain public
+  enum).
+- `CallableQuery` (`techy/src/scopes/mod.rs:104-135`) becomes `CallableQuery<'a, L>`
+  (the `'s` goes; the query never holds a token again): the field
+  `token: Option<&'a Token<'s, L>>` is replaced by `token_kind: Option<TokenKind<'a, L>>`
+  — the view of the triggering token when resolution happens for an already-scanned
+  token, `None` where no token exists (specials scan, synthesized invocations) — and
+  `with_token(token)` by `with_token_kind(token_kind: TokenKind<'a, L>)`. `new(..)`
+  unchanged. Rustdoc: "the view is what a provider can know about the token — a
+  provider has no reader, so it never sees spans or pre-space; `name`/`syntax` repeat
+  the `Command` facts for providers that ignore the view". Field name: `token_kind`, not
+  `kind` (`callable_type` is a sibling in the same struct — [§dd-arch:naming]
+  principle 3–4; `Invocation` may say `kind` because its `token` sibling disambiguates).
+  Stage 3a makes this change with the type spelled `TokenKindView<'a, L>`; 3b renames.
 - `make_paragraph_break_node(&self, state, break_span: &SourceSpan<L::SourceOrigin>)
   -> NodeKind<L>` — replaces `(state, token, source_content)`: the span carries both
   the range (`.span()`, for the default `NodeKind::chars`) and the text (`.content()`,
@@ -610,12 +634,12 @@ old method and renames `move_to_edge` → `move_to` in one commit (afterwards
 | `latexlike/invocation_syntax.rs:779-784` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
 | `latexlike/*.rs` (environments, input, driver, recompose) | `SourceSpan::new(&cx.source, ..)`, `token.kind` | reader queries / view |
 | `scopes/mod.rs:1607-1620` `ErrorCallableSpec::make_invocation_parser`, `:1624-1654` `ErrorInvocationParser` | **a real (non-test) construct parser the plan never named**: `Invocation<'a, 's, L>`, `token.span`, `SourceSpan::new(&cx.source, token.span)` ×2, `NodeKind::chars(token.span)`, `cx.staging_error(error, token.span)` | Stage 2a/2b: `cx.tokens.source_span_of(self.invocation.token)` for both spans, `NodeKind::chars(span.span())`, `staging_error(error, span)`; Stage 3b: `Invocation<'a, L>`, `ErrorInvocationParser<'a, L>` |
-| `scopes/mod.rs:104-115` `CallableQuery<'a, 's, L>` | public field `token: Option<&'a Token<'s, L>>` | `CallableQuery<'a, L>` with `token: Option<&'a L::Token>` (Stage 3b). **Open ruling O-1 (§1.17) — pending user ruling (orchestrator, 2026-08-17)**: a `SpecsProvider` has no reader, so an opaque token is uninterpretable to it. An implementer reaching this row **stops and asks**; do not guess. Suggested default, if it is ruled that way: keep the field, and document that interpreting it needs a reader over the same content |
+| `scopes/mod.rs:104-135` `CallableQuery<'a, 's, L>`; `with_token` callers `engine/driver.rs:933` (`resolve_command_in_scopes`) and the tests `argument_parsers.rs:1114`, `verbatim_parser.rs:864`, `environment_parser.rs:866` | public field `token: Option<&'a Token<'s, L>>`, `with_token(&Token)` | **Stage 3a** (ruling O-1, §1.10): `CallableQuery<'a, L>` (no `'s`) with `token_kind: Option<TokenKindView<'a, L>>` and `with_token_kind(view)`; `resolve_command_in_scopes` passes the view it received; the three tests build the view from their reader (`cx.tokens.token_kind(&token)`). 3b renames the type to `TokenKind` |
 | `latexlike/invariants.rs:60` | doc comment: "a takeover's `stage_invocation(.., end_pos: Some)`" | reword to `end: Some(&position)` (Stage 2a, with the rename) |
 | `spec/callable.rs:162-171` `CallableSpec::make_invocation_parser<'a, 's>` | `invocation: Invocation<'a, 's, L>` | `make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>, ..)` (§1.10) — Stage 3b |
 | `latexlike/spec.rs:132-134` | `make_invocation_parser<'a, 's>(.., Invocation<'a, 's, LLL>)` | same — Stage 3b |
 | `constructs/child_state.rs:106` | `&Invocation<'_, '_, L>` in the compute-closure type | `&Invocation<'_, L>` — Stage 3b |
-| every type whose `'s` comes only from a token or an `Invocation` | `ArgumentNoise<'s, L>` (`argument_parsers.rs:126`), `MintedGroupMatch<'s, L>` (`:710`), `StdInvocationParser<'a, 's, L>` (`invocation_parser.rs:164`), `CallableQuery<'a, 's, L>` (`scopes/mod.rs:104`), `ErrorInvocationParser<'a, 's, L>` (`scopes/mod.rs:1624`), `EnvironmentInvocationParser<'a, 's, LLL>` (`latexlike/environments.rs:766`), `OrphanEndParser<'a, 's, LLL>` (`:990`), `InputInvocationParser<'a, 's, LLL>` (`latexlike/input.rs:291`), `AfterEffectInvocationParser<'a, 's, LLL>` (`latexlike/spec.rs:157`), and the test parsers `DefParser<'a, 's>` (`argument_parsers.rs:2143`, `nodes_parser.rs:2995`), `TakeParser<'a, 's>` (`nodes_parser.rs:3079`), `EnvironmentInvocationParser<'a, 's>` (`environment_parser.rs:944`), `RawBlockParser<'a, 's>` (`:1091`), `RestOfLineParser<'a, 's>` / `BadEndParser<'a, 's>` (`latexlike/invocation_syntax.rs:764, 824`) | **Stage 3b drops the `'s` from all of them.** `ParseContext<'a, 's, L>` is the one exception: its `'s` comes from `TokenReader<'s, L>` and stays |
+| every type whose `'s` comes only from a token or an `Invocation` | `ArgumentNoise<'s, L>` (`argument_parsers.rs:126`), `MintedGroupMatch<'s, L>` (`:710`), `StdInvocationParser<'a, 's, L>` (`invocation_parser.rs:164`), `CallableQuery<'a, 's, L>` (`scopes/mod.rs:104` — already dropped in 3a, see its own row), `ErrorInvocationParser<'a, 's, L>` (`scopes/mod.rs:1624`), `EnvironmentInvocationParser<'a, 's, LLL>` (`latexlike/environments.rs:766`), `OrphanEndParser<'a, 's, LLL>` (`:990`), `InputInvocationParser<'a, 's, LLL>` (`latexlike/input.rs:291`), `AfterEffectInvocationParser<'a, 's, LLL>` (`latexlike/spec.rs:157`), and the test parsers `DefParser<'a, 's>` (`argument_parsers.rs:2143`, `nodes_parser.rs:2995`), `TakeParser<'a, 's>` (`nodes_parser.rs:3079`), `EnvironmentInvocationParser<'a, 's>` (`environment_parser.rs:944`), `RawBlockParser<'a, 's>` (`:1091`), `RestOfLineParser<'a, 's>` / `BadEndParser<'a, 's>` (`latexlike/invocation_syntax.rs:764, 824`) | **Stage 3b drops the `'s` from all of them.** `ParseContext<'a, 's, L>` is the one exception: its `'s` comes from `TokenReader<'s, L>` and stays |
 | `token/mod.rs:50-67` (internal module facade) | `pub use` of `Token`, `TokenKind`, `TokenError`, `TokenRecovery`, `SpecialsMatch`, `StdTokenReader`, `TokenReader` | add `TokenEdge`, `StdStreamPosition` (Stage 1), `SpecialsScanError` (Stage 1), `StdToken` + the `Token` **trait** (Stage 3b). `techy::core` re-exports through this module, so it is edited first |
 | `core/mod.rs:60-66` (public facade) | the single `pub use crate::token::{ … };` block | add `StdStreamPosition`, `TokenEdge`, `SpecialsScanError` (Stage 1); add `StdToken` and let the existing `Token` entry export the **trait** (Stage 3b). `TokenKindView` is never exported. `Span`/`SourceSpan` are **not** re-exported here — they live on `techy::source` (`source/mod.rs:69-72`) |
 | `core/constructs.rs:54-70`, `core/specs.rs:40-52` (public facades) | re-export `ArgumentNoise`, `EnvironmentBody`, `EnvironmentTerminatorSyntaxData`, `FromInvocation`, `GroupParser`, `Invocation`, `NameGroup`, `NodesOutcome`, `StopCause`, `stage_pre_space`, `read_rigid_name_group`, `resolve_command_in_scopes` | **no edit**: these are name-only re-exports and no name changes. Stated so an implementer does not go looking |
@@ -655,7 +679,8 @@ closed core enum), `TokenEdge`, `StdStreamPosition`, `Lang::Token`,
 token_kind, source_span_between, source_span_of, position_here, position_at,
 source_position_at, source_span_within}`, `ParseContext::{here, source_span_within}`,
 `ParseDriver::make_token_reader`, `SourceSpan::at`, `StopCause::*::after`,
-`Invocation::kind`, and the view's comment field names
+`Invocation::kind`, `CallableQuery::token_kind` + `CallableQuery::with_token_kind`
+(the view of the triggering token; ruling O-1), and the view's comment field names
 `TokenKind::Comment { start_delim, content }` (the delimiter as *written text*, where
 the stored token had a `Span`).
 
@@ -671,7 +696,9 @@ now answers them through `source_span_between`,
 move_to_pos, pos}`, `StdTokenReader::{pos, move_to_pos}`, `TokenRecovery::resume_pos`,
 `ParseContext::source`, `stage_invocation(.., end_pos: Option<usize>)`,
 `SpecialsMatch::name`, `SpecialsMatch<'s, L>`, `TokenResult<'s, L, T>`,
-`Invocation<'a, 's, L>`, `make_paragraph_break_node(.., token, source_content)`,
+`Invocation<'a, 's, L>`, `CallableQuery<'a, 's, L>`, `CallableQuery::token` +
+`CallableQuery::with_token` (a token in a reader-less hook), `resolve_command(.., token:
+&Token)`, `make_paragraph_break_node(.., token, source_content)`,
 `probe_token(.., source, ..)`.
 
 ### 1.15 Rustdoc contracts to write (checked by reviewers)
@@ -684,8 +711,7 @@ preferred spellings are `here()`, `source_span_within()`, `cx.tokens.source_span
 On `stage_invocation`: the standard end rule as spelled out in §1.9 (three cases). On
 `StdToken` constructors: the coherence asserts (+ the `docs/panics.md` Panics list —
 the `Token::new` entry replaced by the constructors and the "Six value functions" count
-corrected; CLAUDE.md rule 4 is *not* edited by a code stage — open ruling **O-2**
-(§1.17), **pending user ruling (orchestrator, 2026-08-17)**: stop and ask). On the
+corrected; CLAUDE.md is *not* edited by any stage — ruling O-2, §1.17). On the
 `docs/construct-parsers.md` guide: the "how do I get a span / go back" FAQ rewritten
 in terms of tokens, edges, and positions.
 
@@ -717,20 +743,23 @@ in terms of tokens, edges, and positions.
 
 ### 1.17 Open rulings
 
-Unlike §1.16, these are **not** implementer defaults: both are **pending user ruling
-(orchestrator, 2026-08-17)**. An implementer who reaches one stops and asks; the
-orchestrator relays. Close each here (with the ruling and its date) when it is answered.
+Unlike §1.16, these were **not** implementer defaults; each was put to the user by the
+orchestrator (2026-08-17) and is closed here with the ruling. Both rulings are folded
+into the sections they concern (§1.10, §1.11, §1.14, §1.3, §1.15) — those sections are
+the normative text; this list is the audit trail.
 
-- **O-1 — `CallableQuery::token`** (`techy/src/scopes/mod.rs:104-115`, §1.11 row). The
-  public field `token: Option<&'a Token<'s, L>>` re-signatures to
-  `Option<&'a L::Token>` in Stage 3b, but a `SpecsProvider` has no reader, so an opaque
-  token is uninterpretable to it. Question: keep the field, drop it, or replace it by
-  the facts a provider can use. *Status: open.*
-- **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). Rule 4's parenthetical names
-  `Token::new` among the six approved always-on-assert value functions; the eight
-  `StdToken` constructors inherit that slot. **No code stage edits CLAUDE.md.**
-  Question: whether Stage 5 (or the user directly) updates rule 4's wording and the
-  "six value functions" count. *Status: open.*
+- **O-1 — `CallableQuery::token`** (`techy/src/scopes/mod.rs:104-135`). *Ruling (user,
+  2026-08-17): resolvers may not have a reader but must still be able to look at the
+  triggering token — so they get the token's **view**: `CallableQuery::token_kind:
+  Option<TokenKind<'a, L>>` (by value; `Copy`), set with `with_token_kind`, and the
+  whole resolve chain (`ParseDriver::resolve_command`, `CommandResolver::resolve_command`,
+  `resolve_command_in_scopes`) receives `token_kind: TokenKind<'_, L>` instead of the
+  token or the bare `(name, escape_char)` pair. Spelled out in §1.10. Status: closed.*
+- **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). *Ruling (user, 2026-08-17): the user
+  edited CLAUDE.md themselves on `main` (rule 4 no longer names `Token::new`; it points
+  at `docs/panics.md`). No stage edits CLAUDE.md; Stage 4's final report lists lines
+  that may deserve a refresh (the `techy::core` topology line) for the user. Status:
+  closed.*
 
 ---
 
@@ -1032,8 +1061,11 @@ field has type `TokenKindView<'a, L>`; 3b renames the type in place and drops th
 (files: `nodes_parser.rs`, `argument_parsers.rs`, `environment_parser.rs`,
 `verbatim_parser.rs`, `embellishments_parser.rs`, `tack_on_parser.rs`,
 `group_parser.rs`, `chars_group_parser.rs`, `engine/*`, `latexlike/*`, `docs/*.md`,
-`tests/lang_features.rs`). `resolve_command(state, name, escape_char)` and
-`CommandResolver`; `FromInvocation::from_invocation(&Invocation, &dyn TokenReader)`;
+`tests/lang_features.rs`). The resolve chain takes the view (§1.10, ruling O-1):
+`ParseDriver::resolve_command(state, token_kind: TokenKindView<'_, L>)`,
+`CommandResolver::resolve_command`, `resolve_command_in_scopes`, and `CallableQuery<'a, L>`
+(`token_kind: Option<TokenKindView<'a, L>>`, `with_token_kind`; the `'s` and the
+`token` field go now); `FromInvocation::from_invocation(&Invocation, &dyn TokenReader)`;
 `Invocation` gains `kind`. After this stage no code outside `token/*` reads
 `token.kind`, `token.span`, `token.pre_space`, or calls `token.post_space()`
 (grep-verified; the chars run and pre-space staging were converted in Stage 2).
