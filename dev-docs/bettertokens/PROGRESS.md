@@ -2205,6 +2205,8 @@ dev-docs/DESIGN_RATIONALE.md:4
 $ git diff --stat main..bt-5-docs
  dev-docs/ARCHITECTURE.md          | 169 +++++++---
  dev-docs/DESIGN_RATIONALE.md      | 646 ++++++++++++++++++++++++++++----------
- dev-docs/bettertokens/PROGRESS.md | 163 +++++++++-
- 3 files changed, 766 insertions(+), 212 deletions(-)
+ dev-docs/bettertokens/PROGRESS.md | 282 ++++++++++++++++-
+ 3 files changed, 885 insertions(+), 212 deletions(-)
+      (measured after this section was written; the three files are the only ones the
+       branch touches.)
 ```
