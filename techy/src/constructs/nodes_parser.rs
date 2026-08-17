@@ -3484,14 +3484,19 @@ mod tests {
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap();
-                let data: GroupData<CmdLang> = GroupData::untyped(
-                    TextContent::Spanned(open_span.span()),
-                    TextContent::Spanned(close_span.span()),
-                );
                 let span = cx.source_span_within(
                     &cx.tokens.position_at(self.invocation.token, TokenEdge::Start),
                     &end,
                 )?;
+                // Node data sub-spans are node-relative spans of the node's own
+                // source; a delimiter from elsewhere is recorded as owned text
+                // (the production sites' rule, modelled here too).
+                let delimiter = |at: &SourceSpan| match at.same_source(&span) {
+                    true => TextContent::Spanned(at.span()),
+                    false => TextContent::Owned(at.content().into()),
+                };
+                let data: GroupData<CmdLang> =
+                    GroupData::untyped(delimiter(&open_span), delimiter(&close_span));
                 let id = cx.stage_node(
                     NodeKind::group(data),
                     span,

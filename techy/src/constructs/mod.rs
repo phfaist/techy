@@ -334,7 +334,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let trigger_start = self.tokens.position_at(token, TokenEdge::Start);
         let span = match end {
             // The explicit end: the takeover claims its consumed extent.
-            Some(end) => self.invocation_span_within(&trigger_start, end)?,
+            Some(end) => self.invocation_span_within(&trigger, &trigger_start, end)?,
             None => {
                 // The standard rule: the last staged child's span end, in the
                 // trigger's own source. A last child no parser ever staged (an
@@ -352,14 +352,14 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                         // violation by outer code — the implementation-error abort,
                         // never a panic (`SourceSpan::new` would otherwise assert).
                         if child_end < trigger.start() {
-                            return Err(self.invalid_invocation_span());
+                            return Err(self.invalid_invocation_span(&trigger));
                         }
                         SourceSpan::new(trigger.source(), trigger.start()..child_end)
                     }
                     // No usable child: the node ends where the reader stands.
                     None => {
                         let here = self.tokens.position_here();
-                        self.invocation_span_within(&trigger_start, &here)?
+                        self.invocation_span_within(&trigger, &trigger_start, &here)?
                     }
                 }
             }
@@ -382,27 +382,34 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     }
 
     /// [`stage_invocation`](ParseContext::stage_invocation)'s span computation from
-    /// two stream positions, with the invalid-span wording of that method.
+    /// two stream positions, with the invalid-span wording (and anchor) of that
+    /// method.
     fn invocation_span_within(
         &self,
+        trigger: &SourceSpan<L::SourceOrigin>,
         begin: &L::StreamPosition,
         end: &L::StreamPosition,
     ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
         match self.tokens.source_span_within(begin, end) {
             Some(span) => Ok(span),
-            None => Err(self.invalid_invocation_span()),
+            None => Err(self.invalid_invocation_span(trigger)),
         }
     }
 
     /// The invalid-computed-span abort of
-    /// [`stage_invocation`](ParseContext::stage_invocation).
-    fn invalid_invocation_span(&self) -> ParseError<L::SourceOrigin> {
+    /// [`stage_invocation`](ParseContext::stage_invocation), anchored at the
+    /// trigger — the construct whose staging failed, and the location a reader of
+    /// the report can act on.
+    fn invalid_invocation_span(
+        &self,
+        trigger: &SourceSpan<L::SourceOrigin>,
+    ) -> ParseError<L::SourceOrigin> {
         self.implementation_error(
             "stage_invocation computed an invalid node span: the node's end must \
              not precede the trigger's start and must lie in the trigger's own \
              source — check the explicit end position or the staged children's \
              spans",
-            self.here(),
+            trigger.clone(),
         )
     }
 
@@ -1515,6 +1522,26 @@ mod tests {
         }
     }
 
+    /// Stage one chars node over `range` of a **second** source as a child — the
+    /// standard rule's "last child in another source" branch.
+    fn foreign_child(
+        range: core::ops::Range<usize>,
+    ) -> impl FnOnce(&mut ParseContext<'_, '_, PlainLang>) -> Vec<BuildId> {
+        move |cx| {
+            let other: Arc<Source> = Arc::new(Source::new("elsewhere"));
+            let span = SourceSpan::new(&other, range.clone());
+            let id = cx
+                .stage_node(
+                    NodeKind::chars(span.span()),
+                    span,
+                    Arc::clone(&cx.state),
+                    Vec::new(),
+                )
+                .unwrap();
+            alloc::vec![id]
+        }
+    }
+
     #[test]
     fn stage_invocation_ends_at_the_explicit_position() {
         // The reader stands past the trigger's post-space, and two more characters
@@ -1542,6 +1569,17 @@ mod tests {
         // No child: the node ends where the reader stands — just past the trigger.
         let range =
             stage_invocation_span("abcd", 0, EndUnderTest::Standard, |_cx| Vec::new()).unwrap();
+        assert_eq!(range, 0..1);
+    }
+
+    #[test]
+    fn stage_invocation_ignores_a_last_child_staged_in_another_source() {
+        // The child's span cannot end this node — it is in another source — so the
+        // node ends where the reader stands (just past the trigger), exactly as for
+        // a childless shape.
+        let range =
+            stage_invocation_span("abcd", 0, EndUnderTest::Standard, foreign_child(3..9))
+                .unwrap();
         assert_eq!(range, 0..1);
     }
 

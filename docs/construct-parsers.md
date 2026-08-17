@@ -226,7 +226,7 @@ A takeover parser stages its callable node through one of two calls:
   the [`CallableData`](crate::core::node::CallableData) by transcribing the
   invocation form, name, and spec from the `Invocation` bundle, mints the
   invocation-syntax payload, computes the span (by default from the trigger
-  through the last staged child; pass `end_pos` when the consumed extent
+  through the last staged child; pass `end` when the consumed extent
   outruns the last child — rest-of-line and delimiter-terminated shapes),
   and stages. You supply the argument/slot records and the flat child list
   they tile.

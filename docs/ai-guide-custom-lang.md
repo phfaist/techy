@@ -279,7 +279,7 @@ to `true`. **Two staging calls** for the callable node:
 [`cx.stage_invocation(…)`](crate::core::constructs::ParseContext::stage_invocation)
 — the transcription shorthand for macro-shaped takeovers (builds
 [`CallableData`](crate::core::node::CallableData) from the
-[`Invocation`](crate::core::constructs::Invocation) bundle; pass `end_pos`
+[`Invocation`](crate::core::constructs::Invocation) bundle; pass `end`
 when the consumed extent outruns the last child) — and
 [`cx.stage_node`](crate::core::constructs::ParseContext::stage_node) with
 an explicit `CallableData` — the canonical door for compositions (a node

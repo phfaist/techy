@@ -740,7 +740,8 @@ mod tests {
     // --- stage_invocation (the staging shorthand) ---------------------------------------
 
     /// A rest-of-line takeover: consumes through the end of the line and claims the
-    /// extent via `end_pos: Some(..)` — the consumed-extent-outruns-children case.
+    /// extent via `end: Some(&position)` — the consumed-extent-outruns-children
+    /// case.
     #[derive(Debug)]
     struct RestOfLineSpec;
 
@@ -878,6 +879,10 @@ mod tests {
                 "unexpected detail: {}",
                 condition.detail
             );
+            // Anchored at the trigger — the construct whose staging failed — not
+            // at wherever the reader happened to stand (`\bad ` is 3..8, its
+            // syntactic post-space included).
+            assert_eq!(error.span().range(), 3..8);
         };
 
         // An end preceding the trigger's start (`\bad` starts at 3, its pre-space
@@ -899,7 +904,7 @@ mod tests {
 
     #[test]
     fn stage_invocation_applies_the_std_and_explicit_end_rules() {
-        // end_pos: None — the std rule: last child's span end…
+        // end: None — the std rule: last child's span end…
         let mut package = Package::new("t");
         package.insert(
             CallableType::Macro,
@@ -924,7 +929,7 @@ mod tests {
         let ligature = result.tree.root().child(1).unwrap();
         assert_eq!(ligature.span().range(), 1..4);
 
-        // end_pos: Some — the consumed extent outruns the (empty) child list.
+        // end: Some — the consumed extent outruns the (empty) child list.
         let content = "\\title The Title\nrest";
         let result = parse_ok(&language, content);
         let title = result.tree.root().child(0).unwrap();
