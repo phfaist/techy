@@ -548,8 +548,8 @@ reader reports through its `TokenKind` view, since a token itself is opaque to p
   reports possible first characters (`TriggerChars`; `Any` = conservative fallback for
   dynamic scanners), cached per state instance like the `PrefixTable` and consulted before
   any dyn call. The scan answers `Result<Option<SpecialsMatch<L>>, SpecialsScanError>`; a
-  scan error is an implementation error the reader lifts into an unrecoverable
-  `TokenError`, never a recovery ([§dd-dr:specials-scan-errors]).
+  scan error is a language-level condition the reader lifts, source-qualified, into an
+  unrecoverable `TokenError`, never a recovery ([§dd-dr:specials-scan-errors]).
 - **Syntactic vs. content whitespace** — the principle that decides every whitespace
   placement question: *pre-space is content whitespace* (belongs to the document flow;
   becomes whitespace chars nodes, [§dd-dr:nodes]), *post-space is syntactic whitespace* (consumed by
