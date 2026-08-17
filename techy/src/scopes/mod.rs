@@ -1312,6 +1312,11 @@ impl<L: Lang> fmt::Debug for Package<L> {
 /// old `Arc` — group-local definition semantics fall out of structural reversion, even
 /// when the targeted scope sits below other providers. Storage is a `BTreeMap` (`no_std`, deterministic iteration); keys are
 /// `(Lang::CallableTypeId, normalized name)`, many-to-one to shared specs.
+///
+/// **Serialization.** A scope holds definitions made during a parse, so it is
+/// serialized in full — its name and every definition, each spec as an entry of its
+/// own (by identity or in a self-contained form, whatever the spec's type writes) —
+/// and rebuilt through [`new`](Scope::new) and [`insert`](Scope::insert).
 pub struct Scope<L: Lang> {
     name: Box<str>,
     #[allow(clippy::type_complexity)]
@@ -1461,6 +1466,10 @@ impl<L: Lang> fmt::Debug for Scope<L> {
 /// Fallback specs are shared singletons (possible because specs are de-keyed), so
 /// "unknown `\foo`" costs no per-instance allocation, and a callable node's spec can be
 /// guaranteed never-`None` for every callable type registered here.
+///
+/// **Serialization.** Serialized in full — its name and every fallback, each spec as
+/// an entry of its own — and rebuilt through [`new`](FallbackProvider::new) and
+/// [`set`](FallbackProvider::set).
 pub struct FallbackProvider<L: Lang> {
     name: Box<str>,
     fallbacks: BTreeMap<L::CallableTypeId, Arc<dyn CallableSpec<L>>>,

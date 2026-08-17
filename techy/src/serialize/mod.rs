@@ -100,10 +100,30 @@
 //! once however often it is referred to, and read back as one shared object; a tree is
 //! a value, written in full on every call.
 //!
+//! **Specs and providers: identity or a self-contained form.** A callable spec or a
+//! provider is serialized either by *identity* — a reference the reading side resolves
+//! against the live objects it already holds — or in a *self-contained* form the
+//! reading side rebuilds an equivalent object from; each type's own impl decides. A
+//! [`Package`](crate::core::specs::Package) is loaded data and goes by identity: its
+//! name, resolved through the [`KnownProviders`] directory the reading program sets as
+//! the session's user data — the providers it holds, by name, plus
+//! [`ProviderRecipe`]s to build the ones it does not hold. A spec that holds parsers
+//! (a `StdCallableSpec`, the latexlike macro and environment specs) goes by identity
+//! too, through the [`SpecProvenance`](crate::core::specs::SpecProvenance) stamp a
+//! package built with [`Package::new_shared`](crate::core::specs::Package::new_shared)
+//! hands out — a reference to the package's entry plus the definition key, resolved by
+//! looking the key up in the reading side's package of that name: the very instance
+//! that package holds, never a lookup re-run (a spec of such a type built outside a
+//! shared package cannot be serialized: [`SerializeError::MissingProvenance`]).
+//! Scopes and fallback providers are written in full (their definitions as spec
+//! positions), the error spec as plain data. The readers of all of these are
+//! registered with [`register_core_readers`] — a language's own helper calls it
+//! (the latexlike preset's [`latexlike::serialize::register`](crate::latexlike::serialize::register)).
+//!
 //! **What exists so far.** This module provides the value model, the error types, the
 //! capability traits, the engine, the drivers of the sources, states, specs, providers,
-//! and trees tables, and (with the feature) the rendering layer; the diagnostics driver
-//! and the serialization of the crate's own spec and provider types are not yet present.
+//! and trees tables with the crate's own spec and provider serialization, and (with
+//! the feature) the rendering layer; the diagnostics driver is not yet present.
 
 mod drivers;
 mod engine;

@@ -1400,6 +1400,43 @@ mod tests {
         assert_eq!(raw.group_delimiters(), Some(("|", "|")));
     }
 
+    // A foreign family member opts into serialization with the empty impl: the
+    // preset's vocabulary and payload types carry the value conversions for every
+    // language, and the preset's spec types serialize under `LLL`.
+    impl crate::serialize::SerializableLang for Flavored {}
+
+    #[test]
+    fn a_foreign_family_member_serializes_with_the_presets_conversions() {
+        use crate::serialize::tree_support::{ignore_annotations, round_trip_tree};
+        use crate::serialize::{KnownProviders, SerdeSession};
+
+        let defs = Package::<Flavored>::new_shared("defs", |package| {
+            package.define_macro("emph", ["m"]).unwrap();
+            package.define_environment("A", ["o"]).unwrap();
+        });
+        let language: Language<Flavored> = Language::new(
+            LatexlikeDriver::new(crate::error::Recovery::Strict),
+            ParsingState::lang_initial_with_packages([builtin_package(), Arc::clone(&defs)])
+                .expect("seed state"),
+        );
+        let result = language.parse("\\emph{x} \\begin{A}[o] $m$ \\end{A}").unwrap();
+        let providers = language.initial_state().scopes().providers().to_vec();
+        let factory = move || {
+            let mut session = SerdeSession::<Flavored>::new();
+            let mut known = KnownProviders::<Flavored>::new();
+            for provider in &providers {
+                known.insert(Arc::clone(provider));
+            }
+            session.set_user_data(known);
+            super::serialize::register(&mut session).unwrap();
+            session
+        };
+        let back = round_trip_tree(factory, &result.tree, ignore_annotations);
+        let emph = back.root().child(0).unwrap();
+        assert!(Arc::ptr_eq(emph.spec().unwrap(), defs.get(CallableType::Macro, "emph").unwrap()));
+        assert_eq!(back.root().child(2).unwrap().environment_name(), Some("A"));
+    }
+
     #[test]
     fn the_builtin_package_is_unloadable_by_name() {
         let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
