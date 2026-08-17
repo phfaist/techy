@@ -383,9 +383,17 @@ fn scan_specials(state: &ParsingState<L>, content: &str, pos: usize)
   `content: &'s str = source.content()`, `pos: usize`. `content()` stays as an inherent
   accessor; `is_at_end()` may stay; **`pos()` and `move_to_pos()` are removed** (the
   trait's position API replaces them).
-- `impl<'s, L: Lang<SourceOrigin = O>> TokenReader<'s, L> for StdTokenReader<'s, O>`
-  (**probe P8 settles this spelling**; if it does not compile, P8's reported fallback —
-  e.g. `StdTokenReader<'s, L>` generic over the language — is used instead):
+- `impl<'s, O: SourceOrigin, L> TokenReader<'s, L> for StdTokenReader<'s, O> where L:
+  Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>`
+  (**settled by probe P8**, `PROBE_REPORT.md`: a bare `Lang<SourceOrigin = O>` bound
+  does not compile — it leaves `L::Token` and `L::StreamPosition` opaque while the
+  reader can only produce `StdToken<L>` and `StdStreamPosition`; the two associated-type
+  equalities are the minimal fix, the reader stays generic over the *origin*, and the §9
+  fallback `StdTokenReader<'s, L>` is not needed. The same `where` clause is required on
+  any inherent helper that builds tokens, e.g. the scanning core. **Stage 1 variant** —
+  `Lang::Token` does not exist yet, so Stage 1 writes
+  `impl<'s, O: SourceOrigin, L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>> TokenReader<'s, L> for StdTokenReader<'s, O>`
+  and Stage 3b adds `Token = StdToken<L>`):
   `token_kind` slices `content` by the token's spans; `source_span_between` =
   `SourceSpan::new(source, a_offset..b_offset)`; positions wrap offsets;
   `source_span_within` = `Some(SourceSpan::new(source, begin..end))` if `begin <= end`,
