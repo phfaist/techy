@@ -161,7 +161,12 @@ impl StdStreamPosition {
 ///    the offsets the token carries; the test-only `TokenListReader` does detect it and
 ///    rejects tokens and positions it did not issue (its own documentation states the
 ///    rules), which is what makes the two-reader lockstep suites a guard against a
-///    parser inventing either.
+///    parser inventing either. What `StdTokenReader` answers for a foreign token is
+///    deliberately asymmetric: [`token_kind`](TokenReader::token_kind) reads an empty
+///    slice where the token's offsets fall outside its content (a wrong answer beats a
+///    new panic in library code), while
+///    [`source_span_between`](TokenReader::source_span_between) hands those offsets to
+///    `SourceSpan::new`, whose registered always-on assert fires.
 /// 5. **Absent features yield no tokens:** a token kind belonging to a feature the
 ///    language declares absent ([`Lang::Features`]) must never be produced — no
 ///    `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
@@ -2160,8 +2165,8 @@ mod tests {
         let token = reader.next(&st).unwrap();
         assert_eq!(reader.token_kind(&token), TokenKindView::GroupClose { delim: "}" });
 
-        // The comment's two texts are the token's own bytes in order (contract
-        // clause 7): `%` then ` note`, the newline being post-space.
+        // The comment's two texts, as this reader resolves them: `%` then ` note`,
+        // the newline being post-space.
         let token = reader.next(&st).unwrap();
         assert_eq!(
             reader.token_kind(&token),
@@ -2499,7 +2504,7 @@ mod tests {
     // --- movement -----------------------------------------------------------------------
 
     #[test]
-    fn move_to_lands_at_each_of_the_four_edges() {
+    fn move_to_lands_at_each_of_the_five_edges() {
         let text = "  \\vec b";
         let source = Arc::new(Source::new(text));
         let mut tr = StdTokenReader::new(&source);
@@ -2519,6 +2524,7 @@ mod tests {
         for (edge, offset) in [
             (TokenEdge::EndPastPostSpace, 7), // past post-space
             (TokenEdge::End, 6),              // before it (the `\verb`-style read)
+            (TokenEdge::ContentStart, 3),     // past the escape character
             (TokenEdge::Start, 2),            // at the token, to read it again
             (TokenEdge::StartBeforePreSpace, 0), // giving back the pre-space too
         ] {

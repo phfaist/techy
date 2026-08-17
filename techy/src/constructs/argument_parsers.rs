@@ -282,7 +282,7 @@ where
             // under any policy (resolve_command's contract).
             let resolved = cx
                 .driver
-                .resolve_command(&cx.state, cx.tokens.token_kind(next))
+                .resolve_command(&cx.state, kind)
                 .map_err(|error| cx.attach_hook_frames(error))?;
             match resolved {
                 CommandResolution::Resolved(resolved) => {
@@ -981,8 +981,6 @@ where
                 noise.rewind(cx);
                 return Ok(None);
             };
-            // Consecutive: no whitespace between the marker's characters, and the
-            // next one starts exactly where the run has reached.
             // Consecutive means: same character, and the token's pre-space edge is
             // exactly where the run has reached (no whitespace in between).
             let continues_marker =

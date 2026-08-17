@@ -386,6 +386,7 @@ mod tests {
         for (edge, offset) in [
             (TokenEdge::EndPastPostSpace, 7),
             (TokenEdge::End, 6),
+            (TokenEdge::ContentStart, 3),
             (TokenEdge::Start, 2),
             (TokenEdge::StartBeforePreSpace, 0),
         ] {

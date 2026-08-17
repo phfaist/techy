@@ -1014,9 +1014,10 @@ path were left as they are. (Baseline worktree
 - **Branch**: `bt-3a-view` (off `main` at `a8f36a1`, which already contains Stages 1,
   2a and 2b).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-3a-view`.
-- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Status**: reviewed (READY, review round 1 applied) — awaiting merge with 3b.
+  Date: 2026-08-17.
 - **Commits** (`git log --oneline main..bt-3a-view`, newest first; the PROGRESS update
-  itself follows this list):
+  and the review-round commit follow this list):
 
 ```
 507d7da docs: the guide doctest and the new tests for the view
@@ -1034,11 +1035,12 @@ intermediate state. Each commit builds and is green on the gates.
 | File | Change |
 |---|---|
 | `techy/src/token/token.rs` | new `TokenKindView<'t, L>` (§1.3's variants and fields, no span fields) with manual `Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Display` and `as_str`; `Token::edge_offset` gains the `ContentStart` arm (comment: the start delimiter's end; command: past the escape character; otherwise the token's start); three new unit tests |
-| `techy/src/token/reader.rs` | `TokenEdge::ContentStart` (fifth variant, between `Start` and `End`) with the `≤`-ordering rustdoc; `TokenReader::token_kind<'t>(&self, &'t Token<'_, L>) -> TokenKindView<'t, L> where 's: 't` (required, rustdoc per §1.6/§1.15) and its `StdTokenReader` impl; the trait's "Positions, edges, and spans" section and `move_to`'s docs restated for five edges; four new unit tests |
+| `techy/src/token/reader.rs` | `TokenEdge::ContentStart` (fifth variant, between `Start` and `End`) with the `≤`-ordering rustdoc; `TokenReader::token_kind<'t>(&self, &'t Token<'_, L>) -> TokenKindView<'t, L> where 's: 't` (required, rustdoc per §1.6/§1.15) and its `StdTokenReader` impl; the trait's "Positions, edges, and spans" section, `move_to`'s docs and contract clause 4 (the foreign-token asymmetry) restated for five edges; seven new unit tests, and the movement test covers the new edge |
 | `techy/src/token/list_reader.rs` | `token_kind` (same interpretation, issued-token check first); `EVERY_EDGE` and the lockstep edge matrix cover `ContentStart`; three new tests (view lockstep, the comment's delimiter/content as edges, a forged token rejected) |
 | `techy/src/token/mod.rs`, `techy/src/core/mod.rs` | facades export `TokenKindView` (temporary — 3b renames it `TokenKind`); the token module's design highlights say what a token *is* is a reader answer too |
 | `techy/src/scopes/mod.rs` | `CallableQuery<'a, L>` (the `'s` is gone): `token: Option<&Token>` → `token_kind: Option<TokenKindView<'a, L>>`, `with_token` → `with_token_kind`, rustdoc per §1.10; one new unit test |
 | `techy/src/engine/driver.rs` | `ParseDriver::resolve_command`, `CommandResolver::resolve_command` and `resolve_command_in_scopes` take `token_kind: TokenKindView<'_, L>`; the query is built with `with_token_kind`; rustdoc on why a resolver sees the view |
+| `techy/src/serialize/drivers/{tests,tree_tests}.rs`, `techy/src/latexlike/serialize_tests.rs` | the `SpecsProvider` stubs' `CallableQuery<'_, '_, L>` → `CallableQuery<'_, L>` (the dropped `'s`) — nothing else in `techy/src/serialize/**` touches tokens |
 | `techy/src/constructs/mod.rs` | `Invocation.kind: TokenKindView<'a, L>` and `name: &'a str` (from the view); `FromInvocation::from_invocation(&Invocation, &dyn TokenReader)`, `stage_invocation` passing `&*self.tokens`; new `pub(crate) comment_node_kind(cx, token)` — the comment node's three sub-spans as three edge answers |
 | `techy/src/constructs/nodes_parser.rs` | one `cx.tokens.token_kind(&token)` per loop iteration, matched on in the dispatch and in `token_stop`; `take_pre_space` compares edge positions; `TokenStopKind::Predicate` takes the view; the comment arm stages through `comment_node_kind`; test predicates, harness and `TakeParser` ported |
 | `techy/src/constructs/argument_parsers.rs` | the noise scan, `parse_expression_node`, the group-class and minted-group probes and the marker run read the view; the requires-content spelling comes from `invocation.kind`; the two `Invocation` sites set `kind` |
@@ -1146,24 +1148,24 @@ Token *kind* reads outside the token module:
 ```
 $ grep -rn "\.kind\b" techy/src techy/tests docs | grep -v "^techy/src/token/" \
     | grep -v "node\.kind\|\.kind()\|NodeKind\|kind:"
-techy/src/latexlike/invocation_syntax.rs:127:        match invocation.kind {
-techy/src/latexlike/environments.rs:828:            self.invocation.kind
-techy/src/latexlike/environments.rs:1045:        let command_end = match self.invocation.kind {
 techy/src/constructs/argument_parsers.rs:352:        let spelling = match invocation.kind {
 techy/src/constructs/mod.rs:1274:            .field("kind", &self.kind)
 techy/src/constructs/nodes_parser.rs:211:        match self.kind {
 techy/src/constructs/nodes_parser.rs:763:        let matches = match &cond.kind {
 techy/src/constructs/nodes_parser.rs:1293:            .field("kind", &self.kind)
-techy/src/scopes/mod.rs:2702:        assert!(error.kind.to_string().contains("scan broke"));
+techy/src/latexlike/invocation_syntax.rs:127:        match invocation.kind {
+techy/src/latexlike/environments.rs:828:            self.invocation.kind
+techy/src/latexlike/environments.rs:1045:        let command_end = match self.invocation.kind {
+techy/src/scopes/mod.rs:2627,2628,2630,2638,2640,2720:   error.kind.to_string() …
 techy/src/serialize/**, techy/src/node/**, techy/tests/derive_conditions.rs (node and
 diagnostic data, not tokens — elided here for length)
 ```
 
-**No token-kind read is left.** The nine remaining lines are: `invocation.kind` (the
-view field this stage adds — read, not computed), the `Debug` impls of `Invocation` and
+**No token-kind read is left.** The remaining lines are: `invocation.kind` (the view
+field this stage adds — read, not computed), the `Debug` impls of `Invocation` and
 `TokenStopCondition`, `UnusableRecoveryToken.kind` and `TokenStopCondition.kind` (the
-parsers' own condition enums), and a `SpecialsScanError.kind` assertion. The `serialize`
-/ `node` hits are `NodeData.kind` and wire-record fields.
+parsers' own condition enums), and six `SpecialsScanError.kind` assertions. The
+`serialize` / `node` hits are `NodeData.kind` and wire-record fields.
 
 Token *span* / *whitespace* reads outside the token module:
 
@@ -1171,7 +1173,7 @@ Token *span* / *whitespace* reads outside the token module:
 $ grep -rn "token\.span\|tok\.span\|\.pre_space\b\|\.post_space()" techy/src techy/tests docs \
     | grep -v "^techy/src/token/"
 techy/src/latexlike/arguments.rs:727:        assert_eq!(m.post_space(), Some(" "));
-techy/src/latexlike/invocation_syntax.rs:530,535,586,643,733
+techy/src/latexlike/invocation_syntax.rs:530,535,641,698,788
 techy/src/latexlike/environments.rs:1247,1288
 techy/tests/acceptance.rs:393,397,450,563,606
 docs/learn-by-example.md:186
@@ -1249,3 +1251,34 @@ locals), so they match neither grep.
    unmodified, the comment sub-spans included (the `ContentStart` edge reproduces the
    stored token's `start`/`content`/`post_space` exactly). Recorded because the comment
    staging rule changed shape.
+
+### Review round 1 (fixes applied 2026-08-17)
+
+The stage came back READY for 3b to build on, subject to two documentation fixes and
+four points of polish; all six are on the branch.
+
+1. **`TokenKindView::Comment`'s rustdoc** still claimed "the token's own bytes in
+   order — see the `TokenReader` contract, clause 7". There is no clause 7 (ruling O-3
+   replaced that interim rule with the `ContentStart` edge). It now points at the edges
+   instead, non-normatively: `Start..ContentStart` for the delimiter,
+   `ContentStart..End` for the text.
+2. **The reader test comment** repeating "(contract clause 7)" now says "as this reader
+   resolves them".
+3. **A duplicate comment** left by the port in `argument_parsers.rs`'s marker run (the
+   pre-port "Consecutive: no whitespace…" line) is deleted.
+4. **The two `resolve_command` call sites** pass the `kind` the loop already computed
+   instead of re-querying `cx.tokens.token_kind(…)` — the view is `Copy` and borrows
+   nothing from the reader (`nodes_parser.rs`, `argument_parsers.rs`).
+5. **The two `move_to` edge tables** (`reader.rs`'s movement test, renamed
+   `move_to_lands_at_each_of_the_five_edges`, and `list_reader.rs`'s lockstep matrix)
+   list `ContentStart` — offset 3 for the `\vec` trigger, one byte past its escape
+   character.
+6. **Contract clause 4 states the foreign-token asymmetry**: `token_kind` answers an
+   empty slice where a foreign token's offsets fall outside the reader's content (a
+   wrong answer beats a new panic in library code), while `source_span_between` hands
+   those offsets to `SourceSpan::new`, whose registered always-on assert fires. The
+   reasoning previously lived only in a code comment.
+
+Gates re-run at the branch tip, all green: `cargo test` (1050 unit + 30 + 9 + 13 + 23
+integration + 84 doctests, 0 failed), `cargo clippy --all-targets -- -D warnings`
+(clean), `rm -rf target/doc && cargo docs` (clean).

@@ -182,8 +182,9 @@ pub enum TokenKindView<'t, L: Lang> {
         spec: &'t Arc<dyn CallableSpec<L>>,
     },
     /// A whole comment: start delimiter plus content, up to (not including) the
-    /// terminating newline. The two texts are the token's own bytes in order — see the
-    /// [`TokenReader`](super::TokenReader#contract) contract, clause 7.
+    /// terminating newline. Where the two lie is a reader answer:
+    /// `Start..ContentStart` for the delimiter, `ContentStart..End` for the text (see
+    /// [`source_span_between`](super::TokenReader::source_span_between)).
     Comment {
         /// The start delimiter as matched (`%` in LaTeX).
         start_delim: &'t str,

@@ -1097,7 +1097,7 @@ where
                         // A hook Err aborts under any policy (resolve_command's
                         // contract); the recoverable channels are the Ok values.
                         cx.driver
-                            .resolve_command(&cx.state, cx.tokens.token_kind(&token))
+                            .resolve_command(&cx.state, kind)
                             .map_err(|error| cx.attach_hook_frames(error))?
                     };
                     match resolved {
