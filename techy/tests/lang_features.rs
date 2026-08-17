@@ -48,7 +48,7 @@ mod support {
         CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
         FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
         ParseResult, ParsingState, SpecialsMatch, SpecialsScanError, StateData,
-        StdParseDriver, TokenKindView, TokenRules, TriggerChars, WhitespaceRules,
+        StdParseDriver, TokenKind, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -96,6 +96,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = techy::core::StdToken<Self>;
         type StreamPosition = techy::core::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -163,6 +164,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = techy::core::StdToken<Self>;
         type StreamPosition = techy::core::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -248,6 +250,7 @@ mod support {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = techy::core::StdToken<Self>;
         type StreamPosition = techy::core::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -296,12 +299,12 @@ mod support {
         fn resolve_command(
             &self,
             _state: &ParsingState<CommandsWithoutScopesLang>,
-            token_kind: TokenKindView<'_, CommandsWithoutScopesLang>,
+            token_kind: TokenKind<'_, CommandsWithoutScopesLang>,
         ) -> Result<
             CommandResolution<CommandsWithoutScopesLang>,
             techy::error::ParseError,
         > {
-            let TokenKindView::Command { name, .. } = token_kind else {
+            let TokenKind::Command { name, .. } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             let spec: Arc<dyn CallableSpec<CommandsWithoutScopesLang>> = match name {
@@ -462,8 +465,8 @@ mod plain_chars {
             ConstructParser, ImplementationError, NodesParser, ParseContext, StopSpec,
         };
         use techy::core::{
-            ParserSession, StdStreamPosition, StdTokenReader, Token, TokenEdge, TokenKind,
-            TokenKindView, TokenReader, TokenResult,
+            ParserSession, StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind,
+            TokenReader, TokenResult,
         };
         use techy::error::DiagnosticInfo;
         use techy::source::{Source, SourcePos, SourceSpan, Span};
@@ -492,22 +495,23 @@ mod plain_chars {
             fn peek(
                 &mut self,
                 _state: &Arc<ParsingState<PlainCharsLang>>,
-            ) -> TokenResult<'s, PlainCharsLang, Token<'s, PlainCharsLang>> {
+            ) -> TokenResult<PlainCharsLang, StdToken<PlainCharsLang>> {
                 // Spells the `%c` comment of the plain-parse test above — but as a
-                // `Comment` token, which the language's declaration rules out.
-                Ok(Token::new(
-                    TokenKind::Comment {
-                        start: Span::new(0, 1),
-                        content: "c",
-                        post_space: Span::empty(2),
-                    },
-                    Span::new(0, 2),
-                    Span::empty(0),
+                // `Comment` token, which the language's declaration rules out. The
+                // spans come from scanning the content this reader serves: nothing is
+                // read off a token, and nothing is assumed about one.
+                let content = self.inner.content();
+                let line_end = content.find('\n').unwrap_or(content.len());
+                Ok(StdToken::comment(
+                    Span::new(0, 1),               // the `%` delimiter
+                    Span::new(0, line_end),        // delimiter plus text
+                    Span::empty(0),                // no pre-space
+                    Span::empty(line_end),         // no post-space
                 ))
             }
 
 
-            fn move_to(&mut self, tok: &Token<'_, PlainCharsLang>, edge: TokenEdge) {
+            fn move_to(&mut self, tok: &StdToken<PlainCharsLang>, edge: TokenEdge) {
                 self.inner_mut().move_to(tok, edge);
             }
 
@@ -515,7 +519,10 @@ mod plain_chars {
                 self.inner_mut().move_to_position(at);
             }
 
-            fn token_kind<'t>(&self, tok: &'t Token<'_, PlainCharsLang>) -> TokenKindView<'t, PlainCharsLang>
+            fn token_kind<'t>(
+                &self,
+                tok: &'t StdToken<PlainCharsLang>,
+            ) -> TokenKind<'t, PlainCharsLang>
             where
                 's: 't,
             {
@@ -524,7 +531,7 @@ mod plain_chars {
 
             fn source_span_between(
                 &self,
-                tok: &Token<'_, PlainCharsLang>,
+                tok: &StdToken<PlainCharsLang>,
                 a: TokenEdge,
                 b: TokenEdge,
             ) -> SourceSpan {
@@ -537,7 +544,7 @@ mod plain_chars {
 
             fn position_at(
                 &self,
-                tok: &Token<'_, PlainCharsLang>,
+                tok: &StdToken<PlainCharsLang>,
                 edge: TokenEdge,
             ) -> StdStreamPosition {
                 self.inner().position_at(tok, edge)
@@ -580,8 +587,8 @@ mod groups_only {
     use std::sync::Arc;
     use techy::source::Source;
     use techy::core::{
-        Language, ParsingState, ParsingStateDelta, StdParseDriver, StdTokenReader, Token,
-        TokenEdge, TokenKindView, TokenReader, TokenRulesOverrides,
+        Language, ParsingState, ParsingStateDelta, StdParseDriver, StdToken, StdTokenReader,
+        TokenEdge, TokenKind, TokenReader, TokenRulesOverrides,
     };
     use techy::error::Recovery;
 
@@ -617,10 +624,13 @@ mod groups_only {
     fn whitespace_characters_are_ordinary_content_tokens_with_empty_pre_space() {
         let state = Arc::new(ParsingState::<GroupsOnlyLang>::lang_initial().expect("seed state"));
         let source: Arc<Source> = Arc::new(Source::new(" {"));
-        let mut reader = StdTokenReader::new(&source);
+        // The reader is generic over the language, so the calls that mention it only
+        // through a token go through a `dyn` view of it (as any wrapper reader does).
+        let mut std_reader = StdTokenReader::new(&source);
+        let reader: &mut dyn TokenReader<'_, GroupsOnlyLang> = &mut std_reader;
 
-        let token: Token<'_, GroupsOnlyLang> = reader.peek(&state).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::Char(' '));
+        let token: StdToken<GroupsOnlyLang> = reader.peek(&state).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKind::Char(' '));
         assert_eq!(reader.source_span_of(&token).range(), 0..1);
         assert_eq!(
             reader
@@ -633,7 +643,7 @@ mod groups_only {
         let token = reader.peek(&state).unwrap();
         assert!(matches!(
             reader.token_kind(&token),
-            TokenKindView::GroupOpen { delim: "{", .. }
+            TokenKind::GroupOpen { delim: "{", .. }
         ));
         assert_eq!(
             reader
