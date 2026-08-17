@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "meta": {
+    "profile": "techy golden files"
+  },
+  "tables": [
+    {
+      "name": "sources",
+      "table": 0,
+      "start": 0,
+      "entries": [
+        {
+          "origin": "hello.tex",
+          "provenance": "primary",
+          "line_number_offset": 1,
+          "column_number_offset": 1,
+          "text": {
+            "embedded": "Hello, \\emph{world}!\n"
+          }
+        }
+      ]
+    },
+    {
+      "name": "states",
+      "table": 1,
+      "start": 0,
+      "entries": [
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": []
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "specs",
+      "table": 2,
+      "start": 0,
+      "entries": []
+    },
+    {
+      "name": "providers",
+      "table": 3,
+      "start": 0,
+      "entries": [
+        {
+          "identifier": "core.package",
+          "data": {
+            "name": "_builtin"
+          }
+        },
+        {
+          "identifier": "core.package",
+          "data": {
+            "name": "minilatex"
+          }
+        }
+      ]
+    },
+    {
+      "name": "trees",
+      "table": 4,
+      "start": 0,
+      "entries": []
+    },
+    {
+      "name": "diagnostics",
+      "table": 5,
+      "start": 0,
+      "entries": []
+    },
+    {
+      "name": "parse-results",
+      "table": 6,
+      "start": 0,
+      "entries": []
+    }
+  ]
+}
+

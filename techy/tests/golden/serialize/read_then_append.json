@@ -1,0 +1,2129 @@
+{
+  "version": 1,
+  "meta": {
+    "profile": "techy golden files"
+  },
+  "tables": [
+    {
+      "name": "sources",
+      "table": 0,
+      "start": 0,
+      "entries": [
+        {
+          "origin": null,
+          "provenance": "primary",
+          "line_number_offset": 1,
+          "column_number_offset": 1,
+          "text": {
+            "embedded": "\\emph{a} \\begin{itemize}\\item x~y\\end{itemize}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "states",
+      "table": 1,
+      "start": 0,
+      "entries": [
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": []
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        },
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": []
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            {
+              "$index": [
+                3,
+                2
+              ]
+            }
+          ]
+        },
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": [],
+              "expecting_close": {
+                "group_type": "content",
+                "open": "{",
+                "close": "}"
+              }
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "specs",
+      "table": 2,
+      "start": 0,
+      "entries": [
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            "callable_type": "macro",
+            "definition": {
+              "name": "emph"
+            }
+          }
+        },
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            "callable_type": "environment",
+            "definition": {
+              "name": "itemize"
+            }
+          }
+        },
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                2
+              ]
+            },
+            "callable_type": "macro",
+            "definition": {
+              "name": "item"
+            }
+          }
+        },
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            "callable_type": "specials",
+            "definition": {
+              "trigger": "~"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "providers",
+      "table": 3,
+      "start": 0,
+      "entries": [
+        {
+          "identifier": "core.package",
+          "data": {
+            "name": "_builtin"
+          }
+        },
+        {
+          "identifier": "core.package",
+          "data": {
+            "name": "minilatex"
+          }
+        },
+        {
+          "identifier": "core.package",
+          "data": {
+            "name": "minilatex.item"
+          }
+        }
+      ]
+    },
+    {
+      "name": "trees",
+      "table": 4,
+      "start": 0,
+      "entries": [
+        {
+          "identifier": "core.tree",
+          "data": {
+            "nodes": [
+              {
+                "kind": "list",
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 0,
+                  "end": 46
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 1,
+                  "end": 4
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "macro",
+                    "name": "emph",
+                    "spec": {
+                      "$index": [
+                        2,
+                        0
+                      ]
+                    },
+                    "arguments": [
+                      {
+                        "region": {
+                          "children": {
+                            "start": 0,
+                            "end": 1
+                          },
+                          "content": {
+                            "in_children_of": {
+                              "node": 4,
+                              "start": 0,
+                              "end": 1
+                            }
+                          }
+                        },
+                        "ext": null
+                      }
+                    ],
+                    "slots": [],
+                    "invocation_syntax": {
+                      "macro": {
+                        "escape_char": "\\",
+                        "post_space": {
+                          "owned": ""
+                        }
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 0,
+                  "end": 8
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 4,
+                  "end": 5
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 8,
+                        "end": 9
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 8,
+                  "end": 9
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 5,
+                  "end": 5
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "environment",
+                    "name": "itemize",
+                    "spec": {
+                      "$index": [
+                        2,
+                        1
+                      ]
+                    },
+                    "arguments": [],
+                    "slots": [
+                      {
+                        "name": "body",
+                        "region": {
+                          "children": {
+                            "start": 0,
+                            "end": 1
+                          },
+                          "content": {
+                            "in_children_of": {
+                              "node": 5,
+                              "start": 0,
+                              "end": 4
+                            }
+                          }
+                        },
+                        "role": "content",
+                        "ext": {
+                          "body": true
+                        }
+                      }
+                    ],
+                    "invocation_syntax": {
+                      "environment": {
+                        "begin": {
+                          "escape_char": "\\",
+                          "command_word": {
+                            "owned": "begin"
+                          },
+                          "post_space": {
+                            "owned": ""
+                          },
+                          "name_group_rule": {
+                            "group_type": "content",
+                            "open": "{",
+                            "close": "}"
+                          }
+                        },
+                        "end": {
+                          "escape_char": "\\",
+                          "command_word": {
+                            "owned": "end"
+                          },
+                          "post_space": {
+                            "owned": ""
+                          },
+                          "name_group_rule": {
+                            "group_type": "content",
+                            "open": "{",
+                            "close": "}"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 9,
+                  "end": 46
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 5,
+                  "end": 6
+                }
+              },
+              {
+                "kind": {
+                  "group": {
+                    "group_type": "content",
+                    "open": {
+                      "spanned": {
+                        "start": 5,
+                        "end": 6
+                      }
+                    },
+                    "close": {
+                      "spanned": {
+                        "start": 7,
+                        "end": 8
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 5,
+                  "end": 8
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 6,
+                  "end": 7
+                }
+              },
+              {
+                "kind": "list",
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 24,
+                  "end": 33
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    1
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 11
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 6,
+                        "end": 7
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 6,
+                  "end": 7
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    2
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 11,
+                  "end": 11
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "macro",
+                    "name": "item",
+                    "spec": {
+                      "$index": [
+                        2,
+                        2
+                      ]
+                    },
+                    "arguments": [
+                      {}
+                    ],
+                    "slots": [],
+                    "invocation_syntax": {
+                      "macro": {
+                        "escape_char": "\\",
+                        "post_space": {
+                          "owned": " "
+                        }
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 24,
+                  "end": 30
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    1
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 11,
+                  "end": 11
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 30,
+                        "end": 31
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 30,
+                  "end": 31
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    1
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 11,
+                  "end": 11
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "specials",
+                    "name": "~",
+                    "spec": {
+                      "$index": [
+                        2,
+                        3
+                      ]
+                    },
+                    "arguments": [],
+                    "slots": [],
+                    "invocation_syntax": "specials"
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 31,
+                  "end": 32
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    1
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 11,
+                  "end": 11
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 32,
+                        "end": 33
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      0
+                    ]
+                  },
+                  "start": 32,
+                  "end": 33
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    1
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 11,
+                  "end": 11
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagnostics",
+      "table": 5,
+      "start": 0,
+      "entries": []
+    },
+    {
+      "name": "parse-results",
+      "table": 6,
+      "start": 0,
+      "entries": [
+        {
+          "tree": {
+            "$index": [
+              4,
+              0
+            ]
+          },
+          "diagnostics": {
+            "items": [],
+            "limit": 1000,
+            "suppressed": 0,
+            "error_count": 0
+          },
+          "session_ext": null
+        }
+      ]
+    }
+  ],
+  "main": {
+    "$index": [
+      6,
+      0
+    ]
+  }
+}
+
+{
+  "version": 1,
+  "meta": {
+    "profile": "techy golden files"
+  },
+  "tables": [
+    {
+      "name": "sources",
+      "table": 0,
+      "start": 1,
+      "entries": [
+        {
+          "origin": null,
+          "provenance": "primary",
+          "line_number_offset": 1,
+          "column_number_offset": 1,
+          "text": {
+            "embedded": "b \\textbf{c} {unclosed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "states",
+      "table": 1,
+      "start": 3,
+      "entries": [
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": [],
+              "expecting_close": {
+                "group_type": "content",
+                "open": "{",
+                "close": "}"
+              }
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "specs",
+      "table": 2,
+      "start": 4,
+      "entries": [
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            "callable_type": "macro",
+            "definition": {
+              "name": "textbf"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "providers",
+      "table": 3,
+      "start": 3,
+      "entries": []
+    },
+    {
+      "name": "trees",
+      "table": 4,
+      "start": 1,
+      "entries": [
+        {
+          "identifier": "core.tree",
+          "data": {
+            "nodes": [
+              {
+                "kind": "list",
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 0,
+                  "end": 22
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 1,
+                  "end": 5
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 0,
+                        "end": 2
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 0,
+                  "end": 2
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 5,
+                  "end": 5
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "macro",
+                    "name": "textbf",
+                    "spec": {
+                      "$index": [
+                        2,
+                        4
+                      ]
+                    },
+                    "arguments": [
+                      {
+                        "region": {
+                          "children": {
+                            "start": 0,
+                            "end": 1
+                          },
+                          "content": {
+                            "in_children_of": {
+                              "node": 5,
+                              "start": 0,
+                              "end": 1
+                            }
+                          }
+                        },
+                        "ext": null
+                      }
+                    ],
+                    "slots": [],
+                    "invocation_syntax": {
+                      "macro": {
+                        "escape_char": "\\",
+                        "post_space": {
+                          "owned": ""
+                        }
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 2,
+                  "end": 12
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 5,
+                  "end": 6
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 12,
+                        "end": 13
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 12,
+                  "end": 13
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 6,
+                  "end": 6
+                }
+              },
+              {
+                "kind": {
+                  "group": {
+                    "group_type": "content",
+                    "open": {
+                      "spanned": {
+                        "start": 13,
+                        "end": 14
+                      }
+                    },
+                    "close": {
+                      "owned": ""
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 13,
+                  "end": 22
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 6,
+                  "end": 7
+                }
+              },
+              {
+                "kind": {
+                  "group": {
+                    "group_type": "content",
+                    "open": {
+                      "spanned": {
+                        "start": 9,
+                        "end": 10
+                      }
+                    },
+                    "close": {
+                      "spanned": {
+                        "start": 11,
+                        "end": 12
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 9,
+                  "end": 12
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    0
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 8
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 14,
+                        "end": 22
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 14,
+                  "end": 22
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    3
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 8,
+                  "end": 8
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 10,
+                        "end": 11
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      1
+                    ]
+                  },
+                  "start": 10,
+                  "end": 11
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    3
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 8,
+                  "end": 8
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagnostics",
+      "table": 5,
+      "start": 0,
+      "entries": [
+        {
+          "severity": "error",
+          "identifier": "core.groups.unclosed-group",
+          "message": "unclosed group: expected ‘}’ before end of input",
+          "data": {
+            "expected_close": "}",
+            "found": "end-of-input"
+          },
+          "span": {
+            "source": {
+              "$index": [
+                0,
+                1
+              ]
+            },
+            "start": 13,
+            "end": 14
+          },
+          "frames": []
+        }
+      ]
+    },
+    {
+      "name": "parse-results",
+      "table": 6,
+      "start": 1,
+      "entries": [
+        {
+          "tree": {
+            "$index": [
+              4,
+              1
+            ]
+          },
+          "diagnostics": {
+            "items": [
+              {
+                "$index": [
+                  5,
+                  0
+                ]
+              }
+            ],
+            "limit": 1000,
+            "suppressed": 0,
+            "error_count": 1
+          },
+          "session_ext": null
+        }
+      ]
+    }
+  ],
+  "main": {
+    "$index": [
+      6,
+      1
+    ]
+  }
+}
+
+{
+  "version": 1,
+  "meta": {
+    "profile": "techy golden files"
+  },
+  "tables": [
+    {
+      "name": "sources",
+      "table": 0,
+      "start": 2,
+      "entries": [
+        {
+          "origin": null,
+          "provenance": "primary",
+          "line_number_offset": 1,
+          "column_number_offset": 1,
+          "text": {
+            "embedded": "\\textit{c} --- and $m$"
+          }
+        }
+      ]
+    },
+    {
+      "name": "states",
+      "table": 1,
+      "start": 4,
+      "entries": [
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": []
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        },
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                }
+              ],
+              "temporary": [],
+              "expecting_close": {
+                "group_type": {
+                  "math": "inline"
+                },
+                "open": "$",
+                "close": "$"
+              }
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": "$"
+            }
+          },
+          "mode": "math",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        },
+        {
+          "token_rules": {
+            "whitespace": {
+              "enabled": true,
+              "chars": " \t\n\r\u000b\f"
+            },
+            "paragraphs": {
+              "enabled": true
+            },
+            "groups": {
+              "enabled": true,
+              "rules": [
+                {
+                  "group_type": "content",
+                  "open": "{",
+                  "close": "}"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "$",
+                  "close": "$"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "$$",
+                  "close": "$$"
+                },
+                {
+                  "group_type": {
+                    "math": "inline"
+                  },
+                  "open": "\\(",
+                  "close": "\\)"
+                },
+                {
+                  "group_type": {
+                    "math": "display"
+                  },
+                  "open": "\\[",
+                  "close": "\\]"
+                }
+              ],
+              "temporary": [],
+              "expecting_close": {
+                "group_type": "content",
+                "open": "{",
+                "close": "}"
+              }
+            },
+            "commands": {
+              "enabled": true,
+              "rules": [
+                {
+                  "escape_char": "\\",
+                  "name_chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                }
+              ]
+            },
+            "comments": {
+              "enabled": true,
+              "rules": [
+                {
+                  "start": "%"
+                }
+              ]
+            },
+            "specials": {
+              "enabled": true
+            },
+            "forbidden_chars": {
+              "chars": ""
+            }
+          },
+          "mode": "text",
+          "ext": null,
+          "scopes": [
+            {
+              "$index": [
+                3,
+                0
+              ]
+            },
+            {
+              "$index": [
+                3,
+                1
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "specs",
+      "table": 2,
+      "start": 5,
+      "entries": [
+        {
+          "identifier": "core.provider-spec-identity",
+          "data": {
+            "provider": {
+              "$index": [
+                3,
+                1
+              ]
+            },
+            "callable_type": "macro",
+            "definition": {
+              "name": "textit"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "providers",
+      "table": 3,
+      "start": 3,
+      "entries": []
+    },
+    {
+      "name": "trees",
+      "table": 4,
+      "start": 2,
+      "entries": [
+        {
+          "identifier": "core.tree",
+          "data": {
+            "nodes": [
+              {
+                "kind": "list",
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 0,
+                  "end": 22
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 1,
+                  "end": 6
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "macro",
+                    "name": "textit",
+                    "spec": {
+                      "$index": [
+                        2,
+                        5
+                      ]
+                    },
+                    "arguments": [
+                      {
+                        "region": {
+                          "children": {
+                            "start": 0,
+                            "end": 1
+                          },
+                          "content": {
+                            "in_children_of": {
+                              "node": 6,
+                              "start": 0,
+                              "end": 1
+                            }
+                          }
+                        },
+                        "ext": null
+                      }
+                    ],
+                    "slots": [],
+                    "invocation_syntax": {
+                      "macro": {
+                        "escape_char": "\\",
+                        "post_space": {
+                          "owned": ""
+                        }
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 0,
+                  "end": 10
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 6,
+                  "end": 7
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 10,
+                        "end": 11
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 10,
+                  "end": 11
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 7
+                }
+              },
+              {
+                "kind": {
+                  "callable": {
+                    "callable_type": "specials",
+                    "name": "---",
+                    "spec": {
+                      "$index": [
+                        2,
+                        3
+                      ]
+                    },
+                    "arguments": [],
+                    "slots": [],
+                    "invocation_syntax": "specials"
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 11,
+                  "end": 14
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 7
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 14,
+                        "end": 19
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 14,
+                  "end": 19
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 7
+                }
+              },
+              {
+                "kind": {
+                  "group": {
+                    "group_type": {
+                      "math": "inline"
+                    },
+                    "open": {
+                      "spanned": {
+                        "start": 19,
+                        "end": 20
+                      }
+                    },
+                    "close": {
+                      "spanned": {
+                        "start": 21,
+                        "end": 22
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 19,
+                  "end": 22
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 7,
+                  "end": 8
+                }
+              },
+              {
+                "kind": {
+                  "group": {
+                    "group_type": "content",
+                    "open": {
+                      "spanned": {
+                        "start": 7,
+                        "end": 8
+                      }
+                    },
+                    "close": {
+                      "spanned": {
+                        "start": 9,
+                        "end": 10
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 7,
+                  "end": 10
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    4
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 8,
+                  "end": 9
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 20,
+                        "end": 21
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 20,
+                  "end": 21
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    5
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 9,
+                  "end": 9
+                }
+              },
+              {
+                "kind": {
+                  "chars": {
+                    "content": {
+                      "spanned": {
+                        "start": 8,
+                        "end": 9
+                      }
+                    }
+                  }
+                },
+                "span": {
+                  "source": {
+                    "$index": [
+                      0,
+                      2
+                    ]
+                  },
+                  "start": 8,
+                  "end": 9
+                },
+                "state": {
+                  "$index": [
+                    1,
+                    6
+                  ]
+                },
+                "ext": null,
+                "children": {
+                  "start": 9,
+                  "end": 9
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagnostics",
+      "table": 5,
+      "start": 1,
+      "entries": []
+    },
+    {
+      "name": "parse-results",
+      "table": 6,
+      "start": 2,
+      "entries": [
+        {
+          "tree": {
+            "$index": [
+              4,
+              2
+            ]
+          },
+          "diagnostics": {
+            "items": [],
+            "limit": 1000,
+            "suppressed": 0,
+            "error_count": 0
+          },
+          "session_ext": null
+        }
+      ]
+    }
+  ],
+  "main": {
+    "$index": [
+      6,
+      2
+    ]
+  }
+}
+
