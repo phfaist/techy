@@ -118,7 +118,12 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
 - **D5 — `SerialValue`** (foundation, unconditional, separate from `DiagnosticValue`):
   `Null | Bool(bool) | Int(i64) | Str(String) | Bytes(Vec<u8>) | List(Vec<_>) |
   Map(Vec<(String, _)>) | Index { table: TableId, index: u32 }`. Map is
-  order-preserving with string keys. **No floats** and no sized-int variants: variants
+  order-preserving with string keys — an ORDERED association list: equality is
+  order-sensitive and the canonical rendering preserves order, so two maps with the
+  same entries in different order are different values that render differently
+  (user ruling 2026-08-17; keeps P7 exact). User map keys may NOT begin with `$`
+  (reserved for the canonical JSON forms `$bytes`/`$index`; a `$`-key is a typed
+  error, no escaping — user ruling 2026-08-17, replaces the earlier `$$` escaping). **No floats** and no sized-int variants: variants
   that collapse in the canonical JSON rendering cannot round-trip distinguishably and
   poison equality/dedup/golden files; the bridge maps every Rust int width onto `Int`
   with range checks. `Bytes` renders as base64 in JSON (exact canonical form: Q3).
@@ -549,7 +554,24 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 
 ## 4. Open questions
 
-- **Q3 (M6) — Wire vocabulary naming pass** (freeze-relevant, pre-v1): every public
+- **Q3 (M6) — RESOLVED by the user, 2026-08-17** (inventory:
+  `wire_vocabulary.md`; applied by the rename pass): conventions confirmed (kebab
+  multi-word table names, two-part entry identifiers `core.<kind>`/`latexlike.<kind>`,
+  snake_case keys, kebab enum strings); heterogeneous envelope `{identifier, data}`;
+  directory key `table` (writer ordinal); `$index` stays `[ordinal, position]`;
+  `TableId` keeps its name; `core.provider-spec` → `core.provider-spec-identity` with
+  payload key `key` → `definition`; state outer key `rules` → `token_rules`; region
+  content frame → explicit `in_region`/`in_children_of` variants (mirroring
+  `ContentNodes`); diagnostic `message` kept (order: severity, identifier, message,
+  data, span, frames); parse-result `diagnostics` nested; `Option` asymmetry accepted
+  and documented; condition keys `ch` → `char`, `cause-chain` → `cause_chain`; package
+  names `_builtin`/`minilatex`/`minilatex.item` are stable vocabulary; base64
+  standard alphabet; NO `$$` escaping (user keys may not begin with `$`); NEW: an
+  optional segment key `main` (a `$index` naming the segment's principal payload,
+  translated on read and returned by `push_segment`) and an optional caller-provided
+  `profile` string per segment (identifies what can read the payload fully; a reader
+  with a declared profile rejects a mismatch — Q7-g). Also `Deserialize for
+  DiagnosticValue` added (D1 promise). Original agenda: every public
   field name and enum string (core + latexlike), the `Index` table discriminant
   rendering (name string vs ordinal), the canonical base64 form for `Bytes`; the
   region wire form's implicit content-frame discriminator (`content_parent == the
@@ -614,9 +636,11 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
     session must belong to ONE stream, in order; the engine checks contiguity
     (`start == len`) but cannot detect a foreign segment whose `start` happens to
     match. No stream-identity field in v1; revisit if a use case needs enforcement.
-- **Q7 (M6) — Read-side verification levels**: which optional sanity checks (e.g.
-  argument-count evidence) are worth their wire bytes; bounds checks are the D21
-  baseline.
+- **Q7 (M6) — RESOLVED by the user, 2026-08-17:** the D21 baseline (bounds/table/
+  span/structure checks) is the verification level; argument-count evidence (Q7-b)
+  and spec "evidence" (Q7-e) are REJECTED as imprecise and fragile against custom
+  specs; the only addition is the caller-provided per-segment `profile` string
+  (Q7-g). Everything else stays out of v1.
 - (Q1 resolved: uniform `SerialValue`-mediated entries for v1 — rendering-identical,
   so a typed fast path stays a schema-invisible later optimization. Q2 resolved: §3.G.
   Q4 dissolved: no cfg-gated trait methods exist in the design.)
@@ -838,7 +862,16 @@ merge outside the sandboxed primary checkout.
   adapter revive; ParseResult wrapper; JSONL streaming; **Q3 wire vocabulary naming
   pass with the user**; Q7. Acceptance: full ParseResult round-trip; a written draft
   schema description (input for the v1 freeze).
-- **M7 — Hardening + permanent docs.** Golden files; proptest round-trip properties;
+- **M7 — Hardening + permanent docs.** (Documentation scope per the user, 2026-08-17:
+  ARCHITECTURE.md gets ONE 1–2-paragraph entry (≤ ~300 words) describing the overall
+  high-level design, details omitted; DESIGN_RATIONALE.md gets a SHORT record of the
+  1–4 key decisions and the reasons driving them, details omitted; `schema_draft.md`
+  moves to its final home `dev-docs/serialize_schema.md`, rewritten for clarity so a
+  developer without deep techy knowledge can read it; a focused introductory user
+  guide `docs/serialize.md` (developer guide, examples, context, NOT comprehensive);
+  detailed API information lives in `techy::serialize`'s module rustdoc; an AI guide
+  `docs/ai-guide-serialize.md` optimized for an agent writing code in a third-party
+  project that uses techy's serialization.) Golden files; proptest round-trip properties;
   cost bounds on wire-controlled quantities (M3 review: the prefix table build is
   O(n²) in the number of group rules — dedup via hash map or bound the rule count;
   line/column offsets read unvalidated — sanity bound or saturating arithmetic in
@@ -1763,6 +1796,10 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — Q3/Q7 RESOLVED by the user (see §4);
+  additional rulings: `SerialValue::Map` equality is order-sensitive (D5), no `$`
+  escaping, segment `main` + `profile`. M7 documentation scope adjusted by the user
+  (see M7). Next: rename/rulings pass → re-verification → M7.
 - 2026-08-17 — supervisor (main session) — M6 reviewed (Opus 5; APPROVE WITH NITS;
   inventory + schema draft verified against the code; nits queued for the rename
   pass). Plan patches: seven standard tables (D9, §2), §5 sketch superseded by
