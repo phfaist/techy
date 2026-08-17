@@ -123,7 +123,11 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   same entries in different order are different values that render differently
   (user ruling 2026-08-17; keeps P7 exact). User map keys may NOT begin with `$`
   (reserved for the canonical JSON forms `$bytes`/`$index`; a `$`-key is a typed
-  error, no escaping — user ruling 2026-08-17, replaces the earlier `$$` escaping). **No floats** and no sized-int variants: variants
+  error, no escaping — user ruling 2026-08-17, replaces the earlier `$$` escaping).
+  Nesting depth is bounded (M7a): `SerialValue::MAX_NESTING_DEPTH = 64`, enforced on
+  every read rim (serde `Deserialize` via a depth-carrying seed, `Segment::from_serial_value`,
+  `push_segment`) AND on the writer (`intern` refuses deeper values, so no writer emits
+  what no reader accepts); a segment's own wrapping levels count against it. **No floats** and no sized-int variants: variants
   that collapse in the canonical JSON rendering cannot round-trip distinguishably and
   poison equality/dedup/golden files; the bridge maps every Rust int width onto `Int`
   with range checks. `Bytes` renders as base64 in JSON (exact canonical form: Q3).
@@ -2010,6 +2014,9 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M6b reviewed (Opus 5: APPROVE); M7a
+  hardening landed (see its entry) → Opus review → M7b docs. Plan patch: D5 nesting
+  bound.
 - 2026-08-17 — supervisor (main session) — M6b rulings pass landed (see its entry;
   `meta.profile` per the user's amendment) → targeted Opus review + M7a hardening
   started in parallel. Plan patches: D10 wire structs note, §6 usage `push_segment`
