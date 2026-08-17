@@ -367,7 +367,8 @@ fn scan_specials(state: &ParsingState<L>, content: &str, pos: usize)
   accessor; `is_at_end()` may stay; **`pos()` and `move_to_pos()` are removed** (the
   trait's position API replaces them).
 - `impl<'s, L: Lang<SourceOrigin = O>> TokenReader<'s, L> for StdTokenReader<'s, O>`
-  (or the equivalent bound spelling the probe settles):
+  (**probe P8 settles this spelling**; if it does not compile, P8's reported fallback —
+  e.g. `StdTokenReader<'s, L>` generic over the language — is used instead):
   `token_kind` slices `content` by the token's spans; `source_span_between` =
   `SourceSpan::new(source, a_offset..b_offset)`; positions wrap offsets;
   `source_span_within` = `Some(SourceSpan::new(source, begin..end))` if `begin <= end`,
@@ -407,14 +408,32 @@ way.
     one range of one source").
 - `probe_token(&mut self, state)` unchanged for callers; the driver method loses its
   `source` parameter (§1.10).
-- `stage_invocation(&mut self, invocation, arguments, slots, children, end:
-  Option<&L::StreamPosition>)`: `None` = the standard rule — the node ends at the last
-  staged child's span end **when that child's span is in the trigger's source**
-  (`same_source`), else at `position_here()`; `Some(end)` = the node ends at `end`.
-  The node span is `source_span_within(position_at(trigger, Start), <end>)`; a `None`
-  from the reader is the existing "invalid computed span" implementation error. The
-  `self.source.content().get(start..end)` validation disappears (the reader
-  validates).
+- `stage_invocation(&mut self, invocation, arguments, slots, children, end: Option<&L::StreamPosition>)`.
+  Let `trigger = self.tokens.source_span_of(invocation.token)` (the trigger's span,
+  `Start..EndPastPostSpace`, in the trigger's source) and
+  `trigger_start = self.tokens.position_at(invocation.token, TokenEdge::Start)`. The
+  node span is computed as follows:
+  - `Some(end)`: `self.source_span_within(&trigger_start, end)?` — the reader's `None`
+    becomes the existing "invalid computed span" `ImplementationError`.
+  - `None` — the **standard rule**: look at the last staged child (`children.last()`
+    resolved through `self.staged_nodes().get(..)`, exactly as today; a foreign id
+    falls through as if there were no child, as today).
+    - If there is such a child and `child.span().same_source(&trigger)`: the node runs
+      from `trigger.start()` to `child.span().end()` in that source:
+      `SourceSpan::new(trigger.source(), trigger.start()..child.span().end())`; if
+      `child.span().end() < trigger.start()`, return the "invalid computed span"
+      `ImplementationError` instead (never let `SourceSpan::new` assert).
+    - Otherwise (no child, or the child's span is in another source): the node ends at
+      the current stream position:
+      `self.source_span_within(&trigger_start, &self.tokens.position_here())?`
+      (a `None` = "invalid computed span" `ImplementationError`).
+
+  The `self.source.content().get(start..end)` validation disappears (the reader and the
+  checks above validate). Under `StdTokenReader`, for a childless invocation staged in
+  the ordinary flow (the parser stands right past the trigger's post-space), the
+  standard rule yields exactly today's `token.span` end — **if any existing test's
+  expected node span changes because of this rule, do not adjust the test: stop and
+  report** (that would be a behavior change the user must rule on).
 - `parse_group(base, open: &L::Token, rule, child_states, frame)` (was `open_span:
   Span`); `GroupParser::new(open: L::Token, rule)` (stores a clone).
 - `invocation_frame`: name span = `source_span_between(token, Start, End)`, frame span
@@ -610,7 +629,7 @@ On `TokenReader`: clauses 1–6 of §1.6; the custom-reader-over-std-tokens patt
 and passes; only the reader interprets"). On `TokenRecovery::resume`: the advancement
 contract. On `ParseContext`: "no source handle — spans come from `cx.tokens`; the
 preferred spellings are `here()`, `source_span_within()`, `cx.tokens.source_span_of()`".
-On `stage_invocation`: the standard end rule incl. the same-source clause. On
+On `stage_invocation`: the standard end rule as spelled out in §1.9 (three cases). On
 `StdToken` constructors: the coherence asserts (+ `docs/panics.md` Panics list). On the
 `docs/construct-parsers.md` guide: the "how do I get a span / go back" FAQ rewritten
 in terms of tokens, edges, and positions.
@@ -650,6 +669,11 @@ except `PROBE_REPORT.md`.
 **Setup.** Worktree `bt-probe` off `main`. Create a standalone crate
 `bettertokens-probe/` at the workspace root (**not** added to `[workspace] members`;
 run `cargo check`/`cargo test` inside it; `edition = "2021"`, `rust-version = "1.86"`).
+A package directory *inside* a Cargo workspace that is not listed in
+`[workspace] members` fails with "current package believes it's in a workspace when
+it's not": the probe crate's own `Cargo.toml` must therefore contain an **empty
+`[workspace]` table**, which makes it its own workspace. The root `Cargo.toml` stays
+untouched.
 Mock the minimum: `trait Lang: 'static { type Token: Token<Self>; type StreamPosition:
 Clone + Debug + PartialEq + Eq + Send + Sync; type CallableTypeId: Copy; }`, a `Span`,
 a `Source` with `content: String`, `SourceSpan { source: Arc<Source>, start, end }`,
@@ -687,6 +711,15 @@ needed, `Arc<GroupRule>` as `Arc<String>`.
 - P6 **`FromInvocation::from_invocation(&Invocation<'_, L>, &dyn TokenReader<'_, L>)`**
   called from inside a method that holds `cx: &mut ParseContext` (reborrow `&*cx.tokens`
   for the call). Must compile.
+- P8 **The `StdTokenReader` impl-bound spelling**: mock `trait SourceOrigin`,
+  `Source<O: SourceOrigin>`, `SourceSpan<O>`, `Lang { type SourceOrigin: SourceOrigin;
+  … }`, and write
+  `impl<'s, O: SourceOrigin, L: Lang<SourceOrigin = O>> TokenReader<'s, L> for StdTokenReader<'s, O>`.
+  Use it through `&mut dyn TokenReader<'_, L>` **and** via
+  `Box<dyn TokenReader<'s, L> + 's>` returned from `make_token_reader`. Must compile;
+  if it does not, report the error **and** the fallback spelling that does compile
+  (e.g. `StdTokenReader<'s, L>`, generic over the language rather than over the
+  origin). P8 settles the spelling §1.8 leaves open.
 - P7 **Trait bounds on `Lang::Token`**: `StdToken<L>: Clone + Debug + PartialEq + Send
   + Sync` with `Arc<dyn Trait + Send + Sync>` inside; a `Lang` impl naming
   `type Token = StdToken<Self>` (recursion through `Self` is fine? — confirm).
@@ -860,10 +893,18 @@ add `trait Token<L>` and `Lang::Token` (+ `type Token = StdToken<Self>;` in all 
 signature (`Option<L::Token>`), `StdTokenReader`'s token construction, `TokenListReader`,
 every test that calls `Token::new` (`token/reader.rs` ≈50, `engine/mod.rs` 5,
 `nodes_parser.rs` 4, `environment_parser.rs` 2, `latexlike/*` 2, `list_reader.rs`) →
-`StdToken::…` constructors; `tests/lang_features.rs` (`CommentEmittingReader` →
-delegating wrapper, §1.8); `docs/panics.md` Panics list; `core/mod.rs` facade exports
-(`Token` trait, `StdToken`, `StdStreamPosition`, `TokenEdge`, `SpecialsScanError`;
-drop nothing else — one canonical path per item); rustdoc on opacity (§1.15).
+`StdToken::…` constructors (`token/reader.rs` ≈50, `list_reader.rs` 5,
+`engine/mod.rs` 5, `nodes_parser.rs` 4, `environment_parser.rs` 2,
+`latexlike/{invocation_syntax,driver}.rs` 1 each, `tests/lang_features.rs` 1 —
+counts verified at `9a3c0ac`); `tests/lang_features.rs` (`CommentEmittingReader` →
+delegating wrapper, §1.8); `docs/panics.md` Panics list; **facade exports** — in
+`techy/src/token/mod.rs:50-67` and then in the `pub use crate::token::{ … };` block at
+`techy/src/core/mod.rs:60-66`: the existing `Token` entry now exports the **trait**
+(same public name, different item) and `StdToken` is added next to it. `TokenEdge`,
+`StdStreamPosition` and `SpecialsScanError` were already exported in Stage 1;
+`TokenKindView` is **never** exported (it is renamed to `TokenKind` here, and
+`TokenKind` is already in the block). Drop nothing else — one canonical path per item.
+Rustdoc on opacity (§1.15).
 
 Gates: as Stage 1 (+ timing check repeated once at the end of 3b — expected
 unchanged).
