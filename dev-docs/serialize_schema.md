@@ -521,11 +521,11 @@ core structures above:
 | Slot | latexlike value | Rendering |
 |---|---|---|
 | callable type (`CallableTypeId`) | `CallableType` | `"macro"` / `"environment"` / `"specials"` |
-| group type (`GroupTypeId`) | `GroupType` | `"content"` / `{"math": "inline"|"display"}` / `"verbatim"` |
+| group type (`GroupTypeId`) | `GroupType` | `"content"` / `{"math": "inline"}` / `{"math": "display"}` / `"verbatim"` |
 | mode (`ModeId`) | `Mode` | `"text"` / `"math"` |
 | event | `Event` | `"exit-math-context"` |
 | state ext, node ext, argument ext | `()` | `null` |
-| slot ext | `BodyMarker` | `{"body": true|false}` |
+| slot ext | `BodyMarker` | `{"body": true}` / `{"body": false}` |
 | session ext | `()` | `null` |
 | source origin | `Option<String>` | string or `null` |
 | invocation syntax | `InvocationSyntaxData` | `{"macro": {"escape_char": "\\", "post_space": text}}` / `{"environment": {"begin": side, "end"?: side}}` with side = `{"escape_char", "command_word": text, "post_space": text, "name_group_rule": {"group_type", "open", "close"}}` / `"specials"` |
