@@ -129,14 +129,6 @@ impl<'s, L: Lang<Token = StdToken<L>>> TokenListReader<'s, L> {
         );
     }
 
-    /// The tokens being served.
-    // Unused since the demotion to test-only (July 2026) — it existed as public API
-    // surface. Kept for now; drop it if it stays unused.
-    #[allow(dead_code)]
-    pub fn tokens(&self) -> &[StdToken<L>] {
-        &self.tokens
-    }
-
     /// The first listed token at or after the current position (its span not yet begun).
     fn current(&self) -> Option<&StdToken<L>> {
         let i = self.tokens.partition_point(|t| t.span().start() < self.pos);

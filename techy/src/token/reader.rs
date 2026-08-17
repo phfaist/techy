@@ -277,6 +277,16 @@ pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token>;
 
+    /// Parse the token at the current position and move past it (including its
+    /// post-space): [`peek`](TokenReader::peek) +
+    /// [`move_to`](TokenReader::move_to) at
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
+    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
+        let token = self.peek(state)?;
+        self.move_to(&token, TokenEdge::EndPastPostSpace);
+        Ok(token)
+    }
+
     // --- navigation by edge and by position ------------------------------------------
 
     /// Reposition the stream at `edge` of `tok` — forward or backward.
@@ -359,16 +369,6 @@ pub trait TokenReader<'s, L: Lang> {
         begin: &L::StreamPosition,
         end: &L::StreamPosition,
     ) -> Option<SourceSpan<L::SourceOrigin>>;
-
-    /// Parse the token at the current position and move past it (including its
-    /// post-space): [`peek`](TokenReader::peek) +
-    /// [`move_to`](TokenReader::move_to) at
-    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
-    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
-        let token = self.peek(state)?;
-        self.move_to(&token, TokenEdge::EndPastPostSpace);
-        Ok(token)
-    }
 }
 
 /// End position of the whitespace run starting at `pos` (= `pos` if none, if

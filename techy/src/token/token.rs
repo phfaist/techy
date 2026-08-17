@@ -538,16 +538,17 @@ impl<L: Lang> StdToken<L> {
 
     /// The token's byte range, in the coordinates of the content the issuing reader
     /// scans (pre-space excluded, post-space included).
-    // The crate's readers answer spans and positions through `edge_offset`; the two
-    // direct readings serve the token module's own tests and the test list reader.
-    #[allow(dead_code)]
+    // Test-only: the crate's readers answer spans and positions through `edge_offset`,
+    // so the direct readings serve the token module's own tests and the test list
+    // reader — the only callers there are.
+    #[cfg(test)]
     pub(crate) fn span(&self) -> Span {
         self.span
     }
 
     /// The whitespace immediately preceding the token (an empty span at the token's
-    /// start if there is none).
-    #[allow(dead_code)]
+    /// start if there is none). Test-only, like [`span`](StdToken::span).
+    #[cfg(test)]
     pub(crate) fn pre_space(&self) -> Span {
         self.pre_space
     }
@@ -593,8 +594,9 @@ impl<L: Lang> StdToken<L> {
     /// serving a pre-scanned token from a position inside its pre-space run reports
     /// (in-crate: the test list reader).
     ///
-    /// Panics on the same span coherence as the constructors.
-    #[allow(dead_code)]
+    /// Panics on the same span coherence as the constructors. Test-only: the test
+    /// list reader is the only caller.
+    #[cfg(test)]
     pub(crate) fn with_pre_space(&self, pre_space: Span) -> StdToken<L> {
         assert_pre_space(self.span, pre_space);
         StdToken { kind: self.kind.clone(), span: self.span, pre_space }
