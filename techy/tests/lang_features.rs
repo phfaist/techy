@@ -508,8 +508,8 @@ mod plain_chars {
             }
 
 
-            fn move_to_edge(&mut self, tok: &Token<'_, PlainCharsLang>, edge: TokenEdge) {
-                self.inner_mut().move_to_edge(tok, edge);
+            fn move_to(&mut self, tok: &Token<'_, PlainCharsLang>, edge: TokenEdge) {
+                self.inner_mut().move_to(tok, edge);
             }
 
             fn move_to_position(&mut self, at: &StdStreamPosition) {
@@ -621,7 +621,7 @@ mod groups_only {
         assert_eq!(token.span, Span::new(0, 1));
         assert_eq!(token.pre_space, Span::empty(0));
 
-        reader.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        reader.move_to(&token, TokenEdge::EndPastPostSpace);
         let token = reader.peek(&state).unwrap();
         assert!(matches!(&token.kind, TokenKind::GroupOpen { delim: "{", .. }));
         assert_eq!(token.pre_space, Span::empty(1));

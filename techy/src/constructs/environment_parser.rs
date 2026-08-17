@@ -287,7 +287,7 @@ pub fn read_rigid_name_group<L: Lang>(
         }
         _ => return Ok(None),
     };
-    cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
+    cx.tokens.move_to(&open, TokenEdge::EndPastPostSpace);
 
     // The interior tokens are read under base + expecting_group_close (the memoized
     // derivation the group parser uses — the driver's descent delta included), so the
@@ -301,7 +301,7 @@ pub fn read_rigid_name_group<L: Lang>(
             // Nothing consumed: the reader goes back to the open delimiter, exactly
             // where this read started (a name group's open delimiter has no
             // pre-space — the match above requires it).
-            cx.tokens.move_to_edge(&open, TokenEdge::StartBeforePreSpace);
+            cx.tokens.move_to(&open, TokenEdge::StartBeforePreSpace);
             Ok(None)
         }
     }
@@ -326,10 +326,10 @@ fn read_name_chars<L: Lang>(
         match &token.kind {
             TokenKind::Char(_) => {
                 name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
             TokenKind::GroupClose { delim } if **delim == *rule.close => {
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 return Ok(Some(NameGroup {
                     name: cx.source_span_within(&name_start, &name_end)?,
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
@@ -568,7 +568,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             cx.tokens.source_span_between(&end_token, TokenEdge::End, TokenEdge::EndPastPostSpace);
         // Consume the command whole (syntactic post-space included — `\end {name}`'s
         // tolerated inline whitespace); the name group must be the very next token.
-        cx.tokens.move_to_edge(&end_token, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&end_token, TokenEdge::EndPastPostSpace);
         let after_command = cx.tokens.position_here();
 
         match read_rigid_name_group(cx, self.name_group_type)? {
@@ -597,7 +597,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                         EnvironmentTerminatorMismatch::new(self.invocation_name, name),
                         span,
                     )?;
-                    cx.tokens.move_to_edge(&end_token, TokenEdge::Start);
+                    cx.tokens.move_to(&end_token, TokenEdge::Start);
                     Ok((terminator_start, None))
                 }
             }
@@ -1135,7 +1135,7 @@ mod tests {
             // The `\verb` idiom: stand at the end of the trigger proper, so the
             // trigger's post-space bytes stay raw body content (they are not recorded
             // post-space).
-            cx.tokens.move_to_edge(trigger, TokenEdge::End);
+            cx.tokens.move_to(trigger, TokenEdge::End);
             let body_start = cx.tokens.position_here();
 
             // The verbatim state: every feature gate off, and the expected group close
@@ -1167,14 +1167,14 @@ mod tests {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
                     match &token.kind {
                         TokenKind::Char(_) => {
-                            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace)
+                            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                         }
                         TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
                         other => unreachable!("verbatim state yields only chars, got {}", other),
                     }
                 };
                 // past `\endraw`; no-op at stream end
-                cx.tokens.move_to_edge(&terminator, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&terminator, TokenEdge::EndPastPostSpace);
                 terminator
             });
             let terminator_start = cx.tokens.position_at(&terminator, TokenEdge::Start);
@@ -2079,8 +2079,8 @@ mod tests {
             TokenReader::peek(&mut self.inner, state)
         }
 
-        fn move_to_edge(&mut self, tok: &Token<'_, EnvLang>, edge: TokenEdge) {
-            self.inner_mut().move_to_edge(tok, edge);
+        fn move_to(&mut self, tok: &Token<'_, EnvLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
         }
 
         fn move_to_position(&mut self, at: &StdStreamPosition) {

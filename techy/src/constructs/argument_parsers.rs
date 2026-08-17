@@ -187,7 +187,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
                 let kind = NodeKind::comment(*start, content_span, *post_space);
                 let span = cx.tokens.source_span_of(&token);
                 nodes.push(stage(cx, kind, span)?);
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
             _ => return Ok(ArgumentNoise { nodes, start, next: Some(token) }),
         }
@@ -262,7 +262,7 @@ where
         TokenKind::Char(_) => {
             stage_pre_space(cx, nodes, next)?;
             let span = cx.tokens.source_span_of(next);
-            cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
             let id = stage(cx, NodeKind::chars(span.span()), span)?;
             nodes.push(id);
             Ok(Some(id))
@@ -271,7 +271,7 @@ where
         TokenKind::GroupOpen { rule, .. } => {
             stage_pre_space(cx, nodes, next)?;
             let rule = Arc::clone(rule);
-            cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
             let base = Arc::clone(&cx.state);
             let (id, _delta) =
                 cx.parse_group(base, next, rule, ChildStateSpec::inherit(), None)?; // groups have no after-effect
@@ -304,7 +304,7 @@ where
                     let span = cx.tokens.source_span_of(next);
                     cx.recover(UnresolvableCommand::new(*name, *escape_char, detail), span.clone())?;
                     stage_pre_space(cx, nodes, next)?;
-                    cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
                     let id = stage(cx, NodeKind::chars(span.span()), span)?;
                     nodes.push(id);
                     Ok(Some(id))
@@ -315,7 +315,7 @@ where
                     let span = cx.tokens.source_span_of(next);
                     cx.recover(CommandResolutionFailed::new(*name, *escape_char, detail), span.clone())?;
                     stage_pre_space(cx, nodes, next)?;
-                    cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
                     let id = stage(cx, NodeKind::chars(span.span()), span)?;
                     nodes.push(id);
                     Ok(Some(id))
@@ -360,7 +360,7 @@ where
         let span = cx.tokens.source_span_of(token);
         cx.recover(ExpressionCallableRequiresContent::new(spelling), span)?;
         stage_pre_space(cx, nodes, token)?;
-        cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(token, TokenEdge::EndPastPostSpace);
         // The bare single-token callable: every declared argument absent, no slots —
         // the record stays self-describing (each entry keeps its spec). Staged via
         // the transcription-case shorthand (childless: the trigger's own span).
@@ -386,7 +386,7 @@ where
     let frame = super::invocation_frame(cx, &invocation);
     // Consume the trigger whole before the parser runs (the dispatch contract, [§dd-dr:parsers-engine]);
     // the parser comes from the driver's interception seam (Phase 7.2).
-    cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
+    cx.tokens.move_to(token, TokenEdge::EndPastPostSpace);
     // A factory Err aborts under any policy ("could not build the parser"), with
     // the live traceback attached here.
     let driver = cx.driver;
@@ -608,7 +608,7 @@ where
                     if let Some(matched) = probe_minted_group(cx, rules)? {
                         let MintedGroupMatch { open, rule, contents_state } = matched;
                         stage_pre_space(cx, &mut noise.nodes, &open)?;
-                        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
+                        cx.tokens.move_to(&open, TokenEdge::EndPastPostSpace);
                         let (id, _delta) = cx.parse_group(
                             contents_state,
                             &open,
@@ -633,7 +633,7 @@ where
                         if rule.group_type == *group_type {
                             stage_pre_space(cx, &mut noise.nodes, &next)?;
                             let rule = Arc::clone(rule);
-                            cx.tokens.move_to_edge(&next, TokenEdge::EndPastPostSpace);
+                            cx.tokens.move_to(&next, TokenEdge::EndPastPostSpace);
                             let base = Arc::clone(&cx.state);
                             let (id, _delta) = cx.parse_group(
                                 base,
@@ -874,7 +874,7 @@ where
         let MintedGroupMatch { open, rule, contents_state } = matched;
 
         stage_pre_space(cx, &mut noise.nodes, &open)?;
-        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&open, TokenEdge::EndPastPostSpace);
         // Plain descent — no `ChildStateSpec` wiring (detached July 2026, superseding
         // the 6.5 policy translation of pylatexenc's `make_child_parsing_state`): the
         // temporary rule's state-scoped lifecycle covers both halves of that policy at
@@ -974,7 +974,7 @@ where
         }
         let start = cx.tokens.position_at(&first, TokenEdge::Start);
         let mut end = cx.tokens.position_at(&first, TokenEdge::EndPastPostSpace);
-        cx.tokens.move_to_edge(&first, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&first, TokenEdge::EndPastPostSpace);
         let state = Arc::clone(&cx.state);
         for expected in self.marker.chars().skip(1) {
             let Some(token) = cx.probe_token(&state)? else {
@@ -991,7 +991,7 @@ where
                 return Ok(None);
             }
             end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
-            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
         }
         let span = cx.source_span_within(&start, &end)?;
         stage_pre_space(cx, &mut noise.nodes, &first)?;
@@ -2004,8 +2004,8 @@ mod tests {
             }
 
 
-            fn move_to_edge(&mut self, tok: &Token<'_, ArgLang>, edge: TokenEdge) {
-                self.inner_mut().move_to_edge(tok, edge);
+            fn move_to(&mut self, tok: &Token<'_, ArgLang>, edge: TokenEdge) {
+                self.inner_mut().move_to(tok, edge);
             }
 
             fn move_to_position(&mut self, at: &StdStreamPosition) {

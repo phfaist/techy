@@ -99,7 +99,7 @@ pub fn parse_declared_arguments<L: Lang>(
 ///
 /// Constructed around the resolved [`Invocation`], which travels inside the parser
 /// instance. The **caller consumes the
-/// trigger token whole** — `move_to_edge(token, TokenEdge::EndPastPostSpace)`,
+/// trigger token whole** — `move_to(token, TokenEdge::EndPastPostSpace)`,
 /// syntactic post-space included —
 /// before running the parser (the dispatch-loop arm that peeked it, mirroring the
 /// [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
@@ -107,7 +107,7 @@ pub fn parse_declared_arguments<L: Lang>(
 /// is likewise the caller's (housed as sibling content). A takeover parser that needs
 /// the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader
 /// itself, at the trigger's own [`End`](crate::token::TokenEdge) edge —
-/// `move_to_edge(token, TokenEdge::End)`, where the token proper ends and its
+/// `move_to(token, TokenEdge::End)`, where the token proper ends and its
 /// post-space begins.
 ///
 /// `cx.state` is the invocation's **base** state: the caller resolves any

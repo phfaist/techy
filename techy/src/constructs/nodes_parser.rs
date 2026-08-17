@@ -795,14 +795,14 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     ) -> ConstructParserResult<L, bool> {
         if self.flush_through(cx, token)? {
             if !recovered {
-                cx.tokens.move_to_edge(token, TokenEdge::Start);
+                cx.tokens.move_to(token, TokenEdge::Start);
             }
             return Ok(true);
         }
         let span = cx.tokens.source_span_of(token);
         cx.recover(condition, span.clone())?;
         if !recovered {
-            cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(token, TokenEdge::EndPastPostSpace);
         }
         self.stage_node(cx, NodeKind::chars(span.span()), span)
     }
@@ -838,7 +838,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
         // dispatch push site, [§dd-dr:errors]): a failing factory's traceback names
         // the failing spec too.
         let frame = invocation_frame(cx, &invocation);
-        cx.tokens.move_to_edge(invocation.token, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(invocation.token, TokenEdge::EndPastPostSpace);
         let driver = cx.driver;
         let result = cx.with_frame(frame, |cx| {
             // The parser comes from the driver's interception seam (default: the
@@ -950,9 +950,9 @@ where
                     if consume {
                         // Take the whole token, syntactic post-space included; its
                         // pre-space is already housed in the flushed sibling nodes.
-                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                        cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     } else {
-                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                        cx.tokens.move_to(&token, TokenEdge::Start);
                     }
                     return Ok((
                         self.outcome(&cx.state, StopCause::TokenCondition { span, after }),
@@ -968,7 +968,7 @@ where
                         cx.implementation_error(detail, span)
                     })?;
                     if !recovered {
-                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                        cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     }
                 }
 
@@ -977,7 +977,7 @@ where
                     // trailing whitespace and reaches the tree.
                     let fired = self.flush_through(cx, &token)?;
                     if !recovered {
-                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                        cx.tokens.move_to(&token, TokenEdge::Start);
                     }
                     let cause =
                         if fired { StopCause::NodeCondition } else { StopCause::EndOfInput };
@@ -989,7 +989,7 @@ where
                     // let the caller decide ([§dd-dr:panic-policy] rule 2); the token stays unconsumed.
                     let fired = self.flush_through(cx, &token)?;
                     if !recovered {
-                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                        cx.tokens.move_to(&token, TokenEdge::Start);
                     }
                     let cause = if fired {
                         StopCause::NodeCondition
@@ -1018,7 +1018,7 @@ where
                     }
                     if self.flush_through(cx, &token)? {
                         if !recovered {
-                            cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                            cx.tokens.move_to(&token, TokenEdge::Start);
                         }
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
@@ -1030,7 +1030,7 @@ where
                     let span = cx.tokens.source_span_of(&token);
                     let kind = cx.driver.make_paragraph_break_node(&cx.state, &span);
                     if !recovered {
-                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                        cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     }
                     if self.stage_node(cx, kind, span)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
@@ -1051,7 +1051,7 @@ where
                     }
                     if self.flush_through(cx, &token)? {
                         if !recovered {
-                            cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                            cx.tokens.move_to(&token, TokenEdge::Start);
                         }
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
@@ -1061,7 +1061,7 @@ where
                     let kind = NodeKind::comment(*start, content_span, *post_space);
                     let span = cx.tokens.source_span_of(&token);
                     if !recovered {
-                        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                        cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     }
                     if self.stage_node(cx, kind, span)? {
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
@@ -1097,7 +1097,7 @@ where
                     match resolved {
                         CommandResolution::Resolved(resolved) => {
                             if self.flush_through(cx, &token)? {
-                                cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                                cx.tokens.move_to(&token, TokenEdge::Start);
                                 return Ok((
                                     self.outcome(&cx.state, StopCause::NodeCondition),
                                     None,
@@ -1169,7 +1169,7 @@ where
                         continue;
                     }
                     if self.flush_through(cx, &token)? {
-                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                        cx.tokens.move_to(&token, TokenEdge::Start);
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     let invocation = Invocation {
@@ -1209,7 +1209,7 @@ where
                         continue;
                     }
                     if self.flush_through(cx, &token)? {
-                        cx.tokens.move_to_edge(&token, TokenEdge::Start);
+                        cx.tokens.move_to(&token, TokenEdge::Start);
                         return Ok((self.outcome(&cx.state, StopCause::NodeCondition), None));
                     }
                     // The interior's *base* state per the descent policy (the group
@@ -1226,7 +1226,7 @@ where
                     // Consume the trigger token here, at the site that peeked it and
                     // under the state that tokenized it (the at-match-time atomicity
                     // rule); the group parser gets its two facts — open span and rule.
-                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     // The parser's input state is the policy's answer, scoped to the
                     // descent; the parser itself comes from the driver's factory
                     // (Phase 7.2 uniform routing).
@@ -2495,8 +2495,8 @@ mod tests {
         }
 
 
-        fn move_to_edge(&mut self, tok: &Token<'_, TestLang>, edge: TokenEdge) {
-            self.inner_mut().move_to_edge(tok, edge);
+        fn move_to(&mut self, tok: &Token<'_, TestLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
         }
 
         fn move_to_position(&mut self, at: &StdStreamPosition) {
@@ -2653,8 +2653,8 @@ mod tests {
         }
 
 
-        fn move_to_edge(&mut self, tok: &Token<'_, TabooLang>, edge: TokenEdge) {
-            self.inner_mut().move_to_edge(tok, edge);
+        fn move_to(&mut self, tok: &Token<'_, TabooLang>, edge: TokenEdge) {
+            self.inner_mut().move_to(tok, edge);
         }
 
         fn move_to_position(&mut self, at: &StdStreamPosition) {
@@ -3434,7 +3434,7 @@ mod tests {
                 let (content_end, close_span, end) = loop {
                     let token = cx.tokens.peek(&cx.state).expect("clean test content");
                     let at = cx.tokens.position_at(&token, TokenEdge::Start);
-                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     match token.kind {
                         TokenKind::Char('!') => {
                             break (

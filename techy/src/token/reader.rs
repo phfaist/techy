@@ -128,15 +128,15 @@ impl StdStreamPosition {
 ///    identity is a sound key *only while a strong reference pins the allocation* (a
 ///    dropped state's address can be recycled for a different state). A *different*
 ///    state instance — even one derived with an empty delta — relieves `peek` of any
-///    obligation to repeat itself. [`move_to_edge`](TokenReader::move_to_edge),
+///    obligation to repeat itself. [`move_to`](TokenReader::move_to),
 ///    [`move_to_position`](TokenReader::move_to_position) and
 ///    [`next`](TokenReader::next) commit; `peek` alone never moves the stream.
 /// 2. **A peeked token's [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) edge is
-///    the stream position the peek happened at:** `move_to_edge(&tok,
+///    the stream position the peek happened at:** `move_to(&tok,
 ///    StartBeforePreSpace)` right after a `peek` does nothing, and later returns the
 ///    stream to exactly where that peek happened.
 /// 3. **Tokens and positions stay usable for the whole parse:** every token and every
-///    position a reader hands out remains a valid argument to `move_to_edge`,
+///    position a reader hands out remains a valid argument to `move_to`,
 ///    `move_to_position`, `position_at`, `source_span_between` and `source_span_within`
 ///    until the parse ends — a reader serving several sources must keep them all
 ///    addressable.
@@ -178,12 +178,12 @@ pub trait TokenReader<'s, L: Lang> {
 
     /// Reposition the stream at `edge` of `tok` — forward or backward.
     ///
-    /// This is the position-based navigation the parse loops use: `move_to_edge(&tok,
-    /// TokenEdge::EndPastPostSpace)` consumes the token, `move_to_edge(&tok,
+    /// This is the position-based navigation the parse loops use: `move_to(&tok,
+    /// TokenEdge::EndPastPostSpace)` consumes the token, `move_to(&tok,
     /// TokenEdge::Start)` puts it back to be read again, and
     /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) also gives back the
     /// whitespace before it.
-    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
+    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
 
     /// Reposition the stream at a position this reader handed out earlier.
     ///
@@ -237,11 +237,11 @@ pub trait TokenReader<'s, L: Lang> {
 
     /// Parse the token at the current position and move past it (including its
     /// post-space): [`peek`](TokenReader::peek) +
-    /// [`move_to_edge`](TokenReader::move_to_edge) at
+    /// [`move_to`](TokenReader::move_to) at
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
     fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         let token = self.peek(state)?;
-        self.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        self.move_to(&token, TokenEdge::EndPastPostSpace);
         Ok(token)
     }
 }
@@ -718,7 +718,7 @@ where
         self.peek_impl(state)
     }
 
-    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
+    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
         self.pos = tok.edge_offset(edge);
     }
 
@@ -2006,7 +2006,7 @@ mod tests {
 
     #[test]
     fn a_peeked_tokens_first_edge_is_the_position_the_peek_happened_at() {
-        // Contract clause 2: `move_to_edge(&tok, StartBeforePreSpace)` returns the
+        // Contract clause 2: `move_to(&tok, StartBeforePreSpace)` returns the
         // stream to where the peek happened.
         let source = Arc::new(Source::new("a  b"));
         let mut tr = StdTokenReader::new(&source);
@@ -2018,14 +2018,14 @@ mod tests {
         let token = reader.peek(&st).unwrap();
         assert_eq!(reader.position_at(&token, TokenEdge::StartBeforePreSpace), before);
 
-        reader.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        reader.move_to(&token, TokenEdge::EndPastPostSpace);
         assert_ne!(reader.position_here(), before);
-        reader.move_to_edge(&token, TokenEdge::StartBeforePreSpace);
+        reader.move_to(&token, TokenEdge::StartBeforePreSpace);
         assert_eq!(reader.position_here(), before);
         assert_eq!(reader.peek(&st).unwrap(), token);
 
         // And back to the very beginning, through the first token.
-        reader.move_to_edge(&first, TokenEdge::StartBeforePreSpace);
+        reader.move_to(&first, TokenEdge::StartBeforePreSpace);
         assert_eq!(reader.position_here(), reader.position_at(&first, TokenEdge::Start));
     }
 
@@ -2244,7 +2244,7 @@ mod tests {
             (TokenEdge::Start, 2),            // at the token, to read it again
             (TokenEdge::StartBeforePreSpace, 0), // giving back the pre-space too
         ] {
-            reader.move_to_edge(&token, edge);
+            reader.move_to(&token, edge);
             assert_eq!(at(reader), SourcePos::new(&source, offset), "{edge:?}");
             assert_eq!(reader.position_here(), reader.position_at(&token, edge));
         }

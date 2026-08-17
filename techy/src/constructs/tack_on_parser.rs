@@ -222,7 +222,7 @@ where
                 token: &token,
             };
             let frame = invocation_frame(cx, &invocation);
-            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             // A factory Err aborts under any policy ("could not build the
             // parser"), with the live traceback attached here.
             let driver = cx.driver;

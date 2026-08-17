@@ -324,7 +324,7 @@ mod tests {
             panic!("test content must start with a group open")
         };
         let rule = Arc::clone(rule);
-        TokenReader::move_to_edge(&mut reader, &open, TokenEdge::EndPastPostSpace);
+        TokenReader::move_to(&mut reader, &open, TokenEdge::EndPastPostSpace);
         let mut session = ParserSession::new();
         let driver = crate::engine::StdParseDriver::new(recovery, ());
         let mut cx = ParseContext::new(

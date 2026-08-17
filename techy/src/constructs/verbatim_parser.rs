@@ -179,10 +179,10 @@ fn read_raw_content<L: Lang>(
         match &token.kind {
             TokenKind::Char(c) => {
                 on_char(*c);
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
             TokenKind::GroupClose { .. } => {
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 if consume_close_as_content(&token) {
                     continue;
                 }
@@ -367,7 +367,7 @@ where
         // Committed: the whitespace becomes region noise, the delimiter is consumed.
         let mut nodes = Vec::new();
         stage_pre_space(cx, &mut nodes, &token)?;
-        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
         let open_span = cx.tokens.source_span_of(&token);
         let open_start = cx.tokens.position_at(&token, TokenEdge::Start);
         let content_start = cx.tokens.position_here();
@@ -727,7 +727,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         if self.gobble_leading_newline {
             if let Some(token) = cx.probe_token(&verbatim_state)? {
                 if matches!(token.kind, TokenKind::Char('\n')) {
-                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                    cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     let span = cx.tokens.source_span_of(&token);
                     let id = cx
                         .stage_node(

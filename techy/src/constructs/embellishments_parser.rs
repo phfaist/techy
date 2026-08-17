@@ -264,7 +264,7 @@ impl EmbellishmentsArgumentParser {
         if !prefixes_any(&run) {
             return Ok(None);
         }
-        cx.tokens.move_to_edge(first, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(first, TokenEdge::EndPastPostSpace);
         // The best-so-far match is kept as the *token* it ends on: only the reader can
         // say where that is.
         let mut best: Option<(usize, crate::token::Token<'s, L>)> =
@@ -283,7 +283,7 @@ impl EmbellishmentsArgumentParser {
             if !prefixes_any(&run) {
                 break;
             }
-            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             if let Some(index) = available(&run) {
                 best = Some((index, token.clone()));
             }
@@ -292,7 +292,7 @@ impl EmbellishmentsArgumentParser {
         let Some((index, last)) = best else { return Ok(None) };
         // The scan may have read past the settled match (a longer alternative that
         // never completed): stand the reader at the marker's end.
-        cx.tokens.move_to_edge(&last, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&last, TokenEdge::EndPastPostSpace);
         let span = cx.source_span_within(
             &cx.tokens.position_at(first, TokenEdge::Start),
             &cx.tokens.position_at(&last, TokenEdge::EndPastPostSpace),

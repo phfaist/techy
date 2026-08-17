@@ -960,7 +960,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///   stop condition stops again immediately, staging nothing: an infinite loop for
     ///   an unconditional resumer. Deal with the token first — consume it
     ///   ([`probe_token`](ParseContext::probe_token) +
-    ///   [`move_to_edge`](crate::token::TokenReader::move_to_edge), the environment
+    ///   [`move_to`](crate::token::TokenReader::move_to), the environment
     ///   terminator flow), skip it
     ///   ([`move_to_position`](crate::token::TokenReader::move_to_position) with the
     ///   stop cause's `after` position, the root loop), or exclude it from the next
@@ -1221,7 +1221,7 @@ pub trait ConstructParser<L: Lang> {
 /// invocation parser the spec's factory returns.
 ///
 /// When the parser runs, the trigger token has already been **consumed whole** by the
-/// dispatching arm (`move_to_edge(token, TokenEdge::EndPastPostSpace)`, syntactic
+/// dispatching arm (`move_to(token, TokenEdge::EndPastPostSpace)`, syntactic
 /// post-space included) — see
 /// [`StdInvocationParser`]'s documentation for the full contract.
 ///
@@ -1416,7 +1416,7 @@ mod tests {
 
             // It follows the reader.
             let token = cx.tokens.peek(&cx.state).unwrap();
-            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             assert_eq!(cx.here().range(), 1..1);
         });
     }
@@ -1467,11 +1467,11 @@ mod tests {
             let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(TestSpec);
             for _ in 0..trigger {
                 let skipped = cx.tokens.peek(&cx.state).unwrap();
-                cx.tokens.move_to_edge(&skipped, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&skipped, TokenEdge::EndPastPostSpace);
             }
             let token = cx.tokens.peek(&cx.state).unwrap();
             // The dispatch contract: the trigger is consumed before the parser runs.
-            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             let children = children(cx);
             let invocation = Invocation {
                 callable_type: 0u32,
@@ -1567,7 +1567,7 @@ mod tests {
         let range = stage_invocation_span("abcd", 0, EndUnderTest::Here, |cx| {
             for _ in 0..2 {
                 let token = cx.tokens.peek(&cx.state).unwrap();
-                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
             Vec::new()
         })

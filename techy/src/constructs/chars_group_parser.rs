@@ -194,7 +194,7 @@ where
         let contents_state = cx.derive_state(&self.contents_delta(&outer))?;
 
         stage_pre_space(cx, &mut noise.nodes, &open)?;
-        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to(&open, TokenEdge::EndPastPostSpace);
         let child_states = if self.restricted_descent {
             ChildStateSpec::inherit()
         } else {

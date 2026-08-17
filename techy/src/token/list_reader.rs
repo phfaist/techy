@@ -13,7 +13,7 @@
 //! # Fidelity contract
 //!
 //! The reader keeps a byte **position**, exactly like [`StdTokenReader`]:
-//! [`move_to_edge`](super::TokenReader::move_to_edge) places it at the named edge of
+//! [`move_to`](super::TokenReader::move_to) places it at the named edge of
 //! the token,
 //! and `peek` returns the first listed token at or after the position, clipping its
 //! `pre_space` to start no earlier than that position (re-peeking mid-pre-space behaves
@@ -64,7 +64,7 @@ use super::token::{Token, TokenKind};
 ///   starts with the initial position alone and grows with the four edge offsets of
 ///   every token the reader serves, with every position it answers
 ///   (`position_here`/`position_at`), and with every offset it is moved to
-///   (`move_to_edge`). A position taken from somewhere the reader never served is
+///   (`move_to`). A position taken from somewhere the reader never served is
 ///   therefore rejected.
 pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
@@ -183,8 +183,8 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
         }
     }
 
-    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
-        self.check_issued(tok, "move_to_edge");
+    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
+        self.check_issued(tok, "move_to");
         self.pos = self.issue(tok.edge_offset(edge));
     }
 
@@ -359,12 +359,12 @@ mod tests {
             (TokenEdge::StartBeforePreSpace, 0),
         ] {
             let std_reader: &mut dyn TokenReader<'_, TestLang> = &mut std_r;
-            std_reader.move_to_edge(&token, edge);
+            std_reader.move_to(&token, edge);
             let at = std_reader.source_position_at(&std_reader.position_here());
             assert_eq!(at, SourcePos::new(&source, offset), "{edge:?}");
 
             let list_reader: &mut dyn TokenReader<'_, TestLang> = &mut list_r;
-            list_reader.move_to_edge(&token, edge);
+            list_reader.move_to(&token, edge);
             assert_eq!(
                 list_reader.source_position_at(&list_reader.position_here()),
                 at,
@@ -388,7 +388,7 @@ mod tests {
         let second = TokenReader::next(&mut lr, &st).unwrap();
         assert_eq!(second, scanned[1]);
 
-        TokenReader::move_to_edge(&mut lr, &first, TokenEdge::Start);
+        TokenReader::move_to(&mut lr, &first, TokenEdge::Start);
         assert_eq!(
             TokenReader::position_here(&lr),
             TokenReader::position_at(&lr, &first, TokenEdge::Start)
@@ -479,8 +479,8 @@ mod tests {
                 list_reader.source_span_between(&token, TokenEdge::Start, edge),
                 "spans disagree at {edge:?}"
             );
-            std_reader.move_to_edge(&token, edge);
-            list_reader.move_to_edge(&token, edge);
+            std_reader.move_to(&token, edge);
+            list_reader.move_to(&token, edge);
             assert_eq!(std_reader.position_here(), list_reader.position_here());
         }
 

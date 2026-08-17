@@ -797,7 +797,7 @@ mod tests {
                             crate::token::TokenKind::Char('\n') => break,
                             crate::token::TokenKind::Char(_) => cx
                                 .tokens
-                                .move_to_edge(&token, crate::token::TokenEdge::EndPastPostSpace),
+                                .move_to(&token, crate::token::TokenEdge::EndPastPostSpace),
                             _ => break,
                         }
                     }
