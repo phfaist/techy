@@ -31,7 +31,7 @@ use crate::state::{
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, StdTokenReader, TokenKindView, TokenReader};
+use crate::token::{GroupRule, StdTokenReader, TokenKind, TokenReader};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType,
@@ -67,7 +67,7 @@ pub enum ParagraphBreakStyle {
     /// identity** — the stamped spec is the canonical [`ParagraphBreakSpec`],
     /// recognized by `Any`-downcast — never by a name spelling. The token level is
     /// unchanged (still
-    /// [`ParagraphBreak`](crate::token::TokenKindView::ParagraphBreak)), and the spec
+    /// [`ParagraphBreak`](crate::token::TokenKind::ParagraphBreak)), and the spec
     /// lives on no provider, so paragraph breaks do **not** appear in
     /// [`iter_symbols`](crate::scopes::ScopeStack::iter_symbols) enumerations.
     /// Extraction helpers treat the node as the non-text material it now is
@@ -447,7 +447,7 @@ impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
     fn resolve_command(
         &self,
         state: &ParsingState<LLL>,
-        token_kind: TokenKindView<'_, LLL>,
+        token_kind: TokenKind<'_, LLL>,
     ) -> Result<CommandResolution<LLL>, crate::error::ParseError<LLL::SourceOrigin>> {
         Ok(resolve_command_in_scopes(
             state,

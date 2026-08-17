@@ -243,15 +243,13 @@ where
 
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
     /// `Result`.
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, LLL>,
+        invocation: Invocation<'a, LLL>,
     ) -> Result<
         alloc::boxed::Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
         crate::error::ParseError<LLL::SourceOrigin>,
     >
-    where
-        's: 'a,
     {
         Ok(alloc::boxed::Box::new(InputInvocationParser {
             invocation,
@@ -289,13 +287,13 @@ impl<LLL: LatexlikeLang> Clone for InputMacroSpec<LLL> {
 
 /// The `\input` invocation parser — the **brief form** the attachment helpers
 /// exist for: declared arguments → argument text → attach → `Attached` slot.
-struct InputInvocationParser<'a, 's, LLL: LatexlikeLang> {
-    invocation: Invocation<'a, 's, LLL>,
+struct InputInvocationParser<'a, LLL: LatexlikeLang> {
+    invocation: Invocation<'a, LLL>,
     persist_state: bool,
     attached_slot_ext: &'a SlotExt<LLL>,
 }
 
-impl<LLL> ConstructParser<LLL> for InputInvocationParser<'_, '_, LLL>
+impl<LLL> ConstructParser<LLL> for InputInvocationParser<'_, LLL>
 where
     LLL: LatexlikeLang,
     ArgumentExt<LLL>: Default,

@@ -129,7 +129,7 @@ use crate::state::{
 use crate::token::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
-    StdStreamPosition, TokenRules, TriggerChars, WhitespaceRules,
+    StdStreamPosition, StdToken, TokenRules, TriggerChars, WhitespaceRules,
 };
 
 /// The form in which a math group appears: inline or display — the typed class
@@ -367,6 +367,7 @@ impl Lang for Latexlike {
     type Event = Event;
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type Token = StdToken<Self>;
     type StreamPosition = StdStreamPosition;
     type NodeExts = LatexlikeNodeExts;
     type InvocationSyntax = InvocationSyntaxData;
@@ -1235,6 +1236,7 @@ mod tests {
         type Event = Event;
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = InvocationSyntaxData<StdEnvironmentSyntax<Flavored>>;

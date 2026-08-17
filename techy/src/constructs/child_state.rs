@@ -40,7 +40,7 @@ use core::fmt;
 
 use crate::error::ParseError;
 use crate::state::{Lang, ParsingState};
-use crate::token::TokenKindView;
+use crate::token::TokenKind;
 
 use super::Invocation;
 
@@ -53,7 +53,7 @@ pub enum GroupChildState<'p, L: Lang> {
     /// Use this state (the chars-except-groups revert-to-outer case).
     Fixed(Arc<ParsingState<L>>),
     /// Compute the base from the loop's current state and the opening token's
-    /// [view](TokenKindView) (which carries `delim` and the resolved
+    /// [view](TokenKind) (which carries `delim` and the resolved
     /// `Arc<GroupRule>` — so the policy can key on the group's class). Like every
     /// reader-less hook, the callback sees the view rather than the token: what it
     /// can know about a token is what the view says. Deterministic, no side effects:
@@ -77,7 +77,7 @@ pub enum GroupChildState<'p, L: Lang> {
     Compute(
         &'p dyn Fn(
             &Arc<ParsingState<L>>,
-            TokenKindView<'_, L>,
+            TokenKind<'_, L>,
         )
             -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,
     ),
@@ -105,7 +105,7 @@ pub enum InvocationChildState<'p, L: Lang> {
     Compute(
         &'p dyn Fn(
             &Arc<ParsingState<L>>,
-            &Invocation<'_, '_, L>,
+            &Invocation<'_, L>,
         )
             -> Result<Arc<ParsingState<L>>, ParseError<L::SourceOrigin>>,
     ),

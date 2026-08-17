@@ -7,9 +7,9 @@
 //! ([`GroupRules::enabled`](crate::token::GroupRules::enabled)) and overrides any
 //! close expectation inherited
 //! from an enclosing group, so it is the single recognizer left active: the body
-//! arrives as pure [`Char`](TokenKindView::Char) tokens and the terminator —
+//! arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
 //! multi-character strings included — as one
-//! [`GroupClose`](TokenKindView::GroupClose). These parsers
+//! [`GroupClose`](TokenKind::GroupClose). These parsers
 //! read through the ordinary [`TokenReader`](crate::token::TokenReader) protocol;
 //! they need a **scanning** reader (a pre-scanned token list cannot re-tokenize under
 //! the verbatim state — `TokenListReader`'s documented fidelity limit).
@@ -56,7 +56,7 @@ use crate::state::{
     LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
     SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, TokenEdge, TokenKindView};
+use crate::token::{GroupRule, TokenEdge, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
@@ -110,9 +110,9 @@ impl fmt::Display for ExpectedVerbatimDelimiter {
 /// ([`TokenRulesOverrides::disable_all`](crate::state::TokenRulesOverrides::disable_all))
 /// and [`expecting_group_close`](crate::token::TokenRules::expecting_group_close)
 /// **replaced** by `terminator`. Under the derived state the
-/// content arrives as pure [`Char`](TokenKindView::Char) tokens and the terminator —
+/// content arrives as pure [`Char`](TokenKind::Char) tokens and the terminator —
 /// `terminator`'s `close` string, which must be non-empty to ever match — as one
-/// [`GroupClose`](TokenKindView::GroupClose) token.
+/// [`GroupClose`](TokenKind::GroupClose) token.
 ///
 /// The base building block for custom raw-content parsers; [`VerbatimArgumentParser`]
 /// and [`VerbatimBodyParser`] derive their reading states through it.
@@ -159,7 +159,7 @@ struct RawContentEnd<L: Lang> {
 fn read_raw_content<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     state: &Arc<ParsingState<L>>,
-    mut consume_close_as_content: impl FnMut(TokenKindView<'_, L>) -> bool,
+    mut consume_close_as_content: impl FnMut(TokenKind<'_, L>) -> bool,
     mut on_char: impl FnMut(char),
 ) -> ConstructParserResult<L, RawContentEnd<L>> {
     loop {
@@ -179,11 +179,11 @@ fn read_raw_content<L: Lang>(
         };
         let kind = cx.tokens.token_kind(&token);
         match kind {
-            TokenKindView::Char(c) => {
+            TokenKind::Char(c) => {
                 on_char(c);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
-            TokenKindView::GroupClose { .. } => {
+            TokenKind::GroupClose { .. } => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 if consume_close_as_content(kind) {
                     continue;
@@ -194,7 +194,7 @@ fn read_raw_content<L: Lang>(
                     end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
-            TokenKindView::EndOfStream => {
+            TokenKind::EndOfStream => {
                 let end = cx.tokens.position_at(&token, TokenEdge::Start);
                 return Ok(RawContentEnd {
                     content_end: end.clone(),
@@ -336,7 +336,7 @@ where
             return Ok(None);
         };
         let open = match cx.tokens.token_kind(&token) {
-            TokenKindView::Char(c) => c,
+            TokenKind::Char(c) => c,
             // Under the probe state only `Char` and `EndOfStream` exist; treat
             // anything else like end of input (a misbehaving reader is caught by the
             // content loop's implementation-error arm, not the recovery path).
@@ -728,7 +728,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         let mut content_designation_start = 0u32;
         if self.gobble_leading_newline {
             if let Some(token) = cx.probe_token(&verbatim_state)? {
-                if matches!(cx.tokens.token_kind(&token), TokenKindView::Char('\n')) {
+                if matches!(cx.tokens.token_kind(&token), TokenKind::Char('\n')) {
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     let span = cx.tokens.source_span_of(&token);
                     let id = cx
@@ -830,7 +830,7 @@ mod tests {
     use crate::state::StateData;
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdTokenReader, TokenKindView, TokenRules,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenKind, TokenRules,
         WhitespaceRules,
     };
     use alloc::format;
@@ -854,6 +854,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -888,9 +889,9 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<VerbLang>,
-            token_kind: TokenKindView<'_, VerbLang>,
+            token_kind: TokenKind<'_, VerbLang>,
         ) -> Result<CommandResolution<VerbLang>, crate::error::ParseError> {
-            let TokenKindView::Command { name, escape_char } = token_kind else {
+            let TokenKind::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(

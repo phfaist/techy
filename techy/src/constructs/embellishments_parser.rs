@@ -40,7 +40,7 @@
 //!   markers must be contiguous (no intervening whitespace; the
 //!   [`MarkerArgumentParser`](super::MarkerArgumentParser) precedent — no pylatexenc
 //!   space-normalized accumulation).
-//! - Markers are sequences of [`Char`](TokenKindView::Char) tokens: a character claimed by
+//! - Markers are sequences of [`Char`](TokenKind::Char) tokens: a character claimed by
 //!   another recognizer in the argument's state (a specials trigger, a group open)
 //!   does not match. State-dependent tokenization is the law of the land — e.g. the
 //!   latexlike `''` typography ligature outranks a `'` marker in text mode but not in
@@ -59,7 +59,7 @@ use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::{TokenEdge, TokenKindView};
+use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{
     parse_expression_node, scan_argument_noise, stage_pre_space,
@@ -239,10 +239,10 @@ impl EmbellishmentsArgumentParser {
     fn scan_marker<'s, L: Lang>(
         &self,
         cx: &mut ParseContext<'_, 's, L>,
-        first: &crate::token::Token<'s, L>,
+        first: &L::Token,
         used: &[bool],
     ) -> ConstructParserResult<L, Option<(usize, SourceSpan<L::SourceOrigin>)>> {
-        let TokenKindView::Char(first_char) = cx.tokens.token_kind(first) else {
+        let TokenKind::Char(first_char) = cx.tokens.token_kind(first) else {
             return Ok(None);
         };
 
@@ -269,7 +269,7 @@ impl EmbellishmentsArgumentParser {
         cx.tokens.move_to(first, TokenEdge::EndPastPostSpace);
         // The best-so-far match is kept as the *token* it ends on: only the reader can
         // say where that is.
-        let mut best: Option<(usize, crate::token::Token<'s, L>)> =
+        let mut best: Option<(usize, L::Token)> =
             available(&run).map(|index| (index, first.clone()));
 
         let state = Arc::clone(&cx.state);
@@ -277,7 +277,7 @@ impl EmbellishmentsArgumentParser {
             // Accumulate while the run still prefixes an available marker; each
             // continuation char must be contiguous (no pre-space).
             let Some(token) = cx.probe_token(&state)? else { break };
-            let TokenKindView::Char(c) = cx.tokens.token_kind(&token) else { break };
+            let TokenKind::Char(c) = cx.tokens.token_kind(&token) else { break };
             if cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace)
                 != cx.tokens.position_at(&token, TokenEdge::Start)
             {

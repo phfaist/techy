@@ -159,15 +159,14 @@ pub trait CallableSpec<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableOb
     // The boxed-parser-or-abort pair is the decided factory signature; an alias
     // would only rename it.
     #[allow(clippy::type_complexity)]
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, L>,
+        invocation: Invocation<'a, L>,
     ) -> Result<
         Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
         crate::error::ParseError<L::SourceOrigin>,
     >
     where
-        's: 'a,
         L::InvocationSyntax: FromInvocation<L>,
     {
         Ok(Box::new(StdInvocationParser::new(invocation)))

@@ -5,7 +5,7 @@
 //!
 //! Constructed with the opening delimiter's span and its resolved
 //! [`GroupRule`] — the two facts the
-//! [`GroupOpen`](crate::token::TokenKindView::GroupOpen)
+//! [`GroupOpen`](crate::token::TokenKind::GroupOpen)
 //! trigger token carries. The **caller consumes the trigger token** before running the
 //! parser (the dispatch-loop arm that peeked it, under the state that tokenized it —
 //! the same at-match-time atomicity rule as the stop-condition consume flag; it also
@@ -50,7 +50,7 @@ use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, GroupData, NodeKind};
 use crate::source::TextContent;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, Token, TokenEdge};
+use crate::token::{GroupRule, TokenEdge};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -113,10 +113,10 @@ impl fmt::Display for UnclosedGroup {
 /// derives the actual interior state (base plus the expected close delimiter from
 /// the opening rule), scoped structurally over the descent. Recovery for a group
 /// that never closes is documented on [`UnclosedGroup`].
-pub struct GroupParser<'p, 's, L: Lang> {
+pub struct GroupParser<'p, L: Lang> {
     /// The consumed `GroupOpen` token: the group's open delimiter, as the reader
     /// records it (its span and its stream position come from the reader).
-    open: Token<'s, L>,
+    open: L::Token,
     /// The opening token's resolved rule: the close spelling and group class of the
     /// pairing to match.
     rule: Arc<GroupRule<L>>,
@@ -131,10 +131,10 @@ pub struct GroupParser<'p, 's, L: Lang> {
     child_states: ChildStateSpec<'p, L>,
 }
 
-impl<'p, 's, L: Lang> GroupParser<'p, 's, L> {
+impl<'p, L: Lang> GroupParser<'p, L> {
     /// A parser for the group opened by the consumed `GroupOpen` token `open`, with
     /// resolved rule `rule`.
-    pub fn new(open: Token<'s, L>, rule: Arc<GroupRule<L>>) -> GroupParser<'p, 's, L> {
+    pub fn new(open: L::Token, rule: Arc<GroupRule<L>>) -> GroupParser<'p, L> {
         GroupParser { open, rule, child_states: ChildStateSpec::inherit() }
     }
 
@@ -146,7 +146,7 @@ impl<'p, 's, L: Lang> GroupParser<'p, 's, L> {
     }
 }
 
-impl<L: Lang> ConstructParser<L> for GroupParser<'_, '_, L>
+impl<L: Lang> ConstructParser<L> for GroupParser<'_, L>
 where
     L::InvocationSyntax: FromInvocation<L>,
 {
@@ -245,7 +245,7 @@ where
     }
 }
 
-impl<L: Lang> core::fmt::Debug for GroupParser<'_, '_, L> {
+impl<L: Lang> core::fmt::Debug for GroupParser<'_, L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GroupParser")
             .field("open", &self.open)
@@ -265,7 +265,7 @@ mod tests {
     use crate::state::{ParsingState, TrivialLang, StateData};
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
-        SpecialsRules, StdTokenReader, Token, TokenKindView, TokenReader, TokenRules,
+        SpecialsRules, StdToken, StdTokenReader, TokenKind, TokenReader, TokenRules,
         WhitespaceRules,
     };
     use alloc::vec;
@@ -320,14 +320,13 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state();
         let mut reader = StdTokenReader::new(&source);
-        let open: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        let TokenKindView::GroupOpen { rule, .. } =
-            TokenReader::token_kind(&reader, &open)
-        else {
+        let open: StdToken<TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        let reader_ref: &dyn TokenReader<'_, TestLang> = &reader;
+        let TokenKind::GroupOpen { rule, .. } = reader_ref.token_kind(&open) else {
             panic!("test content must start with a group open")
         };
         let rule = Arc::clone(rule);
-        TokenReader::move_to(&mut reader, &open, TokenEdge::EndPastPostSpace);
+        TokenReader::<'_, TestLang>::move_to(&mut reader, &open, TokenEdge::EndPastPostSpace);
         let mut session = ParserSession::new();
         let driver = crate::engine::StdParseDriver::new(recovery, ());
         let mut cx = ParseContext::new(

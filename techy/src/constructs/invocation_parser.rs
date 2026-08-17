@@ -164,19 +164,19 @@ pub fn parse_declared_arguments<L: Lang>(
 /// argument half is shared as [`parse_declared_arguments`]) — and says "I take
 /// material" via [`requires_content`](crate::spec::CallableSpec::requires_content), the
 /// expression-position guard's channel.
-pub struct StdInvocationParser<'a, 's, L: Lang> {
-    invocation: Invocation<'a, 's, L>,
+pub struct StdInvocationParser<'a, L: Lang> {
+    invocation: Invocation<'a, L>,
 }
 
-impl<'a, 's, L: Lang> StdInvocationParser<'a, 's, L> {
+impl<'a, L: Lang> StdInvocationParser<'a, L> {
     /// A parser for the given resolved invocation (the default body of
     /// [`CallableSpec::make_invocation_parser`](crate::spec::CallableSpec::make_invocation_parser)).
-    pub fn new(invocation: Invocation<'a, 's, L>) -> StdInvocationParser<'a, 's, L> {
+    pub fn new(invocation: Invocation<'a, L>) -> StdInvocationParser<'a, L> {
         StdInvocationParser { invocation }
     }
 }
 
-impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, '_, L>
+impl<L: Lang> ConstructParser<L> for StdInvocationParser<'_, L>
 where
     L::InvocationSyntax: FromInvocation<L>,
 {
@@ -208,7 +208,7 @@ where
     }
 }
 
-impl<L: Lang> fmt::Debug for StdInvocationParser<'_, '_, L> {
+impl<L: Lang> fmt::Debug for StdInvocationParser<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StdInvocationParser")
             .field("invocation", &self.invocation)

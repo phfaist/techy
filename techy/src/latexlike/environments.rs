@@ -658,15 +658,13 @@ where
 
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
     /// `Result`.
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, LLL>,
+        invocation: Invocation<'a, LLL>,
     ) -> Result<
         Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
         crate::error::ParseError<LLL::SourceOrigin>,
     >
-    where
-        's: 'a,
     {
         Ok(Box::new(EnvironmentInvocationParser {
             invocation,
@@ -738,15 +736,13 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for EndSpec<LLL> {
 
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
     /// `Result`.
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, LLL>,
+        invocation: Invocation<'a, LLL>,
     ) -> Result<
         Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
         crate::error::ParseError<LLL::SourceOrigin>,
     >
-    where
-        's: 'a,
     {
         Ok(Box::new(OrphanEndParser { invocation }))
     }
@@ -788,19 +784,19 @@ impl<LLL: LatexlikeLang> fmt::Debug for EndSpec<LLL> {
 ///
 /// This parser is dispatched for the `\begin` **command** ([`BeginSpec`] is a
 /// macro-shaped entry), and its trigger must be a
-/// [`Command`](crate::token::TokenKindView::Command) token — a different trigger
+/// [`Command`](crate::token::TokenKind::Command) token — a different trigger
 /// shape (a specials-dispatched begin, say) is a documented-contract violation
 /// and aborts as an implementation error. A custom trigger shape needs its own
 /// composition *and* its own `Env` record type: this composition's begin facts
 /// ([`EnvironmentBeginSyntaxData`]) are command-spelling facts by construction.
-struct EnvironmentInvocationParser<'a, 's, LLL: LatexlikeLang> {
-    invocation: Invocation<'a, 's, LLL>,
+struct EnvironmentInvocationParser<'a, LLL: LatexlikeLang> {
+    invocation: Invocation<'a, LLL>,
     /// The dispatching [`BeginSpec`]'s terminator command name, passed on to the
     /// body parsers through [`EnvironmentInvocation::end_command_name`].
     end_command_name: &'a str,
 }
 
-impl<LLL: LatexlikeLang> ConstructParser<LLL> for EnvironmentInvocationParser<'_, '_, LLL>
+impl<LLL: LatexlikeLang> ConstructParser<LLL> for EnvironmentInvocationParser<'_, LLL>
 where
     crate::node::SlotExt<LLL>: BodySlotExt,
 {
@@ -824,7 +820,7 @@ where
         // command-initiated, so a non-command trigger is a documented-contract
         // violation by whatever dispatched this composition — an implementation
         // error, not a source condition.
-        let crate::token::TokenKindView::Command { escape_char, .. } =
+        let crate::token::TokenKind::Command { escape_char, .. } =
             self.invocation.kind
         else {
             return Err(cx.implementation_error(
@@ -1024,11 +1020,11 @@ where
 
 /// The orphan-`\end` recovery parser ([`EndSpec`]'s): read the name group when
 /// present, diagnose [`OrphanEnd`], stage the consumed extent as a `Chars` node.
-struct OrphanEndParser<'a, 's, LLL: LatexlikeLang> {
-    invocation: Invocation<'a, 's, LLL>,
+struct OrphanEndParser<'a, LLL: LatexlikeLang> {
+    invocation: Invocation<'a, LLL>,
 }
 
-impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
+impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, LLL> {
     type Output = BuildId;
 
     fn parse(
@@ -1043,7 +1039,7 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
         // and would read as a trailing blank inside the quotes. Any other trigger
         // shape (this spec is registrable under any syntax) quotes its whole extent.
         let command_end = match self.invocation.kind {
-            crate::token::TokenKindView::Command { .. } => TokenEdge::End,
+            crate::token::TokenKind::Command { .. } => TokenEdge::End,
             _ => TokenEdge::EndPastPostSpace,
         };
         let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);

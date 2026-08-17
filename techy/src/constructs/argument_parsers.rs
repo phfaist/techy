@@ -57,7 +57,7 @@ use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
     GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, Token, TokenEdge, TokenKindView};
+use crate::token::{GroupRule, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{
@@ -123,7 +123,7 @@ fn argument_name<L: Lang>(spec: &ArgumentSpec<L>) -> Option<String> {
 
 /// The result of [`scan_argument_noise`]: staged leading-noise nodes, the rewind
 /// target, and the first non-noise token.
-pub struct ArgumentNoise<'s, L: Lang> {
+pub struct ArgumentNoise<L: Lang> {
     /// The staged noise nodes (comment nodes, whitespace-only `Chars` nodes), in source
     /// order — the leading part of the argument's region if the argument turns out
     /// present; unclaimed (and dropped by the builder) otherwise.
@@ -137,10 +137,10 @@ pub struct ArgumentNoise<'s, L: Lang> {
     /// (tolerant mode): the error is neither consumed nor diagnosed by the argument
     /// parser — it reports the argument absent, and the enclosing content loop
     /// re-reads and recovers the token itself.
-    pub next: Option<Token<'s, L>>,
+    pub next: Option<L::Token>,
 }
 
-impl<L: Lang> ArgumentNoise<'_, L> {
+impl<L: Lang> ArgumentNoise<L> {
     /// Report the argument absent: reposition the reader to where the scan started, so
     /// the probed noise is re-parsed as enclosing content. The staged noise nodes are
     /// simply never claimed — the builder drops them.
@@ -149,7 +149,7 @@ impl<L: Lang> ArgumentNoise<'_, L> {
     }
 }
 
-impl<L: Lang> fmt::Debug for ArgumentNoise<'_, L> {
+impl<L: Lang> fmt::Debug for ArgumentNoise<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ArgumentNoise")
             .field("nodes", &self.nodes)
@@ -170,7 +170,7 @@ impl<L: Lang> fmt::Debug for ArgumentNoise<'_, L> {
 /// a parser's behalf.
 pub fn scan_argument_noise<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
-) -> ConstructParserResult<L, ArgumentNoise<'s, L>> {
+) -> ConstructParserResult<L, ArgumentNoise<L>> {
     let start = cx.tokens.position_here();
     let mut nodes = Vec::new();
     let state = Arc::clone(&cx.state); // staging noise nodes never changes the state
@@ -179,7 +179,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
             return Ok(ArgumentNoise { nodes, start, next: None });
         };
         match cx.tokens.token_kind(&token) {
-            TokenKindView::Comment { .. } => {
+            TokenKind::Comment { .. } => {
                 stage_pre_space(cx, &mut nodes, &token)?;
                 let (kind, span) = comment_node_kind(cx, &token);
                 nodes.push(stage(cx, kind, span)?);
@@ -196,7 +196,7 @@ pub fn scan_argument_noise<'s, L: Lang>(
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
-    tok: &Token<'_, L>,
+    tok: &L::Token,
 ) -> ConstructParserResult<L, ()> {
     let pre_space = cx.tokens.source_span_between(
         tok,
@@ -248,7 +248,7 @@ pub(super) fn stage<L: Lang>(
 ///   [`ArgumentParser::parse_argument`] deliberately has no delta channel.
 pub(super) fn parse_expression_node<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
-    next: &Token<'s, L>,
+    next: &L::Token,
     nodes: &mut Vec<BuildId>,
 ) -> ConstructParserResult<L, Option<BuildId>>
 where
@@ -256,7 +256,7 @@ where
 {
     let kind = cx.tokens.token_kind(next);
     match kind {
-        TokenKindView::Char(_) => {
+        TokenKind::Char(_) => {
             stage_pre_space(cx, nodes, next)?;
             let span = cx.tokens.source_span_of(next);
             cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
@@ -265,7 +265,7 @@ where
             Ok(Some(id))
         }
 
-        TokenKindView::GroupOpen { rule, .. } => {
+        TokenKind::GroupOpen { rule, .. } => {
             stage_pre_space(cx, nodes, next)?;
             let rule = Arc::clone(rule);
             cx.tokens.move_to(next, TokenEdge::EndPastPostSpace);
@@ -276,7 +276,7 @@ where
             Ok(Some(id))
         }
 
-        TokenKindView::Command { name, escape_char } => {
+        TokenKind::Command { name, escape_char } => {
             // Resolution under the current state, coherent with the state that
             // tokenized the token ([§dd-dr:parsers-engine]). A hook Err aborts
             // under any policy (resolve_command's contract).
@@ -321,7 +321,7 @@ where
             }
         }
 
-        TokenKindView::Specials { callable_type, name, spec } => {
+        TokenKind::Specials { callable_type, name, spec } => {
             // Recognition = resolution: the token carries the full resolution.
             let invocation =
                 Invocation { callable_type, name, spec, token: next, kind };
@@ -329,10 +329,10 @@ where
         }
 
         // No expression starts here; the caller decides what absence means.
-        TokenKindView::ParagraphBreak
-        | TokenKindView::GroupClose { .. }
-        | TokenKindView::EndOfStream
-        | TokenKindView::Comment { .. } => Ok(None),
+        TokenKind::ParagraphBreak
+        | TokenKind::GroupClose { .. }
+        | TokenKind::EndOfStream
+        | TokenKind::Comment { .. } => Ok(None),
     }
 }
 
@@ -340,7 +340,7 @@ where
 fn dispatch_expression_invocation<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
     nodes: &mut Vec<BuildId>,
-    invocation: Invocation<'_, 's, L>,
+    invocation: Invocation<'_, L>,
 ) -> ConstructParserResult<L, Option<BuildId>>
 where
     L::InvocationSyntax: FromInvocation<L>,
@@ -350,7 +350,7 @@ where
         // The trigger's written spelling, built only on this cold branch (the hot
         // dispatch path stays allocation-free).
         let spelling = match invocation.kind {
-            TokenKindView::Command { name, escape_char } => {
+            TokenKind::Command { name, escape_char } => {
                 format!("{}{}", escape_char, name)
             }
             _ => invocation.name.into(),
@@ -627,7 +627,7 @@ where
             // The class form: a group open of the configured class.
             GroupArgumentForm::Class(group_type) => {
                 if let Some(next) = noise.next.clone() {
-                    if let TokenKindView::GroupOpen { rule, .. } =
+                    if let TokenKind::GroupOpen { rule, .. } =
                         cx.tokens.token_kind(&next)
                     {
                         if rule.group_type == *group_type {
@@ -678,7 +678,7 @@ where
 /// (tolerant) or abort (strict); absent, nothing consumed.
 pub(super) fn missing_mandatory<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
-    noise: ArgumentNoise<'_, L>,
+    noise: ArgumentNoise<L>,
     spec: &ArgumentSpec<L>,
 ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
     let at = match noise.next.as_ref() {
@@ -702,8 +702,8 @@ pub(super) fn staged_child_count<L: Lang>(cx: &ParseContext<'_, '_, L>, id: Buil
 
 /// A successful minted-group probe ([`probe_minted_group`]): the unconsumed opening
 /// token, the rule that matched it, and the state the group's contents parse under.
-struct MintedGroupMatch<'s, L: Lang> {
-    open: Token<'s, L>,
+struct MintedGroupMatch<L: Lang> {
+    open: L::Token,
     rule: Arc<GroupRule<L>>,
     contents_state: Arc<ParsingState<L>>,
 }
@@ -724,7 +724,7 @@ struct MintedGroupMatch<'s, L: Lang> {
 fn probe_minted_group<'s, L: LangHasGroups>(
     cx: &mut ParseContext<'_, 's, L>,
     rules: &[Arc<GroupRule<L>>],
-) -> ConstructParserResult<L, Option<MintedGroupMatch<'s, L>>> {
+) -> ConstructParserResult<L, Option<MintedGroupMatch<L>>> {
     let temporaries = |rules: Vec<Arc<GroupRule<L>>>| {
         ParsingStateDelta::new().rules(TokenRulesOverrides {
             groups: GroupOverrides { temporary: Some(rules), ..GroupOverrides::default() },
@@ -735,7 +735,7 @@ fn probe_minted_group<'s, L: LangHasGroups>(
     let matched = match cx.probe_token(&probe_state)? {
         Some(token) => {
             let rule = match cx.tokens.token_kind(&token) {
-                TokenKindView::GroupOpen { rule, .. }
+                TokenKind::GroupOpen { rule, .. }
                     if rules.iter().any(|candidate| Arc::ptr_eq(rule, candidate)) =>
                 {
                     Some(Arc::clone(rule))
@@ -968,7 +968,7 @@ where
             noise.rewind(cx);
             return Ok(None);
         };
-        if !matches!(cx.tokens.token_kind(&first), TokenKindView::Char(c) if c == first_char) {
+        if !matches!(cx.tokens.token_kind(&first), TokenKind::Char(c) if c == first_char) {
             noise.rewind(cx);
             return Ok(None);
         }
@@ -984,7 +984,7 @@ where
             // Consecutive means: same character, and the token's pre-space edge is
             // exactly where the run has reached (no whitespace in between).
             let continues_marker =
-                matches!(cx.tokens.token_kind(&token), TokenKindView::Char(c) if c == expected)
+                matches!(cx.tokens.token_kind(&token), TokenKind::Char(c) if c == expected)
                     && cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace) == end
                     && cx.tokens.position_at(&token, TokenEdge::Start) == end;
             if !continues_marker {
@@ -1052,7 +1052,7 @@ mod tests {
     use crate::state::{ParsingState, StateData};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsRules, StdTokenReader, TokenKindView, TokenListReader,
+        ParagraphRules, SpecialsRules, StdTokenReader, TokenKind, TokenListReader,
         TokenReader, TokenRules, WhitespaceRules,
     };
     use alloc::string::ToString;
@@ -1076,6 +1076,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1110,9 +1111,9 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<ArgLang>,
-            token_kind: TokenKindView<'_, ArgLang>,
+            token_kind: TokenKind<'_, ArgLang>,
         ) -> Result<CommandResolution<ArgLang>, crate::error::ParseError> {
-            let TokenKindView::Command { name, escape_char } = token_kind else {
+            let TokenKind::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             let query = CallableQuery::new(
@@ -1323,10 +1324,8 @@ mod tests {
         let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
-            let done = matches!(
-                TokenReader::token_kind(&scanner, &token),
-                TokenKindView::EndOfStream
-            );
+            let reader: &dyn TokenReader<'_, ArgLang> = &scanner;
+            let done = matches!(reader.token_kind(&token), TokenKind::EndOfStream);
             scanned.push(token);
             if done {
                 break;
@@ -1971,8 +1970,8 @@ mod tests {
         // re-read aborted anyway.
         use crate::source::SourcePos;
         use crate::token::{
-            EndOfStreamAfterEscape, StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
-            TokenErrorKind, TokenKindView, TokenResult,
+            EndOfStreamAfterEscape, StdStreamPosition, StdToken, StdTokenReader, TokenEdge,
+            TokenError, TokenErrorKind, TokenKind, TokenResult,
         };
 
         /// Every read fails, unrecoverably; everything else is the inner reader's.
@@ -1996,7 +1995,7 @@ mod tests {
             fn peek(
                 &mut self,
                 _state: &Arc<ParsingState<ArgLang>>,
-            ) -> TokenResult<'s, ArgLang, Token<'s, ArgLang>> {
+            ) -> TokenResult<ArgLang, StdToken<ArgLang>> {
                 Err(TokenError::new(
                     TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
                         '\\',
@@ -2007,7 +2006,7 @@ mod tests {
             }
 
 
-            fn move_to(&mut self, tok: &Token<'_, ArgLang>, edge: TokenEdge) {
+            fn move_to(&mut self, tok: &StdToken<ArgLang>, edge: TokenEdge) {
                 self.inner_mut().move_to(tok, edge);
             }
 
@@ -2015,7 +2014,7 @@ mod tests {
                 self.inner_mut().move_to_position(at);
             }
 
-            fn token_kind<'t>(&self, tok: &'t Token<'_, ArgLang>) -> TokenKindView<'t, ArgLang>
+            fn token_kind<'t>(&self, tok: &'t StdToken<ArgLang>) -> TokenKind<'t, ArgLang>
             where
                 's: 't,
             {
@@ -2024,7 +2023,7 @@ mod tests {
 
             fn source_span_between(
                 &self,
-                tok: &Token<'_, ArgLang>,
+                tok: &StdToken<ArgLang>,
                 a: TokenEdge,
                 b: TokenEdge,
             ) -> SourceSpan {
@@ -2035,7 +2034,7 @@ mod tests {
                 self.inner().position_here()
             }
 
-            fn position_at(&self, tok: &Token<'_, ArgLang>, edge: TokenEdge) -> StdStreamPosition {
+            fn position_at(&self, tok: &StdToken<ArgLang>, edge: TokenEdge) -> StdStreamPosition {
                 self.inner().position_at(tok, edge)
             }
 
@@ -2198,20 +2197,18 @@ mod tests {
         struct DefSpec;
         impl crate::serialize::SerializableObject<ArgLang> for DefSpec {}
         impl CallableSpec<ArgLang> for DefSpec {
-            fn make_invocation_parser<'a, 's>(
+            fn make_invocation_parser<'a>(
                 &'a self,
-                invocation: Invocation<'a, 's, ArgLang>,
+                invocation: Invocation<'a, ArgLang>,
             ) -> Result<
                 alloc::boxed::Box<dyn ConstructParser<ArgLang, Output = BuildId> + 'a>,
                 ParseError,
             >
-            where
-                's: 'a,
             {
-                struct DefParser<'a, 's> {
-                    invocation: Invocation<'a, 's, ArgLang>,
+                struct DefParser<'a> {
+                    invocation: Invocation<'a, ArgLang>,
                 }
-                impl ConstructParser<ArgLang> for DefParser<'_, '_> {
+                impl ConstructParser<ArgLang> for DefParser<'_> {
                     type Output = BuildId;
                     fn parse(
                         &mut self,

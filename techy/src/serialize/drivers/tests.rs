@@ -51,6 +51,7 @@ impl Lang for PlainLang {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type Token = crate::token::StdToken<Self>;
     type StreamPosition = crate::token::StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ();

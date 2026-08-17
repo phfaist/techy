@@ -24,7 +24,7 @@ use crate::constructs::{
 };
 use crate::source::{Source, SourceSpan, TextContent};
 use crate::state::{InvocationSyntax, Lang};
-use crate::token::{GroupRule, TokenEdge, TokenKindView, TokenReader};
+use crate::token::{GroupRule, TokenEdge, TokenKind, TokenReader};
 
 use super::lang::{LatexlikeInvocationSyntax, LatexlikeLang};
 use super::Latexlike;
@@ -110,7 +110,7 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 }
 
 /// The standard-site constructor ([`FromInvocation`]): a
-/// [`Command`](TokenKindView::Command) trigger records its
+/// [`Command`](TokenKind::Command) trigger records its
 /// [`Macro`](InvocationSyntaxData::Macro) facts from the trigger's view and the
 /// reader's answer for its syntactic post-space; every
 /// other trigger (a specials token, a paragraph-break token at the preset's
@@ -121,11 +121,11 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 /// [`environment_form`](LatexlikeInvocationSyntax::environment_form).
 impl<L: Lang, Env> FromInvocation<L> for InvocationSyntaxData<Env> {
     fn from_invocation(
-        invocation: &Invocation<'_, '_, L>,
+        invocation: &Invocation<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Self {
         match invocation.kind {
-            TokenKindView::Command { escape_char, .. } => {
+            TokenKind::Command { escape_char, .. } => {
                 // The post-space is a reader answer. Recording it as a bare span is
                 // sound because the node this payload rides on starts at this very
                 // token, so the two are in one source (§1.12's node-data rule).
@@ -576,7 +576,7 @@ mod tests {
             name: "~",
             spec: &spec,
             token: &token,
-            kind: crate::token::TokenKindView::Specials {
+            kind: crate::token::TokenKind::Specials {
                 callable_type: CallableType::Specials,
                 name: "~",
                 spec: &spec,
@@ -824,20 +824,18 @@ mod tests {
             true
         }
 
-        fn make_invocation_parser<'a, 's>(
+        fn make_invocation_parser<'a>(
             &'a self,
-            invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+            invocation: crate::constructs::Invocation<'a, Latexlike>,
         ) -> Result<
             Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
             crate::error::ParseError,
         >
-        where
-            's: 'a,
         {
-            struct RestOfLineParser<'a, 's> {
-                invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+            struct RestOfLineParser<'a> {
+                invocation: crate::constructs::Invocation<'a, Latexlike>,
             }
-            impl ConstructParser<Latexlike> for RestOfLineParser<'_, '_> {
+            impl ConstructParser<Latexlike> for RestOfLineParser<'_> {
                 type Output = BuildId;
                 fn parse(
                     &mut self,
@@ -861,8 +859,8 @@ mod tests {
                     ))?;
                     while let Some(token) = cx.probe_token(&raw)? {
                         match cx.tokens.token_kind(&token) {
-                            TokenKindView::Char('\n') => break,
-                            TokenKindView::Char(_) => {
+                            TokenKind::Char('\n') => break,
+                            TokenKind::Char(_) => {
                                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                             }
                             _ => break,
@@ -898,20 +896,18 @@ mod tests {
     impl crate::serialize::SerializableObject<Latexlike> for BadEndSpec {}
 
     impl CallableSpec<Latexlike> for BadEndSpec {
-        fn make_invocation_parser<'a, 's>(
+        fn make_invocation_parser<'a>(
             &'a self,
-            invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+            invocation: crate::constructs::Invocation<'a, Latexlike>,
         ) -> Result<
             Box<dyn ConstructParser<Latexlike, Output = BuildId> + 'a>,
             crate::error::ParseError,
         >
-        where
-            's: 'a,
         {
-            struct BadEndParser<'a, 's> {
-                invocation: crate::constructs::Invocation<'a, 's, Latexlike>,
+            struct BadEndParser<'a> {
+                invocation: crate::constructs::Invocation<'a, Latexlike>,
             }
-            impl ConstructParser<Latexlike> for BadEndParser<'_, '_> {
+            impl ConstructParser<Latexlike> for BadEndParser<'_> {
                 type Output = BuildId;
                 fn parse(
                     &mut self,
@@ -1062,12 +1058,8 @@ mod tests {
             callable_type: CallableType::Macro,
             name: "emph",
             spec: &(Arc::new(MacroSpec::new(vec![])) as Arc<dyn CallableSpec<Latexlike>>),
-            token: &crate::token::Token::new(
-                crate::token::TokenKind::EndOfStream,
-                Span::empty(0),
-                Span::empty(0),
-            ),
-            kind: TokenKindView::EndOfStream,
+            token: &crate::token::StdToken::end_of_stream(Span::empty(0)),
+            kind: TokenKind::EndOfStream,
         });
     }
 }

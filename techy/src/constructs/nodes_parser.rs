@@ -89,12 +89,12 @@ use crate::node::{BuildId, NodeKind, StagedNodeView};
 use crate::source::SourceSpan;
 use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{Token, TokenEdge, TokenKindView};
+use crate::token::{TokenEdge, TokenKind};
 
 use super::child_state::{ChildStateSpec, GroupChildState, InvocationChildState};
 use super::{comment_node_kind, ConstructParser, ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
 
-/// Condition: a [`Command`](TokenKindView::Command) token resolved to no callable
+/// Condition: a [`Command`](TokenKind::Command) token resolved to no callable
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command) returned no
 /// [`Resolved`](crate::engine::CommandResolution::Resolved)) — the content loop recovers
 /// with a span-backed chars fallback.
@@ -126,7 +126,7 @@ impl fmt::Display for UnresolvableCommand {
     }
 }
 
-/// Condition: a [`Command`](TokenKindView::Command) token's resolution *failed
+/// Condition: a [`Command`](TokenKind::Command) token's resolution *failed
 /// operationally* — a definition provider errored while answering the query
 /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)
 /// returned [`Failed`](crate::engine::CommandResolution::Failed)) — as opposed to a
@@ -229,13 +229,13 @@ impl fmt::Display for UnusableRecoveryToken {
 /// Which peeked token matches a [`TokenStopCondition`] (mirroring pylatexenc's
 /// `stop_token_condition`, reified as a closed enum plus a tier-2 predicate escape).
 pub enum TokenStopKind<'p, L: Lang> {
-    /// Stop at a [`Command`](TokenKindView::Command) token with this name (an
+    /// Stop at a [`Command`](TokenKind::Command) token with this name (an
     /// environment body stopping at `\end`).
     Command {
         /// The command name to stop at (as written, without the escape character).
         name: &'p str,
     },
-    /// Stop at a [`GroupClose`](TokenKindView::GroupClose) token that spells `close` **and**
+    /// Stop at a [`GroupClose`](TokenKind::GroupClose) token that spells `close` **and**
     /// whose class (resolved against the current state) is `group_type` — the exact
     /// `(group_type, close)` pairing the enclosing group opened with. Both must match:
     /// a group opened with `{` (class `group_type`) stops at `}`, but neither at a `]`
@@ -254,11 +254,11 @@ pub enum TokenStopKind<'p, L: Lang> {
         /// The closing delimiter (as written, e.g. `}`) the enclosing group expects.
         close: &'p str,
     },
-    /// Stop at a [`ParagraphBreak`](TokenKindView::ParagraphBreak) token.
+    /// Stop at a [`ParagraphBreak`](TokenKind::ParagraphBreak) token.
     ParagraphBreak,
     /// Stop at any token whose view matches the predicate. Programmatic conditions
     /// live only in tier-2 parser temporaries, never in spec data. The predicate sees
-    /// the token's [view](TokenKindView) rather than the token: like every reader-less
+    /// the token's [view](TokenKind) rather than the token: like every reader-less
     /// hook, what it can know about a token is what the view says.
     ///
     /// An `Err` from the predicate **aborts the parse** under any recovery policy —
@@ -274,7 +274,7 @@ pub enum TokenStopKind<'p, L: Lang> {
     // behind an alias would only make callers look the signature up elsewhere.
     #[allow(clippy::type_complexity)]
     Predicate(
-        &'p dyn Fn(TokenKindView<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>,
+        &'p dyn Fn(TokenKind<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>,
     ),
 }
 
@@ -390,13 +390,13 @@ pub enum StopCause<L: Lang> {
     /// that node ended: a directly staged node is consumed, a flush leaves the triggering
     /// token unconsumed at its own start).
     NodeCondition,
-    /// [`EndOfStream`](TokenKindView::EndOfStream) was reached (its trailing-whitespace
+    /// [`EndOfStream`](TokenKind::EndOfStream) was reached (its trailing-whitespace
     /// node, if any, is already staged).
     EndOfInput,
     /// A group close no condition asked for; the close token is left unconsumed at
     /// its own start and the caller decides (diagnose-and-skip at the root, unwind in
     /// a group parser). The span covers the delimiter exactly as matched
-    /// ([`GroupClose`](crate::token::TokenKindView::GroupClose) carries the span's slice
+    /// ([`GroupClose`](crate::token::TokenKind::GroupClose) carries the span's slice
     /// and nothing more), so a caller diagnosing the close reads it off the span
     /// ([`SourceSpan::content`](crate::source::SourceSpan::content)) — re-peeking
     /// under any state but the loop's own could tokenize different bytes.
@@ -584,7 +584,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn take_pre_space(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
-        token: &Token<'_, L>,
+        token: &L::Token,
     ) -> Result<(), String> {
         let start = cx.tokens.position_at(token, TokenEdge::StartBeforePreSpace);
         let end = cx.tokens.position_at(token, TokenEdge::Start);
@@ -600,7 +600,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn extend_run(
         &mut self,
         cx: &ParseContext<'_, '_, L>,
-        token: &Token<'_, L>,
+        token: &L::Token,
     ) -> Result<(), String> {
         self.take_pre_space(cx, token)?;
         let start = cx.tokens.position_at(token, TokenEdge::Start);
@@ -655,7 +655,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_through(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        token: &Token<'_, L>,
+        token: &L::Token,
     ) -> ConstructParserResult<L, bool> {
         self.take_pre_space(cx, token).map_err(|detail| {
             let span = cx.tokens.source_span_between(
@@ -680,7 +680,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn flush_for_token_stop(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
-        token: &Token<'_, L>,
+        token: &L::Token,
     ) -> ConstructParserResult<L, ()> {
         self.take_pre_space(cx, token).map_err(|detail| {
             let span = cx.tokens.source_span_between(
@@ -755,26 +755,26 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn token_stop(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<Option<bool>, ParseError<L::SourceOrigin>> {
         let Some(cond) = self.stop.token.as_ref() else {
             return Ok(None);
         };
         let matches = match &cond.kind {
             TokenStopKind::Command { name } => {
-                matches!(token_kind, TokenKindView::Command { name: n, .. } if n == *name)
+                matches!(token_kind, TokenKind::Command { name: n, .. } if n == *name)
             }
             // Both the spelling and the state-resolved class must match the pairing the
             // group opened with (a `]` sharing the class, or a `}` a delta re-classed,
             // must not close it).
             TokenStopKind::GroupClose { group_type, close } => match token_kind {
-                TokenKindView::GroupClose { delim } => {
+                TokenKind::GroupClose { delim } => {
                     delim == *close && group_close_type(state, delim) == Some(*group_type)
                 }
                 _ => false,
             },
             TokenStopKind::ParagraphBreak => {
-                matches!(token_kind, TokenKindView::ParagraphBreak)
+                matches!(token_kind, TokenKind::ParagraphBreak)
             }
             TokenStopKind::Predicate(predicate) => predicate(token_kind)?,
         };
@@ -795,7 +795,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn recover_as_chars<'s>(
         &mut self,
         cx: &mut ParseContext<'_, 's, L>,
-        token: &Token<'s, L>,
+        token: &L::Token,
         recovered: bool,
         condition: impl DiagnosticInfo,
     ) -> ConstructParserResult<L, bool> {
@@ -824,7 +824,7 @@ impl<'p, L: Lang> NodesParser<'p, L> {
     fn dispatch_invocation<'s>(
         &mut self,
         cx: &mut ParseContext<'_, 's, L>,
-        invocation: Invocation<'_, 's, L>,
+        invocation: Invocation<'_, L>,
     ) -> ConstructParserResult<L, bool>
     where
         L::InvocationSyntax: FromInvocation<L>,
@@ -972,7 +972,7 @@ where
             }
 
             match kind {
-                TokenKindView::Char(_) => {
+                TokenKind::Char(_) => {
                     self.extend_run(cx, &token).map_err(|detail| {
                         let span = cx.tokens.source_span_of(&token);
                         cx.implementation_error(detail, span)
@@ -982,7 +982,7 @@ where
                     }
                 }
 
-                TokenKindView::EndOfStream => {
+                TokenKind::EndOfStream => {
                     // Invariant 4: the terminal token's pre-space is the input's
                     // trailing whitespace and reaches the tree.
                     let fired = self.flush_through(cx, &token)?;
@@ -994,7 +994,7 @@ where
                     return Ok((self.outcome(&cx.state, cause), None));
                 }
 
-                TokenKindView::GroupClose { .. } => {
+                TokenKind::GroupClose { .. } => {
                     // A close the stop condition did not ask for: report it as data and
                     // let the caller decide ([§dd-dr:panic-policy] rule 2); the token stays unconsumed.
                     let fired = self.flush_through(cx, &token)?;
@@ -1014,7 +1014,7 @@ where
                     return Ok((self.outcome(&cx.state, cause), None));
                 }
 
-                TokenKindView::ParagraphBreak => {
+                TokenKind::ParagraphBreak => {
                     // Impossible under a language that declares paragraphs absent:
                     // the token source violated its contract (`TokenReader` docs) —
                     // an implementation bug aborts under any policy, never a panic.
@@ -1047,7 +1047,7 @@ where
                     }
                 }
 
-                TokenKindView::Comment { .. } => {
+                TokenKind::Comment { .. } => {
                     // Impossible under a language that declares comments absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1074,7 +1074,7 @@ where
                     }
                 }
 
-                TokenKindView::Command { name, escape_char } => {
+                TokenKind::Command { name, escape_char } => {
                     // Impossible under a language that declares commands absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1150,7 +1150,7 @@ where
                     }
                 }
 
-                TokenKindView::Specials { callable_type, name, spec } => {
+                TokenKind::Specials { callable_type, name, spec } => {
                     // Impossible under a language that declares specials absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1186,7 +1186,7 @@ where
                     }
                 }
 
-                TokenKindView::GroupOpen { delim, rule } => {
+                TokenKind::GroupOpen { delim, rule } => {
                     // Impossible under a language that declares groups absent: the
                     // token source violated its contract (`TokenReader` docs) — an
                     // implementation bug aborts under any policy, never a panic.
@@ -1334,8 +1334,8 @@ mod tests {
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
         GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
-        StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
-        TokenErrorKind, TokenKind, TokenKindView, TokenListReader, TokenReader,
+        StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenError,
+        TokenErrorKind, TokenKind, TokenListReader, TokenReader,
         TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
@@ -1356,7 +1356,7 @@ mod tests {
     /// the latexlike preset share one query-and-dispatch implementation.
     fn resolve_macro_in_scopes<L: Lang<CallableTypeId = u32>>(
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         Ok(resolve_command_in_scopes(state, token_kind, CT_MACRO))
     }
@@ -1386,6 +1386,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1426,7 +1427,7 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<CmdLang>,
-            token_kind: TokenKindView<'_, CmdLang>,
+            token_kind: TokenKind<'_, CmdLang>,
         ) -> Result<CommandResolution<CmdLang>, ParseError> {
             resolve_macro_in_scopes(state, token_kind)
         }
@@ -1445,6 +1446,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1662,18 +1664,20 @@ mod tests {
     }
 
     /// Scan `source` into the full token list (including the terminal `EndOfStream`).
-    fn scan<'s, L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>>(
-        source: &'s Arc<Source>,
-        state: &Arc<ParsingState<L>>,
-    ) -> Vec<Token<'s, L>> {
+    fn scan<L>(source: &Arc<Source>, state: &Arc<ParsingState<L>>) -> Vec<L::Token>
+    where
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
+    {
         let mut reader = StdTokenReader::new(source);
         let mut tokens = Vec::new();
         loop {
             let token = TokenReader::next(&mut reader, state).expect("clean scan");
-            let done = matches!(
-                TokenReader::token_kind(&reader, &token),
-                TokenKindView::EndOfStream
-            );
+            let reader_ref: &dyn TokenReader<'_, L> = &reader;
+            let done = matches!(reader_ref.token_kind(&token), TokenKind::EndOfStream);
             tokens.push(token);
             if done {
                 break;
@@ -1686,7 +1690,7 @@ mod tests {
     /// assert they agree on shapes, stop cause, position, and diagnostics count. The two
     /// stop specs must be equivalent (node predicates are `&mut`, so each run needs its
     /// own).
-    fn run_both<'p, L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>>(
+    fn run_both<'p, L>(
         content: &str,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1694,6 +1698,11 @@ mod tests {
         stop_list: StopSpec<'p, L>,
     ) -> Parsed<L>
     where
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
@@ -1702,10 +1711,7 @@ mod tests {
 
     /// [`run_both`] with an explicit descent-state policy (cloned per reader — it is
     /// shallow: `Arc`s and borrows).
-    fn run_both_with<
-        'p,
-        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
-    >(
+    fn run_both_with<'p, L>(
         content: &str,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1714,6 +1720,11 @@ mod tests {
         child_states: ChildStateSpec<'p, L>,
     ) -> Parsed<L>
     where
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
@@ -1850,6 +1861,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -1987,11 +1999,11 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(&source);
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
-        let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        let token: StdToken<TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         let reader: &dyn TokenReader<'_, TestLang> = &reader;
         assert!(matches!(
             reader.token_kind(&token),
-            TokenKindView::Command { name: "end", .. }
+            TokenKind::Command { name: "end", .. }
         ));
         assert!(reader
             .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
@@ -2016,11 +2028,9 @@ mod tests {
         assert_eq!(parsed.pos, 2);
         // … and `after` stands just past it.
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &after);
-        let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
-        assert!(matches!(
-            TokenReader::token_kind(&reader, &token),
-            TokenKindView::Char('c')
-        ));
+        let token: StdToken<TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        let reader_ref: &dyn TokenReader<'_, TestLang> = &reader;
+        assert!(matches!(reader_ref.token_kind(&token), TokenKind::Char('c')));
     }
 
     #[test]
@@ -2175,8 +2185,8 @@ mod tests {
     #[test]
     fn stop_at_a_token_predicate() {
         let st = state();
-        let predicate = |kind: TokenKindView<'_, TestLang>| {
-            Ok(matches!(kind, TokenKindView::Comment { .. }))
+        let predicate = |kind: TokenKind<'_, TestLang>| {
+            Ok(matches!(kind, TokenKind::Comment { .. }))
         };
         let parsed = run_both(
             "ab %c\nd",
@@ -2197,7 +2207,7 @@ mod tests {
         // leaves no sound way to decide where the run ends — and the consultation
         // site attaches the live traceback (the predicate has no session access).
         let st = state();
-        let failing = |_: TokenKindView<'_, TestLang>| -> Result<bool, ParseError> {
+        let failing = |_: TokenKind<'_, TestLang>| -> Result<bool, ParseError> {
             let scratch: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
                 crate::error::HookFailed::new("stop table unavailable", None),
@@ -2255,9 +2265,9 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = StdTokenReader::new(&source);
         TokenReader::<'_, TestLang>::move_to_position(&mut reader, &parsed.position);
-        let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
+        let token: StdToken<TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         let reader: &dyn TokenReader<'_, TestLang> = &reader;
-        assert!(matches!(reader.token_kind(&token), TokenKindView::Char('r')));
+        assert!(matches!(reader.token_kind(&token), TokenKind::Char('r')));
         assert!(reader
             .source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::Start)
             .is_empty());
@@ -2496,7 +2506,7 @@ mod tests {
         fn peek(
             &mut self,
             _state: &Arc<ParsingState<TestLang>>,
-        ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
+        ) -> TokenResult<TestLang, StdToken<TestLang>> {
             let here = self.inner().position_here();
             let pos = here.offset();
             let span = Span::new(pos, pos + 1);
@@ -2504,14 +2514,14 @@ mod tests {
                 TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('#')),
                 SourceSpan::new(self.inner.source(), span),
                 Some(TokenRecovery {
-                    token: Token::new(TokenKind::Char('#'), span, Span::empty(pos)),
+                    token: StdToken::char('#', span, Span::empty(pos)),
                     resume: here, // the violation: the stream does not move
                 }),
             ))
         }
 
 
-        fn move_to(&mut self, tok: &Token<'_, TestLang>, edge: TokenEdge) {
+        fn move_to(&mut self, tok: &StdToken<TestLang>, edge: TokenEdge) {
             self.inner_mut().move_to(tok, edge);
         }
 
@@ -2519,7 +2529,7 @@ mod tests {
             self.inner_mut().move_to_position(at);
         }
 
-        fn token_kind<'t>(&self, tok: &'t Token<'_, TestLang>) -> TokenKindView<'t, TestLang>
+        fn token_kind<'t>(&self, tok: &'t StdToken<TestLang>) -> TokenKind<'t, TestLang>
         where
             's: 't,
         {
@@ -2528,7 +2538,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'_, TestLang>,
+            tok: &StdToken<TestLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2539,7 +2549,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'_, TestLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &StdToken<TestLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 
@@ -2599,6 +2609,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -2658,7 +2669,7 @@ mod tests {
         fn peek(
             &mut self,
             state: &Arc<ParsingState<TabooLang>>,
-        ) -> TokenResult<'s, TabooLang, Token<'s, TabooLang>> {
+        ) -> TokenResult<TabooLang, StdToken<TabooLang>> {
             let pos = TokenReader::<TabooLang>::position_here(&self.inner).offset();
             if self.inner.content()[pos..].starts_with('!') {
                 let span = Span::new(pos, pos + 1);
@@ -2666,7 +2677,7 @@ mod tests {
                     TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
                     SourceSpan::new(self.inner.source(), span),
                     Some(TokenRecovery {
-                        token: Token::new(TokenKind::Char('!'), span, Span::empty(pos)),
+                        token: StdToken::char('!', span, Span::empty(pos)),
                         // In-crate test infrastructure may mint a position directly.
                         resume: StdStreamPosition::at(span.end()),
                     }),
@@ -2676,7 +2687,7 @@ mod tests {
         }
 
 
-        fn move_to(&mut self, tok: &Token<'_, TabooLang>, edge: TokenEdge) {
+        fn move_to(&mut self, tok: &StdToken<TabooLang>, edge: TokenEdge) {
             self.inner_mut().move_to(tok, edge);
         }
 
@@ -2684,7 +2695,7 @@ mod tests {
             self.inner_mut().move_to_position(at);
         }
 
-        fn token_kind<'t>(&self, tok: &'t Token<'_, TabooLang>) -> TokenKindView<'t, TabooLang>
+        fn token_kind<'t>(&self, tok: &'t StdToken<TabooLang>) -> TokenKind<'t, TabooLang>
         where
             's: 't,
         {
@@ -2693,7 +2704,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'_, TabooLang>,
+            tok: &StdToken<TabooLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2704,7 +2715,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'_, TabooLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &StdToken<TabooLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 
@@ -2979,6 +2990,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -3019,7 +3031,7 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<HintLang>,
-            _token_kind: TokenKindView<'_, HintLang>,
+            _token_kind: TokenKind<'_, HintLang>,
         ) -> Result<CommandResolution<HintLang>, ParseError> {
             Ok(CommandResolution::Unresolved {
                 detail: Some("load the {amsmath} library for this command".into()),
@@ -3053,6 +3065,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -3087,7 +3100,7 @@ mod tests {
         fn resolve_command(
             &self,
             _state: &ParsingState<AbortLang>,
-            _token_kind: TokenKindView<'_, AbortLang>,
+            _token_kind: TokenKind<'_, AbortLang>,
         ) -> Result<CommandResolution<AbortLang>, ParseError> {
             let source: Arc<Source> = Arc::new(Source::new(""));
             Err(ParseError::new(
@@ -3154,6 +3167,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -3348,22 +3362,20 @@ mod tests {
         struct DefSpec;
         impl crate::serialize::SerializableObject<CmdLang> for DefSpec {}
         impl CallableSpec<CmdLang> for DefSpec {
-            fn make_invocation_parser<'a, 's>(
+            fn make_invocation_parser<'a>(
                 &'a self,
-                invocation: Invocation<'a, 's, CmdLang>,
+                invocation: Invocation<'a, CmdLang>,
             ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
-            where
-                's: 'a,
             {
                 Ok(Box::new(DefParser { inner: StdInvocationParser::new(invocation) }))
             }
         }
 
-        struct DefParser<'a, 's> {
-            inner: StdInvocationParser<'a, 's, CmdLang>,
+        struct DefParser<'a> {
+            inner: StdInvocationParser<'a, CmdLang>,
         }
 
-        impl ConstructParser<CmdLang> for DefParser<'_, '_> {
+        impl ConstructParser<CmdLang> for DefParser<'_> {
             type Output = BuildId;
 
             fn parse(
@@ -3432,22 +3444,20 @@ mod tests {
         struct TakeSpec;
         impl crate::serialize::SerializableObject<CmdLang> for TakeSpec {}
         impl CallableSpec<CmdLang> for TakeSpec {
-            fn make_invocation_parser<'a, 's>(
+            fn make_invocation_parser<'a>(
                 &'a self,
-                invocation: Invocation<'a, 's, CmdLang>,
+                invocation: Invocation<'a, CmdLang>,
             ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
-            where
-                's: 'a,
             {
                 Ok(Box::new(TakeParser { invocation }))
             }
         }
 
-        struct TakeParser<'a, 's> {
-            invocation: Invocation<'a, 's, CmdLang>,
+        struct TakeParser<'a> {
+            invocation: Invocation<'a, CmdLang>,
         }
 
-        impl ConstructParser<CmdLang> for TakeParser<'_, '_> {
+        impl ConstructParser<CmdLang> for TakeParser<'_> {
             type Output = BuildId;
 
             fn parse(
@@ -3466,14 +3476,14 @@ mod tests {
                     let at = cx.tokens.position_at(&token, TokenEdge::Start);
                     cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                     match cx.tokens.token_kind(&token) {
-                        TokenKindView::Char('!') => {
+                        TokenKind::Char('!') => {
                             break (
                                 at,
                                 cx.tokens.source_span_of(&token),
                                 cx.tokens.position_here(),
                             )
                         }
-                        TokenKindView::EndOfStream => {
+                        TokenKind::EndOfStream => {
                             panic!("test content has a marker")
                         }
                         _ => {}
@@ -3585,7 +3595,7 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<ExtLang>,
-                token_kind: TokenKindView<'_, ExtLang>,
+                token_kind: TokenKind<'_, ExtLang>,
             ) -> Result<CommandResolution<ExtLang>, ParseError> {
                 resolve_macro_in_scopes(state, token_kind)
             }
@@ -3600,6 +3610,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ExtBundle;
             type InvocationSyntax = ();
@@ -3661,7 +3672,7 @@ mod tests {
         // Compute: a pure selection receiving the resolved invocation (resolution
         // precedes policy); returning an input preserves pointer identity.
         let compute = |state: &Arc<ParsingState<CmdLang>>,
-                       invocation: &Invocation<'_, '_, CmdLang>|
+                       invocation: &Invocation<'_, CmdLang>|
          -> Result<Arc<ParsingState<CmdLang>>, ParseError> {
             assert_eq!(invocation.name, "foo");
             assert_eq!(invocation.callable_type, CT_MACRO);
@@ -4031,9 +4042,9 @@ mod tests {
             TokenRulesOverrides { comments: CommentOverrides::disable(), ..Default::default() },
         )).unwrap());
         let compute = |state: &Arc<ParsingState<TestLang>>,
-                       kind: TokenKindView<'_, TestLang>| {
+                       kind: TokenKind<'_, TestLang>| {
             Ok(match kind {
-                TokenKindView::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
+                TokenKind::GroupOpen { rule, .. } if rule.group_type == GT_OPT => {
                     Arc::clone(&no_comments)
                 }
                 _ => Arc::clone(state), // pass-through preserves pointer identity
@@ -4079,7 +4090,7 @@ mod tests {
         // the derivation failure as the cause.
         let full = state_with(rules::<TestLang>());
         let compute = |state: &Arc<ParsingState<TestLang>>,
-                       _kind: TokenKindView<'_, TestLang>| {
+                       _kind: TokenKind<'_, TestLang>| {
             // A derivation the policy needs, failing operationally (a scope op
             // against a provider name that does not exist).
             let delta = ParsingStateDelta::new()
@@ -4173,6 +4184,7 @@ mod tests {
             type Event = ();
             type SessionExt = Counts;
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4271,6 +4283,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4347,6 +4360,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4501,6 +4515,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4533,7 +4548,7 @@ mod tests {
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
-                token_kind: TokenKindView<'_, DriveLang>,
+                token_kind: TokenKind<'_, DriveLang>,
             ) -> Result<CommandResolution<DriveLang>, ParseError> {
                 resolve_macro_in_scopes(state, token_kind)
             }
@@ -4559,14 +4574,12 @@ mod tests {
                 Ok(Box::new(NodesParser::new(stop).with_child_states(child_states)))
             }
 
-            fn make_group_parser<'p, 's>(
+            fn make_group_parser<'p>(
                 &'p self,
-                open: &Token<'s, DriveLang>,
+                open: &StdToken<DriveLang>,
                 rule: Arc<GroupRule<DriveLang>>,
                 child_states: ChildStateSpec<'p, DriveLang>,
             ) -> Result<Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'p>, ParseError>
-            where
-                's: 'p,
             {
                 self.group_parsers.fetch_add(1, Ordering::Relaxed);
                 Ok(Box::new(
@@ -4574,12 +4587,10 @@ mod tests {
                 ))
             }
 
-            fn make_invocation_parser<'a, 's>(
+            fn make_invocation_parser<'a>(
                 &'a self,
-                invocation: Invocation<'a, 's, DriveLang>,
+                invocation: Invocation<'a, DriveLang>,
             ) -> Result<Box<dyn ConstructParser<DriveLang, Output = BuildId> + 'a>, ParseError>
-            where
-                's: 'a,
             {
                 self.invocation_parsers.fetch_add(1, Ordering::Relaxed);
                 let spec = invocation.spec;
@@ -4666,12 +4677,10 @@ mod tests {
         struct BrokenFactorySpec;
         impl crate::serialize::SerializableObject<CmdLang> for BrokenFactorySpec {}
         impl CallableSpec<CmdLang> for BrokenFactorySpec {
-            fn make_invocation_parser<'a, 's>(
+            fn make_invocation_parser<'a>(
                 &'a self,
-                _invocation: Invocation<'a, 's, CmdLang>,
+                _invocation: Invocation<'a, CmdLang>,
             ) -> Result<Box<dyn ConstructParser<CmdLang, Output = BuildId> + 'a>, ParseError>
-            where
-                's: 'a,
             {
                 let scratch: Arc<Source> = Arc::new(Source::new(""));
                 Err(ParseError::new(
@@ -4723,6 +4732,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4805,6 +4815,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -4903,6 +4914,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -5002,6 +5014,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();

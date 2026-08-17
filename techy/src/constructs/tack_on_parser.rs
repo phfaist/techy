@@ -8,7 +8,7 @@
 //! inside the invocation's own parse, per the decided construct-parser (not
 //! postprocessing) ruling. The parser is configured with
 //! the accepted field commands by **name**; a peeked
-//! [`Command`](TokenKindView::Command) token whose name is configured dispatches with the
+//! [`Command`](TokenKind::Command) token whose name is configured dispatches with the
 //! configured [`CallableSpec`] directly — the scope stack is never consulted, so a
 //! field command like `\label` need not exist as a language command at all, and
 //! LaTeX's "a `\label` anywhere attaches to *something*" quirk is simply not
@@ -62,7 +62,7 @@ use crate::error::DiagnosticInfo;
 use crate::node::{ArgumentExt, ContentNodes};
 use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::{TokenEdge, TokenKindView};
+use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
 use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
@@ -185,7 +185,7 @@ where
                 break;
             };
             let kind = cx.tokens.token_kind(&token);
-            let TokenKindView::Command { name, escape_char } = kind else {
+            let TokenKind::Command { name, escape_char } = kind else {
                 noise.rewind(cx);
                 break;
             };

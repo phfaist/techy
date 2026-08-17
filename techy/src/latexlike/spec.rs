@@ -129,15 +129,13 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
 
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
     /// `Result`.
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, LLL>,
+        invocation: Invocation<'a, LLL>,
     ) -> Result<
         Box<dyn ConstructParser<LLL, Output = BuildId> + 'a>,
         crate::error::ParseError<LLL::SourceOrigin>,
     >
-    where
-        's: 'a,
     {
         let inner = StdInvocationParser::new(invocation);
         Ok(match &self.after_effect {
@@ -154,12 +152,12 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
 /// The invocation parser of a [`MacroSpec`] carrying an after-effect: the standard
 /// declarative parse, then the spec's delta as the invocation's after-effect for
 /// the following siblings.
-struct AfterEffectInvocationParser<'a, 's, LLL: LatexlikeLang> {
-    inner: StdInvocationParser<'a, 's, LLL>,
+struct AfterEffectInvocationParser<'a, LLL: LatexlikeLang> {
+    inner: StdInvocationParser<'a, LLL>,
     delta: &'a ParsingStateDelta<LLL>,
 }
 
-impl<LLL: LatexlikeLang> ConstructParser<LLL> for AfterEffectInvocationParser<'_, '_, LLL> {
+impl<LLL: LatexlikeLang> ConstructParser<LLL> for AfterEffectInvocationParser<'_, LLL> {
     type Output = BuildId;
 
     fn parse(

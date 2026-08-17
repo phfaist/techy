@@ -8,7 +8,7 @@ use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, ContentNodes, NodeKind};
 use crate::source::SourceSpan;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, TokenEdge, TokenKindView};
+use crate::token::{GroupRule, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -284,7 +284,7 @@ pub fn read_rigid_name_group<L: Lang>(
     let tight = cx.tokens.position_at(&open, TokenEdge::StartBeforePreSpace)
         == cx.tokens.position_at(&open, TokenEdge::Start);
     let rule = match cx.tokens.token_kind(&open) {
-        TokenKindView::GroupOpen { rule, .. }
+        TokenKind::GroupOpen { rule, .. }
             if rule.group_type == name_group_type && tight =>
         {
             Arc::clone(rule)
@@ -330,11 +330,11 @@ fn read_name_chars<L: Lang>(
             return Ok(None);
         }
         match cx.tokens.token_kind(&token) {
-            TokenKindView::Char(_) => {
+            TokenKind::Char(_) => {
                 name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
             }
-            TokenKindView::GroupClose { delim } if *delim == *rule.close => {
+            TokenKind::GroupClose { delim } if *delim == *rule.close => {
                 cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace);
                 return Ok(Some(NameGroup {
                     name: cx.source_span_within(&name_start, &name_end)?,
@@ -550,7 +550,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             ));
         };
         let token_escape_char = match cx.tokens.token_kind(&end_token) {
-            TokenKindView::Command { name, escape_char }
+            TokenKind::Command { name, escape_char }
                 if name == self.stop_command_name =>
             {
                 escape_char
@@ -796,8 +796,8 @@ mod tests {
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
         ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdStreamPosition,
-        StdTokenReader, Token, TokenEdge, TokenKind, TokenKindView, TokenListReader,
-        TokenReader, TokenRules, TriggerChars, WhitespaceRules,
+        StdToken, StdTokenReader, TokenEdge, TokenKind, TokenListReader, TokenReader,
+        TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::String;
@@ -825,6 +825,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -880,9 +881,9 @@ mod tests {
         fn resolve_command(
             &self,
             state: &ParsingState<EnvLang>,
-            token_kind: TokenKindView<'_, EnvLang>,
+            token_kind: TokenKind<'_, EnvLang>,
         ) -> Result<CommandResolution<EnvLang>, crate::error::ParseError> {
-            let TokenKindView::Command { name, escape_char } = token_kind else {
+            let TokenKind::Command { name, escape_char } = token_kind else {
                 return Ok(CommandResolution::Unresolved { detail: None });
             };
             // `\begin` introduces every environment: the shared dispatcher spec's
@@ -968,22 +969,20 @@ mod tests {
             true
         }
 
-        fn make_invocation_parser<'a, 's>(
+        fn make_invocation_parser<'a>(
             &'a self,
-            invocation: Invocation<'a, 's, EnvLang>,
+            invocation: Invocation<'a, EnvLang>,
         ) -> Result<Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>, ParseError>
-        where
-            's: 'a,
         {
             Ok(Box::new(EnvironmentInvocationParser { invocation }))
         }
     }
 
-    struct EnvironmentInvocationParser<'a, 's> {
-        invocation: Invocation<'a, 's, EnvLang>,
+    struct EnvironmentInvocationParser<'a> {
+        invocation: Invocation<'a, EnvLang>,
     }
 
-    impl ConstructParser<EnvLang> for EnvironmentInvocationParser<'_, '_> {
+    impl ConstructParser<EnvLang> for EnvironmentInvocationParser<'_> {
         type Output = BuildId;
 
         fn parse(
@@ -1115,22 +1114,20 @@ mod tests {
             true
         }
 
-        fn make_invocation_parser<'a, 's>(
+        fn make_invocation_parser<'a>(
             &'a self,
-            invocation: Invocation<'a, 's, EnvLang>,
+            invocation: Invocation<'a, EnvLang>,
         ) -> Result<Box<dyn ConstructParser<EnvLang, Output = BuildId> + 'a>, ParseError>
-        where
-            's: 'a,
         {
             Ok(Box::new(RawBlockParser { invocation }))
         }
     }
 
-    struct RawBlockParser<'a, 's> {
-        invocation: Invocation<'a, 's, EnvLang>,
+    struct RawBlockParser<'a> {
+        invocation: Invocation<'a, EnvLang>,
     }
 
-    impl ConstructParser<EnvLang> for RawBlockParser<'_, '_> {
+    impl ConstructParser<EnvLang> for RawBlockParser<'_> {
         type Output = BuildId;
 
         fn parse(
@@ -1174,11 +1171,11 @@ mod tests {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
                     match cx.tokens.token_kind(&token) {
-                        TokenKindView::Char(_) => {
+                        TokenKind::Char(_) => {
                             cx.tokens.move_to(&token, TokenEdge::EndPastPostSpace)
                         }
-                        TokenKindView::GroupClose { .. }
-                        | TokenKindView::EndOfStream => break token,
+                        TokenKind::GroupClose { .. }
+                        | TokenKind::EndOfStream => break token,
                         other => unreachable!("verbatim state yields only chars, got {}", other),
                     }
                 };
@@ -1188,7 +1185,7 @@ mod tests {
             });
             let terminator_start = cx.tokens.position_at(&terminator, TokenEdge::Start);
             let (body_end, end) = match cx.tokens.token_kind(&terminator) {
-                TokenKindView::GroupClose { .. } => (
+                TokenKind::GroupClose { .. } => (
                     terminator_start,
                     cx.tokens.position_at(&terminator, TokenEdge::EndPastPostSpace),
                 ),
@@ -1445,10 +1442,8 @@ mod tests {
         let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
-            let done = matches!(
-                TokenReader::token_kind(&scanner, &token),
-                TokenKindView::EndOfStream
-            );
+            let reader: &dyn TokenReader<'_, EnvLang> = &scanner;
+            let done = matches!(reader.token_kind(&token), TokenKind::EndOfStream);
             scanned.push(token);
             if done {
                 break;
@@ -2060,7 +2055,7 @@ mod tests {
         fn peek(
             &mut self,
             state: &Arc<ParsingState<EnvLang>>,
-        ) -> crate::token::TokenResult<'s, EnvLang, Token<'s, EnvLang>> {
+        ) -> crate::token::TokenResult<EnvLang, StdToken<EnvLang>> {
             if TokenReader::<EnvLang>::position_here(&self.inner).offset() == self.betray_at {
                 self.peeks_at_betrayal += 1;
                 if self.peeks_at_betrayal >= 2 {
@@ -2068,7 +2063,7 @@ mod tests {
                     let pre_space = Span::empty(self.betray_at);
                     return match self.mode {
                         Betrayal::KindChange => {
-                            Ok(Token::new(TokenKind::Char('x'), span, pre_space))
+                            Ok(StdToken::char('x', span, pre_space))
                         }
                         Betrayal::Vanish => Err(crate::token::TokenError::new(
                             crate::token::TokenErrorKind::ForbiddenChar(
@@ -2076,7 +2071,7 @@ mod tests {
                             ),
                             SourceSpan::new(self.inner.source(), span),
                             Some(crate::token::TokenRecovery {
-                                token: Token::new(TokenKind::Char('\\'), span, pre_space),
+                                token: StdToken::char('\\', span, pre_space),
                                 // In-crate test infrastructure may mint a position
                                 // directly; a third-party reader would take one from
                                 // the reader it delegates to.
@@ -2089,7 +2084,7 @@ mod tests {
             TokenReader::peek(&mut self.inner, state)
         }
 
-        fn move_to(&mut self, tok: &Token<'_, EnvLang>, edge: TokenEdge) {
+        fn move_to(&mut self, tok: &StdToken<EnvLang>, edge: TokenEdge) {
             self.inner_mut().move_to(tok, edge);
         }
 
@@ -2097,7 +2092,7 @@ mod tests {
             self.inner_mut().move_to_position(at);
         }
 
-        fn token_kind<'t>(&self, tok: &'t Token<'_, EnvLang>) -> TokenKindView<'t, EnvLang>
+        fn token_kind<'t>(&self, tok: &'t StdToken<EnvLang>) -> TokenKind<'t, EnvLang>
         where
             's: 't,
         {
@@ -2106,7 +2101,7 @@ mod tests {
 
         fn source_span_between(
             &self,
-            tok: &Token<'_, EnvLang>,
+            tok: &StdToken<EnvLang>,
             a: TokenEdge,
             b: TokenEdge,
         ) -> SourceSpan {
@@ -2117,7 +2112,7 @@ mod tests {
             self.inner().position_here()
         }
 
-        fn position_at(&self, tok: &Token<'_, EnvLang>, edge: TokenEdge) -> StdStreamPosition {
+        fn position_at(&self, tok: &StdToken<EnvLang>, edge: TokenEdge) -> StdStreamPosition {
             self.inner().position_at(tok, edge)
         }
 

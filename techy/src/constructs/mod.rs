@@ -94,7 +94,7 @@ use crate::node::{
     StagedNodes,
 };
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, Token, TokenEdge, TokenKindView, TokenReader};
+use crate::token::{GroupRule, TokenEdge, TokenKind, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
@@ -102,7 +102,7 @@ use crate::token::{GroupRule, Token, TokenEdge, TokenKindView, TokenReader};
 /// only).
 pub(crate) fn invocation_frame<L: Lang>(
     cx: &ParseContext<'_, '_, L>,
-    invocation: &Invocation<'_, '_, L>,
+    invocation: &Invocation<'_, L>,
 ) -> Frame<L> {
     let token = invocation.token;
     Frame {
@@ -142,7 +142,7 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 /// none of them itself.
 pub(crate) fn comment_node_kind<L: Lang>(
     cx: &ParseContext<'_, '_, L>,
-    token: &Token<'_, L>,
+    token: &L::Token,
 ) -> (NodeKind<L>, SourceSpan<L::SourceOrigin>) {
     let span = cx.tokens.source_span_of(token);
     let between = |a, b| cx.tokens.source_span_between(token, a, b);
@@ -356,7 +356,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// under any recovery policy).
     pub fn stage_invocation(
         &mut self,
-        invocation: &Invocation<'_, '_, L>,
+        invocation: &Invocation<'_, L>,
         arguments: ParsedArguments<L>,
         slots: ParsedSlots<L>,
         children: Vec<BuildId>,
@@ -471,7 +471,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub fn probe_token(
         &mut self,
         state: &Arc<ParsingState<L>>,
-    ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
+    ) -> ConstructParserResult<L, Option<L::Token>> {
         self.driver.probe_token(self.tokens, self.session, state)
     }
 
@@ -1040,7 +1040,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub fn parse_group<'p>(
         &mut self,
         base: Arc<ParsingState<L>>,
-        open: &Token<'s, L>,
+        open: &L::Token,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
         frame: Option<Frame<L>>,
@@ -1244,7 +1244,7 @@ pub trait ConstructParser<L: Lang> {
 /// [`StdInvocationParser`]'s documentation for the full contract.
 ///
 /// [`CallableSpec::make_invocation_parser`]: crate::spec::CallableSpec::make_invocation_parser
-pub struct Invocation<'a, 's, L: Lang> {
+pub struct Invocation<'a, L: Lang> {
     /// The invocation form the trigger resolved to.
     pub callable_type: L::CallableTypeId,
     /// The trigger's invocation spelling, as written (from the trigger's
@@ -1256,15 +1256,15 @@ pub struct Invocation<'a, 's, L: Lang> {
     pub spec: &'a Arc<dyn CallableSpec<L>>,
     /// The trigger token. Only a [`TokenReader`] interprets it: hand it back to
     /// `cx.tokens` to learn where the trigger is.
-    pub token: &'a Token<'s, L>,
+    pub token: &'a L::Token,
     /// The view of the trigger token — what it *is*, carried along so a consumer needs
     /// no second query. Where it is stays a reader question
     /// ([`source_span_of`](TokenReader::source_span_of) on
     /// [`token`](Invocation::token)).
-    pub kind: TokenKindView<'a, L>,
+    pub kind: TokenKind<'a, L>,
 }
 
-impl<L: Lang> fmt::Debug for Invocation<'_, '_, L> {
+impl<L: Lang> fmt::Debug for Invocation<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Invocation")
             .field("callable_type", &self.callable_type)
@@ -1308,14 +1308,14 @@ pub trait FromInvocation<L: Lang>: Sized {
     /// as a shared borrow for the duration of the call, so the implementation cannot
     /// move the stream.
     fn from_invocation(
-        invocation: &Invocation<'_, '_, L>,
+        invocation: &Invocation<'_, L>,
         tokens: &dyn TokenReader<'_, L>,
     ) -> Self;
 }
 
 /// The no-record payload: nothing to transcribe.
 impl<L: Lang> FromInvocation<L> for () {
-    fn from_invocation(_invocation: &Invocation<'_, '_, L>, _tokens: &dyn TokenReader<'_, L>) {}
+    fn from_invocation(_invocation: &Invocation<'_, L>, _tokens: &dyn TokenReader<'_, L>) {}
 }
 
 #[cfg(test)]

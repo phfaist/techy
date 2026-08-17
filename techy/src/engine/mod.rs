@@ -626,7 +626,7 @@ mod tests {
     };
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
-        ParagraphRules, SpecialsRules, Token, TokenKind, TokenKindView, TokenListReader,
+        ParagraphRules, SpecialsRules, StdToken, TokenKind, TokenListReader,
         TokenRules, WhitespaceRules,
     };
     use alloc::string::String;
@@ -761,7 +761,7 @@ mod tests {
             (Self::Output, Option<Box<ParsingStateDelta<PlainLang>>>),
         > {
             let token = cx.tokens.next(&cx.state).expect("test token stream is error-free");
-            let TokenKindView::Char(_) = cx.tokens.token_kind(&token) else {
+            let TokenKind::Char(_) = cx.tokens.token_kind(&token) else {
                 panic!("test feeds a Char token")
             };
             let span = cx.tokens.source_span_of(&token);
@@ -779,8 +779,8 @@ mod tests {
     fn construct_parser_plumbing_end_to_end() {
         let source: Arc<Source> = Arc::new(Source::new("q"));
         let st = state();
-        let tokens: Vec<Token<'static, PlainLang>> =
-            vec![Token::new(TokenKind::Char('q'), Span::new(0, 1), Span::empty(0))];
+        let tokens: Vec<StdToken<PlainLang>> =
+            vec![StdToken::char('q', Span::new(0, 1), Span::empty(0))];
         let mut reader = TokenListReader::new(&source, tokens);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
@@ -917,7 +917,7 @@ mod tests {
         let st = state();
         // The view is a plain public enum: a resolver hook takes exactly this, so a
         // test states the trigger's facts directly instead of scanning one.
-        let token_kind = TokenKindView::Command { name: "foo", escape_char: '\\' };
+        let token_kind = TokenKind::Command { name: "foo", escape_char: '\\' };
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Strict, ());
         let resolved: CommandResolution<PlainLang> =
             driver.resolve_command(&st, token_kind).unwrap();
@@ -944,7 +944,7 @@ mod tests {
             .expect("seed state");
 
         let token_kind =
-            TokenKindView::<PlainLang>::Command { name: "foo", escape_char: '\\' };
+            TokenKind::<PlainLang>::Command { name: "foo", escape_char: '\\' };
         // Through the strategy value carried by StdParseDriver…
         let driver: StdParseDriver<ScopesCommandResolver<PlainLang>> = StdParseDriver::new(
             Recovery::Strict,
@@ -955,7 +955,7 @@ mod tests {
             CommandResolution::Resolved(_)
         ));
         // …and a clean miss carries the searched-providers detail.
-        let miss = TokenKindView::<PlainLang>::Command { name: "bar", escape_char: '\\' };
+        let miss = TokenKind::<PlainLang>::Command { name: "bar", escape_char: '\\' };
         match driver.resolve_command(&st, miss).unwrap() {
             CommandResolution::Unresolved { detail } => {
                 assert!(detail.unwrap().contains("defs"));
@@ -1029,6 +1029,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1251,6 +1252,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1374,6 +1376,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -1438,6 +1441,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -1541,6 +1545,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1651,6 +1656,7 @@ mod tests {
         type Event = CtxEvent;
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();

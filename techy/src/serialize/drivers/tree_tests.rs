@@ -1286,6 +1286,7 @@ impl Lang for ParseLang {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type Token = crate::token::StdToken<Self>;
     type StreamPosition = crate::token::StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ();
@@ -1404,6 +1405,7 @@ impl Lang for SyntaxLang {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type Token = crate::token::StdToken<Self>;
     type StreamPosition = crate::token::StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ToySyntax;

@@ -66,7 +66,7 @@ use crate::state::{
     ParsingStateDelta,
 };
 use crate::token::{
-    SpecialsMatch, SpecialsScanError, TokenErrorKind, TokenKindView, TriggerChars,
+    SpecialsMatch, SpecialsScanError, TokenErrorKind, TokenKind, TriggerChars,
 };
 
 mod provenance;
@@ -113,7 +113,7 @@ pub struct CallableQuery<'a, L: Lang> {
     /// The syntax context of the invocation.
     pub syntax: CallableSyntax,
     /// The view of the triggering token, when one exists.
-    pub token_kind: Option<TokenKindView<'a, L>>,
+    pub token_kind: Option<TokenKind<'a, L>>,
 }
 
 impl<'a, L: Lang> CallableQuery<'a, L> {
@@ -127,7 +127,7 @@ impl<'a, L: Lang> CallableQuery<'a, L> {
     }
 
     /// Attach the view of the triggering token.
-    pub fn with_token_kind(mut self, token_kind: TokenKindView<'a, L>) -> CallableQuery<'a, L> {
+    pub fn with_token_kind(mut self, token_kind: TokenKind<'a, L>) -> CallableQuery<'a, L> {
         self.token_kind = Some(token_kind);
         self
     }
@@ -1606,15 +1606,13 @@ impl ErrorCallableSpec {
 impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the
     /// `Result`.
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, L>,
+        invocation: Invocation<'a, L>,
     ) -> Result<
         Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
         crate::error::ParseError<L::SourceOrigin>,
     >
-    where
-        's: 'a,
     {
         Ok(Box::new(ErrorInvocationParser { invocation, detail: self.detail.as_deref() }))
     }
@@ -1622,12 +1620,12 @@ impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
 
 /// The invocation parser of [`ErrorCallableSpec`]: diagnose, stage the trigger as chars,
 /// consume nothing further (the dispatch arm already consumed the trigger token whole).
-struct ErrorInvocationParser<'a, 's, L: Lang> {
-    invocation: Invocation<'a, 's, L>,
+struct ErrorInvocationParser<'a, L: Lang> {
+    invocation: Invocation<'a, L>,
     detail: Option<&'a str>,
 }
 
-impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
+impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, L> {
     type Output = BuildId;
 
     fn parse(
@@ -2105,7 +2103,7 @@ mod tests {
             CallableQuery::new(MACRO, "emph", CallableSyntax::Command { escape_char: '\\' });
         assert!(query.token_kind.is_none());
 
-        let view = TokenKindView::Command { name: "emph", escape_char: '\\' };
+        let view = TokenKind::Command { name: "emph", escape_char: '\\' };
         let query = query.with_token_kind(view);
         assert_eq!(query.token_kind, Some(view));
         // The query stays `Copy`, view included.
@@ -2314,6 +2312,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();

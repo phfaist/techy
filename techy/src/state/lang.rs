@@ -13,7 +13,9 @@ use core::hash::Hash;
 use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{NodeBuildError, NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
-use crate::token::{SpecialsMatch, SpecialsScanError, StdStreamPosition, TriggerChars};
+use crate::token::{
+    SpecialsMatch, SpecialsScanError, StdStreamPosition, StdToken, Token, TriggerChars,
+};
 
 use super::features::{AllLangFeatures, LangFeatures};
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
@@ -238,6 +240,21 @@ pub trait Lang: Sized + 'static {
     /// Origin metadata type for sources (plugged into `Source<O>`); conventionally
     /// `Option<String>`.
     type SourceOrigin: SourceOrigin;
+
+    /// The token type this language's readers produce.
+    ///
+    /// **Opaque:** a construct parser holds a token and passes it back to the reader;
+    /// it never reads anything off one. What a token *is* comes from
+    /// [`token_kind`](crate::token::TokenReader::token_kind) (a
+    /// [`TokenKind`](crate::token::TokenKind) view), where it is from the reader's
+    /// span and position answers. That is what lets a reader serve tokens from more
+    /// than one source during a parse — a macro expander, say — while construct
+    /// parsers stay written against one API.
+    ///
+    /// The bound is the marker contract [`Token`](crate::token::Token). Languages
+    /// tokenized by [`StdTokenReader`](crate::token::StdTokenReader) — every language
+    /// of this crate — use [`StdToken<Self>`](crate::token::StdToken).
+    type Token: Token<Self>;
 
     /// The type naming a place in this language's token stream — the value a
     /// [`TokenReader`](crate::token::TokenReader) hands out from
@@ -549,6 +566,7 @@ impl<T: TrivialLang> Lang for T {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type Token = StdToken<Self>;
     type StreamPosition = StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ();

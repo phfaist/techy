@@ -66,7 +66,9 @@ use crate::source::{
 };
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
-use crate::token::{GroupRule, StdStreamPosition, StdTokenReader, Token, TokenKindView, TokenReader};
+use crate::token::{
+    GroupRule, StdStreamPosition, StdToken, StdTokenReader, TokenKind, TokenReader,
+};
 
 
 use super::ParserSession;
@@ -223,7 +225,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         tokens: &mut dyn TokenReader<'s, L>,
         session: &ParserSession<L>,
         state: &Arc<ParsingState<L>>,
-    ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
+    ) -> ConstructParserResult<L, Option<L::Token>> {
         match tokens.peek(state) {
             Ok(token) => Ok(Some(token)),
             Err(error) => {
@@ -240,7 +242,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- parse-time hooks (migrated off `Lang`, July 2026) -----------------------
 
-    /// Resolve a [`Command`](crate::token::TokenKindView::Command) token to its
+    /// Resolve a [`Command`](crate::token::TokenKind::Command) token to its
     /// invocation form and behavior spec. Typically implemented by a preset
     /// dispatching to the state's libraries via a
     /// [`CallableQuery`](crate::scopes::CallableQuery) — the view carries the fired
@@ -251,7 +253,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// is parse-time and lives here).
     ///
     /// The hook receives the triggering token's **view**
-    /// ([`TokenKindView`](crate::token::TokenKindView), by value — it is `Copy`), not
+    /// ([`TokenKind`](crate::token::TokenKind), by value — it is `Copy`), not
     /// the token: a resolver holds no reader, and the view is everything a reader-less
     /// party can learn about a token. Anything other than a `Command` view is a
     /// caller-contract violation; answer [`Unresolved`](CommandResolution::Unresolved).
@@ -295,7 +297,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         CommandResolver::resolve_command(&(), state, token_kind)
     }
@@ -604,9 +606,9 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// implementation wraps its parser in `Ok(...)` and that is the only change.
     // The decided factory signature, as for `make_nodes_parser`.
     #[allow(clippy::type_complexity)]
-    fn make_group_parser<'p, 's>(
+    fn make_group_parser<'p>(
         &'p self,
-        open: &Token<'s, L>,
+        open: &L::Token,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
     ) -> Result<
@@ -615,7 +617,6 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     >
     where
         L::InvocationSyntax: FromInvocation<L>,
-        's: 'p,
     {
         Ok(Box::new(
             GroupParser::new(open.clone(), rule).with_child_states(child_states),
@@ -646,15 +647,14 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     /// implementation wraps its parser in `Ok(...)` and that is the only change.
     // The decided factory signature, as for `make_nodes_parser`.
     #[allow(clippy::type_complexity)]
-    fn make_invocation_parser<'a, 's>(
+    fn make_invocation_parser<'a>(
         &'a self,
-        invocation: Invocation<'a, 's, L>,
+        invocation: Invocation<'a, L>,
     ) -> Result<
         Box<dyn ConstructParser<L, Output = BuildId> + 'a>,
         ParseError<L::SourceOrigin>,
     >
     where
-        's: 'a,
         L::InvocationSyntax: FromInvocation<L>,
     {
         let spec = invocation.spec;
@@ -678,7 +678,7 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 /// [`ScopesCommandResolver`] is the standard scope-stack resolution
 /// ([`resolve_command_in_scopes`]) under a fixed command callable type.
 pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
-    /// Resolve a [`Command`](TokenKindView::Command) token from its view — the
+    /// Resolve a [`Command`](TokenKind::Command) token from its view — the
     /// contract, the meaning of an `Err` (abort) versus a
     /// [`Failed`](CommandResolution::Failed) resolution (diagnose and recover),
     /// and the condition choice are [`ParseDriver::resolve_command`]'s, which
@@ -686,7 +686,7 @@ pub trait CommandResolver<L: Lang>: fmt::Debug + Send + Sync {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>>;
 }
 
@@ -697,7 +697,7 @@ impl<L: Lang> CommandResolver<L> for () {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         let _ = (state, token_kind);
         Ok(CommandResolution::Unresolved {
@@ -730,7 +730,7 @@ impl<L: Lang> CommandResolver<L> for ScopesCommandResolver<L> {
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         Ok(resolve_command_in_scopes(state, token_kind, self.command_type))
     }
@@ -830,11 +830,13 @@ impl<R, O: SourceOrigin> StdParseDriver<R, O> {
     }
 }
 
-// The `StreamPosition` bound is what lets the ready-made driver build the ready-made
-// reader: `StdTokenReader` serves exactly the languages whose stream positions are
-// `StdStreamPosition`. A language with its own stream positions brings its own driver.
-impl<L: Lang<StreamPosition = StdStreamPosition>, R: CommandResolver<L>> ParseDriver<L>
-    for StdParseDriver<R, L::SourceOrigin>
+// The `Token`/`StreamPosition` bounds are what let the ready-made driver build the
+// ready-made reader: `StdTokenReader` serves exactly the languages whose tokens are
+// `StdToken` and whose stream positions are `StdStreamPosition`. A language with its
+// own token or position type brings its own driver.
+impl<L, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin>
+where
+    L: Lang<Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
     fn make_token_reader<'s>(
         &'s self,
@@ -852,7 +854,7 @@ impl<L: Lang<StreamPosition = StdStreamPosition>, R: CommandResolver<L>> ParseDr
     fn resolve_command(
         &self,
         state: &ParsingState<L>,
-        token_kind: TokenKindView<'_, L>,
+        token_kind: TokenKind<'_, L>,
     ) -> Result<CommandResolution<L>, ParseError<L::SourceOrigin>> {
         self.command_resolver.resolve_command(state, token_kind)
     }
@@ -966,7 +968,7 @@ pub enum CommandResolution<L: Lang> {
 /// [`Unresolved`](CommandResolution::Unresolved) carrying the searched providers —
 /// and, where the scopes advertise their symbols, a **did-you-mean** hint — as
 /// detail; an operational provider error is [`Failed`](CommandResolution::Failed)
-/// carrying the provider's rendered error. A non-[`Command`](TokenKindView::Command)
+/// carrying the provider's rendered error. A non-[`Command`](TokenKind::Command)
 /// view — a caller-contract violation — yields `Unresolved { detail: None }`.
 ///
 /// **The did-you-mean detail** scans the providers' advertised definitions
@@ -982,10 +984,10 @@ pub enum CommandResolution<L: Lang> {
 /// `check_provider_commands_shadowed_by_escape` fires regardless of fallbacks).
 pub fn resolve_command_in_scopes<L: Lang>(
     state: &ParsingState<L>,
-    token_kind: TokenKindView<'_, L>,
+    token_kind: TokenKind<'_, L>,
     callable_type: L::CallableTypeId,
 ) -> CommandResolution<L> {
-    let TokenKindView::Command { name, escape_char } = token_kind else {
+    let TokenKind::Command { name, escape_char } = token_kind else {
         return CommandResolution::Unresolved { detail: None };
     };
     let query =
