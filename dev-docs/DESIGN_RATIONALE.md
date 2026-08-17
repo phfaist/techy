@@ -617,6 +617,113 @@ this hybrid):*
 - *Spec-carrying `Command` tokens* — commands need no lookup at token time; data-only
   tokens keep peeks cheap and the token stream fully `dbg!`-able.
 
+#### Tokens are opaque; only their reader interprets them [§dd-dr:token-opacity]
+
+Status: DECIDED (user-led, token-layer redesign).
+
+A *token* is a value a construct parser holds and passes on but never reads. Its type is
+the language's own (`Lang::Token`, bounded by the marker trait `Token<L>`, which asks only
+for `Clone + Debug + PartialEq + Send + Sync`), and the reader that produced it answers
+the two questions a parser has about it: **what it is** — `TokenReader::token_kind`
+returns the `TokenKind<'t, L>` *view*, the closed enum of kinds carrying the written
+spellings as `&str` and no spans at all — and **where it is** — `source_span_of` /
+`source_span_between` return a `SourceSpan`, `position_at` a stream position
+([§dd-dr:stream-position]). `StdToken<L>`, the token of the standard reader, stores byte
+ranges and `Arc`s only: no strings, no lifetime. It is built through eight public
+constructors, one per kind, so that a custom reader can produce standard tokens; the
+ranges it stores are readable only by this crate's own readers.
+
+The decisive reason: a reader may serve one parse from more than one source — a reader
+that substitutes a macro's definition into the stream as it reads is the motivating future
+case — and then "which source do these offsets belong to" is known only to the reader. A
+parser pairing numbers taken off a token with a source of its own produces a valid-looking
+wrong location, and no signature says so. An unreadable token removes the possibility
+instead of warning against it.
+
+The view borrows the token and — for a reader that scans borrowed content — that content;
+never the reader: `fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L> where
+'s: 't`, with the receiver's lifetime deliberately absent from the return type. A
+reader-borrowed view would keep the reader borrowed for as long as the view lives, and a
+parser that has learned what its trigger is keeps that answer across a sub-parse which
+borrows the same reader mutably.
+
+A party that must interpret a token while holding no reader receives the token *and* a
+shared reference to its reader, valid for that call: `ParseDriver::resolve_command`,
+`CommandResolver::resolve_command`, `resolve_command_in_scopes`,
+`TokenStopKind::Predicate`, `GroupChildState::Compute`, `FromInvocation::from_invocation`.
+`Invocation` is the resolution result plus the token, with nothing cached beside it.
+Definition lookup stays token-free: `CallableQuery` carries the invocation form, the name
+and the callable syntax (the escape character, say), so scopes and packages never see a
+token — a language that must dispatch on token detail does so in `resolve_command`, before
+or instead of consulting the scopes.
+
+Rejected alternatives: an `Arc<Source>` field on one shared concrete token type (a
+refcount pair per token, and one token type cannot serve every reader — an expanding
+reader's token is not a scanner's); a `Cow` of the source content on the token (the same,
+plus copying); a span-only kind enum that parsers resolve against a source of their own
+(the "relative to which source?" assumption again, and still unenforceable); a view
+borrowing the reader (locks the reader for as long as the view lives, per the paragraph
+above); a `Lang::TokenReader` associated type in place of the `dyn` reader (loses object
+safety — the context's `&mut dyn TokenReader`, the two-reader agreement suites — and puts
+an instance on `Lang`, which declares data types; the instance comes from the driver,
+[§dd-dr:token-reader-hook]); a cached view stored on `Invocation` (partial token detail
+sitting next to the token it came from, and redundant since every consumer holds a reader
+— [§dd-dr:invocation-parser-factory]); giving the reader-less hooks the view alone instead
+of the token (a view is strictly less than a token plus its reader, so a language taking
+over resolution would be limited for no gain); a reader reference stored *inside*
+`Invocation` (the invocation is held across the parse that borrows the same reader
+mutably — it does not compile).
+
+Revisit if: a reader needs per-token data that the marker trait cannot express — that is a
+change to `Lang::Token`'s bounds, not a return to readable token fields.
+
+#### Stream positions are opaque and cannot be forged [§dd-dr:stream-position]
+
+Status: DECIDED (user-led, token-layer redesign).
+
+A *stream position* names a place in a reader's token stream. Its type is the language's
+own (`Lang::StreamPosition`; for the standard reader `StdStreamPosition`, a byte offset
+behind a private field). A parser obtains one only from the reader (`position_here`,
+`position_at`) and gives it back to the reader (`move_to_position`, `source_span_within`,
+`source_position_at`). There is no public constructor and no arithmetic, so a position
+cannot be invented or shifted outside the reader that issued it; the test-only
+`TokenListReader` additionally rejects tokens and positions it never issued
+([§dd-dr:token-list-reader-demoted]), which is what turns the two-reader agreement suites
+into a check against a parser inventing either.
+
+Positions replaced the bare byte offsets the reader and the parsers used to exchange
+(`pos()`, `move_to_pos`). One number did three jobs — a place in the text, a place in the
+token stream, and a quantity to compare for "did the reader move?" — which coincide only
+while one parse reads one source. A `SourceSpan` answers the first now, a stream position
+the other two.
+
+Navigation is `move_to(&token, edge)` and `move_to_position(&position)`, and nothing else.
+`TokenEdge` names the five boundaries of a token in reading order:
+`StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace` — `≤` rather than
+`<`, because edges coincide where a token has no preceding whitespace, no leading marker,
+or no trailing syntactic whitespace. `ContentStart` is where the token's own content
+begins past its leading marker (after a comment's start delimiter, after a command's
+escape character; `= Start` for every other kind); it exists so that a comment node's
+three sub-spans — delimiter, content, trailing whitespace — are three reader answers
+rather than arithmetic over the view's strings.
+
+Positions compare with `==` only: no order exists across sources, and equality is what the
+parse loops ask for. `TokenRecovery::resume` is accordingly a stream position, and the
+requirement that it move the stream is checked by comparing the reader's position before
+and after the move ([§dd-dr:resume-pos-contract]).
+
+Rejected alternatives: bare `usize` offsets (forgeable, and silently paired with the wrong
+source once a reader serves several); span-relative navigation with no position type (a
+parser that must return to where it stood has nothing to name that place with — the
+retired trick of synthesizing a zero-width marker token to move by is where that leads,
+[§dd-dr:token-contract-hardening] item 4); `Ord` on positions (there is no cross-source
+order to implement, and an order within one source would be a capability a reader
+declares, not a blanket bound); deriving a comment's sub-spans from the lengths of the
+view's strings (a reader may normalize what it reports as content, so a span never comes
+from a string's length).
+
+Revisit if: a reader must expose more of a position than equality.
+
 #### Zero-copy tokens with ephemeral lifetime [§dd-dr:zero-copy-tokens]
 
 Status: DECIDED (upheld through the token redesign).
@@ -643,6 +750,66 @@ instance* return the same result; implementations may memoize keyed on (position
 identity) — sound because states are immutable and `derived()` always mints a new `Arc`. A
 different state, however trivially derived, voids the obligation. (`StdTokenReader` does
 not memoize yet — no premature optimization; the contract permits it.)
+
+#### The token reader sees only the parsing state [§dd-dr:reader-context-purity]
+
+Status: DECIDED (user).
+
+`TokenReader::peek` receives `&Arc<ParsingState<L>>` and nothing else — no session, no
+driver, no parse context. A reader that needs more takes it at construction, which is
+where its driver builds it ([§dd-dr:token-reader-hook]).
+
+Decisive reason: the reader is called from inside the parse loop, which holds the session
+and the context mutably; passing either back into `peek` asks for a second mutable borrow
+of what the caller is already using. The short parameter list also keeps the boundary
+honest — a reader tokenizes; it does not stage nodes and does not record diagnostics.
+
+Two consequences for a reader that substitutes content into the stream as it reads (a
+macro expander, the motivating future case): the depth of its own substitution is a limit
+it owns and reports as a `TokenError` carrying no recovery, not a case for the engine's
+parse-depth guard, which counts construct-parser descents ([§dd-dr:descent-guard]); and a
+report about content such a reader built is placed through the provenance chain of the
+`Source` it built ([§dd-dr:provenance-on-source]), not through frames a reader would push
+onto the session.
+
+Rejected alternatives: passing the session or the driver into `peek` (the borrows above,
+and it hands the token layer the parse layer's tools).
+
+Revisit if: an expanding reader needs a budget shared with the session rather than one of
+its own.
+
+#### Specials scanning reports errors, never recoveries [§dd-dr:specials-scan-errors]
+
+Status: DECIDED (user).
+
+`Lang::scan_specials` — and the `SpecsProvider`/`Package`/`ScopeStack` chain that feeds it
+— answers `Result<Option<SpecialsMatch<L>>, SpecialsScanError>`. A match carries the end
+offset and the resolved pair (invocation form and spec); an error carries a condition kind
+and a byte range in the content the hook was given. Neither carries a recovery token.
+
+Decisive reason: the hook is handed a `&str` and an offset into it. It knows neither the
+reader's token type nor its stream positions, so it can name neither a token to continue
+with nor a place to continue from — the previous signature let it try, in coordinates only
+the reader could interpret. Recovery is the reader's business: the reader lifts a scan
+error into an unrecoverable `TokenError` whose span it qualifies with its own source. A
+document-level condition a scan can detect is expressed the way the hook expresses
+everything else — as a match to a spec whose parser diagnoses it.
+
+Two riders. The specials name is the matched text (`content[pos..end]`) rather than a
+field the hook fills separately, so what used to be advice ("should be the matched slice")
+is now structure. And the reader checks the match end it is given (inside the content, on
+a character boundary): a hook returning a bad one has violated the documented precondition
+stated on the hook, and the reader reports an implementation error rather than panicking
+([§dd-dr:panic-policy]).
+
+Rejected alternatives: a hook-produced `TokenRecovery` (expressible only in the hook's own
+coordinates, which the reader is free not to share); a scan error the reader may treat as
+recoverable by policy (the reader has no placeholder to continue with that the hook could
+have meant).
+
+Revisit if: a scan needs to report a condition the parse should continue past — the answer
+today is a spec that diagnoses, and reopening this needs a case that spelling cannot
+express.
 
 #### Ambiguous group delimiters resolved by data: `expecting_group_close` [§dd-dr:expecting-group-close]
 
@@ -3347,6 +3514,43 @@ where byte spans become `Arc`-backed source spans, so the context is the honest 
 `NodesParser::new`/`GroupParser::new` carry no redundant `source` parameters —
 single source of truth.
 
+#### `ParseContext` carries no source handle [§dd-dr:no-context-source]
+
+Status: DECIDED (user-led, token-layer redesign).
+
+A construct parser has no `Arc<Source>` to pair a byte range with. Every `SourceSpan` it
+stages comes from the reader — one token's span, the span between two of that token's
+edges, or `source_span_within(begin, end)` over two stream positions — or from another
+`SourceSpan` it already holds. The empty span at the current position, the anchor most
+diagnostics want, is `cx.here()`.
+
+Decisive reason: with a source on the context, the natural spelling
+(`SourceSpan::new(&cx.source, span)`) is also the wrong one as soon as a reader serves a
+parse from more than one source, and nothing in the types says which spans it is wrong
+for. Removing the handle makes the wrong span unspellable instead of merely discouraged
+([§dd-dr:token-opacity]).
+
+The node tree is unaffected: a node's span is still one single-source `SourceSpan`, and
+sub-spans recorded in node data are still byte ranges relative to that span. What changed
+is that a reader answer becomes node data only after a `same_source` check against the
+node's span — one spelling, `node_text_content`, records `TextContent::Spanned` when the
+check passes and `TextContent::Owned` otherwise, and a site that cannot own its text
+records the item as absent instead. Under the standard reader every check passes; it costs
+an `Arc` pointer comparison and states the pairing where it used to be assumed.
+
+`stage_invocation`'s end rule follows the same line: an explicit end is a stream position;
+otherwise the node ends where the last staged child ends when that child lies in the
+trigger's source, and at the current stream position in every other case (no child, or a
+child from elsewhere).
+
+Rejected alternatives: keeping the field for convenience and documenting when it is safe
+(the documentation would be the only guard, and the unsafe use is the shorter one to
+write); a reader accessor answering "the current source" (the same problem one level down
+— "current" is not the source a given token came from).
+
+Revisit if: never for the handle. The `same_source` clauses are what a reader serving
+several sources will exercise; they decide there what today they only confirm.
+
 #### Dispatch by token kind + library lookup [§dd-dr:token-kind-dispatch]
 
 Status: DECIDED (implemented; formerly proposed).
@@ -4361,6 +4565,35 @@ behind the same cx wrappers later). `ParserSession::new()` takes no arguments
 (`Default` added); `ParserSession::recover` takes the policy per call — the channel a
 custom driver `recover` uses for per-condition decisions. The default
 `resolve_command` detail now names `ParseDriver::resolve_command`.
+
+#### `make_token_reader` is where a custom tokenizer is installed [§dd-dr:token-reader-hook]
+
+Status: DECIDED (user, ruling on the implementation finding below).
+
+`ParseDriver::make_token_reader(&'s self, source) -> Box<dyn TokenReader<'s, L> + 's>`
+builds the reader for a parse, and both construction sites go through it — the root parse
+and each attached (included) source — so one implementation covers a whole parse,
+inclusions included. The language fixes the *types* (`Lang::Token`,
+`Lang::StreamPosition`); the driver supplies the *instance*, and may hand it configuration
+it holds. The `make_*` spelling is the factory-hook naming rule ([§dd-dr:naming]).
+
+It is the one `ParseDriver` item without a default body, so the trait's documented
+property reads "every hook but this one is defaulted". A default is not expressible: the
+standard reader implements `TokenReader<'s, L>` only where `L::Token = StdToken<L>` and
+`L::StreamPosition = StdStreamPosition`, while a trait method's default body must
+type-check for every `L`; moving those equalities into a `where` clause on the method
+would instead stop the generic parse entry point from calling it at all. The standard body
+is one line — `Box::new(StdTokenReader::new(source))` — written once by every language
+that tokenizes with the standard reader.
+
+Rejected alternatives: a reader argument on the parse entry point (an attached source
+builds its reader mid-parse, where such an argument never reaches); a reader field on the
+session (a reader borrows the source it scans, and one parse builds one reader per source
+— the session is the wrong lifetime and the wrong multiplicity); a factory on `Lang` (it
+would put an instance where `Lang` declares data types, and would land the cost on every
+`impl Lang` rather than on the drivers, where parse-time behavior already lives).
+
+Revisit if: Rust gains specialization, which is what a defaulted standard body would need.
 
 #### `ScopesResolvingDriver`: the canned command-resolving driver component [§dd-dr:scopes-resolving-driver]
 
