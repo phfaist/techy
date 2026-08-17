@@ -506,15 +506,27 @@ way.
 ```rust
 pub struct Invocation<'a, L: Lang> {          // 's is gone
     pub callable_type: L::CallableTypeId,
-    pub name: &'a str,                        // from the token_kind view of `token`
+    pub name: &'a str,                        // the resolved callable's name (from the view of `token`)
     pub spec: &'a Arc<dyn CallableSpec<L>>,
     pub token: &'a L::Token,
-    pub kind: TokenKind<'a, L>,               // the view, so consumers need no re-query
 }
 pub trait FromInvocation<L: Lang>: Sized {
     fn from_invocation(invocation: &Invocation<'_, L>, tokens: &dyn TokenReader<'_, L>) -> Self;
 }
 ```
+
+`Invocation` is the resolution result plus the token — **no view field** (ruling O-5,
+§1.17: a `kind: TokenKind<'a, L>` field was first specified and built in Stage 3a, then
+dropped in the 3b review round as a redundant cache of token detail; consumers ask the
+reader — `cx.tokens.token_kind(invocation.token)` in `parse`, `tokens.token_kind(..)` in
+`from_invocation`). **No reader reference inside `Invocation` either**: the invocation
+parser stores the invocation across its parse, during which the same reader is
+mutably borrowed through `cx.tokens` — a shared borrow held in the struct cannot
+compile. `make_invocation_parser` gets no reader parameter: the parser it returns
+receives `cx` (and so the reader) when it runs. Two other hooks that must answer on the
+spot — `TokenStopKind::Predicate` (`nodes_parser.rs`) and `GroupChildState::Compute`
+(`child_state.rs`) — receive `(&L::Token, &dyn TokenReader<'_, L>)` (ruling O-1b's
+principle; user, 2026-08-17).
 
 `from_invocation` receives the reader (shared borrow, call-scoped) because a payload
 that records spelling spans (the latexlike `Macro { post_space }`) must obtain them
@@ -705,7 +717,7 @@ closed core enum), `TokenEdge`, `StdStreamPosition`, `Lang::Token`,
 token_kind, source_span_between, source_span_of, position_here, position_at,
 source_position_at, source_span_within}`, `ParseContext::{here, source_span_within}`,
 `ParseDriver::make_token_reader`, `SourceSpan::at`, `StopCause::*::after`,
-`Invocation::kind`, `TokenEdge::ContentStart` (ruling O-3), the resolve chain's
+`TokenEdge::ContentStart` (ruling O-3), the resolve chain's
 `(token: &L::Token, tokens: &dyn TokenReader<'_, L>)` parameters (ruling O-1b), and the view's comment field names
 `TokenKind::Comment { start_delim, content }` (the delimiter as *written text*, where
 the stored token had a `Span`).
@@ -726,6 +738,9 @@ move_to_pos, pos}`, `StdTokenReader::{pos, move_to_pos}`, `TokenRecovery::resume
 `CallableQuery::with_token` (a token in a reader-less hook), `CallableQuery::token_kind` +
 `CallableQuery::with_token_kind` and `resolve_command(.., token_kind: TokenKind)` (the
 view-only form of ruling O-1, superseded by O-1b before reaching `main`),
+`Invocation::kind` (a cached view; ruling O-5), hook signatures taking a bare
+`TokenKind` view (`TokenStopKind::Predicate`, `GroupChildState::Compute` — they take
+`(&L::Token, &dyn TokenReader)`),
 `resolve_command(.., token: &Token)` without the reader, `make_paragraph_break_node(.., token, source_content)`,
 `probe_token(.., source, ..)`.
 
@@ -809,6 +824,14 @@ the normative text; this list is the audit trail.
   Stage 1: the one-liner in every in-crate driver, the std bound on
   `StdParseDriver`/`LatexlikeLang`); rejected: option C, a `Lang`-side factory. Folded
   into §1.10 and §7 item 6. Status: closed.*
+- **O-5 — `Invocation::kind` and the reader-less hooks** (raised with O-1b). *Ruling
+  (user, 2026-08-17): drop `Invocation::kind` (partial token information carried next
+  to the token itself; consumers ask the reader when they need it); a reader reference
+  cannot live inside `Invocation` (stored across the parse that mutably borrows the
+  reader) — the reader reaches consumers call-scoped (`cx.tokens`, `from_invocation`'s
+  parameter); `TokenStopKind::Predicate` and `GroupChildState::Compute` receive
+  `(&L::Token, &dyn TokenReader<'_, L>)`. Applied in the 3b review round. Status:
+  closed.*
 - **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). *Ruling (user, 2026-08-17): the user
   edited CLAUDE.md themselves on `main` (rule 4 no longer names `Token::new`; it points
   at `docs/panics.md`). No stage edits CLAUDE.md; Stage 4's final report lists lines
