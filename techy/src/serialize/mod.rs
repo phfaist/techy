@@ -125,9 +125,14 @@
 //! truncated with only its last, incomplete line lost; there is no end-of-stream
 //! marker — the stream ends where the input ends. A reading session may then intern
 //! further objects and emit segments of its own, which continue the same stream
-//! (reading then appending). The same conventions hold for any other serde format
-//! that frames its values (one segment per framed value, in order); the crate itself
-//! calls no encoder — the engine emits and absorbs `Segment` values only.
+//! (reading then appending): the objects its reading environment holds — the
+//! providers the absorbed entries resolved to by identity — are then written once for
+//! the whole stream, while a live object the program creates anew (the parsing states
+//! of a fresh parse) is a new entry even when an equal object was absorbed earlier,
+//! since sharing follows object identity, not equality. The same conventions hold for
+//! any other serde format that frames its values (one segment per framed value, in
+//! order); the crate itself calls no encoder — the engine emits and absorbs `Segment`
+//! values only.
 //!
 //! **Specs and providers: identity or a self-contained form.** A callable spec or a
 //! provider is serialized either by *identity* — a reference the reading side resolves
