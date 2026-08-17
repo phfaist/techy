@@ -437,7 +437,7 @@ mod tests {
     }
 
     /// Pins the documented panic of the resolved-only accessors on a still-staged
-    /// region — a register-load-bearing contract: the crate-level Panics list and
+    /// region — a register-load-bearing contract: the guide's Panics list and
     /// each accessor's Panics section promise exactly this behavior.
     #[test]
     #[should_panic(expected = "child region still staged")]

@@ -26,7 +26,7 @@ pub struct Span {
 impl Span {
     /// Create a span covering `start..end`. `start <= end` is the caller's contract:
     /// a violation panics, in all builds — one of the crate's few deliberate panics
-    /// (see the [crate-level Panics list](crate#panics)).
+    /// (see the [Panics list](techy::guide::panics)).
     #[inline]
     pub fn new(start: usize, end: usize) -> Span {
         assert!(start <= end, "span start {} is after end {}", start, end);
@@ -77,7 +77,7 @@ impl Span {
     /// Grow the span in place so it ends at `end` — the one permitted in-place
     /// mutation (accumulating a run of tokens into one node's span). Monotone:
     /// `end >= self.end()` is the caller's contract — a violation panics, in all
-    /// builds (see the [crate-level Panics list](crate#panics)) — so the
+    /// builds (see the [Panics list](techy::guide::panics)) — so the
     /// `start <= end` invariant is preserved.
     #[inline]
     pub fn extend_to(&mut self, end: usize) {
@@ -116,7 +116,7 @@ impl Span {
     ///
     /// Panics if the span is out of bounds for `content` or not on `char` boundaries
     /// (same contract as `&content[range]`) — one of the crate's few deliberate
-    /// panics (see the [crate-level Panics list](crate#panics)).
+    /// panics (see the [Panics list](techy::guide::panics)).
     #[inline]
     pub fn slice<'s>(&self, content: &'s str) -> &'s str {
         &content[self.range()]

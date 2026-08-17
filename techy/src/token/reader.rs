@@ -96,7 +96,7 @@ pub trait TokenReader<'s, L: Lang> {
 ///
 /// A `pos` that is out of bounds for `content` or not on a `char` boundary is a
 /// caller-contract violation and panics, in all builds — one of the crate's few
-/// deliberate panics (see the [crate-level Panics list](crate#panics)).
+/// deliberate panics (see the [Panics list](techy::guide::panics)).
 ///
 /// **The multi-newline rule** (`TokenRules::paragraphs_enabled`): skipped
 /// whitespace never contains `\n\s*\n`, nor consumes a newline from such a sequence —

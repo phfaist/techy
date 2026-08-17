@@ -151,7 +151,7 @@ impl<'s, L: Lang> Token<'s, L> {
     /// Create a token. Span coherence — `pre_space` ending at `span`'s start, a
     /// command/comment `post_space` lying as a trailing sub-range of `span` — is the
     /// caller's contract: a violation panics, in all builds — one of the crate's few
-    /// deliberate panics (see the [crate-level Panics list](crate#panics)).
+    /// deliberate panics (see the [Panics list](techy::guide::panics)).
     pub fn new(kind: TokenKind<'s, L>, span: Span, pre_space: Span) -> Token<'s, L> {
         assert!(
             pre_space.end() == span.start(),

@@ -243,7 +243,7 @@ impl<O: SourceOrigin> SourceSpan<O> {
     ///
     /// The range must lie within the source content and fall on `char` boundaries —
     /// the caller's contract: a violation panics here, in all builds — one of the
-    /// crate's few deliberate panics (see the [crate-level Panics list](crate#panics)).
+    /// crate's few deliberate panics (see the [Panics list](techy::guide::panics)).
     /// Every constructed `SourceSpan` is therefore valid for
     /// [`content`](Self::content).
     pub fn new(source: &Arc<Source<O>>, range: impl Into<Range<usize>>) -> Self {
@@ -384,7 +384,7 @@ impl<O: SourceOrigin> SourcePos<O> {
     /// The offset must lie within the source content (`0..=len`; the length itself is
     /// a valid end-of-content position) and fall on a `char` boundary — the caller's
     /// contract: a violation panics, in all builds — one of the crate's few
-    /// deliberate panics (see the [crate-level Panics list](crate#panics)).
+    /// deliberate panics (see the [Panics list](techy::guide::panics)).
     pub fn new(source: &Arc<Source<O>>, pos: usize) -> Self {
         assert!(
             pos <= source.content.len(),

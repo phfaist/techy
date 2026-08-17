@@ -100,7 +100,9 @@ If you need to consult `pylatexenc` sources, they are available at `$HOME/Resear
    precondition asserts of the six approved value functions (Span::new/extend_to,
    Token::new, SourceSpan::new, SourcePos::new, skip_whitespace — contract violation
    panics in all builds). Full policy: DESIGN_RATIONALE.md [§dd-dr:panic-policy] rule 3.
-   New exceptions need explicit user approval.
+   New exceptions need explicit user approval. The user-facing exhaustive list of
+   panicking public items is the guide chapter `docs/panics.md`
+   (`techy::guide::panics`) — any change to documented panicking behavior updates it.
 5. **Always check the naming principles** (dev-docs/ARCHITECTURE.md [§dd-arch:naming]) before suggesting names
 6. **Prefer existing patterns** from dev-docs/ARCHITECTURE.md and dev-docs/DESIGN_RATIONALE.md. (Older strategy documents live in `dev-docs/archive/` and are no longer authoritative.  Do not read them unless authorized to do so by the user.)
 7. **Document learnings from interactive design decision sessions**: After a discussion about a design decision with the user, record the important points, issues, examples, and non-obvious pitfalls that were considered or that appeared in the discussion as a labeled entry in dev-docs/DESIGN_RATIONALE.md (follow its entry template and maintenance rules — including adding an ARCHITECTURE reference for the new entry).
