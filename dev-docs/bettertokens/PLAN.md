@@ -526,7 +526,15 @@ node-relative reading is sound.
 ### 1.10 `ParseDriver` hooks (`techy/src/engine/driver.rs`)
 
 - New: `fn make_token_reader<'s>(&'s self, source: &'s Arc<Source<L::SourceOrigin>>)
-  -> Box<dyn TokenReader<'s, L> + 's>` — default `Box::new(StdTokenReader::new(source))`.
+  -> Box<dyn TokenReader<'s, L> + 's>` — a **required** method (ruling O-4, §1.17: a
+  std default is impossible in stable Rust — a generic default body cannot prove
+  `L::StreamPosition = StdStreamPosition`/`L::Token = StdToken<L>`, and a `where` clause
+  on the method would stop `Language::parse_source::<L>` from calling it generically).
+  The standard body is the one-liner `Box::new(StdTokenReader::new(source))`, available
+  to every language whose `StreamPosition`/`Token` are the std types; the generic
+  in-crate drivers (`StdParseDriver`, `LatexlikeDriver` via `LatexlikeLang`) carry that
+  bound. The documented property "every hook is defaulted, so `impl ParseDriver<MyLang>
+  for MyDriver {}` is a complete driver" becomes "every hook but `make_token_reader`".
   Documented as *the* door for custom tokenization (`Lang::Token`/`StreamPosition`
   fix the data types; the driver supplies the reader instance). `make_*` = factory
   hook naming rule.
@@ -788,6 +796,15 @@ the normative text; this list is the audit trail.
   deriving the sub-spans from the view's string lengths under a new reader contract
   (contradicts "never reconstruct spans from content"); a dedicated comment-parts reader
   method (ad hoc). Status: closed.*
+- **O-4 — `make_token_reader` cannot have the std default §1.10 first specified**
+  (found in Stage 1): a trait method's default body must type-check for every `L: Lang`,
+  and `StdTokenReader<'s, O>: TokenReader<'s, L>` holds only under
+  `L::StreamPosition = StdStreamPosition` (+ `L::Token = StdToken<L>` from 3b); a
+  `where` clause on the method would make the generic parse entry unable to call it.
+  *Ruling (user, 2026-08-17): keep it a **required** method (option A, as implemented in
+  Stage 1: the one-liner in every in-crate driver, the std bound on
+  `StdParseDriver`/`LatexlikeLang`); rejected: option C, a `Lang`-side factory. Folded
+  into §1.10 and §7 item 6. Status: closed.*
 - **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). *Ruling (user, 2026-08-17): the user
   edited CLAUDE.md themselves on `main` (rule 4 no longer names `Token::new`; it points
   at `docs/panics.md`). No stage edits CLAUDE.md; Stage 4's final report lists lines
@@ -1244,9 +1261,12 @@ sections and `Documentation_Structure.md` — read them first):
    condition detectable during the scan is a match to a diagnosing spec; the name is
    the matched text. Rejected: hook-produced `TokenRecovery`.
 6. *`make_token_reader` is the door for custom tokenization* `[§dd-dr:token-reader-door]`
-   — on `ParseDriver`, default std, both construction sites route through it.
-   Rejected: a parameter on the parse entry point (misses attached sources); a session
-   field.
+   — on `ParseDriver`, **required** (ruling O-4: no std default is expressible; the
+   std body is a one-liner; "every hook but this one is defaulted"), both construction
+   sites route through it. Rejected: a parameter on the parse entry point (misses
+   attached sources); a session field; a `Lang`-side factory (data types on `Lang`,
+   the instance from the driver — and the trivial-lang blanket impl would be the only
+   place a default could live).
 7. Amend in place. The **complete** list of entries that name a superseded symbol was
    produced at `9a3c0ac` by mapping every hit of
    `grep -n "Token::new\|move_to_pos\|resume_pos\|Token<'s\|\.pos()\|move_past\|cx\.source" dev-docs/DESIGN_RATIONALE.md dev-docs/ARCHITECTURE.md`
