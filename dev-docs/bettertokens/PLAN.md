@@ -649,7 +649,7 @@ old method and renames `move_to_edge` → `move_to` in one commit (afterwards
 | `constructs/child_state.rs:106` | `&Invocation<'_, '_, L>` in the compute-closure type | `&Invocation<'_, L>` — Stage 3b |
 | every type whose `'s` comes only from a token or an `Invocation` | `ArgumentNoise<'s, L>` (`argument_parsers.rs:126`), `MintedGroupMatch<'s, L>` (`:710`), `StdInvocationParser<'a, 's, L>` (`invocation_parser.rs:164`), `CallableQuery<'a, 's, L>` (`scopes/mod.rs:104` — already dropped in 3a, see its own row), `ErrorInvocationParser<'a, 's, L>` (`scopes/mod.rs:1624`), `EnvironmentInvocationParser<'a, 's, LLL>` (`latexlike/environments.rs:766`), `OrphanEndParser<'a, 's, LLL>` (`:990`), `InputInvocationParser<'a, 's, LLL>` (`latexlike/input.rs:291`), `AfterEffectInvocationParser<'a, 's, LLL>` (`latexlike/spec.rs:157`), and the test parsers `DefParser<'a, 's>` (`argument_parsers.rs:2143`, `nodes_parser.rs:2995`), `TakeParser<'a, 's>` (`nodes_parser.rs:3079`), `EnvironmentInvocationParser<'a, 's>` (`environment_parser.rs:944`), `RawBlockParser<'a, 's>` (`:1091`), `RestOfLineParser<'a, 's>` / `BadEndParser<'a, 's>` (`latexlike/invocation_syntax.rs:764, 824`) | **Stage 3b drops the `'s` from all of them.** `ParseContext<'a, 's, L>` is the one exception: its `'s` comes from `TokenReader<'s, L>` and stays |
 | `token/mod.rs:50-67` (internal module facade) | `pub use` of `Token`, `TokenKind`, `TokenError`, `TokenRecovery`, `SpecialsMatch`, `StdTokenReader`, `TokenReader` | add `TokenEdge`, `StdStreamPosition` (Stage 1), `SpecialsScanError` (Stage 1), `StdToken` + the `Token` **trait** (Stage 3b). `techy::core` re-exports through this module, so it is edited first |
-| `core/mod.rs:60-66` (public facade) | the single `pub use crate::token::{ … };` block | add `StdStreamPosition`, `TokenEdge`, `SpecialsScanError` (Stage 1); add `StdToken` and let the existing `Token` entry export the **trait** (Stage 3b). `TokenKindView` is never exported. `Span`/`SourceSpan` are **not** re-exported here — they live on `techy::source` (`source/mod.rs:69-72`) |
+| `core/mod.rs:60-66` (public facade) | the single `pub use crate::token::{ … };` block | add `StdStreamPosition`, `TokenEdge`, `SpecialsScanError` (Stage 1); add `StdToken` and let the existing `Token` entry export the **trait** (Stage 3b). `TokenKindView` is exported from `techy::core` **only during 3a** and only on the branch — see §5: 3a and 3b merge to `main` together, so the temporary name never reaches `main`. `Span`/`SourceSpan` are **not** re-exported here — they live on `techy::source` (`source/mod.rs:69-72`) |
 | `core/constructs.rs:54-70`, `core/specs.rs:40-52` (public facades) | re-export `ArgumentNoise`, `EnvironmentBody`, `EnvironmentTerminatorSyntaxData`, `FromInvocation`, `GroupParser`, `Invocation`, `NameGroup`, `NodesOutcome`, `StopCause`, `stage_pre_space`, `read_rigid_name_group`, `resolve_command_in_scopes` | **no edit**: these are name-only re-exports and no name changes. Stated so an implementer does not go looking |
 | `serialize/drivers/{tree_tests.rs:1280,1397, diagnostic_tests.rs:45, tests.rs:45}` | 4 `impl Lang for …` test languages in the `serialize` module (added after this plan was drafted) | the two associated types (§1.2); nothing else in `techy/src/serialize/**` touches tokens, readers, `ParseContext` spans, or `scan_specials` |
 | `token/rules.rs:20-21,251,288`, `token/mod.rs:22,34`, `state/mod.rs:27`, `docs/ai-guide.md:244` | prose/intra-doc mentions of `Lang::scan_specials`, `SpecialsMatch`, `TokenRecovery` "resume position" | reword to the new signatures; the intra-doc link targets survive the re-signature, so this is prose only (Stage 1 step 5 for the module docs, Stage 4 for `docs/ai-guide.md`) |
@@ -1059,10 +1059,13 @@ view type** next to the current stored `TokenKind<'s, L>` — to avoid two types
 name during the transition, introduce the view under the temporary name
 `TokenKindView<'t, L>` and `TokenReader::token_kind(&tok) -> TokenKindView<'t, L> where
 's: 't` (std: built from the stored kind's strings; list reader: same). During 3a
-`TokenKindView` is `pub` in its crate-internal module but is **not** re-exported from
-`techy::core` — it is renamed to `TokenKind` in 3b *before* it becomes public, so the
-name `TokenKindView` never reaches a public path. It still needs a `missing_docs`-clean
-rustdoc (the lint fires on `pub` items regardless of reachability). During 3a
+`TokenKindView` **is** re-exported from `techy::core` (temporarily): code outside the
+crate implements `TokenReader` (`techy/tests/lang_features.rs`'s delegating reader) and
+must name `token_kind`'s return type, and the `docs/*.md` doctests match on the view. To
+keep the temporary name off `main`, **3a is not merged on its own: 3b's branch is cut
+from 3a's, each is reviewed separately, and both merge to `main` together after 3b's
+review** (the 3b reviewer confirms `grep -rn TokenKindView techy docs` is empty). It
+still needs a `missing_docs`-clean rustdoc. During 3a
 `Invocation` **keeps its `'s` parameter** (`Invocation<'a, 's, L>`) and its new `kind`
 field has type `TokenKindView<'a, L>`; 3b renames the type in place and drops the `'s`. Port **every**
 `token.kind` / `TokenKind::…` match outside `token/*` to `cx.tokens.token_kind(&token)`
