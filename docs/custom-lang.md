@@ -173,7 +173,8 @@ name. A complete braces-only language:
 # use techy::source::SourceSpan;
 use techy::core::{
     FeatureAbsent, FeaturePresent, FinalizeError, GroupRule, GroupRules, Lang,
-    LangFeatures, Language, ParsingState, StateData, StdParseDriver, TokenRules,
+    LangFeatures, Language, ParsingState, StateData, StdParseDriver, StdStreamPosition,
+    TokenRules,
 };
 
 // The declaration: group delimiters present, the seven other features absent.
@@ -203,6 +204,7 @@ impl Lang for BracesOnlyLang {
 #     type Event = ();
 #     type SessionExt = ();
 #     type SourceOrigin = Option<String>;
+#     type StreamPosition = StdStreamPosition;
 #     type NodeExts = ();
 #     type InvocationSyntax = ();
 #     type Driver = StdParseDriver;

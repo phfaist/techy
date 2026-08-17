@@ -368,6 +368,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = StdParseDriver;
@@ -504,6 +505,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = CapDriver;
@@ -556,6 +558,7 @@ mod tests {
         type Event = ();
         type SessionExt = Observed;
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = ObserveDriver;
@@ -716,6 +719,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = BogusDriver;
@@ -907,6 +911,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = OneLineDriver;

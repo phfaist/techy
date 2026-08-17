@@ -1273,6 +1273,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = CmdDriver;
@@ -1324,6 +1325,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -1696,6 +1698,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = MarkDriver;
@@ -2359,6 +2362,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
@@ -2638,6 +2642,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = HintDriver;
@@ -2704,6 +2709,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = AbortDriver;
@@ -2796,6 +2802,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = RefineDriver;
@@ -3209,6 +3216,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ExtBundle;
             type InvocationSyntax = ();
             type Driver = ExtDriver;
@@ -3778,6 +3786,7 @@ mod tests {
             type Event = ();
             type SessionExt = Counts;
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = CountDriver;
@@ -3870,6 +3879,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = SinkDriver;
@@ -3937,6 +3947,7 @@ mod tests {
             type Event = ();
             type SessionExt = Seen;
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = FailObserveDriver;
@@ -4082,6 +4093,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = DriveDriver;
@@ -4293,6 +4305,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = BrokenDriver;
@@ -4366,6 +4379,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
             type Driver = StdParseDriver;
@@ -4461,6 +4475,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = FailingMathDriver;
@@ -4550,6 +4565,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;

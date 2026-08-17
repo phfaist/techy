@@ -13,7 +13,7 @@ use core::hash::Hash;
 use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{NodeBuildError, NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
-use crate::token::{SpecialsMatch, TokenResult, TriggerChars};
+use crate::token::{SpecialsMatch, StdStreamPosition, TokenResult, TriggerChars};
 
 use super::features::{AllLangFeatures, LangFeatures};
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
@@ -238,6 +238,24 @@ pub trait Lang: Sized + 'static {
     /// Origin metadata type for sources (plugged into `Source<O>`); conventionally
     /// `Option<String>`.
     type SourceOrigin: SourceOrigin;
+
+    /// The type naming a place in this language's token stream — the value a
+    /// [`TokenReader`](crate::token::TokenReader) hands out from
+    /// [`position_here`](crate::token::TokenReader::position_here) and
+    /// [`position_at`](crate::token::TokenReader::position_at), and accepts back at
+    /// [`move_to_position`](crate::token::TokenReader::move_to_position).
+    ///
+    /// **Opaque:** a construct parser holds a stream position and gives it back to the
+    /// reader; it never interprets one. There is deliberately no way to build a
+    /// position from a number, and no ordering — only equality, which is what "did the
+    /// reader move?" needs. This is what lets a reader serving several sources during
+    /// one parse (a macro expander, say) name places its own way, while parsers stay
+    /// written against one API.
+    ///
+    /// Languages tokenized by [`StdTokenReader`](crate::token::StdTokenReader) — every
+    /// language of this crate — use
+    /// [`StdStreamPosition`](crate::token::StdStreamPosition).
+    type StreamPosition: Clone + fmt::Debug + PartialEq + Eq + Send + Sync;
 
     /// The node extension type bundle ([`NodeExtTypes`]); `()` for languages without
     /// custom node data.
@@ -512,6 +530,7 @@ pub trait Lang: Sized + 'static {
 /// MyLang {}` yields a [`Lang`] with every associated type defaulted
 /// (`Features` = [`AllLangFeatures`], `ModeId`/`StateExt`/`Event`/`SessionExt`/
 /// `NodeExts` = `()`, `SourceOrigin` = `Option<String>`,
+/// `StreamPosition` = [`StdStreamPosition`](crate::token::StdStreamPosition),
 /// `GroupTypeId`/`CallableTypeId` = `u32`) and the default method
 /// behavior — the workaround for associated-type defaults being unstable. The default
 /// driver resolves nothing.
@@ -530,6 +549,7 @@ impl<T: TrivialLang> Lang for T {
     type Event = ();
     type SessionExt = ();
     type SourceOrigin = Option<String>;
+    type StreamPosition = StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ();
     type Driver = StdParseDriver;

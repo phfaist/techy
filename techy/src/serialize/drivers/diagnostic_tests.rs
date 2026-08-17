@@ -51,6 +51,7 @@ impl Lang for DiagLang {
     type Event = ();
     type SessionExt = u32;
     type SourceOrigin = Option<String>;
+    type StreamPosition = crate::token::StdStreamPosition;
     type NodeExts = ();
     type InvocationSyntax = ();
     type Driver = StdParseDriver;
