@@ -939,6 +939,101 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M7a hardening agent — **M7a (hardening, code part) complete** on
+  `techy-serialize` (worktree `.claude/worktrees/techy-serialize`). Commits: `d50fa24`
+  nesting-depth bound; `6943055` prefix-table hash map + saturating line/column
+  offsets; `1c87739` transient docs (`usize` widths RESOLVED, depth bound in the schema
+  draft); `113ea38` golden files; `d590f7f` proptest properties; `2137c0d` performance
+  sanity; `3c9c67b` panic-audit comment; plus the docs commit carrying this entry.
+  Verified: `cargo build`/`test` green with and without `--features serde` (1055/1016
+  unit, 30+9+13+23+1 integration, feature-gated `serialize_stream` 5 + `serialize_golden`
+  3 + `serialize_perf` 2, 76/75 doctests); `rm -rf target/doc && cargo docs` clean both
+  states; clippy clean on every touched file (the pre-existing `never_loop` in
+  `latexlike/mod.rs` untouched, per the brief). **Items (plan §7 M7, code part):**
+  - (1) **Nesting-depth bound — `SerialValue::MAX_NESTING_DEPTH = 64`** (`value.rs`;
+    depth = the number of lists and maps enclosing the deepest part, `Index`/`Bytes`
+    are leaves; `SerialValue::nesting_depth()` iterative). Enforced at every rim: the
+    serde `Deserialize` of `SerialValue` (hence `Segment`, `DiagnosticValue`) through a
+    depth-carrying `DeserializeSeed` (`render.rs` `ValueAt`; canonical and compact
+    renderings; an object is charged a level only once it is known not to be a reserved
+    `$bytes`/`$index` object; checked on the way down, no allocation beyond the value);
+    `Segment::from_serial_value` (whole value, iteratively, before the recursive derive
+    walks it); `push_segment` (every entry, before translation/materialization, error
+    `InEntry{Value(NestingTooDeep)}`); and — DECISION: writer refuses too —
+    `intern` (`SerializeError::Value(NestingTooDeep)` in `InTable`, nothing interned):
+    a writer learns at once instead of emitting a segment no reader accepts. A segment's
+    own structure counts (4 levels: segment map, `tables`, table map, `entries`), so an
+    entry's stored form nests ≤ 60 (`engine::MAX_ENTRY_NESTING_DEPTH`; the
+    heterogeneous `{identifier, data}` wrapper is one of them). New
+    `SerialValueError::NestingTooDeep { limit }`. Why 64: far above any legitimate
+    producer (a tree entry nests ≈10; the wrapping 4), and below serde_json's default
+    recursion limit (128 → 127 nested containers, our JSON adds ≤ 2 for a trailing
+    `$index`) so the SAME bound binds in every format. Measured (debug, 2 MiB test
+    thread): pre-fix the recursive derive conversion overflowed between 2 000 and 4 000
+    levels, recursive drop of a nested value between 8 000 and 9 000 (a value's drop is
+    the cost of whoever built it — in-memory hostile tests use ≤ 2 000); post-fix,
+    100 000-deep JSON and postcard input is refused with a typed error, no stack growth
+    (`serde_tests.rs a_value_nesting_too_deep_is_refused_by_every_reader`,
+    `a_segment_with_an_entry_nesting_too_deep_is_refused_by_serde`; `tests.rs`,
+    `engine/tests.rs an_entry_nesting_too_deep_is_refused_at_interning_and_at_absorption`,
+    the DiagnosticValue read in `diagnostic_tests.rs`). Also from the M6b review: a
+    segment without `meta` is refused (`serde_tests.rs a_segment_without_meta_is_refused`);
+    `bridge.rs` doc reworded ("variant name used as a map key").
+  - (2) **Cost bounds.** (a) `token/prefix_table.rs`: the merge goes through a
+    `hashbrown::HashMap<&str, usize>` — linear (chosen over a rule-count bound: no
+    arbitrary constant, no new error); pinned by a 40 000-rule build. (b)
+    `source/line_index.rs`: `LineIndex`/`LineIndexCache` add the offsets with
+    `saturating_add` (chosen over a wire bound: no arbitrary constant, and it also
+    covers user code setting huge offsets — the 32-bit reader shape `usize::MAX`
+    tested; documented on `Source::with_line_column_number_offsets`); plus a source
+    round trip with `u32::MAX` offsets and the typed `IntegerOutOfRange{target:"usize"}`
+    for a wire integer that does not fit (`drivers/tests.rs`).
+  - (3) **`usize` widths — RESOLVED, no wire change**: `i64` on the wire, `IntegerOutOfRange`
+    (target `i64`) when a `usize` does not fit on write, `IntegerOutOfRange` (target
+    `usize`) when a wire value does not fit the reader — verified in `wire/mod.rs`
+    `int_conversions!` and the bridge; recorded in `schema_draft.md` §1 ("Integer
+    widths", "Nesting depth") and `wire_vocabulary.md` §17.
+  - (4) **Golden files** `techy/tests/golden/serialize/{state_and_source, schema_example,
+    read_then_append}.json` + `tests/serialize_golden.rs` (feature-gated): pretty-printed
+    documents (diffable), compared as values AND canonical one-line renderings, read back
+    into fresh sessions; `UPDATE_GOLDEN=1 cargo test --features serde -p techy --test
+    serialize_golden` regenerates (documented in the file). Profile `techy golden files`.
+  - (5) **Proptest properties**: `drivers/tests.rs state_properties` (random
+    `TokenRules` + scope stacks, expected close from either list / none / unlisted;
+    48 cases), `drivers/tree_tests.rs tree_properties` (random builder trees: every
+    kind, nested groups, callables with 0–3 args of every form and 0–3 slots of every
+    role, two shared states, one spec per arity; `assert_trees_equivalent`; 40 cases,
+    2–32 nodes), `drivers/diagnostic_tests.rs diagnostics_properties` (random limit /
+    severities / projections / spans / frames / suppression inside a parse result; 48).
+  - (6) **Performance sanity** `tests/serialize_perf.rs` (feature-gated, 10 s ceiling
+    per phase): 200 KB latexlike parse (8 620 nodes, 3.2 MB JSON) — parse 0.10 s,
+    serialize 0.065 s, JSON render 0.16 s, JSON read 0.14 s, absorb 0.086 s (debug);
+    200 segments written 0.096 s, absorbed 0.10 s, 200 appended 0.047 s, 400 absorbed
+    0.14 s. A one-off 4× input scaled every phase ≈ 4× (linear). No accidental O(n²)
+    found in the engine (interning map, directory checks, memo journal, claim sweep are
+    linear; the rollback truncation runs only on failure).
+  - (7) **Panic audit (non-test serialize code)** — remaining, each with its stated
+    invariant: `drivers/standard.rs` `with_source_driver` ×7 `expect(ACCEPTED)` (an
+    empty session accepts the seven standard tables); `drivers/tree.rs rebuild_tree`
+    `build_id_of[0].expect` (node_count ≥ 1, every position staged by the loop);
+    `engine/segment.rs Segment::to_serial_value` `expect` (a segment's integers are
+    `u32`s, the only failure is an integer outside `i64`); `wire/tree.rs
+    TextContent::from_serial_value` `unreachable!` (`read_variant` accepts only the
+    listed names); `render.rs compact_variant_name` constant-table indexing (index in
+    0..8 by construction, comment added). Reader indexing on wire data is bounds-checked
+    (`stage_node` child ranges, `.get()` for `in_children_of`, `materialize` matches
+    `slots.get` before indexing). New public items: `SerialValue::MAX_NESTING_DEPTH`,
+    `SerialValue::nesting_depth`, `SerialValueError::NestingTooDeep` — none panics; the
+    crate-level `## Panics` list in `lib.rs` needs NO addition (docs pass to confirm).
+  - (8) `Segment::VERSION` stays 1 (nothing shipped); mismatch test
+    `engine/tests.rs` (`found: 99`) confirmed.
+  **Deliberately not done:** the `never_loop` clippy fix (out of scope per the brief);
+  no `Segment` version bump. **Plan patches for the supervisor:** §7 M7 bullet — the
+  code items above are done, the docs pass remains (ARCHITECTURE/DESIGN_RATIONALE
+  entries, `serialize_schema.md`, `docs/serialize.md`, `docs/ai-guide-serialize.md`,
+  module rustdoc pass, `lib.rs` Panics confirmation, delete `dev-docs/serialization/`);
+  D5 gains the nesting bound (64) as part of the value model. Next: M7 docs pass.
+  Blockers: none.
 - 2026-08-17 — M6b rulings-pass agent — **M6b rulings pass complete** on
   `techy-serialize` (worktree `.claude/worktrees/techy-serialize`). Commits: `f8d5ebc`
   no `$` escaping + `Map` order; `13ec2db` the Q3 wire renames; `8b16c05` condition
