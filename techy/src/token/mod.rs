@@ -23,11 +23,11 @@
 //!   [`Lang::scan_specials`](crate::state::Lang::scan_specials) *hook* (recognition =
 //!   resolution: the token carries the spec, and the matched text is the name), gated by
 //!   the state's cached [`TriggerChars`] filter.
-//! - **Where tokens are is the reader's answer**: a token is *at* a place in the
-//!   reader's stream, and only the reader can say where that is in text. A construct
-//!   parser asks it — [`TokenReader::source_span_of`], `source_span_between` at a
-//!   [`TokenEdge`], `position_here`/`position_at` — and never computes a location
-//!   itself.
+//! - **What a token is, and where it is, are both the reader's answers**: a construct
+//!   parser reads nothing off a token. It asks the reader what the token *is*
+//!   ([`TokenReader::token_kind`] → a [`TokenKindView`]) and where it is
+//!   ([`TokenReader::source_span_of`], `source_span_between` at a [`TokenEdge`],
+//!   `position_here`/`position_at`); it never computes either itself.
 //! - **Syntactic vs. content whitespace**: `pre_space` (on every token) is content
 //!   whitespace belonging to the document flow; post-space (only on
 //!   [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)) is whitespace

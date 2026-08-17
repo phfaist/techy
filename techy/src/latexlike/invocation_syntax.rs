@@ -536,6 +536,61 @@ mod tests {
     }
 
     #[test]
+    fn from_invocation_takes_the_post_space_from_the_reader() {
+        // The constructor directly: the trigger's view says it is a command, the
+        // reader says where its syntactic post-space lies.
+        use crate::token::{StdTokenReader, TokenReader};
+        use alloc::sync::Arc;
+
+        let seed = ParsingState::<Latexlike>::lang_initial_with_packages([macro_package(
+            "t", "emph", None,
+        )])
+        .expect("seed state");
+        let state = Arc::new(seed);
+        let source: Arc<Source> = Arc::new(Source::new("\\emph  x"));
+        let mut reader = StdTokenReader::new(&source);
+        let token = TokenReader::<'_, Latexlike>::next(&mut reader, &state).unwrap();
+        let tokens: &dyn TokenReader<'_, Latexlike> = &reader;
+        let spec: Arc<dyn CallableSpec<Latexlike>> = Arc::new(MacroSpec::new(vec![]));
+        let invocation = crate::constructs::Invocation {
+            callable_type: CallableType::Macro,
+            name: "emph",
+            spec: &spec,
+            token: &token,
+            kind: tokens.token_kind(&token),
+        };
+        match InvocationSyntaxData::<StdEnvironmentSyntax<Latexlike>>::from_invocation(
+            &invocation,
+            tokens,
+        ) {
+            InvocationSyntaxData::Macro { escape_char, post_space } => {
+                assert_eq!(escape_char, '\\');
+                assert_eq!(post_space.resolve(&source), "  ");
+            }
+            other => panic!("expected the Macro arm, got {other:?}"),
+        }
+
+        // A trigger that is not a command records the specials arm instead.
+        let specials = crate::constructs::Invocation {
+            callable_type: CallableType::Specials,
+            name: "~",
+            spec: &spec,
+            token: &token,
+            kind: crate::token::TokenKindView::Specials {
+                callable_type: CallableType::Specials,
+                name: "~",
+                spec: &spec,
+            },
+        };
+        assert!(matches!(
+            InvocationSyntaxData::<StdEnvironmentSyntax<Latexlike>>::from_invocation(
+                &specials, tokens
+            ),
+            InvocationSyntaxData::Specials
+        ));
+    }
+
+    #[test]
     fn macros_record_the_escape_char_as_written() {
         // A second command rule with the `@` escape: the payload records whichever
         // escape fired, not a canonical `\`.

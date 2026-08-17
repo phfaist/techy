@@ -2097,6 +2097,24 @@ mod tests {
     }
 
     #[test]
+    fn a_query_carries_the_triggering_tokens_view_or_nothing() {
+        // `new` leaves the token context empty (specials scan, synthesized
+        // invocations); `with_token_kind` attaches the trigger's view — which is all a
+        // provider, having no reader, can know about the token.
+        let query: CallableQuery<'_, PlainLang> =
+            CallableQuery::new(MACRO, "emph", CallableSyntax::Command { escape_char: '\\' });
+        assert!(query.token_kind.is_none());
+
+        let view = TokenKindView::Command { name: "emph", escape_char: '\\' };
+        let query = query.with_token_kind(view);
+        assert_eq!(query.token_kind, Some(view));
+        // The query stays `Copy`, view included.
+        let copy = query;
+        assert_eq!(copy.token_kind, query.token_kind);
+        assert_eq!(copy.name, "emph");
+    }
+
+    #[test]
     fn specs_are_flyweights_across_names() {
         let mut package: Package<PlainLang> = Package::new("test");
         let shared = new_spec();
