@@ -1682,6 +1682,9 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
 pub struct ScopeStack<L: Lang> {
     /// Outermost first; folds iterate in reverse. For a language that declares the
     /// scope stack absent, this is the zero-sized store — no list exists.
+    // The store projection is the point of the field; an alias would hide the very
+    // indirection this declaration exists to state.
+    #[allow(clippy::type_complexity)]
     stack: <<L::Features as LangFeatures>::Scopes as FeaturePresence>::Store<
         Vec<Arc<dyn SpecsProvider<L>>>,
     >,

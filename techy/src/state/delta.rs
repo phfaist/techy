@@ -505,19 +505,19 @@ impl<L: Lang> TokenRulesOverrides<L> {
     /// (see [`ParsingStateDelta::is_empty`]).
     pub(crate) fn is_empty(&self) -> bool {
         <L::Features as LangFeatures>::Whitespace::store_get(&self.whitespace)
-            .map_or(true, |block| *block == WhitespaceOverrides::default())
+            .is_none_or(|block| *block == WhitespaceOverrides::default())
             && <L::Features as LangFeatures>::Paragraphs::store_get(&self.paragraphs)
-                .map_or(true, |block| *block == ParagraphOverrides::default())
+                .is_none_or(|block| *block == ParagraphOverrides::default())
             && <L::Features as LangFeatures>::Groups::store_get(&self.groups)
-                .map_or(true, |block| *block == GroupOverrides::default())
+                .is_none_or(|block| *block == GroupOverrides::default())
             && <L::Features as LangFeatures>::Commands::store_get(&self.commands)
-                .map_or(true, |block| *block == CommandOverrides::default())
+                .is_none_or(|block| *block == CommandOverrides::default())
             && <L::Features as LangFeatures>::Comments::store_get(&self.comments)
-                .map_or(true, |block| *block == CommentOverrides::default())
+                .is_none_or(|block| *block == CommentOverrides::default())
             && <L::Features as LangFeatures>::Specials::store_get(&self.specials)
-                .map_or(true, |block| *block == SpecialsOverrides::default())
+                .is_none_or(|block| *block == SpecialsOverrides::default())
             && <L::Features as LangFeatures>::ForbiddenChars::store_get(&self.forbidden_chars)
-                .map_or(true, |block| *block == ForbiddenCharsOverrides::default())
+                .is_none_or(|block| *block == ForbiddenCharsOverrides::default())
     }
 }
 
@@ -632,7 +632,7 @@ impl<L: Lang> ParsingStateDelta<L> {
     pub(crate) fn is_empty(&self) -> bool {
         self.rules.is_empty()
             && <L::Features as LangFeatures>::Scopes::store_get(&self.scope_ops)
-                .map_or(true, |ops| ops.is_empty())
+                .is_none_or(|ops| ops.is_empty())
             && self.mode.is_none()
             && self.ext.is_none()
             && self.events.is_empty()

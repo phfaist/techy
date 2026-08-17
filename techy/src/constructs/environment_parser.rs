@@ -631,6 +631,9 @@ where
     L::InvocationSyntax: FromInvocation<L>,
 {
     /// The body parse proper, run under the environment's traceback frame.
+    // The return type is the `ConstructParser::parse` shape spelled out; an alias for
+    // it would name one method's tuple, not a concept.
+    #[allow(clippy::type_complexity)]
     fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
@@ -1443,7 +1446,7 @@ mod tests {
                     NodeKind::Callable(_) => {
                         format!("callable {} {:?}", span, node.name().unwrap())
                     }
-                    NodeKind::List { .. } => format!("list {}", span),
+                    NodeKind::List => format!("list {}", span),
                 }
             })
             .collect()
@@ -1474,7 +1477,7 @@ mod tests {
                     NodeKind::Callable(_) => {
                         format!("callable {} {:?}", span, node.name().unwrap())
                     }
-                    NodeKind::List { .. } => format!("list {}", span),
+                    NodeKind::List => format!("list {}", span),
                 }
             })
             .collect()

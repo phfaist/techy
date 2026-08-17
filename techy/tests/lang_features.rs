@@ -770,6 +770,8 @@ mod feature_composition {
         stack.push(provider);
         stack
     }
+    // The spelled-out signature *is* the assertion; an alias would hide what is pinned.
+    #[allow(clippy::type_complexity)]
     const _: fn(
         ScopeStack<AllPresentLang>,
         Arc<dyn SpecsProvider<AllPresentLang>>,

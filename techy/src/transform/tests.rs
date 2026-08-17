@@ -1,5 +1,11 @@
 //! Tests of the restage driver (`techy::transform`).
 
+// The fixtures mint node extensions through `Lang::make_node_ext` and hand the
+// result to `NodeTreeBuilder::add`, the way the parser does. `Latexlike`'s
+// extension type happens to be `()` today, which makes those bindings unit-valued;
+// keeping them spelled out is what keeps the fixtures honest if the type changes.
+#![allow(clippy::let_unit_value)]
+
 use core::convert::Infallible;
 
 use alloc::string::{String, ToString};

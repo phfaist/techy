@@ -658,7 +658,7 @@ fn check_spanned_contents<L: Lang>(
             check(&data.open, "group open delimiter")?;
             check(&data.close, "group close delimiter")
         }
-        NodeKind::List { .. } => Ok(()),
+        NodeKind::List => Ok(()),
     }
 }
 

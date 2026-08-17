@@ -404,7 +404,7 @@ impl<L: Lang> ParserSession<L> {
         let memoizable = delta.ext.is_none()
             && delta.events.is_empty()
             && <L::Features as LangFeatures>::Scopes::store_get(&delta.scope_ops)
-                .map_or(true, |ops| ops.is_empty());
+                .is_none_or(|ops| ops.is_empty());
         if memoizable {
             if let Some(hit) = self.state_memo.get(&StateMemoProbe {
                 base,
@@ -1682,7 +1682,7 @@ mod tests {
             }
             // A context-derived patch: depth many 'd's (any stack-derived fact
             // observable from the derived state works).
-            let depth_marker: String = core::iter::repeat('d').take(stack.len()).collect();
+            let depth_marker: String = "d".repeat(stack.len());
             Ok(Some(ParsingStateDelta::new().rules(
                 crate::state::TokenRulesOverrides {
                     forbidden_chars: crate::state::ForbiddenCharsOverrides {

@@ -400,6 +400,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// The returned [`ParsingStateDelta`] is the construct's after-effect for the
     /// caller, passed through **unapplied** — whether and where it applies is
     /// caller business (the "caller applies deltas" law).
+    // The return type is the `ConstructParser::parse` shape spelled out; an alias for
+    // it would add a second public name for one method's tuple.
+    #[allow(clippy::type_complexity)]
     pub fn parse_construct<P>(
         &mut self,
         parser: &mut P,

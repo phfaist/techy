@@ -380,9 +380,9 @@
 //!
 //! # The `serde` cargo feature: rendering
 //!
-//! Everything above is unconditional plain Rust with no external dependency (`no_std`
-//! + `alloc`): sessions produce and absorb in-memory segments without any feature.
-//! The optional `serde` cargo feature adds the rendering layer:
+//! Everything above is unconditional plain Rust with no external dependency
+//! (`no_std` + `alloc`): sessions produce and absorb in-memory segments without any
+//! feature. The optional `serde` cargo feature adds the rendering layer:
 //! `Serialize`/`Deserialize` impls for [`SerialValue`] and [`Segment`], which encode
 //! through any serde format — the canonical rendering, stated for JSON on
 //! [`SerialValue`]'s page (`Bytes` as `{"$bytes": "<base64>"}`, `Index` as

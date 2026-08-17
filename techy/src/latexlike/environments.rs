@@ -734,7 +734,7 @@ impl<LLL: LatexlikeLang> Default for EndSpec<LLL> {
 
 impl<LLL: LatexlikeLang> Clone for EndSpec<LLL> {
     fn clone(&self) -> Self {
-        EndSpec::new()
+        *self
     }
 }
 

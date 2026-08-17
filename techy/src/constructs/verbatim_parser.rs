@@ -683,6 +683,9 @@ impl<L: LangHasGroups> ConstructParser<L> for VerbatimBodyParser<'_, L> {
 
 impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
     /// The body parse proper, run under the environment's traceback frame.
+    // The return type is the `ConstructParser::parse` shape spelled out; an alias for
+    // it would name one method's tuple, not a concept.
+    #[allow(clippy::type_complexity)]
     fn parse_body(
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,

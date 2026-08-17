@@ -257,7 +257,7 @@ fn collect_chars<'t, L: Lang, A>(
             Ok(())
         }
         NodeKind::Comment { .. } => Ok(()),
-        NodeKind::Group(_) | NodeKind::List { .. } => {
+        NodeKind::Group(_) | NodeKind::List => {
             for child in node.children() {
                 collect_chars(child, None, acc)?;
             }

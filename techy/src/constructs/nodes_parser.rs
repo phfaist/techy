@@ -268,6 +268,9 @@ pub enum TokenStopKind<'p, L: Lang> {
     /// consultation site attaches the live traceback when the error carries no
     /// frames of its own. An infallible predicate wraps its answer in `Ok(...)`
     /// and that is the only change.
+    // The predicate signature is the variant's whole documented meaning; hiding it
+    // behind an alias would only make callers look the signature up elsewhere.
+    #[allow(clippy::type_complexity)]
     Predicate(&'p dyn Fn(&Token<'_, L>) -> Result<bool, ParseError<L::SourceOrigin>>),
 }
 
@@ -1606,7 +1609,7 @@ mod tests {
                     }
                     NodeKind::Group(_) => format!("group {}", span),
                     NodeKind::Callable(_) => format!("callable {}", span),
-                    NodeKind::List { .. } => format!("list {}", span),
+                    NodeKind::List => format!("list {}", span),
                 }
             })
             .collect()

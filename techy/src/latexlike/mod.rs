@@ -405,6 +405,12 @@ impl Lang for Latexlike {
         events: &[Event],
     ) -> Result<(), FinalizeError> {
         let _ = (new, prev);
+        // The loop body always returns on its first iteration today, because `Event`
+        // has a single variant and that variant is refused. `Event` is
+        // `#[non_exhaustive]`: a context-free variant added later is handled by
+        // writing into `new` and moving on to the next event, so the loop over all
+        // events is the intended shape, not an accident of the current variant list.
+        #[allow(clippy::never_loop)]
         for event in events {
             match event {
                 Event::ExitMathContext => {

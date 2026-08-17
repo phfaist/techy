@@ -1,17 +1,18 @@
 //! # techy
 //!
-//! A fast, extensible parser toolkit for LaTeX-like markup languages.
+//! A fast, extensible parser toolkit for your favorite LaTeX-like language.
 //!
-//! techy builds an Abstract Syntax Tree (AST) from LaTeX-like source code, allowing you to
-//! analyze, transform, or convert documents. The engine has no privileged language concepts
-//! (no built-in math mode, `{`/`}`, `%`, or `\`); the familiar LaTeX behavior is provided by
-//! a preset, and custom LaTeX-like languages are defined with the same machinery.
+//! Techy builds an Abstract Syntax Tree (AST) from LaTeX-like source code, allowing you to
+//! analyze, transform, or convert documents.  The parser is highly flexible and
+//! configurable; it consists of *core* modules and a *latexlike* preset, the latter
+//! recognizing behavior familiar from LaTeX.
 //!
 //! New to techy? Start with the [`guide`] — the narrative documentation; the modules
 //! below are the API reference.
 //!
-//! ## no_std
-//!
+//! ## Crate dependencies, features, and panic policy
+//! 
+//! **no_std + alloc:**
 //! The crate is `no_std`-friendly: it depends only on `core` and `alloc` (sources are shared
 //! as `Arc`, so the target must support atomics). Consequently the library performs no
 //! input/output of its own — content lookup for `\input`-like constructs is delegated to the
@@ -19,17 +20,10 @@
 //! crate builds for WebAssembly targets such as `wasm32-unknown-unknown`, where the host
 //! supplies all input.
 //!
-//! ## Cargo features
-//!
-//! - `serde` (off by default) — enables the optional [serde](https://serde.rs)
-//!   dependency for the rendering layer of [`serialize`]: `Serialize`/`Deserialize`
-//!   impls for [`SerialValue`](serialize::SerialValue), so serialized values encode
-//!   through any serde format (JSON is the format the public rendering is stated in),
-//!   and the bridge `serialize::to_value` / `serialize::from_value`, which converts any
-//!   type implementing serde's traits to and from a `SerialValue`. The serialization
-//!   capability itself — the value model and the capability traits — is always present
-//!   and dependency-free; the feature adds only rendering, and adds no obligation to
-//!   any implementer.
+//! **Cargo features:**
+//! - `serde` (off by default) — enables the optional serialization of techy parsing results
+//!   (e.g. node trees) via [serde](https://serde.rs).  See [`techy::serialize`] and
+//!   [`techy::guide::serialize`].
 //!
 //! ## Panics
 //!

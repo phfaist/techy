@@ -138,7 +138,7 @@ fn a_long_stream_is_read_then_appended_in_linear_time() {
     let appended: Vec<String> = timed("append 200 segments", || {
         (0..SEGMENTS)
             .map(|i| {
-                let result = Arc::new(language.parse(&format!("Appended {i}: \\textbf{{c{i}}}")).unwrap());
+                let result = Arc::new(language.parse(format!("Appended {i}: \\textbf{{c{i}}}")).unwrap());
                 let position = appender.serialize_parse_result(&result).unwrap();
                 let segment = appender.take_segment_with_main(position).unwrap();
                 let providers = segment.tables().iter().find(|t| t.name() == "providers").unwrap();

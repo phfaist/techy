@@ -378,6 +378,11 @@ pub(crate) fn scoped_children<'t, L: Lang, A>(
 }
 
 #[cfg(test)]
+// The fixtures mint node extensions through `Lang::make_node_ext` and hand the
+// result to `NodeTreeBuilder::add`, the way the parser does. `Latexlike`'s
+// extension type happens to be `()` today, which makes those bindings unit-valued;
+// keeping them spelled out is what keeps the fixtures honest if the type changes.
+#[allow(clippy::let_unit_value)]
 mod tests {
     use alloc::string::{String, ToString};
     use alloc::sync::Arc;

@@ -254,7 +254,7 @@ impl<L: Lang> ParsingState<L> {
                     ),
                 };
             if ends_temporary_scope
-                && delta_groups.map_or(true, |groups| groups.temporary.is_none())
+                && delta_groups.is_none_or(|groups| groups.temporary.is_none())
             {
                 // Scope enforcement mutates the derived data in place — one of the few
                 // by-field writes into a rules block outside delta application; the

@@ -203,7 +203,7 @@ impl<'t, L: Lang, A> NodeRef<'t, L, A> {
 
     /// Whether this is a `List` node.
     pub fn is_list(&self) -> bool {
-        matches!(self.kind(), NodeKind::List { .. })
+        matches!(self.kind(), NodeKind::List)
     }
 
     /// A `Chars` node's logical text.
