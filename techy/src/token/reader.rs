@@ -203,7 +203,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// TokenEdge::Start)` puts it back to be read again, and
     /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) also gives back the
     /// whitespace before it.
-    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge);
+    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
 
     /// Reposition the stream at a position this reader handed out earlier.
     ///
@@ -219,7 +219,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// contract clause 6).
     fn source_span_between(
         &self,
-        tok: &Token<'s, L>,
+        tok: &Token<'_, L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin>;
@@ -227,7 +227,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// The token's own span: from [`Start`](TokenEdge::Start) to
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — pre-space excluded,
     /// post-space included.
-    fn source_span_of(&self, tok: &Token<'s, L>) -> SourceSpan<L::SourceOrigin> {
+    fn source_span_of(&self, tok: &Token<'_, L>) -> SourceSpan<L::SourceOrigin> {
         self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
     }
 
@@ -237,7 +237,7 @@ pub trait TokenReader<'s, L: Lang> {
     fn position_here(&self) -> L::StreamPosition;
 
     /// The stream position at `edge` of `tok`.
-    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition;
+    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition;
 
     /// Where a stream position lies in text. An empty-span diagnostic anchor at a
     /// position is [`SourceSpan::at`] of this.
@@ -779,7 +779,7 @@ where
         StdTokenReader::pos(self)
     }
 
-    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge) {
+    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
         self.pos = tok.edge_offset(edge);
     }
 
@@ -789,7 +789,7 @@ where
 
     fn source_span_between(
         &self,
-        tok: &Token<'s, L>,
+        tok: &Token<'_, L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -803,7 +803,7 @@ where
         StdStreamPosition::at(self.pos)
     }
 
-    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition {
         StdStreamPosition::at(tok.edge_offset(edge))
     }
 

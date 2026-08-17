@@ -106,7 +106,7 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     /// the end of the list rather than serving from it). `pre_space` is excluded from
     /// the comparison — `peek` clips it to the current position, so a token that came
     /// out of this very reader need not compare equal to its list entry.
-    fn check_issued(&self, tok: &Token<'s, L>, what: &str) {
+    fn check_issued(&self, tok: &Token<'_, L>, what: &str) {
         if matches!(tok.kind, TokenKind::EndOfStream) {
             return;
         }
@@ -214,7 +214,7 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
         self.pos
     }
 
-    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge) {
+    fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
         self.check_issued(tok, "move_to_edge");
         self.pos = self.issue(tok.edge_offset(edge));
     }
@@ -226,7 +226,7 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
 
     fn source_span_between(
         &self,
-        tok: &Token<'s, L>,
+        tok: &Token<'_, L>,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -239,7 +239,7 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
         StdStreamPosition::at(self.issue(self.pos))
     }
 
-    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition {
         self.check_issued(tok, "position_at");
         StdStreamPosition::at(self.issue(tok.edge_offset(edge)))
     }
