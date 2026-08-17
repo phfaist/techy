@@ -11,6 +11,28 @@
   for mandatory args?  E.g. mandatory arg, embellishment arg, + other places we
   seek an expression? Study this possibility.  ### still up-to-date?
 
+- Better tokens — deferred follow-ups (the token/reader port; plan and stage log in
+  dev-docs/bettertokens/):
+
+  - Gap-free chars-run contract: relax it for a reader that serves one parse from
+    several sources — flush the run when the source changes, or let a reader declare
+    that it may skip bytes.  Only needed once such a reader exists.
+  - `LatexlikeDriver::with_token_reader(...)`: a knob for installing a custom reader
+    in the preset family.  Same "only once such a reader exists".
+  - `StdStreamPosition` public constructor: graduate on demonstrated need (a
+    third-party reader over standard tokens that hands out positions of its own).
+  - The expanding reader itself (in-place macro expansion) lives in `techy-xp`, not
+    here.
+  - Naming polish over the port's new fields: `NameGroup::name` is a span, while
+    `EnvironmentInvocation` splits `name` (text) from `name_span`; and
+    `RawContentEnd::{content_end, end}` are two stream positions whose names do not
+    say which is which.
+  - `StdTokenReader::source()` is a public inherent accessor next to `content()`;
+    decide whether it stays public or becomes `pub(crate)`.
+  - The port's own text is clear of the banned words below, but older rustdoc around
+    it still uses "mint", "facts", "vocabulary", "funnel" and "trigger token" — the
+    walk-through below is where that gets settled.
+
 - API doc walk-through; 
 
   - Check for banned words in user and developer guides: "door", "funnel", "mint",
