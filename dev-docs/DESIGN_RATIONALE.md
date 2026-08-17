@@ -308,9 +308,10 @@ pattern is random-access slicing at arbitrary offsets (`starts_with` at a positi
 `find('\n')` from a comment start, longest-match through the `PrefixTable`, whitespace
 look-ahead past the current position) — which the cursor's position-local
 char-at-a-time primitives (`peek_char`/`next_char`/`advance`/`mark`/`rewind`) do not
-serve — and the `TokenReader` contract needs deliberately *bidirectional* `move_to_pos`
-(`TokenRecovery::resume_pos` moves forward), which the backward-only, debug-asserted
-`rewind` actively resists. `SourceContent` fell with the cursor: as designed
+serve — and the `TokenReader` protocol needs deliberately *bidirectional*
+repositioning (`move_to`/`move_to_position`: a recovery's resume position moves
+forward, an absent-argument rewind moves back, [§dd-dr:stream-position]), which the
+backward-only, debug-asserted `rewind` actively resists. `SourceContent` fell with the cursor: as designed
 (`slice(&self, Range) -> &str` over contiguous valid UTF-8) it is
 information-equivalent to `&str` — a UTF-8 memory-mapped file can be handed in as text
 by the embedder after one validation pass, so the trait enabled no future it claimed
@@ -493,10 +494,12 @@ Status: DECIDED (user-led, three-round design review).
 
 Supersedes earlier proposals — uniform `post_space`, maximal-run `Chars`,
 `Ok(None)` at end of stream — each recorded below as rejected.
-Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
-`Char(char)` | `GroupOpen`/`GroupClose` | `Command { name, post_space }` |
-`Specials { name, spec: Arc<dyn CallableSpec<L>> }` | `Comment { content, post_space }` |
-`ParagraphBreak` | `EndOfStream`. The decisions, each with the argument that carried it:
+Final model: a token records its kind, the byte range it covers and the whitespace
+preceding it, and the kinds are `Char(char)` | `GroupOpen`/`GroupClose` |
+`Command { name, escape_char }` | `Specials { callable_type, name, spec }` |
+`Comment { start_delim, content }` | `ParagraphBreak` | `EndOfStream` — the taxonomy the
+reader reports through its `TokenKind` view, since a token itself is opaque to parsers
+([§dd-dr:token-opacity]). The decisions, each with the argument that carried it:
 
 - **No invocation forms at the token level.** No macro/environment/specials taxonomy and no
   `CallableTypeId` on tokens: `\begin` is a `Command` exactly like `\foobar`; which names
@@ -533,8 +536,9 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
 - **Specials: recognition = resolution, owned by the preset.** Specials trigger sets can be
   large and change with library pushes (pylatexenc defers them to the latex context for
   the same reason), so they are *not* enumerated in `TokenRules`. `Lang::scan_specials`
-  returns a `SpecialsMatch` carrying name **and** the full resolution — `callable_type` +
-  spec, the `ResolvedCallable` pair — in one call: scanning/lookup normalization or scoping mismatches are
+  returns a `SpecialsMatch` carrying the full resolution in one call — `callable_type` +
+  spec, the `ResolvedCallable` pair, with the name being the matched text itself
+  ([§dd-dr:specials-scan-errors]): scanning/lookup normalization or scoping mismatches are
   impossible by construction, and unknown-name fallback is the scan's own business (a
   `Specials` token's spec is never absent). It is a
   `Lang` hook (the `finalize_transition` precedent), *not* a per-library protocol and
@@ -552,7 +556,9 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   Post-space exists only where *tokenization syntax* consumes whitespace — multi-character
   `Command` names (whitespace terminates the name) and `Comment`s (the newline terminates
   the content) — and is stored **in those variants**, not as a uniform `Token` field
-  (`Token::post_space()` accessor serves `move_past`'s `skip_post_space` flag). Groups
+  (the reader answers a token's post-space as the range between its `End` and
+  `EndPastPostSpace` edges, so no uniform token field is needed —
+  [§dd-dr:stream-position]). Groups
   never have post-space (space after `}` is content); specials and single-char commands
   (`\&`) neither. Spec-driven whitespace swallowing beyond this is a parse-level concern
   recorded on nodes.
@@ -583,9 +589,10 @@ Final model: `Token<'s, L> { kind, span, pre_space }` with `TokenKind<'s, L>` =
   meaningfully expose). The dangling-escape-at-end recovery placeholder is
   `Char(escape_char)` — cf. [§dd-dr:token-contract-hardening], item 2.
 - **The token topic is wholly S1; tokens are generic over `L`.** `Specials` carries
-  `Arc<dyn CallableSpec<L>>` (tokens are `Clone`, not `Copy`), and `TokenError<'s, L>` may
-  grow state context. Tokens remain transient `'s`-bound engine internals; the genericity
-  never enters the AST. `Span` — a generic byte range used by errors and cursors
+  `Arc<dyn CallableSpec<L>>` (tokens are `Clone`, not `Copy`), and `TokenError<L>` may
+  grow state context. Tokens remain transient engine internals — the standard token
+  carries no lifetime of its own ([§dd-dr:token-opacity]) — and the genericity never
+  enters the AST. `Span` — a generic byte range used by errors and cursors
   independently of tokenization — moved to the source topic (S0). This supersedes the
   earlier "scanning core is S0" stratum split (cf. [§dd-dr:three-strata]);
   the S0-testability property was traded for the freedom to keep state context in token
@@ -602,10 +609,11 @@ this hybrid):*
 - *Whitespace as its own token* — killed by parser ergonomics: every construct parser's
   peek grows a "maybe whitespace first" case; the pre/post-space encoding localizes that
   cost in the tokenizer. (For fairness: it would have bought a token-span partition
-  invariant, flag-free `move_past`/`move_to`, and a field-free `EndOfStream`.)
+  invariant, flag-free navigation, and a field-free `EndOfStream`.)
 - *Uniform `post_space: Span` on every token* — post-space is a per-kind
   syntactic fact; the WIP's variant-embedded instinct was right, and the uniform field's
-  only justification (the `skip_post_space` flag) is served by an accessor.
+  only justification (a skip-post-space flag on the move) is served by the reader's
+  named token edges.
 - *Bare `\` trigger tokens with parser-side name scanning* — the scan reads the name
   anyway; name bytes would belong to no token; stop-condition checks would re-scan per
   peek.
@@ -692,7 +700,7 @@ cannot be invented or shifted outside the reader that issued it; the test-only
 into a check against a parser inventing either.
 
 Positions replaced the bare byte offsets the reader and the parsers used to exchange
-(`pos()`, `move_to_pos`). One number did three jobs — a place in the text, a place in the
+(named in [§dd-dr:superseded-names]). One number did three jobs — a place in the text, a place in the
 token stream, and a quantity to compare for "did the reader move?" — which coincide only
 while one parse reads one source. A `SourceSpan` answers the first now, a stream position
 the other two.
@@ -724,15 +732,18 @@ from a string's length).
 
 Revisit if: a reader must expose more of a position than equality.
 
-#### Zero-copy tokens with ephemeral lifetime [§dd-dr:zero-copy-tokens]
+#### Zero-copy tokens [§dd-dr:zero-copy-tokens]
 
-Status: DECIDED (upheld through the token redesign).
+Status: DECIDED (upheld through the token redesign and the opacity redesign).
 
-`Token<'s, L>` holds `&'s str` slices plus `Span`s; `pre_space`/post-space are `Span`s, not
-`String`s. The `'s` lifetime never enters the AST.
-Revisit if: a streaming token source can't expose stable slices (that calls for a
-chunked-content reader design — see [§dd-dr:sources-and-spans]'s `SourceContent` retirement entry — not a
-change to the token type).
+Tokenization copies nothing out of the source. `StdToken<L>` holds byte ranges (its own
+extent, its preceding whitespace, its post-space and comment-delimiter sub-ranges) plus
+the `Arc`s a `GroupOpen` or `Specials` token already carries — no `String`s, and no
+lifetime at all; the standard reader slices its borrowed `&'s str` when a parser asks what
+a token is, and that borrow never enters the AST ([§dd-dr:token-opacity]).
+Revisit if: — answered by opacity. A reader whose content is not one stable `&str` (a
+source built mid-parse, a chunked backing) chooses its own `Lang::Token` and answers for
+it; the token type no longer has to fit every reader.
 
 #### `TokenReader` is the behavior extension point for tokenization [§dd-dr:token-reader]
 
@@ -742,10 +753,14 @@ Status: DECIDED (user).
 `scan_specials` hook); anyone needing genuinely different tokenization *behavior*
 (catcode-like schemes, non-textual sources) implements the trait. `peek` deliberately
 receives `&ParsingState<L>`, not `&TokenRules` — a catcode-like reader keeps its tables in
-`L::StateExt` ([§dd-dr:crates]). The peek/move_past/move_to protocol with `skip_post_space` /
-`rewind_pre_space` flags follows pylatexenc's proven `LatexTokenReaderBase` design; the
-flags are not vestigial (`\verb`-style parsers reposition before swallowed post-space).
-**Peek idempotence contract:** repeated peeks at one position with the *same state
+`L::StateExt` ([§dd-dr:crates]) — and nothing beyond the state reaches it
+([§dd-dr:reader-context-purity]). The speculative-`peek` plus repositioning protocol
+follows pylatexenc's proven `LatexTokenReaderBase` design; its two boolean flags are
+replaced by named token edges — `move_to(&token, edge)` and `move_to_position(&position)`
+are the only two ways to move ([§dd-dr:stream-position]) — and the capability the flags
+stood for is not vestigial (a `\verb`-style parser repositions at the `End` edge, before
+a swallowed post-space).
+**Peek idempotence contract:** repeated peeks at one stream position with the *same state
 instance* return the same result; implementations may memoize keyed on (position, `Arc`
 identity) — sound because states are immutable and `derived()` always mints a new `Arc`. A
 different state, however trivially derived, voids the obligation. (`StdTokenReader` does
@@ -889,15 +904,17 @@ Status: DECIDED (user, token-contract review).
 Six decisions closing contract gaps ahead of third-party `TokenReader`/`Lang`
 implementations:
 
-1. *`TokenKind::Comment` carries `start: Span`* (the matched start delimiter — mirrors
-   `NodeKind::Comment`: which delimiter fired is a per-instance fact). The content span is
-   `start.end..post_space.start`; consumers must **never** reconstruct it from
-   `content.len()` — the previous `post_space.start - content.len()` arithmetic (duplicated
-   in the nodes parser and the noise scan) silently assumed `content` was sliced verbatim
-   from the source, and a custom reader that normalizes content would underflow it: a
-   lib-code panic reachable from a legitimate impl of a public trait.
+1. *A comment's start delimiter is a per-instance fact the reader answers for* (which
+   delimiter fired mirrors `NodeKind::Comment`). The delimiter's span is
+   `source_span_between(&token, Start, ContentStart)` and the content's is
+   `(ContentStart, End)` — the `ContentStart` edge exists for exactly this
+   ([§dd-dr:stream-position]); consumers must **never** reconstruct either from
+   `content.len()` — the original `post_space.start - content.len()` arithmetic
+   (duplicated in the nodes parser and the noise scan) silently assumed `content` was
+   sliced verbatim from the source, and a custom reader that normalizes content would
+   underflow it: a lib-code panic reachable from a legitimate impl of a public trait.
 2. *Dangling-escape recovery uses a `Char(escape_char)` placeholder* spanning the escape
-   byte (`resume_pos` = its span end). The byte joins the pending chars run, so the tolerant
+   byte (the recovery resumes at that placeholder's end). The byte joins the pending chars run, so the tolerant
    parse keeps the partition invariant — consistent with [§dd-dr:errors]'s recovery principle (markup
    text in a `Chars` node, always with a diagnostic) and with the other content-preserving
    recoveries. Rejected alternatives: the empty `EndOfStream` placeholder (pylatexenc parity) — it
@@ -910,14 +927,17 @@ implementations:
    rule set (ABA). Every call site already held an `Arc`, so the widening was
    source-compatible in the library; the engine's group-interior memo already pinned its
    key `Arc`s the same way.
-4. *`move_to_pos(pos: usize)` is a required `TokenReader` method*, replacing the deleted
-   `resume_at` helper (which synthesized a zero-width `EndOfStream` marker and called
-   `move_to` — bypassing `StdTokenReader`'s bounds/char-boundary guards and silently
-   imposing a "`move_to` must be span-derived" contract on implementors). Deliberately
-   **no default body**: a positional move is a distinct capability every reader must
-   answer for, not a marker-token trick to inherit. The std readers' trait impls delegate
-   to their guarded inherent versions (the inherent forms remain — calling through the
-   generic trait needs `L` pinned; the delegation keeps the two from diverging).
+4. *Moving the stream to a remembered place is a required `TokenReader` capability*,
+   replacing the deleted `resume_at` helper (which synthesized a zero-width `EndOfStream`
+   marker and called `move_to` — bypassing `StdTokenReader`'s bounds and character-boundary
+   guards and silently imposing a "`move_to` must be span-derived" rule on implementors).
+   Deliberately **no default body**: such a move is a distinct capability every reader must
+   answer for, not a marker-token trick to inherit. *Reversed in part (2026-08-17, recorded
+   as a conscious reversal):* the required method was `move_to_pos(pos: usize)`, taking a
+   byte offset; it is retired in favor of `move_to_position(&L::StreamPosition)`, whose
+   argument only the issuing reader can produce ([§dd-dr:stream-position]). The capability
+   stays required and undefaulted for the reason recorded here; what changed is that the
+   place is no longer a number any caller can write down.
 5. *No `content()` on the trait — and no raw-content escape hatch at all* (user,
    follow-up). A `\verb`-style verbatim parser reads ordinary `Char` tokens under a
    derived state with every feature gate off (`enable_whitespace/multi_newline_paragraphs/
@@ -930,10 +950,10 @@ implementations:
    active: the body arrives as pure `Char` tokens and the terminator — multi-character
    strings included — as one `GroupClose`. The test-side `RawBlockParser` demonstrates
    the recipe for `\raw…\endraw`, inherited-close override test included. Doctrine:
-   construct parsers make no forward parsing decision from raw content;
-   `ParseContext::source` exists for staging `SourceSpan`s (and slicing the text of
-   spans already consumed through tokens, e.g. an environment name — span rendering, not
-   scanning). Cost accepted: char-at-a-time reads are slower than a substring search,
+   construct parsers make no forward parsing decision from raw content. A parser obtains
+   spans from the reader ([§dd-dr:no-context-source]) and may read the text of a span it
+   has already consumed through `SourceSpan::content` — e.g. an environment name — which
+   is span rendering, not scanning. Cost accepted: char-at-a-time reads are slower than a substring search,
    and such parsers are testable only against scanning readers (a fixed token list
    cannot re-tokenize under the verbatim state).
 6. *`TokenError`'s recovery payload is boxed* (`Option<Box<TokenRecovery>>`): every
@@ -954,11 +974,16 @@ implementations:
 Status: DECIDED (user).
 
 Compiled under `cfg(test)` only, `pub(crate)`, removed from the
-public exports. Every consumer is an in-crate test; its load-bearing role is the lockstep
+public exports. Every consumer is an in-crate test; its load-bearing role is the
 reader-agreement harness (each construct-parser suite runs every parse against
 `StdTokenReader` *and* a pre-scanned `TokenListReader` and asserts identical trees, stops,
 and diagnostics — the enforcement mechanism for "construct parsers never reach around the
-reader"), plus hand-built token lists for engine tests. Its fixed-list fidelity gap — no
+reader"), plus hand-built token lists for engine tests. It carries the second half of that
+enforcement too: it **rejects a token or a stream position it did not itself issue**
+(tokens matched against its list by extent and kind, positions against the set of offsets
+it has handed out), panicking as test infrastructure may. Since only a reader can produce
+either value ([§dd-dr:token-opacity], [§dd-dr:stream-position]), a parser that invented one
+— or carried one across from another reader — fails the agreement run. Its fixed-list fidelity gap — no
 re-tokenization under the peek state, so state-driven parsers like the verbatim recipe
 cannot run over it — is fine for a test tool but disqualifies it as a public reader
 contract. Rejected alternatives: deleting it outright (loses the lockstep verification); keeping it
@@ -1788,11 +1813,11 @@ documented on `DeriveError` itself.
 pylatexenc parity (`test_for_specials`: a strictly longer match beats an
 earlier-searched category, ties keep the first-searched); since equal-length matches at
 one position are the same spelling, the tie rule *is* redefinition shadowing.
-Provider-side `scan_specials` returns
-`TokenResult` (the exact shape of the `Lang` hook it feeds), not
-`Result<_, ProviderError>` — scanning providers keep the tokenizer's recoverable-error
-protocol, and the `ScopeStack::scan_specials` fold propagates the first `Err`
-(innermost-first) with no translation. Per-provider trigger chars are deliberately
+Provider-side `scan_specials` returns the exact shape of the `Lang` hook it feeds
+(`Result<Option<SpecialsMatch<L>>, SpecialsScanError>`), not
+`Result<_, ProviderError>` — scanning providers report in the scanning layer's own error
+form ([§dd-dr:specials-scan-errors]), and the `ScopeStack::scan_specials` fold propagates
+the first `Err` (innermost-first) with no translation. Per-provider trigger chars are deliberately
 state-independent and unioned at freeze: a mode-invisible provider's chars stay in the
 cached filter and its scan declines instead (conservative superset).
 *(c) Shapes:* `ProviderError` is a `#[non_exhaustive]` structured enum (`NotMutable`,
@@ -3500,19 +3525,14 @@ Entries below that spell the pair unboxed predate the boxing.*
 
 Status: DECIDED (implemented; formerly proposed).
 
-Bundles token reader + state + session handle, avoiding pylatexenc's three-argument threading
-through every parser. One place to extend later (e.g. depth limits, cancellation).
-`ParseContext` also carries
-`source: Arc<Source<L::SourceOrigin>>` — the source the token spans refer into, which
-staging a node's `SourceSpan` requires. Factory-created parsers
-(`make_invocation_parser(&self, invocation)`, later `ArgumentParser` entry points) have no
-constructor through which a caller could thread it, and it cannot ride on tokens or
-readers: the token layer deliberately carries only transient byte spans ([§dd-dr:errors] — no
-`Arc`-span infection; a reader-side accessor would force `StdTokenReader` origin-generic
-and `TokenListReader` to carry a source it doesn't have). The construct-parser layer is
-where byte spans become `Arc`-backed source spans, so the context is the honest carrier.
-`NodesParser::new`/`GroupParser::new` carry no redundant `source` parameters —
-single source of truth.
+Bundles token reader + state + session handle + the language's driver, avoiding
+pylatexenc's three-argument threading through every parser. One place to extend later
+(e.g. depth limits, cancellation). Factory-created parsers
+(`make_invocation_parser(&self, invocation)`, the `ArgumentParser` entry points) have no
+constructor through which a caller could thread any of it, which is what the context
+solves. It carries **no** source handle: locations come from the reader, which is the only
+party that knows which source a token's offsets belong to ([§dd-dr:no-context-source]).
+`NodesParser::new`/`GroupParser::new` likewise take no source — single source of truth.
 
 #### `ParseContext` carries no source handle [§dd-dr:no-context-source]
 
@@ -3524,10 +3544,10 @@ edges, or `source_span_within(begin, end)` over two stream positions — or from
 `SourceSpan` it already holds. The empty span at the current position, the anchor most
 diagnostics want, is `cx.here()`.
 
-Decisive reason: with a source on the context, the natural spelling
-(`SourceSpan::new(&cx.source, span)`) is also the wrong one as soon as a reader serves a
-parse from more than one source, and nothing in the types says which spans it is wrong
-for. Removing the handle makes the wrong span unspellable instead of merely discouraged
+Decisive reason: with a source on the context, the natural spelling — build a
+`SourceSpan` from the context's source and a byte range taken off a token — is also the
+wrong one as soon as a reader serves a parse from more than one source, and nothing in
+the types says which spans it is wrong for. Removing the handle makes the wrong span unspellable instead of merely discouraged
 ([§dd-dr:token-opacity]).
 
 The node tree is unaffected: a node's span is still one single-source `SourceSpan`, and
@@ -3589,7 +3609,7 @@ Status: DECIDED (user; a third option superseding both sketched ones).
 ```rust
 fn make_invocation_parser<'a>(
     &'a self,
-    invocation: Invocation<'a, /* 's, */ L>,  // callable_type, name, spec, trigger token
+    invocation: Invocation<'a, L>,  // callable_type, name, spec, the triggering token
 ) -> Box<dyn ConstructParser<L, Output = BuildId> + 'a> {
     Box::new(StdInvocationParser::new(invocation))
 }
@@ -3616,16 +3636,16 @@ loop can special-case the default path without touching the trait. (The benchmar
 was consciously deferred, not dropped — user decision; the obligation stands open,
 unscheduled.)
 *(Composition finding:* a composition running
-*inside* `parse(cx)` cannot mint a **new** `Invocation` for a construct it resolves
-mid-parse — `Invocation.name: &'s str`, and the `'s` source content is unreachable through
-`cx` (the source is `Arc`-owned; tokens and readers carry only byte spans, [§dd-dr:errors]). So a
-two-level dispatch — a `\begin` spec's parser calling the resolved environment spec's own
+*inside* `parse(cx)` cannot build a **new** `Invocation` for a construct it resolves
+mid-parse — `Invocation.name` borrows the matched name, which comes from the reader's view
+of a token the composition does not hold ([§dd-dr:token-opacity]). So a two-level dispatch
+— a `\begin` spec's parser calling the resolved environment spec's own
 `make_invocation_parser` — does not work with the `Invocation` shape; the standard
-composition instead drives `EnvironmentBodyParser` directly under the resolved spec.
-Relatedly, a *stored* trigger token cannot be handed back to `cx.tokens` (the uniform
-`parse` signature cannot tie it to the context's reader), so the
-takeover post-space reposition idiom is expressed positionally:
-`move_to_pos(token.post_space().start())`.)*
+composition instead drives `EnvironmentBodyParser` directly under the resolved spec. A
+*stored* triggering token, by contrast, is handed back to the context's reader without
+difficulty now that a token carries no lifetime of its own: a takeover repositioning past
+its trigger's swallowed post-space writes
+`cx.tokens.move_to(self.invocation.token, TokenEdge::End)`.)*
 
 #### `Lang::finalize_node`: one centralized finalization hook in the builder [§dd-dr:finalize-node]
 
@@ -3751,8 +3771,9 @@ Status: DECIDED (user; pylatexenc-informed).
 triggers, mirroring pylatexenc's well-tested pair:
 - *token condition* — a small closed enum (`Command(name)`,
   `GroupClose(group_type, close)`, `ParagraphBreak`, …) **or** a programmatic predicate
-  (`Fn(&Token) -> Result<bool, ParseError<_>>` — fallible,
-  [§dd-dr:hook-fallibility]);
+  (`Fn(&L::Token, &dyn TokenReader<'_, L>) -> Result<bool, ParseError<_>>` — fallible,
+  [§dd-dr:hook-fallibility]; the predicate holds no reader of its own, so it is handed
+  the one that produced the token, [§dd-dr:token-opacity]);
 - *node condition* — a programmatic predicate consulted after each node is assembled,
   receiving (node count, view of the just-staged node) — covers pylatexenc's
   `stop_nodelist_condition` uses (stop-after-one-node, `LatexSingleNodeParser`).
@@ -3763,9 +3784,12 @@ hook (consume amendment below); a node-condition match includes the triggering n
 stops after it; conditions are
 tested only at the parser's own nesting level (nested groups are consumed whole by the
 group parser, so an `\end` inside a brace group cannot terminate an environment body).
-`NodesParser` returns its `StopCause` — `TokenCondition { span }` / `NodeCondition` /
-`EndOfInput` / `UnexpectedGroupClose { span }` — and the *caller* decides which causes are
-errors ([§dd-dr:errors]).
+`NodesParser` returns its `StopCause` — `TokenCondition { span, after }` /
+`NodeCondition` / `EndOfInput` / `UnexpectedGroupClose { span, after }` — and the *caller*
+decides which causes are errors ([§dd-dr:errors]). Both token-bearing causes carry the
+matched token's `SourceSpan` **and** `after`, the stream position just past it: a caller
+that wants to skip the token can no longer compute that place from the span
+([§dd-dr:stream-position]).
 Deliberate deviations from pylatexenc: the node predicate sees (count, last node), not the
 whole node list on every iteration (pylatexenc's `stop_nodelist_condition(nodelist)`
 invites O(n²) rescans); predicates live only in tier-2 parser temporaries, never in spec
@@ -3785,18 +3809,19 @@ caller to adjudicate.
 `{ kind: TokenStopKind, consume: bool }` (the closed enum renamed `TokenStopKind`), so the
 flag binds to the presence of a token condition — an orphan `consume` with no condition is
 unrepresentable. On a match `NodesParser` either leaves the token (`consume = false`,
-reader parked at `span.start`) or takes it whole (`consume = true`, `move_past` past any
-syntactic post-space). Two reasons over the earlier always-unconsumed rule: (a) the common
+reader parked at the token's `Start` edge) or takes it whole (`consume = true`, moving to
+its `EndPastPostSpace` edge, past any syntactic post-space). Two reasons over the earlier always-unconsumed rule: (a) the common
 closer parsers (a group parser consumes its `}`, …) stop hand-writing the consume line; and
 (b) **atomicity** — consuming at match time uses the exact state that matched, whereas
 leave-then-re-peek re-tokenizes at `span.start` under whatever state is *now* current, which
 can reclassify the delimiter (a delta that drops the close rule makes `}` come back a
 `Char`, desynchronizing the caller). A post-hoc consume helper cannot fix this — it, too,
-re-peeks. `StopCause` accordingly split `StopConditionMet` into `TokenCondition { span }`
-(token stop) and `NodeCondition` (node stop), and `UnexpectedGroupClose` carries a `span`: the
+re-peeks. `StopCause` accordingly split `StopConditionMet` into `TokenCondition`
+(token stop) and `NodeCondition` (node stop), and `UnexpectedGroupClose` carries a span: the
 group parser builds its `Spanned` close delimiter from that span, which it can no
 longer re-peek once the token is consumed. No `consumed` field — the cause discriminant plus
-the caller's own `consume` already determine it. Consume is always `move_past(token, true)`:
+the caller's own `consume` already determine it. Consume always moves to the token's
+`EndPastPostSpace` edge:
 a *closing* token has no *content* space to preserve — a command's trailing space is its
 name-terminating **syntactic** post-space (a sub-range inside `span`, absorbed by the macro),
 and a `GroupClose` reports no post-space at all (any following whitespace is already the next
@@ -4491,8 +4516,8 @@ absorbing invocation (the configured spec sees only its own invocation).
 
 Status: DECIDED (user).
 
-New core trait `ParseDriver<L>`, defaulted methods only (`StdParseDriver` = the trivial
-impl carrying the `Recovery` knob), bound into the bundle as `Lang::Driver`;
+New core trait `ParseDriver<L>`, every method defaulted but one (`StdParseDriver` = the
+trivial impl carrying the `Recovery` knob), bound into the bundle as `Lang::Driver`;
 `ParseContext` gains `driver: &'a L::Driver`. The field is concretely typed through `L`,
 so preset parsers reach preset helper methods (a future `LatexlikeDriver::load_package`)
 fully typed — no downcasts; generic code sees only the trait. The driver owns:
@@ -4518,15 +4543,15 @@ below a driven parse — `initial_state_data`/`finalize_transition` (state layer
 while a parse is driven lives on the driver — instance methods, so behavior can carry
 configuration that static `Lang` hooks never could. Accepted asymmetry: specials
 resolution stays `Lang` (token time); command resolution is driver (parse time).
-*`ParseContext` doctrine:* cx returns to a data struct (tokens, source, state, session,
-driver). Policy helpers (`recover`, `probe_token`) are defined on the driver with thin
+*`ParseContext` doctrine:* cx returns to a data struct (tokens, state, session, driver —
+no source handle, [§dd-dr:no-context-source]). Policy helpers (`recover`, `probe_token`) are defined on the driver with thin
 delegating sugar kept on cx; invariant-bearing plumbing (`parse_construct` — the
 single normative descent entry point, its frame folding absorbing the separate
 `with_frame` composition at descent sites — `with_frame`,
 `implementation_error`) stays as non-overridable cx methods — pairing invariants must
-not be overridable. Every trait item is defaulted — `impl ParseDriver<L> for D {}`
-is a complete driver; the descent guard is engine-fixed, not a driver item
-([§dd-dr:descent-guard]).
+not be overridable. Every trait item but one is defaulted — a driver writes
+`make_token_reader` and inherits the rest ([§dd-dr:token-reader-hook]); the descent guard
+is engine-fixed, not a driver item ([§dd-dr:descent-guard]).
 Rationale: the session-purity argument (user) — `ParserSession` is organized scratch
 space, and a parser *provider* conceptually drives the parse; it was misfiled there, as
 was `Recovery`. One seam for provision + one home for parse behavior + typed preset
@@ -5368,18 +5393,19 @@ Four rules:
    documented panics **with non-panicking companions** (`NodeTree::get`, `Span::get`,
    `ChildRegion::staged`)
    — the std `Index`-vs-`get` convention: the panicking form for ids/spans the caller
-   minted from this very tree/source, the `Option` form for values of unknown
-   provenance; (b) *always-on precondition asserts* on the six
-   deep value functions `Span::new`, `Span::extend_to`, `Token::new`,
-   `SourceSpan::new`, `SourcePos::new`, and `skip_whitespace`: a documented-contract
-   violation panics in every build — these functions are deliberately infallible (no
+   obtained from this very tree/source, the `Option` form for values of unknown
+   provenance; (b) *always-on precondition asserts* on the five
+   deep value functions `Span::new`, `Span::extend_to`, `SourceSpan::new`,
+   `SourcePos::new` and `skip_whitespace`, and on the seven span-taking `StdToken`
+   constructors, which inherit the same slot for the span coherence each one asserts
+   (the eighth, `StdToken::end_of_stream`, takes no span and never panics): a
+   documented-contract violation panics in every build — these functions are deliberately infallible (no
    `Err` channel exists to prefer), the checks are O(1), and the always-on panic keeps
    invalid values unrepresentable where the release alternative was unspecified
    misbehavior or a later cryptic panic far from the cause (the std str/slice-indexing
-   convention). Each of the six sites documents the all-builds panic in its rustdoc
-   with a pointer to rule 3, pinned by `should_panic` tests; invalid
-   `Span`/`Token`/`SourceSpan`/`SourcePos` values are thereby unrepresentable
-   through the public API (`TokenListReader::new` is `cfg(test)`-only test
+   convention). Each site documents the all-builds panic in its rustdoc with a pointer
+   to rule 3, pinned by `should_panic` tests; invalid `Span`/`StdToken`/`SourceSpan`/`SourcePos` values are thereby
+   unrepresentable through the public API (`TokenListReader::new` is `cfg(test)`-only test
    infrastructure and keeps a debug assert).
 4. Everything else returns an error.
 
@@ -5456,16 +5482,17 @@ tolerant parses.
 Rationale: tolerant parsing is a first-class requirement for document tooling (FLM,
 linters, editors), not an afterthought flag; and a diagnostics sink is the API-honest
 replacement for logging side channels (see [§dd-dr:dependencies]).
-Concrete shape: `TokenError<'s>` = structured `TokenErrorKind` (closed enum:
+Concrete shape: `TokenError<L>` = structured `TokenErrorKind` (closed enum:
 end-of-stream-after-escape, forbidden-char — replaces pylatexenc's stringly
-`error_type_info`) + byte `Span` + `Option<TokenRecovery<'s>>`, where `TokenRecovery` =
-placeholder token + an explicit `resume_pos` (explicit rather than derived from the
-token: a custom source's placeholder need not end where reading resumes, and the explicit
-position carries the advancement contract; the built-in recoveries all resume at their
-placeholder's span end — the dangling-escape placeholder is a `Char(escape_char)`
-covering the escape byte). Token-level errors carry plain `Span`s, not `SourceSpan`s —
-they are transient like tokens; the session converts whatever it reports into Arc-span
-`Diagnostic`s. The reader itself is policy-free: it always returns `Err` with the
+`error_type_info`) + a `SourceSpan` + `Option<TokenRecovery<L>>`, where `TokenRecovery` =
+placeholder token + an explicit `resume` stream position (explicit rather than derived
+from the token: a custom source's placeholder need not end where reading resumes, and the
+explicit position carries the advancement requirement; the built-in recoveries all resume
+at their placeholder's end — the dangling-escape placeholder is a `Char(escape_char)`
+covering the escape byte). A token error's location is **source-qualified at the reader**:
+only the reader knows which source its offsets belong to, so it is the party that can
+name one ([§dd-dr:no-context-source]); the session boxes the condition into a
+`Diagnostic` around that span. The reader itself is policy-free: it always returns `Err` with the
 recovery attached, and the session's `Recovery` policy decides (the original per-reader
 `tolerant_parsing` flag is superseded).
 Rejected alternatives: a token-agnostic `TokenError<R>` designed blind against no real
@@ -5479,7 +5506,8 @@ Three rules:
 1. *Recovery happens where the problem is detected.* `ParseContext` exposes the `Recovery`
    policy and the diagnostics sink behind a helper (tolerant: record the diagnostic and
    continue; strict: return `Err`). Token errors continue with their `TokenRecovery` token
-   (the reader is already repositioned via `resume_pos`); each parse-level condition
+   (the content loop repositions the reader to the recovery's resume position); each
+   parse-level condition
    defines its recovery at its site — unresolvable command: diagnostic + span-backed
    chars-node fallback (markup text in a `Chars` node is an accepted tolerant-recovery
    artifact, always accompanied by a diagnostic); missing mandatory argument: absent +
@@ -5498,25 +5526,27 @@ Rejected alternatives: pylatexenc's recovery-attributes-on-exceptions (`recovery
 for having no context object, and exactly the caller/callee reader-state ambiguity that
 rule 2 eliminates.
 
-#### `resume_pos` must advance the reader; violations abort even in tolerant mode [§dd-dr:resume-pos-contract]
+#### A recovery's resume position must move the reader; violations abort even in tolerant mode [§dd-dr:resume-pos-contract]
 
 Status: DECIDED (user, code-review follow-up).
 
 The content loop's recovery arm
-is the one arm that consumes no token, so its termination rests entirely on `resume_pos`
-repositioning the reader strictly past the failed read's start. Both in-crate producers
-satisfy this, but the contract is reachable by third-party code through two public
-extension points (a custom `TokenReader::peek`, a `Lang::scan_specials` returning a
-`TokenRecovery`), and a violating `resume_pos` was demonstrated to hang `NodesParser` in
-release builds while growing the diagnostics sink unboundedly. The contract is now stated
-on `TokenRecovery::resume_pos` and enforced at the adoption site (`nodes_parser.rs`
-content loop): if the reader did not advance after the positional move (`move_to_pos`;
-[§dd-dr:token-contract-hardening], item 4), the parse aborts with the
-token error as a `ParseError` — *even in tolerant mode*, whose promise is a best-effort
-tree, not tolerance of non-termination; an abort is the doctrine-blessed failure mode
-(no panic, rule 3 above). The guard lives at the adoption site and not inside the move
-because `move_to_pos` is deliberately bidirectional (it is also the absent-argument and
-environment-name rewind), so it can assert nothing about direction.
+is the one arm that consumes no token, so its termination rests entirely on
+`TokenRecovery::resume` repositioning the reader away from the failed read's start. The
+one in-crate producer class — readers — satisfies this, but the requirement is reachable
+by third-party code through a custom `TokenReader::peek`, and a violating resume position
+was demonstrated to hang `NodesParser` in release builds while growing the diagnostics
+sink unboundedly. It is stated on `TokenRecovery::resume` and enforced at the adoption
+site (`nodes_parser.rs` content loop): the loop compares the reader's position before and
+after `move_to_position(&recovery.resume)`, and an unchanged position aborts the parse
+with the token error as a `ParseError` — *even in tolerant mode*, whose promise is a
+best-effort tree, not tolerance of non-termination; an abort is the doctrine-blessed
+failure mode (no panic, rule 3 above). The check is equality, not order: stream positions
+compare only for equality ([§dd-dr:stream-position]). The guard lives at the adoption site
+and not inside the move, because repositioning is deliberately bidirectional (it is also
+the absent-argument and environment-name rewind), so the move itself can assert nothing
+about direction. Since the specials hook can no longer return a recovery at all
+([§dd-dr:specials-scan-errors]), a reader is the only party that can violate this.
 *Noted for the future:* contract violations by extension-point code are
 a different *category* from malformed input, and the error model may eventually want to
 distinguish them (e.g. a `ParseError` vs. an `ImplementationError`/contract-violation
@@ -5719,9 +5749,12 @@ The two
 built-in structs and *unwraps* `Custom`; a named `ParseError::from_token_error(…)`
 constructor replaces the lift currently duplicated at `try_peek` (`constructs/mod.rs`) and
 the content-loop recovery arm (`nodes_parser.rs`).
-Rationale: `scan_specials` participates in the recovery protocol but could only lie with
-tokenizer-internal kinds; one extension mechanism (`DiagnosticData`) serves both layers,
-while the token layer keeps a concrete matchable enum for the recovery protocol.
+Rationale: a specials scan reports conditions of the language's own, which
+tokenizer-internal kinds could only misname; one extension mechanism (`DiagnosticData`)
+serves both layers, while the token layer keeps a concrete matchable enum for the recovery
+protocol. The scan itself is outside that protocol — it reports errors and never
+recoveries ([§dd-dr:specials-scan-errors]), so its condition travels in a
+`SpecialsScanError` that the reader lifts into an unrecoverable `TokenError`.
 
 #### `Diagnostics` retention is capped; `render_all` shares line indices [§dd-dr:diagnostics-retention]
 
@@ -6298,6 +6331,33 @@ re-opens a settled argument:
   `SerializableObjects` as a `LangFeature` — objects self-describe, the lang gate is
   `SerializableLang` ([§dd-dr:serialize-capability-traits]); a public `ToSerialValue`
   derive — the serde bridge ([§dd-dr:serial-value-model]).
+- From the token-layer redesign ([§dd-dr:token-opacity], [§dd-dr:stream-position],
+  [§dd-dr:no-context-source]): `Token<'s, L>` as a struct with a lifetime — the token
+  type is `StdToken<L>`, opaque and lifetime-free, and `Token` is now the marker
+  **trait** on `Lang::Token`; with it `Token::new` — one constructor per kind
+  (`StdToken::char`, `group_open`, …); `TokenKind` variants carrying spans — the
+  stored-token field names `TokenKind::Comment::{start, post_space}` and
+  `TokenKind::Command::post_space` (the view carries written spellings, and a span is a
+  reader answer between two `TokenEdge`s), and the interim view name `TokenKindView`
+  (the view *is* `TokenKind`); `TokenReader::{pos, move_to_pos, move_past,
+  move_to(&token, bool)}` and `StdTokenReader::{pos, move_to_pos}` — the two moves are
+  `move_to(&token, edge)` and `move_to_position(&position)`, and the interim
+  `move_to_edge`; `TokenRecovery::resume_pos` — the field is `resume`, a stream
+  position; `ParseContext::source` — there is no source handle;
+  `stage_invocation(.., end_pos: Option<usize>)` — the end is `Option<&L::StreamPosition>`;
+  `SpecialsMatch<'s, L>` and `SpecialsMatch::name` — the name is the matched text;
+  `TokenResult<'s, L, T>`, `Invocation<'a, 's, L>` and `CallableQuery<'a, 's, L>` — none
+  of the three carries a content lifetime any more; `CallableQuery::token` +
+  `CallableQuery::with_token` (a token handed to a party with no reader to read it with)
+  and their view-carrying successors `CallableQuery::token_kind` +
+  `CallableQuery::with_token_kind` and `resolve_command(.., token_kind: TokenKind)` — the
+  resolve chain receives `(&L::Token, &dyn TokenReader<'_, L>)` and the query carries
+  name and callable syntax only; `Invocation::kind` — a cached view beside its own
+  token; bare-view hook signatures for `TokenStopKind::Predicate` and
+  `GroupChildState::Compute` — both take the token and its reader;
+  `resolve_command(.., token: &Token)` without the reader;
+  `make_paragraph_break_node(.., token, source_content)` — the hook takes the break's
+  `SourceSpan`; and `probe_token(.., source, ..)` — no source parameter.
 
 ## Crate organization and dependency model [§dd-dr:crates]
 
@@ -7418,7 +7478,7 @@ would force an ext-composition story onto every framework — the preset stays
 Revisit if: a third math-group form with distinct downstream semantics is identified
 (the closed enum makes adding it a conscious breaking change, accepted).
 
-#### The preset driver: pillar functions + generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
+#### The preset driver: public behavior functions + the generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
 
 Status: DECIDED (user, API-review session).
 
@@ -7514,7 +7574,8 @@ holding the full argument.
 - **Whitespace as its own token kind** ([§dd-dr:tokens]) — every construct parser's peek grows a
   "maybe whitespace first" case; pre/post-space spans localize the cost in the tokenizer.
 - **Uniform `post_space` field on `Token`** ([§dd-dr:tokens]) — post-space is a per-kind syntactic
-  fact (commands, comments); an accessor serves `move_past`, the field taxed every token.
+  fact (commands, comments); the reader's token edges answer it, the field taxed every
+  token.
 - **Maximal-run `Chars` tokens** ([§dd-dr:tokens]) — a token is an atomic unit; run-splitting
   machinery (conservative stop sets) bought speed the node level didn't need and cost
   char-by-char construct parsing.
