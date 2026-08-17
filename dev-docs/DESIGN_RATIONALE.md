@@ -159,8 +159,8 @@ payloads and specs).
 ## Zero-copy by default [§dd-dr:zero-copy]
 
 Tokens and nodes reference source content by byte spans; owned `String`s appear only where
-content genuinely differs from any source slice (synthesized content). Transient borrow
-lifetimes (tokens borrowing the current source) are fine as long as they never enter the AST.
+content genuinely differs from any source slice (synthesized content). Transient borrows held
+by a token reader over the source it is scanning are fine as long as they never enter the AST.
 
 ## Deterministic dispatch over registry scanning [§dd-dr:deterministic-dispatch]
 
@@ -547,8 +547,9 @@ reader reports through its `TokenKind` view, since a token itself is opaque to p
   without a state field. Hot-path guard: `Lang::specials_trigger_chars(&StateData)`
   reports possible first characters (`TriggerChars`; `Any` = conservative fallback for
   dynamic scanners), cached per state instance like the `PrefixTable` and consulted before
-  any dyn call. The scan returns `TokenResult`, so scanner errors participate in the
-  recovery-token protocol.
+  any dyn call. The scan answers `Result<Option<SpecialsMatch<L>>, SpecialsScanError>`; a
+  scan error is an implementation error the reader lifts into an unrecoverable
+  `TokenError`, never a recovery ([§dd-dr:specials-scan-errors]).
 - **Syntactic vs. content whitespace** — the principle that decides every whitespace
   placement question: *pre-space is content whitespace* (belongs to the document flow;
   becomes whitespace chars nodes, [§dd-dr:nodes]), *post-space is syntactic whitespace* (consumed by
@@ -740,10 +741,12 @@ Tokenization copies nothing out of the source. `StdToken<L>` holds byte ranges (
 extent, its preceding whitespace, its post-space and comment-delimiter sub-ranges) plus
 the `Arc`s a `GroupOpen` or `Specials` token already carries — no `String`s, and no
 lifetime at all; the standard reader slices its borrowed `&'s str` when a parser asks what
-a token is, and that borrow never enters the AST ([§dd-dr:token-opacity]).
-Revisit if: the former clause — a token source that cannot expose stable slices — is
-answered by opacity: such a reader chooses its own `Lang::Token` and interprets it itself,
-so the token type no longer has to fit every reader.
+a token is, and that borrow never enters the AST ([§dd-dr:token-opacity]). The earlier
+revisit condition — a token source that cannot expose stable slices — is answered by
+opacity: such a reader chooses its own `Lang::Token` and interprets it itself, so the token
+type no longer has to fit every reader.
+Revisit if: the standard reader itself must serve content it cannot slice out of a single
+`&str` — the copy-free story is then `StdToken`'s to re-settle, not the trait's.
 
 #### `TokenReader` is the behavior extension point for tokenization [§dd-dr:token-reader]
 
@@ -812,9 +815,11 @@ everything else — as a match to a spec whose parser diagnoses it.
 
 Two riders. The specials name is the matched text (`content[pos..end]`) rather than a
 field the hook fills separately, so what used to be advice ("should be the matched slice")
-is now structure. And the reader checks the match end it is given (inside the content, on
-a character boundary): a hook returning a bad one has violated the documented precondition
-stated on the hook, and the reader reports an implementation error rather than panicking
+is now structure. And the reader checks every offset the hook hands it before using it:
+the match end (inside the content, on a character boundary) and, on the error path, the
+reported span (in range, both ends on character boundaries) before qualifying it with its
+own source. Either violates a precondition documented on the hook, so the reader answers
+with an unrecoverable implementation error rather than panicking on the slice
 ([§dd-dr:panic-policy]).
 
 Rejected alternatives: a hook-produced `TokenRecovery` (expressible only in the hook's own
@@ -889,7 +894,8 @@ Revisit if: per-instance group data beyond class + spellings is needed — that 
 
 Status: DECIDED (user).
 
-`Command { name, escape_char: char, post_space }`.
+The view is `Command { name, escape_char }` (the post-space is not view data: it is the
+reader's `End..EndPastPostSpace` answer).
 Rationale: [§dd-dr:specs]'s lookup design requires `CallableQuery { syntax: Command { escape_char } }`,
 the escape char was not recoverable from the token, and the nodes parser must not reach
 around the reader into raw content ([§dd-dr:tokens], `EndOfStream` rationale). The tokenizer knows
@@ -1574,22 +1580,21 @@ lint can warn on shadowing if ever wanted.
 Status: DECIDED (closes the deferred half of [§dd-dr:lexical-shadowing]).
 
 `lookup(&CallableQuery, &ParsingState<L>) -> Option<Arc<dyn CallableSpec<L>>>`, where
-the query carries `callable_type`, `name`, a `CallableSyntax` (`Command { escape_char }` /
-`Specials` / `Other`), and `token: Option<&Token>`.
+the query carries `callable_type`, `name`, and a `CallableSyntax` (`Command { escape_char }` /
+`Specials` / `Other`).
 *Why a syntax field:* with several `CommandRule`s in scope, `\foo` and `#foo` both tokenize as
-`Command { name: "foo" }`, and the escape character is **not** recoverable from the token alone
-— a token carries spans and borrowed substrings, not access to the source content behind them.
-So the syntax context must be explicit data on the query.
-*Why the token too (and why `Option`):* lookups may want `pre_space`/span context (user
-request); it is optional because specials resolution happens *inside* the scan hook before any
-token exists, and synthesized invocations never have one. The struct form absorbs future
-context fields without dyn-trait signature churn.
+`Command { name: "foo" }`, so the escape character has to travel as data on the query —
+providers see no token at all and could not read one if they did.
+*Why no token:* scopes and packages look a callable up by name and callable syntax, nothing
+more; a language that must dispatch on token details does so in `ParseDriver::resolve_command`,
+which receives the token and its reader ([§dd-dr:token-opacity]). The struct form absorbs
+future context fields without dyn-trait signature churn.
 Rejected alternatives: bare `(ct, name, state)` (forces presets to multiply `CallableTypeId`s to encode
-syntax); a mandatory `&Token` parameter (lifetime noise on a dyn trait, and inconsistent —
-sometimes there is no token).
+syntax); a token on the query, mandatory or optional (a provider holds no reader, and an opaque
+token can only be read through its reader — the token would be dead weight).
 *Mode-awareness*, as proposed: the `&ParsingState<L>` parameter lets a preset's lookup dispatch
-on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state, syntax, and
-token alike. This replaces an earlier proposal's hard-coded `math_mode_macros` tables, which
+on `state.ext()` (FLM's `\vec` in math mode); the core `Library` ignores state and syntax
+alike. This replaces an earlier proposal's hard-coded `math_mode_macros` tables, which
 contradicted [§dd-dr:no-privileged-concepts].
 (The lookup contract has since rehomed to `SpecsProvider::retrieve_spec` — fallible,
 part of a richer provider trait — with `CallableQuery` and its rationale carried over
@@ -2398,8 +2403,9 @@ Status: DECIDED (user).
    the recorded post-space sits between the name and the first argument region — a
    sub-range of the node's span, not necessarily trailing — and environment-shaped
    callables record empty post-space.)
-4. *End of stream:* `EndOfStream.pre_space` materializes as a final whitespace-only `Chars`
-   node.
+4. *End of stream:* the whitespace before the end-of-stream token — the reader's
+   `source_span_between(&tok, StartBeforePreSpace, Start)` answer — materializes as a final
+   whitespace-only `Chars` node.
 5. *Partition invariant:* sibling spans partition the parent's *content interior* exactly —
    `List` bodies, `Group` interiors, the root. For callables: argument/slot regions tile
    the child list (builder-enforced), the children block is span-contiguous, and unrecorded
@@ -2408,7 +2414,7 @@ Status: DECIDED (user).
    builder law, so a future construct that legitimately breaks byte-accounting amends a
    test, not the architecture. The core checker is payload-blind; the payload-dependent
    pins — macro spelling + post-space (the childless arm pins containment, not span-end:
-   a takeover's `stage_invocation(.., end_pos: Some)` legitimately claims extent past
+   a takeover's `stage_invocation(.., end: Some(&position))` legitimately claims extent past
    the trigger), the specials name-as-written prefix, the environment
    `write_begin`/`write_end` bytes — live in the **preset checker**
    `check_latexlike_tree_invariants`, layered on top ([§dd-dr:invocation-syntax]).
@@ -3682,12 +3688,14 @@ crate-private, so parsers cannot stage around it. [§dd-dr:ext-minting].)*
 
 Status: DECIDED (user; return type refined — next two entries).
 
-`Command` tokens
-resolve through `fn resolve_command(state, &token) -> CommandResolution<Self>`
-(`Resolved(ResolvedCallable { callable_type, spec })` / `Unresolved { detail }`);
-typically dispatches to the state's libraries via
-`CallableQuery { syntax: Command { escape_char }, … }` — the token now carries its escape
-char ([§dd-dr:tokens]). An `Unresolved` answer → the nodes parser diagnoses and recovers ([§dd-dr:errors]).
+`Command` tokens resolve through
+`fn resolve_command(&self, state, token: &L::Token, tokens: &dyn TokenReader<'_, L>) ->
+Result<CommandResolution<L>, ParseError<…>>` (the hook lives on `ParseDriver`, not `Lang`;
+`Resolved(ResolvedCallable { callable_type, spec })` / `Unresolved { detail }`). It typically
+dispatches to the state's scopes, building the query from the token's view —
+`tokens.token_kind(token)` answers `Command { name, escape_char }`, which becomes
+`CallableQuery { name, syntax: Command { escape_char }, … }` ([§dd-dr:token-opacity]).
+An `Unresolved` answer → the nodes parser diagnoses and recovers ([§dd-dr:errors]).
 Specials need no hook: recognition = resolution; the token already carries its spec.
 Rationale: the dispatch loop needs `(CallableTypeId, spec)` for command tokens and the
 core cannot know a preset's type ids; follows the `scan_specials` precedent (a `Lang` hook,
@@ -3706,8 +3714,8 @@ is `CommandResolution` — `Resolved(ResolvedCallable)` or `Unresolved { detail:
 Option<String> }` — and the dispatch sites hand the detail to the `UnresolvableCommand`
 condition (field `detail`, serialized; hand-written `Display` appends it parenthetically).
 The trait default answers `Unresolved` with a core-provided detail ("command resolution is
-not implemented by this language — implement `Lang::resolve_command` or use a preset"),
-so the forgot-the-hook wall names its own cause; `From<Option<ResolvedCallable>>` maps
+not implemented by this language's driver — implement `ParseDriver::resolve_command` or use
+a preset"), so the forgot-the-hook wall names its own cause; `From<Option<ResolvedCallable>>` maps
 lookup misses to detail-less `Unresolved`, so implemented resolvers stay bare unless they
 opt in. The detail ships in **all** builds — it is precise by construction (only the
 answering resolver produces it), so debug-gating buys nothing.
@@ -3755,10 +3763,13 @@ channel are distinct and both documented on the hook.)
 
 Status: DECIDED (user; upgraded from "core default only").
 
-`fn make_paragraph_break_node(state, &token) -> NodeKind<Self>`; default: a
-whitespace-only `Chars` kind, `TextContent::Spanned` over the full token span (newlines
-included). The *core* stages the returned kind with the token's span and the current state —
-a `Lang` cannot stage nodes itself.
+`fn make_paragraph_break_node(&self, state, break_span: &SourceSpan<L::SourceOrigin>) ->
+NodeKind<L>` on `ParseDriver`; default: a whitespace-only `Chars` kind,
+`TextContent::Spanned` over the full break span (newlines included). The *core* stages the
+returned kind with the span it passed in and the current state — a driver cannot stage nodes
+itself. `break_span` is the break's span as the reader answers it, so a callable-shaped kind
+takes the break's spelling from `break_span.content()` (the preset's specials-formed break
+does exactly that, with `LatexlikeInvocationSyntax::specials_form()` as its payload).
 Rationale: paragraph-break representation belongs to the preset;
 returning a `NodeKind` keeps callable-shaped paragraph breaks (FLM) expressible without a
 redesign, while the default preserves the whitespace-as-chars invariant ([§dd-dr:nodes]).
@@ -4746,14 +4757,15 @@ shorthand-not-second-path principle):
 3. **The canned invocation-staging helper** — a `ParseContext` method
    wrapping the one staging door (`cx.stage_node`, [§dd-dr:ext-minting]):
    `cx.stage_invocation(&invocation, arguments: ParsedArguments<L>, slots:
-   ParsedSlots<L>, children: Vec<BuildId>, end_pos: Option<usize>) ->
+   ParsedSlots<L>, children: Vec<BuildId>, end: Option<&L::StreamPosition>) ->
    ConstructParserResult<L, BuildId>` —
    builds the `CallableData` (four of its seven fields are transcriptions from
    the invocation and trigger), computes the node span, mints the
    invocation-syntax payload via `FromInvocation`, stages, returns the id.
-   `end_pos: None` = the std rule — last staged
-   child's span end, else the trigger's end; `Some` serves takeovers whose consumed
-   extent outruns their last child (rest-of-line, heredoc shapes). **No
+   `end: None` = the standard rule — the last staged child's span end when that child
+   lies in the trigger's source, otherwise the current stream position; `Some` serves
+   takeovers whose consumed extent outruns their last child (rest-of-line, heredoc
+   shapes). **No
    `callable_type`/`name` overrides**: the helper is the transcription-case
    shorthand only — the environment takeover overrides both and its span outruns
    its children ([§dd-dr:environment-scaffolding]), so environment-class
@@ -7478,7 +7490,7 @@ would force an ext-composition story onto every framework — the preset stays
 Revisit if: a third math-group form with distinct downstream semantics is identified
 (the closed enum makes adding it a conscious breaking change, accepted).
 
-#### The preset driver: public behavior functions + the generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
+#### The preset driver: pillar functions + generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
 
 Status: DECIDED (user, API-review session).
 

@@ -1937,7 +1937,7 @@ the user's explicit approval of the drafted text.
 
 - **Branch**: `bt-5-docs` (off `main` at `a729f7f`, which contains every code stage).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-5-docs`.
-- **Status**: implemented — awaiting review. Date: 2026-08-18.
+- **Status**: review round 1 applied — awaiting re-review. Date: 2026-08-18.
 - **Commits** (`git log --oneline main..bt-5-docs`, newest first; the PROGRESS update
   itself follows them):
 
@@ -1984,7 +1984,7 @@ Every one of the six is referenced from ARCHITECTURE (gate below).
 | `[§dd-dr:specs]` topic, the scope-stack fold paragraph | **not in §7's table** — provider-side `scan_specials` returns `Result<Option<SpecialsMatch<L>>, SpecialsScanError>`, not `TokenResult` |
 | `[§dd-dr:parse-driver]` | **not in §7's table** — "defaulted methods only" and "every trait item is defaulted" corrected to "all but one"; the `ParseContext` field list drops `source` |
 | `[§dd-dr:rejected-patterns]` | the uniform-`post_space` bullet no longer says "an accessor serves `move_past`" (this is the line §7's table attributed to `[§dd-dr:preset-driver-pillars]`, whose `####` heading merely precedes it) |
-| `[§dd-dr:preset-driver-pillars]` | **title only** — the banned metaphor is out of the heading ("public behavior functions + the generic `LatexlikeDriver<LLL>` assembly"); the label is untouched. See open question 1 |
+| `[§dd-dr:preset-driver-pillars]` | **untouched after review round 1** — the round-1 title change was reverted to `main`'s wording; see review round 1, fix 12 and open question 1 |
 | `[§dd-dr:superseded-names]` | a new bullet with the redesign's superseded names (PLAN §1.14): the `Token<'s, L>` struct and `Token::new`, span-carrying `TokenKind` fields, `TokenKindView` and `move_to_edge` as interim names, `pos`/`move_to_pos`/`move_past`/two-flag `move_to`, `TokenRecovery::resume_pos`, `ParseContext::source`, `end_pos`, `SpecialsMatch<'s, L>`/`::name`, the three `'s`-carrying type spellings, `CallableQuery::token`/`with_token` and the view-only successors, `Invocation::kind`, the bare-view hook signatures, the reader-less `resolve_command`, the old paragraph-break hook and `probe_token`'s source parameter |
 
 ### ARCHITECTURE sections touched
@@ -2075,13 +2075,13 @@ PLAN §1 disagreed, the merged code decided — see the open questions.
 
 ### Open questions
 
-1. **`[§dd-dr:preset-driver-pillars]`: title fixed, body not.** The heading no longer
+1. **`[§dd-dr:preset-driver-pillars]`: title fixed, body not.** ~~The heading no longer
    says "pillar", but the entry's body uses the word about fifteen times, and so do
-   `techy/src/latexlike/driver.rs`'s section comments and four test names. Renaming the
-   term across documents and code is a naming decision for the user, not a documentation
-   stage; the title change alone leaves the entry internally inconsistent until then. If
-   the user prefers, the title can go back and the whole rename can be scheduled with the
-   documentation walk-through in `TODO_Big.md`.
+   `techy/src/latexlike/driver.rs`'s section comments and four test names.~~
+   **Answered in review round 1 (orchestrator):** the title is reverted to `main`'s
+   wording. A title-only rename is inconsistent with a body, a label, and code that keep
+   the term, and the pre-existing word is owned by the standing documentation
+   walk-through recorded in `TODO_Big.md` — which is where the whole rename belongs.
 2. **Where PLAN §1 and the merged code disagreed, the documents describe the code.**
    The three places: the number of token edges (five, §1.17 ruling O-3 — §7 item 2 still
    said four); `Invocation` has no `kind` field and the resolve chain takes the token and
@@ -2091,3 +2091,120 @@ PLAN §1 disagreed, the merged code decided — see the open questions.
 3. **ARCHITECTURE is 78 KB**, against the ~50 KB target its own maintenance section
    states; this stage added about 4 KB, almost all of it the rewritten token section. The
    standing simplification pass in `TODO_Big.md` owns the reduction.
+
+### Review round 1 (fixes applied 2026-08-18)
+
+The stage came back with seven required fixes (stale API spellings that survived the
+sweep, all in DESIGN_RATIONALE unless noted), four adopted suggestions, and one
+orchestrator ruling. Every claim below was re-verified against the merged tree.
+
+1. `[§dd-dr:callable-query]` — the query no longer carries a token. Field list is
+   `callable_type`, `name`, `syntax` (`scopes/mod.rs:106-114`, ruling O-1b); the "why the
+   token too" paragraph is replaced by "why no token" (scopes and packages look up by
+   name and callable syntax; a language that must dispatch on token details does so in
+   `ParseDriver::resolve_command`, which receives the token and its reader); the
+   token-carrying form moved to `Rejected alternatives:` with its killing flaw (a
+   provider holds no reader and cannot read an opaque token); the "a token carries spans
+   and borrowed substrings" clause is gone — the escape character is query data precisely
+   because providers see no token; "and token alike" dropped.
+2. ARCHITECTURE `[§dd-arch:specs]` lookup line: "(name, form, syntax, optional token)" →
+   "(name, form, syntax)".
+3. `[§dd-dr:resolve-command-hook]` — the merged shape:
+   `resolve_command(&self, state, token: &L::Token, tokens: &dyn TokenReader<'_, L>) ->
+   Result<CommandResolution<L>, ParseError<…>>`, with a parenthetical that the hook lives
+   on `ParseDriver` (the heading's `Lang::` prefix and the label are untouched), and the
+   scopes query built from `tokens.token_kind(token)` (`engine/driver.rs:1001-1005`).
+   Follow-on in `[§dd-dr:resolution-detail]`: the quoted default detail string now matches
+   the code ("…by this language's driver — implement `ParseDriver::resolve_command`…",
+   `engine/driver.rs:712-714`).
+4. `[§dd-dr:paragraph-break-hook]` —
+   `make_paragraph_break_node(&self, state, break_span: &SourceSpan<L::SourceOrigin>) ->
+   NodeKind<L>` on `ParseDriver` (`engine/driver.rs:337`); the core stages the returned
+   kind with the span it passed in; a callable-shaped kind takes the break's spelling from
+   `break_span.content()` and its payload from `LatexlikeInvocationSyntax::specials_form()`
+   (`latexlike/driver.rs:273-288`).
+5. `[§dd-dr:command-escape-char]` — the view is `Command { name, escape_char }`
+   (`token/token.rs:103-109`); the post-space is named as the reader's
+   `End..EndPastPostSpace` answer, not a variant field.
+6. `[§dd-dr:takeover-staging-sugar]` — `end: Option<&L::StreamPosition>`, and the
+   default rule as implemented (`constructs/mod.rs:357-400`): the last staged child's span
+   end **when that child lies in the trigger's source**, otherwise the current stream
+   position.
+7. `[§dd-dr:span-invariants]` — `stage_invocation(.., end: Some(&position))`; item 4's
+   end-of-stream whitespace is a reader answer
+   (`source_span_between(&tok, StartBeforePreSpace, Start)`), not a `pre_space` field read.
+8. `[§dd-dr:zero-copy]` principle — "transient borrow lifetimes (tokens borrowing the
+   current source)" → transient borrows **held by a token reader** over the source it is
+   scanning; the standard token has no lifetime.
+9. `[§dd-dr:zero-copy-tokens]` — the "answered by opacity" sentence moved into the body;
+   `Revisit if:` now states a condition (the standard reader must serve content it cannot
+   slice out of a single `&str`).
+10. `[§dd-dr:specials-scan-errors]` — the reader validates the hook's **error span** as
+    well as the match end before qualifying it with its own source, answering an
+    unrecoverable implementation error rather than panicking on the slice
+    (`token/reader.rs:622-645`, `:565-584`).
+11. `[§dd-arch:token]` — `next` is named (peek + `move_to(&token, EndPastPostSpace)`), so
+    the section covers all eleven trait methods.
+12. `[§dd-dr:preset-driver-pillars]` — **title reverted to `main`'s wording** (orchestrator
+    ruling; the answer to open question 1 above). A title-only rename is inconsistent with
+    the label, the body, and `latexlike/driver.rs`; the pre-existing banned word belongs to
+    the standing documentation walk-through in `TODO_Big.md`.
+
+One further correction was made while verifying fix 10: `[§dd-dr:token-model]`'s specials
+bullet still said "the scan returns `TokenResult`, so scanner errors participate in the
+recovery-token protocol" — flatly contradicted by `Lang::scan_specials`
+(`state/lang.rs:433-437`) and by the new entry. It now states the real answer type and
+points at `[§dd-dr:specials-scan-errors]`.
+
+### Gate results, review round 1 (verbatim)
+
+```
+$ for l in token-opacity stream-position no-context-source reader-context-purity \
+      specials-scan-errors token-reader-hook; do printf "%s: " "$l"; \
+      git grep -c "dd-dr:$l" dev-docs/ARCHITECTURE.md; done
+token-opacity: dev-docs/ARCHITECTURE.md:4
+stream-position: dev-docs/ARCHITECTURE.md:3
+no-context-source: dev-docs/ARCHITECTURE.md:2
+reader-context-purity: dev-docs/ARCHITECTURE.md:2
+specials-scan-errors: dev-docs/ARCHITECTURE.md:2
+token-reader-hook: dev-docs/ARCHITECTURE.md:3
+
+$ git grep -n 'bettertokens\|Stage [0-9]\|bt-[0-9]\|PROBE_REPORT\|compiler probe' \
+      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+(no output; exit 1)
+
+$ git grep -n 'move_to_pos\|resume_pos\|Token::new\|Token<.s\|move_past\|cx\.source\|token_kind: Option\|with_token\|end_pos\|optional token\|resolve_command(state, &token\|make_paragraph_break_node(state, &token' \
+      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+ARCHITECTURE.md:247,664 + DESIGN_RATIONALE.md:312,696,709,762,5553    — live
+      `move_to_position` (the patterns are unboundaried)
+ARCHITECTURE.md:617,665                                              — live `cx.source_span_within`
+DESIGN_RATIONALE.md:942,943                                          — the one reversal note
+      ([§dd-dr:token-contract-hardening] item 4)
+DESIGN_RATIONALE.md:3478                                             — the live S0 accessor
+      `SourceSpan::start_pos()/end_pos()` (`source/source.rs:341,348`)
+DESIGN_RATIONALE.md:6347,6349,6354,6355,6356,6357,6359,6363,6365     — the
+      [§dd-dr:superseded-names] register
+(21 lines total; nothing else. The two round-1 spellings
+ `resolve_command(state, &token` and `make_paragraph_break_node(state, &token` are gone.)
+
+$ git diff main..bt-5-docs -- dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md \
+      | grep "^+" | grep -i -c "\bdoor\b\|funnel\|\bmint\|trigger token\|vocabulary\|\bfacts\b\|footgun\|heart of\|on-ramp\|pillar"
+0
+      (the round-1 revert removed the sole previous hit — the retitled
+       `preset-driver-pillars` heading is identical to `main`'s again, so it no longer
+       appears in the diff at all. Run over the whole diff, the remaining hits are this
+       PROGRESS file's own record of the ruling and of the rejected `token-reader-door`
+       label, which is where that discussion belongs.)
+
+$ grep -c '^```' dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+dev-docs/ARCHITECTURE.md:4
+dev-docs/DESIGN_RATIONALE.md:4
+      (both even; the scripted check finds 183 labelled `####` entries — the 184th is the
+       maintenance section's template line — 183 distinct labels, 0 without a `Status:`)
+
+$ git diff --stat main..bt-5-docs
+ dev-docs/ARCHITECTURE.md          | 169 +++++++---
+ dev-docs/DESIGN_RATIONALE.md      | 646 ++++++++++++++++++++++++++++----------
+ dev-docs/bettertokens/PROGRESS.md | 163 +++++++++-
+ 3 files changed, 766 insertions(+), 212 deletions(-)
+```

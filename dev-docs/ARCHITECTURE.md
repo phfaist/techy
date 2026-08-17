@@ -282,7 +282,9 @@ constructor and no arithmetic. The concrete shapes live in `src/token` (public p
   their tables in `L::StateExt` — hence `peek` receives the full
   `&Arc<ParsingState<L>>`, and nothing beyond the state:
   [§dd-dr:reader-context-purity]). The trait has no associated types, so it stays
-  object-safe and a parse context holds `&mut dyn TokenReader<'s, L>`. Its documented
+  object-safe and a parse context holds `&mut dyn TokenReader<'s, L>`. Reading is `peek`
+  (produce the token at the current position, leaving the stream where it is) and the
+  defaulted `next` (`peek` plus `move_to(&token, EndPastPostSpace)`). Its documented
   contract: `peek` is speculative and idempotent per (stream position, state *instance*)
   and implementations may memoize on `Arc` pointer identity; a peeked token's
   `StartBeforePreSpace` edge is the position the peek happened at; every token and every
@@ -435,7 +437,7 @@ is the sanctioned downcast channel for preset finalization
   [§dd-dr:mode-visibility]) and `Scope` (the delta-targeted definition target,
   copy-on-write, created lazily). Resolution is innermost-first lexical shadowing — no
   conflict policies ([§dd-dr:lexical-shadowing]); lookups receive a `CallableQuery`
-  (name, form, syntax, optional token) plus the state ([§dd-dr:callable-query]).
+  (name, form, syntax) plus the state ([§dd-dr:callable-query]).
 - **Unknown-callable policy is ordinary data**: per-form fallback singletons sit at the
   bottom of the stack as providers, so a callable node's spec is never `None` for a
   form with a registered fallback; "undefined on purpose" is an `ErrorCallableSpec`
