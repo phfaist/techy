@@ -102,7 +102,7 @@ pub enum ContentNodes {
 /// panic on staged ones — a finished tree never contains staged regions (the builder
 /// validates staged-ness at `add()`), so the panic is only reachable by reading a
 /// region one built oneself and never staged. These are among the crate's few
-/// deliberate panics (see the [crate-level Panics list](crate#panics)).
+/// deliberate panics (see the [Panics list](techy::guide::panics)).
 #[derive(Clone, Debug)]
 pub struct ChildRegion {
     state: RegionState,

@@ -69,6 +69,8 @@ it explains what the library is for and where each part of this guide fits.
 - [Serializing parses](crate::guide::serialize) — writing parse results,
   trees, states, and diagnostics into a format-independent value model and
   rebuilding them elsewhere: caching, inter-process exchange, snapshot tests.
+- [List of panicking items](crate::guide::panics) — maintained exhaustive list
+  of items in the crate that can panic.
 - [Migrating from pylatexenc](crate::guide::pylatexenc_migration) — the main
   concept mappings between the Python library
   [pylatexenc](https://pylatexenc.readthedocs.io/) and techy.

@@ -31,10 +31,10 @@ Documents call contracts, prerequisites, best use practices, and pointers to
 how specific functions/structs can solve a particular problem when relevant and
 appropriate.
 
-The crate-level `## Panics` section in `techy/src/lib.rs` is the exhaustive
+The `docs/panics.md` guide contains the exhaustive
 user-facing list of the public API's panicking items, each named specifically
 with an intra-doc link.  Any change to the public API's panicking behavior
-(adding, removing, or changing a documented panic) must update that section —
+(adding, removing, or changing a documented panic) must update that guide —
 it is kept exhaustive by maintenance discipline.
 
 
