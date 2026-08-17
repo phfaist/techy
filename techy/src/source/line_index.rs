@@ -145,14 +145,16 @@ impl<'c> LineIndex<'c> {
     }
 
     /// Get the (line, column) for a byte offset, using (and lazily extending) the cached
-    /// line starts. Line and column numbers include the configured offsets.
+    /// line starts. Line and column numbers include the configured offsets (added with
+    /// saturating arithmetic: an offset near `usize::MAX` yields `usize::MAX`, never an
+    /// overflow).
     ///
     /// Returns `None` if the offset exceeds the content length, or if the content is longer
     /// than the maximum scan length (see [`set_max_scan_len`](Self::set_max_scan_len)).
     pub fn line_col(&mut self, byte_offset: usize) -> Option<(usize, usize)> {
         let line_idx = self.line_index_of(byte_offset)?;
-        let line = line_idx + self.line_number_offset;
-        let col = (byte_offset - self.line_starts[line_idx]) + self.column_number_offset;
+        let line = line_idx.saturating_add(self.line_number_offset);
+        let col = (byte_offset - self.line_starts[line_idx]).saturating_add(self.column_number_offset);
         Some((line, col))
     }
 
@@ -170,7 +172,7 @@ impl<'c> LineIndex<'c> {
     pub fn line_of(&mut self, byte_offset: usize) -> Option<(usize, Range<usize>)> {
         let line_idx = self.line_index_of(byte_offset)?;
         Some((
-            line_idx + self.line_number_offset,
+            line_idx.saturating_add(self.line_number_offset),
             line_range_from(self.content, self.line_starts[line_idx]),
         ))
     }
@@ -354,8 +356,8 @@ impl<O: SourceOrigin> LineIndexCache<O> {
         let line_starts = entry.line_starts.as_ref()?;
         let line_idx = line_index_in_starts(line_starts, byte_offset);
         Some((
-            line_idx + entry.source.line_number_offset(),
-            (byte_offset - line_starts[line_idx]) + entry.source.column_number_offset(),
+            line_idx.saturating_add(entry.source.line_number_offset()),
+            (byte_offset - line_starts[line_idx]).saturating_add(entry.source.column_number_offset()),
         ))
     }
 
@@ -374,7 +376,7 @@ impl<O: SourceOrigin> LineIndexCache<O> {
         let line_starts = entry.line_starts.as_ref()?;
         let line_idx = line_index_in_starts(line_starts, byte_offset);
         Some((
-            line_idx + entry.source.line_number_offset(),
+            line_idx.saturating_add(entry.source.line_number_offset()),
             line_range_from(entry.source.content(), line_starts[line_idx]),
         ))
     }
@@ -482,6 +484,29 @@ mod tests {
         assert_eq!(index.line_col(0), Some((10, 5))); // Line 0 + 10, col 0 + 5
         assert_eq!(index.line_col(6), Some((11, 5))); // Line 1 + 10, col 0 + 5
         assert_eq!(index.line_col(10), Some((11, 9))); // Line 1 + 10, col 4 + 5
+    }
+
+    /// Offsets are added with saturating arithmetic: the largest offsets (what a
+    /// 32-bit reader gets from a serialized source declaring `4294967295`, say) yield
+    /// `usize::MAX`, never an overflow — through the transient index and the cache.
+    #[test]
+    fn extreme_offsets_saturate_instead_of_overflowing() {
+        let source: Source =
+            Source::new("Hello\nWorld").with_line_column_number_offsets(usize::MAX, usize::MAX - 2);
+        let mut index = source.line_index();
+        assert_eq!(index.line_col(0), Some((usize::MAX, usize::MAX - 2)));
+        assert_eq!(index.line_col(6), Some((usize::MAX, usize::MAX - 2)));
+        assert_eq!(index.line_col(10), Some((usize::MAX, usize::MAX)));
+        assert_eq!(index.line_of(7).map(|(line, _)| line), Some(usize::MAX));
+        assert_eq!(
+            index.line_col_span(0..10),
+            Some(((usize::MAX, usize::MAX - 2), (usize::MAX, usize::MAX)))
+        );
+        let source = Arc::new(source);
+        let mut cache = LineIndexCache::new();
+        assert_eq!(cache.line_col(&source, 10), Some((usize::MAX, usize::MAX)));
+        assert_eq!(cache.line_of(&source, 10).map(|(line, _)| line), Some(usize::MAX));
+        assert_eq!(cache.line_col_span(&source, 0..1), Some(((usize::MAX, usize::MAX - 2), (usize::MAX, usize::MAX - 1))));
     }
 
     #[test]

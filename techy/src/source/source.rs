@@ -107,7 +107,10 @@ impl<O: SourceOrigin> Source<O> {
     /// Set the line and column number offsets.
     ///
     /// Default offsets are `(1, 1)` for 1-indexed line/column numbers; use `(0, 0)` for
-    /// 0-indexed numbers.
+    /// 0-indexed numbers. Any value is accepted: a line or column number is the
+    /// zero-based position plus the offset, computed with saturating addition, so an
+    /// offset near `usize::MAX` (from a serialized source, say) yields `usize::MAX`
+    /// rather than an overflow.
     pub fn with_line_column_number_offsets(
         mut self,
         line_number_offset: usize,

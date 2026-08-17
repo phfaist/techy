@@ -351,6 +351,40 @@ fn an_embedded_source_round_trips_with_origin_and_offsets() {
     assert!(Arc::ptr_eq(&back, &again));
 }
 
+/// The line and column offsets read from the wire are not bounded — a `usize` on the
+/// wire is an `i64` read with a range check on the reader's `usize` — and the line
+/// index adds them with saturating arithmetic, so the largest offset a 32-bit reader
+/// can hold (`u32::MAX`, valid on both widths) round-trips and answers positions
+/// without overflow.
+#[test]
+fn extreme_line_column_offsets_round_trip_and_saturate() {
+    let extreme = u32::MAX as usize;
+    let mut writer = SerdeSession::<ToyLang>::new();
+    let source = Arc::new(Source::new("ab\ncd").with_line_column_number_offsets(extreme, extreme));
+    let position = writer.intern_source(&source).unwrap();
+    let segment = writer.take_segment();
+    let mut reader = SerdeSession::<ToyLang>::new();
+    reader.push_segment(segment).unwrap();
+    let back = reader.source(reader.standard_tables().unwrap().sources.position(position.index())).unwrap();
+    assert_eq!((back.line_number_offset(), back.column_number_offset()), (extreme, extreme));
+    let mut index = back.line_index();
+    assert_eq!(index.line_col(4), Some((extreme.saturating_add(1), extreme.saturating_add(1))));
+    // A wire integer that does not fit the reader's `usize` (a 64-bit writer's value
+    // above `u32::MAX` on a 32-bit reader; on any reader, a negative one) is a typed
+    // range error, never a truncation.
+    let mut writer = SerdeSession::<ToyLang>::new();
+    writer.intern_source(&source).unwrap();
+    let hostile = edited_segment(&writer.take_segment(), "sources", 0, |entry| {
+        *entry_field_mut(entry, &["line_number_offset"]) = SerialValue::Int(-1);
+    });
+    let mut reader = SerdeSession::<ToyLang>::new();
+    let error = reader.push_segment(hostile).unwrap_err();
+    assert!(
+        matches!(innermost(&error), DeserializeError::Value(SerialValueError::IntegerOutOfRange { target: "usize", .. })),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn provenance_chains_are_source_references_and_identity_survives() {
     // A (primary) <- B (resolved, triggered in A) <- C (synthesized, triggered in B);

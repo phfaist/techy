@@ -8,6 +8,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use hashbrown::HashMap;
+
 use crate::state::{FeaturePresence, Lang, LangFeatures};
 
 use super::rules::{GroupRule, TokenRules};
@@ -71,28 +73,26 @@ impl<L: Lang> PrefixTable<L> {
             return PrefixTable { entries };
         }
 
-        let mut add = |delim: &str, rule: &Arc<GroupRule<L>>, is_open: bool| {
-            if delim.is_empty() {
-                return;
-            }
-            let index = match entries.iter().position(|e| e.delim == delim) {
-                Some(index) => index,
-                None => {
+        // Delimiter string → its entry's index: the merge is a hash lookup per
+        // delimiter, so building the table is linear in the number of rules (a rule
+        // list of any size — a deserialized state's, say — costs no more than a scan).
+        let mut by_delim: HashMap<&str, usize> = HashMap::new();
+        for rule in rules.temporary_group_rules().iter().chain(rules.group_rules()) {
+            for (delim, is_open) in [(&rule.open, true), (&rule.close, false)] {
+                if delim.is_empty() {
+                    continue;
+                }
+                let index = *by_delim.entry(delim.as_str()).or_insert_with(|| {
                     entries.push(PrefixEntry { delim: String::from(delim), open: None, close: None });
                     entries.len() - 1
+                });
+                let entry = &mut entries[index];
+                let slot = if is_open { &mut entry.open } else { &mut entry.close };
+                if slot.is_none() {
+                    *slot = Some(Arc::clone(rule));
                 }
-            };
-            let entry = &mut entries[index];
-            let slot = if is_open { &mut entry.open } else { &mut entry.close };
-            if slot.is_none() {
-                *slot = Some(Arc::clone(rule));
+                // An occupied slot is left alone: earlier rules win.
             }
-            // An occupied slot is left alone: earlier rules win.
-        };
-
-        for rule in rules.temporary_group_rules().iter().chain(rules.group_rules()) {
-            add(&rule.open, rule, true);
-            add(&rule.close, rule, false);
         }
 
         // Longest first, for greedy matching; stable, so equal lengths keep declaration order.
@@ -274,5 +274,27 @@ mod tests {
         let table = PrefixTable::for_rules(&rules_with_groups(vec![group(0, "{", "")]));
         assert_eq!(table.entries().len(), 1);
         assert_eq!(table.entries()[0].delim(), "{");
+    }
+
+    /// Building the table is linear in the number of rules (a rule list read from a
+    /// serialized state can be as long as the wire says): many distinct rules plus
+    /// many same-spelling ones merge in one pass, earlier rules still winning.
+    #[test]
+    fn many_rules_build_in_one_pass() {
+        let mut groups = Vec::new();
+        for i in 0..20_000u32 {
+            groups.push(group(i, &alloc::format!("<{i}"), &alloc::format!("{i}>")));
+        }
+        // The same spelling claimed again and again: merged into the first claim.
+        for i in 0..20_000u32 {
+            groups.push(group(100_000 + i, "<0", "0>"));
+        }
+        let first = groups[0].clone();
+        let table = PrefixTable::for_rules(&rules_with_groups(groups));
+        assert_eq!(table.entries().len(), 40_000);
+        let entry = table.match_at("<0").unwrap();
+        assert_eq!(entry.open(), Some(&first));
+        assert_eq!(table.match_at("0>x").unwrap().close(), Some(&first));
+        assert_eq!(table.match_at("<19999").unwrap().delim(), "<19999");
     }
 }
