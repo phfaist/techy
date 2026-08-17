@@ -179,15 +179,14 @@ pub trait TokenReader<'s, L: Lang> {
     fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool);
 
     /// Move to an absolute byte position: a
-    /// [`TokenRecovery::resume_pos`](super::TokenRecovery), an argument parser's
-    /// absent-argument rewind target. The position must be one the reader can
+    /// an argument parser's absent-argument rewind target. The position must be one the reader can
     /// meaningfully resume from (for text-scanning readers: on a `char` boundary, at
     /// most the content's length).
     ///
     /// Deliberately bidirectional — it also serves rewinds — so implementations assert
-    /// nothing about the direction of the move. When adopting a `TokenRecovery`, the
-    /// *caller* enforces the [`resume_pos` advancement contract](super::TokenRecovery#contract-resume_pos-must-advance-the-reader)
-    /// (the content loop aborts if the reader did not advance).
+    /// nothing about the direction of the move. Superseded by
+    /// [`move_to_position`](TokenReader::move_to_position), which names a place the
+    /// reader itself minted instead of a bare number.
     fn move_to_pos(&mut self, pos: usize);
 
     /// Current byte position.
@@ -402,8 +401,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         let start = self.pos;
 
         // The position was set through outer-layer hands (`move_to_pos` serves
-        // custom recoveries' `resume_pos` and argument rewinds; `move_past` accepts
-        // caller-held tokens), so it is validated at this single consumption
+        // argument rewinds; `move_past` and `move_to_position` accept caller-held
+        // tokens and positions), so it is validated at this single consumption
         // boundary ([§dd-dr:panic-policy]): an out-of-bounds or non-boundary
         // position aborts the read instead of panicking in the scanners below.
         if s.get(start..).is_none() {

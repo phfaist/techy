@@ -420,9 +420,11 @@ so behavior can carry configuration (a recovery policy) that static hooks
 could not. The trait's page groups its five concerns: recovery policy,
 parse-time hooks (command resolution, paragraph-break emission, diagnostic
 refinement, transition observation, event lowering), source resolution,
-the group descent-delta channel, and construct provision. Every method has
-a working default, so `impl ParseDriver<MyLang> for MyDriver {}` is a
-complete driver; override what your language needs. (Parsing depth is
+the group descent-delta channel, and construct provision. Every method but
+[`make_token_reader`](crate::core::ParseDriver::make_token_reader) has a
+working default, and that one's standard body is the one-liner
+`Box::new(StdTokenReader::new(source))`, so a driver that supplies it is
+already complete; override what else your language needs. (Parsing depth is
 limited by the engine's own guard, configured on the language value with
 [`with_descent_guard_init`](crate::core::Language::with_descent_guard_init)
 — it is not a driver concern.)

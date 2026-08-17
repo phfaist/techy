@@ -67,7 +67,7 @@
 //!
 //! Recovery happens where a problem is detected, through the session's policy helper.
 //! Tokenizer errors continue with their [`TokenRecovery`](crate::token::TokenRecovery)
-//! placeholder token, the reader repositioned to the error's `resume_pos` (so the error
+//! placeholder token, the reader repositioned to the error's `resume` position (so the error
 //! is never re-read); an unresolvable command recovers as a diagnostic plus a chars
 //! fallback node over the token's span (specials never take this path: recognition =
 //! resolution, so a recognized trigger always dispatches).
