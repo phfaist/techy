@@ -63,6 +63,18 @@ impl fmt::Display for Kinded {
 #[diagnostic(id = "test.derive.unit", message = "a fixed wording")]
 struct UnitCondition;
 
+/// A field whose serialization key differs from its Rust name (`char` is a keyword,
+/// and the wire key is chosen, not derived): `#[diagnostic(key = "…")]`. The message
+/// still interpolates by Rust field name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DiagnosticInfo)]
+#[non_exhaustive]
+#[diagnostic(id = "test.derive.keyed", message = "saw ‘{ch}’ at {at}")]
+struct Keyed {
+    #[diagnostic(key = "char")]
+    ch: char,
+    at: u32,
+}
+
 fn sample() -> Sample {
     Sample::new(
         "alpha",
@@ -71,6 +83,25 @@ fn sample() -> Sample {
         Some(String::from("hint")),
         vec![String::from("a"), String::from("b")],
     )
+}
+
+#[test]
+fn a_field_level_key_attribute_renames_the_serialization_key_only() {
+    let keyed = Keyed::new('x', 3u32);
+    assert_eq!(
+        DiagnosticInfo::serializable_data(&keyed),
+        DiagnosticValue::Map(vec![
+            ("char".into(), DiagnosticValue::Str("x".into())),
+            ("at".into(), DiagnosticValue::Int(3)),
+        ])
+    );
+    assert_eq!(keyed.to_string(), "saw ‘x’ at 3");
+    // The crate's own use of it: `ForbiddenChar` projects its character under `char`.
+    let forbidden = techy::core::ForbiddenChar::new('$');
+    assert_eq!(
+        DiagnosticInfo::serializable_data(&forbidden),
+        DiagnosticValue::Map(vec![("char".into(), DiagnosticValue::Str("$".into()))])
+    );
 }
 
 #[test]

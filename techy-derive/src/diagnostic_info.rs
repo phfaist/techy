@@ -50,8 +50,9 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     }
 
     let attrs = DiagnosticAttrs::parse(&input)?;
+    let keys = fields.iter().map(|field| serialization_key(field)).collect::<syn::Result<Vec<_>>>()?;
 
-    let info_impl = expand_info_impl(name, &attrs.id, &fields);
+    let info_impl = expand_info_impl(name, &attrs.id, &fields, &keys);
     let display_impl = match &attrs.message {
         Some(message) => Some(expand_display_impl(name, message, &fields)?),
         None => None,
@@ -127,6 +128,38 @@ impl DiagnosticAttrs {
     }
 }
 
+/// The serialization key of `field`: its `#[diagnostic(key = "…")]` when given, else
+/// the field name.
+fn serialization_key(field: &Field) -> syn::Result<String> {
+    let ident = field.ident.as_ref().expect("named field has an ident");
+    let mut key: Option<String> = None;
+    for attr in &field.attrs {
+        if !attr.path().is_ident("diagnostic") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("key") {
+                if key.is_some() {
+                    return Err(meta.error("duplicate `key`"));
+                }
+                let lit: LitStr = meta.value()?.parse()?;
+                let value = lit.value();
+                if value.is_empty() || value.contains(char::is_whitespace) {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        "the serialization key must be a non-empty string without whitespace",
+                    ));
+                }
+                key = Some(value);
+                Ok(())
+            } else {
+                Err(meta.error("unknown `diagnostic` key on a field; expected `key`"))
+            }
+        })?;
+    }
+    Ok(key.unwrap_or_else(|| ident.to_string()))
+}
+
 /// The identifier is namespaced `<crate-or-lang>.<area>.<condition>`;
 /// enforce the coarse shape, not the exact scheme.
 fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
@@ -147,17 +180,17 @@ fn validate_identifier(lit: &LitStr) -> syn::Result<()> {
 }
 
 /// `impl DiagnosticInfo`: the `IDENTIFIER` const and `serializable_data()` mapping
-/// every field through `ToDiagnosticValue`, keyed by field name. Each conversion call
+/// every field through `ToDiagnosticValue`, keyed by its serialization key (`keys`,
+/// one per field). Each conversion call
 /// is spanned at the field's type, so a non-serializable field type reports at its
 /// declaration.
-fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field]) -> TokenStream {
+fn expand_info_impl(name: &Ident, id: &LitStr, fields: &[&Field], keys: &[String]) -> TokenStream {
     let body = if fields.is_empty() {
         quote! { ::techy::__private::DiagnosticValue::empty_map() }
     } else {
         let len = fields.len();
-        let entries = fields.iter().map(|field| {
+        let entries = fields.iter().zip(keys).map(|(field, key)| {
             let ident = field.ident.as_ref().expect("named field has an ident");
-            let key = ident.to_string();
             quote_spanned! {field.ty.span()=>
                 __data.push((
                     ::techy::__private::String::from(#key),

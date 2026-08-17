@@ -292,7 +292,7 @@ impl ToDiagnosticValue for DiagnosticValue {
 }
 
 /// A [`ResolveError`](crate::source::ResolveError) projects as a map of its
-/// `reference`, its `message`, and the rendered `cause-chain` (each
+/// `reference`, its `message`, and the rendered `cause_chain` (each
 /// [`Error::source`](core::error::Error::source) hop's `Display`, outermost
 /// first) — the serialization face of the
 /// [`UnresolvableSourceReference`](crate::constructs::UnresolvableSourceReference)
@@ -309,7 +309,7 @@ impl ToDiagnosticValue for crate::source::ResolveError {
         DiagnosticValue::Map(alloc::vec![
             ("reference".to_string(), DiagnosticValue::Str(self.reference().to_string())),
             ("message".to_string(), DiagnosticValue::Str(self.message().to_string())),
-            ("cause-chain".to_string(), DiagnosticValue::List(chain)),
+            ("cause_chain".to_string(), DiagnosticValue::List(chain)),
         ])
     }
 }

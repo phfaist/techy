@@ -45,7 +45,8 @@ pub struct EndOfStreamAfterEscape {
 #[non_exhaustive]
 #[diagnostic(id = "core.token.forbidden-char")]
 pub struct ForbiddenChar {
-    /// The forbidden character encountered.
+    /// The forbidden character encountered (serialization key `char`).
+    #[diagnostic(key = "char")]
     pub ch: char,
 }
 

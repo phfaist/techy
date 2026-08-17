@@ -42,7 +42,10 @@ use syn::{parse_macro_input, DeriveInput};
 /// - the `DiagnosticInfo` impl — `IDENTIFIER` from the **mandatory** `id` (the wire
 ///   identity is hand-chosen, never derived from the type name), and
 ///   `serializable_data()` mapping every field through `techy::error::ToDiagnosticValue`,
-///   keyed by field name. A field whose type does not implement `ToDiagnosticValue`
+///   keyed by field name — or by the field's `#[diagnostic(key = "…")]` when the
+///   serialization key must differ from the Rust name (`ch` → `"char"`, say; the
+///   key is part of the stable wire contract, the field name is not). A field whose
+///   type does not implement `ToDiagnosticValue`
 ///   fails with an error at the field — serializability of the payload is enforced by
 ///   the compiler.
 /// - a `Display` impl from the **optional** `message` format string; `{field}` (with

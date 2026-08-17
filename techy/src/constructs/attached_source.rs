@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(
             error_fields[2],
             (
-                "cause-chain".into(),
+                "cause_chain".into(),
                 DiagnosticValue::List(vec![DiagnosticValue::Str(
                     "file not found (os error 2)".into()
                 )])
