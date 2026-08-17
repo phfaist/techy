@@ -1631,23 +1631,24 @@ impl<L: Lang> ConstructParser<L> for ErrorInvocationParser<'_, '_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (BuildId, Option<Box<ParsingStateDelta<L>>>)> {
-        let token = self.invocation.token;
+        let span = cx.tokens.source_span_of(self.invocation.token);
         cx.recover(
             CallableDefinedAsError {
                 name: self.invocation.name.into(),
                 detail: self.detail.map(String::from),
             },
-            SourceSpan::new(&cx.source, token.span),
+            span.clone(),
         )?;
         // Tolerant continuation: markup in a Chars node is the accepted recovery
         // artifact (DESIGN_RATIONALE.md [§dd-dr:errors]).
-        let id = cx.stage_node(
-                NodeKind::chars(token.span),
-                SourceSpan::new(&cx.source, token.span),
+        let id = cx
+            .stage_node(
+                NodeKind::chars(span.span()),
+                span.clone(),
                 Arc::clone(&cx.state),
                 Vec::new(),
             )
-            .map_err(|error| cx.staging_error(error, token.span))?;
+            .map_err(|error| cx.staging_error(error, span))?;
         Ok((id, None))
     }
 }

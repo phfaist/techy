@@ -57,7 +57,7 @@ pub(crate) fn check_latexlike_tree_invariants<LLL: LatexlikeLang, A>(
 ///   escape character followed by the name as written; a `Spanned` post-space
 ///   starts right after that spelling and ends where the first child begins — or
 ///   at most at the span's end for a childless callable (`==` cannot be pinned
-///   there: a takeover's `stage_invocation(.., end_pos: Some)` legitimately
+///   there: a takeover's `stage_invocation(.., end: Some(&position))` legitimately
 ///   claims consumed extent past the trigger, T5-B / D-plan-17).
 /// - **Specials** — name-as-written: the name is a byte prefix of the node's
 ///   span (for paragraph-break `Specials` nodes the name is the whole span).
