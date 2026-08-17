@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::engine::{Language, ParseResult};
 use crate::error::Recovery;
 use crate::latexlike::check_latexlike_tree_invariants;
-use crate::scopes::Package;
+use crate::scopes::{IntoSpecsProvider, Package};
 use crate::spec::StdCallableSpec;
 use crate::state::ParsingState;
 
@@ -38,7 +38,7 @@ pub(super) fn tolerant() -> Language<Latexlike> {
 
 /// A latexlike `Language` under `recovery` with `package` pushed innermost over the
 /// seed defaults.
-pub(super) fn with_package(recovery: Recovery, package: Package<Latexlike>) -> Language<Latexlike> {
+pub(super) fn with_package(recovery: Recovery, package: impl IntoSpecsProvider<Latexlike>) -> Language<Latexlike> {
     Language::new(
         LatexlikeDriver::new(recovery),
         ParsingState::lang_initial_with_packages([package]).expect("seed state"),
@@ -49,7 +49,7 @@ pub(super) fn with_package(recovery: Recovery, package: Package<Latexlike>) -> L
 /// seed defaults (in iteration order — the last is innermost).
 pub(super) fn with_packages(
     recovery: Recovery,
-    packages: impl IntoIterator<Item = Package<Latexlike>>,
+    packages: impl IntoIterator<Item: IntoSpecsProvider<Latexlike>>,
 ) -> Language<Latexlike> {
     Language::new(
         LatexlikeDriver::new(recovery),
@@ -71,18 +71,22 @@ pub(super) fn parse_shapes(input: &str) -> Vec<String> {
     root_shapes(&result)
 }
 
-/// A package named `pkg_name` defining `macro_name` as a zero-argument
-/// [`Macro`](CallableType::Macro), optionally restricted (package-level) to
-/// `visible_modes`.
+/// A shared package named `pkg_name` defining `macro_name` as a zero-argument
+/// [`Macro`](CallableType::Macro) (stamped, so it serializes), optionally restricted
+/// (package-level) to `visible_modes`.
 pub(super) fn macro_package(
     pkg_name: &str,
     macro_name: &str,
     visible_modes: Option<Vec<Mode>>,
-) -> Package<Latexlike> {
-    let mut package = Package::new(pkg_name);
-    package.insert(CallableType::Macro, macro_name, Arc::new(StdCallableSpec::<Latexlike>::default()));
-    if visible_modes.is_some() {
-        package.set_visible_modes(visible_modes);
-    }
-    package
+) -> Arc<Package<Latexlike>> {
+    Package::new_shared(pkg_name, |package| {
+        let mut spec = StdCallableSpec::<Latexlike>::default();
+        if let Some(provenance) = package.provenance_for(CallableType::Macro, macro_name) {
+            spec = spec.with_provenance(provenance);
+        }
+        package.insert(CallableType::Macro, macro_name, Arc::new(spec));
+        if visible_modes.is_some() {
+            package.set_visible_modes(visible_modes);
+        }
+    })
 }

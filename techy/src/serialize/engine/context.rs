@@ -54,8 +54,8 @@ impl<'a, L: SerializableLang> SerializeContext<'a, L> {
         self.session.intern_with_guard(self.guard, table, object)
     }
 
-    /// The caller's user data, set on the session with
-    /// [`SerdeSession::set_user_data`], if it is of type `T`.
+    /// The caller's user data of type `T`, if set on the session with
+    /// [`SerdeSession::set_user_data`] (one value per type).
     pub fn user_data<T: Any>(&self) -> Option<&T> {
         self.session.user_data::<T>()
     }
@@ -133,10 +133,12 @@ impl<'a, L: SerializableLang> DeserializeContext<'a, L> {
         self.session.object_with_guard(self.guard, table, index, self.current)
     }
 
-    /// The caller's user data, set on the session with
-    /// [`SerdeSession::set_user_data`], if it is of type `T` — the reading
+    /// The caller's user data of type `T`, if set on the session with
+    /// [`SerdeSession::set_user_data`] (one value per type) — the reading
     /// environment's entry point: how an implementation finds the live objects that
-    /// serialized data refers to by identity.
+    /// serialized data refers to by identity (the crate's own providers through
+    /// [`KnownProviders`](crate::serialize::KnownProviders), a framework's through
+    /// its own environment type).
     pub fn user_data<T: Any>(&self) -> Option<&T> {
         self.session.user_data::<T>()
     }

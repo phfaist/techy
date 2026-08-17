@@ -79,8 +79,7 @@ use crate::node::{
 };
 use core::marker::PhantomData;
 
-use crate::scopes::{CallableQuery, CallableSyntax};
-use crate::serialize::SerializableObject;
+use crate::scopes::{CallableQuery, CallableSyntax, SpecProvenance};
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
@@ -462,8 +461,17 @@ impl<LLL: LatexlikeLang> fmt::Debug for BodyDeltaOverride<LLL> {
 /// parse, which reads the arguments and no body). A generic non-`EnvironmentSpec`
 /// [`CallableSpec`] under [`CallableType::Environment`](super::CallableType::Environment) is legitimate too: its
 /// declared arguments parse and the body takes the default handling.
+///
+/// **Serialization.** The behavior (its arguments' parsers, its body handling) has no
+/// serialized form, so an environment spec is serialized by *identity* — a reference
+/// to the provider that defined it plus its key — which needs the [`SpecProvenance`]
+/// stamp a shared package hands out ([`with_provenance`](EnvironmentSpec::with_provenance);
+/// [`Package::define_environment`](crate::scopes::Package::define_environment) stamps
+/// automatically in a shared package). An unstamped environment spec cannot be
+/// serialized (the error names the type).
 pub struct EnvironmentSpec<LLL: LatexlikeLang = Latexlike> {
     behavior: Arc<dyn EnvironmentBehavior<LLL>>,
+    provenance: Option<SpecProvenance<LLL>>,
 }
 
 impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
@@ -476,7 +484,7 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     /// An environment driven by a custom [`EnvironmentBehavior`] — the wrapper's
     /// registration entry for behavior-shaped customization (verbatim-like bodies).
     pub fn from_behavior(behavior: Arc<dyn EnvironmentBehavior<LLL>>) -> EnvironmentSpec<LLL> {
-        EnvironmentSpec { behavior }
+        EnvironmentSpec { behavior, provenance: None }
     }
 
     /// Set the body's parsing-state delta (`equation` entering
@@ -485,7 +493,21 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     pub fn with_body_delta(self, delta: ParsingStateDelta<LLL>) -> EnvironmentSpec<LLL> {
         EnvironmentSpec {
             behavior: Arc::new(BodyDeltaOverride { inner: self.behavior, delta }),
+            provenance: self.provenance,
         }
+    }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out ([`Package::provenance_for`](crate::scopes::Package::provenance_for))
+    /// — so that the spec can be serialized by identity. Replaces a previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> EnvironmentSpec<LLL> {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// Where this spec is defined, if it was stamped.
+    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 
     /// The behavior driving this environment's parse.
@@ -494,8 +516,8 @@ impl<LLL: LatexlikeLang> EnvironmentSpec<LLL> {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for EnvironmentSpec<LLL> {}
+// The `SerializableObject` impl (identity through the provenance stamp) lives in
+// `super::serialize`, with the preset's other serialization impls.
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for EnvironmentSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
@@ -509,13 +531,16 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for EnvironmentSpec<LLL> {
 
 impl<LLL: LatexlikeLang> Clone for EnvironmentSpec<LLL> {
     fn clone(&self) -> Self {
-        EnvironmentSpec { behavior: Arc::clone(&self.behavior) }
+        EnvironmentSpec { behavior: Arc::clone(&self.behavior), provenance: self.provenance.clone() }
     }
 }
 
 impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EnvironmentSpec").field("behavior", &self.behavior).finish()
+        f.debug_struct("EnvironmentSpec")
+            .field("behavior", &self.behavior)
+            .field("provenance", &self.provenance)
+            .finish()
     }
 }
 
@@ -536,8 +561,16 @@ impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentSpec<LLL> {
 /// pair `\open`/`\shut` registers `BeginSpec::new("shut")` under `"open"` and needs no
 /// code of its own. The name reaches the body parsers through
 /// [`EnvironmentInvocation::end_command_name`].
+///
+/// **Serialization.** A `BeginSpec` has a self-contained serialized form (the
+/// terminator command's name), so it is always serializable; when it carries a
+/// [`SpecProvenance`] stamp ([`with_provenance`](BeginSpec::with_provenance) — the
+/// [`builtin_package`](super::builtin_package) stamps its `\begin`) it is serialized
+/// by identity instead, so that reading yields the very instance the reading side's
+/// package holds.
 pub struct BeginSpec<LLL: LatexlikeLang = Latexlike> {
     end_command_name: String,
+    provenance: Option<SpecProvenance<LLL>>,
     lang: PhantomData<fn() -> LLL>,
 }
 
@@ -553,17 +586,29 @@ impl<LLL: LatexlikeLang> BeginSpec<LLL> {
     /// what turns a stray terminator into an [`OrphanEnd`] diagnostic rather than an
     /// unknown command; nothing enforces the pairing.
     pub fn new(end_command_name: impl Into<String>) -> BeginSpec<LLL> {
-        BeginSpec { end_command_name: end_command_name.into(), lang: PhantomData }
+        BeginSpec { end_command_name: end_command_name.into(), provenance: None, lang: PhantomData }
     }
 
     /// The terminator command's name, as given to [`new`](BeginSpec::new).
     pub fn end_command_name(&self) -> &str {
         &self.end_command_name
     }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out — so that the spec is serialized by identity rather than in
+    /// its self-contained form. Replaces a previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> BeginSpec<LLL> {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// Where this spec is defined, if it was stamped.
+    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
+    }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for BeginSpec<LLL> {}
+// The `SerializableObject`/`DeserializableObject` impls live in `super::serialize`.
 
 // The `SlotExt: BodySlotExt` clause is the body-marking contract: the composition
 // mints the environment's body slot ext through the generic `BodySlotExt`
@@ -611,7 +656,11 @@ where
 // `Copy` value. `Clone` stays — a spec is registration data.
 impl<LLL: LatexlikeLang> Clone for BeginSpec<LLL> {
     fn clone(&self) -> Self {
-        BeginSpec::new(self.end_command_name.clone())
+        BeginSpec {
+            end_command_name: self.end_command_name.clone(),
+            provenance: self.provenance.clone(),
+            lang: PhantomData,
+        }
     }
 }
 
@@ -619,6 +668,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BeginSpec")
             .field("end_command_name", &self.end_command_name)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }
@@ -632,6 +682,10 @@ impl<LLL: LatexlikeLang> fmt::Debug for BeginSpec<LLL> {
 /// The spec carries no name of its own — it diagnoses whatever command it was
 /// registered under, and that name should be the one the paired
 /// [`BeginSpec`](BeginSpec::new) was given as its terminator.
+///
+/// **Serialization.** Stateless, so it is serialized in its (empty) self-contained
+/// form and rebuilt as a fresh `EndSpec` — no provenance stamp (the type stays
+/// `Copy`).
 pub struct EndSpec<LLL: LatexlikeLang = Latexlike> {
     lang: PhantomData<fn() -> LLL>,
 }
@@ -643,8 +697,7 @@ impl<LLL: LatexlikeLang> EndSpec<LLL> {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for EndSpec<LLL> {}
+// The `SerializableObject`/`DeserializableObject` impls live in `super::serialize`.
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for EndSpec<LLL> {
     /// Like `\begin`: declares nothing, reads material (its name group) — bare
@@ -1733,7 +1786,7 @@ mod tests {
         package.insert(
             CallableType::Environment,
             "gen",
-            Arc::new(crate::spec::StdCallableSpec { arguments: vec![brace_arg()] }),
+            Arc::new(crate::spec::StdCallableSpec { arguments: vec![brace_arg()], ..Default::default() }),
         );
         let language = Language::new(
             LatexlikeDriver::new(Recovery::Strict),

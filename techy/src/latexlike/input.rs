@@ -60,7 +60,7 @@ use crate::node::{
     ParsedArgument, ParsedArguments, ParsedSlot, ParsedSlots, SlotExt, SlotRole,
 };
 use crate::engine::ParseDriver;
-use crate::serialize::SerializableObject;
+use crate::scopes::SpecProvenance;
 use crate::source::{SourceSpan, Span};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
@@ -138,6 +138,36 @@ pub struct InputMacroSpec<LLL: LatexlikeLang = Latexlike> {
     persist_state: bool,
     /// The ext value cloned into every invocation's attached slot.
     attached_slot_ext: SlotExt<LLL>,
+    /// Where the spec was defined, when known.
+    provenance: Option<SpecProvenance<LLL>>,
+}
+
+impl<LLL: LatexlikeLang> InputMacroSpec<LLL> {
+    /// Whether the included run's merged after-effects continue past the `\input`
+    /// (the `persist_state` choice of [`input_macro_spec`]).
+    pub fn persist_state(&self) -> bool {
+        self.persist_state
+    }
+
+    /// The ext value recorded on every invocation's attached slot (the
+    /// `attached_slot_ext` choice of [`input_macro_spec`]).
+    pub fn attached_slot_ext(&self) -> &SlotExt<LLL> {
+        &self.attached_slot_ext
+    }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out — so that the spec is serialized by identity rather than in
+    /// its self-contained form (`persist_state` plus the slot ext). Replaces a
+    /// previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> InputMacroSpec<LLL> {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// Where this spec is defined, if it was stamped.
+    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
+    }
 }
 
 /// Create the preset's opt-in `\input` spec ([`InputMacroSpec`] — never preloaded:
@@ -190,11 +220,12 @@ where
         ))],
         persist_state,
         attached_slot_ext,
+        provenance: None,
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for InputMacroSpec<LLL> {}
+// The `SerializableObject`/`DeserializableObject` impls (identity when stamped, the
+// two constructor choices otherwise) live in `super::serialize`.
 
 impl<LLL> CallableSpec<LLL> for InputMacroSpec<LLL>
 where
@@ -239,6 +270,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for InputMacroSpec<LLL> {
             .field("arguments", &self.arguments)
             .field("persist_state", &self.persist_state)
             .field("attached_slot_ext", &self.attached_slot_ext)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }
@@ -249,6 +281,7 @@ impl<LLL: LatexlikeLang> Clone for InputMacroSpec<LLL> {
             arguments: self.arguments.clone(),
             persist_state: self.persist_state,
             attached_slot_ext: self.attached_slot_ext.clone(),
+            provenance: self.provenance.clone(),
         }
     }
 }

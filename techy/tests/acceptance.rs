@@ -201,7 +201,7 @@ mod support {
         let seed = ParsingState::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
-                Arc::new(builtin_package()),
+                builtin_package(),
                 Arc::new(testdb()),
             ])))
             .unwrap();

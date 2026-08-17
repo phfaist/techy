@@ -109,10 +109,14 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// from other tables, [`empty`](SerdeSession::empty).
     ///
     /// The readers of the specs and providers tables (heterogeneous tables) are not
-    /// registered here: a language or framework registers its own, or its resolver,
-    /// on the handles ([`TableHandle::register_type`] and its siblings). The trees
-    /// table has the unit annotation registered; other annotation types are registered
-    /// with [`TableHandle::register_annotation`].
+    /// registered here — writing needs none, and a reading session registers them
+    /// once: the crate's own with
+    /// [`register_core_readers`](crate::serialize::register_core_readers), a language's
+    /// with its own helper (which calls the crate's — the latexlike preset's
+    /// [`latexlike::serialize::register`](crate::latexlike::serialize::register)), a
+    /// framework's own or its resolver on the handles ([`TableHandle::register_type`]
+    /// and its siblings). The trees table has the unit annotation registered; other
+    /// annotation types are registered with [`TableHandle::register_annotation`].
     pub fn new() -> SerdeSession<L> {
         SerdeSession::with_source_driver(SourceSerdeDriver::new())
     }

@@ -18,20 +18,19 @@
 //! **Never preloaded**: activation is always explicit
 //! ([`ParsingState::lang_initial_with_packages`](crate::state::ParsingState::lang_initial_with_packages)),
 //! and no other latexlike module references this one, so builds that never import
-//! it dead-strip it entirely.
+//! it dead-strip it entirely (its serialization recipes are registered from here
+//! too: [`register_package_recipes`]).
 
 use alloc::sync::Arc;
 use alloc::vec;
 
 use crate::node::ArgumentExt;
 use crate::scopes::{Package, ScopeOp, SpecsProvider};
+use crate::serialize::KnownProviders;
 use crate::spec::CallableSpec;
 use crate::state::ParsingStateDelta;
 
-use super::{
-    argument_specs, EnvironmentSpec, LatexlikeCallableType, LatexlikeLang, MacroSpec,
-    SpecialsSpec,
-};
+use super::{EnvironmentSpec, LatexlikeCallableType, LatexlikeLang, SpecialsSpec};
 
 /// The `"minilatex"` package: `\emph`/`\textbf`/`\textit` (one mandatory `"m"`
 /// argument each, expression fallback on), the `itemize`/`enumerate` list
@@ -56,11 +55,15 @@ use super::{
 /// [`Mode::Text`](super::Mode::Text) for the shipped preset — while the
 /// seeding call site reports the seed failure itself.
 ///
-/// Returns a bare [`Package`] — load it explicitly, e.g.
-/// `ParsingState::lang_initial_with_packages([minilatex_package()])`; it is never
-/// part of the seed. Generic over the language family (`LLL`,
+/// Returns a shared [`Package`] (built with [`Package::new_shared`], its specs
+/// stamped with their provenance so that they serialize by identity) — load it
+/// explicitly, e.g. `ParsingState::lang_initial_with_packages([minilatex_package()])`;
+/// it is never part of the seed. The nested item package is built by
+/// [`minilatex_item_package`] (a fresh one per call, nested by this function; a
+/// reading environment resolving a serialized `minilatex.item` builds its own — see
+/// [`register_package_recipes`]). Generic over the language family (`LLL`,
 /// [`LatexlikeLang`]); the bound on the argument ext is the argument-code
-/// factory's ([`argument_specs`]).
+/// factory's ([`argument_specs`](super::argument_specs)).
 ///
 /// ```
 /// use techy::core::{Language, ParsingState};
@@ -75,67 +78,82 @@ use super::{
 /// let result = language.parse(r"\emph{try} it --- now").unwrap();
 /// assert_eq!(result.tree.root().child(0).unwrap().macro_name(), Some("emph"));
 /// ```
-pub fn minilatex_package<LLL: LatexlikeLang>() -> Package<LLL>
+pub fn minilatex_package<LLL: LatexlikeLang>() -> Arc<Package<LLL>>
 where
     ArgumentExt<LLL>: Default,
 {
-    let mut package = Package::new("minilatex");
+    Package::new_shared("minilatex", |package| {
+        // The three inline styles: one mandatory content-group argument.
+        for name in ["emph", "textbf", "textit"] {
+            package.define_macro(name, ["m"]).expect("the literal code list [\"m\"] is valid");
+        }
 
-    // The three inline styles: one mandatory content-group argument.
-    for name in ["emph", "textbf", "textit"] {
-        package.insert(
-            LLL::CallableTypeId::macro_callable(),
-            name,
-            MacroSpec::new(argument_specs(["m"]).expect("the literal code list [\"m\"] is valid")),
-        );
-    }
+        // The list environments: no arguments; the body pushes the inner item
+        // package — `\item` is a definition of the *body*, not of the document.
+        let item_package: Arc<dyn SpecsProvider<LLL>> = minilatex_item_package();
+        let environment_type = LLL::CallableTypeId::environment_callable();
+        for name in ["itemize", "enumerate"] {
+            let mut spec = EnvironmentSpec::new(vec![]).with_body_delta(
+                ParsingStateDelta::new().scope_op(ScopeOp::Push(Arc::clone(&item_package))),
+            );
+            if let Some(provenance) = package.provenance_for(environment_type, name) {
+                spec = spec.with_provenance(provenance);
+            }
+            package.insert(environment_type, name, spec);
+        }
 
-    // The list environments: no arguments; the body pushes the inner item package —
-    // `\item` is a definition of the *body*, not of the document.
-    let mut item_package = Package::new("minilatex.item");
-    item_package.insert(
-        LLL::CallableTypeId::macro_callable(),
-        "item",
-        MacroSpec::new(argument_specs(["o"]).expect("the literal code list [\"o\"] is valid")),
-    );
-    let item_package: Arc<dyn SpecsProvider<LLL>> = Arc::new(item_package);
-    for name in ["itemize", "enumerate"] {
-        package.insert(
-            LLL::CallableTypeId::environment_callable(),
-            name,
-            EnvironmentSpec::new(vec![]).with_body_delta(
-                ParsingStateDelta::new()
-                    .scope_op(ScopeOp::Push(Arc::clone(&item_package))),
-            ),
-        );
-    }
+        // The typography specials (moved from the seed package): zero-argument
+        // callables sharing one spec instance (the package flyweight contract). The
+        // one instance carries one stamp — the tie's — which names one of its
+        // definitions: an identity reference resolves to the instance, whichever
+        // trigger it was reached through.
+        let specials_type = LLL::CallableTypeId::specials_callable();
+        let mut spec = SpecialsSpec::<LLL>::new(vec![]);
+        if let Some(provenance) = package.provenance_for_specials(specials_type, "~") {
+            spec = spec.with_provenance(provenance);
+        }
+        let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(spec);
+        package.insert_specials(specials_type, "~", Arc::clone(&spec));
+        // Ligatures are restricted to the language's seed (document-base) mode — the
+        // generic stand-in for "text-only": the mode role trait deliberately has no
+        // text-mode constructor, and for `Latexlike` the seed mode is `Mode::Text`.
+        // A language whose (fallible) seed data cannot be built here still gets the
+        // package; the restriction then uses the mode type's default value — the
+        // same value `StateData::empty` seeds, and `Mode::Text` for the shipped
+        // preset. The seeding call site surfaces the seed failure itself.
+        let base_mode = LLL::initial_state_data().map(|data| data.mode).unwrap_or_default();
+        for trigger in ["``", "''", "--", "---"] {
+            package.insert_specials_in_modes(specials_type, trigger, Arc::clone(&spec), Some(vec![base_mode]));
+        }
+    })
+}
 
-    // The typography specials (moved from the seed package): zero-argument
-    // callables sharing one spec instance (the package flyweight contract).
-    let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(SpecialsSpec::new(vec![]));
-    package.insert_specials(
-        LLL::CallableTypeId::specials_callable(),
-        "~",
-        Arc::clone(&spec),
-    );
-    // Ligatures are restricted to the language's seed (document-base) mode — the
-    // generic stand-in for "text-only": the mode role trait deliberately has no
-    // text-mode constructor, and for `Latexlike` the seed mode is `Mode::Text`.
-    // A language whose (fallible) seed data cannot be built here still gets the
-    // package; the restriction then uses the mode type's default value — the same
-    // value `StateData::empty` seeds, and `Mode::Text` for the shipped preset. The
-    // seeding call site surfaces the seed failure itself.
-    let base_mode = LLL::initial_state_data().map(|data| data.mode).unwrap_or_default();
-    for trigger in ["``", "''", "--", "---"] {
-        package.insert_specials_in_modes(
-            LLL::CallableTypeId::specials_callable(),
-            trigger,
-            Arc::clone(&spec),
-            Some(vec![base_mode]),
-        );
-    }
+/// The `"minilatex.item"` package: `\item` (one optional `"o"` argument), the
+/// definition the two list environments of [`minilatex_package`] push onto the
+/// scope stack for their bodies. Shared and stamped like its parent; every call
+/// builds a fresh package — [`minilatex_package`] nests one of its own.
+pub fn minilatex_item_package<LLL: LatexlikeLang>() -> Arc<Package<LLL>>
+where
+    ArgumentExt<LLL>: Default,
+{
+    Package::new_shared("minilatex.item", |package| {
+        package.define_macro("item", ["o"]).expect("the literal code list [\"o\"] is valid");
+    })
+}
 
-    package
+/// Register the recipes of this module's packages — `minilatex` and
+/// `minilatex.item` — on `known`, so that a reading session resolves serialized
+/// references to them by building them ([`KnownProviders`]'s recipe fallback: a
+/// provider inserted under the name takes precedence). The counterpart of
+/// [`serialize::register_package_recipes`](super::serialize::register_package_recipes)
+/// for the toy package, kept here so that builds that never import this module
+/// keep dead-stripping it.
+pub fn register_package_recipes<LLL: LatexlikeLang>(known: &mut KnownProviders<LLL>)
+where
+    ArgumentExt<LLL>: Default,
+{
+    known.register_recipe("minilatex", minilatex_package::<LLL>);
+    known.register_recipe("minilatex.item", minilatex_item_package::<LLL>);
 }
 
 #[cfg(test)]

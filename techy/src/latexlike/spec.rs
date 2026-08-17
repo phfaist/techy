@@ -19,8 +19,7 @@ use crate::constructs::{
     ConstructParser, ConstructParserResult, Invocation, ParseContext, StdInvocationParser,
 };
 use crate::node::{ArgumentExt, BuildId};
-use crate::scopes::Package;
-use crate::serialize::SerializableObject;
+use crate::scopes::{Package, SpecProvenance};
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
 
@@ -59,6 +58,13 @@ pub(crate) fn frame_title(kind: &str, role: FrameRole, name: &str) -> String {
 /// private, so there is no struct-literal form; the public `arguments` field stays
 /// readable and assignable on an owned value.
 ///
+/// **Serialization.** The argument structure holds parsers, which have no
+/// serialized form, so a macro spec is serialized by *identity* — a reference to the
+/// provider that defined it plus its key — which needs the [`SpecProvenance`] stamp
+/// a shared package hands out ([`with_provenance`](MacroSpec::with_provenance);
+/// [`Package::define_macro`] stamps automatically in a shared package). An
+/// unstamped macro spec cannot be serialized (the error names the type).
+///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
 /// [`Latexlike`]) — a family member registers the same declarative macro shape
 /// under its own marker type.
@@ -69,12 +75,27 @@ pub struct MacroSpec<LLL: LatexlikeLang = Latexlike> {
     /// follows it; `None` (the default) leaves the surrounding state untouched.
     /// Set with [`with_after_effect`](MacroSpec::with_after_effect).
     after_effect: Option<ParsingStateDelta<LLL>>,
+    /// Where the spec was defined, when known.
+    provenance: Option<SpecProvenance<LLL>>,
 }
 
 impl<LLL: LatexlikeLang> MacroSpec<LLL> {
     /// A macro with the given argument structure.
     pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> MacroSpec<LLL> {
-        MacroSpec { arguments, after_effect: None }
+        MacroSpec { arguments, after_effect: None, provenance: None }
+    }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out ([`Package::provenance_for`]) — so that the spec can be
+    /// serialized by identity. Replaces a previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> MacroSpec<LLL> {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// Where this spec is defined, if it was stamped.
+    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 
     /// Give the macro an **after-effect**: a parsing-state change every invocation
@@ -98,8 +119,8 @@ impl<LLL: LatexlikeLang> MacroSpec<LLL> {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for MacroSpec<LLL> {}
+// The `SerializableObject` impl (identity through the provenance stamp) lives in
+// `super::serialize`, with the preset's other serialization impls.
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for MacroSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
@@ -160,6 +181,7 @@ impl<LLL: LatexlikeLang> fmt::Debug for MacroSpec<LLL> {
         f.debug_struct("MacroSpec")
             .field("arguments", &self.arguments)
             .field("after_effect", &self.after_effect)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }
@@ -169,13 +191,14 @@ impl<LLL: LatexlikeLang> Clone for MacroSpec<LLL> {
         MacroSpec {
             arguments: self.arguments.clone(),
             after_effect: self.after_effect.clone(),
+            provenance: self.provenance.clone(),
         }
     }
 }
 
 impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
     fn default() -> Self {
-        MacroSpec { arguments: Vec::new(), after_effect: None }
+        MacroSpec { arguments: Vec::new(), after_effect: None, provenance: None }
     }
 }
 
@@ -188,6 +211,11 @@ impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
 /// the [`minilatex_package`](super::minidefs::minilatex_package) registers one shared
 /// argument-less instance for all its typography triggers).
 ///
+/// **Serialization.** Like [`MacroSpec`]: by identity through a [`SpecProvenance`]
+/// stamp ([`with_provenance`](SpecialsSpec::with_provenance); the stamp of a specials
+/// definition is [`Package::provenance_for_specials`]) — an unstamped specials spec
+/// cannot be serialized.
+///
 /// Generic over the language family (`LLL`, [`LatexlikeLang`]; defaulting to
 /// [`Latexlike`]) — it is also what the paragraph-break behavior function
 /// ([`make_paragraph_break_node`](super::make_paragraph_break_node)) stamps on
@@ -195,17 +223,32 @@ impl<LLL: LatexlikeLang> Default for MacroSpec<LLL> {
 pub struct SpecialsSpec<LLL: LatexlikeLang = Latexlike> {
     /// The argument structure, in invocation order.
     pub arguments: Vec<Arc<ArgumentSpec<LLL>>>,
+    /// Where the spec was defined, when known.
+    provenance: Option<SpecProvenance<LLL>>,
 }
 
 impl<LLL: LatexlikeLang> SpecialsSpec<LLL> {
     /// A specials callable with the given argument structure.
     pub fn new(arguments: Vec<Arc<ArgumentSpec<LLL>>>) -> SpecialsSpec<LLL> {
-        SpecialsSpec { arguments }
+        SpecialsSpec { arguments, provenance: None }
+    }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out ([`Package::provenance_for_specials`]) — so that the spec
+    /// can be serialized by identity. Replaces a previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<LLL>) -> SpecialsSpec<LLL> {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// Where this spec is defined, if it was stamped.
+    pub fn provenance(&self) -> Option<&SpecProvenance<LLL>> {
+        self.provenance.as_ref()
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<LLL: LatexlikeLang> SerializableObject<LLL> for SpecialsSpec<LLL> {}
+// The `SerializableObject` impl (identity through the provenance stamp) lives in
+// `super::serialize`.
 
 impl<LLL: LatexlikeLang> CallableSpec<LLL> for SpecialsSpec<LLL> {
     fn arguments(&self) -> &[Arc<ArgumentSpec<LLL>>] {
@@ -222,19 +265,22 @@ impl<LLL: LatexlikeLang> CallableSpec<LLL> for SpecialsSpec<LLL> {
 
 impl<LLL: LatexlikeLang> fmt::Debug for SpecialsSpec<LLL> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpecialsSpec").field("arguments", &self.arguments).finish()
+        f.debug_struct("SpecialsSpec")
+            .field("arguments", &self.arguments)
+            .field("provenance", &self.provenance)
+            .finish()
     }
 }
 
 impl<LLL: LatexlikeLang> Clone for SpecialsSpec<LLL> {
     fn clone(&self) -> Self {
-        SpecialsSpec { arguments: self.arguments.clone() }
+        SpecialsSpec { arguments: self.arguments.clone(), provenance: self.provenance.clone() }
     }
 }
 
 impl<LLL: LatexlikeLang> Default for SpecialsSpec<LLL> {
     fn default() -> Self {
-        SpecialsSpec { arguments: Vec::new() }
+        SpecialsSpec { arguments: Vec::new(), provenance: None }
     }
 }
 
@@ -266,6 +312,11 @@ impl<LLL: LatexlikeLang> Package<LLL> {
     /// character), and — deliberately — **no escape-char validation happens here
     /// either** (escape characters can change mid-parse, and a leading
     /// escape-character-like char can be intended).
+    ///
+    /// In a package built shared ([`Package::new_shared`]) the spec is stamped with
+    /// its provenance ([`MacroSpec::with_provenance`]), so that it can be serialized
+    /// by identity; in a package built with [`Package::new`] it is not (nothing to
+    /// stamp with).
     pub fn define_macro<I>(
         &mut self,
         name: impl Into<Box<str>>,
@@ -276,11 +327,13 @@ impl<LLL: LatexlikeLang> Package<LLL> {
         I: IntoIterator,
         I::Item: AsRef<str>,
     {
-        Ok(self.insert(
-            LLL::CallableTypeId::macro_callable(),
-            name,
-            MacroSpec::new(argument_specs(codes)?),
-        ))
+        let callable_type = LLL::CallableTypeId::macro_callable();
+        let name: Box<str> = name.into();
+        let mut spec = MacroSpec::new(argument_specs(codes)?);
+        if let Some(provenance) = self.provenance_for(callable_type, &*name) {
+            spec = spec.with_provenance(provenance);
+        }
+        Ok(self.insert(callable_type, name, spec))
     }
 
     /// Define the environment `name` with the given argument codes — the
@@ -288,7 +341,8 @@ impl<LLL: LatexlikeLang> Package<LLL> {
     /// [`EnvironmentSpec`](super::EnvironmentSpec) under the environment role
     /// (default body handling; for body deltas or custom behavior, build the
     /// [`EnvironmentSpec`](super::EnvironmentSpec) yourself and
-    /// [`insert`](Package::insert) it).
+    /// [`insert`](Package::insert) it). Stamps the spec with its provenance in a
+    /// shared package, like [`define_macro`](Package::define_macro).
     pub fn define_environment<I>(
         &mut self,
         name: impl Into<Box<str>>,
@@ -299,11 +353,13 @@ impl<LLL: LatexlikeLang> Package<LLL> {
         I: IntoIterator,
         I::Item: AsRef<str>,
     {
-        Ok(self.insert(
-            LLL::CallableTypeId::environment_callable(),
-            name,
-            EnvironmentSpec::new(argument_specs(codes)?),
-        ))
+        let callable_type = LLL::CallableTypeId::environment_callable();
+        let name: Box<str> = name.into();
+        let mut spec = EnvironmentSpec::new(argument_specs(codes)?);
+        if let Some(provenance) = self.provenance_for(callable_type, &*name) {
+            spec = spec.with_provenance(provenance);
+        }
+        Ok(self.insert(callable_type, name, spec))
     }
 }
 

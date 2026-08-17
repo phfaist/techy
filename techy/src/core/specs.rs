@@ -19,6 +19,10 @@
 //!   [`new_unnamed`](ArgumentSpec::new_unnamed)), and
 //!   [`IntoSpecsProvider`] (packages/providers into
 //!   [`ParsingState::lang_initial_with_packages`](crate::core::ParsingState::lang_initial_with_packages)).
+//!   A package built shared ([`Package::new_shared`]) hands its specs
+//!   [`SpecProvenance`] stamps — which provider defined the spec, under which
+//!   [`DefinitionKey`] — the record that lets a spec be serialized by identity
+//!   (see [`serialize`](crate::serialize)).
 //! - **Command resolution** — [`resolve_command_in_scopes`] is the standard
 //!   resolution body (build the query, consult the scope stack, map the outcome —
 //!   a clean miss carries the searched providers plus a did-you-mean detail),
@@ -38,9 +42,9 @@ pub use crate::engine::{
 };
 pub use crate::scopes::{
     check_provider_commands_shadowed_by_escape, CallableDefinedAsError, CallableQuery,
-    CallableSyntax, DefinitionOp, ErrorCallableSpec, FallbackProvider, IntoSpecsProvider,
+    CallableSyntax, DefinitionKey, DefinitionOp, ErrorCallableSpec, FallbackProvider, IntoSpecsProvider,
     Package, ProviderCommandsShadowedByEscape, ProviderError, Scope, ScopeOp,
-    ScopeOpError, ScopeStack, ScopeStackError, SearchedProviders, SpecsProvider,
+    ScopeOpError, ScopeStack, ScopeStackError, SearchedProviders, SpecProvenance, SpecsProvider,
     SymbolEntry,
 };
 pub use crate::spec::{

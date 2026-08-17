@@ -45,10 +45,10 @@ use super::segment::{Segment, SegmentTable, WireEntry};
 /// appending is the natural flow, and both directions share the same tables.
 ///
 /// The session also carries the caller's *user data*
-/// ([`set_user_data`](SerdeSession::set_user_data)) — the reading environment's
-/// entry point: an implementation's `deserialize_object` reads it through the
-/// context to find the live objects that serialized data refers to by identity — and
-/// the readers and resolvers registered on heterogeneous tables (see
+/// ([`set_user_data`](SerdeSession::set_user_data); one value per type) — the
+/// reading environment's entry point: an implementation's `deserialize_object` reads
+/// it through the context to find the live objects that serialized data refers to by
+/// identity — and the readers and resolvers registered on heterogeneous tables (see
 /// [`DispatchingSerdeDriver`](crate::serialize::DispatchingSerdeDriver)).
 ///
 /// Nested calls — an object's serialization interning the objects it refers to, an
@@ -127,7 +127,8 @@ use super::segment::{Segment, SegmentTable, WireEntry};
 /// ```
 pub struct SerdeSession<L: SerializableLang> {
     tables: Vec<TableState<L>>,
-    user_data: Option<Box<dyn Any + Send + Sync>>,
+    /// The caller's user data, one value per type.
+    user_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     descent_guard_init: StdDescentGuardInit,
     /// The write side's in-progress stack: `(table ordinal, object address)` of the
     /// objects whose serialization is in progress, outermost first — the write-side
@@ -220,7 +221,7 @@ impl<L: SerializableLang> SerdeSession<L> {
     pub fn empty() -> SerdeSession<L> {
         SerdeSession {
             tables: Vec::new(),
-            user_data: None,
+            user_data: HashMap::new(),
             descent_guard_init: StdDescentGuardInit::default(),
             write_stack: Vec::new(),
             memo_journal: Vec::new(),
@@ -338,17 +339,21 @@ impl<L: SerializableLang> SerdeSession<L> {
 
     // --- user data ----------------------------------------------------------------------
 
-    /// Set the caller's user data: any value, replacing the previous one. It is what
-    /// serialization and deserialization calls see through their context's
-    /// `user_data` — the reading environment (the live objects that serialized data
-    /// refers to by identity), or anything else an implementation needs.
+    /// Set the caller's user data of type `T`: any value, one per type — setting a
+    /// value of a type already set replaces that value and leaves the values of
+    /// other types in place. It is what serialization and deserialization calls see
+    /// through their context's `user_data::<T>()` — the reading environment (the
+    /// live objects that serialized data refers to by identity: the crate's own
+    /// [`KnownProviders`](crate::serialize::KnownProviders), a framework's own
+    /// environment type), or anything else an implementation needs. Keyed by type,
+    /// so the crate's and a framework's environment values coexist in one session.
     pub fn set_user_data<T: Any + Send + Sync>(&mut self, data: T) {
-        self.user_data = Some(Box::new(data));
+        self.user_data.insert(TypeId::of::<T>(), Box::new(data));
     }
 
-    /// The caller's user data, if set and of type `T`.
+    /// The caller's user data of type `T`, if a value of that type was set.
     pub fn user_data<T: Any>(&self) -> Option<&T> {
-        self.user_data.as_ref()?.downcast_ref::<T>()
+        self.user_data.get(&TypeId::of::<T>())?.downcast_ref::<T>()
     }
 
     // --- writing ------------------------------------------------------------------------
@@ -855,7 +860,7 @@ impl<L: SerializableLang> fmt::Debug for SerdeSession<L> {
         }
         f.debug_struct("SerdeSession")
             .field("tables", &Tables(&self.tables))
-            .field("user_data", &self.user_data.as_ref().map(|_| "set"))
+            .field("user_data", &format_args!("{} value(s)", self.user_data.len()))
             .field("descent_guard_init", &self.descent_guard_init)
             .finish()
     }

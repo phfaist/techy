@@ -916,7 +916,7 @@ mod tests {
         let mut package = Package::new("test-macros");
         for (name, arguments) in macros {
             let spec: Arc<dyn CallableSpec<VerbLang>> =
-                Arc::new(StdCallableSpec { arguments: arguments.clone() });
+                Arc::new(StdCallableSpec { arguments: arguments.clone(), ..Default::default() });
             package.insert(CT_MACRO, *name, spec);
         }
         let mut scopes = ScopeStack::new();
@@ -1074,7 +1074,7 @@ mod tests {
         // with a diagnostic.
         let st = {
             let spec: Arc<dyn CallableSpec<VerbLang>> =
-                Arc::new(StdCallableSpec { arguments: vec![verb_arg()] });
+                Arc::new(StdCallableSpec { arguments: vec![verb_arg()], ..Default::default() });
             let mut package = Package::new("test-macros");
             package.insert(CT_MACRO, "verb", spec);
             let mut scopes = ScopeStack::new();

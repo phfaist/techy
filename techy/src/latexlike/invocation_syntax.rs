@@ -906,7 +906,7 @@ mod tests {
         // minilatex supplies the `---` specials the childless-shape probe uses.
         let language = with_packages(
             Recovery::Strict,
-            [super::super::minidefs::minilatex_package(), package],
+            [super::super::minidefs::minilatex_package(), Arc::new(package)],
         );
 
         let result = parse_ok(&language, "\\emph{ab} x");

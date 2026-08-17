@@ -9,6 +9,8 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
 
+use crate::scopes::DefinitionKey;
+
 use super::value::TableId;
 
 /// The shared error value behind the `cause` field of [`SerializeError::Failed`] and
@@ -138,6 +140,26 @@ pub enum SerializeError {
         /// The identifier the entry carried.
         found: String,
     },
+    /// The spec carries no provenance stamp, and its type has no self-contained
+    /// serialized form: it can only be serialized by identity — as a reference to the
+    /// provider that defined it — which needs the stamp a shared package hands out
+    /// ([`Package::new_shared`](crate::scopes::Package::new_shared),
+    /// [`SpecProvenance`](crate::scopes::SpecProvenance)). The spec was built outside
+    /// a shared package (or not stamped). `spec` names the spec's type.
+    MissingProvenance {
+        /// The name of the spec's type.
+        spec: &'static str,
+    },
+    /// The provider that defined the spec — named by its provenance stamp — no longer
+    /// exists (the stamp refers to it weakly, and every strong reference has been
+    /// dropped), so the spec's identity cannot be serialized. `callable_type` is the
+    /// invocation form's debug rendering; `key` the definition key.
+    ProviderDropped {
+        /// The invocation form the spec was defined under (its debug rendering).
+        callable_type: String,
+        /// The key the spec was defined under.
+        key: DefinitionKey,
+    },
     /// The failure happened while serializing an object into table `table`: the
     /// location wrapper the session adds around a driver's failure. Only the innermost
     /// table location is recorded — a `cause` is never itself an `InTable`. It may be
@@ -266,6 +288,17 @@ impl fmt::Display for SerializeError {
                 f,
                 "the driver of table `{table}` produced an entry with identifier `{found}`, \
                  but every entry of that table must carry `{expected}`"
+            ),
+            SerializeError::MissingProvenance { spec } => write!(
+                f,
+                "a `{spec}` carries no provenance stamp: it was built outside a shared \
+                 package (see Package::new_shared) and its type has no self-contained \
+                 serialized form, so it cannot be serialized"
+            ),
+            SerializeError::ProviderDropped { callable_type, key } => write!(
+                f,
+                "the provider that defined the spec ({callable_type}, {key}) no longer \
+                 exists, so the spec's identity cannot be serialized"
             ),
             SerializeError::InTable { table, cause } => {
                 write!(f, "while serializing an object into table `{table}`: {cause}")
@@ -538,6 +571,26 @@ pub enum DeserializeError {
         /// What the check found, in words, naming the entry.
         detail: String,
     },
+    /// A serialized provider refers, by name, to a provider the reading environment
+    /// does not hold: the session's [`KnownProviders`](crate::serialize::KnownProviders)
+    /// (in its user data) has neither a provider nor a recipe of that name — or no
+    /// `KnownProviders` value was set at all.
+    MissingProvider {
+        /// The provider's name.
+        name: String,
+    },
+    /// A serialized spec refers, by identity, to a definition its provider does not
+    /// hold in the reading environment: the provider named `provider` (a package the
+    /// reading environment supplied) has no definition under that callable type and
+    /// key — the environment's package differs from the writer's.
+    MissingDefinition {
+        /// The provider's name.
+        provider: String,
+        /// The invocation form (its debug rendering).
+        callable_type: String,
+        /// The key the spec was defined under.
+        key: DefinitionKey,
+    },
     /// The failure happened while deserializing entry `index` of table `table`, whose
     /// identifier is `identifier` when it is known (a table holding one kind of object
     /// has a fixed identifier; an entry of any other table carries its own, unless the
@@ -748,6 +801,16 @@ impl fmt::Display for DeserializeError {
             DeserializeError::Internal { detail } => {
                 write!(f, "internal error of the serialization session (a bug in this crate): {detail}")
             }
+            DeserializeError::MissingProvider { name } => write!(
+                f,
+                "the reading environment holds no provider named `{name}` (neither a \
+                 provider nor a recipe of that name in the session's KnownProviders)"
+            ),
+            DeserializeError::MissingDefinition { provider, callable_type, key } => write!(
+                f,
+                "the provider `{provider}` of the reading environment has no definition \
+                 under {callable_type} with {key}"
+            ),
             DeserializeError::InEntry { table, index, identifier, cause } => match identifier {
                 Some(identifier) => write!(
                     f,
@@ -802,6 +865,14 @@ pub enum RegistrationError {
         /// The id the handle carries.
         table: TableId,
     },
+    /// The session has no table of that name registered with the expected driver
+    /// type: a registration helper that finds the crate's standard tables by name
+    /// ([`register_core_readers`](crate::serialize::register_core_readers)) was used
+    /// on a session that lacks one of them.
+    UnknownTableName {
+        /// The table's name.
+        name: String,
+    },
     /// A reader is already registered for that identifier in the table (by an earlier
     /// registration, or by a resolver whose reader was kept).
     DuplicateIdentifier {
@@ -842,6 +913,11 @@ impl fmt::Display for RegistrationError {
                 "table #{} is not registered in this session (the handle comes from another \
                  session, or the table was registered with a different driver type)",
                 table.ordinal()
+            ),
+            RegistrationError::UnknownTableName { name } => write!(
+                f,
+                "no table named `{name}` is registered in this session with the expected \
+                 driver type"
             ),
             RegistrationError::DuplicateIdentifier { table, identifier } => write!(
                 f,

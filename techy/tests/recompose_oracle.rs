@@ -119,7 +119,7 @@ fn language(recovery: Recovery) -> Language<Latexlike> {
     // definitions win.
     Language::new(
         LatexlikeDriver::new(recovery),
-        ParsingState::lang_initial_with_packages([minilatex_package(), testdb()])
+        ParsingState::lang_initial_with_packages([minilatex_package(), Arc::new(testdb())])
             .expect("seed state"),
     )
 }

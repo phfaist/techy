@@ -154,9 +154,12 @@ fn serialize_object_defaults_to_unsupported_and_dispatches_overrides() {
             SerialValue::Map(Vec::from([("k".into(), SerialValue::Int(7))]))
         );
 
-        // A provider's default, through its own trait object.
+        // A provider's serialization, through its own trait object: a package writes
+        // its identity (its name) — no default in play, the impl is the crate's.
         let package: Arc<dyn SpecsProvider<OptedInLang>> = Arc::new(Package::<OptedInLang>::new("pkg"));
-        assert!(matches!(package.serialize_object(cx), Err(SerializeError::Unsupported)));
+        let entry = package.serialize_object(cx).unwrap();
+        assert_eq!(entry.identifier, "core.package");
+        assert_eq!(entry.data, SerialValue::Map(Vec::from([("name".into(), SerialValue::Str("pkg".into()))])));
     });
 }
 

@@ -226,7 +226,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec() });
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec(), ..Default::default() });
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -472,6 +472,7 @@ mod tests {
             Arc::new(ArgumentSpec::new(Arc::new(StubParser), "title"));
         let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec {
             arguments: vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
+            ..Default::default()
         });
         let section = b.add(
             NodeKind::callable(CallableData {
@@ -735,7 +736,7 @@ mod tests {
 
         let arg_specs = [brace_arg_spec(), brace_arg_spec()];
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec() });
+            Arc::new(StdCallableSpec { arguments: arg_specs.to_vec(), ..Default::default() });
         let frac = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -817,7 +818,7 @@ mod tests {
 
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -866,7 +867,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -909,7 +910,7 @@ mod tests {
     ) -> Result<BuildId, NodeBuildError> {
         let specs: Vec<_> = args.iter().map(|a| a.spec.clone()).collect();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: specs });
+            Arc::new(StdCallableSpec { arguments: specs, ..Default::default() });
         b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -1788,7 +1789,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -1855,6 +1856,7 @@ mod tests {
             Arc::new(ArgumentSpec::new(Arc::new(StubParser), "title"));
         let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(StdCallableSpec {
             arguments: vec![star_spec.clone(), placement_spec.clone(), title_spec.clone()],
+            ..Default::default()
         });
         let body_chars =
             b.add(NodeKind::chars(Span::new(10, 11)), spanned(&source, 10..11), st.clone(), vec![], (), ()).unwrap();
@@ -1995,7 +1997,7 @@ mod tests {
         ).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,
@@ -2269,7 +2271,7 @@ mod tests {
         let y = b.add(NodeKind::chars(Span::new(5, 6)), spanned(&source, 5..6), st.clone(), vec![], (), ()).unwrap();
         let arg_spec = brace_arg_spec();
         let spec: Arc<dyn CallableSpec<PlainLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()] });
+            Arc::new(StdCallableSpec { arguments: vec![arg_spec.clone()], ..Default::default() });
         let m = b.add(
             NodeKind::callable(CallableData {
                 callable_type: CT_MACRO,

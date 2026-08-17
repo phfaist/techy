@@ -1246,7 +1246,7 @@ mod tests {
     }
 
     fn macro_spec(arguments: Vec<Arc<ArgumentSpec<EnvLang>>>) -> Arc<dyn CallableSpec<EnvLang>> {
-        Arc::new(StdCallableSpec { arguments })
+        Arc::new(StdCallableSpec { arguments, ..Default::default() })
     }
 
     /// The test-lang environment spec (an `EnvironmentSpec` rehearsal): arguments

@@ -5,8 +5,11 @@
 //! [`ProviderSerdeDriver`]), their typed positions ([`SourceIndex`], [`StateIndex`],
 //! [`SpecIndex`], [`ProviderIndex`]), the standard-tables constructor
 //! ([`SerdeSession::new`](crate::serialize::SerdeSession::new)) with its handle bundle
-//! ([`StandardTables`]), and the extension traits that intern into and read from
-//! the standard tables by kind ([`StandardTableInterning`], [`StandardTableReading`]).
+//! ([`StandardTables`]), the extension traits that intern into and read from
+//! the standard tables by kind ([`StandardTableInterning`], [`StandardTableReading`]),
+//! the tree driver ([`TreeSerdeDriver`]), and the serialization of the crate's own
+//! spec and provider types with the reading environment's provider directory
+//! ([`KnownProviders`], [`register_core_readers`]).
 //!
 //! Everything here is registered on the type-blind engine exactly as a framework's
 //! own tables would be: the drivers implement
@@ -15,6 +18,7 @@
 //! the tables by name ([`SerdeSession::table_handle`](crate::serialize::SerdeSession::table_handle)).
 
 mod source;
+pub(crate) mod specs;
 mod standard;
 mod state;
 mod tree;
@@ -23,6 +27,7 @@ pub use source::{
     ReferencedSource, SourceDigest, SourceIndex, SourceSerdeDriver, SourceTextForm,
     SourceTextPolicy, SourceTextSupplier,
 };
+pub use specs::{register_core_readers, KnownProviders, ProviderRecipe};
 pub use standard::{
     ProviderIndex, ProviderSerdeDriver, SpecIndex, SpecSerdeDriver, StandardTableInterning,
     StandardTableReading, StandardTables,
@@ -48,6 +53,17 @@ pub(crate) const STATE_IDENTIFIER: &str = "core.state";
 /// The identifier of a trees table entry whose annotation is the unit type (the
 /// annotations are omitted from the wire).
 pub(crate) const CORE_TREE_IDENTIFIER: &str = "core.tree";
+/// The identifier of a specs table entry holding a stamped spec's identity form
+/// (its provider's position plus the definition key).
+pub(crate) const SPEC_IDENTITY_IDENTIFIER: &str = "core.provider-spec";
+/// The identifier of a specs table entry holding an error spec's self-contained form.
+pub(crate) const ERROR_SPEC_IDENTIFIER: &str = "core.error-spec";
+/// The identifier of a providers table entry holding a package (by name).
+pub(crate) const PACKAGE_IDENTIFIER: &str = "core.package";
+/// The identifier of a providers table entry holding a scope (in full).
+pub(crate) const SCOPE_IDENTIFIER: &str = "core.scope";
+/// The identifier of a providers table entry holding a fallback provider (in full).
+pub(crate) const FALLBACK_PROVIDER_IDENTIFIER: &str = "core.fallback-provider";
 
 #[cfg(test)]
 mod tests;

@@ -1210,7 +1210,7 @@ mod tests {
                 .iter()
                 .map(|(name, arguments)| {
                     let spec: Arc<dyn CallableSpec<ArgLang>> =
-                        Arc::new(StdCallableSpec { arguments: arguments.clone() });
+                        Arc::new(StdCallableSpec { arguments: arguments.clone(), ..Default::default() });
                     (*name, spec)
                 })
                 .collect::<Vec<_>>(),
@@ -1848,7 +1848,7 @@ mod tests {
         lib.insert(
             CT_MACRO,
             "item",
-            Arc::new(StdCallableSpec { arguments: vec![optional_arg_unwrapping()] })
+            Arc::new(StdCallableSpec { arguments: vec![optional_arg_unwrapping()], ..Default::default() })
                 as Arc<dyn CallableSpec<ArgLang>>,
         );
         let mut scopes = ScopeStack::new();
@@ -2171,7 +2171,7 @@ mod tests {
         }
 
         let w: Arc<dyn CallableSpec<ArgLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![brace_arg()] });
+            Arc::new(StdCallableSpec { arguments: vec![brace_arg()], ..Default::default() });
         let def: Arc<dyn CallableSpec<ArgLang>> = Arc::new(DefSpec);
         let st = state_with_specs(&[("w", w), ("def", def)]);
         let parsed = parse_std("\\w\\def %c", &st, Recovery::Strict);
@@ -2231,7 +2231,7 @@ mod tests {
         }
 
         let a: Arc<dyn CallableSpec<ArgLang>> =
-            Arc::new(StdCallableSpec { arguments: vec![brace_arg()] });
+            Arc::new(StdCallableSpec { arguments: vec![brace_arg()], ..Default::default() });
         let env: Arc<dyn CallableSpec<ArgLang>> = Arc::new(TakesBodySpec);
         let st = state_with_specs(&[("a", a), ("env", env)]);
         let parsed = parse_both(r"\a\env{x}", &st, Recovery::Tolerant);

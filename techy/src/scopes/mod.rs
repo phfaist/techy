@@ -46,7 +46,7 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
@@ -68,6 +68,10 @@ use crate::state::{
 use crate::token::{
     SpecialsMatch, Token, TokenError, TokenErrorKind, TokenResult, TriggerChars,
 };
+
+mod provenance;
+
+pub use provenance::{DefinitionKey, SpecProvenance};
 
 /// The syntax through which a callable invocation was recognized.
 ///
@@ -842,6 +846,19 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 /// **Specials as data**: a package may carry trigger-string definitions
 /// ([`insert_specials`](Package::insert_specials)); its scan returns the longest
 /// matching trigger.
+///
+/// **Serialization.** A package is serialized by *identity*: its entry carries the
+/// package's name only, and the reading side looks the name up among the providers
+/// it already holds ([`KnownProviders`](crate::serialize::KnownProviders)) — a package
+/// is loaded data, not something to describe in full. Its *definitions* are
+/// serialized by identity too, when the package was built **shared**
+/// ([`new_shared`](Package::new_shared)): the specs it hands out
+/// [`SpecProvenance`] stamps for ([`provenance_for`](Package::provenance_for),
+/// [`provenance_for_specials`](Package::provenance_for_specials)) refer back to it.
+/// A package built with [`new`](Package::new) and later wrapped in an `Arc` cannot
+/// stamp its specs (it has no reference to its own `Arc`), so its specs — unless
+/// their type has a self-contained serialized form — cannot be serialized; the
+/// package itself still can.
 pub struct Package<L: Lang> {
     name: Box<str>,
     specs: HashMap<L::CallableTypeId, HashMap<Box<str>, PackageEntry<L>>>,
@@ -850,22 +867,107 @@ pub struct Package<L: Lang> {
     specials: Vec<PackageSpecials<L>>,
     /// `None` = visible in every mode.
     visible_modes: Option<Vec<L::ModeId>>,
+    /// The package's own `Arc`, weakly, when built shared ([`Package::new_shared`]):
+    /// what its provenance stamps refer to. `None` for a package built with
+    /// [`Package::new`].
+    self_weak: Option<Weak<dyn SpecsProvider<L>>>,
 }
 
 impl<L: Lang> Package<L> {
     /// An empty package. The name identifies it on stacks, in ops, and in diagnostics.
+    ///
+    /// A package built this way cannot hand out provenance stamps for its definitions
+    /// (see [`new_shared`](Package::new_shared) and the type's documentation).
     pub fn new(name: impl Into<Box<str>>) -> Package<L> {
         Package {
             name: name.into(),
             specs: HashMap::new(),
             specials: Vec::new(),
             visible_modes: None,
+            self_weak: None,
         }
+    }
+
+    /// An empty package that `build` fills, returned shared: the package is created
+    /// inside its own `Arc`, so that while `build` runs it can hand out
+    /// [`SpecProvenance`] stamps for its definitions
+    /// ([`provenance_for`](Package::provenance_for),
+    /// [`provenance_for_specials`](Package::provenance_for_specials)) — the stamps
+    /// refer weakly to the `Arc` being built. Inside `build`, insert the definitions
+    /// as usual, stamping the specs first (the crate's spec types take the stamp with
+    /// `with_provenance`; the latexlike one-liners `define_macro`/`define_environment`
+    /// stamp automatically). Only the specs a package stamps can be serialized by
+    /// identity — see the type's documentation.
+    ///
+    /// ```
+    /// use techy::core::specs::{Package, StdCallableSpec};
+    /// use techy::core::TrivialLang;
+    ///
+    /// #[derive(Debug, Clone, Copy)]
+    /// struct MyLang;
+    /// impl TrivialLang for MyLang {}
+    ///
+    /// const MACRO: u32 = 0;
+    /// let package = Package::<MyLang>::new_shared("mydefs", |package| {
+    ///     let stamp = package.provenance_for(MACRO, "emph").expect("a shared package stamps");
+    ///     package.insert(MACRO, "emph", StdCallableSpec::default().with_provenance(stamp));
+    /// });
+    /// assert_eq!(package.name(), "mydefs");
+    /// assert!(package.get(MACRO, "emph").is_some());
+    /// ```
+    pub fn new_shared(
+        name: impl Into<Box<str>>,
+        build: impl FnOnce(&mut Package<L>),
+    ) -> Arc<Package<L>> {
+        Arc::new_cyclic(|weak: &Weak<Package<L>>| {
+            let mut package = Package::new(name);
+            package.self_weak = Some(Weak::clone(weak) as Weak<dyn SpecsProvider<L>>);
+            build(&mut package);
+            package
+        })
     }
 
     /// This package's name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether this package was built shared ([`new_shared`](Package::new_shared))
+    /// and so hands out provenance stamps.
+    pub fn is_shared(&self) -> bool {
+        self.self_weak.is_some()
+    }
+
+    /// The provenance stamp for the definition of `name` under `callable_type` in this
+    /// package — for a spec about to be inserted under that key (or already there):
+    /// the stamp names this package (weakly), the invocation form, and
+    /// [`DefinitionKey::Name`]. `None` unless the package was built shared
+    /// ([`new_shared`](Package::new_shared)); nothing checks that the key is or
+    /// becomes defined — the caller inserts the stamped spec under it.
+    pub fn provenance_for(
+        &self,
+        callable_type: L::CallableTypeId,
+        name: impl Into<Box<str>>,
+    ) -> Option<SpecProvenance<L>> {
+        let provider = self.self_weak.as_ref()?;
+        Some(SpecProvenance::new(Weak::clone(provider), callable_type, DefinitionKey::Name(name.into())))
+    }
+
+    /// The provenance stamp for the specials definition of `trigger` under
+    /// `callable_type` — the [`provenance_for`](Package::provenance_for) sibling for
+    /// [`insert_specials`](Package::insert_specials) entries
+    /// ([`DefinitionKey::Trigger`]). `None` unless the package was built shared.
+    pub fn provenance_for_specials(
+        &self,
+        callable_type: L::CallableTypeId,
+        trigger: impl Into<Box<str>>,
+    ) -> Option<SpecProvenance<L>> {
+        let provider = self.self_weak.as_ref()?;
+        Some(SpecProvenance::new(
+            Weak::clone(provider),
+            callable_type,
+            DefinitionKey::Trigger(trigger.into()),
+        ))
     }
 
     /// Define `name` (normalized spelling) under the invocation form `callable_type`,
@@ -992,7 +1094,8 @@ impl<L: Lang> Package<L> {
     /// definition even immediately after
     /// [`insert_specials`](Package::insert_specials) (whose `callable_type`
     /// parameter is what the *match* reports, not a lookup key here). To read
-    /// them back, use [`iter_symbols`](SpecsProvider::iter_symbols) (which lists
+    /// them back, use [`get_specials`](Package::get_specials) (by trigger),
+    /// [`iter_symbols`](SpecsProvider::iter_symbols) (which lists
     /// specials with the trigger as the name) or
     /// [`scan_specials`](SpecsProvider::scan_specials) (the matching path);
     /// [`len`](Package::len) counts them.
@@ -1002,6 +1105,23 @@ impl<L: Lang> Package<L> {
         name: &str,
     ) -> Option<&Arc<dyn CallableSpec<L>>> {
         self.specs.get(&callable_type)?.get(name).map(|entry| &entry.spec)
+    }
+
+    /// The spec of the specials definition registered for `trigger` under
+    /// `callable_type`, if any (visibility-blind, like [`get`](Package::get)): the
+    /// raw accessor of the specials store, keyed by the trigger string exactly as
+    /// registered ([`insert_specials`](Package::insert_specials)). The callable type
+    /// must be the one the entry was registered with — a trigger registered under
+    /// another type answers `None`.
+    pub fn get_specials(
+        &self,
+        callable_type: L::CallableTypeId,
+        trigger: &str,
+    ) -> Option<&Arc<dyn CallableSpec<L>>> {
+        self.specials
+            .iter()
+            .find(|entry| entry.callable_type == callable_type && &*entry.trigger == trigger)
+            .map(|entry| &entry.spec)
     }
 
     /// Number of definitions across all callable types (specials entries included).
@@ -1019,8 +1139,8 @@ impl<L: Lang> Package<L> {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<L: Lang> SerializableObject<L> for Package<L> {}
+// The `SerializableObject` (identity by name) and `DeserializableObject` impls live
+// in `crate::serialize::drivers::specs`, with the other core spec/provider types'.
 
 impl<L: Lang> SpecsProvider<L> for Package<L> {
     fn name(&self) -> &str {
@@ -1155,6 +1275,10 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
     }
 }
 
+/// A clone is a new, unshared package: it copies the name, the definitions (sharing
+/// their spec `Arc`s), and the visibility, but not the shared identity — the clone
+/// hands out no provenance stamps of its own, and the stamps its specs may carry keep
+/// naming the package they were cloned from.
 impl<L: Lang> Clone for Package<L> {
     fn clone(&self) -> Self {
         Package {
@@ -1162,6 +1286,7 @@ impl<L: Lang> Clone for Package<L> {
             specs: self.specs.clone(),
             specials: self.specials.clone(),
             visible_modes: self.visible_modes.clone(),
+            self_weak: None,
         }
     }
 }
@@ -1172,6 +1297,7 @@ impl<L: Lang> fmt::Debug for Package<L> {
             .field("name", &self.name)
             .field("definitions", &self.len())
             .field("visible_modes", &self.visible_modes)
+            .field("shared", &self.is_shared())
             .finish()
     }
 }
@@ -1243,10 +1369,20 @@ impl<L: Lang> Scope<L> {
     pub fn is_empty(&self) -> bool {
         self.specs.values().all(BTreeMap::is_empty)
     }
+
+    /// Every definition — `(callable type, name, spec)` — ordered by callable type,
+    /// then by name (the storage order; deterministic).
+    pub fn definitions(
+        &self,
+    ) -> impl Iterator<Item = (L::CallableTypeId, &str, &Arc<dyn CallableSpec<L>>)> + '_ {
+        self.specs.iter().flat_map(|(callable_type, definitions)| {
+            definitions.iter().map(move |(name, spec)| (*callable_type, &**name, spec))
+        })
+    }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<L: Lang> SerializableObject<L> for Scope<L> {}
+// The `SerializableObject` (the definitions in full) and `DeserializableObject`
+// impls live in `crate::serialize::drivers::specs`.
 
 impl<L: Lang> SpecsProvider<L> for Scope<L> {
     fn name(&self) -> &str {
@@ -1350,10 +1486,16 @@ impl<L: Lang> FallbackProvider<L> {
     pub fn get(&self, callable_type: L::CallableTypeId) -> Option<&Arc<dyn CallableSpec<L>>> {
         self.fallbacks.get(&callable_type)
     }
+
+    /// Every registered fallback — `(callable type, spec)` — ordered by callable type
+    /// (the storage order; deterministic).
+    pub fn fallbacks(&self) -> impl Iterator<Item = (L::CallableTypeId, &Arc<dyn CallableSpec<L>>)> + '_ {
+        self.fallbacks.iter().map(|(callable_type, spec)| (*callable_type, spec))
+    }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<L: Lang> SerializableObject<L> for FallbackProvider<L> {}
+// The `SerializableObject` (the fallbacks in full) and `DeserializableObject` impls
+// live in `crate::serialize::drivers::specs`.
 
 impl<L: Lang> SpecsProvider<L> for FallbackProvider<L> {
     fn name(&self) -> &str {
@@ -1437,8 +1579,8 @@ impl ErrorCallableSpec {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<L: Lang> SerializableObject<L> for ErrorCallableSpec {}
+// The `SerializableObject` (a self-contained form: the detail) and
+// `DeserializableObject` impls live in `crate::serialize::drivers::specs`.
 
 impl<L: Lang> CallableSpec<L> for ErrorCallableSpec {
     /// Infallible: `Ok(...)` wrapping is this implementation's whole use of the

@@ -34,7 +34,12 @@
 //! - `NodeRef` accessor sugar for latexlike trees
 //!   ([`math_form`](crate::node::NodeRef::math_form),
 //!   [`is_math_group`](crate::node::NodeRef::is_math_group), …) — inherent methods on
-//!   latexlike-shaped `NodeRef`s.
+//!   latexlike-shaped `NodeRef`s;
+//! - [`serialize`] — the preset's serialization support: [`Latexlike`] is a
+//!   [`SerializableLang`](crate::serialize::SerializableLang), the vocabulary and
+//!   ext types have value conversions, the spec types serialize (by identity through
+//!   their provenance stamps, or in a self-contained form), and
+//!   [`serialize::register`] prepares a reading session.
 //!
 //! ```
 //! use techy::core::{Language, ParsingState};
@@ -72,6 +77,7 @@ mod lang;
 pub mod minidefs;
 mod node_ref;
 mod recompose;
+pub mod serialize;
 mod spec;
 #[cfg(test)]
 mod test_support;
@@ -354,7 +360,7 @@ impl Lang for Latexlike {
     /// data-equivalence mechanically.
     fn initial_state_data() -> Result<StateData<Self>, crate::state::FinalizeError> {
         let mut scopes = ScopeStack::new();
-        scopes.push(Arc::new(builtin_package()));
+        scopes.push(builtin_package());
         Ok(StateData {
             rules: default_token_rules(),
             scopes,
@@ -529,7 +535,15 @@ pub fn default_token_rules<LLL: LatexlikeLang>() -> TokenRules<LLL> {
 /// command is named by its registration, the terminator by
 /// [`BeginSpec::new`]'s argument, and a package spelling the pair differently is an
 /// ordinary package ([`BeginSpec`]).
-pub fn builtin_package<LLL: LatexlikeLang>() -> Package<LLL>
+///
+/// Built **shared** ([`Package::new_shared`]) with its `\begin` spec stamped, so a
+/// parse's builtin definitions serialize by identity; every call builds a fresh
+/// package (a fresh `Arc`) — a reading environment that should resolve a serialized
+/// `_builtin` to the very package its own parses use holds that package's `Arc`
+/// ([`KnownProviders::insert`](crate::serialize::KnownProviders::insert)), or lets
+/// the preset's recipe build one
+/// ([`serialize::register_package_recipes`]).
+pub fn builtin_package<LLL: LatexlikeLang>() -> Arc<Package<LLL>>
 where
     crate::node::SlotExt<LLL>: BodySlotExt,
 {
@@ -537,18 +551,16 @@ where
     // `BeginSpec`) and the orphan diagnoser is resolved under it (through the
     // registration) — two uses that must agree.
     let end_command_name = "end";
-    let mut package = Package::new("_builtin");
-    package.insert(
-        LLL::CallableTypeId::macro_callable(),
-        "begin",
-        BeginSpec::<LLL>::new(end_command_name),
-    );
-    package.insert(
-        LLL::CallableTypeId::macro_callable(),
-        end_command_name,
-        EndSpec::<LLL>::new(),
-    );
-    package
+    Package::new_shared("_builtin", |package| {
+        let macro_type = LLL::CallableTypeId::macro_callable();
+        let mut begin = BeginSpec::<LLL>::new(end_command_name);
+        if let Some(provenance) = package.provenance_for(macro_type, "begin") {
+            begin = begin.with_provenance(provenance);
+        }
+        package.insert(macro_type, "begin", begin);
+        // `EndSpec` is stateless: serialized in its self-contained form, no stamp.
+        package.insert(macro_type, end_command_name, EndSpec::<LLL>::new());
+    })
 }
 
 #[cfg(test)]
@@ -873,7 +885,7 @@ mod tests {
         let seed = ParsingState::<Latexlike>::lang_initial().expect("seed state")
             .derived(&ParsingStateDelta::new().scope_op(ScopeOp::ReplaceStack(vec![
                 Arc::new(fallback),
-                Arc::new(builtin_package()),
+                builtin_package(),
                 Arc::new(package),
             ])))
             .unwrap();

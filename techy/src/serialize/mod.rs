@@ -121,10 +121,11 @@ pub(crate) mod bridge;
 mod render;
 
 pub use drivers::{
-    ProviderIndex, ProviderSerdeDriver, ReferencedSource, SourceDigest, SourceIndex,
-    SourceSerdeDriver, SourceTextForm, SourceTextPolicy, SourceTextSupplier, SpecIndex,
-    SpecSerdeDriver, StandardTableInterning, StandardTableReading, StandardTables, StateIndex,
-    StateSerdeDriver, TreeIndex, TreeSerdeDriver, TreeSerialization,
+    register_core_readers, KnownProviders, ProviderIndex, ProviderRecipe, ProviderSerdeDriver,
+    ReferencedSource, SourceDigest, SourceIndex, SourceSerdeDriver, SourceTextForm,
+    SourceTextPolicy, SourceTextSupplier, SpecIndex, SpecSerdeDriver, StandardTableInterning,
+    StandardTableReading, StandardTables, StateIndex, StateSerdeDriver, TreeIndex,
+    TreeSerdeDriver, TreeSerialization,
 };
 pub use engine::{
     DeserializeContext, DispatchingSerdeDriver, IdentifierResolver, ObjectReader,
@@ -136,6 +137,9 @@ pub use object::{
     SerializableValue,
 };
 pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
+
+// Shared bodies of the crate's own spec serialization, for the preset's impls.
+pub(crate) use drivers::specs::{read_unit_recipe, serialize_stamped_spec, unit_recipe_value};
 
 // The typed-position macro is defined at the crate root (as every `macro_rules!`
 // export is) and hidden there; this is its canonical, documented path.

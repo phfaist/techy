@@ -18,6 +18,7 @@ use crate::serialize::{
     DeserializeContext, DeserializeError, SerialValue, SerializableLang, SerializableObject,
     SerializeContext, SerializeError,
 };
+use crate::scopes::SpecProvenance;
 use crate::state::Lang;
 
 use super::structure::ArgumentSpec;
@@ -333,21 +334,46 @@ impl<L: Lang> IntoCallableSpec<L, sealed::SharedDyn> for Arc<dyn CallableSpec<L>
 }
 
 /// The standard declarative [`CallableSpec`]: the argument structure as plain data.
+///
+/// **Serialization.** The argument structure holds parsers, which have no serialized
+/// form, so a `StdCallableSpec` is serialized by *identity* — as a reference to the
+/// provider that defined it plus its key — which requires the spec to carry a
+/// [`SpecProvenance`] stamp in its [`provenance`](StdCallableSpec::provenance) field
+/// ([`with_provenance`](StdCallableSpec::with_provenance) sets it; a shared
+/// [`Package`](crate::scopes::Package) hands the stamp out). Serializing an unstamped
+/// `StdCallableSpec` is an error naming the type. Both fields are public — the type
+/// is plain data, built by [`new`](StdCallableSpec::new) or as a struct literal
+/// (`StdCallableSpec { arguments, ..Default::default() }` for pre-`Arc`'d argument
+/// specs).
 pub struct StdCallableSpec<L: Lang> {
     /// The argument structure.
     pub arguments: Vec<Arc<ArgumentSpec<L>>>,
+    /// Where the spec was defined, when known: the stamp that lets the spec be
+    /// serialized by identity (`None` for a spec built outside a shared package).
+    pub provenance: Option<SpecProvenance<L>>,
 }
 
 impl<L: Lang> StdCallableSpec<L> {
     /// A spec with the given argument structure — specs by value, `Arc`'d inside
     /// (`StdCallableSpec::new([ArgumentSpec::new(parser, "title")])`, no `Arc::new`
-    /// noise). A caller that shares pre-`Arc`'d specs (flyweights referenced from
-    /// parsed records) builds the pub [`arguments`](StdCallableSpec::arguments) field
-    /// directly.
+    /// noise) and no provenance stamp. A caller that shares pre-`Arc`'d specs
+    /// (flyweights referenced from parsed records) builds the struct literal instead
+    /// (`StdCallableSpec { arguments, ..Default::default() }`).
     pub fn new(
         arguments: impl IntoIterator<Item = ArgumentSpec<L>>,
     ) -> StdCallableSpec<L> {
-        StdCallableSpec { arguments: arguments.into_iter().map(Arc::new).collect() }
+        StdCallableSpec {
+            arguments: arguments.into_iter().map(Arc::new).collect(),
+            provenance: None,
+        }
+    }
+
+    /// Record where this spec is defined — the [`SpecProvenance`] stamp a shared
+    /// package hands out ([`Package::provenance_for`](crate::scopes::Package::provenance_for))
+    /// — so that the spec can be serialized by identity. Replaces a previous stamp.
+    pub fn with_provenance(mut self, provenance: SpecProvenance<L>) -> StdCallableSpec<L> {
+        self.provenance = Some(provenance);
+        self
     }
 }
 
@@ -357,21 +383,21 @@ impl<L: Lang> CallableSpec<L> for StdCallableSpec<L> {
     }
 }
 
-// Does not participate in serialization yet — M5 gives it a real impl.
-impl<L: Lang> SerializableObject<L> for StdCallableSpec<L> {}
+// The `SerializableObject` (identity through the provenance stamp) impl lives in
+// `crate::serialize::drivers::specs`, with the other core spec/provider types'.
 
 // Manual impls: derives would demand `L: Clone`/`L: Debug`/`L: Default` although only
 // `Arc`s to spec data are stored.
 
 impl<L: Lang> Default for StdCallableSpec<L> {
     fn default() -> Self {
-        StdCallableSpec { arguments: Vec::new() }
+        StdCallableSpec { arguments: Vec::new(), provenance: None }
     }
 }
 
 impl<L: Lang> Clone for StdCallableSpec<L> {
     fn clone(&self) -> Self {
-        StdCallableSpec { arguments: self.arguments.clone() }
+        StdCallableSpec { arguments: self.arguments.clone(), provenance: self.provenance.clone() }
     }
 }
 
@@ -379,6 +405,7 @@ impl<L: Lang> fmt::Debug for StdCallableSpec<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StdCallableSpec")
             .field("arguments", &self.arguments)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }

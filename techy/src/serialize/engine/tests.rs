@@ -776,6 +776,21 @@ fn named_shapes_resolve_against_the_environment() {
     assert!(matches!(err, DeserializeError::InEntry { .. }));
 }
 
+#[test]
+fn user_data_holds_one_value_per_type() {
+    let (mut session, _tables) = full_session();
+    assert!(session.user_data::<ShapeEnvironment>().is_none());
+    session.set_user_data(ShapeEnvironment::default());
+    session.set_user_data(String::from("a second value, of another type"));
+    assert!(session.user_data::<ShapeEnvironment>().is_some());
+    assert_eq!(session.user_data::<String>().map(String::as_str), Some("a second value, of another type"));
+    assert!(session.user_data::<u32>().is_none());
+    // Setting a type again replaces that type's value only.
+    session.set_user_data(String::from("replaced"));
+    assert_eq!(session.user_data::<String>().map(String::as_str), Some("replaced"));
+    assert!(session.user_data::<ShapeEnvironment>().is_some());
+}
+
 // --- resolver dispatch and memoization ------------------------------------------------
 
 /// A resolver that constructs a reader dynamically and counts its invocations.
