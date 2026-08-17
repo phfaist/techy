@@ -1608,3 +1608,323 @@ tested. The semver categories are unchanged from the first run (the same 20; O-1
 `method_parameter_count_changed`/`struct_pub_field_missing` entries to families already
 failing, and removes `CallableQuery::with_token_kind` — a method Stage 3a introduced,
 which never reached `main`).
+
+---
+
+## Stage 4 — final sweep (§6)
+
+- **Branch**: `bt-4-final` (off `main` at `8b25806`, which already contains Stages 1,
+  2a, 2b, 3a and 3b).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-4-final`.
+- **Status**: implemented — awaiting review. Date: 2026-08-18.
+- **Commits** (`git log --oneline main..bt-4-final`, newest first; the newest one is
+  this PROGRESS/PLAN update itself, "bettertokens: Stage 4 — the final sweep, its
+  numbers, and the plan's status", which also deletes the timing example):
+
+```
+8338d6d TODO_Big: the better-tokens follow-ups left for later
+85b8944 docs: the banned words leave the text this project wrote
+5dd37de docs: the guides describe opaque tokens and reader-issued positions
+ac220d2 docs: the construct-parser guide on tokens, edges and positions
+76b6769 core: the chars run asks the reader once per token
+```
+
+### What was merged before this stage
+
+Every code stage is on `main`: `7825789` (Stage 0, the probe report and this log),
+`d5f37e0` (Stage 1, positions/spans/the reader hook), `0af4276` (Stage 2a, the core
+construct-parser layer), `a8f36a1` (Stage 2b, the rest of the port and the old
+positional API deleted), `8b25806` (Stages 3a + 3b together, the view and the opaque
+token). `main` is at `8b25806` while this stage runs.
+
+### What changed, per file
+
+| File | Change |
+|---|---|
+| `techy/src/constructs/nodes_parser.rs` | the one optimization (below): `extend_run` asks for two edge positions instead of four, and `token_stop` receives the view the content loop already computed instead of re-querying it; plus wording |
+| `docs/construct-parsers.md` | the reader section rewritten as the three questions a parser asks (what a token is, where it is, where the stream stands), with the edges, the two position sources, `cx.source_span_within` and `cx.here()`; the worked example's closing notes point at the spans it stages |
+| `docs/concepts-overview.md` | the token concept: which token type a language uses is its own declaration, what a span answer covers (whole token, or between two of the five edges), what a stream position is; the specials sentence reads off the reader's answer |
+| `docs/parsing-model.md` | the reader comes from `make_token_reader`; tokens are opaque; command resolution receives the token and its reader |
+| `docs/custom-lang.md` | the custom-reader paragraph: the `TokenReader` trait, installed through `make_token_reader`, `Lang::Token`/`Lang::StreamPosition` as the language's choice, and the delegating shape for a reader over standard tokens; the driver section points back at it |
+| `docs/ai-guide-custom-lang.md` | the `Lang` table gains the `Token` and `StreamPosition` rows; the context table's reader row lists the three answers and the navigation, with a new row for the two ways to obtain a node's span |
+| `techy/src/{token,constructs,engine,latexlike}/*.rs`, `docs/ai-guide-custom-lang.md` | the banned-word sweep over text this project wrote (below) |
+| `TODO_Big.md` | the "Better tokens — deferred follow-ups" list (§10 plus what the stage log left open) |
+| `techy/examples/bt_timing.rs` | deleted (its purpose ends with this stage's measurement) |
+
+### Gate results (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-4-final/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.32s
+
+$ cargo test
+     Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
+running 1054 tests
+test result: ok. 1054 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+     Running tests/acceptance.rs
+running 30 tests
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/derive_conditions.rs
+running 9 tests
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lang_features.rs
+running 13 tests
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/recompose_oracle.rs
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/serialize_golden.rs / serialize_perf.rs / serialize_stream.rs
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out (each)
+     Running unittests src/lib.rs (techy_derive)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests techy
+running 90 tests
+test result: ok. 85 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 21.69s
+   Doc-tests techy_derive
+running 2 tests
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy --all-targets -- -D warnings
+    Checking techy v0.1.0 (…/bt-4-final/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.70s
+(clean — no warnings, exit 0)
+
+$ rm -rf target/doc && cargo docs
+ Documenting techy-derive v0.1.0 (…/bt-4-final/techy-derive)
+ Documenting techy v0.1.0 (…/bt-4-final/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.49s
+   Generated …/target/doc/techy/index.html and 1 other file
+(no broken intra-doc links)
+
+$ cargo test -p techy --lib constructs::nodes_parser
+running 79 tests
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 975 filtered out; finished in 0.06s
+
+$ cargo test -p techy --lib token::list_reader
+running 14 tests
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 0.01s
+```
+
+### Semver report (`scripts/check_semver.sh`)
+
+Breaking, as expected for the whole project (soft freeze); nothing was "fixed".
+
+```
+    Checking techy v0.1.0 -> v0.1.0 (no change; assume minor)
+     Checked [   0.040s] 196 checks: 176 pass, 20 fail, 0 warn, 58 skip
+     Summary semver requires new major version: 20 major and 0 minor checks failed
+    Finished [   9.671s] techy
+```
+
+The 20 failing lints in full, with every item each one reports (three of them —
+`auto_trait_impl_removed`, `trait_added_supertrait`, and the `provenance` entries of
+the two `constructible_struct_*` lints — predate this project):
+
+- `auto_trait_impl_removed`: `BeginSpec` no longer `UnwindSafe`; `BeginSpec` no longer
+  `RefUnwindSafe` *(pre-existing)*
+- `constructible_struct_adds_field`: `NameGroup.name`; `StdCallableSpec.provenance`
+  *(pre-existing)*; `TokenRecovery.resume`
+- `constructible_struct_adds_private_field`: `SpecialsSpec.provenance` *(pre-existing)*
+- `copy_impl_added`: `techy::core::TokenKind` (the view is `Copy`)
+- `derive_trait_impl_removed`: `EnvironmentInvocation` no longer derives `Copy`;
+  `StopCause` no longer derives `Copy`
+- `enum_struct_variant_field_added`: `StopCause::TokenCondition::after`;
+  `StopCause::UnexpectedGroupClose::after`; `TokenKind::Comment::start_delim`
+- `enum_struct_variant_field_missing`: `TokenKind::Command::post_space`;
+  `TokenKind::Comment::start`; `TokenKind::Comment::post_space`
+- `function_parameter_count_changed`: `techy::latexlike::make_paragraph_break_node`
+  4 → 3; `techy::core::specs::resolve_command_in_scopes` 3 → 4
+- `inherent_method_missing`: `StdTokenReader::pos`; `StdTokenReader::move_to_pos`;
+  `CallableQuery::with_token`
+- `method_parameter_count_changed`: `ParseContext::new` 5 → 4
+- `struct_missing`: `techy::core::Token` (the struct; the name is now the trait)
+- `struct_pub_field_missing`: `NameGroup::name_span`; `ParseContext::source`;
+  `TokenRecovery::resume_pos`; `CallableQuery::token`; `SpecialsMatch::name`
+- `trait_added_supertrait`: `SpecsProvider` and `CallableSpec` gained
+  `SerializableObject` *(pre-existing)*
+- `trait_associated_type_added`: `Lang::Token`; `Lang::StreamPosition`
+- `trait_method_added`: `ParseDriver::make_token_reader`
+- `trait_method_missing`: `TokenReader::move_past`; `TokenReader::move_to_pos`;
+  `TokenReader::pos`
+- `trait_method_parameter_count_changed`: `ParseDriver::probe_token` 4 → 3;
+  `ParseDriver::resolve_command` 2 → 3; `ParseDriver::make_paragraph_break_node` 3 → 2;
+  `CommandResolver::resolve_command` 2 → 3; `EnvironmentSyntax::from_parsed` 2 → 3;
+  `FromInvocation::from_invocation` 1 → 2
+- `trait_requires_more_generic_type_params`: `StopCause` 0 → 1
+- `type_mismatched_generic_lifetimes`: `TokenRecovery` 1 → 0; `StdInvocationParser`
+  2 → 1; `TokenError` 1 → 0; `CallableQuery` 2 → 1; `Invocation` 2 → 1;
+  `ArgumentNoise` 1 → 0; `SpecialsMatch` 1 → 0
+- `type_requires_more_generic_type_params`: `StopCause` 0 → 1
+
+### The sweep (§6)
+
+```
+$ grep -rn "move_to_pos\b\|resume_pos\|Token::new\b\|TokenKindView\|Token<'s\|TokenResult<'\|TokenError<'\|Invocation<'a, '\|SpecialsMatch<'\|with_token(\|with_token_kind\|move_past\|move_to_edge\|cx\.source\b\|end_pos\b" techy docs
+techy/src/source/source.rs:274,348,652,653,748,750,751
+techy/src/source/line_index.rs:183
+techy/src/serialize/drivers/source.rs:382
+techy/src/constructs/nodes_parser.rs:1177,1213
+```
+
+Eleven hits, all unrelated to this project's vocabulary:
+
+- **`SourceSpan::end_pos`** (8 hits, `source/source.rs` ×7 including two tests,
+  `source/line_index.rs` ×1) — the S0 accessor, sibling of `start_pos`, which no stage
+  renamed.
+- **`UnusableRecoveryToken::new`** (2 hits, `nodes_parser.rs`) — a diagnostic
+  condition's constructor, matched because `Token::new` is a substring of it.
+- **`DeserializeContext::source(SourceIndex)`** (1 hit,
+  `serialize/drivers/source.rs:382`) — the serialization side's sources-table lookup,
+  matched by `cx\.source\b`; a different `cx`, unrelated to the removed
+  `ParseContext::source`, and older than this project.
+
+No hit for `move_to_pos`, `resume_pos`, `TokenKindView`, `Token<'s`, `TokenResult<'`,
+`TokenError<'`, `Invocation<'a, '`, `SpecialsMatch<'`, `with_token(`,
+`with_token_kind`, `move_past` or `move_to_edge`.
+
+`docs/panics.md` was re-checked against the tree and is still exhaustive: the eight
+`StdToken` constructors (seven that take spans and assert their coherence through the
+two shared helpers `assert_pre_space`/`assert_post_space`, plus `end_of_stream`, which
+takes no span and never panics) are the only panicking public items this project added;
+`StdStreamPosition::at` is `pub(crate)` and the `TokenListReader` guards are
+`cfg(test)`.
+
+### Timing re-measure (release profile)
+
+`cargo run --release --example bt_timing` — the **release** profile throughout, the
+same deterministic 5 242 901-byte document, both trees reporting the same 257 816 root
+children and 0 diagnostics. Baseline: the pre-project commit `7825789` in a throwaway
+worktree (`bt-timing-4`, detached, the example copied in untracked, removed with
+`git worktree remove --force` afterwards). Runs interleaved (baseline, branch,
+baseline, …) on an otherwise idle machine, no cargo work in parallel, nothing
+discarded.
+
+**Before the optimization** (branch tip `8b25806`'s code):
+
+| Series | Baseline (ms) | Branch (ms) | Medians | Slowdown |
+|---|---|---|---|---|
+| 1 (9 each) | 210.4, 425.7, 183.2, 173.1, 171.2, 178.4, 169.9, 176.2, 173.8 | 218.3, 207.7, 198.1, 187.4, 197.4, 187.6, 190.0, 197.1, 196.4 | 176.2 / 197.1 | **+11.9 %** |
+| 2 (9 each) | 181.3, 171.8, 171.5, 168.8, 168.6, 171.6, 171.8, 174.8, 181.2 | 186.0, 195.4, 187.5, 185.1, 190.7, 186.7, 190.7, 197.4, 187.2 | 171.8 / 187.5 | **+9.1 %** |
+| pooled (18 each) | | | 173.4 / 190.7 | **+9.9 %** |
+
+Above the 8 % line, so the plan's cheap optimizations were considered. **What was
+applied** (one commit, `76b6769`, no public signature touched) is §6's item (b),
+"redundant reader queries per token in the chars run", in two places:
+
+- `NodesParser::extend_run` asked the reader for four edge positions per `Char` token
+  (`StartBeforePreSpace`, `Start` for the pre-space extension, then `Start` again and
+  `EndPastPostSpace` for the character). The run is contiguous by construction, so one
+  extension over `StartBeforePreSpace..EndPastPostSpace` says the same thing in two
+  questions, and keeps the check that can actually fail (does the run end where this
+  token begins). `take_pre_space` is unchanged and still serves the non-`Char` arms.
+- `NodesParser::token_stop` re-queried `token_kind` although the content loop computes
+  the view one statement earlier; it now takes that view as a parameter. The
+  `Predicate` hook still receives `(&L::Token, &dyn TokenReader)`, as its contract says.
+
+Items (a) — the per-node `SourceSpan` clone on the success path of `stage` — and (c)
+were **not** applied: the measurement after (b) is below the 8 % line, and (a) costs
+one `Arc` refcount pair per staged node (≈ 258 k nodes here) against ≈ 5 M reader
+queries per parse, so it is the smaller of the two by a wide margin. Left as they are;
+the clone is one line and can be revisited if a future measurement asks for it.
+
+**After the optimization** (branch tip):
+
+| Series | Baseline (ms) | Branch (ms) | Medians | Slowdown |
+|---|---|---|---|---|
+| A (7 each) | 182.2, 174.2, 172.5, 175.3, 180.7, 171.4, 181.1 | 251.0, 183.1, 187.6, 183.5, 197.9, 183.8, 182.8 | 175.3 / 183.8 | **+4.8 %** |
+| B (9 each) | 180.3, 195.3, 187.1, 178.0, 197.3, 177.5, 186.8, 177.1, 175.8 | 189.4, 182.8, 199.2, 218.8, 186.7, 189.0, 189.7, 182.7, 197.8 | 180.3 / 189.4 | **+5.0 %** |
+| C (10 each) | 171.1, 171.0, 169.3, 181.0, 171.7, 169.5, 170.6, 168.8, 171.5, 180.3 | 210.9, 184.5, 179.0, 187.0, 177.2, 188.2, 180.3, 176.4, 185.8, 197.1 | 171.1 / 185.2 | **+8.2 %** |
+| D (10 each) | 182.4, 182.1, 167.0, 169.9, 237.3, 174.1, 172.3, 169.7, 170.1, 170.3 | 183.1, 177.6, 177.2, 190.3, 179.2, 178.8, 185.6, 179.1, 178.8, 176.0 | 171.3 / 178.9 | **+4.5 %** |
+| **pooled (36 each)** | | | **174.8 / 184.2** | **+5.4 %** |
+
+**Verdict: +5.4 % at the pooled median, release profile — within the ≤ 10 %
+acceptance.** Series A and C each begin with an inflated branch run (251.0, 210.9)
+because the branch binary had just been rebuilt while the baseline binary was warm;
+nothing was discarded, and the medians absorb it. The machine's own spread is worth
+recording for whoever repeats this: baseline medians ranged 171–180 ms across series,
+so a single series is worth about ±3 % of noise, and only the pooled figure should be
+quoted.
+
+### Decisions taken under §1.16
+
+None reached: this stage adds no API and takes no design decision. The optimization is
+a pure internal restructuring; the documentation changes are wording.
+
+### Deviations from §1/§6
+
+1. **§6's item (b) was applied with an addition §6 does not name**: besides the chars
+   run, `token_stop` re-queried the token's kind. Same category (a redundant reader
+   query per token), same commit, no signature change outside a private method.
+2. **The gap-free failure detail's wording changed** with the merged run extension:
+   one message ("the char token with its pre-space starts at …") where there were two
+   ("the token's pre-space …" / "the char token …"). No test asserts either wording,
+   and the condition remains the same `ImplementationError` with both positions.
+3. **Two documentation fixes beyond wording** rode along with the banned-word sweep:
+   `group_parser.rs`'s module documentation still said the parser is constructed with
+   the opening delimiter's *span* (it takes the token), and `docs/panics.md` was
+   verified rather than changed (it was already correct).
+
+### Open questions
+
+1. **None blocking.** No design question came up; no test's expectation changed.
+2. **For the user, not for this stage** — the timing figure is a *median of medians*
+   on a machine whose own spread (±3 %) is of the same order as the effect. If the
+   ≤ 10 % budget is meant to hold on quieter hardware too, the honest statement is
+   "about +5 %, with a per-series range of +4.5 % to +8.2 %".
+
+### CLAUDE.md refresh candidates (ruling O-2: no stage edits it)
+
+- **The `techy::core` topology line** (line 26) reads "tokens (Token, TokenKind,
+  TokenRules, TokenReader, StdTokenReader)". After the port, `Token` is a **trait**
+  (the marker contract on a language's token type), the standard token type is
+  **`StdToken`**, and `TokenKind` is the reader's **view**, not a stored enum. Two
+  further public names live in the same group: **`TokenEdge`** (the five boundaries)
+  and **`StdStreamPosition`** (the standard reader's stream position), plus
+  `SpecialsScanError` next to the specials hook. A refreshed line could read: "tokens
+  (the Token trait + StdToken, the TokenKind view, TokenEdge, StdStreamPosition,
+  TokenRules, TokenReader, StdTokenReader)".
+- Nothing else in CLAUDE.md is stale: `token → constructs → node (AST)` (line 12) still
+  describes the flow; "Use `Token` not `LatexToken`" (line 42) still names a real
+  public item (now the trait); rule 4 already points at `docs/panics.md` rather than
+  naming `Token::new`, and `docs/panics.md` is exhaustive.
+
+### Deferred follow-ups (PLAN §10, now also in `TODO_Big.md`)
+
+1. Gap-free chars-run contract relaxation for a reader serving one parse from several
+   sources (flush on source change, or a declared may-skip-bytes capability) — needed
+   only with an expanding reader.
+2. `LatexlikeDriver::with_token_reader(...)` — needed only once a custom reader for the
+   latexlike family exists.
+3. A public `StdStreamPosition` constructor — graduate on demonstrated need.
+4. The expanding reader itself lives in `techy-xp`.
+5. From the stage log, not from §10: one round of naming polish over the port's new
+   fields (`NameGroup::name` is a span while `EnvironmentInvocation` splits
+   `name`/`name_span`; `RawContentEnd::{content_end, end}`), and the visibility of
+   `StdTokenReader::source()` (public inherent accessor today — Stage 1 deviation 4,
+   its open question never closed).
+6. The banned words survive in older rustdoc around the port (the standing
+   documentation walk-through in `TODO_Big.md` owns that sweep).
+
+### State of the tree, for a fresh session
+
+The token layer is in §1's end state and every code stage is merged to `main` except
+this one, which is complete on `bt-4-final`. Tokens are opaque values a language
+declares (`Lang::Token`, `StdToken` for everything shipped); the reader that produced a
+token is the only party that interprets it — what it is (`token_kind` → the `TokenKind`
+view), where it is (`source_span_of`/`source_span_between` over the five `TokenEdge`s),
+and where the stream stands (`position_here`/`position_at` → `Lang::StreamPosition`,
+opaque and reader-issued). `ParseContext` has no source handle: spans come from the
+reader, through `cx.here()` and `cx.source_span_within()`. Navigation is `move_to(&tok,
+edge)` and `move_to_position(&pos)`; the old `pos()`/`move_to_pos`/`move_past` API is
+gone. A custom reader is installed through `ParseDriver::make_token_reader`, the one
+driver method without a default (ruling O-4). The node tree is untouched by all of
+this: node spans are still single-source `SourceSpan`s and node data sub-spans still
+node-relative `Span`s. Gates at the branch tip: 1054 unit + 75 integration + 85 doctests
+green, clippy clean, documentation builds with no broken links, semver breaking as
+expected (20 lints, listed above), parse throughput about +5 % against the pre-project
+baseline in a release build. **What remains is Stage 5 (§7)**: the ARCHITECTURE and
+DESIGN_RATIONALE entries, on a branch off `main` taken *after* this stage merges, with
+the user's explicit approval of the drafted text.
