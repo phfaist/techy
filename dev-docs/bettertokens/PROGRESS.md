@@ -1014,7 +1014,8 @@ path were left as they are. (Baseline worktree
 - **Branch**: `bt-3a-view` (off `main` at `a8f36a1`, which already contains Stages 1,
   2a and 2b).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-3a-view`.
-- **Status**: reviewed (READY, review round 1 applied) — awaiting merge with 3b.
+- **Status**: reviewed (READY, review round 1 applied); merges together with 3b (§5:
+  the temporary name `TokenKindView` must never reach `main`, and 3b removes it).
   Date: 2026-08-17.
 - **Commits** (`git log --oneline main..bt-3a-view`, newest first; the PROGRESS update
   and the review-round commit follow this list):
@@ -1282,3 +1283,206 @@ four points of polish; all six are on the branch.
 Gates re-run at the branch tip, all green: `cargo test` (1050 unit + 30 + 9 + 13 + 23
 integration + 84 doctests, 0 failed), `cargo clippy --all-targets -- -D warnings`
 (clean), `rm -rf target/doc && cargo docs` (clean).
+
+---
+
+## Stage 3b — the opaque token (§5)
+
+- **Branch**: `bt-3b-opaque` (off `bt-3a-view` at `1e96803`).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-3b-opaque`.
+- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Merge**: together with `bt-3a-view` (§5) — `TokenKindView` never reaches `main`.
+- **Commits** (`git log --oneline bt-3a-view..bt-3b-opaque`, newest first; the
+  PROGRESS update follows this list):
+
+```
+683525a token: pin the `Lang::Token` contract for the trivial blanket impl
+d60d676 docs: the panics list, the guides, and the `Lang` doctest for opaque tokens
+ea6ec24 tests: the custom reader over standard tokens, from outside the crate
+cd57c08 core: `Lang::Token`, and every layer holds tokens it cannot read
+fffa65f token: the opaque `StdToken`, the `Token` contract, and `TokenKind` as the view
+```
+
+The first two commits are **one atomic change split for reviewing**: dropping the
+token's lifetime forces `Lang::Token`, the 14 dependent types and every call site in
+the same step, so only the second of the two builds. Every later commit builds and is
+green on the gates.
+
+### What changed, per file
+
+| File | Change |
+|---|---|
+| `techy/src/token/token.rs` | rewritten: the `Token<L>` marker contract (`Clone + Debug + PartialEq + Send + Sync`); the view renamed `TokenKind<'t, L>` (the stored kind enum deleted, its taxonomy documentation moved onto the view); `StdToken<L>` — private `StdTokenKindData<L>` + `span`/`pre_space`, eight public constructors with the coherence asserts, `pub(crate)` `kind_data`/`span`/`pre_space`/`post_space`/`edge_offset`/`with_pre_space`, manual `Clone`/`Debug`/`PartialEq`/`Eq`, `impl Token<L> for StdToken<L>`; six new tests (all eight constructors' happy paths and edges, the kind-data variants, spec identity/rule structural equality, three `#[should_panic]` — one per assert family — and the `Lang::Token` contract for a trivial lang) |
+| `techy/src/token/reader.rs` | the trait in its §1.6 final form over `L::Token`/`TokenResult<L, T>`; the `StdTokenReader` impl header and every scanning-core helper carry `L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>` (probe P8); the scanner builds tokens with the `StdToken` constructors; `token_kind` slices `content` between the token's edges (`Command` name = `ContentStart..End`, `Specials` name = `Start..End`, comment delimiter/text = `Start..ContentStart`/`ContentStart..End`), all through `.get(..).unwrap_or("")`; the "writing a reader over standard tokens" rustdoc gains a compiling wrapper example; ~50 `Token::new` test calls become constructors and every `.kind` assertion goes through a `kind_of(&reader, &token)` helper (the reader's view), with `.span`/`.pre_space` reading through the `pub(crate)` accessors |
+| `techy/src/token/list_reader.rs` | holds `Vec<StdToken<L>>`, impl bound gains `Token = StdToken<L>`; `peek` clips pre-space through `with_pre_space`; `check_issued` compares `span()` + `kind_data()`; `token_kind` interprets identically over the same content; tests read through the view |
+| `techy/src/token/error.rs` | `TokenError<L>`, `TokenRecovery<L> { token: L::Token, resume }`, `TokenResult<L, T>` — the `'s` is gone |
+| `techy/src/token/mod.rs`, `techy/src/core/mod.rs` | facades export `StdToken` and the `Token` **trait** (same public name, different item); `TokenKindView` removed; the module prose says tokens are opaque and pre-space/post-space are reader answers |
+| `techy/src/state/lang.rs` | `Lang::Token: Token<Self>` with the opacity rustdoc (§1.2/§1.15); the blanket `impl<T: TrivialLang> Lang for T` names `StdToken<Self>` |
+| 17 files with `impl Lang for …` | `type Token = StdToken<Self>;` next to `type StreamPosition` — all 57 sites (53 in `techy/src`, 3 in `techy/tests/lang_features.rs`, 1 in the `docs/custom-lang.md` doctest) |
+| `techy/src/engine/driver.rs` | `probe_token -> Option<L::Token>`; `make_group_parser<'p>(&'p self, open: &L::Token, ..)` (the `'s: 'p` clause gone); `make_invocation_parser<'a>`; `StdParseDriver`'s impl bound gains `Token = StdToken<L>` |
+| `techy/src/latexlike/lang.rs` | `LatexlikeLang`'s supertrait bound gains `Token = StdToken<Self>` |
+| `techy/src/constructs/mod.rs` | `Invocation<'a, L>` (`token: &'a L::Token`), `FromInvocation::from_invocation(&Invocation<'_, L>, &dyn TokenReader<'_, L>)`, `ParseContext::probe_token`/`parse_group`, `comment_node_kind`, `invocation_frame` |
+| `techy/src/spec/callable.rs`, `techy/src/latexlike/spec.rs`, `techy/src/constructs/child_state.rs` | `make_invocation_parser<'a>(.., Invocation<'a, L>)`; the compute-closure type takes `&Invocation<'_, L>` |
+| the 14 `'s`-dropping types | `ArgumentNoise`, `MintedGroupMatch`, `GroupParser`, `StdInvocationParser`, `ErrorInvocationParser` (`scopes/mod.rs`), `EnvironmentInvocationParser`/`OrphanEndParser` (`latexlike/environments.rs`), `InputInvocationParser`, `AfterEffectInvocationParser`, and the test parsers `DefParser` ×2, `TakeParser`, the test `EnvironmentInvocationParser`, `RawBlockParser`, `RestOfLineParser`/`BadEndParser`. `ParseContext<'a, 's, L>` keeps its `'s` |
+| the four `cfg(test)` delegating readers | `BrokenReader`, `StuckRecoveryReader`, `FlakyReader`, `TabooReader` mint with the constructors and delegate interpretation to their inner `StdTokenReader` |
+| `techy/tests/lang_features.rs` | `CommentEmittingReader` is the §1.8 wrapper as an outside party writes it: the comment token minted with `StdToken::comment` from spans it computes by scanning `self.inner.content()`, every interpretive method delegated, no field access (there is none); the groups-only reader test drives the standard reader through a `dyn TokenReader` view |
+| `docs/panics.md` | the `Token::new` entry replaced by the seven span-taking `StdToken` constructors and their asserts, with `end_of_stream` named as the eighth that takes no span and never panics; the count sentence corrected ("Five value functions and the seven span-taking `StdToken` constructors") |
+| `docs/construct-parsers.md` | the takeover doctest's `make_invocation_parser<'a>` and `UntilParser<'a>` |
+| `docs/custom-lang.md` | the `impl Lang` doctest gains `type Token = StdToken<Self>` (and the import) |
+| `docs/concepts-overview.md` | the one sentence that became false ("zero-copy views of the source") — tokens are opaque values; what one *is* is the reader's answer |
+
+### Gate results (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.43s
+
+$ cargo test
+running 1055 tests   test result: ok. 1055 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 30 tests     test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 9 tests      test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 13 tests     test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 23 tests     test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 0 tests × 3  test result: ok. (serialize_golden, serialize_perf, serialize_stream)
+running 1 test       test result: ok. 1 passed (techy-derive unit)
+running 90 tests     test result: ok. 85 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out  (doctests)
+running 2 tests      test result: ok. 0 passed; 0 failed; 2 ignored  (techy-derive doctests)
+
+$ cargo clippy --all-targets -- -D warnings
+    Checking techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.62s
+(no warnings)
+
+$ rm -rf target/doc && cargo docs
+ Documenting techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.45s
+   Generated …/target/doc/techy/index.html and 1 other file
+
+$ cargo test -p techy --lib constructs::nodes_parser
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 975 filtered out
+
+$ cargo test -p techy --lib token::list_reader
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1040 filtered out
+```
+
+### Semver report (`scripts/check_semver.sh`)
+
+Breaking, as expected — the report is cumulative against the `api-baseline` branch, so
+it still carries Stages 1–2b's removals alongside 3b's:
+
+```
+Summary semver requires new major version: 20 major and 0 minor checks failed
+```
+
+3b's own entries: `copy_impl_added` (`techy::core::TokenKind` — the view is `Copy`);
+`trait_associated_type_added` (`Lang::Token`, plus Stage 1's `Lang::StreamPosition`);
+`type_mismatched_generic_lifetimes` for `TokenError`, `TokenRecovery`, `Invocation`,
+`StdInvocationParser`, `ArgumentNoise` (and Stage 3a's `CallableQuery`, Stage 1's
+`SpecialsMatch`); `trait_method_parameter_count_changed` for
+`FromInvocation::from_invocation`; the `struct_missing`/`derive_trait_impl_removed`
+families for the old `Token<'s, L>` struct and the stored `TokenKind`. The rest predates
+this stage (`StdTokenReader::pos`/`move_to_pos`, `ParseContext::new`,
+`ParseDriver::probe_token`/`make_paragraph_break_node`/`make_token_reader`,
+`CallableQuery::with_token`, `StopCause<L>`, the `SerializableObject` supertraits).
+
+### The sweep (§5)
+
+```
+$ grep -rn "move_to_pos\|resume_pos\|Token::new\|TokenKindView\|end_pos\b\|Token<'s\|TokenResult<'\|TokenError<'\|Invocation<'a, '\|SpecialsMatch<'" techy docs
+```
+
+51 hits, all classified as unrelated:
+
+- **`move_to_position`** (41 hits) — the new API; the pattern `move_to_pos` is its
+  prefix. No `move_to_pos(` call or definition exists.
+- **`end_pos`** (8 hits: `source/source.rs` ×7, prose and its two tests included,
+  `source/line_index.rs` ×1) — `SourceSpan::end_pos`, the S0 accessor, untouched by
+  this plan.
+- **`UnusableRecoveryToken::new`** (2 hits, `nodes_parser.rs`) — a diagnostic
+  condition's constructor, matched only because `Token::new` is a substring of it.
+
+No hit for `resume_pos`, `TokenKindView`, `Token<'s`, `TokenResult<'`, `TokenError<'`,
+`Invocation<'a, '` or `SpecialsMatch<'`.
+
+### Timing check (§5, repeated once)
+
+`cargo run --release --example bt_timing`, 5 runs each, same 5 242 901-byte document,
+same result on both trees (257 816 nodes, 0 diagnostics):
+
+| Tree | Runs (parse_ms) | Median |
+|---|---|---|
+| `bt-3b-opaque` | 212.8, 212.9, 210.2, 221.6, 216.7 | **212.9 ms** |
+| baseline `7825789` (throwaway worktree, example copied in untracked) | 201.4, 195.2, 201.4, 216.8, 201.3 | **201.4 ms** |
+
+**+5.7 %** — within the ≤ 10 % budget and inside 2b's measured +3–7 % band, i.e. 3b adds
+nothing measurable on top of the position/edge work. No new per-token `Arc` clone
+appeared: a `GroupOpen` token still holds the one `Arc<GroupRule>` the prefix-table
+match hands it and a `Specials` token the one `Arc<dyn CallableSpec>` the scan hook
+returns, exactly as before; the token now stores *fewer* words (no `&str` pairs). The
+throwaway worktree was removed with `git worktree remove --force`.
+
+### Decisions taken under §1.16
+
+- **The doc example that hand-built tokens.** The only such example outside the crate
+  was `techy/tests/lang_features.rs`'s `CommentEmittingReader` (a test, not a doc
+  example): it keeps hand-building its token, now with `StdToken::comment` and spans it
+  computes by scanning the content its inner reader serves. In `docs/*.md` no example
+  built a token; the guides' examples go through a reader, so nothing had to be
+  rewritten there. New in the trait's rustdoc: a **compiling** wrapper-reader example
+  (`MyReader` over `StdTokenReader`, `TrivialLang`), with the six mechanical
+  delegations hidden behind `#` so the visible sketch stays short — the shape §1.8
+  prescribes and probe P4 recommends showing (the `&dyn TokenReader` helpers).
+- **`source_span_between` with equal edges** — unchanged from Stage 1: the empty span
+  at that edge.
+- **`StdTokenReader::source_span_between` on a foreign token** — unchanged: the
+  registered `SourceSpan::new` assert, documented in contract clause 4. `token_kind`
+  keeps 3a's asymmetric answer (an empty slice) and now applies it to *every* written
+  spelling it slices, since all of them are slices now.
+- **`TokenListReader` position validation**, **`StopCause<L>`**,
+  **`ArgumentNoise.next`**, **`Invocation.kind` as a field**, **`is_at_end()`**,
+  **the chars-run contiguity message** — all unchanged from the earlier stages.
+
+### Deviations from §1/§5
+
+1. **`StdTokenKindData<L>` is a named `pub(crate)` enum**, not an anonymous shape:
+   §1.3 says "kind data (…)" and lets the implementer choose the spelling
+   ("`kind_data()` (or however the readers need to read the kind data)"). The two
+   in-crate readers match on it to build their views, and `TokenListReader` compares it
+   for its issued-token check. Not exported anywhere.
+2. **One `pub(crate)` accessor beyond §1.3's list: `with_pre_space`.** The test list
+   reader clips a served token's pre-space to the current position (its documented
+   fidelity rule); with private fields it can no longer assign the field. The method
+   returns a clone with the narrowed pre-space and asserts the same coherence the
+   constructors do.
+3. **`span()`, `pre_space()` and `with_pre_space()` carry `#[allow(dead_code)]`.** The
+   crate's two readers answer positions and spans through `edge_offset`, so the three
+   direct readings are used only by the token module's own tests and by the
+   `cfg(test)` list reader — dead in a non-test build, which `-D warnings` rejects.
+   Kept (rather than `cfg(test)`-gated) because §1.3 lists them as the in-crate reader
+   accessor set.
+4. **`make_group_parser` lost its `'s` parameter**, not only the `'s: 'p` clause: with
+   `open: &L::Token` the lifetime had no other use, and an unused lifetime on a trait
+   method does not compile.
+5. **Two test helpers named `kind_of`** (in `token/reader.rs` and
+   `token/list_reader.rs`) wrap `reader.token_kind(&token)` so the readers' own tests
+   read a token exactly as a construct parser does. They exist because the P8 inference
+   caveat bites in those modules: a call on the *concrete* reader whose only argument
+   mentions `L` through `&L::Token` cannot pin `L`. The same caveat is why a handful of
+   test call sites bind `let reader: &dyn TokenReader<'_, TheLang> = &r;` first — the
+   shape §1.8's documented pattern uses anyway.
+6. **`docs/concepts-overview.md` prose was touched** (one sentence), which Stage 4
+   otherwise owns: "zero-copy views of the source" became false in this stage, and §5
+   requires a sentence that would now be false to be corrected minimally.
+
+### Open questions
+
+1. **None blocking.** No design question outside §1.16 came up; nothing was decided
+   beyond the defaults recorded above.
+2. **No test's expected node span, payload or diagnostic changed.** The whole suite
+   passes unmodified — the lockstep suites included — which is the evidence that
+   opacity changed no behavior.
+3. **For Stage 4's CLAUDE.md note** (ruling O-2 — no stage edits it): the
+   `techy::core` topology line still reads "tokens (Token, TokenKind, TokenRules,
+   TokenReader, StdTokenReader)". `Token` is now a trait and `StdToken` is a new
+   public item next to it, so that line may deserve `StdToken` — the user's call.
