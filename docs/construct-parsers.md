@@ -57,7 +57,7 @@ the driver. Its methods are the parser's entire toolkit:
 **Token reading.** `cx.tokens` is the
 [`TokenReader`](crate::core::TokenReader): peek or consume tokens under an
 explicitly passed state, and reposition — at an edge of a token it read
-([`move_to`](crate::core::TokenReader::move_to)) or at a position it handed
+([`move_to_edge`](crate::core::TokenReader::move_to_edge)) or at a position it handed
 out earlier
 ([`move_to_position`](crate::core::TokenReader::move_to_position)). Prefer
 [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token)

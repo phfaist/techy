@@ -2,8 +2,9 @@
 //! [`StdTokenReader`].
 //!
 //! `StdTokenReader` follows pylatexenc's proven `LatexTokenReader` protocol: `peek` parses
-//! the token at the current position without advancing; `move_past`/`move_to` reposition
-//! relative to a token; `move_to_pos` repositions absolutely; `next` = peek + move-past. The scanning core is decomposed into
+//! the token at the current position without advancing; `move_to` repositions at a named
+//! edge of a token; `move_to_position` repositions at a position the reader handed out
+//! earlier; `next` = peek + move past the token. The scanning core is decomposed into
 //! private `detect_*`/`read_*` methods, each driven by one feature block of the
 //! [`TokenRules`] — except specials recognition, which is delegated to
 //! [`Lang::scan_specials`] (gated by the state's cached
@@ -173,27 +174,6 @@ pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
 
-    /// Move immediately past `tok`. If `skip_post_space` is true the position lands after
-    /// the token's post-space; otherwise right after the token proper, before it.
-    fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool);
-
-    /// Move to `tok`'s own start, so that it would be read again. If `rewind_pre_space`
-    /// is true the position lands before the token's preceding whitespace instead.
-    fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool);
-
-    /// Move to an absolute byte position — an argument parser's absent-argument rewind
-    /// target. The position must be one the reader can meaningfully resume from (for
-    /// text-scanning readers: on a `char` boundary, at most the content's length).
-    ///
-    /// Deliberately bidirectional — it also serves rewinds — so implementations assert
-    /// nothing about the direction of the move. Superseded by
-    /// [`move_to_position`](TokenReader::move_to_position), which names a place the
-    /// reader itself minted instead of a bare number.
-    fn move_to_pos(&mut self, pos: usize);
-
-    /// Current byte position.
-    fn pos(&self) -> usize;
-
     // --- navigation by edge and by position ------------------------------------------
 
     /// Reposition the stream at `edge` of `tok` — forward or backward.
@@ -256,10 +236,12 @@ pub trait TokenReader<'s, L: Lang> {
     ) -> Option<SourceSpan<L::SourceOrigin>>;
 
     /// Parse the token at the current position and move past it (including its
-    /// post-space): [`peek`](TokenReader::peek) + [`move_past`](TokenReader::move_past).
+    /// post-space): [`peek`](TokenReader::peek) +
+    /// [`move_to_edge`](TokenReader::move_to_edge) at
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
     fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         let token = self.peek(state)?;
-        self.move_past(&token, true);
+        self.move_to_edge(&token, TokenEdge::EndPastPostSpace);
         Ok(token)
     }
 }
@@ -369,27 +351,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         offset
     }
 
-    // `pos`/`move_to_pos` exist both here and on the `TokenReader` trait: the trait
-    // impl is generic over `L`, so calling through it on a concrete reader needs `L`
-    // pinned by context — these inherent forms serve direct (non-generic) users. The
-    // trait impl delegates here; the logic lives in one place.
-
-    /// Current byte position.
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
     /// Whether the reader is at the end of the content.
     pub fn is_at_end(&self) -> bool {
         self.pos >= self.content.len()
-    }
-
-    /// Move to an absolute byte position (must lie on a `char` boundary, at most the
-    /// content's length). A violating position is not diagnosed here — the next
-    /// [`peek`](TokenReader::peek) validates it and reports an implementation error
-    /// (deliberately one validation point, at the consumption boundary).
-    pub fn move_to_pos(&mut self, pos: usize) {
-        self.pos = pos;
     }
 
     // --- scanning core ------------------------------------------------------------------
@@ -402,9 +366,10 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         let rules = state.rules();
         let start = self.pos;
 
-        // The position was set through outer-layer hands (`move_to_pos` serves
-        // argument rewinds; `move_past` and `move_to_position` accept caller-held
-        // tokens and positions), so it is validated at this single consumption
+        // The position was set through outer-layer hands (`move_to` and
+        // `move_to_position` accept caller-held tokens and positions, and a token
+        // recovery's resume position comes from a custom reader), so it is validated
+        // at this single consumption
         // boundary ([§dd-dr:panic-policy]): an out-of-bounds or non-boundary
         // position aborts the read instead of panicking in the scanners below.
         if s.get(start..).is_none() {
@@ -753,32 +718,6 @@ where
         self.peek_impl(state)
     }
 
-    fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool) {
-        if skip_post_space {
-            self.pos = tok.span.end();
-        } else {
-            // Post-space is a trailing sub-range of `span`, so its `start` is the end
-            // of the token proper — for every kind (empty post-space sits at `span.end`).
-            self.pos = tok.post_space().start();
-        }
-    }
-
-    fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool) {
-        if rewind_pre_space {
-            self.pos = tok.pre_space.start();
-        } else {
-            self.pos = tok.span.start();
-        }
-    }
-
-    fn move_to_pos(&mut self, pos: usize) {
-        StdTokenReader::move_to_pos(self, pos);
-    }
-
-    fn pos(&self) -> usize {
-        StdTokenReader::pos(self)
-    }
-
     fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
         self.pos = tok.edge_offset(edge);
     }
@@ -966,6 +905,26 @@ mod tests {
         Token::new(TokenKind::Char(c), sp(at, at + c.len_utf8()), pre_space)
     }
 
+    /// Put the reader at a byte offset. The scanner's own tests read from places no
+    /// token walk reaches (mid-content starts, deliberately invalid offsets), and this
+    /// module — the reader's own — is where positions may be minted from offsets.
+    fn seek<L>(tr: &mut StdTokenReader<'_>, offset: usize)
+    where
+        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
+    {
+        let reader: &mut dyn TokenReader<'_, L> = tr;
+        reader.move_to_position(&StdStreamPosition::at(offset));
+    }
+
+    /// Where the reader stands, as a byte offset.
+    fn at<L>(tr: &StdTokenReader<'_>) -> usize
+    where
+        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
+    {
+        let reader: &dyn TokenReader<'_, L> = tr;
+        reader.source_position_at(&reader.position_here()).pos()
+    }
+
     // --- chars ------------------------------------------------------------------------
 
     #[test]
@@ -998,7 +957,7 @@ mod tests {
         let st = state(latex_rules());
         let first = peek(&mut tr, &st);
         assert_eq!(peek(&mut tr, &st), first);
-        assert_eq!(tr.pos(), 0);
+        assert_eq!(at::<TestLang>(&tr), 0);
     }
 
     #[test]
@@ -1011,7 +970,7 @@ mod tests {
         let token = next(&mut tr, &st);
         assert_eq!(token.kind, TokenKind::Char('é'));
         assert_eq!(token.span.slice(text), "é");
-        assert_eq!(tr.pos(), 1 + 'é'.len_utf8());
+        assert_eq!(at::<TestLang>(&tr), 1 + 'é'.len_utf8());
     }
 
     // --- commands -----------------------------------------------------------------------
@@ -1390,7 +1349,7 @@ mod tests {
         for (pos, st, kind, end) in cases {
             let source = Arc::new(Source::new(text));
             let mut tr = StdTokenReader::new(&source);
-            tr.move_to_pos(pos);
+            seek::<TestLang>(&mut tr, pos);
             let token = peek(&mut tr, st);
             assert_eq!(token.kind, kind, "at pos {}", pos);
             assert_eq!(token.span, sp(pos, end), "at pos {}", pos);
@@ -1573,7 +1532,7 @@ mod tests {
         let source = Arc::new(Source::new("Abc    \n\n  z"));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        tr.move_to_pos(3);
+        seek::<TestLang>(&mut tr, 3);
 
         assert_eq!(
             next(&mut tr, &st),
@@ -1587,7 +1546,7 @@ mod tests {
         let source = Arc::new(Source::new("Abc  \t \n   \t\nz"));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        tr.move_to_pos(3);
+        seek::<TestLang>(&mut tr, 3);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(TokenKind::ParagraphBreak, sp(7, 13), sp(3, 7)),
@@ -1619,7 +1578,7 @@ mod tests {
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.paragraphs.enabled = false;
         let st = state(rules);
-        tr.move_to_pos(2);
+        seek::<TestLang>(&mut tr, 2);
         assert_eq!(next(&mut tr, &st), char_token('c', 2, Span::empty(2)));
         // The double newline is ordinary consumable whitespace now.
         assert_eq!(next(&mut tr, &st), char_token('N', 5, sp(3, 5)));
@@ -1855,7 +1814,7 @@ mod tests {
             let source = Arc::new(Source::new(content));
             let mut tr = StdTokenReader::new(&source);
             let st = scan_error_state();
-            tr.move_to_pos(at);
+            seek::<ScanErrorLang>(&mut tr, at);
 
             let err = TokenReader::peek(&mut tr, &st).unwrap_err();
             match err.kind() {
@@ -1906,11 +1865,11 @@ mod tests {
     fn invalid_reader_position_is_an_unrecoverable_implementation_error_at_peek() {
         let st = state(latex_rules());
 
-        // Out of bounds (`move_to_pos` serves outer-layer resume positions, so the
+        // Out of bounds (a resume position comes from outer-layer hands, so the
         // violation is reported at the next read, not panicked).
         let source = Arc::new(Source::new("ab"));
         let mut tr = StdTokenReader::new(&source);
-        tr.move_to_pos(5);
+        seek::<TestLang>(&mut tr, 5);
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
             if data.identifier() == crate::constructs::ImplementationError::IDENTIFIER));
@@ -1919,7 +1878,7 @@ mod tests {
         // Not a char boundary.
         let source = Arc::new(Source::new("é"));
         let mut tr = StdTokenReader::new(&source);
-        tr.move_to_pos(1);
+        seek::<TestLang>(&mut tr, 1);
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
             if data.identifier() == crate::constructs::ImplementationError::IDENTIFIER));
@@ -2001,7 +1960,7 @@ mod tests {
         let st = state(latex_rules());
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
 
-        reader.move_to_pos(1);
+        let _ = reader.next(&st).unwrap(); // the leading `a`
         let token = reader.peek(&st).unwrap();
         // ` \vec  `: pre-space 1..2, the command 2..6, its post-space 6..8.
         assert_eq!(
@@ -2192,7 +2151,7 @@ mod tests {
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
         let eos = Token::new(TokenKind::EndOfStream, Span::empty(4), sp(1, 4));
         assert_eq!(next(&mut tr, &st), eos);
-        assert_eq!(tr.pos(), 4);
+        assert_eq!(at::<TestLang>(&tr), 4);
         assert!(tr.is_at_end());
         // Terminal: further reads yield end-of-stream again (now with empty pre_space,
         // the earlier trailing whitespace having been consumed).
@@ -2262,30 +2221,36 @@ mod tests {
     // --- movement -----------------------------------------------------------------------
 
     #[test]
-    fn move_past_and_move_to_flags() {
+    fn move_to_lands_at_each_of_the_four_edges() {
         let text = "  \\vec b";
         let source = Arc::new(Source::new(text));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
 
-        let token = peek(&mut tr, &st);
+        let token = reader.peek(&st).unwrap();
         assert_eq!(token.kind, TokenKind::Command { name: "vec", escape_char: '\\', post_space: sp(6, 7) });
         assert_eq!(token.span, sp(2, 7)); // includes post_space
         assert_eq!(token.pre_space, sp(0, 2));
-        assert_eq!(token.post_space(), sp(6, 7));
 
-        TokenReader::move_past(&mut tr, &token, true);
-        assert_eq!(tr.pos(), 7); // past post_space
-        TokenReader::move_past(&mut tr, &token, false);
-        assert_eq!(tr.pos(), 6); // before post_space (e.g. for \verb-style parsers)
+        // Each edge, checked through the text location the reader answers for the
+        // position it lands on.
+        let at = |reader: &dyn TokenReader<'_, TestLang>| {
+            reader.source_position_at(&reader.position_here())
+        };
+        for (edge, offset) in [
+            (TokenEdge::EndPastPostSpace, 7), // past post-space
+            (TokenEdge::End, 6),              // before it (the `\verb`-style read)
+            (TokenEdge::Start, 2),            // at the token, to read it again
+            (TokenEdge::StartBeforePreSpace, 0), // giving back the pre-space too
+        ] {
+            reader.move_to_edge(&token, edge);
+            assert_eq!(at(reader), SourcePos::new(&source, offset), "{edge:?}");
+            assert_eq!(reader.position_here(), reader.position_at(&token, edge));
+        }
 
-        TokenReader::move_to(&mut tr, &token, false);
-        assert_eq!(tr.pos(), 2); // at the token
-        TokenReader::move_to(&mut tr, &token, true);
-        assert_eq!(tr.pos(), 0); // before pre_space
-
-        // Reading again after move_to yields the same token.
-        assert_eq!(peek(&mut tr, &st), token);
+        // Reading again after the rewind yields the same token.
+        assert_eq!(reader.peek(&st).unwrap(), token);
     }
 
     // --- an end-to-end walk (adapted from pylatexenc's multiple-tokens test) ---------------
@@ -2309,7 +2274,7 @@ mod tests {
         assert_eq!(next(&mut tr, &st), char_token('T', 0, Span::empty(0)));
 
         let p = find(r"\`");
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -2320,7 +2285,7 @@ mod tests {
         );
 
         let p = find(r"\textbf") - 1; // pre space
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             // '{' follows the name: no post_space.
@@ -2336,7 +2301,7 @@ mod tests {
         );
 
         let p = find(r"\vec"); // post-space present
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -2347,7 +2312,7 @@ mod tests {
         );
 
         let p = find(r"\&") - 1; // pre-space and *no* post-space
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -2359,7 +2324,7 @@ mod tests {
 
         // \begin is just a command token; the environment name is ordinary group+chars.
         let p = find(r"\begin");
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         let token = next(&mut tr, &st);
         assert_eq!(
             token.kind,
@@ -2367,7 +2332,7 @@ mod tests {
         );
 
         let p = find("@@@") + 3; // pre space up to \end
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -2379,7 +2344,7 @@ mod tests {
 
         // The whole comment is one token: content to end of line, newline as post_space.
         let p = find("%") - 2;
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         let nl = find(" % here goes a comment") + " % here goes a comment".len();
         assert_eq!(
             next(&mut tr, &st),
@@ -2396,7 +2361,7 @@ mod tests {
 
         // \mymacro directly precedes a paragraph break: no post_space.
         let p = find(r"\mymacro");
-        tr.move_to_pos(p);
+        seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -2413,7 +2378,7 @@ mod tests {
 
         // ... and the file's trailing newline is the end-of-stream token's pre_space.
         let p = find("New paragraph");
-        tr.move_to_pos(p + "New paragraph".len());
+        seek::<TestLang>(&mut tr, p + "New paragraph".len());
         assert_eq!(
             next(&mut tr, &st),
             Token::new(

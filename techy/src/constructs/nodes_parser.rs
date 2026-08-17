@@ -2482,7 +2482,7 @@ mod tests {
             _state: &Arc<ParsingState<TestLang>>,
         ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
             let here = self.inner().position_here();
-            let pos = self.inner().pos();
+            let pos = here.offset();
             let span = Span::new(pos, pos + 1);
             Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('#')),
@@ -2494,21 +2494,6 @@ mod tests {
             ))
         }
 
-        fn move_past(&mut self, tok: &Token<'s, TestLang>, skip_post_space: bool) {
-            self.inner_mut().move_past(tok, skip_post_space);
-        }
-
-        fn move_to(&mut self, tok: &Token<'s, TestLang>, rewind_pre_space: bool) {
-            self.inner_mut().move_to(tok, rewind_pre_space);
-        }
-
-        fn move_to_pos(&mut self, pos: usize) {
-            self.inner_mut().move_to_pos(pos);
-        }
-
-        fn pos(&self) -> usize {
-            self.inner().pos()
-        }
 
         fn move_to_edge(&mut self, tok: &Token<'_, TestLang>, edge: TokenEdge) {
             self.inner_mut().move_to_edge(tok, edge);
@@ -2651,7 +2636,7 @@ mod tests {
             &mut self,
             state: &Arc<ParsingState<TabooLang>>,
         ) -> TokenResult<'s, TabooLang, Token<'s, TabooLang>> {
-            let pos = self.inner.pos();
+            let pos = TokenReader::<TabooLang>::position_here(&self.inner).offset();
             if self.inner.content()[pos..].starts_with('!') {
                 let span = Span::new(pos, pos + 1);
                 return Err(TokenError::new(
@@ -2667,21 +2652,6 @@ mod tests {
             TokenReader::peek(&mut self.inner, state)
         }
 
-        fn move_past(&mut self, tok: &Token<'s, TabooLang>, skip_post_space: bool) {
-            self.inner_mut().move_past(tok, skip_post_space);
-        }
-
-        fn move_to(&mut self, tok: &Token<'s, TabooLang>, rewind_pre_space: bool) {
-            self.inner_mut().move_to(tok, rewind_pre_space);
-        }
-
-        fn move_to_pos(&mut self, pos: usize) {
-            self.inner_mut().move_to_pos(pos);
-        }
-
-        fn pos(&self) -> usize {
-            self.inner().pos()
-        }
 
         fn move_to_edge(&mut self, tok: &Token<'_, TabooLang>, edge: TokenEdge) {
             self.inner_mut().move_to_edge(tok, edge);

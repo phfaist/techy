@@ -12,19 +12,20 @@
 //!
 //! # Fidelity contract
 //!
-//! The reader keeps a byte **position**, exactly like [`StdTokenReader`]: `move_past` /
-//! `move_to` place `pos()` per the span conventions (after the token or its post-space;
-//! at the token start or before its pre-space), and `peek` returns the first listed token
-//! at or after the position, clipping its `pre_space` to start no earlier than `pos()`
-//! (re-peeking mid-pre-space behaves like a fresh scan). Past the last token, `peek`
-//! yields the terminal idempotent [`EndOfStream`](super::TokenKind::EndOfStream).
+//! The reader keeps a byte **position**, exactly like [`StdTokenReader`]:
+//! [`move_to_edge`](super::TokenReader::move_to_edge) places it at the named edge of
+//! the token,
+//! and `peek` returns the first listed token at or after the position, clipping its
+//! `pre_space` to start no earlier than that position (re-peeking mid-pre-space behaves
+//! like a fresh scan). Past the last token, `peek` yields the terminal idempotent
+//! [`EndOfStream`](super::TokenKind::EndOfStream).
 //!
 //! The one inherent difference from a scanning reader: the list is **fixed**. Tokens are
 //! not re-scanned under the state passed to `peek`, and a position placed *inside* a
-//! token's span (e.g. `move_past(tok, false)` rewinding before swallowed post-space, the
-//! `\verb` idiom) yields the *following* listed token — a scanning reader would re-read
-//! the post-space bytes as fresh content. Tests that need re-scanning behavior use
-//! [`StdTokenReader`] on real content.
+//! token's span (e.g. a move to [`End`](super::TokenEdge::End), rewinding before
+//! swallowed post-space — the `\verb` idiom) yields the *following* listed token — a
+//! scanning reader would re-read the post-space bytes as fresh content. Tests that need
+//! re-scanning behavior use [`StdTokenReader`] on real content.
 //!
 //! [`StdTokenReader`]: super::StdTokenReader
 
@@ -63,8 +64,8 @@ use super::token::{Token, TokenKind};
 ///   starts with the initial position alone and grows with the four edge offsets of
 ///   every token the reader serves, with every position it answers
 ///   (`position_here`/`position_at`), and with every offset it is moved to
-///   (`move_to_edge`/`move_to_pos`). A position taken from somewhere the reader never
-///   served is therefore rejected.
+///   (`move_to_edge`). A position taken from somewhere the reader never served is
+///   therefore rejected.
 pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
     tokens: Vec<Token<'s, L>>,
@@ -137,11 +138,6 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
         &self.tokens
     }
 
-    /// Move to an absolute byte position (mirrors `StdTokenReader::move_to_pos`).
-    pub fn move_to_pos(&mut self, pos: usize) {
-        self.pos = pos;
-    }
-
     /// The first listed token at or after the current position (its span not yet begun).
     fn current(&self) -> Option<&Token<'s, L>> {
         let i = self.tokens.partition_point(|t| t.span.start() < self.pos);
@@ -185,33 +181,6 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
                 ))
             }
         }
-    }
-
-    fn move_past(&mut self, tok: &Token<'s, L>, skip_post_space: bool) {
-        if skip_post_space {
-            self.pos = tok.span.end();
-        } else {
-            // Post-space is a trailing sub-range of `span`, so its `start` is the end
-            // of the token proper — underflow-free even for hand-built tokens.
-            self.pos = tok.post_space().start();
-        }
-    }
-
-    fn move_to(&mut self, tok: &Token<'s, L>, rewind_pre_space: bool) {
-        if rewind_pre_space {
-            self.pos = tok.pre_space.start();
-        } else {
-            self.pos = tok.span.start();
-        }
-    }
-
-    fn move_to_pos(&mut self, pos: usize) {
-        TokenListReader::move_to_pos(self, pos);
-        self.issue(pos);
-    }
-
-    fn pos(&self) -> usize {
-        self.pos
     }
 
     fn move_to_edge(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
@@ -363,17 +332,17 @@ mod tests {
         let mut lr = TokenListReader::new(&source, scan(&source));
         let st = state();
 
-        let start = TokenReader::pos(&lr);
+        let start = TokenReader::position_here(&lr);
         let first = TokenReader::peek(&mut lr, &st).unwrap();
         assert_eq!(TokenReader::peek(&mut lr, &st).unwrap(), first);
-        assert_eq!(TokenReader::pos(&lr), start);
+        assert_eq!(TokenReader::position_here(&lr), start);
         assert_eq!(first.pre_space, Span::new(0, 1));
     }
 
     #[test]
-    fn move_past_and_move_to_flags_match_std_reader() {
-        // The movement matrix of the Phase 3 `move_past_and_move_to_flags` test, run
-        // against both readers in lockstep.
+    fn moving_to_each_edge_matches_the_std_reader() {
+        // The movement matrix of the reader suite's edge test, run against both
+        // readers in lockstep.
         let content = "  \\vec b";
         let st = state();
         let source: Arc<Source> = Arc::new(Source::new(content));
@@ -383,20 +352,27 @@ mod tests {
         let token = TokenReader::peek(&mut std_r, &st).unwrap();
         assert_eq!(TokenReader::peek(&mut list_r, &st).unwrap(), token);
 
-        for (skip_post_space, expected_pos) in [(true, 7), (false, 6)] {
-            TokenReader::move_past(&mut std_r, &token, skip_post_space);
-            TokenReader::move_past(&mut list_r, &token, skip_post_space);
-            assert_eq!(std_r.pos(), expected_pos);
-            assert_eq!(TokenReader::pos(&list_r), expected_pos);
-        }
-        for (rewind_pre_space, expected_pos) in [(false, 2), (true, 0)] {
-            TokenReader::move_to(&mut std_r, &token, rewind_pre_space);
-            TokenReader::move_to(&mut list_r, &token, rewind_pre_space);
-            assert_eq!(std_r.pos(), expected_pos);
-            assert_eq!(TokenReader::pos(&list_r), expected_pos);
+        for (edge, offset) in [
+            (TokenEdge::EndPastPostSpace, 7),
+            (TokenEdge::End, 6),
+            (TokenEdge::Start, 2),
+            (TokenEdge::StartBeforePreSpace, 0),
+        ] {
+            let std_reader: &mut dyn TokenReader<'_, TestLang> = &mut std_r;
+            std_reader.move_to_edge(&token, edge);
+            let at = std_reader.source_position_at(&std_reader.position_here());
+            assert_eq!(at, SourcePos::new(&source, offset), "{edge:?}");
+
+            let list_reader: &mut dyn TokenReader<'_, TestLang> = &mut list_r;
+            list_reader.move_to_edge(&token, edge);
+            assert_eq!(
+                list_reader.source_position_at(&list_reader.position_here()),
+                at,
+                "{edge:?}"
+            );
         }
 
-        // Reading again after move_to yields the same token from both.
+        // Reading again after the rewind yields the same token from both.
         assert_eq!(TokenReader::peek(&mut std_r, &st).unwrap(), token);
         assert_eq!(TokenReader::peek(&mut list_r, &st).unwrap(), token);
     }
@@ -412,8 +388,11 @@ mod tests {
         let second = TokenReader::next(&mut lr, &st).unwrap();
         assert_eq!(second, scanned[1]);
 
-        TokenReader::move_to(&mut lr, &first, false);
-        assert_eq!(TokenReader::pos(&lr), first.span.start());
+        TokenReader::move_to_edge(&mut lr, &first, TokenEdge::Start);
+        assert_eq!(
+            TokenReader::position_here(&lr),
+            TokenReader::position_at(&lr, &first, TokenEdge::Start)
+        );
         assert_eq!(TokenReader::peek(&mut lr, &st).unwrap().kind, first.kind);
         // pre_space was already consumed positionally: clipped to empty.
         assert_eq!(
@@ -425,10 +404,21 @@ mod tests {
     #[test]
     fn pre_space_clipped_when_peeking_mid_whitespace() {
         let source: Arc<Source> = Arc::new(Source::new("a   b"));
-        let mut lr = TokenListReader::new(&source, scan(&source));
+        let mut scanned = scan(&source);
+        // A filler token over the first whitespace character, so that consuming it
+        // leaves the reader inside `b`'s recorded pre-space run.
+        scanned.insert(
+            1,
+            Token::new(TokenKind::Char(' '), Span::new(1, 2), Span::empty(1)),
+        );
+        let mut lr = TokenListReader::new(&source, scanned);
         let st = state();
 
-        lr.move_to_pos(2); // inside b's pre-space run (1..4)
+        // Land inside b's pre-space run (1..4) the only way a reader ever lands
+        // anywhere: by consuming a token that ends there. The hand-built list holds
+        // one covering `1..2`, so reading it leaves the stream mid-whitespace.
+        let _ = TokenReader::next(&mut lr, &st).unwrap(); // `a`
+        let _ = TokenReader::next(&mut lr, &st).unwrap(); // the 1..2 filler
         let token = TokenReader::peek(&mut lr, &st).unwrap();
         assert_eq!(token.kind, TokenKind::Char('b'));
         assert_eq!(token.pre_space, Span::new(2, 4));
@@ -531,7 +521,11 @@ mod tests {
         let mut lr = TokenListReader::new(&source, prefix);
         let mut std_r = StdTokenReader::new(&source);
         let std_reader: &mut dyn TokenReader<'_, TestLang> = &mut std_r;
-        std_reader.move_to_pos(4);
+        // Read past the list's extent: the position the std reader stands at then is
+        // one this list reader never handed out.
+        for _ in 0..3 {
+            let _ = std_reader.next(&state()).unwrap();
+        }
         let elsewhere = std_reader.position_here();
 
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut lr;
@@ -566,7 +560,10 @@ mod tests {
         let mut lr = TokenListReader::new(&source, tokens.clone());
         assert_eq!(TokenReader::next(&mut lr, &st).unwrap(), tokens[0]);
         assert_eq!(TokenReader::next(&mut lr, &st).unwrap(), tokens[1]);
-        assert_eq!(TokenReader::pos(&lr), 6);
+        assert_eq!(
+            TokenReader::source_position_at(&lr, &TokenReader::position_here(&lr)),
+            SourcePos::new(&source, 6)
+        );
         assert_eq!(
             TokenReader::peek(&mut lr, &st).unwrap().kind,
             TokenKind::EndOfStream,

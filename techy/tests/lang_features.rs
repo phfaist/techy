@@ -507,21 +507,6 @@ mod plain_chars {
                 ))
             }
 
-            fn move_past(&mut self, tok: &Token<'s, PlainCharsLang>, skip: bool) {
-                self.inner_mut().move_past(tok, skip);
-            }
-
-            fn move_to(&mut self, tok: &Token<'s, PlainCharsLang>, rewind: bool) {
-                self.inner_mut().move_to(tok, rewind);
-            }
-
-            fn move_to_pos(&mut self, pos: usize) {
-                self.inner_mut().move_to_pos(pos);
-            }
-
-            fn pos(&self) -> usize {
-                self.inner().pos()
-            }
 
             fn move_to_edge(&mut self, tok: &Token<'_, PlainCharsLang>, edge: TokenEdge) {
                 self.inner_mut().move_to_edge(tok, edge);
