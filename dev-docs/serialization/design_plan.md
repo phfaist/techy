@@ -864,6 +864,54 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M4 fix-pass agent — **M4 fix pass complete** on `techy-serialize`
+  (worktree `.claude/worktrees/techy-serialize`). Commits: `953810c`
+  `SerializeError::InNode` / `DeserializeError::InNode { node, callable, cause }`
+  (mirroring `InTable`/`InEntry`; the table/entry wrappers may now carry an `InNode`
+  whose own cause is another table's location); `e4480f3` the tree driver fix pass;
+  `7956503` the tests. **Blocking findings:** B1 — the reader tracks child claims
+  while staging: every non-root wire node must be listed by exactly one node stored
+  before it (unclaimed → typed error naming the node; the builder's drop-unreachable
+  convenience can no longer accept a shortened root range), plus a post-`finish`
+  node-count re-check (`Internal`); B2 — every per-node failure, write and read
+  (payload, argument-spec hooks, nested table interning/reading, annotations), is
+  wrapped in `InNode` — the D21 out-of-band write error now reads "…table `trees`:
+  …node #1 (callable `x`)…: argument #1…"; B3 — the content-parent message states
+  the real contract (a descendant, stored AFTER the callable; out-of-range and
+  stored-before cases distinguished). **The lang-opaque span rule (D23/D25
+  refinement, plan patch pending):** `TextContent`'s public value conversion is
+  owned-only both ways (a `Spanned` value is a typed error on write and on read —
+  the conversion receives no node to validate a range against); the tree writer
+  materializes each callable's invocation syntax against the node's source
+  (`InvocationSyntax::materialized`) before converting it, so a span-backed
+  post-space round-trips as owned text (the deep-compare compares materialized
+  invocation syntaxes); the public `Span` value-trait impls (unused; a bare span in a
+  payload cannot be validated) are REMOVED; the ext-values contract ("must not carry
+  node-relative spans", as `NodeTree::materialize` states) is documented on
+  `TreeSerdeDriver` and `register_annotation`; the node's own text payloads
+  (Chars/Group/Comment) stay span-backed on the wire, validated by the reader +
+  builder. **Nits:** builder errors reach users with wire node positions and the
+  `NodeBuildError` kept as `Failed { cause }`; an ext on an absent argument is
+  rejected; `tree::<WrongA>()` names the stored identifier and the requested type; a
+  non-tree object interned into the trees table is named as such (`TreeSerdeDriver`
+  docs state `Object = dyn Any + Send + Sync` accepts `NodeTree<L, A>` only); the
+  trees table now registers `core.tree` ITSELF (the registry is created with it —
+  decision: driver-level, so `SerdeSession::empty()` + `register_table(TreeSerdeDriver::new())`
+  needs no extra call; `register_core_tree` gone); unused test imports; "ride as"
+  wording. **Tests (+14, reviewer probes included):** unreachable nodes, root claimed
+  as a child, content parent outside its region / stored before its callable / out
+  of range, region content out of bounds, overlapping regions, ext on an absent
+  argument, annotation-count mismatch, non-tree object, 60k-deep chain round trip,
+  session composed from `empty()`, node-location asserts on write and read errors,
+  the three span-rule tests (toy `SyntaxLang` with a `TextContent`-carrying
+  invocation syntax). Not changed (recorded): the reader accepts any wire order in
+  which children follow their parent (not only breadth-first) — safe, since regions
+  map `content_parent` through the staging map; the wire form is unchanged (Q3 note
+  C on an explicit content-frame tag remains open). Verified: `cargo test` green
+  without/with `--features serde` (940/969 unit — the M4 entry's "954" was 955 —,
+  30+8+13+23+1 integration, 72/73 doctests); `rm -rf target/doc && cargo docs` clean
+  both states; clippy clean in `serialize/`. Next: M5 (specs, providers, latexlike).
+  Blockers: none.
 - 2026-08-17 — M4 implementer agent — **M4 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `58d4c20` M3 review nits (char
   mismatch uses `kind_name()`; source/object/mod doc wording; two state-reading
