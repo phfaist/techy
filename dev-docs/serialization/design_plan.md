@@ -403,6 +403,10 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   recomputed, never trusted. Consumer `NodeId`s do not survive round-trips (durable
   node identity rides in annotations). Everything read is untrusted: bounds checks,
   invariant validation, typed errors, no panics (panic policy rule 3 in full).
+  Clarified after the M4 review (2026-08-17): the wire node list must be EXACTLY the
+  set reachable from the root — every non-root node claimed once by a children
+  range, and the rebuilt node count re-checked — because the builder's convenience
+  of dropping unreachable staged nodes must never hide malformed input.
 - **D23 — Annotations & ext serialize with context.** `NodeTree<L, A>` annotations are
   often `SourceSpan`s (extract/transform mint them), so `A` payloads may need
   `cx.intern_*` — a plain `A: Serialize` bound can never suffice. Mechanism: per-call
@@ -411,6 +415,19 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   InvocationSyntax) implement `SerializableValue`/`DeserializableValue` (D17
   REVISED). latexlike's
   `StdEnvironmentSideSyntax::name_group_rule` (`Arc<GroupRule>`) is inlined.
+  **Lang-opaque span rule (M4 review, 2026-08-17 — supervisor decision, user may
+  veto):** language payloads (invocation syntax, ext values, annotations) carry OWNED
+  text only — the tree writer materializes the invocation syntax against the node's
+  source (`InvocationSyntax::materialized`) before encoding it, and `TextContent`'s
+  public value-trait codec is owned-only both ways (a `spanned` form inside a
+  language payload is a typed read error). Reason: a value codec receives no node
+  and cannot validate offsets, and the builder deliberately skips Callable payloads
+  (`check_spanned_contents`), so an offset span in a language payload would be an
+  unvalidated panic path (`TextContent::resolve`). Ext values are already
+  source-independent by `NodeTree::materialize`'s contract (documented on the tree
+  driver). Node text of core payloads (Chars/Group/Comment) stays offset-based (D25)
+  and is validated against the node's source by the reader and the builder. The
+  public `Span` value-trait impl was removed for the same reason.
 - **D24 — States: always serialized, interned.** Per state: token rules in full (rule
   payloads are small; all sections optional on the wire — feature-agnostic; reader
   errors if the target lang lacks a used feature), mode + ext via lang codecs, scope
@@ -514,6 +531,8 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 - **Q3 (M6) — Wire vocabulary naming pass** (freeze-relevant, pre-v1): every public
   field name and enum string (core + latexlike), the `Index` table discriminant
   rendering (name string vs ordinal), the canonical base64 form for `Bytes`; the
+  region wire form's implicit content-frame discriminator (`content_parent == the
+  callable's own index` ⇔ in-region — consider an explicit tag, M4 review); the
   `Option` asymmetry between derive-omitted keys and verbatim `SerialValue` fields
   (`WireSource.origin` `None` renders `null` while `digest: Option` omits its key —
   M3 review); also
@@ -795,7 +814,9 @@ merge outside the sandboxed primary checkout.
   codecs (D23); multi-tree. Acceptance: parse → serialize → deserialize →
   deep-compare (structure, resolved text, spans, state/spec identity) on the test
   corpus; hostile-input battery (bad indices, non-tiling regions, wire cycles, deep
-  recursion).
+  recursion). (Scheduling note 2026-08-17: the REAL latexlike corpus round-trip runs
+  at M5, when the spec/provider impls exist; M4 ran toy-lang parses + hand-built
+  trees through the same harness.)
 - **M5 — Specs, providers, latexlike.** Provenance stamp + `new_cyclic` builder (Q5);
   dispatching drivers; latexlike `SerializableLang` + object impls (pkg-spec identity,
   macro recipes, Scope full-dump, environments/specials); namespace resolver +
@@ -1371,6 +1392,16 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M4 reviewed (Opus 5; REQUEST CHANGES:
+  unreachable wire nodes silently dropped, missing node/callable location context,
+  one inverted message, plus a plan gap: span-backed fields inside lang-opaque
+  payloads were unvalidated) → fix pass landed (see its entry) → re-verification.
+  Plan patches: D22 exact-node-set rule, D23 lang-opaque span rule (owned text
+  only; writer materializes invocation syntax), Q3 content-frame tag note, M4
+  corpus-at-M5 note. Naming-pass items queued: `TreeSerialization` bundles both
+  directions while M3's sugar traits are per direction. Next: M5 (awaiting the
+  user's rulings on identity-only package specs, `Package::new_shared` stamping,
+  typed user-data map + `KnownProviders`).
 - 2026-08-17 — supervisor (main session) — M3 reviewed (Opus 5; APPROVE WITH NITS,
   hostile-input harness clean; nits folded into the M4 brief). Plan patches: D13
   `Source` has no plain impl (driver-direct), M7 cost bounds (prefix table O(n²),
