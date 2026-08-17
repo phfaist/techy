@@ -91,6 +91,13 @@ architecture/rationale entries for the decisions above are written in Stage 5 (�
 
 ## 1. Target design (normative — reviewers check diffs against this section)
 
+§1 describes the **end state** of the code. §3–§5 stage it: each stage's own text is
+authoritative for what that stage's signatures look like at the end of that stage (for
+instance, Stage 1 adds `Lang::StreamPosition` and the reader's position/span methods
+over today's `Token<'s, L>`; `Lang::Token` and the opaque `StdToken` arrive in Stage
+3b). When a §1 signature and a stage's text differ, the stage's text wins for that stage
+and §1 wins for the final tree.
+
 ### 1.1 Vocabulary
 
 - **Token**: an opaque value produced by a reader; meaningful only through the reader
@@ -217,8 +224,9 @@ pub enum TokenKind<'t, L: Lang> {
   functions …", `docs/panics.md:9`) has its count corrected. Use the current rustdoc
   link spelling `[Panics list](techy::guide::panics)` on the constructors.
   *(CLAUDE.md rule 4's parenthetical also names `Token::new` among the six approved
-  value functions. **No code stage edits CLAUDE.md** — orchestrator decision pending on
-  who does.)*
+  value functions. **No code stage edits CLAUDE.md** — open ruling **O-2** (§1.17),
+  **pending user ruling (orchestrator, 2026-08-17)**: an implementer who reaches it
+  stops and asks; do not edit CLAUDE.md and do not guess.)*
 - `pub(crate)` accessors used by the two in-crate readers: `span()`, `pre_space()`,
   `post_space()`, `edge_offset(TokenEdge) -> usize`, `kind_data()`. **Not public**: a
   third-party reader over `StdToken`s interprets them by delegating to a
@@ -596,12 +604,13 @@ old method and renames `move_to_edge` → `move_to` in one commit (afterwards
 | `constructs/mod.rs:103-117` `invocation_frame` | `SourceSpan::new(&cx.source, ..)` | §1.9 |
 | `constructs/mod.rs:262-330` `stage_invocation` | `end_pos: Option<usize>`, `self.source.content().get(..)` | §1.9 |
 | `constructs/mod.rs:434,445` guard anchors, `:795` | `pos()` | `self.here()` |
+| `attached_source.rs:461,564,590,606,660,779,800` (tests) | `SourceSpan::entire(&cx.source)` | bind the test's own `Arc<Source>` locally (the same `source` the test builds/parses) and call `SourceSpan::entire(&source)`; no API addition. **Stage 2a** — that stage's text says `cx.source` reads in `attached_source.rs` reach zero |
 | `attached_source.rs:155-162` reader construction, `:195` skip | `StdTokenReader::new(content)`, `move_to_pos(span.end())` | `driver.make_token_reader(&source)`, `move_to_position(&after)` |
 | `engine/language.rs:184,245,269` | reader construction, skip, anchor | same |
 | `latexlike/invocation_syntax.rs:779-784` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
 | `latexlike/*.rs` (environments, input, driver, recompose) | `SourceSpan::new(&cx.source, ..)`, `token.kind` | reader queries / view |
 | `scopes/mod.rs:1607-1620` `ErrorCallableSpec::make_invocation_parser`, `:1624-1654` `ErrorInvocationParser` | **a real (non-test) construct parser the plan never named**: `Invocation<'a, 's, L>`, `token.span`, `SourceSpan::new(&cx.source, token.span)` ×2, `NodeKind::chars(token.span)`, `cx.staging_error(error, token.span)` | Stage 2a/2b: `cx.tokens.source_span_of(self.invocation.token)` for both spans, `NodeKind::chars(span.span())`, `staging_error(error, span)`; Stage 3b: `Invocation<'a, L>`, `ErrorInvocationParser<'a, L>` |
-| `scopes/mod.rs:104-115` `CallableQuery<'a, 's, L>` | public field `token: Option<&'a Token<'s, L>>` | `CallableQuery<'a, L>` with `token: Option<&'a L::Token>` (Stage 3b). **Open question — §1.16 does not cover it**: a `SpecsProvider` has no reader, so an opaque token is uninterpretable to it. Default if nobody rules otherwise: keep the field, and document that interpreting it needs a reader over the same content |
+| `scopes/mod.rs:104-115` `CallableQuery<'a, 's, L>` | public field `token: Option<&'a Token<'s, L>>` | `CallableQuery<'a, L>` with `token: Option<&'a L::Token>` (Stage 3b). **Open ruling O-1 (§1.17) — pending user ruling (orchestrator, 2026-08-17)**: a `SpecsProvider` has no reader, so an opaque token is uninterpretable to it. An implementer reaching this row **stops and asks**; do not guess. Suggested default, if it is ruled that way: keep the field, and document that interpreting it needs a reader over the same content |
 | `latexlike/invariants.rs:60` | doc comment: "a takeover's `stage_invocation(.., end_pos: Some)`" | reword to `end: Some(&position)` (Stage 2a, with the rename) |
 | `spec/callable.rs:162-171` `CallableSpec::make_invocation_parser<'a, 's>` | `invocation: Invocation<'a, 's, L>` | `make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>, ..)` (§1.10) — Stage 3b |
 | `latexlike/spec.rs:132-134` | `make_invocation_parser<'a, 's>(.., Invocation<'a, 's, LLL>)` | same — Stage 3b |
@@ -646,11 +655,18 @@ closed core enum), `TokenEdge`, `StdStreamPosition`, `Lang::Token`,
 token_kind, source_span_between, source_span_of, position_here, position_at,
 source_position_at, source_span_within}`, `ParseContext::{here, source_span_within}`,
 `ParseDriver::make_token_reader`, `SourceSpan::at`, `StopCause::*::after`,
-`Invocation::kind`.
+`Invocation::kind`, and the view's comment field names
+`TokenKind::Comment { start_delim, content }` (the delimiter as *written text*, where
+the stored token had a `Span`).
 
 Superseded (must not come back — recorded in DESIGN_RATIONALE [§dd-dr:superseded-names]
 in Stage 5, §7): `Token::new` (the struct constructor; the
-struct itself is now `StdToken`), `TokenKind` variants with `&'s str`/`Span` fields,
+struct itself is now `StdToken`), `TokenKind` variants with `&'s str`/`Span` fields —
+specifically the stored-token field names `TokenKind::Comment::{start, post_space}` and
+`TokenKind::Command::post_space` (today `Comment { start: Span, content: &'s str,
+post_space: Span }` and `Command { name: &'s str, escape_char: char, post_space: Span }`,
+`techy/src/token/token.rs:64-114`): those were spans living on the token, and the reader
+now answers them through `source_span_between`,
 `Token<'s, L>` (lifetime on the token), `TokenReader::{move_past, move_to(tok, bool),
 move_to_pos, pos}`, `StdTokenReader::{pos, move_to_pos}`, `TokenRecovery::resume_pos`,
 `ParseContext::source`, `stage_invocation(.., end_pos: Option<usize>)`,
@@ -668,8 +684,8 @@ preferred spellings are `here()`, `source_span_within()`, `cx.tokens.source_span
 On `stage_invocation`: the standard end rule as spelled out in §1.9 (three cases). On
 `StdToken` constructors: the coherence asserts (+ the `docs/panics.md` Panics list —
 the `Token::new` entry replaced by the constructors and the "Six value functions" count
-corrected; CLAUDE.md rule 4 is *not* edited by a code stage, orchestrator decision
-pending). On the
+corrected; CLAUDE.md rule 4 is *not* edited by a code stage — open ruling **O-2**
+(§1.17), **pending user ruling (orchestrator, 2026-08-17)**: stop and ask). On the
 `docs/construct-parsers.md` guide: the "how do I get a span / go back" FAQ rewritten
 in terms of tokens, edges, and positions.
 
@@ -690,12 +706,31 @@ in terms of tokens, edges, and positions.
 - **`Invocation.kind`**: keep as a field (a `Copy` view); if the probe shows a
   lifetime problem holding a `TokenKind<'a, L>` in the struct, drop the field and have
   consumers call `tokens.token_kind(invocation.token)`.
-- **`is_at_end()` on `StdTokenReader`**: keep if any caller remains, else delete.
+- **`is_at_end()` on `StdTokenReader`**: keep it (its unit-test caller
+  `token/reader.rs:1619` counts as a caller; it is a harmless public inherent
+  accessor).
 - **Chars-run contiguity failure message**: keep it an `ImplementationError` with the
   two positions' `Debug` renderings.
 - **Doc example that hand-builds tokens** (`docs/*.md`): rewrite with the `StdToken`
   constructors + a delegating reader, or replace by a `StdTokenReader`-based example
   — whichever keeps the doctest short.
+
+### 1.17 Open rulings
+
+Unlike §1.16, these are **not** implementer defaults: both are **pending user ruling
+(orchestrator, 2026-08-17)**. An implementer who reaches one stops and asks; the
+orchestrator relays. Close each here (with the ruling and its date) when it is answered.
+
+- **O-1 — `CallableQuery::token`** (`techy/src/scopes/mod.rs:104-115`, §1.11 row). The
+  public field `token: Option<&'a Token<'s, L>>` re-signatures to
+  `Option<&'a L::Token>` in Stage 3b, but a `SpecsProvider` has no reader, so an opaque
+  token is uninterpretable to it. Question: keep the field, drop it, or replace it by
+  the facts a provider can use. *Status: open.*
+- **O-2 — who edits `CLAUDE.md`** (§1.3, §1.15). Rule 4's parenthetical names
+  `Token::new` among the six approved always-on-assert value functions; the eight
+  `StdToken` constructors inherit that slot. **No code stage edits CLAUDE.md.**
+  Question: whether Stage 5 (or the user directly) updates rule 4's wording and the
+  "six value functions" count. *Status: open.*
 
 ---
 
@@ -828,6 +863,21 @@ Steps:
    `ParseContext::new`), so it must be given one to answer `source_span_between` /
    `source_position_at`. §1.8's "delegating wrapper over an inner `StdTokenReader`" is
    the shape; 3b then only swaps `Token::new` for the `StdToken` constructors.
+8b. Three more **hand-written test `TokenReader` impls** stop compiling the moment
+   step 1 lands (the new trait methods have no defaults): `BrokenReader`
+   (`techy/src/constructs/argument_parsers.rs:1960-1987`), `StuckRecoveryReader`
+   (`techy/src/constructs/nodes_parser.rs:2283-2323`), `FlakyReader`
+   (`techy/src/constructs/environment_parser.rs:1984-2037`). Rewrite each in **Stage 1**
+   with the same delegating-wrapper shape as 8a wherever it must answer position/span
+   queries (give each an `Arc<Source>` and/or an inner `StdTokenReader` as needed).
+   **Keep each test's intent** — read what each test asserts:
+   - `StuckRecoveryReader` must still produce a recovery whose `resume` equals the
+     current position, so the content loop's *equality* check (§1.7's advancement
+     contract) aborts;
+   - `FlakyReader` and `BrokenReader` keep their failure behavior unchanged.
+
+   Together with 8a and the two in-crate readers this makes **five** hand-written
+   `TokenReader` impls plus `StdTokenReader`/`TokenListReader` to carry the new methods.
 8. `TokenListReader` (test): the constructor
    (`techy/src/token/list_reader.rs:57`) goes from
    `pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L>` to
@@ -868,7 +918,11 @@ Gates (all stages): `cargo build`, `cargo test` (unit + integration + doctests),
   Breaking changes are *expected*: soft freeze; capture the report, do not "fix" them.
 
 Reviewer checklist (Stage 1): new items match §1.4–§1.8/§1.10 signatures verbatim (or
-the probe report's settled variants); contract clauses present; no behavior change in
+the probe report's settled variants); **all five hand-written `TokenReader` impls —
+`StdTokenReader`, `TokenListReader`, and the three test readers `BrokenReader` /
+`StuckRecoveryReader` / `FlakyReader` — plus `CommentEmittingReader` in
+`techy/tests/lang_features.rs` implement every new method, and each rewritten test
+reader still exercises the behavior its test asserts**; contract clauses present; no behavior change in
 scanning (`token/reader.rs` tests unchanged and green); lockstep harness green; the
 list reader's validation is exercised by at least one new negative test (a forged
 token panics); `SpecialsScanError` lift is unrecoverable; every changed `Lang` impl
@@ -900,9 +954,14 @@ the renamed parameter (`latexlike/invariants.rs:60`). Every `SourceSpan::new(&cx
 `verbatim_parser.rs`, `embellishments_parser.rs`, `tack_on_parser.rs`,
 `chars_group_parser.rs`, `latexlike/*.rs` (`environments.rs` conversion with
 `same_source`; `input.rs`; `driver.rs`; `recompose.rs`; test `RestOfLineParser`),
-`docs/*.md` (the §1.11 docs rows) and `techy/tests/lang_features.rs` (the only
-integration test that names any of these symbols — verified by grep at `9a3c0ac`).
-Then **delete**:
+`docs/*.md`: **everything that must compile or link** — intra-doc links to
+deleted/renamed items (`docs/construct-parsers.md:58-63` and any other), doctests that
+call the old API (`docs/construct-parsers.md:334-455`,
+`docs/ai-guide-custom-lang.md:274`; `docs/custom-lang.md:196`'s `impl Lang` block was
+already handled in Stage 1), and any prose sentence that names a deleted method — so
+`grep -rn "move_to_pos\|move_past\|\.pos()\|cx\.source" docs` is **empty** at the end
+of 2b. And `techy/tests/lang_features.rs` (the only integration test that names any of
+these symbols — verified by grep at `9a3c0ac`). Then **delete**:
 `TokenReader::{move_past, move_to(bool), move_to_pos, pos}`, `StdTokenReader::{pos,
 move_to_pos}`, `TokenListReader::move_to_pos`, `ParseContext::source` (and the
 `source` parameter of `ParseContext::new`), and rename `move_to_edge` → `move_to`;
@@ -1003,6 +1062,12 @@ delegating wrapper, §1.8); `docs/panics.md` Panics list; **facade exports** —
 `TokenKind` is already in the block). Drop nothing else — one canonical path per item.
 Rustdoc on opacity (§1.15).
 
+`docs/*.md` follow the same rule as in 2b, for this stage's symbols: everything that
+must compile or link is fixed **in the stage that breaks it** — intra-doc links,
+doctests and prose naming `token.kind`, `token.span`, `Token::new`, `Invocation<'a, 's`
+or `TokenKind`'s stored-token fields. The docs must compile and link at the end of 3a
+and again at the end of 3b.
+
 Gates: as Stage 1 (+ timing check repeated once at the end of 3b — expected
 unchanged).
 
@@ -1022,7 +1087,10 @@ Branch `bt-4-final` off `bt-3b-opaque`.
 
 - Full gates; `cargo docs` with `rm -rf target/doc` first; `scripts/check_semver.sh`
   report captured (breaking, expected).
-- `docs/*.md` prose pass: `construct-parsers.md` (reader section, "positions" FAQ,
+- `docs/*.md` **prose only** — descriptions, FAQ wording, the conceptual token/reader
+  paragraphs. No doctest and no intra-doc link can still be stale at this point (the
+  gates of Stages 1, 2b, 3a and 3b guarantee it), so Stage 4 does not depend on any of
+  them: `construct-parsers.md` (reader section, "positions" FAQ,
   the verbatim example), `ai-guide-custom-lang.md` (table rows on `cx.tokens`,
   the `\verb` idiom now `move_to(token, End)`), `custom-lang.md` and
   `concepts-overview.md`/`parsing-model.md` (token/reader description: opaque tokens,
@@ -1031,8 +1099,10 @@ Branch `bt-4-final` off `bt-3b-opaque`.
 - `TODO_Big.md`: add the deferred items from §10 if the file tracks such items.
 - `PROGRESS.md` final entry: what was merged, the timing numbers, the semver report,
   the list of §10 follow-ups.
-- Delete probe/timing scaffolding (`bettertokens-probe/`, `examples/bt_timing.rs`)
-  from every branch; leave `PROBE_REPORT.md`.
+- Delete `techy/examples/bt_timing.rs` (committed in 2b). `bettertokens-probe/` never
+  left the `bt-probe` branch (Stage 0 merges only `PROBE_REPORT.md`; the branch is
+  deleted after that merge), so it needs no deletion here — verify with
+  `git ls-files bettertokens-probe` on `bt-4-final` (empty). Leave `PROBE_REPORT.md`.
 
 Reviewer (Stage 4, Opus): end-to-end read of `git diff main..bt-4-final -- techy/src/token
 techy/src/constructs/mod.rs techy/src/engine/driver.rs docs/construct-parsers.md`
