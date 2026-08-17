@@ -66,6 +66,9 @@ it explains what the library is for and where each part of this guide fits.
 - [Integration: tooling, embedding, and bindings](crate::guide::integration)
   — building tools on top of techy and embedding it in other environments,
   including bindings to other programming languages.
+- [Serializing parses](crate::guide::serialize) — writing parse results,
+  trees, states, and diagnostics into a format-independent value model and
+  rebuilding them elsewhere: caching, inter-process exchange, snapshot tests.
 - [Migrating from pylatexenc](crate::guide::pylatexenc_migration) — the main
   concept mappings between the Python library
   [pylatexenc](https://pylatexenc.readthedocs.io/) and techy.

@@ -228,6 +228,9 @@ pub mod guide {
     #[doc = include_str!("../../docs/integration.md")]
     pub mod integration {}
 
+    #[doc = include_str!("../../docs/serialize.md")]
+    pub mod serialize {}
+
     #[doc = include_str!("../../docs/pylatexenc-migration.md")]
     pub mod pylatexenc_migration {}
 

@@ -5,11 +5,12 @@
 //! another process or program), inspected, and rebuilt on the other side with their
 //! sharing and identity intact.
 //!
-//! This page is the reference entry point of the module. It defines the vocabulary,
-//! walks the write path and the read path with one example each, and describes the
-//! streams, the capability traits, the engine, the standard tables, the optional
-//! `serde` rendering, the errors, and the stability of the serialized form; the index
-//! at the end links every public item. The preset's own support — the impls that make
+//! This page is the reference entry point of the module (the introductory guide
+//! chapter is [Serializing parses](crate::guide::serialize)). It defines the
+//! vocabulary, walks the write path and the read path with one example each, and
+//! describes the streams, the capability traits, the engine, the standard tables, the
+//! optional `serde` rendering, the errors, and the stability of the serialized form;
+//! the index at the end links every public item. The preset's own support — the impls that make
 //! [`Latexlike`](crate::latexlike::Latexlike) serializable and the helper that prepares
 //! a reading session for latexlike data — is [`latexlike::serialize`](crate::latexlike::serialize).
 //!

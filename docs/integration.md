@@ -124,5 +124,5 @@ identical content. Holding the source also keeps a
 attempts for free — its documentation calls this the span-stability
 rule.
 
-Read next: [Migrating from pylatexenc](crate::guide::pylatexenc_migration)
-— the concept mappings for readers arriving from the Python library.
+Read next: [Serializing parses](crate::guide::serialize) — writing parses
+out and reading them back: caching, inter-process exchange, snapshot tests.
