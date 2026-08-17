@@ -270,6 +270,26 @@ impl<O: SourceOrigin> SourceSpan<O> {
         SourceSpan::new(source, 0..source.content.len())
     }
 
+    /// The empty span at `pos` — the mirror of [`start_pos`](Self::start_pos) /
+    /// [`end_pos`](Self::end_pos), turning a position back into a span.
+    ///
+    /// This is the anchor a diagnostic uses when it reports about a *place* rather
+    /// than a stretch of text ("expected an argument here").
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use techy::source::{Source, SourcePos, SourceSpan};
+    ///
+    /// let source: Arc<Source> = Arc::new(Source::new("ab\ncd"));
+    /// let span = SourceSpan::at(&SourcePos::new(&source, 3));
+    /// assert!(span.is_empty());
+    /// assert_eq!(span.range(), 3..3);
+    /// assert_eq!(span.start_pos(), SourcePos::new(&source, 3));
+    /// ```
+    pub fn at(pos: &SourcePos<O>) -> Self {
+        SourceSpan { source: Arc::clone(&pos.source), start: pos.pos, end: pos.pos }
+    }
+
     /// The source this span points into.
     pub fn source(&self) -> &Arc<Source<O>> {
         &self.source
@@ -714,6 +734,21 @@ mod tests {
         assert!(matches!(chain[0], SourceProvenance::Synthesized { .. }));
         assert!(matches!(chain[1], SourceProvenance::Resolved { .. }));
         assert!(matches!(chain[2], SourceProvenance::Primary));
+    }
+
+    #[test]
+    fn source_span_at_a_position_is_the_empty_span_there() {
+        let source = arc_source("ab\ncd");
+        let pos = SourcePos::new(&source, 3);
+        let span = SourceSpan::at(&pos);
+
+        assert!(span.is_empty());
+        assert_eq!(span.range(), 3..3);
+        assert!(Arc::ptr_eq(span.source(), &source));
+        // Round trip: `at` is the inverse of `start_pos`/`end_pos`.
+        assert_eq!(span.start_pos(), pos);
+        assert_eq!(span.end_pos(), pos);
+        assert_eq!(SourceSpan::at(&SourceSpan::new(&source, 1..4).end_pos()).range(), 4..4);
     }
 
     #[test]
