@@ -1616,7 +1616,7 @@ which never reached `main`).
 - **Branch**: `bt-4-final` (off `main` at `8b25806`, which already contains Stages 1,
   2a, 2b, 3a and 3b).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-4-final`.
-- **Status**: reviewed (READY) — merging. Date: 2026-08-18.
+- **Status**: reviewed and merged (`main` a729f7f). Date: 2026-08-18.
 - **Commits** (`git log --oneline main..bt-4-final`, newest first). Two commits are
   not in the list below because they were written after it: this PROGRESS/PLAN update
   itself ("bettertokens: Stage 4 — the final sweep, its numbers, and the plan's
@@ -1930,3 +1930,164 @@ expected (20 lints, listed above), parse throughput about +5 % against the pre-p
 baseline in a release build. **What remains is Stage 5 (§7)**: the ARCHITECTURE and
 DESIGN_RATIONALE entries, on a branch off `main` taken *after* this stage merges, with
 the user's explicit approval of the drafted text.
+
+---
+
+## Stage 5 — architecture and rationale documentation (§7)
+
+- **Branch**: `bt-5-docs` (off `main` at `a729f7f`, which contains every code stage).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-5-docs`.
+- **Status**: implemented — awaiting review. Date: 2026-08-18.
+- **Commits** (`git log --oneline main..bt-5-docs`, newest first; the PROGRESS update
+  itself follows them):
+
+```
+32a14a1 ARCHITECTURE: the token layer as it now stands
+0e9b3e9 DESIGN_RATIONALE: the entries that named the retired token API say the current truth
+de59bef DESIGN_RATIONALE: the six decisions behind the token-layer redesign
+```
+
+- **Files touched**: `dev-docs/ARCHITECTURE.md`, `dev-docs/DESIGN_RATIONALE.md`, this
+  file. No code, no `docs/*.md`, no `CLAUDE.md`.
+
+### New DESIGN_RATIONALE entries (§7 items 1–6)
+
+| Label | Title | One line |
+|---|---|---|
+| `[§dd-dr:token-opacity]` | Tokens are opaque; only their reader interprets them | `Lang::Token` behind the `Token<L>` marker trait; the reader answers what a token is (the `TokenKind` view, spellings and no spans) and where it is; `StdToken` stores ranges and `Arc`s; the view borrows the token, never the reader; reader-less parties get token + reader; `CallableQuery` sees no token |
+| `[§dd-dr:stream-position]` | Stream positions are opaque and cannot be forged | `Lang::StreamPosition`, issued only by the reader, no constructor and no arithmetic; the five `TokenEdge`s incl. `ContentStart`; `move_to`/`move_to_position` as the only moves; equality-only comparison; the list reader rejects what it never issued |
+| `[§dd-dr:no-context-source]` | `ParseContext` carries no source handle | spans come from the reader (`here`, `source_span_within`, the token span answers); node data converts through `node_text_content` after a `same_source` check; `stage_invocation`'s three-case end rule |
+| `[§dd-dr:reader-context-purity]` | The token reader sees only the parsing state | `peek` takes `&Arc<ParsingState<L>>` and nothing else; anything more is taken at construction; an expanding reader owns its own depth limit and leans on source provenance |
+| `[§dd-dr:specials-scan-errors]` | Specials scanning reports errors, never recoveries | the hook works on a `&str` and can name neither a token nor a position; the reader lifts a `SpecialsScanError` into an unrecoverable `TokenError`; the name is the matched text; a bad match end is an implementation error, not a panic |
+| `[§dd-dr:token-reader-hook]` | `make_token_reader` is where a custom tokenizer is installed | on `ParseDriver`, the one item with no default (a default body cannot type-check for a generic `L`); both construction sites route through it; the standard body is one line |
+
+Every one of the six is referenced from ARCHITECTURE (gate below).
+
+### Amended DESIGN_RATIONALE entries
+
+| Label | What changed |
+|---|---|
+| `[§dd-dr:source-cursor-retired]` | the bidirectional-repositioning argument now names `move_to`/`move_to_position` instead of `move_to_pos`/`resume_pos` |
+| `[§dd-dr:token-model]` | the "final model" line describes the current kind taxonomy reported through the reader's view (no stored spans, no lifetime); the specials match carries the resolution with the name as matched text; post-space is a reader answer between two edges; `TokenError<L>`; the two rejected-alternative lines that named `move_past`/the skip flag |
+| `[§dd-dr:zero-copy-tokens]` | rewritten for `StdToken` (ranges + `Arc`s, no strings, no lifetime); the "revisit if" is answered by opacity; title dropped "ephemeral lifetime" |
+| `[§dd-dr:token-reader]` | the protocol paragraph: speculative `peek` plus edge-named repositioning replaces the two-flag `move_past`/`move_to`; `peek` takes `&Arc<ParsingState<L>>` and nothing beyond the state; idempotence is per *stream* position |
+| `[§dd-dr:token-contract-hardening]` | item 1 rewritten around the `ContentStart` edge (the comment sub-spans are reader answers); item 2's resume wording; **item 4 records the conscious reversal** (2026-08-17: the required positional move is `move_to_position(&L::StreamPosition)`, not `move_to_pos(usize)` — the capability stays required); item 5's doctrine sentence no longer names `ParseContext::source` |
+| `[§dd-dr:token-list-reader-demoted]` | now also records the forged-token/position guard (rejects tokens and positions it never issued) as the second half of the agreement harness |
+| `[§dd-dr:parse-context]` | **not in §7's table** — it described the removed `source: Arc<Source>` field; rewritten to the four inputs and pointed at `[§dd-dr:no-context-source]` |
+| `[§dd-dr:invocation-parser-factory]` | the `Invocation<'a, L>` spelling; the composition finding's second half (a stored token *is* handed back to the reader now — `move_to(self.invocation.token, TokenEdge::End)`) |
+| `[§dd-dr:stop-conditions]` | the predicate takes `(&L::Token, &dyn TokenReader)`; `StopCause`'s two token causes carry `after`; consume is the `EndPastPostSpace` edge, the unconsumed park is `Start` |
+| `[§dd-dr:panic-policy]` | rule 3(b): five value functions plus the seven span-taking `StdToken` constructors (the eighth takes no span); `Token::new` is gone |
+| `[§dd-dr:tolerant-parsing]` | `TokenError<L>` carries a source-qualified `SourceSpan`, `TokenRecovery` an explicit `resume` stream position |
+| `[§dd-dr:err-means-abort]` | the content loop repositions to the recovery's resume position |
+| `[§dd-dr:resume-pos-contract]` | retitled (the label is unchanged); the whole entry re-spelled for `TokenRecovery::resume` + `move_to_position`, the check is equality, and readers are now the only party that can violate it |
+| `[§dd-dr:token-diagnostics]` | **not in §7's table** — it claimed the specials scan participates in the recovery protocol; corrected, with a pointer to the new entry |
+| `[§dd-dr:specs]` topic, the scope-stack fold paragraph | **not in §7's table** — provider-side `scan_specials` returns `Result<Option<SpecialsMatch<L>>, SpecialsScanError>`, not `TokenResult` |
+| `[§dd-dr:parse-driver]` | **not in §7's table** — "defaulted methods only" and "every trait item is defaulted" corrected to "all but one"; the `ParseContext` field list drops `source` |
+| `[§dd-dr:rejected-patterns]` | the uniform-`post_space` bullet no longer says "an accessor serves `move_past`" (this is the line §7's table attributed to `[§dd-dr:preset-driver-pillars]`, whose `####` heading merely precedes it) |
+| `[§dd-dr:preset-driver-pillars]` | **title only** — the banned metaphor is out of the heading ("public behavior functions + the generic `LatexlikeDriver<LLL>` assembly"); the label is untouched. See open question 1 |
+| `[§dd-dr:superseded-names]` | a new bullet with the redesign's superseded names (PLAN §1.14): the `Token<'s, L>` struct and `Token::new`, span-carrying `TokenKind` fields, `TokenKindView` and `move_to_edge` as interim names, `pos`/`move_to_pos`/`move_past`/two-flag `move_to`, `TokenRecovery::resume_pos`, `ParseContext::source`, `end_pos`, `SpecialsMatch<'s, L>`/`::name`, the three `'s`-carrying type spellings, `CallableQuery::token`/`with_token` and the view-only successors, `Invocation::kind`, the bare-view hook signatures, the reader-less `resolve_command`, the old paragraph-break hook and `probe_token`'s source parameter |
+
+### ARCHITECTURE sections touched
+
+| Section | Change |
+|---|---|
+| `[§dd-arch:token]` | rewritten: a token is opaque and reader-interpreted; the reader's three question families (what a token is — the view; where it is — spans over the five edges; where the stream stands — positions); `StdToken`/`StdStreamPosition`; the trait's contract clauses in one paragraph; the custom-reader-over-standard-tokens pattern and the two-reader agreement harness; `make_token_reader` as the installation point; the four new labels added to the decisions list |
+| `[§dd-arch:constructs]` | `ParseContext` without a source handle and how a parser obtains spans and positions; the content loop reads `tokens.token_kind(&tok)` and `resolve_command(state, &tok, tokens)`; a new bullet for the parse outputs that carry stream positions (`StopCause::after`, `EnvironmentBody::end`, `NameGroup`, `ArgumentNoise::start`) and one for `Invocation` = resolution result + token, with the hooks that receive token + reader; `[§dd-dr:no-context-source]` added to the decisions list |
+| `[§dd-arch:engine]` | `make_token_reader` in the driver's inventory as the one undefaulted item; `probe_token` named; `resolve_command` receives the token and its reader; "every item is defaulted" corrected; `[§dd-dr:token-reader-hook]` added to the decisions list |
+| `[§dd-arch:errors]` | `TokenError` carries a source-qualified location; `TokenRecovery::resume` is a stream position that must move the reader |
+| `[§dd-arch:arch]` | the S1 line of the layer diagram lists the current token items |
+| `[§dd-arch:naming]` | untouched — no new naming principle emerged (§7 expected none) |
+
+### Gate results (verbatim)
+
+```
+$ for l in token-opacity stream-position no-context-source reader-context-purity \
+      specials-scan-errors token-reader-hook; do printf "%s: " "$l"; \
+      git grep -c "§dd-dr:$l\]" dev-docs/ARCHITECTURE.md; done
+token-opacity: dev-docs/ARCHITECTURE.md:4
+stream-position: dev-docs/ARCHITECTURE.md:3
+no-context-source: dev-docs/ARCHITECTURE.md:2
+reader-context-purity: dev-docs/ARCHITECTURE.md:2
+specials-scan-errors: dev-docs/ARCHITECTURE.md:2
+token-reader-hook: dev-docs/ARCHITECTURE.md:3
+
+$ git grep -n 'bettertokens\|Stage [0-9]\|bt-[0-9]' dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+(no output; exit 1)
+
+$ git grep -n 'move_to_pos\b\|resume_pos\|Token::new\|Token<.s\|move_past\|cx\.source\b\|token_kind: Option\|with_token\b' \
+      dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+dev-docs/DESIGN_RATIONALE.md:936:   as a conscious reversal):* the required method was `move_to_pos(pos: usize)`, taking a
+dev-docs/DESIGN_RATIONALE.md:6335:  [§dd-dr:no-context-source]): `Token<'s, L>` as a struct with a lifetime — the token
+dev-docs/DESIGN_RATIONALE.md:6337:  **trait** on `Lang::Token`; with it `Token::new` — one constructor per kind
+dev-docs/DESIGN_RATIONALE.md:6342:  (the view *is* `TokenKind`); `TokenReader::{pos, move_to_pos, move_past,
+dev-docs/DESIGN_RATIONALE.md:6343:  move_to(&token, bool)}` and `StdTokenReader::{pos, move_to_pos}` — the two moves are
+dev-docs/DESIGN_RATIONALE.md:6345:  `move_to_edge`; `TokenRecovery::resume_pos` — the field is `resume`, a stream
+dev-docs/DESIGN_RATIONALE.md:6351:  `CallableQuery::with_token` (a token handed to a party with no reader to read it with)
+      (line 936 = the reversal note in [§dd-dr:token-contract-hardening] item 4;
+       6335-6351 = the [§dd-dr:superseded-names] register — nothing else)
+
+$ git diff main..bt-5-docs | grep "^+" | grep -i -n \
+      "\bdoor\b\|funnel\|\bmint\|trigger token\|vocabulary\|\bfacts\b\|footgun\|heart of\|on-ramp\|pillar"
+553:+#### The preset driver: public behavior functions + the generic `LatexlikeDriver<LLL>` assembly [§dd-dr:preset-driver-pillars]
+      (the sole hit is the immutable label in a retitled heading, as §7 allows)
+
+$ grep -c '^```' dev-docs/ARCHITECTURE.md dev-docs/DESIGN_RATIONALE.md
+dev-docs/ARCHITECTURE.md:4
+dev-docs/DESIGN_RATIONALE.md:4
+      (both even; and a scripted check finds 183 `####` entries, 183 distinct labels,
+       0 without a `Status:` line)
+
+$ git diff --stat main..bt-5-docs
+ dev-docs/ARCHITECTURE.md     | 165 ++++++++++---
+ dev-docs/DESIGN_RATIONALE.md | 562 ++++++++++++++++++++++++++++++++-----------
+ 2 files changed, 553 insertions(+), 174 deletions(-)
+
+$ cargo build
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.26s
+```
+
+Two notes on the greps. `cx\.source` without a word boundary also matches the *current*
+`cx.source_span_within` (two hits in ARCHITECTURE), and `move_to_pos` without one matches
+the current `move_to_position` (five hits across both files); the boundaried pattern above
+is the one that separates stale names from live ones.
+
+### Decisions taken under §1.16
+
+None: this stage adds no API and takes no design decision. Where a document sentence and
+PLAN §1 disagreed, the merged code decided — see the open questions.
+
+### Deviations from §7
+
+1. **The entry list grew by five amendments §7's table does not name**, each because the
+   entry stated something the merged code makes false: `[§dd-dr:parse-context]` (the
+   removed `source` field), `[§dd-dr:token-diagnostics]` (the scan "participates in the
+   recovery protocol"), the scope-stack specials fold inside `[§dd-dr:specs]`
+   (provider-side `scan_specials` returning `TokenResult`), `[§dd-dr:parse-driver]`
+   ("defaulted methods only", and `source` in the context field list), and
+   `[§dd-dr:rejected-patterns]` (the `move_past` accessor line — which is the line §7's
+   table attributed to `[§dd-dr:preset-driver-pillars]`; the mapping picked the nearest
+   preceding `####`, but the text sits under the `##`-level rejected-patterns list).
+2. **§7 item 6's proposed label was `[§dd-dr:token-reader-door]`**; the entry carries
+   `[§dd-dr:token-reader-hook]`, since "door" is a banned word and the label is an
+   address that cannot be fixed later.
+3. **§7 item 2 says "the four `TokenEdge`s"** — there are five since ruling O-3; the
+   entry says five.
+
+### Open questions
+
+1. **`[§dd-dr:preset-driver-pillars]`: title fixed, body not.** The heading no longer
+   says "pillar", but the entry's body uses the word about fifteen times, and so do
+   `techy/src/latexlike/driver.rs`'s section comments and four test names. Renaming the
+   term across documents and code is a naming decision for the user, not a documentation
+   stage; the title change alone leaves the entry internally inconsistent until then. If
+   the user prefers, the title can go back and the whole rename can be scheduled with the
+   documentation walk-through in `TODO_Big.md`.
+2. **Where PLAN §1 and the merged code disagreed, the documents describe the code.**
+   The three places: the number of token edges (five, §1.17 ruling O-3 — §7 item 2 still
+   said four); `Invocation` has no `kind` field and the resolve chain takes the token and
+   its reader (rulings O-5 and O-1b — §7 item 1's "cached view" and probe P2's finding are
+   recorded as *rejected*, which is what they became); and `make_token_reader` is a
+   required method (ruling O-4 — §7 item 6 already says so).
+3. **ARCHITECTURE is 78 KB**, against the ~50 KB target its own maintenance section
+   states; this stage added about 4 KB, almost all of it the rewritten token section. The
+   standing simplification pass in `TODO_Big.md` owns the reduction.
