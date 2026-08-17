@@ -1,4 +1,4 @@
-//! Tests of the preset's serialization (M5): real latexlike parses through the tree
+//! Tests of the preset's serialization: real latexlike parses through the tree
 //! round-trip harness over a corpus (macros, environments, minilatex lists with the
 //! body-pushed item package, specials, math, comments, verbatim, paragraph breaks in
 //! both styles, `\input` across sources), the identity and self-contained spec forms,
@@ -876,7 +876,7 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
     assert!(error.to_string().contains("not a Package"), "{error}");
 }
 
-// --- parse results with their diagnostics (M6) ---------------------------------------------
+// --- parse results with their diagnostics --------------------------------------------------
 
 /// The segment as the reading side receives it: through JSON under the `serde`
 /// feature, as is otherwise.

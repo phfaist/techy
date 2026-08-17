@@ -1,4 +1,4 @@
-//! Tests of the tree driver (M4): round-trips of hand-built and parsed trees covering
+//! Tests of the tree driver: round-trips of hand-built and parsed trees covering
 //! every node kind and region shape, the argument-spec index rule and its
 //! override, multi-tree sharing, the fresh layout tag, a hostile-input battery, and —
 //! under the `serde` feature — a pinned JSON snapshot.

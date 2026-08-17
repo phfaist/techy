@@ -33,8 +33,8 @@ fn index(table: u32, index: u32) -> SerialValue {
     SerialValue::Index { table: TableId::new(table), index }
 }
 
-/// A stand-in for a typed table position: what M2's index newtypes will do in their
-/// serde impls — route through the sentinel helpers.
+/// A stand-in for a typed table position: what the `serial_index!` newtypes do in
+/// their serde impls — route through the sentinel helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TestIndex {
     table: TableId,

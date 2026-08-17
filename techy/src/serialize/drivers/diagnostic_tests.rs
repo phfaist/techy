@@ -1,4 +1,4 @@
-//! Tests of the diagnostic and parse-result drivers (M6): diagnostic round trips of
+//! Tests of the diagnostic and parse-result drivers: diagnostic round trips of
 //! every severity with a real derived condition and traceback frames, the
 //! deserialized condition's contract (identifier, projection, message; no downcast to
 //! the original type), sources shared between a tree and its diagnostics, parse-result
