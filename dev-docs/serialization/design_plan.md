@@ -359,7 +359,12 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   tags — never wire material; it feeds `serialize_object` (identity data +
   `cx.intern_provider`). Upgrade failure → error or the implementer's recipe fallback.
   Records the constructing provider (correct even when the Arc is reachable via
-  others).
+  others). **Refined at M5 (2026-08-17, supervisor proposal, user informed):** the
+  stamp is `SpecProvenance { provider: Weak<dyn SpecsProvider<L>>, callable_type,
+  key }` — the address INSIDE the provider (registered name, or trigger for specials)
+  travels with the stamp because a spec does not know its own name(s); a spec Arc
+  registered under several names carries the first address (any address resolves to
+  the same instance).
 - **D20 — Owner-decided granularity; the standard latexlike split.** Packages emit
   identity payloads (`{provider: ProviderIndex, ct, name}`-shaped, via provenance) and
   identity-resolve on read against the caller's environment. `Scope` (dynamic
@@ -367,7 +372,21 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   entries. `\newcommand` specs serialize constructor recipes (`{args, opt_default,
   body}`), NOT internals: **no serialization on `ArgumentParser` or
   `EnvironmentBehavior`** — factories rebuild specs through their constructors, which
-  re-create parsers/behaviors internally.
+  re-create parsers/behaviors internally. **Scoping note (M5, 2026-08-17):**
+  `\newcommand` does not exist in the crate yet (acceptance.rs: deferred), and no
+  shipped spec type is generically recipe-able (argument parsers are opaque
+  behaviors; nothing records argument codes) — so at M5 package specs serialize by
+  IDENTITY only, recipes exist only for the self-contained types (`ParagraphBreakSpec`,
+  `EndSpec`, `BeginSpec`, `InputMacroSpec`), an unstamped instance of a non-recipe
+  type is a clear write error, `Scope`/`FallbackProvider` full-dump is implemented
+  and tested with those, and the `\newcommand` recipe type is the obligation of
+  whoever implements `\newcommand` (D20 stays the design). The reading environment
+  for provider identity is a scaffolding value type (`KnownProviders<L>`, name
+  pending user confirmation) stored in the session's user data, which becomes a
+  small type-keyed map (`user_data::<T>()` looks up by type) so consumers keep
+  their own data alongside; missing providers can be supplied by memoized recipes
+  (latexlike registers its builtin/minilatex packages that way, since
+  `builtin_package()` mints a fresh Arc per call).
 - **D21 — `ParsedArgument::spec`: index rule + spec-level hook pair.** Default: the
   i-th parsed argument's `ArgumentSpec` Arc must be pointer-equal to
   `spec.arguments()[i]`; the wire stores only the index; revive =
@@ -541,7 +560,14 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
   `SegmentTable::id` — reviewer-noted tension, 2026-08-16).
 - **Q5 (M5) — Package-builder API shape** for provenance stamping (`new_cyclic`
   threading; whether core `Package` construction changes or only the latexlike
-  builder).
+  builder). **PROPOSED (supervisor, 2026-08-17; M5 implements; user may amend):**
+  additive core builder `Package::new_shared(name, |pkg| …) -> Arc<Package<L>>`
+  (`Arc::new_cyclic`; the package keeps its own `Weak<dyn SpecsProvider<L>>` and
+  hands out stamps via `provenance_for(callable_type, key)`); concrete spec types
+  gain `with_provenance(SpecProvenance)` builders; latexlike's `define_macro`/
+  `define_environment` helpers and its packages stamp automatically; `Package::get_specials`
+  added for read-side resolution; packages built the old way keep parsing but their
+  specs are not serializable (documented).
 - **Q6 (M2) — Segment/stream container details**: version placement (first segment
   only?), JSONL conventions, end-of-stream marker or not, `take_segment`/
   `push_segment` final names.
