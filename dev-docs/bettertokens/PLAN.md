@@ -531,7 +531,7 @@ Public/`pub(crate)` types that carried bare positions or spans:
 | `GroupParser` | `open_span: Span` | `open: L::Token` |
 | `RawContentEnd` and similar internal helpers (`verbatim_parser.rs`) | `usize` positions | `L::StreamPosition` / `SourceSpan` (implementer's choice, same principle) |
 | `stage_pre_space(cx, nodes, pre_space: Span)` (`argument_parsers.rs`) | | `stage_pre_space(cx, nodes, tok: &L::Token)` — stages `source_span_between(tok, StartBeforePreSpace, Start)` when non-empty |
-| `stage(cx, kind, span: Span)` (`pub(super)`) | | `stage(cx, kind, span: SourceSpan)` |
+| `stage(cx, kind, span: Span)` — **two** functions of that shape: the free `pub(super) fn stage` (`argument_parsers.rs:211`) and the private `NodesParser::stage` (`nodes_parser.rs:605`); both do `SourceSpan::new(&cx.source, span)` | | `stage(cx, kind, span: SourceSpan)` in both |
 
 **Crate facts that changed after this plan was drafted** (commits `1c59e66..9a3c0ac`,
 almost all of them the new `techy::serialize` module) — an implementer writing new code
@@ -599,10 +599,13 @@ old method and renames `move_to_edge` → `move_to` in one commit (afterwards
 | `engine/language.rs:184,245,269` | reader construction, skip, anchor | same |
 | `latexlike/invocation_syntax.rs:779-784` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
 | `latexlike/*.rs` (environments, input, driver, recompose) | `SourceSpan::new(&cx.source, ..)`, `token.kind` | reader queries / view |
+| `scopes/mod.rs:1607-1620` `ErrorCallableSpec::make_invocation_parser`, `:1624-1654` `ErrorInvocationParser` | **a real (non-test) construct parser the plan never named**: `Invocation<'a, 's, L>`, `token.span`, `SourceSpan::new(&cx.source, token.span)` ×2, `NodeKind::chars(token.span)`, `cx.staging_error(error, token.span)` | Stage 2a/2b: `cx.tokens.source_span_of(self.invocation.token)` for both spans, `NodeKind::chars(span.span())`, `staging_error(error, span)`; Stage 3b: `Invocation<'a, L>`, `ErrorInvocationParser<'a, L>` |
+| `scopes/mod.rs:104-115` `CallableQuery<'a, 's, L>` | public field `token: Option<&'a Token<'s, L>>` | `CallableQuery<'a, L>` with `token: Option<&'a L::Token>` (Stage 3b). **Open question — §1.16 does not cover it**: a `SpecsProvider` has no reader, so an opaque token is uninterpretable to it. Default if nobody rules otherwise: keep the field, and document that interpreting it needs a reader over the same content |
 | `latexlike/invariants.rs:60` | doc comment: "a takeover's `stage_invocation(.., end_pos: Some)`" | reword to `end: Some(&position)` (Stage 2a, with the rename) |
 | `spec/callable.rs:162-171` `CallableSpec::make_invocation_parser<'a, 's>` | `invocation: Invocation<'a, 's, L>` | `make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>, ..)` (§1.10) — Stage 3b |
 | `latexlike/spec.rs:132-134` | `make_invocation_parser<'a, 's>(.., Invocation<'a, 's, LLL>)` | same — Stage 3b |
 | `constructs/child_state.rs:106` | `&Invocation<'_, '_, L>` in the compute-closure type | `&Invocation<'_, L>` — Stage 3b |
+| every type whose `'s` comes only from a token or an `Invocation` | `ArgumentNoise<'s, L>` (`argument_parsers.rs:126`), `MintedGroupMatch<'s, L>` (`:710`), `StdInvocationParser<'a, 's, L>` (`invocation_parser.rs:164`), `CallableQuery<'a, 's, L>` (`scopes/mod.rs:104`), `ErrorInvocationParser<'a, 's, L>` (`scopes/mod.rs:1624`), `EnvironmentInvocationParser<'a, 's, LLL>` (`latexlike/environments.rs:766`), `OrphanEndParser<'a, 's, LLL>` (`:990`), `InputInvocationParser<'a, 's, LLL>` (`latexlike/input.rs:291`), `AfterEffectInvocationParser<'a, 's, LLL>` (`latexlike/spec.rs:157`), and the test parsers `DefParser<'a, 's>` (`argument_parsers.rs:2143`, `nodes_parser.rs:2995`), `TakeParser<'a, 's>` (`nodes_parser.rs:3079`), `EnvironmentInvocationParser<'a, 's>` (`environment_parser.rs:944`), `RawBlockParser<'a, 's>` (`:1091`), `RestOfLineParser<'a, 's>` / `BadEndParser<'a, 's>` (`latexlike/invocation_syntax.rs:764, 824`) | **Stage 3b drops the `'s` from all of them.** `ParseContext<'a, 's, L>` is the one exception: its `'s` comes from `TokenReader<'s, L>` and stays |
 | `token/mod.rs:50-67` (internal module facade) | `pub use` of `Token`, `TokenKind`, `TokenError`, `TokenRecovery`, `SpecialsMatch`, `StdTokenReader`, `TokenReader` | add `TokenEdge`, `StdStreamPosition` (Stage 1), `SpecialsScanError` (Stage 1), `StdToken` + the `Token` **trait** (Stage 3b). `techy::core` re-exports through this module, so it is edited first |
 | `core/mod.rs:60-66` (public facade) | the single `pub use crate::token::{ … };` block | add `StdStreamPosition`, `TokenEdge`, `SpecialsScanError` (Stage 1); add `StdToken` and let the existing `Token` entry export the **trait** (Stage 3b). `TokenKindView` is never exported. `Span`/`SourceSpan` are **not** re-exported here — they live on `techy::source` (`source/mod.rs:69-72`) |
 | `core/constructs.rs:54-70`, `core/specs.rs:40-52` (public facades) | re-export `ArgumentNoise`, `EnvironmentBody`, `EnvironmentTerminatorSyntaxData`, `FromInvocation`, `GroupParser`, `Invocation`, `NameGroup`, `NodesOutcome`, `StopCause`, `stage_pre_space`, `read_rigid_name_group`, `resolve_command_in_scopes` | **no edit**: these are name-only re-exports and no name changes. Stated so an implementer does not go looking |
@@ -816,6 +819,14 @@ Steps:
 6. `engine/driver.rs`: `make_token_reader` with the default; route
    `Language::parse_source` and `parse_attached_source` through it.
 7. `source/source.rs`: `SourceSpan::at(&SourcePos)`.
+8a. `techy/tests/lang_features.rs:466-490` `CommentEmittingReader` — a **hand-written
+   `TokenReader` impl** (currently exactly `peek`, `move_past`, `move_to(bool)`,
+   `move_to_pos`, `pos`). The new trait methods have no defaults, so this impl stops
+   compiling the moment step 1 lands: it must be rewritten in **Stage 1**, not deferred
+   to 3b. It also holds **no source** today (the `Arc<Source>` was supplied to
+   `ParseContext::new`), so it must be given one to answer `source_span_between` /
+   `source_position_at`. §1.8's "delegating wrapper over an inner `StdTokenReader`" is
+   the shape; 3b then only swaps `Token::new` for the `StdToken` constructors.
 8. `TokenListReader` (test): the constructor
    (`techy/src/token/list_reader.rs:57`) goes from
    `pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L>` to
