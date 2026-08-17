@@ -556,11 +556,9 @@ mod plain_chars {
         let mut reader = CommentEmittingReader { inner: StdTokenReader::new(&source) };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::new(ParsingState::<PlainCharsLang>::lang_initial().expect("seed state")),
             &mut session,
-            &driver,
-        );
+            &driver);
 
         let err = NodesParser::new(StopSpec::none()).parse(&mut cx).unwrap_err();
         assert_eq!(err.identifier(), ImplementationError::IDENTIFIER);

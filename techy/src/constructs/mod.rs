@@ -87,7 +87,7 @@ use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
 use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity};
-use crate::source::{Source, SourceSpan, TextContent};
+use crate::source::{SourceSpan, TextContent};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
     BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
@@ -151,8 +151,9 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 /// guarded on `error.frames().is_empty()` — an error already carrying frames keeps
 /// them.
 ///
-/// **Spans come from the token reader.** A construct parser does not pair a byte
-/// range with a source itself: every [`SourceSpan`] it stages or reports is obtained
+/// **Spans come from the token reader** — the context holds no source handle. A
+/// construct parser does not pair a byte range with a source itself: every
+/// [`SourceSpan`] it stages or reports is obtained
 /// from [`tokens`](ParseContext::tokens) — one token's span
 /// ([`TokenReader::source_span_of`](crate::token::TokenReader::source_span_of),
 /// [`source_span_between`](crate::token::TokenReader::source_span_between)), the span
@@ -162,14 +163,9 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 /// detected between tokens). Only the reader knows which source it is serving tokens
 /// from, so only the reader can answer where a token is.
 pub struct ParseContext<'a, 's, L: Lang> {
-    /// The token stream.
+    /// The token stream — and the answer to every "where?" question: what a token
+    /// is worth as a span, and where the stream stands.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
-    /// The source this context's parse started from. Not a parsing input: construct
-    /// parsers make no forward parsing decision from raw content — even a verbatim
-    /// parser reads `Char` tokens under a features-disabled state — and they do not
-    /// pair spans with it either (spans come from [`tokens`](ParseContext::tokens);
-    /// see the type's documentation).
-    pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the
     /// state-threading contract in [`core::constructs`](crate::core::constructs)).
     pub state: Arc<ParsingState<L>>,
@@ -198,18 +194,17 @@ pub struct ParseContext<'a, 's, L: Lang> {
 }
 
 impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
-    /// Bundle the five parse inputs into a context. Prefer this over a struct literal
+    /// Bundle the four parse inputs into a context. Prefer this over a struct literal
     /// (the fields stay public for access): the context is the type's stated "one place
     /// to grow" (depth limits, cancellation), and construction through `new` keeps
     /// future fields from breaking every embedder.
     pub fn new(
         tokens: &'a mut dyn TokenReader<'s, L>,
-        source: Arc<Source<L::SourceOrigin>>,
         state: Arc<ParsingState<L>>,
         session: &'a mut ParserSession<L>,
         driver: &'a L::Driver,
     ) -> ParseContext<'a, 's, L> {
-        ParseContext { tokens, source, state, session, driver }
+        ParseContext { tokens, state, session, driver }
     }
 
     /// The empty [`SourceSpan`] at the reader's current stream position — the
@@ -1288,7 +1283,7 @@ impl<L: Lang> FromInvocation<L> for () {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::Span;
+    use crate::source::{Source, Span};
     use crate::engine::StdParseDriver;
     use crate::error::Recovery;
     use crate::scopes::ScopeStack;
@@ -1399,11 +1394,9 @@ mod tests {
         let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             state(),
             &mut session,
-            &driver,
-        );
+            &driver);
         f(&mut cx, &source)
     }
 
@@ -1641,11 +1634,9 @@ mod tests {
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
 
         // `state: None`: the sub-parse runs under the current state, scoped (one
         // enclosing-state stack entry), and the outer state is restored after.
@@ -1676,7 +1667,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx =
-            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+            ParseContext::new(&mut reader, st, &mut session, &driver);
 
         let frame = Frame {
             title: FrameTitle::Static("construct frame"),
@@ -1699,7 +1690,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx =
-            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+            ParseContext::new(&mut reader, st, &mut session, &driver);
 
         let frame = Frame {
             title: FrameTitle::Static("construct frame"),

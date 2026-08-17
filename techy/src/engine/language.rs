@@ -62,7 +62,6 @@ use super::{ParseResult, ParserSession};
 /// let mut reader = language.driver().make_token_reader(&source);
 /// let mut cx = ParseContext::new(
 ///     &mut *reader,
-///     source,
 ///     Arc::clone(language.initial_state()),
 ///     &mut session,
 ///     language.driver(),
@@ -198,11 +197,9 @@ impl<L: Lang> Language<L> {
         self.driver.observe_parse_start(&source, &seed, &mut session.diagnostics);
         let mut cx = ParseContext::new(
             &mut *reader,
-            Arc::clone(&source),
             Arc::clone(&seed),
             &mut session,
-            &self.driver,
-        );
+            &self.driver);
         loop {
             // The root descent routes through the driver's factory like every other
             // descent site (Phase 7.2 uniform-routing contract). A pass-through delta

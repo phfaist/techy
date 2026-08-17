@@ -154,11 +154,9 @@ impl<L: Lang> ParseContext<'_, '_, L> {
         let mut reader = self.driver.make_token_reader(&source);
         let mut inner = ParseContext::new(
             &mut *reader,
-            Arc::clone(&source),
             state,
             &mut *self.session,
-            self.driver,
-        );
+            self.driver);
 
         inner.with_frame(frame, |cx| {
             let mut nodes: Vec<BuildId> = Vec::new();
@@ -425,7 +423,7 @@ mod tests {
         let state = Arc::new(ParsingState::<DocLang>::lang_initial().expect("seed state"));
         let result = {
             let mut cx =
-                ParseContext::new(&mut reader, Arc::clone(&source), state, &mut session, driver);
+                ParseContext::new(&mut reader, state, &mut session, driver);
             // The test's own source: a construct parser gets its spans from the
             // reader, so the fixtures build theirs from the binding here.
             f(&mut cx, &source)
@@ -775,7 +773,7 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<PlainLang> = ParserSession::new();
         let state = Arc::new(ParsingState::<PlainLang>::lang_initial().expect("seed state"));
-        let mut cx = ParseContext::new(&mut reader, source.clone(), state, &mut session, &driver);
+        let mut cx = ParseContext::new(&mut reader, state, &mut session, &driver);
         let at = SourceSpan::entire(&source);
         let mut parser = ParseDriver::<PlainLang>::make_nodes_parser(
             &driver,

@@ -1263,7 +1263,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = ArgDriver { recovery };
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none())
             .with_child_states(ChildStateSpec::inherit());
         let (outcome, delta) = parser.parse(&mut cx)?;
@@ -1884,11 +1884,9 @@ mod tests {
         let driver = ArgDriver { recovery: Recovery::Tolerant };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser =
             NodesParser::new(StopSpec::none()).with_child_states(ChildStateSpec::inherit());
         let (outcome, _delta) = parser.parse(&mut cx).expect("tolerant parse");
@@ -2049,11 +2047,9 @@ mod tests {
         let driver = ArgDriver { recovery: Recovery::Tolerant };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
 
         let spec = brace_arg();
         let err = spec
@@ -2461,11 +2457,9 @@ mod tests {
             let mut reader = StdTokenReader::new(&source);
             let mut cx = ParseContext::new(
                 &mut reader,
-                Arc::clone(&source),
                 Arc::clone(&st),
                 &mut other_session,
-                &driver,
-            );
+                &driver);
             cx.stage_node(
                 NodeKind::chars(Span::new(0, 1)),
                 SourceSpan::new(&source, 0..1),
@@ -2480,11 +2474,9 @@ mod tests {
         let mut reader = StdTokenReader::new(&source);
         let cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         assert_eq!(staged_child_count(&cx, foreign), 0);
     }
 }

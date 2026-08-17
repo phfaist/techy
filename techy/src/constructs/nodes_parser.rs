@@ -1618,7 +1618,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = L::Driver::with_recovery(recovery);
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
@@ -2194,11 +2194,9 @@ mod tests {
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser = NodesParser::new(StopSpec::at_token(
             TokenStopKind::Predicate(&failing),
             false,
@@ -2349,11 +2347,9 @@ mod tests {
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser =
             NodesParser::new(StopSpec { token: None, node: Some(&mut failing) });
         let frame = crate::engine::Frame {
@@ -3894,11 +3890,9 @@ mod tests {
         let stop = loop {
             let mut cx = ParseContext::new(
                 &mut reader,
-                Arc::clone(&source),
                 Arc::clone(&st),
                 &mut session,
-                &driver,
-            );
+                &driver);
             let mut parser = NodesParser::new(StopSpec::none());
             let (outcome, _) = parser.parse(&mut cx).unwrap();
             nodes.extend(outcome.nodes);
@@ -4202,11 +4196,9 @@ mod tests {
         let driver = CountDriver;
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, _) = parser.parse(&mut cx).unwrap();
         assert!(matches!(outcome.stop, StopCause::EndOfInput));
@@ -4580,11 +4572,9 @@ mod tests {
         let driver = DriveDriver::default();
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
 
         // The top-level drive goes through the same seam as every interior descent.
         let (outcome, delta) = cx

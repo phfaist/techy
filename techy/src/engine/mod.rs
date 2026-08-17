@@ -784,7 +784,7 @@ mod tests {
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
 
         let mut cx =
-            ParseContext::new(&mut reader, source.clone(), st.clone(), &mut session, &driver);
+            ParseContext::new(&mut reader, st.clone(), &mut session, &driver);
         let mut parser = OneCharParser;
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());
@@ -802,7 +802,7 @@ mod tests {
         let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
-        let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session, &driver);
+        let mut cx = ParseContext::new(&mut reader, st, &mut session, &driver);
 
         let condition = TestUnresolvable { name: "boom".into() };
         assert!(cx.recover(condition, span(&source, 0..1)).is_ok());
@@ -819,7 +819,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx =
-            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+            ParseContext::new(&mut reader, st, &mut session, &driver);
 
         let frame =
             Frame { title: FrameTitle::Static("test frame"), span: span(&source, 0..1) };
@@ -846,7 +846,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx =
-            ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+            ParseContext::new(&mut reader, st, &mut session, &driver);
 
         // The closure body aborts (strict recover); with_frame still pops — the pop
         // after the closure returns covers the Err path by construction.
@@ -1421,7 +1421,7 @@ mod tests {
         let mut reader: TokenListReader<'_, QuietLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = QuietDriver;
-        let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session, &driver);
+        let mut cx = ParseContext::new(&mut reader, st, &mut session, &driver);
 
         // The funnel consults the driver: the condition vanishes — no diagnostic, no
         // abort — under a policy neither Strict nor Tolerant could express.
@@ -1483,7 +1483,7 @@ mod tests {
         let mut reader: TokenListReader<'_, HelperLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = HelperDriver { answer: 42 };
-        let cx = ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
+        let cx = ParseContext::new(&mut reader, st, &mut session, &driver);
         assert_eq!(cx.driver.preset_helper(), 42);
     }
 
@@ -1745,12 +1745,11 @@ mod tests {
 
     fn ctx_context<'a, 's>(
         reader: &'a mut crate::token::TokenListReader<'s, CtxLang>,
-        source: &Arc<Source>,
         state: Arc<ParsingState<CtxLang>>,
         session: &'a mut ParserSession<CtxLang>,
         driver: &'a CtxDriver,
     ) -> ParseContext<'a, 's, CtxLang> {
-        ParseContext::new(reader, Arc::clone(source), state, session, driver)
+        ParseContext::new(reader, state, session, driver)
     }
 
     #[test]
@@ -1763,7 +1762,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
-            ctx_context(&mut reader, &source, Arc::clone(&outer), &mut session, &driver);
+            ctx_context(&mut reader, Arc::clone(&outer), &mut session, &driver);
 
         assert_eq!(cx.session.state_stack().len(), 0);
         cx.with_parsing_state(Arc::clone(&outer), |cx| {
@@ -1790,7 +1789,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
-            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+            ctx_context(&mut reader, Arc::clone(&base), &mut session, &driver);
 
         let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
         // Outside any scope: the lend pushes the current state (depth 1).
@@ -1830,7 +1829,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: true };
         let mut cx =
-            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+            ctx_context(&mut reader, Arc::clone(&base), &mut session, &driver);
 
         let delta = ParsingStateDelta::new().event(CtxEvent::NeedsContext);
         let error = cx.derive_state(&delta).unwrap_err();
@@ -1851,7 +1850,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
-            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+            ctx_context(&mut reader, Arc::clone(&base), &mut session, &driver);
 
         // A context-free event passes through to finalize untouched…
         let plain = cx.derive_state(&ParsingStateDelta::new().event(CtxEvent::Plain)).unwrap();
@@ -1912,7 +1911,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: false, fail_events: false };
         let mut cx =
-            ctx_context(&mut reader, &source, Arc::clone(&base), &mut session, &driver);
+            ctx_context(&mut reader, Arc::clone(&base), &mut session, &driver);
 
         let error = cx
             .derive_state(&ParsingStateDelta::new().event(CtxEvent::NeedsContext))

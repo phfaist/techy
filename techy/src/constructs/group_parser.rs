@@ -329,11 +329,9 @@ mod tests {
         let driver = crate::engine::StdParseDriver::new(recovery, ());
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser = GroupParser::new(open.clone(), rule);
         let (id, delta) = parser.parse(&mut cx).unwrap();
         assert!(delta.is_none());

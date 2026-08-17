@@ -989,11 +989,9 @@ mod tests {
         let driver = VerbDriver { recovery };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(state),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser = NodesParser::new(StopSpec::none())
             .with_child_states(ChildStateSpec::inherit());
         let (outcome, delta) = parser.parse(&mut cx)?;
@@ -1349,11 +1347,9 @@ mod tests {
         let driver = VerbDriver { recovery };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&state),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser =
             VerbatimBodyParser::new(
                 SourceSpan::new(&source, 0..0),

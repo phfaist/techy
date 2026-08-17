@@ -1380,7 +1380,7 @@ mod tests {
         let mut session = ParserSession::new();
         let driver = EnvDriver { recovery };
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
@@ -1987,11 +1987,9 @@ mod tests {
         let driver = EnvDriver { recovery: Recovery::Strict };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::clone(&source),
             Arc::clone(&st),
             &mut session,
-            &driver,
-        );
+            &driver);
         let mut parser = EnvironmentBodyParser::new(
             SourceSpan::new(&source, 0..0),
             "A",
