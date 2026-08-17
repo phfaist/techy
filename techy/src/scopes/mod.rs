@@ -2004,7 +2004,7 @@ mod tests {
     use crate::state::StateData;
     use crate::token::{
         CommandRules, CommentRules, ForbiddenCharsRules, GroupRules, ParagraphRules,
-        SpecialsRules, TokenError, TokenErrorKind, TokenRules, WhitespaceRules,
+        SpecialsRules, TokenErrorKind, TokenRules, WhitespaceRules,
     };
     use alloc::string::{String, ToString};
     use alloc::vec;

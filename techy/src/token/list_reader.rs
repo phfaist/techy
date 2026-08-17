@@ -456,6 +456,90 @@ mod tests {
     }
 
     #[test]
+    fn positions_and_spans_match_the_std_reader_in_lockstep() {
+        let content = "a \\vec  b";
+        let st = state();
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_r = StdTokenReader::new(&source);
+        let mut list_r = TokenListReader::new(&source, scan(&source));
+        let std_reader: &mut dyn TokenReader<'_, TestLang> = &mut std_r;
+        let list_reader: &mut dyn TokenReader<'_, TestLang> = &mut list_r;
+
+        assert_eq!(std_reader.position_here(), list_reader.position_here());
+
+        let a = std_reader.next(&st).unwrap();
+        let b = list_reader.next(&st).unwrap();
+        assert_eq!(a, b);
+
+        let token = std_reader.peek(&st).unwrap();
+        assert_eq!(list_reader.peek(&st).unwrap(), token);
+
+        for edge in [
+            TokenEdge::StartBeforePreSpace,
+            TokenEdge::Start,
+            TokenEdge::End,
+            TokenEdge::EndPastPostSpace,
+        ] {
+            assert_eq!(
+                std_reader.position_at(&token, edge),
+                list_reader.position_at(&token, edge),
+                "positions disagree at {edge:?}"
+            );
+            assert_eq!(
+                std_reader.source_span_between(&token, TokenEdge::Start, edge),
+                list_reader.source_span_between(&token, TokenEdge::Start, edge),
+                "spans disagree at {edge:?}"
+            );
+            std_reader.move_to_edge(&token, edge);
+            list_reader.move_to_edge(&token, edge);
+            assert_eq!(std_reader.position_here(), list_reader.position_here());
+        }
+
+        assert_eq!(std_reader.source_span_of(&token), list_reader.source_span_of(&token));
+
+        let begin = std_reader.position_at(&token, TokenEdge::Start);
+        let end = std_reader.position_at(&token, TokenEdge::EndPastPostSpace);
+        assert_eq!(
+            std_reader.source_span_within(&begin, &end),
+            list_reader.source_span_within(&begin, &end)
+        );
+        assert_eq!(
+            std_reader.source_position_at(&begin),
+            list_reader.source_position_at(&begin)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a token it never issued")]
+    fn a_token_this_reader_never_issued_is_rejected() {
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let mut lr = TokenListReader::new(&source, scan(&source));
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut lr;
+
+        // Not from this reader — and not from any scan of this content.
+        let forged = Token::new(TokenKind::Char('z'), Span::new(0, 1), Span::empty(0));
+        let _ = reader.source_span_between(&forged, TokenEdge::Start, TokenEdge::End);
+    }
+
+    #[test]
+    #[should_panic(expected = "a position it never issued")]
+    fn a_position_this_reader_never_issued_is_rejected() {
+        // The list covers only the first two characters of the source, so a position
+        // taken further along is one this reader never handed out.
+        let source: Arc<Source> = Arc::new(Source::new("ab cd"));
+        let prefix: Vec<Token<'_, TestLang>> =
+            scan(&source).into_iter().take(2).collect();
+        let mut lr = TokenListReader::new(&source, prefix);
+        let mut std_r = StdTokenReader::new(&source);
+        let std_reader: &mut dyn TokenReader<'_, TestLang> = &mut std_r;
+        std_reader.move_to_pos(4);
+        let elsewhere = std_reader.position_here();
+
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut lr;
+        reader.move_to_position(&elsewhere);
+    }
+
+    #[test]
     fn empty_list_yields_end_of_stream() {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let mut lr: TokenListReader<'_, TestLang> = TokenListReader::new(&source, vec![]);

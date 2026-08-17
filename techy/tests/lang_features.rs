@@ -49,7 +49,7 @@ mod support {
         FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
         ParseResult, ParsingState, SpecialsMatch, SpecialsScanError, StateData,
         StdParseDriver, Token,
-        TokenKind, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        TokenKind, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
     use techy::source::SourceSpan;
@@ -68,8 +68,8 @@ mod support {
     /// The shared specials scan of the test languages that declare specials absent
     /// while implementing the hooks anyway: `~` would trigger a zero-argument
     /// callable — if the specials feature existed.
-    fn scan_tilde<'s, L: Lang<CallableTypeId = u32>>(
-        content: &'s str,
+    fn scan_tilde<L: Lang<CallableTypeId = u32>>(
+        content: &str,
         pos: usize,
     ) -> Option<SpecialsMatch<L>> {
         content[pos..].starts_with('~').then(|| SpecialsMatch {

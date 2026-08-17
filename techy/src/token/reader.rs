@@ -1715,7 +1715,7 @@ mod tests {
         }
         fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &str,
+            _content: &str,
             pos: usize,
         ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             Ok(Some(SpecialsMatch {
@@ -1849,6 +1849,130 @@ mod tests {
         let source = Arc::new(Source::new("x"));
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
+    }
+
+    // --- positions, edges, spans -----------------------------------------------------
+
+    #[test]
+    fn the_four_edges_of_a_token_delimit_its_pre_space_body_and_post_space() {
+        //                                    0....5....1
+        let source = Arc::new(Source::new("a \\vec  b"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        reader.move_to_pos(1);
+        let token = reader.peek(&st).unwrap();
+        // ` \vec  `: pre-space 1..2, the command 2..6, its post-space 6..8.
+        assert_eq!(
+            reader.source_span_between(
+                &token,
+                TokenEdge::StartBeforePreSpace,
+                TokenEdge::Start
+            ),
+            SourceSpan::new(&source, sp(1, 2))
+        );
+        assert_eq!(
+            reader.source_span_between(&token, TokenEdge::Start, TokenEdge::End),
+            SourceSpan::new(&source, sp(2, 6))
+        );
+        assert_eq!(
+            reader.source_span_between(&token, TokenEdge::End, TokenEdge::EndPastPostSpace),
+            SourceSpan::new(&source, sp(6, 8))
+        );
+        // `source_span_of` is Start..EndPastPostSpace — the token's own span.
+        assert_eq!(reader.source_span_of(&token), SourceSpan::new(&source, sp(2, 8)));
+        assert_eq!(reader.source_span_of(&token).span(), token.span);
+    }
+
+    #[test]
+    fn source_span_between_ignores_edge_order_and_empties_on_equal_edges() {
+        let source = Arc::new(Source::new(" x"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let token = reader.peek(&st).unwrap();
+        let forward =
+            reader.source_span_between(&token, TokenEdge::StartBeforePreSpace, TokenEdge::End);
+        let backward =
+            reader.source_span_between(&token, TokenEdge::End, TokenEdge::StartBeforePreSpace);
+        assert_eq!(forward, backward);
+        assert_eq!(forward, SourceSpan::new(&source, sp(0, 2)));
+
+        let empty = reader.source_span_between(&token, TokenEdge::Start, TokenEdge::Start);
+        assert!(empty.is_empty());
+        assert_eq!(empty, SourceSpan::new(&source, sp(1, 1)));
+    }
+
+    #[test]
+    fn a_peeked_tokens_first_edge_is_the_position_the_peek_happened_at() {
+        // Contract clause 2: `move_to_edge(&tok, StartBeforePreSpace)` returns the
+        // stream to where the peek happened.
+        let source = Arc::new(Source::new("a  b"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let first = reader.next(&st).unwrap();
+        let before = reader.position_here();
+        let token = reader.peek(&st).unwrap();
+        assert_eq!(reader.position_at(&token, TokenEdge::StartBeforePreSpace), before);
+
+        reader.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        assert_ne!(reader.position_here(), before);
+        reader.move_to_edge(&token, TokenEdge::StartBeforePreSpace);
+        assert_eq!(reader.position_here(), before);
+        assert_eq!(reader.peek(&st).unwrap(), token);
+
+        // And back to the very beginning, through the first token.
+        reader.move_to_edge(&first, TokenEdge::StartBeforePreSpace);
+        assert_eq!(reader.position_here(), reader.position_at(&first, TokenEdge::Start));
+    }
+
+    #[test]
+    fn positions_answer_text_locations_and_delimit_spans() {
+        let source = Arc::new(Source::new("ab cd"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let begin = reader.position_here();
+        assert_eq!(reader.source_position_at(&begin), SourcePos::new(&source, 0));
+
+        let _ = reader.next(&st).unwrap();
+        let _ = reader.next(&st).unwrap();
+        let end = reader.position_here();
+
+        assert_eq!(
+            reader.source_span_within(&begin, &end),
+            Some(SourceSpan::new(&source, sp(0, 2)))
+        );
+        // An inverted pair does not delimit a range: the caller lifts `None` to an
+        // implementation error.
+        assert_eq!(reader.source_span_within(&end, &begin), None);
+        // Equal positions delimit the empty span there.
+        assert_eq!(
+            reader.source_span_within(&end, &end),
+            Some(SourceSpan::new(&source, sp(2, 2)))
+        );
+    }
+
+    #[test]
+    fn a_position_returns_the_stream_to_where_it_was_taken() {
+        let source = Arc::new(Source::new("a{b}c"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let _ = reader.next(&st).unwrap();
+        let mark = reader.position_here();
+        let open = reader.next(&st).unwrap();
+        assert!(matches!(open.kind, TokenKind::GroupOpen { .. }));
+
+        reader.move_to_position(&mark);
+        assert_eq!(reader.position_here(), mark);
+        assert_eq!(reader.peek(&st).unwrap(), open);
     }
 
     // --- errors and recovery -------------------------------------------------------------
