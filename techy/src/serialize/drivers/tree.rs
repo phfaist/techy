@@ -320,10 +320,79 @@ impl<L: SerializableLang> TableHandle<TreeSerdeDriver<L>> {
         register_codec::<L>(self, session, TypeId::of::<NodeTree<L, A>>(), value_tree_codec::<L, A>(identifier.into()))
     }
 
+    /// Register the codec for tree annotation type `A` under `identifier` through the
+    /// serde bridge: `A`'s annotations are serialized with
+    /// [`to_value`](crate::serialize::to_value) and read back with
+    /// [`from_value`](crate::serialize::from_value) — the convenience for a plain-data
+    /// annotation type (one whose values refer to no table object, so they need no
+    /// serialization context). An annotation type that does refer to a table object (a
+    /// [`SourceSpan`](crate::source::SourceSpan)) uses
+    /// [`register_annotation`](TableHandle::register_annotation) instead. Available
+    /// with the `serde` cargo feature.
+    ///
+    /// # Errors
+    ///
+    /// As [`register_annotation`](TableHandle::register_annotation).
+    #[cfg(feature = "serde")]
+    pub fn register_serde_annotation<A>(
+        self,
+        session: &mut SerdeSession<L>,
+        identifier: impl Into<Cow<'static, str>>,
+    ) -> Result<(), RegistrationError>
+    where
+        A: serde::Serialize + serde::de::DeserializeOwned + Clone + Debug + Send + Sync + 'static,
+    {
+        register_codec::<L>(self, session, TypeId::of::<NodeTree<L, A>>(), serde_tree_codec::<L, A>(identifier.into()))
+    }
+
     /// Pre-register the unit annotation codec (`core.tree`) — called by
     /// [`SerdeSession::new`](crate::serialize::SerdeSession::new).
     pub(crate) fn register_core_tree(self, session: &mut SerdeSession<L>) -> Result<(), RegistrationError> {
         register_codec::<L>(self, session, TypeId::of::<NodeTree<L, ()>>(), unit_tree_codec::<L>())
+    }
+}
+
+/// The codec of a plain-data annotation type `A`, through the serde bridge (see
+/// [`register_serde_annotation`](TableHandle::register_serde_annotation)).
+#[cfg(feature = "serde")]
+fn serde_tree_codec<L, A>(identifier: Cow<'static, str>) -> TreeCodec<L>
+where
+    L: SerializableLang,
+    A: serde::Serialize + serde::de::DeserializeOwned + Clone + Debug + Send + Sync + 'static,
+{
+    TreeCodec {
+        identifier,
+        serialize: Arc::new(|object, cx| {
+            let tree = downcast_tree::<L, A>(object)?;
+            let nodes = serialize_nodes(tree, cx)?;
+            let annotations = tree
+                .annotations()
+                .iter()
+                .map(|annotation| super::super::bridge::to_value(annotation).map_err(SerializeError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(WireTree { nodes, annotations: Some(annotations) }.to_serial_value()?)
+        }),
+        deserialize: Arc::new(|data, cx| {
+            let mut wire = WireTree::from_serial_value(data)?;
+            let node_count = wire.nodes.len();
+            let list = wire.annotations.take().ok_or_else(|| {
+                DeserializeError::failed(
+                    "the tree entry carries no annotations, but its annotation type is not the unit type",
+                )
+            })?;
+            if list.len() != node_count {
+                return Err(DeserializeError::failed(alloc::format!(
+                    "the tree has {node_count} nodes but {} annotations",
+                    list.len()
+                )));
+            }
+            let annotations = list
+                .iter()
+                .map(|value| super::super::bridge::from_value::<A>(value).map_err(DeserializeError::from))
+                .collect::<Result<Vec<A>, _>>()?;
+            let tree = rebuild_tree::<L, A>(wire.nodes, annotations, cx)?;
+            Ok(Arc::new(tree) as Arc<dyn Any + Send + Sync>)
+        }),
     }
 }
 

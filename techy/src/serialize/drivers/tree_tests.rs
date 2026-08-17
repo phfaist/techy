@@ -1072,3 +1072,28 @@ fn a_small_tree_has_a_pinned_json_rendering() {
         r#"{"id":"core.tree","data":{"nodes":[{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},{"kind":{"chars":{"content":{"spanned":{"start":0,"end":2}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":2}}]}}"#
     );
 }
+
+// --- serde-bridge annotations (feature) ----------------------------------------------
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_tree_of_plain_data_annotations_round_trips_through_the_bridge() {
+    // A plain-data annotation (`String`) registered through the serde bridge.
+    let src = source("hello");
+    let st = state();
+    let mut builder = NodeTreeBuilder::<ToyLang, String>::new();
+    let child = builder
+        .add(NodeKind::chars(Span::new(0, 5)), span(&src, 0..5), Arc::clone(&st), Vec::new(), (), String::from("leaf"))
+        .unwrap();
+    let root =
+        builder.add(NodeKind::list(), span(&src, 0..5), st, Vec::from([child]), (), String::from("root")).unwrap();
+    let tree = builder.finish(root).unwrap();
+
+    let setup_bridge = || {
+        let mut session = setup::<ToyLang>();
+        let trees = session.standard_tables().unwrap().trees;
+        trees.register_serde_annotation::<String>(&mut session, "test.label").unwrap();
+        session
+    };
+    round_trip_tree(setup_bridge, &tree, |a: &String, b: &String| a == b);
+}
