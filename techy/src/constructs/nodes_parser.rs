@@ -1221,7 +1221,7 @@ mod tests {
     };
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
-        GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, StdTokenReader, TokenError,
+        GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, StdStreamPosition, StdTokenReader, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
         TriggerChars, WhitespaceRules,
     };
@@ -1299,6 +1299,13 @@ mod tests {
     }
 
     impl ParseDriver<CmdLang> for CmdDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CmdLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1453,7 +1460,7 @@ mod tests {
     /// spanning exactly the parsed extent, freeze, and run the invariant checker over
     /// the finished tree. The reader must be reading `content`.
     fn try_run<'s, L: Lang<SourceOrigin = Option<String>>>(
-        content: &'s str,
+        source: &'s Arc<Source>,
         tokens: &mut dyn TokenReader<'s, L>,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1463,12 +1470,12 @@ mod tests {
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
-        try_run_with(content, tokens, state, recovery, stop, ChildStateSpec::inherit())
+        try_run_with(source, tokens, state, recovery, stop, ChildStateSpec::inherit())
     }
 
     /// [`try_run`] with an explicit descent-state policy.
     fn try_run_with<'s, 'p, L: Lang<SourceOrigin = Option<String>>>(
-        content: &'s str,
+        source: &'s Arc<Source>,
         tokens: &mut dyn TokenReader<'s, L>,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1479,11 +1486,10 @@ mod tests {
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
-        let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new();
         let driver = L::Driver::with_recovery(recovery);
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(stop).with_child_states(child_states);
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none(), "NodesParser returns no pass-through delta");
@@ -1504,7 +1510,7 @@ mod tests {
             // The generic test harness stages its root list via the explicit recipe
             // (the harness plays the transform-author role here).
             let kind = NodeKind::list();
-            let span = SourceSpan::new(&source, root_span);
+            let span = SourceSpan::new(source, root_span);
             let ext = L::make_node_ext(
                 &kind,
                 &span,
@@ -1519,9 +1525,12 @@ mod tests {
         Ok(Parsed { result, stop: outcome.stop, pos })
     }
 
-    /// Scan `content` into the full token list (including the terminal `EndOfStream`).
-    fn scan<'s, L: Lang>(content: &'s str, state: &Arc<ParsingState<L>>) -> Vec<Token<'s, L>> {
-        let mut reader = StdTokenReader::new(content);
+    /// Scan `source` into the full token list (including the terminal `EndOfStream`).
+    fn scan<'s, L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>>(
+        source: &'s Arc<Source>,
+        state: &Arc<ParsingState<L>>,
+    ) -> Vec<Token<'s, L>> {
+        let mut reader = StdTokenReader::new(source);
         let mut tokens = Vec::new();
         loop {
             let token = TokenReader::next(&mut reader, state).expect("clean scan");
@@ -1538,7 +1547,7 @@ mod tests {
     /// assert they agree on shapes, stop cause, position, and diagnostics count. The two
     /// stop specs must be equivalent (node predicates are `&mut`, so each run needs its
     /// own).
-    fn run_both<'p, L: Lang<SourceOrigin = Option<String>>>(
+    fn run_both<'p, L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>>(
         content: &str,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1554,7 +1563,10 @@ mod tests {
 
     /// [`run_both`] with an explicit descent-state policy (cloned per reader — it is
     /// shallow: `Arc`s and borrows).
-    fn run_both_with<'p, L: Lang<SourceOrigin = Option<String>>>(
+    fn run_both_with<
+        'p,
+        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
+    >(
         content: &str,
         state: &Arc<ParsingState<L>>,
         recovery: Recovery,
@@ -1566,9 +1578,10 @@ mod tests {
         L::Driver: TestDriver,
         L::InvocationSyntax: FromInvocation<L>,
     {
-        let mut std_reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_reader = StdTokenReader::new(&source);
         let a = try_run_with(
-            content,
+            &source,
             &mut std_reader,
             state,
             recovery,
@@ -1576,9 +1589,9 @@ mod tests {
             child_states.clone(),
         )
         .expect("std reader");
-        let mut list_reader = TokenListReader::new(scan(content, state));
+        let mut list_reader = TokenListReader::new(&source, scan(&source, state));
         let b =
-            try_run_with(content, &mut list_reader, state, recovery, stop_list, child_states)
+            try_run_with(&source, &mut list_reader, state, recovery, stop_list, child_states)
                 .expect("list reader");
         assert_eq!(shapes(&a.result), shapes(&b.result), "readers disagree on {:?}", content);
         assert_eq!(a.stop, b.stop, "stop causes disagree on {:?}", content);
@@ -1724,6 +1737,13 @@ mod tests {
         }
 
         impl ParseDriver<MarkLang> for MarkDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, MarkLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -1826,7 +1846,8 @@ mod tests {
 
         // Re-peeking from the seam yields the stop token itself, with empty pre-space —
         // no byte is represented twice.
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         reader.move_to_pos(parsed.pos);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         assert!(matches!(token.kind, TokenKind::Command { name: "end", .. }));
@@ -2015,7 +2036,7 @@ mod tests {
         };
         let content = "ab";
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<TestLang> = ParserSession::new();
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
@@ -2063,7 +2084,8 @@ mod tests {
         assert_eq!(parsed.pos, 8);
 
         // The next read is the following content, its pre-space empty (nothing re-read).
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         reader.move_to_pos(parsed.pos);
         let token: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         assert!(matches!(token.kind, TokenKind::Char('r')));
@@ -2169,7 +2191,7 @@ mod tests {
             };
         let content = "ab";
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<TestLang> = ParserSession::new();
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
@@ -2243,9 +2265,10 @@ mod tests {
         let mut r = rules::<TestLang>();
         r.forbidden_chars.chars = "#".into();
         let st = state_with(r);
-        let mut reader = StdTokenReader::new("ab#cd");
+        let source: Arc<Source> = Arc::new(Source::new("ab#cd"));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run("ab#cd", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
         // The placeholder Char joins the run: one maximal chars node, plus a diagnostic.
         assert_eq!(shapes(&parsed.result), ["chars 0..5 \"ab#cd\""]);
         assert_eq!(parsed.stop, StopCause::EndOfInput);
@@ -2266,9 +2289,10 @@ mod tests {
         let mut r = rules::<TestLang>();
         r.forbidden_chars.chars = "#".into();
         let st = state_with(r);
-        let mut reader = StdTokenReader::new("ab#cd");
+        let source: Arc<Source> = Arc::new(Source::new("ab#cd"));
+        let mut reader = StdTokenReader::new(&source);
         let err =
-            try_run("ab#cd", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
         // The token error was lifted into the structured condition ([§dd-dr:errors]): compare
         // identifier and downcast fields (no PartialEq on the carriers).
         assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
@@ -2325,8 +2349,9 @@ mod tests {
         // Without the advancement guard this parse never terminates in tolerant mode
         // (the recovery arm consumes no token), pushing one diagnostic per iteration.
         let st = state();
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
         let mut reader = StuckRecoveryReader { pos: 0 };
-        let err = try_run("ab", &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+        let err = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a non-advancing resume position must abort the parse");
         assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
         assert_eq!(
@@ -2406,9 +2431,10 @@ mod tests {
 
         // Tolerant: a diagnostic with the language's own identifier; the placeholder
         // char joins the content run.
-        let mut reader = StdTokenReader::new("a!b");
+        let source: Arc<Source> = Arc::new(Source::new("a!b"));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run("a!b", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a!b\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
@@ -2421,8 +2447,9 @@ mod tests {
         );
 
         // Strict: the same condition rides the ParseError.
-        let mut reader = StdTokenReader::new("a!b");
-        let err = try_run("a!b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a!b"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         assert_eq!(err.identifier(), TabooChar::IDENTIFIER);
         assert!(err.data().downcast_ref::<TabooChar>().is_some());
@@ -2431,9 +2458,10 @@ mod tests {
     #[test]
     fn escape_at_end_of_input_tolerant_recovers_and_repositions() {
         let st = state();
-        let mut reader = StdTokenReader::new("ab \\");
+        let source: Arc<Source> = Arc::new(Source::new("ab \\"));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run("ab \\", &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
         // The placeholder is a Char covering the dangling escape byte: it joins the
         // pending chars run, so the recovery is partition-clean ([§dd-dr:errors]) — the escape
         // byte stays in the tree, accompanied by its diagnostic.
@@ -2447,9 +2475,10 @@ mod tests {
     #[test]
     fn escape_at_end_of_input_strict_aborts() {
         let st = state();
-        let mut reader = StdTokenReader::new("ab \\");
+        let source: Arc<Source> = Arc::new(Source::new("ab \\"));
+        let mut reader = StdTokenReader::new(&source);
         let err =
-            try_run("ab \\", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
         assert_eq!(err.identifier(), crate::token::EndOfStreamAfterEscape::IDENTIFIER);
         assert_eq!(
             err.data()
@@ -2528,8 +2557,9 @@ mod tests {
     #[test]
     fn unresolved_command_strict_aborts() {
         let st = state();
-        let mut reader = StdTokenReader::new("a \\foo  b");
-        let err = try_run("a \\foo  b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a \\foo  b"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         // Exact detail wording pinned in unresolved_command_recovers_as_a_chars_fallback.
         let message = err.to_string();
@@ -2668,6 +2698,13 @@ mod tests {
     }
 
     impl ParseDriver<HintLang> for HintDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, HintLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2729,6 +2766,13 @@ mod tests {
     }
 
     impl ParseDriver<AbortLang> for AbortDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, AbortLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2760,9 +2804,10 @@ mod tests {
         // attaches the live traceback (the hook has no session access).
         let st = state_with(rules::<AbortLang>());
         let content = "a {\\foo} b";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
@@ -2828,6 +2873,13 @@ mod tests {
     }
 
     impl ParseDriver<RefineLang> for RefineDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, RefineLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -2866,8 +2918,9 @@ mod tests {
         assert!(diagnostic.message().contains("is not available"));
 
         // Strict mode: the refined condition rides the ParseError too (one funnel).
-        let mut reader = StdTokenReader::new("a \\foo b");
-        let err = try_run("a \\foo b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a \\foo b"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         assert_eq!(err.identifier(), CommandsNotAvailable::IDENTIFIER);
     }
@@ -3147,9 +3200,10 @@ mod tests {
         // a pre-scanned token list can neither re-serve raw bytes nor re-tokenize
         // under mid-parse rule changes (TokenListReader's documented fidelity limit).
         let content = "\\take a{b! %c";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run(content, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
         assert_eq!(
             shapes(&parsed.result),
             ["group 0..10", "chars 10..13 \" %c\""]
@@ -3194,6 +3248,13 @@ mod tests {
         }
 
         impl ParseDriver<ExtLang> for ExtDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ExtLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recovery(&self) -> Recovery {
                 self.recovery
             }
@@ -3372,9 +3433,10 @@ mod tests {
         let mut r = rules::<TestLang>();
         r.groups.rules.push(math_rule());
         let st = state_with(r);
-        let mut reader = StdTokenReader::new("a $x$ b");
+        let source: Arc<Source> = Arc::new(Source::new("a $x$ b"));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run("a $x$ b", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap();
         assert_eq!(
             shapes(&parsed.result),
             ["chars 0..2 \"a \"", "group 2..5", "chars 5..7 \" b\""]
@@ -3450,8 +3512,9 @@ mod tests {
     #[test]
     fn unclosed_group_strict_aborts() {
         let st = state();
-        let mut reader = StdTokenReader::new("a {bc");
-        let err = try_run("a {bc", &mut reader, &st, Recovery::Strict, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a {bc"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         assert_eq!(err.to_string(), "unclosed group: expected ‘}’ before end of input");
         // The diagnostic points at the open delimiter that was never closed.
@@ -3496,9 +3559,10 @@ mod tests {
             close: "]".into(),
         }));
         let st = state_with(r);
-        let mut reader = StdTokenReader::new("{a]}");
+        let source: Arc<Source> = Arc::new(Source::new("{a]}"));
+        let mut reader = StdTokenReader::new(&source);
         let err =
-            try_run("{a]}", &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none()).unwrap_err();
         assert_eq!(err.to_string(), "mismatched group close: expected ‘}’");
         assert_eq!(err.span().range(), 2..3);
     }
@@ -3529,7 +3593,7 @@ mod tests {
         let content = "a}b";
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state();
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<TestLang> = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut nodes = Vec::new();
@@ -3592,9 +3656,10 @@ mod tests {
         let content = "%x{%y\n}z";
 
         // Under the restricted state alone, `%` is ordinary content everywhere.
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let plain =
-            try_run(content, &mut reader, &restricted, Recovery::Strict, StopSpec::none())
+            try_run(&source, &mut reader, &restricted, Recovery::Strict, StopSpec::none())
                 .unwrap();
         let group = plain.result.tree.root().child(1).unwrap();
         assert!(group.children().iter().all(|c| c.is_chars()));
@@ -3604,9 +3669,9 @@ mod tests {
             group: GroupChildState::Fixed(Arc::clone(&full)),
             invocation: InvocationChildState::Inherit,
         };
-        let mut reader = StdTokenReader::new(content);
-        let parsed = try_run_with(
-            content,
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        let parsed = try_run_with(&source,
             &mut reader,
             &restricted,
             Recovery::Strict,
@@ -3659,9 +3724,9 @@ mod tests {
         };
 
         let content = "{%a\n}[%b\n]";
-        let mut reader = StdTokenReader::new(content);
-        let parsed = try_run_with(
-            content,
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        let parsed = try_run_with(&source,
             &mut reader,
             &full,
             Recovery::Strict,
@@ -3715,9 +3780,9 @@ mod tests {
         };
 
         let content = "{a}";
-        let mut reader = StdTokenReader::new(content);
-        let error = try_run_with(
-            content,
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        let error = try_run_with(&source,
             &mut reader,
             &full,
             Recovery::Tolerant,
@@ -3815,6 +3880,13 @@ mod tests {
         struct CountDriver;
 
         impl ParseDriver<CountLang> for CountDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CountLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn observe_transition(
                 &self,
                 ext: &mut Counts,
@@ -3832,7 +3904,7 @@ mod tests {
         let content = "{a}{b}";
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state_with(rules::<CountLang>());
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<CountLang> = ParserSession::new();
         let driver = CountDriver;
         let mut cx = ParseContext::new(
@@ -3901,6 +3973,13 @@ mod tests {
             }
         }
         impl ParseDriver<SinkLang> for SinkDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, SinkLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn observe_transition(
                 &self,
                 ext: &mut Seen,
@@ -3923,9 +4002,10 @@ mod tests {
         // One group descent = one observed transition; the parse completes.
         let st = state_with(rules::<SinkLang>());
         let content = "{a}";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let parsed =
-            try_run(content, &mut reader, &st, Recovery::Strict, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
                 .expect("the sink records; it never aborts");
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let recorded = parsed.result.diagnostics.iter().next().unwrap();
@@ -3969,6 +4049,13 @@ mod tests {
             }
         }
         impl ParseDriver<FailObserveLang> for FailObserveDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailObserveLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -3996,9 +4083,10 @@ mod tests {
 
         let st = state_with(rules::<FailObserveLang>());
         let content = "{{a}}";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
@@ -4115,6 +4203,13 @@ mod tests {
         }
 
         impl ParseDriver<DriveLang> for DriveDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, DriveLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn resolve_command(
                 &self,
                 state: &ParsingState<DriveLang>,
@@ -4183,7 +4278,7 @@ mod tests {
         }));
         let st = Arc::new(st.derived(&ParsingStateDelta::new()).unwrap()); // through the choke point
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<DriveLang> = ParserSession::new();
         let driver = DriveDriver::default();
         let mut cx = ParseContext::new(
@@ -4272,9 +4367,10 @@ mod tests {
             Arc::new(ParsingState::new(StateData { rules: rules(), scopes, mode: (), ext: () }));
 
         let content = "a {\\fail} b";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
@@ -4327,6 +4423,13 @@ mod tests {
             }
         }
         impl ParseDriver<BrokenLang> for BrokenDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, BrokenLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -4350,9 +4453,10 @@ mod tests {
         // consulted at the `{…}` descent — inside the group's frame.
         let st = state_with(rules::<BrokenLang>());
         let content = "{a}";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(error.frames().len(), 1);
@@ -4402,9 +4506,10 @@ mod tests {
         // live when the mint fails.
         let st = state_with(rules::<MintFailLang>());
         let content = "{a}";
-        let mut reader = StdTokenReader::new(content);
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run(content, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.identifier(), "core.hooks.hook-failed");
         assert_eq!(
@@ -4455,9 +4560,10 @@ mod tests {
         assert_partition(&parsed.result, 0..8);
 
         // Strict: the same condition aborts (through the recover funnel).
-        let mut reader = StdTokenReader::new("a\\gone b");
+        let source: Arc<Source> = Arc::new(Source::new("a\\gone b"));
+        let mut reader = StdTokenReader::new(&source);
         let error =
-            try_run("a\\gone b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+            try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
                 .unwrap_err();
         assert_eq!(error.data().identifier(), CallableDefinedAsError::IDENTIFIER);
     }
@@ -4501,6 +4607,13 @@ mod tests {
     }
 
     impl ParseDriver<FailingMathLang> for FailingMathDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailingMathLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -4529,8 +4642,9 @@ mod tests {
         // ScopeOpFailed condition and the group parses under the ops-skipped state.
         // (Std reader only: a pre-scanned token list cannot disambiguate the closing
         // `$` of a same-delimiter group — that is expecting_group_close's job.)
-        let mut reader = StdTokenReader::new("a$m$b");
-        let parsed = try_run("a$m$b", &mut reader, &st, Recovery::Tolerant, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a$m$b"));
+        let mut reader = StdTokenReader::new(&source);
+        let parsed = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect("tolerant parse continues");
         assert_eq!(
             shapes(&parsed.result),
@@ -4546,8 +4660,9 @@ mod tests {
         assert_partition(&parsed.result, 0..5);
 
         // Strict: the first failing op aborts the parse.
-        let mut reader = StdTokenReader::new("a$m$b");
-        let error = try_run("a$m$b", &mut reader, &st, Recovery::Strict, StopSpec::none())
+        let source: Arc<Source> = Arc::new(Source::new("a$m$b"));
+        let mut reader = StdTokenReader::new(&source);
+        let error = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         assert_eq!(error.data().identifier(), ScopeOpFailed::IDENTIFIER);
     }

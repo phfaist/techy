@@ -1296,7 +1296,7 @@ mod tests {
     fn parse_construct_state_none_matches_explicit_current_state_clone() {
         let source: Arc<Source> = Arc::new(Source::new("xy"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(
@@ -1332,7 +1332,7 @@ mod tests {
     fn parse_construct_frame_reaches_the_diagnostic_snapshot() {
         let source: Arc<Source> = Arc::new(Source::new("xy"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx =
@@ -1355,7 +1355,7 @@ mod tests {
     fn parse_construct_pops_the_frame_on_the_err_path() {
         let source: Arc<Source> = Arc::new(Source::new("xy"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx =

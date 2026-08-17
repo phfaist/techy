@@ -31,7 +31,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::source::Span;
+use crate::source::{Source, Span};
 use crate::state::{Lang, ParsingState};
 
 use super::error::TokenResult;
@@ -45,6 +45,7 @@ use super::token::{Token, TokenKind};
 /// scan produces); a trailing [`EndOfStream`](super::TokenKind::EndOfStream) token is
 /// permitted but not required (one is synthesized past the end of the list).
 pub struct TokenListReader<'s, L: Lang> {
+    source: &'s Arc<Source<L::SourceOrigin>>,
     tokens: Vec<Token<'s, L>>,
     pos: usize,
 }
@@ -54,13 +55,16 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     /// (type docs) is the caller's; it is debug-asserted here, and an out-of-order
     /// list is not rejected — the parse's span bookkeeping reports the breakage as an
     /// implementation error where it surfaces.
-    pub fn new(tokens: Vec<Token<'s, L>>) -> TokenListReader<'s, L> {
+    pub fn new(
+        source: &'s Arc<Source<L::SourceOrigin>>,
+        tokens: Vec<Token<'s, L>>,
+    ) -> TokenListReader<'s, L> {
         debug_assert!(
             tokens.windows(2).all(|w| w[0].span.end() <= w[1].span.start()),
             "tokens must be in source order with non-overlapping spans"
         );
         let pos = tokens.first().map(|t| t.pre_space.start()).unwrap_or(0);
-        TokenListReader { tokens, pos }
+        TokenListReader { source, tokens, pos }
     }
 
     /// The tokens being served.
@@ -145,6 +149,7 @@ impl<L: Lang> core::fmt::Debug for TokenListReader<'_, L> {
 mod tests {
     use super::*;
     use crate::scopes::ScopeStack;
+    use crate::source::Source;
     use crate::state::{TrivialLang, StateData};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
@@ -198,11 +203,11 @@ mod tests {
         }))
     }
 
-    /// Scan `content` into the full token list with `StdTokenReader` (including the
+    /// Scan `source` into the full token list with `StdTokenReader` (including the
     /// terminal `EndOfStream`).
-    fn scan(content: &str) -> Vec<Token<'_, TestLang>> {
+    fn scan(source: &Arc<Source>) -> Vec<Token<'_, TestLang>> {
         let st = state();
-        let mut tr = StdTokenReader::new(content);
+        let mut tr = StdTokenReader::new(source);
         let mut tokens = Vec::new();
         loop {
             let token = TokenReader::next(&mut tr, &st).unwrap();
@@ -217,11 +222,11 @@ mod tests {
 
     #[test]
     fn round_trips_a_scanned_token_sequence() {
-        let content = "ab \\vec c % note\n {x}\n\nz  ";
-        let scanned = scan(content);
+        let source: Arc<Source> = Arc::new(Source::new("ab \\vec c % note\n {x}\n\nz  "));
+        let scanned = scan(&source);
         let st = state();
 
-        let mut lr = TokenListReader::new(scanned.clone());
+        let mut lr = TokenListReader::new(&source, scanned.clone());
         for expected in &scanned {
             assert_eq!(&TokenReader::next(&mut lr, &st).unwrap(), expected);
         }
@@ -229,8 +234,8 @@ mod tests {
 
     #[test]
     fn peek_is_idempotent_and_does_not_advance() {
-        let content = " \\vec b";
-        let mut lr = TokenListReader::new(scan(content));
+        let source: Arc<Source> = Arc::new(Source::new(" \\vec b"));
+        let mut lr = TokenListReader::new(&source, scan(&source));
         let st = state();
 
         let start = TokenReader::pos(&lr);
@@ -246,8 +251,9 @@ mod tests {
         // against both readers in lockstep.
         let content = "  \\vec b";
         let st = state();
-        let mut std_r = StdTokenReader::new(content);
-        let mut list_r = TokenListReader::new(scan(content));
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_r = StdTokenReader::new(&source);
+        let mut list_r = TokenListReader::new(&source, scan(&source));
 
         let token = TokenReader::peek(&mut std_r, &st).unwrap();
         assert_eq!(TokenReader::peek(&mut list_r, &st).unwrap(), token);
@@ -272,10 +278,10 @@ mod tests {
 
     #[test]
     fn move_to_an_earlier_token_rewinds() {
-        let content = "a {b}";
-        let scanned = scan(content);
+        let source: Arc<Source> = Arc::new(Source::new("a {b}"));
+        let scanned = scan(&source);
         let st = state();
-        let mut lr = TokenListReader::new(scanned.clone());
+        let mut lr = TokenListReader::new(&source, scanned.clone());
 
         let first = TokenReader::next(&mut lr, &st).unwrap();
         let second = TokenReader::next(&mut lr, &st).unwrap();
@@ -293,8 +299,8 @@ mod tests {
 
     #[test]
     fn pre_space_clipped_when_peeking_mid_whitespace() {
-        let content = "a   b";
-        let mut lr = TokenListReader::new(scan(content));
+        let source: Arc<Source> = Arc::new(Source::new("a   b"));
+        let mut lr = TokenListReader::new(&source, scan(&source));
         let st = state();
 
         lr.move_to_pos(2); // inside b's pre-space run (1..4)
@@ -309,8 +315,9 @@ mod tests {
         let st = state();
         // Same walk against both readers: EOS carries the trailing whitespace once,
         // then repeats with empty pre_space.
-        let mut std_r = StdTokenReader::new(content);
-        let mut list_r = TokenListReader::new(scan(content));
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_r = StdTokenReader::new(&source);
+        let mut list_r = TokenListReader::new(&source, scan(&source));
         for _ in 0..2 {
             let a = TokenReader::next(&mut std_r, &st).unwrap();
             let b = TokenReader::next(&mut list_r, &st).unwrap();
@@ -324,7 +331,8 @@ mod tests {
 
     #[test]
     fn empty_list_yields_end_of_stream() {
-        let mut lr: TokenListReader<'_, TestLang> = TokenListReader::new(vec![]);
+        let source: Arc<Source> = Arc::new(Source::new(""));
+        let mut lr: TokenListReader<'_, TestLang> = TokenListReader::new(&source, vec![]);
         let st = state();
         assert_eq!(
             TokenReader::peek(&mut lr, &st).unwrap(),
@@ -333,8 +341,10 @@ mod tests {
     }
 
     #[test]
-    fn hand_built_lists_need_no_source() {
-        // The unit-test use case: a token list written by hand, spans made up.
+    fn hand_built_lists_need_only_a_long_enough_source() {
+        // The unit-test use case: a token list written by hand, spans made up — the
+        // source only has to be long enough for the spans to be valid ranges in it.
+        let source: Arc<Source> = Arc::new(Source::new(r"x\vec  "));
         let tokens: Vec<Token<'static, TestLang>> = vec![
             Token::new(TokenKind::Char('x'), Span::new(0, 1), Span::empty(0)),
             Token::new(
@@ -344,7 +354,7 @@ mod tests {
             ),
         ];
         let st = state();
-        let mut lr = TokenListReader::new(tokens.clone());
+        let mut lr = TokenListReader::new(&source, tokens.clone());
         assert_eq!(TokenReader::next(&mut lr, &st).unwrap(), tokens[0]);
         assert_eq!(TokenReader::next(&mut lr, &st).unwrap(), tokens[1]);
         assert_eq!(TokenReader::pos(&lr), 6);

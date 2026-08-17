@@ -248,6 +248,9 @@ pub trait LatexlikeInvocationSyntax<L: LatexlikeLang> {
 pub trait LatexlikeLang:
     Lang<
         Features = crate::state::AllLangFeatures,
+        // The preset is tokenized by `StdTokenReader`, whose stream positions are
+        // `StdStreamPosition` — the bound its driver's `make_token_reader` needs.
+        StreamPosition = crate::token::StdStreamPosition,
         GroupTypeId: LatexlikeGroupType,
         CallableTypeId: LatexlikeCallableType,
         ModeId: LatexlikeMode,

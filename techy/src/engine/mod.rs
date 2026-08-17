@@ -778,7 +778,7 @@ mod tests {
         let st = state();
         let tokens: Vec<Token<'static, PlainLang>> =
             vec![Token::new(TokenKind::Char('q'), Span::new(0, 1), Span::empty(0))];
-        let mut reader = TokenListReader::new(tokens);
+        let mut reader = TokenListReader::new(&source, tokens);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
 
@@ -798,7 +798,7 @@ mod tests {
     fn context_recover_forwards_to_the_session() {
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session, &driver);
@@ -814,7 +814,7 @@ mod tests {
     fn with_frame_pushes_pops_and_snapshots_into_diagnostics() {
         let source: Arc<Source> = Arc::new(Source::new("xy"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut cx =
@@ -841,7 +841,7 @@ mod tests {
     fn with_frame_pops_on_the_err_path_and_strict_errors_carry_frames() {
         let source: Arc<Source> = Arc::new(Source::new("xy"));
         let st = state();
-        let mut reader: TokenListReader<'static, PlainLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, PlainLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = StdParseDriver::new(Recovery::Strict, ());
         let mut cx =
@@ -1052,6 +1052,13 @@ mod tests {
     #[derive(Debug, Clone, Copy, Default)]
     struct ObserverDriver;
     impl ParseDriver<ObserverLang> for ObserverDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ObserverLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1269,6 +1276,13 @@ mod tests {
     }
 
     impl ParseDriver<DescentLang> for DescentDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, DescentLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1382,6 +1396,13 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         struct QuietDriver;
         impl ParseDriver<QuietLang> for QuietDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, QuietLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recover(
                 &self,
                 _session: &mut ParserSession<QuietLang>,
@@ -1395,7 +1416,7 @@ mod tests {
 
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let st: Arc<ParsingState<QuietLang>> = state();
-        let mut reader: TokenListReader<'static, QuietLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, QuietLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = QuietDriver;
         let mut cx = ParseContext::new(&mut reader, source.clone(), st, &mut session, &driver);
@@ -1441,6 +1462,13 @@ mod tests {
             answer: u32,
         }
         impl ParseDriver<HelperLang> for HelperDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, HelperLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
         }
         impl HelperDriver {
             /// An inherent helper — not on the `ParseDriver` trait.
@@ -1451,10 +1479,10 @@ mod tests {
 
         let source: Arc<Source> = Arc::new(Source::new(""));
         let st: Arc<ParsingState<HelperLang>> = state();
-        let mut reader: TokenListReader<'static, HelperLang> = TokenListReader::new(vec![]);
+        let mut reader: TokenListReader<'_, HelperLang> = TokenListReader::new(&source, vec![]);
         let mut session = ParserSession::new();
         let driver = HelperDriver { answer: 42 };
-        let cx = ParseContext::new(&mut reader, source, st, &mut session, &driver);
+        let cx = ParseContext::new(&mut reader, Arc::clone(&source), st, &mut session, &driver);
         assert_eq!(cx.driver.preset_helper(), 42);
     }
 
@@ -1534,6 +1562,13 @@ mod tests {
     }
 
     impl ParseDriver<FailingDescentLang> for FailingDescentDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, FailingDescentLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -1668,6 +1703,13 @@ mod tests {
         fail_events: bool,
     }
     impl ParseDriver<CtxLang> for CtxDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CtxLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }
@@ -1716,7 +1758,7 @@ mod tests {
         let outer: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
         let inner = Arc::new(outer.derived(&ParsingStateDelta::new()).unwrap());
-        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut reader = crate::token::TokenListReader::new(&source, alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
@@ -1743,7 +1785,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let base: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
-        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut reader = crate::token::TokenListReader::new(&source, alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
@@ -1783,7 +1825,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let base: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
-        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut reader = crate::token::TokenListReader::new(&source, alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: true };
         let mut cx =
@@ -1804,7 +1846,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let base: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
-        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut reader = crate::token::TokenListReader::new(&source, alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: true, fail_events: false };
         let mut cx =
@@ -1865,7 +1907,7 @@ mod tests {
         let source: Arc<Source> = Arc::new(Source::new(""));
         let base: Arc<ParsingState<CtxLang>> =
             Arc::new(ParsingState::lang_initial().expect("seed state"));
-        let mut reader = crate::token::TokenListReader::new(alloc::vec![]);
+        let mut reader = crate::token::TokenListReader::new(&source, alloc::vec![]);
         let mut session = ParserSession::new();
         let driver = CtxDriver { lower: false, fail_events: false };
         let mut cx =

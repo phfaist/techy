@@ -836,6 +836,13 @@ mod tests {
     }
 
     impl ParseDriver<EnvLang> for EnvDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, EnvLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1335,16 +1342,15 @@ mod tests {
     /// Drive a root `NodesParser` to end of input, stage the outcome under a root
     /// `List` spanning the parsed extent, freeze, and run the invariant checker.
     fn try_run<'s>(
-        content: &'s str,
+        source: &'s Arc<Source>,
         tokens: &mut dyn TokenReader<'s, EnvLang>,
         state: &Arc<ParsingState<EnvLang>>,
         recovery: Recovery,
     ) -> Result<Parsed, ParseError> {
-        let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new();
         let driver = EnvDriver { recovery };
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none());
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
@@ -1362,7 +1368,7 @@ mod tests {
         };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::new(&source, root_span),
+            SourceSpan::new(source, root_span),
             Arc::clone(state),
             outcome.nodes, (), (),
         ).unwrap();
@@ -1380,8 +1386,9 @@ mod tests {
         state: &Arc<ParsingState<EnvLang>>,
         recovery: Recovery,
     ) -> Parsed {
-        let mut reader = StdTokenReader::new(content);
-        try_run(content, &mut reader, state, recovery).expect("parse")
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        try_run(&source, &mut reader, state, recovery).expect("parse")
     }
 
     /// Run against both readers (report R6) and assert they agree; for content whose
@@ -1391,11 +1398,12 @@ mod tests {
         state: &Arc<ParsingState<EnvLang>>,
         recovery: Recovery,
     ) -> Parsed {
-        let mut std_reader = StdTokenReader::new(content);
-        let a = try_run(content, &mut std_reader, state, recovery).expect("std reader");
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_reader = StdTokenReader::new(&source);
+        let a = try_run(&source, &mut std_reader, state, recovery).expect("std reader");
 
         let mut scanned = Vec::new();
-        let mut scanner = StdTokenReader::new(content);
+        let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
             let done = matches!(token.kind, TokenKind::EndOfStream);
@@ -1404,8 +1412,8 @@ mod tests {
                 break;
             }
         }
-        let mut list_reader = TokenListReader::new(scanned);
-        let b = try_run(content, &mut list_reader, state, recovery).expect("list reader");
+        let mut list_reader = TokenListReader::new(&source, scanned);
+        let b = try_run(&source, &mut list_reader, state, recovery).expect("list reader");
 
         assert_eq!(shapes(&a.result), shapes(&b.result), "readers disagree on {:?}", content);
         assert_eq!(a.pos, b.pos, "positions disagree on {:?}", content);
@@ -1864,8 +1872,9 @@ mod tests {
     fn strict_mode_aborts_on_terminator_problems() {
         let st = suite_state();
         for content in ["\\begin{A}x\\end{B}", "\\begin{A}x", "\\begin{A}x\\end[y]"] {
-            let mut reader = StdTokenReader::new(content);
-            let result = try_run(content, &mut reader, &st, Recovery::Strict);
+            let source: Arc<Source> = Arc::new(Source::new(content));
+            let mut reader = StdTokenReader::new(&source);
+            let result = try_run(&source, &mut reader, &st, Recovery::Strict);
             assert!(result.is_err(), "expected strict abort on {:?}", content);
         }
     }
@@ -1943,7 +1952,7 @@ mod tests {
         let content = "x\\end{whatever} rest";
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = suite_state();
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session = ParserSession::new();
         let driver = EnvDriver { recovery: Recovery::Strict };
         let mut cx = ParseContext::new(
@@ -2037,13 +2046,14 @@ mod tests {
     /// implementation error bypasses the recover funnel and aborts even there.
     fn flaky_terminator_error(mode: Betrayal) -> ParseError {
         let content = "\\begin{A}b\\end{A}";
+        let source: Arc<Source> = Arc::new(Source::new(content));
         let mut reader = FlakyReader {
-            inner: StdTokenReader::new(content),
+            inner: StdTokenReader::new(&source),
             betray_at: 10,
             peeks_at_betrayal: 0,
             mode,
         };
-        try_run(content, &mut reader, &suite_state(), Recovery::Tolerant)
+        try_run(&source, &mut reader, &suite_state(), Recovery::Tolerant)
             .expect_err("the reader contract violation must abort the parse")
     }
 

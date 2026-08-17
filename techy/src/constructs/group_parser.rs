@@ -314,7 +314,7 @@ mod tests {
     ) -> (crate::engine::ParseResult<TestLang>, usize) {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let st = state();
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let open: Token<'_, TestLang> = TokenReader::peek(&mut reader, &st).unwrap();
         let TokenKind::GroupOpen { rule, .. } = &open.kind else {
             panic!("test content must start with a group open")

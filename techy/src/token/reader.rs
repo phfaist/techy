@@ -18,10 +18,11 @@
 
 use alloc::boxed::Box;
 use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
 
 use crate::constructs::ImplementationError;
-use crate::source::Span;
+use crate::source::{Source, SourceOrigin, SourcePos, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
 
 use super::error::{
@@ -217,15 +218,26 @@ fn paragraph_continues(content: &str, after_nl: usize, ws_chars: &str) -> bool {
 /// its detection branch is eliminated at compile time, and its rules block stores no
 /// data to consult in the first place.
 #[derive(Debug, Clone)]
-pub struct StdTokenReader<'s> {
+pub struct StdTokenReader<'s, O: SourceOrigin = Option<String>> {
+    source: &'s Arc<Source<O>>,
     content: &'s str,
     pos: usize,
 }
 
-impl<'s> StdTokenReader<'s> {
-    /// Create a reader positioned at the start of `content`.
-    pub fn new(content: &'s str) -> StdTokenReader<'s> {
-        StdTokenReader { content, pos: 0 }
+impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
+    /// Create a reader positioned at the start of `source`'s content.
+    ///
+    /// The reader borrows the source rather than cloning the `Arc`: it needs the
+    /// source to answer where its tokens are (every location it hands out is a
+    /// [`SourceSpan`]/[`SourcePos`] qualified by this source), and cloning the `Arc`
+    /// once per span keeps that cheap.
+    pub fn new(source: &'s Arc<Source<O>>) -> StdTokenReader<'s, O> {
+        StdTokenReader { source, content: source.content(), pos: 0 }
+    }
+
+    /// The source being tokenized.
+    pub fn source(&self) -> &'s Arc<Source<O>> {
+        self.source
     }
 
     /// The content being tokenized.
@@ -258,7 +270,7 @@ impl<'s> StdTokenReader<'s> {
 
     // --- scanning core ------------------------------------------------------------------
 
-    fn peek_impl<L: Lang>(
+    fn peek_impl<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
         &self,
         state: &ParsingState<L>,
     ) -> TokenResult<'s, L, Token<'s, L>> {
@@ -374,7 +386,7 @@ impl<'s> StdTokenReader<'s> {
     /// whitespace after the last newline is left for the next token's pre-space.
     /// Requires the paragraphs *and* whitespace features, each declared present and
     /// enabled at runtime: a language that declares either absent never yields a break.
-    fn detect_paragraph_break<L: Lang>(
+    fn detect_paragraph_break<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
         &self,
         pos: usize,
         pre_space: Span,
@@ -413,7 +425,7 @@ impl<'s> StdTokenReader<'s> {
     /// A `GroupOpen`/`GroupClose` token at `pos`, if a delimiter matches. The close
     /// delimiter expected per `rules.expecting_group_close()` takes precedence; otherwise
     /// the longest table match wins, read as an opener when the string is ambiguous.
-    fn detect_group_delimiter<L: Lang>(
+    fn detect_group_delimiter<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
         &self,
         pos: usize,
         pre_space: Span,
@@ -451,7 +463,7 @@ impl<'s> StdTokenReader<'s> {
     /// is not a name character. Multi-character names consume their following whitespace
     /// as post-space — syntactic whitespace, never crossing a paragraph break (enforced
     /// by [`skip_whitespace`] itself).
-    fn read_command<L: Lang>(
+    fn read_command<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
         &self,
         pos: usize,
         pre_space: Span,
@@ -516,7 +528,7 @@ impl<'s> StdTokenReader<'s> {
     /// post-space and the break surfaces as its own token. Returns `None` when the
     /// language declares the comments feature absent (such a language stores no
     /// comment rules data at all).
-    fn read_comment<L: Lang>(
+    fn read_comment<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
         &self,
         pos: usize,
         pre_space: Span,
@@ -556,7 +568,11 @@ impl<'s> StdTokenReader<'s> {
     }
 }
 
-impl<'s, L: Lang> TokenReader<'s, L> for StdTokenReader<'s> {
+impl<'s, O, L> TokenReader<'s, L> for StdTokenReader<'s, O>
+where
+    O: SourceOrigin,
+    L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>,
+{
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         self.peek_impl(state)
     }
@@ -737,7 +753,8 @@ mod tests {
     fn single_char_tokens() {
         // pylatexenc parity: one token per content character; whitespace between tokens
         // becomes the next token's pre_space.
-        let mut tr = StdTokenReader::new("ab c");
+        let source = Arc::new(Source::new("ab c"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
 
         assert_eq!(next(&mut tr, &st), char_token('a', 0, Span::empty(0)));
@@ -750,13 +767,15 @@ mod tests {
     fn char_with_pre_space() {
         let pre_space = "   \t\n \t";
         let text = format!("{}Some", pre_space);
-        let mut tr = StdTokenReader::new(&text);
+        let source = Arc::new(Source::new(&text));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(peek(&mut tr, &state(latex_rules())), char_token('S', 7, sp(0, 7)));
     }
 
     #[test]
     fn peek_does_not_advance() {
-        let mut tr = StdTokenReader::new("abc");
+        let source = Arc::new(Source::new("abc"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         let first = peek(&mut tr, &st);
         assert_eq!(peek(&mut tr, &st), first);
@@ -766,7 +785,8 @@ mod tests {
     #[test]
     fn char_multibyte() {
         let text = "héllo→";
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('h'));
         let token = next(&mut tr, &st);
@@ -780,7 +800,8 @@ mod tests {
     #[test]
     fn command_with_post_space() {
         let text = r"\somemacro and more stuff";
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
 
         // span includes the post_space (pylatexenc: pos_end past post_space).
         assert_eq!(
@@ -797,7 +818,8 @@ mod tests {
     fn command_with_pre_space() {
         let pre_space = "   \t\n \t";
         let text = format!("{}\\somemacro and more stuff", pre_space);
-        let mut tr = StdTokenReader::new(&text);
+        let source = Arc::new(Source::new(&text));
+        let mut tr = StdTokenReader::new(&source);
 
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
@@ -811,7 +833,8 @@ mod tests {
 
     #[test]
     fn single_char_command_takes_no_post_space() {
-        let mut tr = StdTokenReader::new(r"\& also");
+        let source = Arc::new(Source::new(r"\& also"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
@@ -824,7 +847,8 @@ mod tests {
 
     #[test]
     fn accent_command_then_char() {
-        let mut tr = StdTokenReader::new(r"\`accent");
+        let source = Arc::new(Source::new(r"\`accent"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         let token = next(&mut tr, &st);
         assert_eq!(token.kind, TokenKind::Command { name: "`", escape_char: '\\', post_space: Span::empty(2) });
@@ -835,7 +859,8 @@ mod tests {
     fn command_post_space_stops_before_paragraph_break() {
         // Whitespace after the command starts with the break sequence: no post_space at
         // all (pylatexenc: "put back whitespace that breaks into a new paragraph").
-        let mut tr = StdTokenReader::new("\\macroname\n  \n ");
+        let source = Arc::new(Source::new("\\macroname\n  \n "));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
@@ -854,7 +879,8 @@ mod tests {
 
     #[test]
     fn command_post_space_kept_up_to_paragraph_break() {
-        let mut tr = StdTokenReader::new("\\macroname   \n  \n ");
+        let source = Arc::new(Source::new("\\macroname   \n  \n "));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
@@ -873,7 +899,8 @@ mod tests {
     #[test]
     fn command_custom_name_chars() {
         let text = r"\zzz1234567890-haha_works! is a macro here";
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = vec![Arc::new(CommandRule {
             escape_char: '\\',
@@ -909,7 +936,8 @@ mod tests {
             Arc::new(CommandRule { escape_char: '@', name_chars: names.into() }),
         ];
         let st = state(rules);
-        let mut tr = StdTokenReader::new("\\foo @bar");
+        let source = Arc::new(Source::new("\\foo @bar"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -930,7 +958,8 @@ mod tests {
 
     #[test]
     fn commands_disabled_escape_is_plain_content() {
-        let mut tr = StdTokenReader::new(r"\foo");
+        let source = Arc::new(Source::new(r"\foo"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = Vec::new();
         let st = state(rules);
@@ -942,7 +971,8 @@ mod tests {
     fn commands_gate_off_is_the_scoped_disable() {
         // The gate variant of the test above: the command rules stay in the data (a
         // later enabled: Some(true) delta restores recognition without carrying them).
-        let mut tr = StdTokenReader::new(r"\foo");
+        let source = Arc::new(Source::new(r"\foo"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.enabled = false;
         let st = state(rules);
@@ -958,7 +988,8 @@ mod tests {
         // \begin{equation} tokenizes as command + group open + chars (+ group close):
         // "as far as token parsing is concerned, \begin is a command just like \foobar".
         // Environment recognition is entirely a parse-time (preset) concern.
-        let mut tr = StdTokenReader::new(r"\begin{equation}");
+        let source = Arc::new(Source::new(r"\begin{equation}"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
 
         assert_eq!(
@@ -979,7 +1010,8 @@ mod tests {
 
     #[test]
     fn begin_prefixed_command_name_reads_fully() {
-        let mut tr = StdTokenReader::new(r"\beginMacroWithConfusingName");
+        let source = Arc::new(Source::new(r"\beginMacroWithConfusingName"));
+        let mut tr = StdTokenReader::new(&source);
         let token = peek(&mut tr, &state(latex_rules()));
         match token.kind {
             TokenKind::Command { name, .. } => assert_eq!(name, "beginMacroWithConfusingName"),
@@ -993,7 +1025,8 @@ mod tests {
     fn group_open_and_close() {
         let st = state(latex_rules());
 
-        let mut tr = StdTokenReader::new("{begin group here");
+        let source = Arc::new(Source::new("{begin group here"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
@@ -1003,7 +1036,8 @@ mod tests {
             ),
         );
 
-        let mut tr = StdTokenReader::new("} a braced group just ended here");
+        let source = Arc::new(Source::new("} a braced group just ended here"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
@@ -1018,7 +1052,8 @@ mod tests {
     fn group_delimiters_with_pre_space() {
         let pre_space = "   \t\n \t";
         let text = format!("{}{{begin group here", pre_space);
-        let mut tr = StdTokenReader::new(&text);
+        let source = Arc::new(Source::new(&text));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
             Token::new(
@@ -1031,7 +1066,8 @@ mod tests {
 
     #[test]
     fn optional_argument_brackets_are_group_tokens() {
-        let mut tr = StdTokenReader::new("[(i)]");
+        let source = Arc::new(Source::new("[(i)]"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st).kind,
@@ -1050,7 +1086,8 @@ mod tests {
 
     #[test]
     fn ambiguous_delimiter_reads_as_open_by_default() {
-        let mut tr = StdTokenReader::new("$x$");
+        let source = Arc::new(Source::new("$x$"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())).kind,
             TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) },
@@ -1059,7 +1096,8 @@ mod tests {
 
     #[test]
     fn expected_close_wins_over_open_interpretation() {
-        let mut tr = StdTokenReader::new("$ and more");
+        let source = Arc::new(Source::new("$ and more"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &expecting_close(MATH_INLINE)).kind,
             TokenKind::GroupClose { delim: "$" },
@@ -1070,7 +1108,8 @@ mod tests {
     fn close_only_delimiter_reads_as_close_even_unexpected() {
         // "report closing '\)' also with incorrect parsing state -- it's not the
         // tokenizer's job to report syntax errors" (pylatexenc test suite).
-        let mut tr = StdTokenReader::new(r"\) rest");
+        let source = Arc::new(Source::new(r"\) rest"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())).kind,
             TokenKind::GroupClose { delim: r"\)" },
@@ -1081,7 +1120,8 @@ mod tests {
     fn escape_led_delimiters_win_over_command_interpretation() {
         let st = state(latex_rules());
 
-        let mut tr = StdTokenReader::new(r" \(x\)");
+        let source = Arc::new(Source::new(r" \(x\)"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             next(&mut tr, &st),
             Token::new(
@@ -1091,7 +1131,8 @@ mod tests {
             ),
         );
 
-        let mut tr = StdTokenReader::new("\n\\[ cx^2 \\]");
+        let source = Arc::new(Source::new("\n\\[ cx^2 \\]"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(
@@ -1128,7 +1169,8 @@ mod tests {
         ];
 
         for (pos, st, kind, end) in cases {
-            let mut tr = StdTokenReader::new(text);
+            let source = Arc::new(Source::new(text));
+            let mut tr = StdTokenReader::new(&source);
             tr.move_to_pos(pos);
             let token = peek(&mut tr, st);
             assert_eq!(token.kind, kind, "at pos {}", pos);
@@ -1142,7 +1184,8 @@ mod tests {
     fn comment_token_covers_content_and_post_space() {
         // "% Comment here\n  more": content sans delimiter and newline; post_space =
         // newline + indentation (syntactic whitespace, consumed by the comment).
-        let mut tr = StdTokenReader::new("% Comment here\n  more stuff");
+        let source = Arc::new(Source::new("% Comment here\n  more stuff"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
@@ -1163,7 +1206,8 @@ mod tests {
     fn comment_with_pre_space() {
         let pre_space = "   \t\n \t";
         let text = format!("{}% Comment here\n  more stuff", pre_space);
-        let mut tr = StdTokenReader::new(&text);
+        let source = Arc::new(Source::new(&text));
+        let mut tr = StdTokenReader::new(&source);
         let token = peek(&mut tr, &state(latex_rules()));
         assert_eq!(token.pre_space, sp(0, 7));
         assert_eq!(token.span, sp(7, 24));
@@ -1182,7 +1226,8 @@ mod tests {
         // "a% c\n\nb": the comment's terminating newline belongs to a \n\s*\n sequence,
         // so the comment takes no post-space and the paragraph break survives as its own
         // token (TeX-wise: the blank line still yields \par).
-        let mut tr = StdTokenReader::new("a% c\n\nb");
+        let source = Arc::new(Source::new("a% c\n\nb"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
         assert_eq!(
@@ -1206,7 +1251,8 @@ mod tests {
 
     #[test]
     fn comment_at_end_of_input_without_newline() {
-        let mut tr = StdTokenReader::new("x% trailing");
+        let source = Arc::new(Source::new("x% trailing"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
         assert_eq!(
@@ -1231,7 +1277,8 @@ mod tests {
         // input is expected text-mode-normalized by the embedder (the no_std core
         // never reads files). On CRLF input the '\r' therefore stays inside the
         // comment content, as in pylatexenc.
-        let mut tr = StdTokenReader::new("% note\r\n  more");
+        let source = Arc::new(Source::new("% note\r\n  more"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
@@ -1251,7 +1298,8 @@ mod tests {
     #[test]
     fn comment_alternative_start_string_longest_wins() {
         let text = "%!!COMMENT!! Comment here\nmore";
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = vec![
             Arc::new(CommentRule { start: "%".into() }),
@@ -1274,7 +1322,8 @@ mod tests {
 
     #[test]
     fn comments_disabled_percent_is_plain_content() {
-        let mut tr = StdTokenReader::new("a %b");
+        let source = Arc::new(Source::new("a %b"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = Vec::new();
         let st = state(rules);
@@ -1285,7 +1334,8 @@ mod tests {
 
     #[test]
     fn comments_gate_off_is_the_scoped_disable() {
-        let mut tr = StdTokenReader::new("a %b");
+        let source = Arc::new(Source::new("a %b"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.enabled = false;
         let st = state(rules);
@@ -1301,7 +1351,8 @@ mod tests {
     fn paragraph_break_token() {
         // "Abc    \n\n  z": break spans first..last newline; leading run is pre_space,
         // whitespace after the last newline is left for the next token.
-        let mut tr = StdTokenReader::new("Abc    \n\n  z");
+        let source = Arc::new(Source::new("Abc    \n\n  z"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         tr.move_to_pos(3);
 
@@ -1314,7 +1365,8 @@ mod tests {
 
     #[test]
     fn paragraph_break_with_inner_whitespace() {
-        let mut tr = StdTokenReader::new("Abc  \t \n   \t\nz");
+        let source = Arc::new(Source::new("Abc  \t \n   \t\nz"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         tr.move_to_pos(3);
         assert_eq!(
@@ -1325,7 +1377,8 @@ mod tests {
 
     #[test]
     fn paragraph_break_in_trailing_whitespace_still_emitted() {
-        let mut tr = StdTokenReader::new("x  \n\n  ");
+        let source = Arc::new(Source::new("x  \n\n  "));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
         assert_eq!(
@@ -1342,7 +1395,8 @@ mod tests {
 
     #[test]
     fn paragraph_breaks_disabled() {
-        let mut tr = StdTokenReader::new("Abc\n\nNew");
+        let source = Arc::new(Source::new("Abc\n\nNew"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.paragraphs.enabled = false;
         let st = state(rules);
@@ -1414,7 +1468,8 @@ mod tests {
 
     #[test]
     fn specials_recognized_with_spec_attached() {
-        let mut tr = StdTokenReader::new("a&b");
+        let source = Arc::new(Source::new("a&b"));
+        let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
 
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
@@ -1433,7 +1488,8 @@ mod tests {
 
     #[test]
     fn specials_longest_match_is_the_scanners_business() {
-        let mut tr = StdTokenReader::new("---x");
+        let source = Arc::new(Source::new("---x"));
+        let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
         let token = TokenReader::peek(&mut tr, &st).unwrap();
         match &token.kind {
@@ -1446,7 +1502,8 @@ mod tests {
     #[test]
     fn specials_scan_miss_falls_through_to_char() {
         // '-' is a trigger char, but a lone '-' matches no trigger: plain content.
-        let mut tr = StdTokenReader::new("-x");
+        let source = Arc::new(Source::new("-x"));
+        let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('-'));
     }
@@ -1503,7 +1560,8 @@ mod tests {
 
     #[test]
     fn scan_specials_invalid_match_end_is_an_unrecoverable_implementation_error() {
-        let mut tr = StdTokenReader::new("~x");
+        let source = Arc::new(Source::new("~x"));
+        let mut tr = StdTokenReader::new(&source);
         let rules: TokenRules<BadEndLang> = latex_rules();
         let st = Arc::new(ParsingState::new(StateData {
             rules,
@@ -1529,7 +1587,8 @@ mod tests {
 
         // Out of bounds (`move_to_pos` serves outer-layer resume positions, so the
         // violation is reported at the next read, not panicked).
-        let mut tr = StdTokenReader::new("ab");
+        let source = Arc::new(Source::new("ab"));
+        let mut tr = StdTokenReader::new(&source);
         tr.move_to_pos(5);
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
@@ -1537,7 +1596,8 @@ mod tests {
         assert!(err.into_recovery().is_none());
 
         // Not a char boundary.
-        let mut tr = StdTokenReader::new("é");
+        let source = Arc::new(Source::new("é"));
+        let mut tr = StdTokenReader::new(&source);
         tr.move_to_pos(1);
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(err.kind(), TokenErrorKind::Custom(data)
@@ -1549,7 +1609,8 @@ mod tests {
         // The gate is baked at freeze: the state stores the empty TriggerChars, so the
         // scan hook is unreachable and triggers read as plain content — this is what
         // makes "no specials here" delta-expressible (DESIGN_RATIONALE [§dd-dr:tokens], ex-[§dd-dr:open-questions]).
-        let mut tr = StdTokenReader::new("a&b");
+        let source = Arc::new(Source::new("a&b"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<SpecialsLang> = latex_rules();
         rules.specials.enabled = false;
         let st = specials_state(rules);
@@ -1604,7 +1665,8 @@ mod tests {
             mode: (),
             ext: (),
         }));
-        let mut tr = StdTokenReader::new("x");
+        let source = Arc::new(Source::new("x"));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
     }
 
@@ -1612,7 +1674,8 @@ mod tests {
 
     #[test]
     fn forbidden_char_error_with_recovery() {
-        let mut tr = StdTokenReader::new("% forbidden here");
+        let source = Arc::new(Source::new("% forbidden here"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = Vec::new();
         rules.forbidden_chars.chars = "%$".into();
@@ -1635,7 +1698,8 @@ mod tests {
 
     #[test]
     fn end_of_stream_after_escape_error_with_recovery() {
-        let mut tr = StdTokenReader::new(r"a \");
+        let source = Arc::new(Source::new(r"a \"));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
 
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
@@ -1667,7 +1731,8 @@ mod tests {
     fn end_of_stream_token_is_terminal_and_idempotent() {
         let st = state(latex_rules());
 
-        let mut tr = StdTokenReader::new("");
+        let source = Arc::new(Source::new(""));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
             Token::new(TokenKind::EndOfStream, Span::empty(0), Span::empty(0)),
@@ -1675,7 +1740,8 @@ mod tests {
 
         // Trailing whitespace (no paragraph break) is the end-of-stream token's
         // pre_space — reported, so it can land in the node tree.
-        let mut tr = StdTokenReader::new("x   ");
+        let source = Arc::new(Source::new("x   "));
+        let mut tr = StdTokenReader::new(&source);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
         let eos = Token::new(TokenKind::EndOfStream, Span::empty(4), sp(1, 4));
         assert_eq!(next(&mut tr, &st), eos);
@@ -1693,7 +1759,8 @@ mod tests {
 
     #[test]
     fn whitespace_disabled_gives_character_level_content() {
-        let mut tr = StdTokenReader::new("a b{");
+        let source = Arc::new(Source::new("a b{"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.whitespace.enabled = false;
         let st = state(rules);
@@ -1710,7 +1777,8 @@ mod tests {
 
     #[test]
     fn groups_gate_off_delimiters_are_plain_content() {
-        let mut tr = StdTokenReader::new("{a}");
+        let source = Arc::new(Source::new("{a}"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.groups.enabled = false;
         let st = state(rules);
@@ -1731,7 +1799,8 @@ mod tests {
         // The decided interaction (DESIGN_RATIONALE [§dd-dr:tokens]): expecting_group_close is
         // positional data, not a feature — a group interior that disables groups
         // entirely still finds its own close, so the entered group always terminates.
-        let mut tr = StdTokenReader::new("a{$");
+        let source = Arc::new(Source::new("a{$"));
+        let mut tr = StdTokenReader::new(&source);
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.groups.enabled = false;
         rules.groups.expecting_close = Some(rule_of(MATH_INLINE));
@@ -1748,7 +1817,8 @@ mod tests {
     #[test]
     fn move_past_and_move_to_flags() {
         let text = "  \\vec b";
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
 
         let token = peek(&mut tr, &st);
@@ -1784,7 +1854,8 @@ mod tests {
                     \\mymacro\n\n\
                     New paragraph\n";
         let st = state(latex_rules());
-        let mut tr = StdTokenReader::new(text);
+        let source = Arc::new(Source::new(text));
+        let mut tr = StdTokenReader::new(&source);
 
         let find = |needle: &str| text.find(needle).unwrap();
 

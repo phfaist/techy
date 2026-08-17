@@ -14,6 +14,7 @@
 //! inputs the driver feeds ([`ParsingStateStack::from_node_ancestors`] supplies
 //! the stack with no session anywhere).
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -24,14 +25,14 @@ use crate::constructs::{FromInvocation, Invocation};
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
-use crate::source::{IntoSourceResolver, SourceResolver};
+use crate::source::{IntoSourceResolver, Source, SourceResolver};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{
     CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, Token};
+use crate::token::{GroupRule, StdTokenReader, Token, TokenReader};
 
 use super::{
     Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang,
@@ -414,6 +415,14 @@ impl<LLL: LatexlikeLang> fmt::Debug for LatexlikeDriver<LLL> {
 }
 
 impl<LLL: LatexlikeLang> ParseDriver<LLL> for LatexlikeDriver<LLL> {
+    /// The standard reader: the preset tokenizes with
+    /// [`StdTokenReader`](crate::token::StdTokenReader).
+    fn make_token_reader<'s>(
+        &'s self,
+        source: &'s Arc<Source<LLL::SourceOrigin>>,
+    ) -> Box<dyn TokenReader<'s, LLL> + 's> {
+        Box::new(StdTokenReader::new(source))
+    }
 
     fn recovery(&self) -> Recovery {
         self.recovery

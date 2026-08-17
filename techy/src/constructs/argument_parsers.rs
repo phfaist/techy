@@ -1095,6 +1095,13 @@ mod tests {
     }
 
     impl ParseDriver<ArgLang> for ArgDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ArgLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -1249,16 +1256,15 @@ mod tests {
     /// Drive a `NodesParser` to end of input over `tokens`, stage the outcome under a
     /// root `List` spanning the parsed extent, freeze, and run the invariant checker.
     fn try_run<'s>(
-        content: &'s str,
+        source: &'s Arc<Source>,
         tokens: &mut dyn TokenReader<'s, ArgLang>,
         state: &Arc<ParsingState<ArgLang>>,
         recovery: Recovery,
     ) -> Result<Parsed, ParseError> {
-        let source: Arc<Source> = Arc::new(Source::new(content));
         let mut session = ParserSession::new();
         let driver = ArgDriver { recovery };
         let mut cx =
-            ParseContext::new(tokens, Arc::clone(&source), Arc::clone(state), &mut session, &driver);
+            ParseContext::new(tokens, Arc::clone(source), Arc::clone(state), &mut session, &driver);
         let mut parser = NodesParser::new(StopSpec::none())
             .with_child_states(ChildStateSpec::inherit());
         let (outcome, delta) = parser.parse(&mut cx)?;
@@ -1277,7 +1283,7 @@ mod tests {
         };
         let root = session.builder.add(
             NodeKind::list(),
-            SourceSpan::new(&source, root_span),
+            SourceSpan::new(source, root_span),
             Arc::clone(state),
             outcome.nodes, (), (),
         ).unwrap();
@@ -1295,8 +1301,9 @@ mod tests {
         state: &Arc<ParsingState<ArgLang>>,
         recovery: Recovery,
     ) -> Parsed {
-        let mut reader = StdTokenReader::new(content);
-        try_run(content, &mut reader, state, recovery).expect("parse")
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        try_run(&source, &mut reader, state, recovery).expect("parse")
     }
 
     /// Run against both readers (report R6) and assert they agree; for content whose
@@ -1306,11 +1313,12 @@ mod tests {
         state: &Arc<ParsingState<ArgLang>>,
         recovery: Recovery,
     ) -> Parsed {
-        let mut std_reader = StdTokenReader::new(content);
-        let a = try_run(content, &mut std_reader, state, recovery).expect("std reader");
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut std_reader = StdTokenReader::new(&source);
+        let a = try_run(&source, &mut std_reader, state, recovery).expect("std reader");
 
         let mut scanned = Vec::new();
-        let mut scanner = StdTokenReader::new(content);
+        let mut scanner = StdTokenReader::new(&source);
         loop {
             let token = TokenReader::next(&mut scanner, state).expect("clean scan");
             let done = matches!(token.kind, TokenKind::EndOfStream);
@@ -1319,8 +1327,8 @@ mod tests {
                 break;
             }
         }
-        let mut list_reader = TokenListReader::new(scanned);
-        let b = try_run(content, &mut list_reader, state, recovery).expect("list reader");
+        let mut list_reader = TokenListReader::new(&source, scanned);
+        let b = try_run(&source, &mut list_reader, state, recovery).expect("list reader");
 
         assert_eq!(a.pos, b.pos, "positions disagree on {:?}", content);
         assert_eq!(
@@ -1442,8 +1450,9 @@ mod tests {
         );
 
         // Strict aborts on the same shape.
-        let mut reader = StdTokenReader::new(r"\m x");
-        let err = try_run(r"\m x", &mut reader, &st, Recovery::Strict).unwrap_err();
+        let source: Arc<Source> = Arc::new(Source::new(r"\m x"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
         assert!(err.to_string().contains("missing mandatory argument"));
     }
 
@@ -1870,7 +1879,7 @@ mod tests {
         // The would-be-protected case fails for real.
         let content = r"\item[{a]b}]";
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session = ParserSession::new();
         let driver = ArgDriver { recovery: Recovery::Tolerant };
         let mut cx = ParseContext::new(
@@ -1927,8 +1936,9 @@ mod tests {
         );
 
         // Strict mode aborts instead.
-        let mut reader = StdTokenReader::new(r"\frac{a}");
-        let err = try_run(r"\frac{a}", &mut reader, &st, Recovery::Strict).unwrap_err();
+        let source: Arc<Source> = Arc::new(Source::new(r"\frac{a}"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
         assert!(err.to_string().contains("missing mandatory argument"));
     }
 
@@ -2029,8 +2039,9 @@ mod tests {
         assert_eq!(diagnostic.frames()[1].span().range(), 0..5);
 
         // A strict abort carries the same snapshot on the ParseError.
-        let mut reader = StdTokenReader::new(r"\frac{a}");
-        let err = try_run(r"\frac{a}", &mut reader, &st, Recovery::Strict).unwrap_err();
+        let source: Arc<Source> = Arc::new(Source::new(r"\frac{a}"));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, &st, Recovery::Strict).unwrap_err();
         let titles: Vec<&str> = err.frames().iter().map(|f| f.title()).collect();
         assert_eq!(titles, ["argument #2 of ‘\\frac’", "callable ‘\\frac’"]);
     }
@@ -2354,8 +2365,9 @@ mod tests {
     /// recovery, deliberately: an implementation error bypasses the recover funnel
     /// and aborts even there.
     fn expect_implementation_error(content: &str, st: &Arc<ParsingState<ArgLang>>) {
-        let mut reader = StdTokenReader::new(content);
-        let err = try_run(content, &mut reader, st, Recovery::Tolerant)
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = StdTokenReader::new(&source);
+        let err = try_run(&source, &mut reader, st, Recovery::Tolerant)
             .expect_err("the spec-author contract violation must abort the parse");
         assert_eq!(err.identifier(), super::super::ImplementationError::IDENTIFIER);
     }
@@ -2398,7 +2410,7 @@ mod tests {
         let driver = ArgDriver { recovery: Recovery::Strict };
         let foreign = {
             let mut other_session = ParserSession::new();
-            let mut reader = StdTokenReader::new(content);
+            let mut reader = StdTokenReader::new(&source);
             let mut cx = ParseContext::new(
                 &mut reader,
                 Arc::clone(&source),
@@ -2417,7 +2429,7 @@ mod tests {
         // A fresh session that staged nothing: the foreign id resolves to no
         // staged node.
         let mut session = ParserSession::new();
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let cx = ParseContext::new(
             &mut reader,
             Arc::clone(&source),

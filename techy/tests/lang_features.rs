@@ -515,6 +515,7 @@ mod plain_chars {
 mod groups_only {
     use super::support::*;
     use std::sync::Arc;
+    use techy::source::Source;
     use techy::core::{
         Language, ParsingState, ParsingStateDelta, StdParseDriver, StdTokenReader, Token,
         TokenKind, TokenReader, TokenRulesOverrides,
@@ -553,7 +554,8 @@ mod groups_only {
     #[test]
     fn whitespace_characters_are_ordinary_content_tokens_with_empty_pre_space() {
         let state = Arc::new(ParsingState::<GroupsOnlyLang>::lang_initial().expect("seed state"));
-        let mut reader = StdTokenReader::new(" {");
+        let source: Arc<Source> = Arc::new(Source::new(" {"));
+        let mut reader = StdTokenReader::new(&source);
 
         let token: Token<'_, GroupsOnlyLang> = reader.peek(&state).unwrap();
         assert_eq!(token.kind, TokenKind::Char(' '));

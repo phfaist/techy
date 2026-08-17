@@ -66,7 +66,7 @@ use crate::source::{
 };
 use crate::spec::CallableSpec;
 use crate::state::{Lang, ParsingState, ParsingStateDelta, ParsingStateStack};
-use crate::token::{GroupRule, Token, TokenKind, TokenReader};
+use crate::token::{GroupRule, StdStreamPosition, StdTokenReader, Token, TokenKind, TokenReader};
 
 
 use super::ParserSession;
@@ -74,8 +74,12 @@ use super::ParserSession;
 /// The Lang-provided parse-behavior object, grouping five concerns: the recovery
 /// policy, the parse-time hooks (command resolution, paragraph-break emission,
 /// diagnostic refinement, transition observation, event lowering), source
-/// resolution, the group descent-delta channel, and construct provision — all
-/// defaulted, so `impl ParseDriver<MyLang> for MyDriver {}` is a complete driver.
+/// resolution, the group descent-delta channel, and construct provision. Every
+/// method but [`make_token_reader`](ParseDriver::make_token_reader) is defaulted,
+/// and that one's standard body is the one-liner
+/// `Box::new(StdTokenReader::new(source))`, so
+/// `impl ParseDriver<MyLang> for MyDriver { /* make_token_reader */ }` is a complete
+/// driver.
 /// (Parsing depth is limited by the engine-owned
 /// [`StdDescentGuard`](super::StdDescentGuard), not a driver
 /// concern; its configuration travels on the [`Language`](super::Language) value,
@@ -163,6 +167,42 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
         let data = self.refine_diagnostic(data, state);
         session.recover(self.recovery(), data, span)
     }
+
+    // --- tokenization ---------------------------------------------------------
+
+    /// Build the token reader for one parse over `source` — **the door for custom
+    /// tokenization**.
+    ///
+    /// Both reader-construction sites go through this hook:
+    /// [`Language::parse_source`](super::Language::parse_source) for the root parse and
+    /// [`ParseContext::parse_attached_source`](crate::constructs::ParseContext::parse_attached_source)
+    /// for an attached (included) source. A driver that returns its own reader thereby
+    /// tokenizes the whole parse its way, while the *types* involved stay fixed by the
+    /// language ([`Lang::StreamPosition`](crate::state::Lang::StreamPosition)).
+    ///
+    /// The standard body — right for every language tokenized by
+    /// [`StdTokenReader`](crate::token::StdTokenReader), which is every language whose
+    /// `StreamPosition` is [`StdStreamPosition`](crate::token::StdStreamPosition):
+    ///
+    /// ```ignore
+    /// fn make_token_reader<'s>(
+    ///     &'s self,
+    ///     source: &'s Arc<Source<L::SourceOrigin>>,
+    /// ) -> Box<dyn TokenReader<'s, L> + 's> {
+    ///     Box::new(StdTokenReader::new(source))
+    /// }
+    /// ```
+    ///
+    /// This method has no default: the default body would have to name a concrete
+    /// reader type, and no single reader type serves a language whose stream positions
+    /// are its own.
+    ///
+    /// The returned reader borrows both `self` and `source` for the parse's extent, so
+    /// a driver may hand it configuration it holds.
+    fn make_token_reader<'s>(
+        &'s self,
+        source: &'s Arc<Source<L::SourceOrigin>>,
+    ) -> Box<dyn TokenReader<'s, L> + 's>;
 
     /// Probe the token at the reader's position under `state`, mapping a tokenizer
     /// error per the recovery policy (the default reads it through
@@ -779,7 +819,19 @@ impl<R, O: SourceOrigin> StdParseDriver<R, O> {
     }
 }
 
-impl<L: Lang, R: CommandResolver<L>> ParseDriver<L> for StdParseDriver<R, L::SourceOrigin> {
+// The `StreamPosition` bound is what lets the ready-made driver build the ready-made
+// reader: `StdTokenReader` serves exactly the languages whose stream positions are
+// `StdStreamPosition`. A language with its own stream positions brings its own driver.
+impl<L: Lang<StreamPosition = StdStreamPosition>, R: CommandResolver<L>> ParseDriver<L>
+    for StdParseDriver<R, L::SourceOrigin>
+{
+    fn make_token_reader<'s>(
+        &'s self,
+        source: &'s Arc<Source<L::SourceOrigin>>,
+    ) -> Box<dyn TokenReader<'s, L> + 's> {
+        Box::new(StdTokenReader::new(source))
+    }
+
     fn recovery(&self) -> Recovery {
         self.recovery
     }

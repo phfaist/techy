@@ -28,12 +28,11 @@ use alloc::vec::Vec;
 
 use core::fmt;
 
-use crate::engine::{Frame, FrameTitle};
+use crate::engine::{Frame, FrameTitle, ParseDriver};
 use crate::error::DiagnosticInfo;
 use crate::node::{BuildId, NodeKind};
 use crate::source::{resolve_source_reference, ResolveError, Source, SourceSpan};
 use crate::state::{Lang, ParsingState, ParsingStateDelta};
-use crate::token::StdTokenReader;
 
 use super::{
     ConstructParser, ConstructParserResult, NodesOutcome, ParseContext, StopCause,
@@ -152,9 +151,9 @@ impl<L: Lang> ParseContext<'_, '_, L> {
         // The fresh inner context: its own reader over the attached content, the
         // same session/builder/driver. The outer reader (and the outer ambient
         // state) are untouched — `self` is shadowed for the sub-parse's extent.
-        let mut reader = StdTokenReader::new(source.content());
+        let mut reader = self.driver.make_token_reader(&source);
         let mut inner = ParseContext::new(
-            &mut reader,
+            &mut *reader,
             Arc::clone(&source),
             state,
             &mut *self.session,
@@ -331,6 +330,7 @@ mod tests {
     use crate::error::Recovery;
     use crate::scopes::ScopeStack;
     use crate::source::MapResolver;
+    use crate::token::StdTokenReader;
     use crate::state::{ParsingState, StateData, TrivialLang};
     use crate::token::{
         CommandRule, CommandRules, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
@@ -423,7 +423,7 @@ mod tests {
         f: impl FnOnce(&mut ParseContext<'_, '_, DocLang>) -> R,
     ) -> (R, ParserSession<DocLang>) {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(source.content());
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<DocLang> = ParserSession::new();
         let state = Arc::new(ParsingState::<DocLang>::lang_initial().expect("seed state"));
         let result = {
@@ -773,7 +773,7 @@ mod tests {
 
         let driver: StdParseDriver = StdParseDriver::new(Recovery::Tolerant, ());
         let source: Arc<Source> = Arc::new(Source::new("x"));
-        let mut reader = StdTokenReader::new(source.content());
+        let mut reader = StdTokenReader::new(&source);
         let mut session: ParserSession<PlainLang> = ParserSession::new();
         let state = Arc::new(ParsingState::<PlainLang>::lang_initial().expect("seed state"));
         let mut cx = ParseContext::new(&mut reader, source.clone(), state, &mut session, &driver);

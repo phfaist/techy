@@ -23,7 +23,6 @@ use super::descent_guard::{DescentGuard, StdDescentGuard, StdDescentGuardInit};
 use super::driver::ParseDriver;
 use crate::source::{Source, SourceSpan, Span};
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState};
-use crate::token::StdTokenReader;
 
 use super::{ParseResult, ParserSession};
 
@@ -60,9 +59,9 @@ use super::{ParseResult, ParserSession};
 ///
 /// ```ignore
 /// let mut session = ParserSession::new();
-/// let mut reader = StdTokenReader::new(content);
+/// let mut reader = language.driver().make_token_reader(&source);
 /// let mut cx = ParseContext::new(
-///     &mut reader,
+///     &mut *reader,
 ///     source,
 ///     Arc::clone(language.initial_state()),
 ///     &mut session,
@@ -181,7 +180,7 @@ impl<L: Lang> Language<L> {
     where
         L::InvocationSyntax: FromInvocation<L>,
     {
-        let mut reader = StdTokenReader::new(source.content());
+        let mut reader = self.driver.make_token_reader(&source);
         let mut session = ParserSession::new();
         // Seed the diagnostics sink's retention cap from the driver
         // (`ParseDriver::diagnostics_limit`); `None` keeps the default cap.
@@ -198,7 +197,7 @@ impl<L: Lang> Language<L> {
         // per root parse, before any token is read.
         self.driver.observe_parse_start(&source, &seed, &mut session.diagnostics);
         let mut cx = ParseContext::new(
-            &mut reader,
+            &mut *reader,
             Arc::clone(&source),
             Arc::clone(&seed),
             &mut session,
@@ -528,6 +527,13 @@ mod tests {
     struct CapDriver;
 
     impl ParseDriver<CapLang> for CapDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, CapLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             Recovery::Tolerant
         }
@@ -580,6 +586,13 @@ mod tests {
     struct ObserveDriver;
 
     impl ParseDriver<ObserveLang> for ObserveDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, ObserveLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn observe_transition(
             &self,
             ext: &mut Observed,
@@ -759,6 +772,13 @@ mod tests {
         }
 
         impl ParseDriver<BogusLang> for BogusDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, BogusLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+
             fn recovery(&self) -> Recovery {
                 Recovery::Tolerant
             }
@@ -926,7 +946,14 @@ mod tests {
         }
         #[derive(Debug, Clone, Copy)]
         struct OneLineDriver;
-        impl ParseDriver<OneLineLang> for OneLineDriver {}
+        impl ParseDriver<OneLineLang> for OneLineDriver {
+            fn make_token_reader<'s>(
+                &'s self,
+                source: &'s alloc::sync::Arc<crate::source::Source>,
+            ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, OneLineLang> + 's> {
+                alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+            }
+        }
         let language: Language<OneLineLang> =
             Language::new(OneLineDriver, ParsingState::lang_initial().expect("seed state"));
         assert!(language.parse("hello").is_ok());

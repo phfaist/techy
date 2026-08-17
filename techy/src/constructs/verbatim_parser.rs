@@ -845,6 +845,13 @@ mod tests {
     }
 
     impl ParseDriver<VerbLang> for VerbDriver {
+        fn make_token_reader<'s>(
+            &'s self,
+            source: &'s alloc::sync::Arc<crate::source::Source>,
+        ) -> alloc::boxed::Box<dyn crate::token::TokenReader<'s, VerbLang> + 's> {
+            alloc::boxed::Box::new(crate::token::StdTokenReader::new(source))
+        }
+
         fn recovery(&self) -> Recovery {
             self.recovery
         }
@@ -951,7 +958,7 @@ mod tests {
         recovery: Recovery,
     ) -> Result<ParseResult<VerbLang>, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session = ParserSession::new();
         let driver = VerbDriver { recovery };
         let mut cx = ParseContext::new(
@@ -1308,7 +1315,7 @@ mod tests {
     ) -> Result<BodyRun, ParseError> {
         let source: Arc<Source> = Arc::new(Source::new(content));
         let state = plain_state();
-        let mut reader = StdTokenReader::new(content);
+        let mut reader = StdTokenReader::new(&source);
         let mut session = ParserSession::new();
         let driver = VerbDriver { recovery };
         let mut cx = ParseContext::new(
