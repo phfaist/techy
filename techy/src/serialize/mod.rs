@@ -207,8 +207,9 @@ pub use object::{
 pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
 
 // Shared bodies of the crate's own spec serialization, for the preset's impls.
-pub(crate) use drivers::specs::{read_unit_recipe, serialize_stamped_spec, unit_recipe_value};
-pub(crate) use drivers::missing_standard_table;
+pub(crate) use drivers::specs::{
+    read_unit_recipe, serialize_stamped_spec, spec_and_provider_tables, unit_recipe_value,
+};
 
 // The typed-position macro is defined at the crate root (as every `macro_rules!`
 // export is) and hidden there; this is its canonical, documented path.

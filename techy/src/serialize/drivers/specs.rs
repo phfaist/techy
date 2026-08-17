@@ -37,7 +37,7 @@ use crate::scopes::{
 use crate::spec::{CallableSpec, StdCallableSpec};
 use crate::state::Lang;
 
-use super::super::engine::{DeserializeContext, SerdeSession, SerializeContext};
+use super::super::engine::{DeserializeContext, SerdeSession, SerializeContext, TableHandle};
 use super::super::error::{DeserializeError, RegistrationError, SerializeError};
 use super::super::object::{
     DeserializableObject, DeserializableValue, SerializableLang, SerializableObject,
@@ -49,10 +49,10 @@ use super::super::wire::specs::{
     WirePackage, WireScope, WireSpecIdentity,
 };
 use super::super::wire::{FromSerialValue, ToSerialValue};
-use super::standard::{StandardTableInterning, StandardTableReading};
+use super::standard::{ProviderSerdeDriver, SpecSerdeDriver, StandardTableInterning, StandardTableReading};
 use super::{
-    ERROR_SPEC_IDENTIFIER, FALLBACK_PROVIDER_IDENTIFIER, PACKAGE_IDENTIFIER, SCOPE_IDENTIFIER,
-    SPEC_IDENTITY_IDENTIFIER,
+    ERROR_SPEC_IDENTIFIER, FALLBACK_PROVIDER_IDENTIFIER, PACKAGE_IDENTIFIER, PROVIDERS_TABLE,
+    SCOPE_IDENTIFIER, SPECS_TABLE, SPEC_IDENTITY_IDENTIFIER,
 };
 
 // --- the reading environment: KnownProviders ------------------------------------------
@@ -243,27 +243,45 @@ impl<L: Lang> fmt::Debug for KnownProviders<L> {
 ///
 /// # Errors
 ///
-/// [`RegistrationError::UnknownTableName`] when the session lacks a standard table
-/// (a session composed with [`SerdeSession::empty`] that did not register them
-/// all); [`RegistrationError::DuplicateIdentifier`] when the readers are already
+/// [`RegistrationError::UnknownTableName`] when the session lacks the specs or the
+/// providers table (a session composed with [`SerdeSession::empty`] that did not
+/// register them — the other standard tables are not needed here);
+/// [`RegistrationError::DuplicateIdentifier`] when the readers are already
 /// registered (the function was called twice, or a language helper already called
 /// it).
 pub fn register_core_readers<L: SerializableLang>(session: &mut SerdeSession<L>) -> Result<(), RegistrationError> {
-    let tables = session
-        .standard_tables()
-        .ok_or_else(|| RegistrationError::UnknownTableName { name: String::from(super::missing_standard_table(session)) })?;
-    tables.specs.register_type::<SpecProvenance<L>>(session, SPEC_IDENTITY_IDENTIFIER, |spec| spec)?;
-    tables.specs.register_type::<ErrorCallableSpec>(session, ERROR_SPEC_IDENTIFIER, |spec| {
+    let (specs, providers) = spec_and_provider_tables(session)?;
+    specs.register_type::<SpecProvenance<L>>(session, SPEC_IDENTITY_IDENTIFIER, |spec| spec)?;
+    specs.register_type::<ErrorCallableSpec>(session, ERROR_SPEC_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<L>>
     })?;
-    tables.providers.register_type::<Package<L>>(session, PACKAGE_IDENTIFIER, |provider| provider)?;
-    tables.providers.register_type::<Scope<L>>(session, SCOPE_IDENTIFIER, |scope| {
+    providers.register_type::<Package<L>>(session, PACKAGE_IDENTIFIER, |provider| provider)?;
+    providers.register_type::<Scope<L>>(session, SCOPE_IDENTIFIER, |scope| {
         Arc::new(scope) as Arc<dyn SpecsProvider<L>>
     })?;
-    tables.providers.register_type::<FallbackProvider<L>>(session, FALLBACK_PROVIDER_IDENTIFIER, |provider| {
+    providers.register_type::<FallbackProvider<L>>(session, FALLBACK_PROVIDER_IDENTIFIER, |provider| {
         Arc::new(provider) as Arc<dyn SpecsProvider<L>>
     })?;
     Ok(())
+}
+
+/// The specs and providers tables of `session`, by name — what a reader-registration
+/// helper needs (the other standard tables need not be registered).
+///
+/// # Errors
+///
+/// [`RegistrationError::UnknownTableName`] naming the first of the two the session
+/// lacks (with the standard driver type).
+pub(crate) fn spec_and_provider_tables<L: SerializableLang>(
+    session: &SerdeSession<L>,
+) -> Result<(TableHandle<SpecSerdeDriver<L>>, TableHandle<ProviderSerdeDriver<L>>), RegistrationError> {
+    let specs = session
+        .table_handle::<SpecSerdeDriver<L>>(SPECS_TABLE)
+        .ok_or_else(|| RegistrationError::UnknownTableName { name: String::from(SPECS_TABLE) })?;
+    let providers = session
+        .table_handle::<ProviderSerdeDriver<L>>(PROVIDERS_TABLE)
+        .ok_or_else(|| RegistrationError::UnknownTableName { name: String::from(PROVIDERS_TABLE) })?;
+    Ok((specs, providers))
 }
 
 // --- SpecProvenance: the identity form of a stamped spec ------------------------------

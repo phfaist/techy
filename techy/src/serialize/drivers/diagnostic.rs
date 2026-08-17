@@ -280,24 +280,49 @@ impl From<&DiagnosticValue> for SerialValue {
 
 /// The reverse of the embedding, for the diagnostic reader: a `SerialValue` holding
 /// only the kinds a [`DiagnosticValue`] holds. A byte string or a table position
-/// anywhere inside is [`DeserializeError::UnrepresentableDiagnosticValue`].
+/// anywhere inside is [`DeserializeError::UnrepresentableDiagnosticValue`], naming the
+/// path to the offending value (map keys and list positions from the root, as
+/// `key.key[3]`; empty for the root itself).
 fn diagnostic_value_from_serial(value: &SerialValue) -> Result<DiagnosticValue, DeserializeError> {
+    let mut path = String::new();
+    diagnostic_value_at(value, &mut path)
+}
+
+/// [`diagnostic_value_from_serial`] at `path` (extended and restored around each
+/// descent).
+fn diagnostic_value_at(value: &SerialValue, path: &mut String) -> Result<DiagnosticValue, DeserializeError> {
     Ok(match value {
         SerialValue::Null => DiagnosticValue::Null,
         SerialValue::Bool(b) => DiagnosticValue::Bool(*b),
         SerialValue::Int(i) => DiagnosticValue::Int(*i),
         SerialValue::Str(s) => DiagnosticValue::Str(s.clone()),
         SerialValue::List(items) => {
-            DiagnosticValue::List(items.iter().map(diagnostic_value_from_serial).collect::<Result<Vec<_>, _>>()?)
+            let mut converted = Vec::with_capacity(items.len());
+            for (position, item) in items.iter().enumerate() {
+                let len = path.len();
+                use core::fmt::Write as _;
+                // Writing into a `String` cannot fail.
+                let _ = write!(path, "[{position}]");
+                converted.push(diagnostic_value_at(item, path)?);
+                path.truncate(len);
+            }
+            DiagnosticValue::List(converted)
         }
-        SerialValue::Map(entries) => DiagnosticValue::Map(
-            entries
-                .iter()
-                .map(|(key, value)| Ok((key.clone(), diagnostic_value_from_serial(value)?)))
-                .collect::<Result<Vec<_>, DeserializeError>>()?,
-        ),
+        SerialValue::Map(entries) => {
+            let mut converted = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let len = path.len();
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(key);
+                converted.push((key.clone(), diagnostic_value_at(value, path)?));
+                path.truncate(len);
+            }
+            DiagnosticValue::Map(converted)
+        }
         SerialValue::Bytes(_) | SerialValue::Index { .. } => {
-            return Err(DeserializeError::UnrepresentableDiagnosticValue { kind: value.kind_name() })
+            return Err(DeserializeError::UnrepresentableDiagnosticValue { kind: value.kind_name(), path: path.clone() })
         }
     })
 }
@@ -309,6 +334,18 @@ fn diagnostic_value_from_serial(value: &SerialValue) -> Result<DiagnosticValue, 
 impl serde::Serialize for DiagnosticValue {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         SerialValue::from(self).serialize(serializer)
+    }
+}
+
+/// Available with the `serde` cargo feature: reads a [`SerialValue`]'s rendering (see
+/// [`SerialValue`]'s `Deserialize`) and accepts only the kinds a `DiagnosticValue`
+/// holds — a byte string or a table position anywhere inside is an error (the message
+/// of [`DeserializeError::UnrepresentableDiagnosticValue`], naming the path to it).
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for DiagnosticValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = SerialValue::deserialize(deserializer)?;
+        diagnostic_value_from_serial(&value).map_err(serde::de::Error::custom)
     }
 }
 

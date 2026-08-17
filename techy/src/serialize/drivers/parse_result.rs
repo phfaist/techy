@@ -241,7 +241,12 @@ pub trait ParseResultSerialization<L: SerializableLang> {
     ///
     /// The session lacks a standard table ([`SerializeError::UnknownTableName`]); a
     /// node's, a diagnostic's, or the session extension's serialization fails (its
-    /// error, wrapped in [`SerializeError::InTable`]); the errors of
+    /// error, wrapped in [`SerializeError::InTable`]); the diagnostics' retention cap
+    /// or counts do not fit the serialized form's integers — a collection created with
+    /// [`Diagnostics::with_limit`](crate::error::Diagnostics::with_limit) above
+    /// `i64::MAX` (`usize::MAX` as "no cap", say) cannot be serialized
+    /// ([`SerialValueError::IntegerOutOfRange`](crate::serialize::SerialValueError::IntegerOutOfRange)
+    /// through [`SerializeError::Value`]); the errors of
     /// [`SerdeSession::intern`](crate::serialize::SerdeSession::intern).
     fn serialize_parse_result(&mut self, result: &Arc<ParseResult<L>>) -> Result<ParseResultIndex, SerializeError>;
 

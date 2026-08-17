@@ -657,9 +657,10 @@ where
 ///
 /// # Errors
 ///
-/// [`RegistrationError::UnknownTableName`] when the session lacks a standard table;
-/// [`RegistrationError::DuplicateIdentifier`] when the readers are already registered
-/// (the function, or [`register_core_readers`], was called before on this session).
+/// [`RegistrationError::UnknownTableName`] when the session lacks the specs or the
+/// providers table; [`RegistrationError::DuplicateIdentifier`] when the readers are
+/// already registered (the function, or [`register_core_readers`], was called before
+/// on this session).
 pub fn register<LLL>(session: &mut SerdeSession<LLL>) -> Result<(), RegistrationError>
 where
     LLL: LatexlikeLang + SerializableLang,
@@ -667,19 +668,17 @@ where
     ArgumentExt<LLL>: Default,
 {
     register_core_readers(session)?;
-    let tables = session.standard_tables().ok_or_else(|| RegistrationError::UnknownTableName {
-        name: String::from(crate::serialize::missing_standard_table(session)),
-    })?;
-    tables.specs.register_type::<BeginSpec<LLL>>(session, BEGIN_IDENTIFIER, |spec| {
+    let (specs, _providers) = crate::serialize::spec_and_provider_tables(session)?;
+    specs.register_type::<BeginSpec<LLL>>(session, BEGIN_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<LLL>>
     })?;
-    tables.specs.register_type::<EndSpec<LLL>>(session, END_IDENTIFIER, |spec| {
+    specs.register_type::<EndSpec<LLL>>(session, END_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<LLL>>
     })?;
-    tables.specs.register_type::<ParagraphBreakSpec>(session, PARAGRAPH_BREAK_IDENTIFIER, |spec| {
+    specs.register_type::<ParagraphBreakSpec>(session, PARAGRAPH_BREAK_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<LLL>>
     })?;
-    tables.specs.register_type::<InputMacroSpec<LLL>>(session, INPUT_IDENTIFIER, |spec| {
+    specs.register_type::<InputMacroSpec<LLL>>(session, INPUT_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<LLL>>
     })?;
     Ok(())

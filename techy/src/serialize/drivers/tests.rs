@@ -301,6 +301,31 @@ fn an_empty_session_has_no_standard_tables_and_the_accessors_say_so() {
     assert!(other.standard_tables().is_none());
 }
 
+#[test]
+fn the_core_readers_register_on_the_specs_and_providers_tables_alone() {
+    use crate::serialize::{register_core_readers, ProviderSerdeDriver, RegistrationError, SpecSerdeDriver};
+    // A session composed by hand with just those two tables (no other standard
+    // table) takes the readers.
+    let mut session = SerdeSession::<ToyLang>::empty();
+    session.register_table(SpecSerdeDriver::<ToyLang>::new("specs")).unwrap();
+    session.register_table(ProviderSerdeDriver::<ToyLang>::new("providers")).unwrap();
+    register_core_readers(&mut session).unwrap();
+    // A second call is the duplicate it always was.
+    assert!(matches!(register_core_readers(&mut session), Err(RegistrationError::DuplicateIdentifier { .. })));
+    // The error names the table that is missing: providers here, specs there.
+    let mut only_specs = SerdeSession::<ToyLang>::empty();
+    only_specs.register_table(SpecSerdeDriver::<ToyLang>::new("specs")).unwrap();
+    assert!(matches!(
+        register_core_readers(&mut only_specs),
+        Err(RegistrationError::UnknownTableName { name }) if name == "providers"
+    ));
+    let mut none = SerdeSession::<ToyLang>::empty();
+    assert!(matches!(
+        register_core_readers(&mut none),
+        Err(RegistrationError::UnknownTableName { name }) if name == "specs"
+    ));
+}
+
 // --- sources --------------------------------------------------------------------------
 
 #[test]

@@ -49,7 +49,10 @@ pub use techy_derive::{DiagnosticInfo, ToDiagnosticValue};
 /// [`IDENTIFIER`](DiagnosticInfo::IDENTIFIER) plus, optionally,
 /// [`serializable_data`](DiagnosticInfo::serializable_data). The dyn-compatible facade
 /// [`DiagnosticData`] is blanket-implemented for every `DiagnosticInfo` type; consumers
-/// downcast to the concrete struct for typed access.
+/// downcast to the concrete struct for typed access — within one process: a diagnostic
+/// read back through [`techy::serialize`](crate::serialize) carries a
+/// [`DeserializedCondition`](crate::serialize::DeserializedCondition) answering the
+/// written identifier, projection, and message, not the original type.
 pub trait DiagnosticInfo: Any + Clone + fmt::Display + fmt::Debug + Send + Sync {
     /// Wire/config identity, namespaced `<crate-or-lang>.<area>.<condition>` (library
     /// conditions use `core.<area>.*`; presets and downstream languages use their own
@@ -161,8 +164,11 @@ impl Clone for Box<dyn DiagnosticData> {
 /// ([`DiagnosticInfo::serializable_data`]).
 ///
 /// Deliberately barebones: no float variant — serialize floats
-/// as strings if ever needed. A JSON emission helper over this tree is deferred,
-/// non-breaking work.
+/// as strings if ever needed. It embeds into
+/// [`SerialValue`](crate::serialize::SerialValue) (`From` impls in
+/// [`techy::serialize`](crate::serialize)) and, with the `serde` cargo feature,
+/// implements `Serialize`/`Deserialize` through that embedding — the same rendering
+/// as a `SerialValue`, and only the kinds this tree holds read back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticValue {
     /// No value.
@@ -503,6 +509,12 @@ impl<O: SourceOrigin> fmt::Display for Diagnostic<O> {
 
 /// An ordered collection of [`Diagnostic`]s, as accumulated over one parse.
 ///
+/// Diagnostics read back through [`techy::serialize`](crate::serialize) (inside a
+/// deserialized parse result) carry
+/// [`DeserializedCondition`](crate::serialize::DeserializedCondition)s: match them by
+/// [`identifier`](Diagnostic::identifier) ([`with_identifier`](Diagnostics::with_identifier)),
+/// not by type ([`conditions`](Diagnostics::conditions) yields nothing for them).
+///
 /// Retention is **bounded**: at most [`limit`](Diagnostics::limit)
 /// diagnostics are stored — [`DEFAULT_LIMIT`](Diagnostics::DEFAULT_LIMIT) unless the
 /// collection was created with [`with_limit`](Diagnostics::with_limit). In tolerant mode
@@ -539,6 +551,11 @@ impl<O: SourceOrigin> Diagnostics<O> {
     /// the cap are counted as [`suppressed`](Diagnostics::suppressed) instead of stored.
     /// A driven parse's sink is seeded through
     /// [`ParseDriver::diagnostics_limit`](crate::engine::ParseDriver::diagnostics_limit).
+    ///
+    /// A limit above `i64::MAX` (`usize::MAX` as "no cap", say) is honored here but
+    /// makes a parse result holding the collection unserializable: the serialized
+    /// form's integers are `i64` (see
+    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization)).
     pub fn with_limit(limit: usize) -> Self {
         Diagnostics { items: Vec::new(), limit, suppressed: 0, error_count: 0 }
     }

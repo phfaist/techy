@@ -406,10 +406,23 @@ fn a_diagnostic_value_renders_through_serde_as_its_embedding() {
     let value = DiagnosticValue::Map(vec![
         (String::from("expected_close"), DiagnosticValue::Str(String::from("}"))),
         (String::from("odd$"), DiagnosticValue::List(vec![DiagnosticValue::Int(1), DiagnosticValue::Null])),
+        (String::from("flag"), DiagnosticValue::Bool(true)),
     ]);
     let json = serde_json::to_string(&value).unwrap();
-    assert_eq!(json, r#"{"expected_close":"}","odd$":[1,null]}"#);
+    assert_eq!(json, r#"{"expected_close":"}","odd$":[1,null],"flag":true}"#);
     assert_eq!(json, serde_json::to_string(&SerialValue::from(&value)).unwrap());
+    // And it reads back — through JSON, through the bridge, through a compact format.
+    assert_eq!(serde_json::from_str::<DiagnosticValue>(&json).unwrap(), value);
+    assert_eq!(crate::serialize::from_value::<DiagnosticValue>(&SerialValue::from(&value)).unwrap(), value);
+    let bytes = postcard::to_allocvec(&value).unwrap();
+    assert_eq!(postcard::from_bytes::<DiagnosticValue>(&bytes).unwrap(), value);
+    // Only the kinds a DiagnosticValue holds: a byte string or a table position in
+    // the rendering is an error naming its path.
+    let error = serde_json::from_str::<DiagnosticValue>(r#"{"a":[0,{"$bytes":"AA=="}]}"#).unwrap_err();
+    assert!(error.to_string().contains("kind `bytes` at `a[1]`"), "{error}");
+    let error = serde_json::from_str::<DiagnosticValue>(r#"{"$index":[0,1]}"#).unwrap_err();
+    assert!(error.to_string().contains("kind `index` at its root"), "{error}");
+    assert!(crate::serialize::from_value::<DiagnosticValue>(&SerialValue::Bytes(vec![])).is_err());
 }
 
 // --- hostile input ------------------------------------------------------------------------
@@ -498,7 +511,11 @@ fn a_byte_string_inside_the_projection_is_rejected() {
         let entry = &mut table_entries_mut(segment, "diagnostics")[0];
         *map_field_mut(map_field_mut(entry, "data"), "expected_close") = SerialValue::Bytes(vec![1, 2]);
     });
-    assert!(matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "bytes" }), "{error}");
+    assert!(
+        matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "bytes", path } if path == "expected_close"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("kind `bytes` at `expected_close`"), "{error}");
 }
 
 #[test]
@@ -508,7 +525,20 @@ fn a_table_position_nested_inside_the_projection_is_rejected() {
         *map_field_mut(map_field_mut(entry, "data"), "found") =
             SerialValue::List(vec![SerialValue::Null, SerialValue::Index { table: TableId::new(0), index: 0 }]);
     });
-    assert!(matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "index" }), "{error}");
+    assert!(
+        matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "index", path } if path == "found[1]"),
+        "{error}"
+    );
+    // The projection itself: an empty path, spelled "at its root".
+    let error = push_edited_diagnostic(&sample_diagnostic(), |segment| {
+        let entry = &mut table_entries_mut(segment, "diagnostics")[0];
+        *map_field_mut(entry, "data") = SerialValue::Bytes(vec![]);
+    });
+    assert!(
+        matches!(innermost(&error), DeserializeError::UnrepresentableDiagnosticValue { kind: "bytes", path } if path.is_empty()),
+        "{error}"
+    );
+    assert!(error.to_string().contains("kind `bytes` at its root"), "{error}");
 }
 
 #[test]
@@ -629,10 +659,10 @@ fn inconsistent_diagnostic_counts_are_rejected() {
     // More errors in all than retained errors plus suppressed pushes.
     assert_eq!(counts(&edit_counts(2, 3, 6)), (2, 2, 2, 3, 6));
     // Consistent variants of the same edits read fine: the cap reached with suppressed
-    // errors, and a large cap.
+    // errors, and a large cap (one that fits a `usize` on every target).
     let mut writer = setup();
     writer.serialize_parse_result(&result).unwrap();
-    for (limit, suppressed, error_count) in [(2, 3, 5), (2, 3, 2), (1 << 40, 0, 2)] {
+    for (limit, suppressed, error_count) in [(2, 3, 5), (2, 3, 2), (1 << 20, 0, 2)] {
         let mut value = writer.take_segment().to_serial_value();
         {
             let entry = &mut table_entries_mut(&mut value, "parse-results")[0];

@@ -626,6 +626,10 @@ pub enum DeserializeError {
     UnrepresentableDiagnosticValue {
         /// The kind of the offending value: `bytes` or `index`.
         kind: &'static str,
+        /// Where inside the projection it sits: the map keys and list positions from
+        /// the projection's root, as `error.cause_chain[2]`; empty when the
+        /// projection itself is the offending value.
+        path: String,
     },
     /// A serialized diagnostics collection's counts contradict one another: `retained`
     /// diagnostics were listed, `retained_errors` of them of error severity, under a
@@ -873,12 +877,22 @@ impl fmt::Display for DeserializeError {
                 "the provider `{provider}` of the reading environment has no definition \
                  under {callable_type} with {key}"
             ),
-            DeserializeError::UnrepresentableDiagnosticValue { kind } => write!(
-                f,
-                "the diagnostic's condition data holds a value of kind `{kind}`, which a \
-                 DiagnosticValue cannot hold (only null, booleans, integers, strings, lists, \
-                 and string-keyed maps)"
-            ),
+            DeserializeError::UnrepresentableDiagnosticValue { kind, path } => {
+                write!(
+                    f,
+                    "the diagnostic's condition data holds a value of kind `{kind}` "
+                )?;
+                if path.is_empty() {
+                    write!(f, "at its root")?;
+                } else {
+                    write!(f, "at `{path}`")?;
+                }
+                write!(
+                    f,
+                    ", which a DiagnosticValue cannot hold (only null, booleans, integers, \
+                     strings, lists, and string-keyed maps)"
+                )
+            }
             DeserializeError::InconsistentDiagnosticCounts { retained, retained_errors, limit, suppressed, error_count } => {
                 write!(
                     f,
