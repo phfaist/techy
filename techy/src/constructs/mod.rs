@@ -87,14 +87,14 @@ use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
 use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity};
-use crate::source::{Source, SourceSpan, Span};
+use crate::source::{Source, SourceSpan};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
     BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
     StagedNodes,
 };
 use crate::state::{FeaturePresence, Lang, LangFeatures, ParsingState, ParsingStateDelta};
-use crate::token::{GroupRule, Token, TokenReader};
+use crate::token::{GroupRule, Token, TokenEdge, TokenReader};
 
 /// The live frame covering a resolved invocation's parse (the dispatch push site): the spec's title hook with the invocation spelling — the
 /// trigger token minus its syntactic post-space — anchored at the trigger. Built before
@@ -105,14 +105,13 @@ pub(crate) fn invocation_frame<L: Lang>(
     invocation: &Invocation<'_, '_, L>,
 ) -> Frame<L> {
     let token = invocation.token;
-    let name_span = Span::new(token.span.start(), token.post_space().start());
     Frame {
         title: FrameTitle::Callable {
             spec: Arc::clone(invocation.spec),
             role: FrameRole::Invocation,
-            name: SourceSpan::new(&cx.source, name_span),
+            name: cx.tokens.source_span_between(token, TokenEdge::Start, TokenEdge::End),
         },
-        span: SourceSpan::new(&cx.source, token.span),
+        span: cx.tokens.source_span_of(token),
     }
 }
 
@@ -133,16 +132,25 @@ pub(crate) fn invocation_frame<L: Lang>(
 /// [`ParserSession::snapshot_frames`](crate::engine::ParserSession::snapshot_frames)),
 /// guarded on `error.frames().is_empty()` — an error already carrying frames keeps
 /// them.
+///
+/// **Spans come from the token reader.** A construct parser does not pair a byte
+/// range with a source itself: every [`SourceSpan`] it stages or reports is obtained
+/// from [`tokens`](ParseContext::tokens) — one token's span
+/// ([`TokenReader::source_span_of`](crate::token::TokenReader::source_span_of),
+/// [`source_span_between`](crate::token::TokenReader::source_span_between)), the span
+/// between two stream positions
+/// ([`source_span_within`](ParseContext::source_span_within)), or the empty span at
+/// the current position ([`here`](ParseContext::here), the anchor for a condition
+/// detected between tokens). Only the reader knows which source it is serving tokens
+/// from, so only the reader can answer where a token is.
 pub struct ParseContext<'a, 's, L: Lang> {
     /// The token stream.
     pub tokens: &'a mut dyn TokenReader<'s, L>,
-    /// The source the token spans refer into — what staging a node's
-    /// [`SourceSpan`] requires. It lives
-    /// here, not on tokens or readers, because the token layer deliberately carries
-    /// only transient byte spans; the construct-parser layer
-    /// is where byte spans become `Arc`-backed source spans. Not a parsing input:
-    /// construct parsers make no forward parsing decision from raw content — even a
-    /// verbatim parser reads `Char` tokens under a features-disabled state.
+    /// The source this context's parse started from. Not a parsing input: construct
+    /// parsers make no forward parsing decision from raw content — even a verbatim
+    /// parser reads `Char` tokens under a features-disabled state — and they do not
+    /// pair spans with it either (spans come from [`tokens`](ParseContext::tokens);
+    /// see the type's documentation).
     pub source: Arc<Source<L::SourceOrigin>>,
     /// The parser's **input** parsing state (the caller sets it; see the
     /// state-threading contract in [`core::constructs`](crate::core::constructs)).
@@ -184,6 +192,39 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         driver: &'a L::Driver,
     ) -> ParseContext<'a, 's, L> {
         ParseContext { tokens, source, state, session, driver }
+    }
+
+    /// The empty [`SourceSpan`] at the reader's current stream position — the
+    /// diagnostics anchor for a condition detected **between** tokens (a missing
+    /// argument, a contract violation with no token to blame).
+    pub fn here(&self) -> SourceSpan<L::SourceOrigin> {
+        SourceSpan::at(&self.tokens.source_position_at(&self.tokens.position_here()))
+    }
+
+    /// The source span running from `begin` to `end` — the span of a construct that
+    /// covers several tokens, taken from two stream positions the reader handed out
+    /// ([`position_here`](crate::token::TokenReader::position_here),
+    /// [`position_at`](crate::token::TokenReader::position_at)).
+    ///
+    /// `Err` reports an [`ImplementationError`]: the two positions do not delimit one
+    /// range of one source (`end` before `begin`, or the two in different sources).
+    /// That is a contract violation by the calling parser — it aborts under any
+    /// recovery policy, and never panics.
+    pub fn source_span_within(
+        &self,
+        begin: &L::StreamPosition,
+        end: &L::StreamPosition,
+    ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
+        match self.tokens.source_span_within(begin, end) {
+            Some(span) => Ok(span),
+            None => Err(self.implementation_error(
+                format!(
+                    "the positions {begin:?} and {end:?} do not delimit one range of \
+                     one source (a span must run forward within a single source)"
+                ),
+                self.here(),
+            )),
+        }
     }
 
     /// Stage one parsed node — **the single staging entry point** of parsing (every
@@ -251,10 +292,16 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// arity: the restage side passes driver-tiled bundles because the region
     /// arithmetic is owned by the other party there.
     ///
-    /// `end_pos: None` = the **standard rule**: the node's span runs from the
-    /// trigger's start to the last staged child's span end — or the trigger's own
-    /// end for childless shapes. `Some(end)` serves takeovers whose consumed
-    /// extent outruns their last child (rest-of-line and heredoc shapes).
+    /// The node's span starts at the trigger token's start; where it ends is
+    /// decided by `end`, in three cases:
+    ///
+    /// - `Some(end)`: at that stream position — for takeovers whose consumed extent
+    ///   outruns their last child (rest-of-line and heredoc shapes).
+    /// - `None` with a last staged child whose span is in the trigger's source: at
+    ///   that child's span end (the **standard rule**).
+    /// - `None` otherwise (no child, or a child staged in another source): at the
+    ///   reader's current stream position — which, for a childless invocation staged
+    ///   in the ordinary flow, is just past the trigger's own post-space.
     ///
     /// Deliberately **no `callable_type`/`name` overrides**: a composition that
     /// overrides both and whose span outruns its children (the environment shape)
@@ -263,10 +310,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// mints the ext, and parse annotations are `()`.
     ///
     /// `Err` reports an **invalid computed span** — a node end (from the standard
-    /// rule or from `end_pos`) that precedes the trigger's start or does not lie
-    /// within the source content on a character boundary: a contract violation by
-    /// the calling parser, lifted as an [`ImplementationError`] that aborts under
-    /// any recovery policy, never a panic — or a
+    /// rule or from `end`) that precedes the trigger's start, or that lies in
+    /// another source than the trigger: a contract violation by the calling parser,
+    /// lifted as an [`ImplementationError`] that aborts under any recovery policy,
+    /// never a panic — or a
     /// [`stage_node`](ParseContext::stage_node) failure lifted per that method's
     /// split (contract violations as [`ImplementationError`], the ext mint's
     /// reported failure as [`HookFailed`](crate::error::HookFailed); both abort
@@ -277,42 +324,46 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         arguments: ParsedArguments<L>,
         slots: ParsedSlots<L>,
         children: Vec<BuildId>,
-        end_pos: Option<usize>,
+        end: Option<&L::StreamPosition>,
     ) -> ConstructParserResult<L, BuildId>
     where
         L::InvocationSyntax: FromInvocation<L>,
     {
         let token = invocation.token;
-        let start = token.span.start();
-        // The std end rule: last staged child's span end, else the trigger's end.
-        // A last child no parser ever staged (an implementation bug) falls back to
-        // the trigger's end — the builder diagnoses the foreign id in `add`.
-        let end = end_pos.unwrap_or_else(|| {
-            children
-                .last()
-                .and_then(|last| self.staged_nodes().get(*last))
-                .map(|child| child.span().end())
-                .unwrap_or(token.span.end())
-        });
-        // A bad computed span is a contract violation by outer code (a takeover's
-        // `end_pos`, or a staged child's span outside the trigger's source) — the
-        // implementation-error abort, never a panic (`SourceSpan::new` would
-        // otherwise assert on the invalid range below). `get` answers `None` for a
-        // decreasing range, one out of bounds, and one off a character boundary
-        // alike.
-        if self.source.content().get(start..end).is_none() {
-            return Err(self.implementation_error(
-                format!(
-                    "stage_invocation computed the invalid node span {start}..{end} \
-                     (source length {}): the node's end must not precede the \
-                     trigger's start and must lie within the source content on a \
-                     character boundary — check the explicit end_pos or the staged \
-                     children's spans",
-                    self.source.content().len(),
-                ),
-                token.span,
-            ));
-        }
+        let trigger = self.tokens.source_span_of(token);
+        let trigger_start = self.tokens.position_at(token, TokenEdge::Start);
+        let span = match end {
+            // The explicit end: the takeover claims its consumed extent.
+            Some(end) => self.invocation_span_within(&trigger_start, end)?,
+            None => {
+                // The standard rule: the last staged child's span end, in the
+                // trigger's own source. A last child no parser ever staged (an
+                // implementation bug) falls through as if there were none — the
+                // builder diagnoses the foreign id in `add`.
+                let child_end = children
+                    .last()
+                    .and_then(|last| self.staged_nodes().get(*last))
+                    .map(|child| child.span().clone())
+                    .filter(|child| child.same_source(&trigger))
+                    .map(|child| child.end());
+                match child_end {
+                    Some(child_end) => {
+                        // A child ending before the trigger starts is a contract
+                        // violation by outer code — the implementation-error abort,
+                        // never a panic (`SourceSpan::new` would otherwise assert).
+                        if child_end < trigger.start() {
+                            return Err(self.invalid_invocation_span());
+                        }
+                        SourceSpan::new(trigger.source(), trigger.start()..child_end)
+                    }
+                    // No usable child: the node ends where the reader stands.
+                    None => {
+                        let here = self.tokens.position_here();
+                        self.invocation_span_within(&trigger_start, &here)?
+                    }
+                }
+            }
+        };
         let data = CallableData {
             callable_type: invocation.callable_type,
             name: invocation.name.into(),
@@ -323,11 +374,36 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         };
         self.stage_node(
             NodeKind::callable(data),
-            SourceSpan::new(&self.source, start..end),
+            span.clone(),
             Arc::clone(&self.state),
             children,
         )
-        .map_err(|error| self.staging_error(error, Span::new(start, end)))
+        .map_err(|error| self.staging_error(error, span))
+    }
+
+    /// [`stage_invocation`](ParseContext::stage_invocation)'s span computation from
+    /// two stream positions, with the invalid-span wording of that method.
+    fn invocation_span_within(
+        &self,
+        begin: &L::StreamPosition,
+        end: &L::StreamPosition,
+    ) -> ConstructParserResult<L, SourceSpan<L::SourceOrigin>> {
+        match self.tokens.source_span_within(begin, end) {
+            Some(span) => Ok(span),
+            None => Err(self.invalid_invocation_span()),
+        }
+    }
+
+    /// The invalid-computed-span abort of
+    /// [`stage_invocation`](ParseContext::stage_invocation).
+    fn invalid_invocation_span(&self) -> ParseError<L::SourceOrigin> {
+        self.implementation_error(
+            "stage_invocation computed an invalid node span: the node's end must \
+             not precede the trigger's start and must lie in the trigger's own \
+             source — check the explicit end position or the staged children's \
+             spans",
+            self.here(),
+        )
     }
 
     /// Probe the token at the current position under `state`, mapping a tokenizer error
@@ -431,8 +507,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                 // The guard's early warning (the standard guard's one-time
                 // half-budget notice under the unconfigured default): recorded
                 // immediately, at the current position, with the live traceback.
-                let pos = self.tokens.pos();
-                let span = SourceSpan::new(&self.source, Span::empty(pos));
+                let span = self.here();
                 let frames = self.session.snapshot_frames();
                 self.session.diagnostics.push(Diagnostic::from_parts(
                     Severity::Warning,
@@ -442,10 +517,9 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
                 ));
             }
             Err(refusal) => {
-                let pos = self.tokens.pos();
                 let error = ParseError::new(
                     DescentLimitExceeded::new(refusal.detail),
-                    SourceSpan::new(&self.source, Span::empty(pos)),
+                    self.here(),
                 )
                 .with_frames(self.session.snapshot_frames());
                 if framed {
@@ -792,8 +866,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         base: &Arc<ParsingState<L>>,
         failure: crate::state::DeriveError<L>,
     ) -> ConstructParserResult<L, Arc<ParsingState<L>>> {
-        let pos = self.tokens.pos();
-        let span = SourceSpan::new(&self.source, Span::new(pos, pos));
+        let span = self.here();
         let crate::state::DeriveError {
             failures,
             finalize_error,
@@ -804,7 +877,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
             self.recover(ScopeOpFailed::new(failed_op.to_string()), span.clone())?;
         }
         if let Some(finalize_error) = finalize_error {
-            return Err(self.implementation_error(finalize_error, Span::new(pos, pos)));
+            return Err(self.implementation_error(finalize_error, span));
         }
         // Tolerant continuation: commit the recovered transition — the session seam
         // observed nothing on the Err path (no transition had been committed). The
@@ -857,14 +930,16 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     ///
     /// - **Stand the reader where the next run should start.** The stop contract is
     ///   defined ([`TokenStopCondition::consume`], [`StopCause`]'s per-variant docs): a
-    ///   left stop token sits at its own `span.start`, pre-space already staged, and
+    ///   left stop token sits at its own start, pre-space already staged, and
     ///   re-peeks clean — but re-entering with the reader still on it and the same
     ///   stop condition stops again immediately, staging nothing: an infinite loop for
     ///   an unconditional resumer. Deal with the token first — consume it
     ///   ([`probe_token`](ParseContext::probe_token) +
-    ///   [`move_past`](crate::token::TokenReader::move_past), the environment
-    ///   terminator flow), skip it (`move_to_pos(span.end())`, the root loop), or
-    ///   exclude it from the next run's stop spec.
+    ///   [`move_to_edge`](crate::token::TokenReader::move_to_edge), the environment
+    ///   terminator flow), skip it
+    ///   ([`move_to_position`](crate::token::TokenReader::move_to_position) with the
+    ///   stop cause's `after` position, the root loop), or exclude it from the next
+    ///   run's stop spec.
     ///
     /// - **Concatenate the segments yourself.** Each run returns its own
     ///   [`NodesOutcome::nodes`]; the resuming caller extends one list across runs.
@@ -913,16 +988,16 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// group descent through it makes one driver override apply at every group
     /// site.
     ///
-    /// Parses one **group descent** (the consumed `GroupOpen` token's facts: open
-    /// span and resolved rule) with `base` as the group's input state. `frame`,
-    /// when `Some`, is pushed around the whole descent
+    /// Parses one **group descent** (the consumed `GroupOpen` token and its resolved
+    /// rule) with `base` as the group's input state. `frame`, when `Some`, is pushed
+    /// around the whole descent
     /// ([`parse_construct`](ParseContext::parse_construct)'s frame semantics).
     // Same decided pair as above.
     #[allow(clippy::type_complexity)]
     pub fn parse_group<'p>(
         &mut self,
         base: Arc<ParsingState<L>>,
-        open_span: Span,
+        open: &Token<'s, L>,
         rule: Arc<GroupRule<L>>,
         child_states: ChildStateSpec<'p, L>,
         frame: Option<Frame<L>>,
@@ -934,7 +1009,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         let driver = self.driver;
         // A factory Err aborts under any policy, as in `parse_nodes`.
         let mut parser = driver
-            .make_group_parser(open_span, rule, child_states)
+            .make_group_parser(open, rule, child_states)
             .map_err(|error| self.attach_hook_frames(error))?;
         self.parse_construct(&mut *parser, Some(base), frame)
     }
@@ -964,13 +1039,10 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub fn implementation_error(
         &self,
         detail: impl fmt::Display,
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
-        ParseError::new(
-            ImplementationError::new(detail.to_string()),
-            SourceSpan::new(&self.source, span),
-        )
-        .with_frames(self.session.snapshot_frames())
+        ParseError::new(ImplementationError::new(detail.to_string()), span)
+            .with_frames(self.session.snapshot_frames())
     }
 
     /// Build the abort error for a failed staging call — the in-crate lift of a
@@ -986,14 +1058,13 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     pub(crate) fn staging_error(
         &self,
         error: NodeBuildError,
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
     ) -> ParseError<L::SourceOrigin> {
         match error {
-            NodeBuildError::ExtMintFailed { detail } => ParseError::new(
-                HookFailed::new(detail, None),
-                SourceSpan::new(&self.source, span),
-            )
-            .with_frames(self.session.snapshot_frames()),
+            NodeBuildError::ExtMintFailed { detail } => {
+                ParseError::new(HookFailed::new(detail, None), span)
+                    .with_frames(self.session.snapshot_frames())
+            }
             other => self.implementation_error(other, span),
         }
     }
@@ -1077,8 +1148,7 @@ pub struct DescentLimitApproaching {
 impl<L: Lang> fmt::Debug for ParseContext<'_, '_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParseContext")
-            .field("pos", &self.tokens.pos())
-            .field("source", &self.source)
+            .field("at", &self.here())
             .field("state", &self.state)
             .field("session", &self.session)
             .finish()
@@ -1126,7 +1196,8 @@ pub trait ConstructParser<L: Lang> {
 /// invocation parser the spec's factory returns.
 ///
 /// When the parser runs, the trigger token has already been **consumed whole** by the
-/// dispatching arm (`move_past(token, true)`, syntactic post-space included) — see
+/// dispatching arm (`move_to_edge(token, TokenEdge::EndPastPostSpace)`, syntactic
+/// post-space included) — see
 /// [`StdInvocationParser`]'s documentation for the full contract.
 ///
 /// [`CallableSpec::make_invocation_parser`]: crate::spec::CallableSpec::make_invocation_parser
@@ -1192,6 +1263,7 @@ impl<L: Lang> FromInvocation<L> for () {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::Span;
     use crate::engine::StdParseDriver;
     use crate::error::Recovery;
     use crate::scopes::ScopeStack;
@@ -1284,10 +1356,220 @@ mod tests {
             cx: &mut ParseContext<'_, '_, PlainLang>,
         ) -> ConstructParserResult<PlainLang, ((), Option<Box<ParsingStateDelta<PlainLang>>>)>
         {
-            let span = SourceSpan::new(&cx.source, Span::new(1, 2));
-            cx.recover(TestCondition, span)?;
+            cx.recover(TestCondition, cx.here())?;
             Ok(((), None))
         }
+    }
+
+    // --- the reader-answered spans (here / source_span_within) ----------------------
+
+    /// A context over `content`, with a real [`StdTokenReader`] behind it.
+    fn with_std_context<R>(
+        content: &str,
+        f: impl FnOnce(&mut ParseContext<'_, '_, PlainLang>, &Arc<Source>) -> R,
+    ) -> R {
+        let source: Arc<Source> = Arc::new(Source::new(content));
+        let mut reader = crate::token::StdTokenReader::new(&source);
+        let mut session = ParserSession::new();
+        let driver = StdParseDriver::new(Recovery::Strict, ());
+        let mut cx = ParseContext::new(
+            &mut reader,
+            Arc::clone(&source),
+            state(),
+            &mut session,
+            &driver,
+        );
+        f(&mut cx, &source)
+    }
+
+    #[test]
+    fn here_is_the_empty_span_at_the_reader_position() {
+        with_std_context("abc", |cx, source| {
+            let at = cx.here();
+            assert_eq!(at.range(), 0..0);
+            assert!(Arc::ptr_eq(at.source(), source));
+
+            // It follows the reader.
+            let token = cx.tokens.peek(&cx.state).unwrap();
+            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            assert_eq!(cx.here().range(), 1..1);
+        });
+    }
+
+    #[test]
+    fn source_span_within_spans_two_positions_and_lifts_an_incoherent_pair() {
+        with_std_context("abc", |cx, _source| {
+            let begin = cx.tokens.position_here();
+            let token = cx.tokens.peek(&cx.state).unwrap();
+            let end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
+            assert_eq!(cx.source_span_within(&begin, &end).unwrap().range(), 0..1);
+
+            // The reversed pair delimits nothing: an implementation error, not a
+            // panic and not a source condition.
+            let error = cx.source_span_within(&end, &begin).unwrap_err();
+            let condition = error
+                .data()
+                .downcast_ref::<ImplementationError>()
+                .expect("an ImplementationError condition");
+            assert!(
+                condition.detail.contains("do not delimit one range of one source"),
+                "unexpected detail: {}",
+                condition.detail
+            );
+        });
+    }
+
+    // --- stage_invocation's three end cases -----------------------------------------
+
+    /// A spec with no arguments and no behavior: `stage_invocation` reads only its
+    /// identity off the bundle.
+    #[derive(Debug)]
+    struct TestSpec;
+
+    impl crate::serialize::SerializableObject<PlainLang> for TestSpec {}
+    impl CallableSpec<PlainLang> for TestSpec {}
+
+    /// Stage a callable over the token of `content` at index `trigger` as the
+    /// trigger, with the given children and end, and report the staged node's span
+    /// range.
+    fn stage_invocation_span(
+        content: &str,
+        trigger: usize,
+        end: EndUnderTest,
+        children: impl FnOnce(&mut ParseContext<'_, '_, PlainLang>) -> Vec<BuildId>,
+    ) -> Result<core::ops::Range<usize>, ParseError> {
+        with_std_context(content, |cx, _source| {
+            let spec: Arc<dyn CallableSpec<PlainLang>> = Arc::new(TestSpec);
+            for _ in 0..trigger {
+                let skipped = cx.tokens.peek(&cx.state).unwrap();
+                cx.tokens.move_to_edge(&skipped, TokenEdge::EndPastPostSpace);
+            }
+            let token = cx.tokens.peek(&cx.state).unwrap();
+            // The dispatch contract: the trigger is consumed before the parser runs.
+            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            let children = children(cx);
+            let invocation = Invocation {
+                callable_type: 0u32,
+                name: "t",
+                spec: &spec,
+                token: &token,
+            };
+            let end = match end {
+                EndUnderTest::Standard => None,
+                EndUnderTest::Here => Some(cx.tokens.position_here()),
+                EndUnderTest::BeforeTheTrigger => {
+                    Some(cx.tokens.position_at(&token, TokenEdge::StartBeforePreSpace))
+                }
+            };
+            // A callable's children must be tiled by its regions: one content slot
+            // covers whatever the fixture staged.
+            let slots = match children.len() as u32 {
+                0 => ParsedSlots::empty(),
+                count => ParsedSlots::new(alloc::vec![crate::node::ParsedSlot::new(
+                    crate::node::ChildRegion::new(
+                        0..count,
+                        crate::node::ContentNodes::InRegion(0..count),
+                    ),
+                    "content",
+                    crate::node::SlotRole::Content,
+                    (),
+                )]),
+            };
+            let id = cx.stage_invocation(
+                &invocation,
+                ParsedArguments::empty(),
+                slots,
+                children,
+                end.as_ref(),
+            )?;
+            Ok(cx.staged_nodes().get(id).unwrap().span().range())
+        })
+    }
+
+    enum EndUnderTest {
+        /// `None` — the standard rule.
+        Standard,
+        /// `Some` at the reader's current position.
+        Here,
+        /// `Some` before the trigger's own start (a contract violation).
+        BeforeTheTrigger,
+    }
+
+    /// Stage one chars node over `range` as a child.
+    fn chars_child(
+        range: core::ops::Range<usize>,
+    ) -> impl FnOnce(&mut ParseContext<'_, '_, PlainLang>) -> Vec<BuildId> {
+        move |cx| {
+            let span = SourceSpan::new(&Arc::clone(&cx.source), range.clone());
+            let id = cx
+                .stage_node(
+                    NodeKind::chars(span.span()),
+                    span,
+                    Arc::clone(&cx.state),
+                    Vec::new(),
+                )
+                .unwrap();
+            alloc::vec![id]
+        }
+    }
+
+    #[test]
+    fn stage_invocation_ends_at_the_explicit_position() {
+        // The reader stands past the trigger's post-space, and two more characters
+        // are consumed before staging: the explicit end claims them.
+        let range = stage_invocation_span("abcd", 0, EndUnderTest::Here, |cx| {
+            for _ in 0..2 {
+                let token = cx.tokens.peek(&cx.state).unwrap();
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+            }
+            Vec::new()
+        })
+        .unwrap();
+        assert_eq!(range, 0..3);
+    }
+
+    #[test]
+    fn stage_invocation_ends_at_the_last_child_under_the_standard_rule() {
+        let range = stage_invocation_span("abcd", 0, EndUnderTest::Standard, chars_child(1..3))
+            .unwrap();
+        assert_eq!(range, 0..3);
+    }
+
+    #[test]
+    fn stage_invocation_ends_at_the_reader_for_a_childless_shape() {
+        // No child: the node ends where the reader stands — just past the trigger.
+        let range =
+            stage_invocation_span("abcd", 0, EndUnderTest::Standard, |_cx| Vec::new()).unwrap();
+        assert_eq!(range, 0..1);
+    }
+
+    #[test]
+    fn stage_invocation_reports_an_end_before_the_trigger_as_an_implementation_error() {
+        // (a) an explicit end that precedes the trigger's start (the trigger's own
+        // pre-space edge).
+        let error =
+            stage_invocation_span(" abcd", 0, EndUnderTest::BeforeTheTrigger, |_cx| Vec::new())
+                .unwrap_err();
+        assert_invalid_node_span(&error);
+
+        // (b) the standard rule with a last child that ends before the trigger
+        // starts (the trigger is the third character here, the child the first).
+        let error =
+            stage_invocation_span("abcd", 2, EndUnderTest::Standard, chars_child(0..1))
+                .unwrap_err();
+        assert_invalid_node_span(&error);
+    }
+
+    fn assert_invalid_node_span(error: &ParseError) {
+        let condition = error
+            .data()
+            .downcast_ref::<ImplementationError>()
+            .expect("an ImplementationError condition");
+        assert!(
+            condition.detail.contains("invalid node span"),
+            "unexpected detail: {}",
+            condition.detail
+        );
     }
 
     // --- the descent entry point (parse_construct) --------------------------------
