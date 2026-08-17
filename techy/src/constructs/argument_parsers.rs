@@ -57,7 +57,7 @@ use crate::engine::{CommandResolution, ParseDriver};
 use crate::state::{
     GroupOverrides, Lang, LangHasGroups, ParsingState, ParsingStateDelta, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, Token, TokenKind};
+use crate::token::{GroupRule, Token, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{
@@ -128,9 +128,9 @@ pub struct ArgumentNoise<'s, L: Lang> {
     /// order — the leading part of the argument's region if the argument turns out
     /// present; unclaimed (and dropped by the builder) otherwise.
     pub nodes: Vec<BuildId>,
-    /// The reader position before the scan: where [`rewind`](ArgumentNoise::rewind)
+    /// The stream position before the scan: where [`rewind`](ArgumentNoise::rewind)
     /// returns to when the argument is absent.
-    pub start: usize,
+    pub start: L::StreamPosition,
     /// The first non-noise token, peeked and left unconsumed; its `pre_space` is *not*
     /// staged (the parser stages it via [`stage_pre_space`] once it commits to the
     /// argument being present). `None` when a tokenizer error sits at the position
@@ -145,7 +145,7 @@ impl<L: Lang> ArgumentNoise<'_, L> {
     /// the probed noise is re-parsed as enclosing content. The staged noise nodes are
     /// simply never claimed — the builder drops them.
     pub fn rewind(&self, cx: &mut ParseContext<'_, '_, L>) {
-        cx.tokens.move_to_pos(self.start);
+        cx.tokens.move_to_position(&self.start);
     }
 }
 
@@ -171,7 +171,7 @@ impl<L: Lang> fmt::Debug for ArgumentNoise<'_, L> {
 pub fn scan_argument_noise<'s, L: Lang>(
     cx: &mut ParseContext<'_, 's, L>,
 ) -> ConstructParserResult<L, ArgumentNoise<'s, L>> {
-    let start = cx.tokens.pos();
+    let start = cx.tokens.position_here();
     let mut nodes = Vec::new();
     let state = Arc::clone(&cx.state); // staging noise nodes never changes the state
     loop {
@@ -180,29 +180,35 @@ pub fn scan_argument_noise<'s, L: Lang>(
         };
         match &token.kind {
             TokenKind::Comment { start, post_space, .. } => {
-                stage_pre_space(cx, &mut nodes, token.pre_space)?;
+                stage_pre_space(cx, &mut nodes, &token)?;
                 // The token's sub-spans tile its span: start delimiter, content,
                 // post-space.
                 let content_span = Span::new(start.end(), post_space.start());
                 let kind = NodeKind::comment(*start, content_span, *post_space);
-                nodes.push(stage(cx, kind, token.span)?);
-                cx.tokens.move_past(&token, true);
+                let span = cx.tokens.source_span_of(&token);
+                nodes.push(stage(cx, kind, span)?);
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
             }
             _ => return Ok(ArgumentNoise { nodes, start, next: Some(token) }),
         }
     }
 }
 
-/// Stage `pre_space` as a whitespace-only `Chars` node (if non-empty) and record it in
-/// `nodes` — how a committed token's pre-space becomes the region's leading noise
+/// Stage `tok`'s pre-space as a whitespace-only `Chars` node (if non-empty) and record
+/// it in `nodes` — how a committed token's pre-space becomes the region's leading noise
 /// (whitespace before an argument is a node like everywhere else).
 pub fn stage_pre_space<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     nodes: &mut Vec<BuildId>,
-    pre_space: Span,
+    tok: &Token<'_, L>,
 ) -> ConstructParserResult<L, ()> {
+    let pre_space = cx.tokens.source_span_between(
+        tok,
+        TokenEdge::StartBeforePreSpace,
+        TokenEdge::Start,
+    );
     if !pre_space.is_empty() {
-        nodes.push(stage(cx, NodeKind::chars(pre_space), pre_space)?);
+        nodes.push(stage(cx, NodeKind::chars(pre_space.span()), pre_space)?);
     }
     Ok(())
 }
@@ -211,9 +217,9 @@ pub fn stage_pre_space<L: Lang>(
 pub(super) fn stage<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     kind: NodeKind<L>,
-    span: Span,
+    span: SourceSpan<L::SourceOrigin>,
 ) -> ConstructParserResult<L, BuildId> {
-    cx.stage_node(kind, SourceSpan::new(&cx.source, span), Arc::clone(&cx.state), Vec::new())
+    cx.stage_node(kind, span.clone(), Arc::clone(&cx.state), Vec::new())
         .map_err(|error| cx.staging_error(error, span))
 }
 
@@ -254,20 +260,21 @@ where
 {
     match &next.kind {
         TokenKind::Char(_) => {
-            stage_pre_space(cx, nodes, next.pre_space)?;
-            cx.tokens.move_past(next, true);
-            let id = stage(cx, NodeKind::chars(next.span), next.span)?;
+            stage_pre_space(cx, nodes, next)?;
+            let span = cx.tokens.source_span_of(next);
+            cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+            let id = stage(cx, NodeKind::chars(span.span()), span)?;
             nodes.push(id);
             Ok(Some(id))
         }
 
         TokenKind::GroupOpen { rule, .. } => {
-            stage_pre_space(cx, nodes, next.pre_space)?;
+            stage_pre_space(cx, nodes, next)?;
             let rule = Arc::clone(rule);
-            cx.tokens.move_past(next, true);
+            cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
             let base = Arc::clone(&cx.state);
             let (id, _delta) =
-                cx.parse_group(base, next.span, rule, ChildStateSpec::inherit(), None)?; // groups have no after-effect
+                cx.parse_group(base, next, rule, ChildStateSpec::inherit(), None)?; // groups have no after-effect
             nodes.push(id);
             Ok(Some(id))
         }
@@ -294,26 +301,22 @@ where
                     // The decided unresolvable-command recovery ([§dd-dr:errors]), in expression
                     // position: diagnostic + span-backed chars fallback, the token
                     // consumed whole — mirroring the content loop.
-                    cx.recover(
-                        UnresolvableCommand::new(*name, *escape_char, detail),
-                        SourceSpan::new(&cx.source, next.span),
-                    )?;
-                    stage_pre_space(cx, nodes, next.pre_space)?;
-                    cx.tokens.move_past(next, true);
-                    let id = stage(cx, NodeKind::chars(next.span), next.span)?;
+                    let span = cx.tokens.source_span_of(next);
+                    cx.recover(UnresolvableCommand::new(*name, *escape_char, detail), span.clone())?;
+                    stage_pre_space(cx, nodes, next)?;
+                    cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+                    let id = stage(cx, NodeKind::chars(span.span()), span)?;
                     nodes.push(id);
                     Ok(Some(id))
                 }
                 CommandResolution::Failed { detail } => {
                     // Operational resolver failure ([§dd-dr:errors]), in expression position: a
                     // distinct condition from a clean miss, same span-backed recovery.
-                    cx.recover(
-                        CommandResolutionFailed::new(*name, *escape_char, detail),
-                        SourceSpan::new(&cx.source, next.span),
-                    )?;
-                    stage_pre_space(cx, nodes, next.pre_space)?;
-                    cx.tokens.move_past(next, true);
-                    let id = stage(cx, NodeKind::chars(next.span), next.span)?;
+                    let span = cx.tokens.source_span_of(next);
+                    cx.recover(CommandResolutionFailed::new(*name, *escape_char, detail), span.clone())?;
+                    stage_pre_space(cx, nodes, next)?;
+                    cx.tokens.move_to_edge(next, TokenEdge::EndPastPostSpace);
+                    let id = stage(cx, NodeKind::chars(span.span()), span)?;
                     nodes.push(id);
                     Ok(Some(id))
                 }
@@ -354,12 +357,10 @@ where
             }
             _ => invocation.name.into(),
         };
-        cx.recover(
-            ExpressionCallableRequiresContent::new(spelling),
-            SourceSpan::new(&cx.source, token.span),
-        )?;
-        stage_pre_space(cx, nodes, token.pre_space)?;
-        cx.tokens.move_past(token, true);
+        let span = cx.tokens.source_span_of(token);
+        cx.recover(ExpressionCallableRequiresContent::new(spelling), span)?;
+        stage_pre_space(cx, nodes, token)?;
+        cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
         // The bare single-token callable: every declared argument absent, no slots —
         // the record stays self-describing (each entry keeps its spec). Staged via
         // the transcription-case shorthand (childless: the trigger's own span).
@@ -380,12 +381,12 @@ where
         return Ok(Some(id));
     }
 
-    stage_pre_space(cx, nodes, token.pre_space)?;
+    stage_pre_space(cx, nodes, token)?;
     // The invocation's traceback frame (the expression-position dispatch site, [§dd-dr:errors]).
     let frame = super::invocation_frame(cx, &invocation);
     // Consume the trigger whole before the parser runs (the dispatch contract, [§dd-dr:parsers-engine]);
     // the parser comes from the driver's interception seam (Phase 7.2).
-    cx.tokens.move_past(token, true);
+    cx.tokens.move_to_edge(token, TokenEdge::EndPastPostSpace);
     // A factory Err aborts under any policy ("could not build the parser"), with
     // the live traceback attached here.
     let driver = cx.driver;
@@ -450,13 +451,11 @@ where
         match expression {
             Some(_) => Ok(Some(region_with_last_as_content(noise.nodes))),
             None => {
-                let at = noise.next.as_ref().map(|token| token.span).unwrap_or_else(|| {
-                    Span::empty(cx.tokens.pos())
-                });
-                cx.recover(
-                    ExpectedExpressionArgument::new(argument_name(spec)),
-                    SourceSpan::new(&cx.source, at),
-                )?;
+                let at = match noise.next.as_ref() {
+                    Some(token) => cx.tokens.source_span_of(token),
+                    None => cx.here(),
+                };
+                cx.recover(ExpectedExpressionArgument::new(argument_name(spec)), at)?;
                 noise.rewind(cx);
                 Ok(None)
             }
@@ -596,7 +595,7 @@ where
         if matches!(&self.form, GroupArgumentForm::Rules(rules) if rules.is_empty()) {
             return Err(cx.implementation_error(
                 "GroupArgumentParser::any_of needs at least one delimiter rule",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
         let mut noise = scan_argument_noise(cx)?;
@@ -608,11 +607,11 @@ where
                 if noise.next.is_some() {
                     if let Some(matched) = probe_minted_group(cx, rules)? {
                         let MintedGroupMatch { open, rule, contents_state } = matched;
-                        stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
-                        cx.tokens.move_past(&open, true);
+                        stage_pre_space(cx, &mut noise.nodes, &open)?;
+                        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
                         let (id, _delta) = cx.parse_group(
                             contents_state,
-                            open.span,
+                            &open,
                             rule,
                             ChildStateSpec::inherit(),
                             None,
@@ -632,13 +631,13 @@ where
                 if let Some(next) = noise.next.clone() {
                     if let TokenKind::GroupOpen { rule, .. } = &next.kind {
                         if rule.group_type == *group_type {
-                            stage_pre_space(cx, &mut noise.nodes, next.pre_space)?;
+                            stage_pre_space(cx, &mut noise.nodes, &next)?;
                             let rule = Arc::clone(rule);
-                            cx.tokens.move_past(&next, true);
+                            cx.tokens.move_to_edge(&next, TokenEdge::EndPastPostSpace);
                             let base = Arc::clone(&cx.state);
                             let (id, _delta) = cx.parse_group(
                                 base,
-                                next.span,
+                                &next,
                                 rule,
                                 ChildStateSpec::inherit(),
                                 None,
@@ -682,15 +681,11 @@ pub(super) fn missing_mandatory<L: Lang>(
     noise: ArgumentNoise<'_, L>,
     spec: &ArgumentSpec<L>,
 ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
-    let at = noise
-        .next
-        .as_ref()
-        .map(|token| token.span)
-        .unwrap_or_else(|| Span::empty(cx.tokens.pos()));
-    cx.recover(
-        MissingMandatoryArgument::new(argument_name(spec)),
-        SourceSpan::new(&cx.source, at),
-    )?;
+    let at = match noise.next.as_ref() {
+        Some(token) => cx.tokens.source_span_of(token),
+        None => cx.here(),
+    };
+    cx.recover(MissingMandatoryArgument::new(argument_name(spec)), at)?;
     noise.rewind(cx);
     Ok(None)
 }
@@ -857,7 +852,7 @@ where
         if self.rules.is_empty() {
             return Err(cx.implementation_error(
                 "OptionalGroupArgumentParser::any_of needs at least one delimiter rule",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         }
         let mut noise = scan_argument_noise(cx)?;
@@ -878,15 +873,15 @@ where
         };
         let MintedGroupMatch { open, rule, contents_state } = matched;
 
-        stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
-        cx.tokens.move_past(&open, true);
+        stage_pre_space(cx, &mut noise.nodes, &open)?;
+        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
         // Plain descent — no `ChildStateSpec` wiring (detached July 2026, superseding
         // the 6.5 policy translation of pylatexenc's `make_child_parsing_state`): the
         // temporary rule's state-scoped lifecycle covers both halves of that policy at
         // every depth (see the type docs).
         let (id, _delta) = cx.parse_group(
             contents_state,
-            open.span,
+            &open,
             rule,
             ChildStateSpec::inherit(),
             None,
@@ -965,7 +960,7 @@ where
         let Some(first_char) = self.marker.chars().next() else {
             return Err(cx.implementation_error(
                 "MarkerArgumentParser::new needs a non-empty marker",
-                Span::empty(cx.tokens.pos()),
+                cx.here(),
             ));
         };
         let mut noise = scan_argument_noise(cx)?;
@@ -977,26 +972,30 @@ where
             noise.rewind(cx);
             return Ok(None);
         }
-        let mut span = first.span;
-        cx.tokens.move_past(&first, true);
+        let start = cx.tokens.position_at(&first, TokenEdge::Start);
+        let mut end = cx.tokens.position_at(&first, TokenEdge::EndPastPostSpace);
+        cx.tokens.move_to_edge(&first, TokenEdge::EndPastPostSpace);
         let state = Arc::clone(&cx.state);
         for expected in self.marker.chars().skip(1) {
             let Some(token) = cx.probe_token(&state)? else {
                 noise.rewind(cx);
                 return Ok(None);
             };
+            // Consecutive: no whitespace between the marker's characters, and the
+            // next one starts exactly where the run has reached.
             let continues_marker = matches!(token.kind, TokenKind::Char(c) if c == expected)
                 && token.pre_space.is_empty()
-                && token.span.start() == span.end();
+                && cx.tokens.position_at(&token, TokenEdge::Start) == end;
             if !continues_marker {
                 noise.rewind(cx);
                 return Ok(None);
             }
-            span.extend_to(token.span.end());
-            cx.tokens.move_past(&token, true);
+            end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
+            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
         }
-        stage_pre_space(cx, &mut noise.nodes, first.pre_space)?;
-        noise.nodes.push(stage(cx, NodeKind::chars(span), span)?);
+        let span = cx.source_span_within(&start, &end)?;
+        stage_pre_space(cx, &mut noise.nodes, &first)?;
+        noise.nodes.push(stage(cx, NodeKind::chars(span.span()), span)?);
         Ok(Some(region_with_last_as_content(mem::take(&mut noise.nodes))))
     }
 
@@ -1270,7 +1269,8 @@ mod tests {
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
         assert!(delta.is_none());
-        let pos = cx.tokens.pos();
+        // The reader's position, as a byte offset, through its own answer.
+        let pos = cx.here().start();
         let root_span = {
             let staged = session.builder.staged_nodes();
             match (outcome.nodes.first(), outcome.nodes.last()) {
@@ -2019,7 +2019,7 @@ mod tests {
                 self.inner().pos()
             }
 
-            fn move_to_edge(&mut self, tok: &Token<'s, ArgLang>, edge: TokenEdge) {
+            fn move_to_edge(&mut self, tok: &Token<'_, ArgLang>, edge: TokenEdge) {
                 self.inner_mut().move_to_edge(tok, edge);
             }
 
@@ -2029,7 +2029,7 @@ mod tests {
 
             fn source_span_between(
                 &self,
-                tok: &Token<'s, ArgLang>,
+                tok: &Token<'_, ArgLang>,
                 a: TokenEdge,
                 b: TokenEdge,
             ) -> SourceSpan {
@@ -2040,7 +2040,7 @@ mod tests {
                 self.inner().position_here()
             }
 
-            fn position_at(&self, tok: &Token<'s, ArgLang>, edge: TokenEdge) -> StdStreamPosition {
+            fn position_at(&self, tok: &Token<'_, ArgLang>, edge: TokenEdge) -> StdStreamPosition {
                 self.inner().position_at(tok, edge)
             }
 
@@ -2227,10 +2227,10 @@ mod tests {
                         ArgLang,
                         (BuildId, Option<Box<ParsingStateDelta<ArgLang>>>),
                     > {
-                        let span = self.invocation.token.span;
+                        let span = cx.tokens.source_span_of(self.invocation.token);
                         let id = cx.stage_node(
-                            NodeKind::chars(span),
-                            SourceSpan::new(&cx.source, span),
+                            NodeKind::chars(span.span()),
+                            span,
                             Arc::clone(&cx.state),
                             vec![],
                         ).unwrap();

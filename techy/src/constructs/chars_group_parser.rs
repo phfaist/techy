@@ -193,7 +193,7 @@ where
         let outer = Arc::clone(&cx.state);
         let contents_state = cx.derive_state(&self.contents_delta(&outer))?;
 
-        stage_pre_space(cx, &mut noise.nodes, open.pre_space)?;
+        stage_pre_space(cx, &mut noise.nodes, &open)?;
         cx.tokens.move_past(&open, true);
         let child_states = if self.restricted_descent {
             ChildStateSpec::inherit()
@@ -207,7 +207,7 @@ where
             }
         };
         let (id, _delta) =
-            cx.parse_group(contents_state, open.span, rule, child_states, None)?;
+            cx.parse_group(contents_state, &open, rule, child_states, None)?;
 
         // The id routes through the driver's group-parser factory: a bogus id from a
         // misbehaving custom driver degrades to a zero-child region rather than

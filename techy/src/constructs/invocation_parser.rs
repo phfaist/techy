@@ -13,8 +13,9 @@ use crate::engine::{Frame, FrameTitle};
 use crate::node::{
     BuildId, ChildRegion, ParsedArgument, ParsedArguments, ParsedSlots,
 };
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::spec::{CallableSpec, FrameRole};
+use crate::token::TokenEdge;
 use crate::state::{Lang, ParsingStateDelta};
 
 use super::{
@@ -44,7 +45,7 @@ use super::{
 pub fn parse_declared_arguments<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     callable_spec: &Arc<dyn CallableSpec<L>>,
-    name_span: Span,
+    name: &SourceSpan<L::SourceOrigin>,
 ) -> ConstructParserResult<L, (Vec<BuildId>, Vec<ParsedArgument<L>>)> {
     let argument_specs = callable_spec.arguments();
     let mut children: Vec<BuildId> = Vec::new();
@@ -59,9 +60,9 @@ pub fn parse_declared_arguments<L: Lang>(
             title: FrameTitle::Callable {
                 spec: Arc::clone(callable_spec),
                 role: FrameRole::Argument { index },
-                name: SourceSpan::new(&cx.source, name_span),
+                name: name.clone(),
             },
-            span: SourceSpan::new(&cx.source, Span::empty(cx.tokens.pos())),
+            span: cx.here(),
         };
         let result = cx.with_frame(frame, |cx| {
             cx.with_parsing_state(argument_state, |cx| {
@@ -98,14 +99,16 @@ pub fn parse_declared_arguments<L: Lang>(
 ///
 /// Constructed around the resolved [`Invocation`], which travels inside the parser
 /// instance. The **caller consumes the
-/// trigger token whole** — `move_past(token, true)`, syntactic post-space included —
+/// trigger token whole** — `move_to_edge(token, TokenEdge::EndPastPostSpace)`,
+/// syntactic post-space included —
 /// before running the parser (the dispatch-loop arm that peeked it, mirroring the
 /// [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,
 /// since no invocation parser can forget to consume its trigger). The token's pre-space
 /// is likewise the caller's (housed as sibling content). A takeover parser that needs
-/// the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader itself,
-/// positionally — `move_to_pos(token.post_space().start())`: the stored trigger token
-/// cannot be handed back to the reader through the uniform `parse` signature.
+/// the trigger's post-space bytes raw (the `\verb` idiom) repositions the reader
+/// itself, at the trigger's own [`End`](crate::token::TokenEdge) edge —
+/// `move_to_edge(token, TokenEdge::End)`, where the token proper ends and its
+/// post-space begins.
 ///
 /// `cx.state` is the invocation's **base** state: the caller resolves any
 /// [`InvocationChildState`](super::InvocationChildState) policy first and scopes the
@@ -186,9 +189,9 @@ where
         let token = self.invocation.token;
         // The invocation spelling (trigger minus syntactic post-space) titles the
         // argument frames.
-        let name_span = Span::new(token.span.start(), token.post_space().start());
+        let name = cx.tokens.source_span_between(token, TokenEdge::Start, TokenEdge::End);
         let (children, arguments) =
-            parse_declared_arguments(cx, self.invocation.spec, name_span)?;
+            parse_declared_arguments(cx, self.invocation.spec, &name)?;
 
         // The transcription-case staging shorthand: callable_type/name/spec and the
         // invocation-syntax payload transcribed from the bundle; `None` = the std
