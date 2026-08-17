@@ -715,7 +715,7 @@ fn a_diagnostic_and_a_parse_result_have_a_pinned_json_rendering() {
     writer.serialize_parse_result(&result).unwrap();
     let json = serde_json::to_string(&writer.take_segment()).unwrap();
     let expected = concat!(
-        r#"{"version":1,"tables":["#,
+        r#"{"version":1,"meta":{},"tables":["#,
         r#"{"name":"sources","table":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"{a"}}]},"#,
         r#"{"name":"states","table":1,"start":0,"entries":["#,
         r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":0,"open":"{","close":"}"}],"temporary":[]},"commands":{"enabled":false,"rules":[]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":false},"forbidden_chars":{"chars":""}},"mode":null,"ext":null,"scopes":[]},"#,

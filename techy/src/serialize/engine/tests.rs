@@ -17,7 +17,7 @@ use crate::state::TrivialLang;
 use crate::serialize::{
     DeserializableObject, DeserializeContext, DeserializeError, DispatchingSerdeDriver,
     IdentifierResolver, ObjectReader, ObjectSerdeDriver, RegistrationError, SerdeSession,
-    Segment, SerialEntry, SerialIndex, SerialValue, SerializableLang,
+    Segment, SegmentMeta, SerialEntry, SerialIndex, SerialValue, SerialValueError, SerializableLang,
     SerializableObject, SerializeContext, SerializeError, TableId,
 };
 
@@ -1202,6 +1202,7 @@ fn version_unknown_table_and_out_of_order_segments() {
     // Version mismatch.
     let bad_version = Segment::from_serial_value(&SerialValue::Map(Vec::from([
         (String::from("version"), SerialValue::Int(99)),
+        (String::from("meta"), SerialValue::Map(Vec::new())),
         (String::from("tables"), SerialValue::List(Vec::new())),
     ])))
     .unwrap();
@@ -1516,6 +1517,138 @@ fn unemitted_entries_block_a_push() {
     ));
 }
 
+// --- the segment's main entry and profile ---------------------------------------------
+
+#[test]
+fn a_segment_names_its_main_entry_and_the_reader_translates_it() {
+    // The writer names one of its entries as the segment's main entry; a reader with
+    // another registration order gets it back in its own numbering, bounds-checked.
+    let (mut writer, wt) = full_session();
+    let first_leaf = Arc::new(Leaf { text: "a".into() });
+    writer.intern(wt.leaves, &first_leaf).unwrap();
+    let square: Arc<dyn Shape> = Arc::new(Square { side: 3 });
+    let main = writer.intern(wt.shapes, &square).unwrap();
+    let segment = writer.take_segment_with_main(main).unwrap();
+    assert_eq!(segment.main(), Some((wt.shapes.id(), 0)));
+    assert_eq!(wt.shapes.id().ordinal(), 1);
+
+    let (mut reader, rt) = permuted_session();
+    assert_eq!(rt.shapes.id().ordinal(), 0);
+    let translated = reader.push_segment(segment).unwrap();
+    assert_eq!(translated, Some((rt.shapes.id(), 0)));
+    let (table, index) = translated.unwrap();
+    assert_eq!(table, rt.shapes.id());
+    assert_eq!(reader.object(rt.shapes, rt.shapes.position(index)).unwrap().area(), 9);
+
+    // A plain `take_segment` names none, and pushing it answers `None`.
+    writer.intern(wt.leaves, &Arc::new(Leaf { text: "b".into() })).unwrap();
+    let plain = writer.take_segment();
+    assert_eq!(plain.main(), None);
+    assert_eq!(reader.push_segment(plain).unwrap(), None);
+
+    // The main entry may lie in an earlier segment of the stream (the entry exists in
+    // the session): here the leaf interned first (the same `Arc`, so its position).
+    let earlier = writer.intern(wt.leaves, &first_leaf).unwrap();
+    assert_eq!(earlier.index(), 0);
+    let segment = writer.take_segment_with_main(earlier).unwrap();
+    assert!(segment.is_empty());
+    assert_eq!(reader.push_segment(segment).unwrap(), Some((rt.leaves.id(), 0)));
+}
+
+#[test]
+fn a_main_entry_the_writer_does_not_hold_is_refused_and_nothing_is_emitted() {
+    let (mut writer, wt) = full_session();
+    writer.intern(wt.leaves, &Arc::new(Leaf { text: "a".into() })).unwrap();
+    // A position beyond the table's end.
+    let error = writer.take_segment_with_main(LeafIndex::from_parts(wt.leaves.id(), 5)).unwrap_err();
+    assert!(matches!(error, SerializeError::IndexOutOfRange { table: "leaves", index: 5, len: 1 }), "{error}");
+    // A table id the session does not have.
+    let error = writer.take_segment_with_main(LeafIndex::from_parts(TableId::new(7), 0)).unwrap_err();
+    assert!(matches!(error, SerializeError::UnknownTable { .. }), "{error}");
+    // The pending entry is still pending: the next emission carries it.
+    let segment = writer.take_segment();
+    assert_eq!(segment.tables()[0].entries().len(), 1);
+}
+
+#[test]
+fn a_hostile_main_entry_is_refused_before_anything_is_absorbed() {
+    fn with_main(segment: &Segment, table: TableId, index: u32) -> Segment {
+        let mut value = segment.to_serial_value();
+        let SerialValue::Map(fields) = &mut value else { panic!() };
+        fields.push((String::from("main"), SerialValue::Index { table, index }));
+        Segment::from_serial_value(&value).unwrap()
+    }
+    let (mut writer, wt) = full_session();
+    writer.intern(wt.leaves, &Arc::new(Leaf { text: "a".into() })).unwrap();
+    let segment = writer.take_segment();
+
+    // Beyond the table's length after the push (one leaf).
+    let (mut reader, rt) = full_session();
+    let error = reader.push_segment(with_main(&segment, wt.leaves.id(), 1)).unwrap_err();
+    assert!(matches!(error, DeserializeError::IndexOutOfRange { table: "leaves", index: 1, len: 1 }), "{error}");
+    // Nothing was absorbed: the same segment pushes fine afterwards.
+    assert_eq!(reader.push_segment(segment.clone()).unwrap(), None);
+    assert_eq!(reader.object(rt.leaves, rt.leaves.position(0)).unwrap().text, "a");
+
+    // A writer table id the directory does not list.
+    let (mut reader, _rt) = full_session();
+    let error = reader.push_segment(with_main(&segment, TableId::new(9), 0)).unwrap_err();
+    assert!(matches!(error, DeserializeError::UnknownWriterTable { .. }), "{error}");
+
+    // A malformed main (not a table position) does not even parse as a segment.
+    let mut value = segment.to_serial_value();
+    let SerialValue::Map(fields) = &mut value else { panic!() };
+    fields.push((String::from("main"), SerialValue::Int(3)));
+    assert!(matches!(
+        Segment::from_serial_value(&value),
+        Err(SerialValueError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn a_declared_profile_is_written_and_required_on_reading() {
+    let (mut writer, wt) = full_session();
+    writer.set_profile("toy 1");
+    assert_eq!(writer.profile(), Some("toy 1"));
+    writer.intern(wt.leaves, &Arc::new(Leaf { text: "a".into() })).unwrap();
+    let segment = writer.take_segment();
+    assert_eq!(segment.meta().profile(), Some("toy 1"));
+
+    // The same profile: accepted.
+    let (mut reader, _) = full_session();
+    reader.set_profile("toy 1");
+    reader.push_segment(segment.clone()).unwrap();
+
+    // Another profile: refused up front, the session untouched.
+    let (mut reader, rt) = full_session();
+    reader.set_profile("toy 2");
+    let error = reader.push_segment(segment.clone()).unwrap_err();
+    assert!(
+        matches!(&error, DeserializeError::ProfileMismatch { expected, found: Some(found) } if expected == "toy 2" && found == "toy 1"),
+        "{error}"
+    );
+    assert_eq!(error.to_string(), "the segment's profile `toy 1` is not this session's profile `toy 2`");
+    assert!(reader.object(rt.leaves, rt.leaves.position(0)).is_err());
+
+    // No profile declared: any segment is accepted, with or without one.
+    let (mut reader, _) = full_session();
+    reader.push_segment(segment).unwrap();
+    let (mut plain_writer, pt) = full_session();
+    plain_writer.intern(pt.leaves, &Arc::new(Leaf { text: "b".into() })).unwrap();
+    let unprofiled = plain_writer.take_segment();
+    assert_eq!(unprofiled.meta().profile(), None);
+    assert_eq!(unprofiled.meta(), &SegmentMeta::default());
+    let (mut reader, _) = full_session();
+    reader.push_segment(unprofiled.clone()).unwrap();
+
+    // A profiled reader refuses a segment carrying none.
+    let (mut reader, _) = full_session();
+    reader.set_profile("toy 1");
+    let error = reader.push_segment(unprofiled).unwrap_err();
+    assert!(matches!(&error, DeserializeError::ProfileMismatch { found: None, .. }), "{error}");
+    assert_eq!(error.to_string(), "the segment carries no profile; this session requires `toy 1`");
+}
+
 // --- determinism ----------------------------------------------------------------------
 
 #[test]
@@ -1566,6 +1699,7 @@ fn one_table_segment(name: &str, id: TableId, start: u32, entries: Vec<SerialVal
     ]));
     Segment::from_serial_value(&SerialValue::Map(Vec::from([
         (String::from("version"), SerialValue::Int(i64::from(Segment::VERSION))),
+        (String::from("meta"), SerialValue::Map(Vec::new())),
         (String::from("tables"), SerialValue::List(Vec::from([table]))),
     ])))
     .unwrap()
@@ -1586,6 +1720,7 @@ fn two_table_segment(
     }
     Segment::from_serial_value(&SerialValue::Map(Vec::from([
         (String::from("version"), SerialValue::Int(i64::from(Segment::VERSION))),
+        (String::from("meta"), SerialValue::Map(Vec::new())),
         (String::from("tables"), SerialValue::List(Vec::from([table(first), table(second)]))),
     ])))
     .unwrap()
@@ -1630,7 +1765,7 @@ mod serde_rendering {
         assert_eq!(
             json,
             concat!(
-                r#"{"version":1,"tables":["#,
+                r#"{"version":1,"meta":{},"tables":["#,
                 r#"{"name":"leaves","table":0,"start":0,"entries":["hi"]},"#,
                 r#"{"name":"shapes","table":1,"start":0,"entries":[{"identifier":"toy.square","data":{"side":2}}]},"#,
                 r#"{"name":"nodes","table":2,"start":0,"entries":[{"leaves":[{"$index":[0,0]}],"shape":{"$index":[1,0]}}]}"#,

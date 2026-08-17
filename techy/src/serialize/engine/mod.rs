@@ -15,7 +15,7 @@ mod session;
 pub use context::{DeserializeContext, SerializeContext};
 pub use dispatch::{DispatchingSerdeDriver, IdentifierResolver, ObjectReader};
 pub use driver::{ObjectSerdeDriver, TableHandle};
-pub use segment::{Segment, SegmentTable};
+pub use segment::{Segment, SegmentMeta, SegmentTable};
 pub use session::SerdeSession;
 
 // Crate-internal: the per-table registry trait a custom driver (the trees table)

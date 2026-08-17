@@ -129,7 +129,17 @@
 //! providers the absorbed entries resolved to by identity — are then written once for
 //! the whole stream, while a live object the program creates anew (the parsing states
 //! of a fresh parse) is a new entry even when an equal object was absorbed earlier,
-//! since sharing follows object identity, not equality. The same conventions hold for
+//! since sharing follows object identity, not equality. Two segment-level
+//! conveniences serve such streams: a segment may name its *main entry* — the one
+//! entry it is about, the parse result of that line, say
+//! ([`SerdeSession::take_segment_with_main`]; `push_segment` returns it in the
+//! reader's numbering, so a reader finds each line's payload without knowing the
+//! tables' layout) — and a session may declare a *profile*
+//! ([`SerdeSession::set_profile`]): a caller-chosen name for the configuration that
+//! reads the stream fully, written into every segment ([`SegmentMeta`]) and required
+//! of every segment a reader with a profile absorbs, so that a stream written for one
+//! configuration is refused up front by a reader configured for another. The same
+//! conventions hold for
 //! any other serde format that frames its values (one segment per framed value, in
 //! order); the crate itself calls no encoder — the engine emits and absorbs `Segment`
 //! values only.
@@ -187,7 +197,7 @@ pub use drivers::{
 };
 pub use engine::{
     DeserializeContext, DispatchingSerdeDriver, IdentifierResolver, ObjectReader,
-    ObjectSerdeDriver, SerdeSession, Segment, SegmentTable, SerializeContext, TableHandle,
+    ObjectSerdeDriver, SerdeSession, Segment, SegmentMeta, SegmentTable, SerializeContext, TableHandle,
 };
 pub use error::{DeserializeError, RegistrationError, SerialValueError, SerializeError};
 pub use object::{

@@ -1005,7 +1005,7 @@ mod serde_rendering {
         assert_eq!(
             json,
             concat!(
-                r#"{"version":1,"tables":["#,
+                r#"{"version":1,"meta":{},"tables":["#,
                 r#"{"name":"sources","table":0,"start":0,"entries":["#,
                 r#"{"origin":"a.tex","provenance":"primary","line_number_offset":1,"column_number_offset":1,"#,
                 r#""text":{"referenced":{"length":2,"digest":{"algorithm":"toy-sum","bytes":{"$bytes":"AAAAAAAAAMM="}}}}},"#,

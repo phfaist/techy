@@ -1026,7 +1026,7 @@ fn the_rendering_of_the_determinism_input_is_pinned_across_processes() {
 
 /// The pinned `(byte length, FNV-1a 64-bit digest)` of the determinism input's JSON.
 #[cfg(feature = "serde")]
-const PINNED_DETERMINISM_RENDERING: (usize, u64) = (8003, 5_103_988_058_968_863_647);
+const PINNED_DETERMINISM_RENDERING: (usize, u64) = (8013, 3_299_525_534_588_708_154);
 
 // --- helpers ------------------------------------------------------------------------------
 
@@ -1150,7 +1150,7 @@ mod rendering {
         writer.serialize_tree(&result.tree).unwrap();
         let json = serde_json::to_string(&writer.take_segment()).unwrap();
         let expected = concat!(
-            r#"{"version":1,"tables":["#,
+            r#"{"version":1,"meta":{},"tables":["#,
             r#"{"name":"sources","table":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"\\e{x}"}}]},"#,
             r#"{"name":"states","table":1,"start":0,"entries":["#,
             r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n\r\u000b\f"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":"content","open":"{","close":"}"},{"group_type":{"math":"inline"},"open":"$","close":"$"},{"group_type":{"math":"display"},"open":"$$","close":"$$"},{"group_type":{"math":"inline"},"open":"\\(","close":"\\)"},{"group_type":{"math":"display"},"open":"\\[","close":"\\]"}],"temporary":[]},"commands":{"enabled":true,"rules":[{"escape_char":"\\","name_chars":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":true},"forbidden_chars":{"chars":""}},"mode":"text","ext":null,"scopes":[{"$index":[3,0]},{"$index":[3,1]}]},"#,

@@ -4,7 +4,8 @@
 //! through a binary format (postcard, length-prefixed frames). Two parses are written
 //! by one session, read by another that then appends a third parse of its own
 //! (reading then appending), and the whole stream is read by a third session with the
-//! sharing between the parses intact.
+//! sharing between the parses intact. Every segment names its parse result as its
+//! main entry and carries the sessions' profile.
 
 #![cfg(feature = "serde")]
 
@@ -20,12 +21,12 @@ use techy::latexlike::{source_recomposer, Latexlike, LatexlikeDriver, MacroSpec}
 use techy::recompose::TreeRecomposer;
 use techy::serialize::{
     DeserializeError, KnownProviders, ParseResultIndex, ParseResultSerialization, SerdeSession,
-    Segment, SerialIndex,
+    Segment, SerialIndex, TableId,
 };
 
 // --- fixtures -----------------------------------------------------------------------------
 
-/// The minilatex language, tolerant (so a document with a mistake still yields a parse
+/// The minilatex language, tolerant (so an input with a mistake still yields a parse
 /// result, with diagnostics).
 fn language() -> Language<Latexlike> {
     let seed = ParsingState::lang_initial_with_packages([minilatex_package() as Arc<dyn SpecsProvider<Latexlike>>])
@@ -33,14 +34,19 @@ fn language() -> Language<Latexlike> {
     Language::new(LatexlikeDriver::new(Recovery::Tolerant), seed)
 }
 
-/// A session with the standard tables, the preset's readers, and a reading
-/// environment holding `language`'s own packages by identity (the flow of a program
-/// that reads a stream and appends to it: what it parses with is what the stream's
-/// provider entries resolve to, so its own parses intern the same instances and
-/// nothing is written twice), with the preset's recipes as the fallback for a package
-/// the language does not hold in its seed (the nested `minilatex.item`).
+/// The profile every session here declares: the name of the configuration that reads
+/// these streams fully (the caller's own vocabulary; techy only compares it).
+const PROFILE: &str = "techy stream test / minilatex";
+
+/// A session with the standard tables, the preset's readers, the test's profile, and
+/// a reading environment holding `language`'s own packages by identity (the flow of a
+/// program that reads a stream and appends to it: what it parses with is what the
+/// stream's provider entries resolve to, so its own parses intern the same instances
+/// and nothing is written twice), with the preset's recipes as the fallback for a
+/// package the language does not hold in its seed (the nested `minilatex.item`).
 fn session(language: &Language<Latexlike>) -> SerdeSession<Latexlike> {
     let mut session = SerdeSession::<Latexlike>::new();
+    session.set_profile(PROFILE);
     let mut known = KnownProviders::<Latexlike>::new();
     for provider in language.initial_state().scopes().providers() {
         known.insert(Arc::clone(provider));
@@ -67,9 +73,9 @@ fn package_of(result: &ParseResult<Latexlike>, name: &str) -> Arc<dyn SpecsProvi
     macro_spec.provenance().expect("stamped").provider().expect("the package is alive")
 }
 
-const DOC_A: &str = "\\emph{a} \\begin{itemize}\\item x~y\\end{itemize}";
-const DOC_B: &str = "b \\textbf{c} {unclosed";
-const DOC_C: &str = "\\textit{c} --- and $m$";
+const TEXT_A: &str = "\\emph{a} \\begin{itemize}\\item x~y\\end{itemize}";
+const TEXT_B: &str = "b \\textbf{c} {unclosed";
+const TEXT_C: &str = "\\textit{c} --- and $m$";
 
 fn parse(language: &Language<Latexlike>, input: &str) -> Arc<ParseResult<Latexlike>> {
     Arc::new(language.parse(input).expect("a tolerant parse completes"))
@@ -100,6 +106,22 @@ fn parse_result_at(reader: &mut SerdeSession<Latexlike>, index: u32) -> Arc<Pars
     reader.parse_result(table.position(index)).expect("the parse result reads back")
 }
 
+/// The parse result a segment named as its main entry, as `push_segment` handed it
+/// back: the reader's parse-results table and the position, without knowing where in
+/// the stream's numbering the segment's parse result landed.
+fn main_parse_result(reader: &mut SerdeSession<Latexlike>, main: Option<(TableId, u32)>) -> Arc<ParseResult<Latexlike>> {
+    let (table, index) = main.expect("the segment names its main entry");
+    let parse_results = reader.standard_tables().expect("standard tables").parse_results;
+    assert_eq!(table, parse_results.id(), "the main entry is a parse result");
+    reader.parse_result(parse_results.position(index)).expect("the main parse result reads back")
+}
+
+/// Serialize `result` and emit the segment naming it as its main entry.
+fn emit(writer: &mut SerdeSession<Latexlike>, result: &Arc<ParseResult<Latexlike>>) -> Segment {
+    let position = writer.serialize_parse_result(result).expect("the parse result serializes");
+    writer.take_segment_with_main(position).expect("the position is the writer's own")
+}
+
 /// The number of entries the segment carries for table `name`, and their start.
 fn part(segment: &Segment, name: &str) -> (usize, u32) {
     let table = segment.tables().iter().find(|t| t.name() == name).expect("the table is in the directory");
@@ -116,31 +138,37 @@ fn write_line(stream: &mut String, segment: &Segment) {
     stream.push('\n');
 }
 
-/// Absorb every line of `stream` into `reader`, in order.
-fn read_lines(reader: &mut SerdeSession<Latexlike>, stream: &str) {
-    for line in stream.lines() {
-        let segment: Segment = serde_json::from_str(line).expect("each line is a segment");
-        reader.push_segment(segment).expect("the segments continue the stream in order");
-    }
+/// Absorb every line of `stream` into `reader`, in order; the main entries, one per
+/// line, as the reader numbers them.
+fn read_lines(reader: &mut SerdeSession<Latexlike>, stream: &str) -> Vec<Option<(TableId, u32)>> {
+    stream
+        .lines()
+        .map(|line| {
+            let segment: Segment = serde_json::from_str(line).expect("each line is a segment");
+            assert_eq!(segment.meta().profile(), Some(PROFILE));
+            reader.push_segment(segment).expect("the segments continue the stream in order")
+        })
+        .collect()
 }
 
 #[test]
 fn a_json_lines_stream_is_read_then_appended_then_read_again() {
     let language = language();
-    let a = parse(&language, DOC_A);
-    let b = parse(&language, DOC_B);
-    assert!(b.diagnostics.has_errors(), "document B recovers from a mistake");
+    let a = parse(&language, TEXT_A);
+    let b = parse(&language, TEXT_B);
+    assert!(b.diagnostics.has_errors(), "input B recovers from a mistake");
 
-    // Write: two parses, one segment (one line) each.
+    // Write: two parses, one segment (one line) each, each naming its parse result
+    // as its main entry.
     let mut stream = String::new();
     let mut writer = session(&language);
-    let a_position = writer.serialize_parse_result(&a).unwrap();
-    let first = writer.take_segment();
+    let first = emit(&mut writer, &a);
     write_line(&mut stream, &first);
-    let b_position = writer.serialize_parse_result(&b).unwrap();
-    let second = writer.take_segment();
+    let second = emit(&mut writer, &b);
     write_line(&mut stream, &second);
-    assert_eq!((a_position.index(), b_position.index()), (0, 1));
+    let parse_results = writer.standard_tables().unwrap().parse_results.id();
+    assert_eq!((first.main(), second.main()), (Some((parse_results, 0)), Some((parse_results, 1))));
+    assert_eq!(first.meta().profile(), Some(PROFILE));
     // The second segment carries only what is new: B's own source and tree, no
     // provider (the packages went out with A), and it starts where the first ended.
     assert_eq!(part(&second, "sources"), (1, 1));
@@ -149,12 +177,14 @@ fn a_json_lines_stream_is_read_then_appended_then_read_again() {
     assert_eq!(part(&second, "parse-results"), (1, 1));
     assert_eq!(stream.lines().count(), 2);
 
-    // Read, then append: a second session absorbs both lines, parses a third
-    // document, and emits a third line continuing the stream.
+    // Read, then append: a second session absorbs both lines, parses a third text,
+    // and emits a third line continuing the stream. Each line's main entry is the
+    // parse result it is about.
     let mut reader = session(&language);
-    read_lines(&mut reader, &stream);
-    let back_a = parse_result_at(&mut reader, 0);
-    let back_b = parse_result_at(&mut reader, 1);
+    let mains = read_lines(&mut reader, &stream);
+    let back_a = main_parse_result(&mut reader, mains[0]);
+    let back_b = main_parse_result(&mut reader, mains[1]);
+    assert!(Arc::ptr_eq(&back_a, &parse_result_at(&mut reader, 0)));
     assert_matches(&a, &back_a);
     assert_matches(&b, &back_b);
     // Sharing across the parses, as written by one session: both trees' roots hold the
@@ -164,15 +194,14 @@ fn a_json_lines_stream_is_read_then_appended_then_read_again() {
     assert!(Arc::ptr_eq(&package_of(&back_a, "emph"), &package_of(&back_b, "textbf")));
     assert!(Arc::ptr_eq(&package_of(&back_a, "emph"), &language.initial_state().scopes().providers()[1]));
 
-    // Append: the reader parses a third document with the same language and emits a
+    // Append: the reader parses a third text with the same language and emits a
     // segment continuing the stream. Its packages are the instances the absorbed
     // provider entries resolved to, so no provider is written again; its states are
     // the parse's own live objects — new entries (a rebuilt state is a different
     // object from the language's live one).
-    let c = parse(&language, DOC_C);
-    let c_position = reader.serialize_parse_result(&c).unwrap();
-    assert_eq!(c_position.index(), 2, "the appended parse result continues the stream's numbering");
-    let third = reader.take_segment();
+    let c = parse(&language, TEXT_C);
+    let third = emit(&mut reader, &c);
+    assert_eq!(third.main(), Some((parse_results, 2)), "the appended parse result continues the stream's numbering");
     assert_eq!(part(&third, "providers").0, 0, "the packages were absorbed, not re-emitted");
     assert_eq!(part(&third, "parse-results"), (1, 2));
     assert!(part(&third, "states").0 >= 1);
@@ -181,10 +210,10 @@ fn a_json_lines_stream_is_read_then_appended_then_read_again() {
 
     // Read the whole stream in a third session.
     let mut third_reader = session(&language);
-    read_lines(&mut third_reader, &stream);
-    let final_a = parse_result_at(&mut third_reader, 0);
-    let final_b = parse_result_at(&mut third_reader, 1);
-    let final_c = parse_result_at(&mut third_reader, 2);
+    let mains = read_lines(&mut third_reader, &stream);
+    let final_a = main_parse_result(&mut third_reader, mains[0]);
+    let final_b = main_parse_result(&mut third_reader, mains[1]);
+    let final_c = main_parse_result(&mut third_reader, mains[2]);
     assert_matches(&a, &final_a);
     assert_matches(&b, &final_b);
     assert_matches(&c, &final_c);
@@ -200,9 +229,9 @@ fn every_line_is_a_valid_segment_but_positions_are_stream_scoped() {
     let language = language();
     let mut stream = String::new();
     let mut writer = session(&language);
-    writer.serialize_parse_result(&parse(&language, DOC_A)).unwrap();
+    writer.serialize_parse_result(&parse(&language, TEXT_A)).unwrap();
     write_line(&mut stream, &writer.take_segment());
-    writer.serialize_parse_result(&parse(&language, DOC_B)).unwrap();
+    writer.serialize_parse_result(&parse(&language, TEXT_B)).unwrap();
     write_line(&mut stream, &writer.take_segment());
 
     // The second line alone is a well-formed segment (its own version and directory)…
@@ -220,11 +249,36 @@ fn every_line_is_a_valid_segment_but_positions_are_stream_scoped() {
 }
 
 #[test]
+fn a_reader_with_another_profile_refuses_the_stream_up_front() {
+    let language = language();
+    let mut stream = String::new();
+    let mut writer = session(&language);
+    write_line(&mut stream, &emit(&mut writer, &parse(&language, TEXT_A)));
+
+    // A reader configured for another profile refuses the first line before absorbing
+    // anything; one declaring no profile accepts it.
+    let mut other = session(&language);
+    other.set_profile("some other framework 9");
+    let first: Segment = serde_json::from_str(stream.lines().next().unwrap()).unwrap();
+    let error = other.push_segment(first.clone()).unwrap_err();
+    assert!(matches!(&error, DeserializeError::ProfileMismatch { expected, found: Some(found) }
+        if expected == "some other framework 9" && found == PROFILE), "{error}");
+    let mut indifferent = SerdeSession::<Latexlike>::new();
+    register(&mut indifferent).unwrap();
+    let mut known = KnownProviders::<Latexlike>::new();
+    register_package_recipes(&mut known);
+    minidefs::register_package_recipes(&mut known);
+    indifferent.set_user_data(known);
+    let main = indifferent.push_segment(first).unwrap();
+    assert!(main_parse_result(&mut indifferent, main).diagnostics.is_empty());
+}
+
+#[test]
 fn a_truncated_stream_loses_only_its_last_line() {
     let language = language();
     let mut stream = String::new();
     let mut writer = session(&language);
-    for input in [DOC_A, DOC_B, DOC_C] {
+    for input in [TEXT_A, TEXT_B, TEXT_C] {
         writer.serialize_parse_result(&parse(&language, input)).unwrap();
         write_line(&mut stream, &writer.take_segment());
     }
@@ -286,23 +340,21 @@ fn read_frames(reader: &mut SerdeSession<Latexlike>, stream: &[u8]) {
 #[test]
 fn a_postcard_stream_is_read_then_appended_then_read_again() {
     let language = language();
-    let a = parse(&language, DOC_A);
-    let b = parse(&language, DOC_B);
+    let a = parse(&language, TEXT_A);
+    let b = parse(&language, TEXT_B);
     let mut stream: Vec<u8> = Vec::new();
     let mut writer = session(&language);
-    writer.serialize_parse_result(&a).unwrap();
-    write_frame(&mut stream, &writer.take_segment());
-    writer.serialize_parse_result(&b).unwrap();
-    write_frame(&mut stream, &writer.take_segment());
+    write_frame(&mut stream, &emit(&mut writer, &a));
+    write_frame(&mut stream, &emit(&mut writer, &b));
 
     let mut reader = session(&language);
     read_frames(&mut reader, &stream);
     assert_matches(&a, &parse_result_at(&mut reader, 0));
     assert_matches(&b, &parse_result_at(&mut reader, 1));
-    let c = parse(&language, DOC_C);
+    let c = parse(&language, TEXT_C);
     let position: ParseResultIndex = reader.serialize_parse_result(&c).unwrap();
     assert_eq!(position.index(), 2);
-    write_frame(&mut stream, &reader.take_segment());
+    write_frame(&mut stream, &reader.take_segment_with_main(position).unwrap());
 
     let mut third_reader = session(&language);
     read_frames(&mut third_reader, &stream);
@@ -319,8 +371,7 @@ fn a_postcard_stream_is_read_then_appended_then_read_again() {
         let mut json = String::new();
         let mut w = session(&language);
         for result in [&a, &b] {
-            w.serialize_parse_result(result).unwrap();
-            write_line(&mut json, &w.take_segment());
+            write_line(&mut json, &emit(&mut w, result));
         }
         json
     };

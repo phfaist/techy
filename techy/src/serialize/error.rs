@@ -107,6 +107,18 @@ pub enum SerializeError {
         /// The table's name.
         table: &'static str,
     },
+    /// A position names an entry beyond the end of its table: position `index` of
+    /// table `table`, which holds `len` entries — the main entry given to
+    /// [`take_segment_with_main`](crate::serialize::SerdeSession::take_segment_with_main)
+    /// does not exist in the session.
+    IndexOutOfRange {
+        /// The table's name.
+        table: &'static str,
+        /// The position.
+        index: u32,
+        /// The number of entries the table holds.
+        len: u32,
+    },
     /// The serialized reference graph would be cyclic: while an object of table
     /// `referrer` was being serialized, an object whose serialization is itself still
     /// in progress — of table `table` — was interned again (an object refers, directly
@@ -275,6 +287,10 @@ impl fmt::Display for SerializeError {
             SerializeError::TableFull { table } => {
                 write!(f, "table `{table}` is full (u32::MAX entries)")
             }
+            SerializeError::IndexOutOfRange { table, index, len } => write!(
+                f,
+                "position #{index} of table `{table}` does not exist (the table holds {len} entries)"
+            ),
             SerializeError::ReferenceCycle { table, referrer } => write!(
                 f,
                 "serialized references would form a cycle: an object of table `{table}` \
@@ -454,6 +470,17 @@ pub enum DeserializeError {
         found: u32,
         /// The version this crate reads.
         expected: u32,
+    },
+    /// The segment's profile is not the one this session declares
+    /// ([`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)):
+    /// the segment carries `found` (`None`: no profile at all), the session requires
+    /// `expected`. The stream was written for another configuration than the one
+    /// reading it; the check fails closed, before any entry is absorbed.
+    ProfileMismatch {
+        /// The profile this session declares.
+        expected: String,
+        /// The profile the segment carries, if any.
+        found: Option<String>,
     },
     /// A table was looked up by a name the session has not registered (with the
     /// expected driver type): the segment being absorbed lists such a table, or an
@@ -765,6 +792,13 @@ impl fmt::Display for DeserializeError {
                 f,
                 "segment version {found} is not supported (this crate reads version {expected})"
             ),
+            DeserializeError::ProfileMismatch { expected, found } => match found {
+                Some(found) => write!(
+                    f,
+                    "the segment's profile `{found}` is not this session's profile `{expected}`"
+                ),
+                None => write!(f, "the segment carries no profile; this session requires `{expected}`"),
+            },
             DeserializeError::UnknownTableName { name } => write!(
                 f,
                 "no table named `{name}` is registered in this session with the expected \

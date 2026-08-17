@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use super::super::error::SerialValueError;
 use super::super::value::{SerialValue, TableId};
-use super::super::wire::{FromSerialValue, ToSerialValue};
+use super::super::wire::{index_from_serial_value, FromSerialValue, ToSerialValue};
 
 /// A segment: what one [`take_segment`](crate::serialize::SerdeSession::take_segment)
 /// call emits and one [`push_segment`](crate::serialize::SerdeSession::push_segment)
@@ -26,21 +26,29 @@ use super::super::wire::{FromSerialValue, ToSerialValue};
 ///
 /// Every segment is self-describing: it carries the [`version`](Segment::version)
 /// of the layout it uses (a reading session accepts exactly
-/// [`VERSION`](Segment::VERSION)) and its *table directory* — every table of the
+/// [`VERSION`](Segment::VERSION)), its [`meta`](Segment::meta) — information about
+/// the segment as a whole, today the emitting session's *profile* (see
+/// [`SegmentMeta`]) — and its *table directory* — every table of the
 /// emitting session, in registration order, by name (how the reading session finds
 /// its own table, whatever its registration order), with the writer's table id (how
 /// the table references inside the entries are translated) and the start position.
-/// The segments of a stream are independently valid values, so a stream can be
-/// stored or sent as one segment per file, message, or line.
+/// A segment may also name its [`main`](Segment::main) entry: the position of the
+/// one entry the segment is about (the parse result of a line in a stream of parse
+/// results, say), so that a reader need not know the layout of the tables to find
+/// it — [`push_segment`](crate::serialize::SerdeSession::push_segment) returns it
+/// translated into the reading session's numbering. The segments of a stream are
+/// independently valid values, so a stream can be stored or sent as one segment per
+/// file, message, or line.
 ///
 /// # Serialized form
 ///
 /// [`to_serial_value`](Segment::to_serial_value) / [`from_serial_value`](Segment::from_serial_value)
 /// convert a segment to and from a [`SerialValue`] — the map
-/// `{"version": <int>, "tables": [<table>, …]}`, each table the map `{"name": <str>,
-/// "table": <int>, "start": <int>, "entries": [<value>, …]}` (`table` being the
-/// writer's table id, the ordinal every table reference inside the entries uses) —
-/// with the key names
+/// `{"version": <int>, "meta": {"profile"?: <str>}, "tables": [<table>, …], "main"?:
+/// <table position>}` (`meta` always present, its keys optional; `main` omitted when
+/// none), each table the map `{"name": <str>, "table": <int>, "start": <int>,
+/// "entries": [<value>, …]}` (`table` being the writer's table id, the ordinal every
+/// table reference inside the entries uses) — with the key names
 /// provisional until the vocabulary of the serialized form is finalized. An entry of
 /// a table holding objects of one kind only is the entry's data itself; an entry of
 /// any other table is the map `{"identifier": <identifier>, "data": <value>}`. With the
@@ -53,8 +61,57 @@ use super::super::wire::{FromSerialValue, ToSerialValue};
 pub struct Segment {
     #[serial(name = "version")]
     version: u32,
+    #[serial(name = "meta")]
+    meta: SegmentMeta,
     #[serial(name = "tables")]
     tables: Vec<SegmentTable>,
+    #[serial(name = "main")]
+    main: Option<WireMain>,
+}
+
+/// What a [`Segment`] says about itself as a whole, as opposed to its entries: today
+/// the emitting session's *profile* — the caller-chosen string naming what can read
+/// the stream fully (see [`SerdeSession::set_profile`](crate::serialize::SerdeSession::set_profile)),
+/// when the session declared one. The object is always present in a segment's
+/// serialized form (empty when nothing is set), so that later layouts can add
+/// segment-wide information to it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, ToSerialValue, FromSerialValue)]
+pub struct SegmentMeta {
+    #[serial(name = "profile")]
+    profile: Option<String>,
+}
+
+impl SegmentMeta {
+    /// Segment metadata carrying `profile` (the session builds it).
+    pub(super) fn new(profile: Option<String>) -> SegmentMeta {
+        SegmentMeta { profile }
+    }
+
+    /// The emitting session's profile, when it declared one.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+}
+
+/// The wire form of a segment's main entry: a table position (`{"$index": [table,
+/// index]}` in the canonical rendering), in the writer's numbering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WireMain {
+    table: TableId,
+    index: u32,
+}
+
+impl ToSerialValue for WireMain {
+    fn to_serial_value(&self) -> Result<SerialValue, SerialValueError> {
+        Ok(SerialValue::Index { table: self.table, index: self.index })
+    }
+}
+
+impl FromSerialValue for WireMain {
+    fn from_serial_value(value: &SerialValue) -> Result<Self, SerialValueError> {
+        let (table, index) = index_from_serial_value(value)?;
+        Ok(WireMain { table, index })
+    }
 }
 
 /// One table's part of a [`Segment`]: the table's name and writer-side id, the
@@ -86,9 +143,15 @@ impl Segment {
     /// declaring any other version is rejected.
     pub const VERSION: u32 = 1;
 
-    /// A segment of the given version and tables (the session builds them).
-    pub(super) fn new(version: u32, tables: Vec<SegmentTable>) -> Segment {
-        Segment { version, tables }
+    /// A segment of the given version, metadata, tables, and main entry (the session
+    /// builds them).
+    pub(super) fn new(
+        version: u32,
+        meta: SegmentMeta,
+        tables: Vec<SegmentTable>,
+        main: Option<(TableId, u32)>,
+    ) -> Segment {
+        Segment { version, meta, tables, main: main.map(|(table, index)| WireMain { table, index }) }
     }
 
     /// The version of the layout the segment declares.
@@ -96,9 +159,25 @@ impl Segment {
         self.version
     }
 
+    /// What the segment says about itself as a whole (its profile, when the emitting
+    /// session declared one).
+    pub fn meta(&self) -> &SegmentMeta {
+        &self.meta
+    }
+
     /// The tables, in the emitting session's registration order.
     pub fn tables(&self) -> &[SegmentTable] {
         &self.tables
+    }
+
+    /// The segment's main entry, when the emitting session named one
+    /// ([`take_segment_with_main`](crate::serialize::SerdeSession::take_segment_with_main)):
+    /// the entry's table id **in the emitting session's numbering** (the same numbering
+    /// as the directory's `table` ids and the references inside the entries) and its
+    /// position — as the segment carries it, untranslated. A reading session gets the
+    /// translated pair from [`push_segment`](crate::serialize::SerdeSession::push_segment).
+    pub fn main(&self) -> Option<(TableId, u32)> {
+        self.main.map(|main| (main.table, main.index))
     }
 
     /// Whether the segment carries no entries at all (every table empty).
@@ -126,9 +205,10 @@ impl Segment {
         FromSerialValue::from_serial_value(value)
     }
 
-    /// Take the segment apart.
-    pub(super) fn into_parts(self) -> (u32, Vec<SegmentTable>) {
-        (self.version, self.tables)
+    /// Take the segment apart: version, metadata, tables, main entry.
+    pub(super) fn into_parts(self) -> (u32, SegmentMeta, Vec<SegmentTable>, Option<(TableId, u32)>) {
+        let main = self.main();
+        (self.version, self.meta, self.tables, main)
     }
 }
 

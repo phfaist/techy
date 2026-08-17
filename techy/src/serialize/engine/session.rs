@@ -21,7 +21,7 @@ use super::super::value::{SerialEntry, SerialIndex, SerialValue, TableId};
 use super::super::wire::{FromSerialValue, ToSerialValue};
 use super::context::{DeserializeContext, SerializeContext};
 use super::driver::{ObjectSerdeDriver, TableHandle};
-use super::segment::{Segment, SegmentTable, WireEntry};
+use super::segment::{Segment, SegmentMeta, SegmentTable, WireEntry};
 
 /// A serialization session: the tables of objects, read and write unified.
 ///
@@ -129,6 +129,9 @@ pub struct SerdeSession<L: SerializableLang> {
     tables: Vec<TableState<L>>,
     /// The caller's user data, one value per type.
     user_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    /// The caller-declared profile (see [`set_profile`](SerdeSession::set_profile)):
+    /// written into every emitted segment; required of every absorbed one when set.
+    profile: Option<String>,
     descent_guard_init: StdDescentGuardInit,
     /// The write side's in-progress stack: `(table ordinal, object address)` of the
     /// objects whose serialization is in progress, outermost first — the write-side
@@ -222,6 +225,7 @@ impl<L: SerializableLang> SerdeSession<L> {
         SerdeSession {
             tables: Vec::new(),
             user_data: HashMap::new(),
+            profile: None,
             descent_guard_init: StdDescentGuardInit::default(),
             write_stack: Vec::new(),
             memo_journal: Vec::new(),
@@ -240,6 +244,33 @@ impl<L: SerializableLang> SerdeSession<L> {
     pub fn with_descent_guard_init(mut self, init: StdDescentGuardInit) -> SerdeSession<L> {
         self.descent_guard_init = init;
         self
+    }
+
+    /// Declare the session's *profile*: a caller-chosen string naming the
+    /// configuration that can read the session's stream fully — the environment and
+    /// version whose packages, spec types, annotation identifiers, and readers resolve
+    /// every identity and identifier the stream refers to (a name like
+    /// `"myframework 2.3 / techy 1"` is the caller's to choose and to keep meaningful;
+    /// the crate compares it and does nothing else with it). Every segment the session
+    /// emits then carries it (in the segment's [`meta`](Segment::meta)), and every
+    /// segment pushed into the session must carry the same one:
+    /// [`push_segment`](SerdeSession::push_segment) rejects a segment whose profile
+    /// differs or is missing ([`DeserializeError::ProfileMismatch`]) — the check
+    /// fails closed, before any entry is touched. A session with no profile declared
+    /// writes none and accepts any.
+    ///
+    /// The profile is the caller's contract about the reading environment, made
+    /// checkable: a stream written for one configuration is refused up front by a
+    /// reader configured for another, instead of failing later on some unresolvable
+    /// entry — or, worse, reading through with a package of the same name that
+    /// defines things differently.
+    pub fn set_profile(&mut self, profile: impl Into<String>) {
+        self.profile = Some(profile.into());
+    }
+
+    /// The session's declared profile, if any (see [`set_profile`](SerdeSession::set_profile)).
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
     }
 
     // --- registration -----------------------------------------------------------------
@@ -458,12 +489,49 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// re-emitted. Every registered table appears in the segment, in registration
     /// order, with the position its entries start at (so a reading session can check
     /// it continues the stream) — with no entries if nothing new was interned into it.
-    /// The segment's version is [`Segment::VERSION`].
+    /// The segment's version is [`Segment::VERSION`]; its metadata carries the
+    /// session's profile when one is declared ([`set_profile`](SerdeSession::set_profile));
+    /// it names no main entry (see [`take_segment_with_main`](SerdeSession::take_segment_with_main)).
     ///
     /// The output is deterministic: entries in position order, tables in registration
     /// order; two sessions that intern the same objects in the same order emit equal
     /// segments.
     pub fn take_segment(&mut self) -> Segment {
+        self.emit_segment(None)
+    }
+
+    /// [`take_segment`](SerdeSession::take_segment), with the segment naming `main`
+    /// as its main entry: the position of the one entry the segment is about — the
+    /// parse result of this line in a stream of parse results, say — so that a reader
+    /// finds it without knowing the tables' layout
+    /// ([`push_segment`](SerdeSession::push_segment) returns it translated into the
+    /// reading session's numbering; [`Segment::main`] carries it as this session
+    /// numbers it). `main` is a typed position this session minted (an
+    /// [`intern`](SerdeSession::intern) result — of this segment or of an earlier one
+    /// of the same stream: the entry must exist in the session).
+    ///
+    /// # Errors
+    ///
+    /// The position's table is not one of this session's
+    /// ([`SerializeError::UnknownTable`]) or the position lies beyond the table's
+    /// end ([`SerializeError::IndexOutOfRange`]); nothing is emitted then, and the
+    /// pending entries stay pending for the next emission.
+    pub fn take_segment_with_main(&mut self, main: impl SerialIndex) -> Result<Segment, SerializeError> {
+        let table = self
+            .tables
+            .get(main.table().ordinal() as usize)
+            .ok_or(SerializeError::UnknownTable { table: main.table() })?;
+        let len = table.slots.len() as u32;
+        if main.index() >= len {
+            return Err(SerializeError::IndexOutOfRange { table: table.name, index: main.index(), len });
+        }
+        Ok(self.emit_segment(Some((main.table(), main.index()))))
+    }
+
+    /// The body of [`take_segment`](SerdeSession::take_segment) and
+    /// [`take_segment_with_main`](SerdeSession::take_segment_with_main): drain every
+    /// outbox into a segment naming `main`.
+    fn emit_segment(&mut self, main: Option<(TableId, u32)>) -> Segment {
         let tables = self
             .tables
             .iter_mut()
@@ -478,7 +546,7 @@ impl<L: SerializableLang> SerdeSession<L> {
                 SegmentTable::new(String::from(table.name), TableId::new(ordinal as u32), start, entries)
             })
             .collect();
-        Segment::new(Segment::VERSION, tables)
+        Segment::new(Segment::VERSION, SegmentMeta::new(self.profile.clone()), tables, main)
     }
 
     // --- reading ------------------------------------------------------------------------
@@ -489,7 +557,9 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// position — no re-emission).
     ///
     /// The segment is validated as untrusted input, then materialized: its version
-    /// must be [`Segment::VERSION`]; each of its tables is matched to a table of this
+    /// must be [`Segment::VERSION`]; when this session declares a profile
+    /// ([`set_profile`](SerdeSession::set_profile)), the segment's must be the same
+    /// (a session without one accepts any); each of its tables is matched to a table of this
     /// session *by name* (registration order may differ between writer and reader),
     /// and its entries must start exactly where the session's table ends — segments
     /// of a stream are pushed in order, each once; every table reference in the
@@ -501,11 +571,19 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// [`take_segment`](SerdeSession::take_segment)): a segment continues the stream
     /// the session has emitted so far.
     ///
+    /// Returns the segment's main entry ([`Segment::main`]), if it names one,
+    /// translated into this session's numbering — the table's id in this session
+    /// and the position, validated to exist once the segment is absorbed — as a
+    /// `(TableId, u32)` pair; the typed position is `handle.position(index)` for the
+    /// handle whose [`id`](TableHandle::id) is the table (see
+    /// [`TableHandle::position`]). `None` for a segment naming no main entry.
+    ///
     /// **The segments pushed into one session must all come from one stream, in
     /// order** — the caller's obligation. The session checks that each segment
     /// continues its tables (the start positions), which catches a skipped or
     /// repeated segment; it cannot recognize a segment of another stream whose
-    /// positions happen to line up, and would absorb it as a continuation.
+    /// positions happen to line up, and would absorb it as a continuation (a
+    /// declared profile narrows this to streams of the same profile).
     ///
     /// On any error the session is left exactly as it was before the call — the
     /// segment's entries are dropped, and the session stays usable — and the error
@@ -513,13 +591,18 @@ impl<L: SerializableLang> SerdeSession<L> {
     ///
     /// # Errors
     ///
-    /// [`DeserializeError::UnsupportedVersion`], [`UnknownTableName`](DeserializeError::UnknownTableName),
+    /// [`DeserializeError::UnsupportedVersion`],
+    /// [`ProfileMismatch`](DeserializeError::ProfileMismatch),
+    /// [`UnknownTableName`](DeserializeError::UnknownTableName),
     /// [`DuplicateSegmentTable`](DeserializeError::DuplicateSegmentTable),
     /// [`SegmentOutOfOrder`](DeserializeError::SegmentOutOfOrder),
     /// [`UnemittedEntries`](DeserializeError::UnemittedEntries),
     /// [`TableFull`](DeserializeError::TableFull), and
     /// [`UnknownWriterTable`](DeserializeError::UnknownWriterTable) for a segment that
-    /// does not fit the session; then, from rebuilding the entries, a driver's failure
+    /// does not fit the session (the last two also for a main entry naming a table
+    /// the directory does not list, or a position beyond the table's end after the
+    /// push: [`IndexOutOfRange`](DeserializeError::IndexOutOfRange)); then, from
+    /// rebuilding the entries, a driver's failure
     /// wrapped in [`InEntry`](DeserializeError::InEntry), a reference cycle
     /// ([`ReferenceCycle`](DeserializeError::ReferenceCycle)), a reference beyond a
     /// table's end ([`IndexOutOfRange`](DeserializeError::IndexOutOfRange)) or into
@@ -527,10 +610,18 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// limit ([`DescentLimitExceeded`](DeserializeError::DescentLimitExceeded)); and
     /// [`Internal`](DeserializeError::Internal) should the session's own check after
     /// rebuilding — every new entry holds its object — fail (a bug of this crate).
-    pub fn push_segment(&mut self, segment: Segment) -> Result<(), DeserializeError> {
-        let (version, tables) = segment.into_parts();
+    pub fn push_segment(&mut self, segment: Segment) -> Result<Option<(TableId, u32)>, DeserializeError> {
+        let (version, meta, tables, main) = segment.into_parts();
         if version != Segment::VERSION {
             return Err(DeserializeError::UnsupportedVersion { found: version, expected: Segment::VERSION });
+        }
+        if let Some(expected) = &self.profile {
+            if meta.profile() != Some(expected.as_str()) {
+                return Err(DeserializeError::ProfileMismatch {
+                    expected: expected.clone(),
+                    found: meta.profile().map(String::from),
+                });
+            }
         }
 
         // A segment continues the stream the session has emitted so far: nothing
@@ -577,6 +668,24 @@ impl<L: SerializableLang> SerdeSession<L> {
             }
         }
 
+        // The main entry, translated and checked against the lengths after the push
+        // (its table's planned entries included) — before anything is touched.
+        let main = match main {
+            None => None,
+            Some((table, index)) => {
+                let ordinal = *writer_to_reader
+                    .get(&table.ordinal())
+                    .ok_or(DeserializeError::UnknownWriterTable { table })?;
+                let appended = planned.iter().find(|(t, _)| *t == ordinal).map_or(0, |(_, entries)| entries.len());
+                // The table-full check above bounds `len + appended` below `u32::MAX`.
+                let len = (self.tables[ordinal].slots.len() + appended) as u32;
+                if index >= len {
+                    return Err(DeserializeError::IndexOutOfRange { table: self.tables[ordinal].name, index, len });
+                }
+                Some((TableId::new(ordinal as u32), index))
+            }
+        };
+
         // Append as pending, remembering the old lengths for the rollback.
         let old_lens: Vec<usize> = self.tables.iter().map(|table| table.slots.len()).collect();
         for (ordinal, entries) in planned {
@@ -601,7 +710,7 @@ impl<L: SerializableLang> SerdeSession<L> {
                 }
             }
         }
-        result
+        result.map(|()| main)
     }
 
     /// Rebuild every entry beyond `old_lens`, table by table, position by position.
