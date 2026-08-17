@@ -51,7 +51,7 @@ let segment: Segment = writer.take_segment_with_main(position)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Extension traits to import for the by-kind spellings:
+Extension traits to import for the by-kind convenience methods:
 [`ParseResultSerialization`](crate::serialize::ParseResultSerialization)
 (`serialize_parse_result` / `parse_result`),
 [`TreeSerialization`](crate::serialize::TreeSerialization) (`serialize_tree` /
