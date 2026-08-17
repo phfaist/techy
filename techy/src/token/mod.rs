@@ -58,7 +58,7 @@ pub use error::{
 #[cfg(test)]
 pub(crate) use list_reader::TokenListReader;
 pub use prefix_table::{PrefixEntry, PrefixTable};
-pub use reader::{skip_whitespace, StdTokenReader, TokenReader};
+pub use reader::{skip_whitespace, StdStreamPosition, StdTokenReader, TokenEdge, TokenReader};
 pub use rules::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,

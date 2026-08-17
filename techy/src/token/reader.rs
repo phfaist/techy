@@ -31,6 +31,66 @@ use super::error::{
 use super::rules::{CommandRule, TokenRules};
 use super::token::{Token, TokenKind};
 
+/// One of the four boundaries of a token, in reading order.
+///
+/// A token occupies a stretch of the stream that has two optional whitespace wings:
+/// *pre-space* (content whitespace read just before the token, outside its span) and
+/// *post-space* (syntactic whitespace consumed just after the token proper, inside its
+/// span — only [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)
+/// tokens have any). An edge names one of the four boundaries this creates, and is how
+/// a construct parser asks a [`TokenReader`] for a position or a span without knowing
+/// how the reader stores either.
+///
+/// For a kind without post-space, [`End`](TokenEdge::End) and
+/// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) coincide; for a token with no
+/// preceding whitespace, [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) and
+/// [`Start`](TokenEdge::Start) coincide.
+///
+/// The ordering (`PartialOrd`/`Ord`) is the declaration order, which is reading order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TokenEdge {
+    /// Where the token's pre-space begins — the position the stream stood at when the
+    /// token was read.
+    StartBeforePreSpace,
+    /// Where the token proper begins (its pre-space has been passed).
+    Start,
+    /// Where the token proper ends — equivalently, where its post-space begins.
+    End,
+    /// Where the token's post-space ends: the position the stream stands at after
+    /// reading the token with [`next`](TokenReader::next).
+    EndPastPostSpace,
+}
+
+/// The stream position type of [`StdTokenReader`] — a byte offset into the content the
+/// reader scans, kept opaque.
+///
+/// A *stream position* names a place in a reader's token stream. Construct parsers
+/// obtain one only from the reader ([`position_here`](TokenReader::position_here),
+/// [`position_at`](TokenReader::position_at)) and give it back to the reader
+/// ([`move_to_position`](TokenReader::move_to_position),
+/// [`source_span_within`](TokenReader::source_span_within)); there is deliberately no
+/// public constructor and no arithmetic, so a position cannot be invented or shifted
+/// outside the reader that minted it.
+///
+/// Positions compare with `==` only. Two positions of the same reader are equal exactly
+/// when they name the same place, which is what the parse loops need ("did the reader
+/// move?").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StdStreamPosition(usize);
+
+impl StdStreamPosition {
+    /// The position at byte offset `offset`. In-crate readers only: minting a position
+    /// is the issuing reader's privilege (see the type's documentation).
+    pub(crate) fn at(offset: usize) -> Self {
+        StdStreamPosition(offset)
+    }
+
+    /// The byte offset this position names.
+    pub(crate) fn offset(self) -> usize {
+        self.0
+    }
+}
+
 /// The token-reading protocol — the behavior extension point for genuinely different
 /// tokenization (catcode-like schemes, non-textual sources). `peek` receives the full
 /// [`ParsingState<L>`], not just `&TokenRules`: a custom reader keeps its tables in

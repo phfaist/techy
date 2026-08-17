@@ -61,6 +61,7 @@ pub use crate::token::{
     skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,
     EndOfStreamAfterEscape, ForbiddenChar, ForbiddenCharsRules, GroupRule, GroupRules,
     ParagraphRules, PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules,
-    StdTokenReader, Token, TokenError, TokenErrorKind, TokenKind, TokenReader,
-    TokenRecovery, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+    StdStreamPosition, StdTokenReader, Token, TokenEdge, TokenError, TokenErrorKind,
+    TokenKind, TokenReader, TokenRecovery, TokenResult, TokenRules, TriggerChars,
+    WhitespaceRules,
 };
