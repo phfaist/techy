@@ -115,7 +115,7 @@
 //!   [`DeserializableValue`](serialize::DeserializableValue) for embedded values),
 //!   the [`SerializableLang`](serialize::SerializableLang) declaration, the session
 //!   ([`SerdeSession`](serialize::SerdeSession)) with the standard tables of
-//!   sources, states, specs, and providers.
+//!   sources, states, specs, providers, trees, diagnostics, and parse results.
 //! - [`core`] — the machinery hub: the `Lang` contract and parsing state, tokens,
 //!   and the parse engine ([`Language`](core::Language) + `parse()` →
 //!   [`ParseResult`](core::ParseResult)), with three submodules:

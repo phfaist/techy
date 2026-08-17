@@ -18,10 +18,15 @@ use super::super::engine::{
 };
 use super::super::error::{DeserializeError, SerializeError};
 use super::super::object::SerializableLang;
+use super::diagnostic::DiagnosticSerdeDriver;
+use super::parse_result::ParseResultSerdeDriver;
 use super::source::{SourceIndex, SourceSerdeDriver};
 use super::state::{StateIndex, StateSerdeDriver};
 use super::tree::TreeSerdeDriver;
-use super::{PROVIDERS_TABLE, SOURCES_TABLE, SPECS_TABLE, STATES_TABLE, TREES_TABLE};
+use super::{
+    DIAGNOSTICS_TABLE, PARSE_RESULTS_TABLE, PROVIDERS_TABLE, SOURCES_TABLE, SPECS_TABLE, STATES_TABLE,
+    TREES_TABLE,
+};
 
 crate::serial_index! {
     /// A position in the specs table — the `Index` type of [`SpecSerdeDriver`]: the
@@ -71,6 +76,10 @@ pub struct StandardTables<L: SerializableLang> {
     pub providers: TableHandle<ProviderSerdeDriver<L>>,
     /// The trees table.
     pub trees: TableHandle<TreeSerdeDriver<L>>,
+    /// The diagnostics table.
+    pub diagnostics: TableHandle<DiagnosticSerdeDriver<L>>,
+    /// The parse-results table.
+    pub parse_results: TableHandle<ParseResultSerdeDriver<L>>,
 }
 
 impl<L: SerializableLang> Clone for StandardTables<L> {
@@ -89,6 +98,8 @@ impl<L: SerializableLang> fmt::Debug for StandardTables<L> {
             .field("specs", &self.specs)
             .field("providers", &self.providers)
             .field("trees", &self.trees)
+            .field("diagnostics", &self.diagnostics)
+            .field("parse_results", &self.parse_results)
             .finish()
     }
 }
@@ -99,12 +110,16 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// embedded, no supplier of referenced source text), the states table
     /// ([`StateSerdeDriver`]), the specs table ([`SpecSerdeDriver`]), the providers
     /// table ([`ProviderSerdeDriver`]), the trees table ([`TreeSerdeDriver`], with the
-    /// unit annotation pre-registered). Their handles are
+    /// unit annotation pre-registered), the diagnostics table
+    /// ([`DiagnosticSerdeDriver`]), and the parse-results table
+    /// ([`ParseResultSerdeDriver`]). Their handles are
     /// [`standard_tables`](SerdeSession::standard_tables); the interning and reading
     /// accessors by kind are the [`StandardTableInterning`] and
-    /// [`StandardTableReading`] extension traits, and, for trees, the
-    /// [`TreeSerialization`](crate::serialize::TreeSerialization) extension trait. To
-    /// configure the source driver, use
+    /// [`StandardTableReading`] extension traits, and, for trees, diagnostics, and
+    /// parse results, the [`TreeSerialization`](crate::serialize::TreeSerialization),
+    /// [`DiagnosticSerialization`](crate::serialize::DiagnosticSerialization), and
+    /// [`ParseResultSerialization`](crate::serialize::ParseResultSerialization)
+    /// extension traits. To configure the source driver, use
     /// [`with_source_driver`](SerdeSession::with_source_driver); to compose a session
     /// from other tables, [`empty`](SerdeSession::empty).
     ///
@@ -126,8 +141,8 @@ impl<L: SerializableLang> SerdeSession<L> {
     /// ([`SourceSerdeDriver::with_text_policy`], [`SourceSerdeDriver::with_text_supplier`]).
     pub fn with_source_driver(sources: SourceSerdeDriver<L>) -> SerdeSession<L> {
         let mut session = SerdeSession::empty();
-        // Invariant: an empty session accepts the five standard tables — their names
-        // are distinct, their homogeneous identifiers non-empty, and five tables are
+        // Invariant: an empty session accepts the seven standard tables — their names
+        // are distinct, their homogeneous identifiers non-empty, and seven tables are
         // far below the table limit — so none of these registrations can fail.
         const ACCEPTED: &str = "an empty session accepts the standard tables";
         session.register_table(sources).expect(ACCEPTED);
@@ -136,6 +151,8 @@ impl<L: SerializableLang> SerdeSession<L> {
         session.register_table(ProviderSerdeDriver::<L>::new(PROVIDERS_TABLE)).expect(ACCEPTED);
         // The trees table registers the unit annotation itself.
         session.register_table(TreeSerdeDriver::<L>::new()).expect(ACCEPTED);
+        session.register_table(DiagnosticSerdeDriver::<L>::new()).expect(ACCEPTED);
+        session.register_table(ParseResultSerdeDriver::<L>::new()).expect(ACCEPTED);
         session
     }
 
@@ -151,6 +168,8 @@ impl<L: SerializableLang> SerdeSession<L> {
             specs: self.table_handle(SPECS_TABLE)?,
             providers: self.table_handle(PROVIDERS_TABLE)?,
             trees: self.table_handle(TREES_TABLE)?,
+            diagnostics: self.table_handle(DIAGNOSTICS_TABLE)?,
+            parse_results: self.table_handle(PARSE_RESULTS_TABLE)?,
         })
     }
 }

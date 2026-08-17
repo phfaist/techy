@@ -270,9 +270,11 @@ fn new_registers_the_standard_tables_in_canonical_order() {
     assert_eq!(tables.specs.id().ordinal(), 2);
     assert_eq!(tables.providers.id().ordinal(), 3);
     assert_eq!(tables.trees.id().ordinal(), 4);
+    assert_eq!(tables.diagnostics.id().ordinal(), 5);
+    assert_eq!(tables.parse_results.id().ordinal(), 6);
     let segment = session.take_segment();
     let names: Vec<String> = segment.tables().iter().map(|t| String::from(t.name())).collect();
-    assert_eq!(names, ["sources", "states", "specs", "providers", "trees"]);
+    assert_eq!(names, ["sources", "states", "specs", "providers", "trees", "diagnostics", "parse-results"]);
     // The default is the same session.
     assert!(SerdeSession::<ToyLang>::default().standard_tables().is_some());
 }
@@ -1022,7 +1024,9 @@ mod serde_rendering {
                 r#""mode":null,"ext":null,"scopes":[{"$index":[3,0]}]}]},"#,
                 r#"{"name":"specs","id":2,"start":0,"entries":[]},"#,
                 r#"{"name":"providers","id":3,"start":0,"entries":[{"id":"toy.provider","data":"pkg"}]},"#,
-                r#"{"name":"trees","id":4,"start":0,"entries":[]}"#,
+                r#"{"name":"trees","id":4,"start":0,"entries":[]},"#,
+                r#"{"name":"diagnostics","id":5,"start":0,"entries":[]},"#,
+                r#"{"name":"parse-results","id":6,"start":0,"entries":[]}"#,
                 r#"]}"#,
             )
         );

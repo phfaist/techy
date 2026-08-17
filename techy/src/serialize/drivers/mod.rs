@@ -7,9 +7,11 @@
 //! ([`SerdeSession::new`](crate::serialize::SerdeSession::new)) with its handle bundle
 //! ([`StandardTables`]), the extension traits that intern into and read from
 //! the standard tables by kind ([`StandardTableInterning`], [`StandardTableReading`]),
-//! the tree driver ([`TreeSerdeDriver`]), and the serialization of the crate's own
-//! spec and provider types with the reading environment's provider directory
-//! ([`KnownProviders`], [`register_core_readers`]).
+//! the tree driver ([`TreeSerdeDriver`]), the diagnostic driver
+//! ([`DiagnosticSerdeDriver`], with the [`DeserializedCondition`] a diagnostic read
+//! back carries), the parse-result driver ([`ParseResultSerdeDriver`]), and the
+//! serialization of the crate's own spec and provider types with the reading
+//! environment's provider directory ([`KnownProviders`], [`register_core_readers`]).
 //!
 //! Everything here is registered on the type-blind engine exactly as a framework's
 //! own tables would be: the drivers implement
@@ -17,12 +19,18 @@
 //! [`serial_index!`](crate::serialize::serial_index) types, and the accessors find
 //! the tables by name ([`SerdeSession::table_handle`](crate::serialize::SerdeSession::table_handle)).
 
+mod diagnostic;
+mod parse_result;
 mod source;
 pub(crate) mod specs;
 mod standard;
 mod state;
 mod tree;
 
+pub use diagnostic::{
+    DeserializedCondition, DiagnosticIndex, DiagnosticSerdeDriver, DiagnosticSerialization,
+};
+pub use parse_result::{ParseResultIndex, ParseResultSerdeDriver, ParseResultSerialization};
 pub use source::{
     ReferencedSource, SourceDigest, SourceIndex, SourceSerdeDriver, SourceTextForm,
     SourceTextPolicy, SourceTextSupplier,
@@ -45,10 +53,21 @@ pub(crate) const SPECS_TABLE: &str = "specs";
 pub(crate) const PROVIDERS_TABLE: &str = "providers";
 /// The name of the trees table.
 pub(crate) const TREES_TABLE: &str = "trees";
+/// The name of the diagnostics table.
+pub(crate) const DIAGNOSTICS_TABLE: &str = "diagnostics";
+/// The name of the parse-results table.
+pub(crate) const PARSE_RESULTS_TABLE: &str = "parse-results";
 
 /// The names of the standard tables, in registration order.
-pub(crate) const STANDARD_TABLE_NAMES: &[&str] =
-    &[SOURCES_TABLE, STATES_TABLE, SPECS_TABLE, PROVIDERS_TABLE, TREES_TABLE];
+pub(crate) const STANDARD_TABLE_NAMES: &[&str] = &[
+    SOURCES_TABLE,
+    STATES_TABLE,
+    SPECS_TABLE,
+    PROVIDERS_TABLE,
+    TREES_TABLE,
+    DIAGNOSTICS_TABLE,
+    PARSE_RESULTS_TABLE,
+];
 
 /// The name of the first standard table `session` lacks (by name), or the string
 /// "standard tables" when every name is registered but not with the standard
@@ -72,6 +91,10 @@ pub(crate) const STATE_IDENTIFIER: &str = "core.state";
 /// The identifier of a trees table entry whose annotation is the unit type (the
 /// annotations are omitted from the wire).
 pub(crate) const CORE_TREE_IDENTIFIER: &str = "core.tree";
+/// The identifier of every entry of the diagnostics table.
+pub(crate) const DIAGNOSTIC_IDENTIFIER: &str = "core.diagnostic";
+/// The identifier of every entry of the parse-results table.
+pub(crate) const PARSE_RESULT_IDENTIFIER: &str = "core.parse-result";
 /// The identifier of a specs table entry holding a stamped spec's identity form
 /// (its provider's position plus the definition key).
 pub(crate) const SPEC_IDENTITY_IDENTIFIER: &str = "core.provider-spec";
@@ -88,3 +111,5 @@ pub(crate) const FALLBACK_PROVIDER_IDENTIFIER: &str = "core.fallback-provider";
 mod tests;
 #[cfg(test)]
 mod tree_tests;
+#[cfg(test)]
+mod diagnostic_tests;

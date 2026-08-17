@@ -543,6 +543,20 @@ impl<O: SourceOrigin> Diagnostics<O> {
         Diagnostics { items: Vec::new(), limit, suppressed: 0, error_count: 0 }
     }
 
+    /// Assemble a collection from its parts — the deserialization entry (the parts
+    /// as a serialized collection recorded them). The caller establishes the
+    /// invariants `push` maintains: `items.len() <= limit`; `suppressed > 0` only
+    /// when `items.len() == limit`; `error_count` between the number of
+    /// error-severity `items` and that number plus `suppressed`.
+    pub(crate) fn from_parts(
+        items: Vec<Diagnostic<O>>,
+        limit: usize,
+        suppressed: usize,
+        error_count: usize,
+    ) -> Self {
+        Diagnostics { items, limit, suppressed, error_count }
+    }
+
     /// Append a diagnostic. Beyond the retention cap the diagnostic is dropped and only
     /// counted (see the type docs).
     pub fn push(&mut self, diagnostic: Diagnostic<O>) {
@@ -581,6 +595,12 @@ impl<O: SourceOrigin> Diagnostics<O> {
     /// [`Severity::Error`].
     pub fn has_errors(&self) -> bool {
         self.error_count > 0
+    }
+
+    /// Number of error-severity diagnostics pushed, retained *and* suppressed (what
+    /// [`has_errors`](Diagnostics::has_errors) tests for zero).
+    pub fn error_count(&self) -> usize {
+        self.error_count
     }
 
     /// Iterate over the diagnostics in the order they were recorded.

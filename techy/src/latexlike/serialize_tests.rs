@@ -22,11 +22,12 @@ use crate::scopes::{
     CallableQuery, DefinitionKey, ErrorCallableSpec, FallbackProvider, Package, ProviderError,
     Scope, ScopeOp, SpecProvenance, SpecsProvider,
 };
-use crate::serialize::tree_support::{ignore_annotations, round_trip_tree};
+use crate::serialize::tree_support::{assert_trees_equivalent, ignore_annotations, round_trip_tree};
 use crate::serialize::{
-    DeserializableObject, DeserializeContext, DeserializeError, KnownProviders, SerdeSession,
-    SerialEntry, SerialIndex, SerialValue, SerializableObject, SerializeContext,
-    SerializeError, StandardTableInterning, StandardTableReading, TreeSerialization,
+    DeserializableObject, DeserializeContext, DeserializeError, DeserializedCondition, KnownProviders,
+    ParseResultSerialization, SerdeSession, Segment, SerialEntry, SerialIndex, SerialValue,
+    SerializableObject, SerializeContext, SerializeError, StandardTableInterning,
+    StandardTableReading, TreeSerialization,
 };
 use crate::source::MapResolver;
 use crate::spec::{CallableSpec, StdCallableSpec};
@@ -875,6 +876,111 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
     assert!(error.to_string().contains("not a Package"), "{error}");
 }
 
+// --- parse results with their diagnostics (M6) ---------------------------------------------
+
+/// The segment as the reading side receives it: through JSON under the `serde`
+/// feature, as is otherwise.
+fn pass_through(segment: Segment) -> Segment {
+    #[cfg(feature = "serde")]
+    {
+        let json = serde_json::to_string(&segment).expect("segment to JSON");
+        serde_json::from_str(&json).expect("segment from JSON")
+    }
+    #[cfg(not(feature = "serde"))]
+    {
+        segment
+    }
+}
+
+/// Serialize `result` in a session from `factory`, pass the segment through, read it
+/// back in another, and check it against the original: the tree deep-compared, the
+/// diagnostics compared on everything the wire carries (identifier, projection,
+/// message, rendering, severity, span, frames) with their sources shared with the
+/// rebuilt tree, the collection's counts, the session ext.
+fn round_trip_parse_result(
+    factory: impl Fn() -> SerdeSession<Latexlike>,
+    result: &Arc<ParseResult<Latexlike>>,
+) -> Arc<ParseResult<Latexlike>> {
+    let mut writer = factory();
+    let position = writer.serialize_parse_result(result).unwrap();
+    let segment = pass_through(writer.take_segment());
+    let mut reader = factory();
+    reader.push_segment(segment).unwrap();
+    let parse_results = reader.standard_tables().unwrap().parse_results;
+    let back = reader.parse_result(parse_results.position(position.index())).unwrap();
+
+    assert_trees_equivalent(&result.tree, &back.tree, ignore_annotations);
+    // (The preset's session ext is the unit type: nothing to compare.)
+    let (a, b) = (&result.diagnostics, &back.diagnostics);
+    assert_eq!((b.len(), b.limit(), b.suppressed(), b.error_count()), (a.len(), a.limit(), a.suppressed(), a.error_count()));
+    assert_eq!(b.render_all(), a.render_all());
+    for (original, rebuilt) in a.iter().zip(b.iter()) {
+        assert_eq!(rebuilt.severity(), original.severity());
+        assert_eq!(rebuilt.identifier(), original.identifier());
+        assert_eq!(rebuilt.data().serializable_data(), original.data().serializable_data());
+        assert_eq!(rebuilt.message(), original.message());
+        assert_eq!(rebuilt.render(), original.render());
+        assert_eq!((rebuilt.span().start(), rebuilt.span().end()), (original.span().start(), original.span().end()));
+        assert_eq!(rebuilt.frames().len(), original.frames().len());
+        for (fa, fb) in original.frames().iter().zip(rebuilt.frames()) {
+            assert_eq!(fa.title(), fb.title());
+            assert_eq!((fa.span().start(), fa.span().end()), (fb.span().start(), fb.span().end()));
+        }
+        // The diagnostic's source is the rebuilt tree's very source (single-source
+        // parses here).
+        assert!(rebuilt.span().same_source(back.tree.root().span()));
+        assert!(rebuilt.data().downcast_ref::<DeserializedCondition>().is_some());
+    }
+    back
+}
+
+#[test]
+fn strict_parse_results_round_trip() {
+    let language = oracle_language(Recovery::Strict);
+    for input in ["\\emph{x} and $m$", "\\begin{itemize}\\item one\\end{itemize}", "plain % c\n text"] {
+        let result = Arc::new(parse(&language, input));
+        assert!(result.diagnostics.is_empty());
+        round_trip_parse_result(session_factory(seed_providers(&language)), &result);
+    }
+}
+
+#[test]
+fn tolerant_parse_results_round_trip_with_their_diagnostics_and_tracebacks() {
+    let language = oracle_language(Recovery::Tolerant);
+    for (input, framed) in [
+        ("\\emph{x", true),                       // unclosed group inside an argument: two frames
+        ("\\begin{A}\\emph{x\\end{A}", true),     // orphan end + unclosed group + missing terminator
+        ("\\begin{itemize}\\item \\emph{x \\end{itemize}", true),
+        ("\\unknown x", false),                   // unknown macro (error spec): recorded at top level
+        ("stray }", false),
+    ] {
+        let result = Arc::new(parse(&language, input));
+        assert!(!result.diagnostics.is_empty(), "{input:?} recovers");
+        assert_eq!(result.diagnostics.iter().any(|d| !d.frames().is_empty()), framed, "{input:?}: traceback presence");
+        let back = round_trip_parse_result(session_factory(seed_providers(&language)), &result);
+        assert!(back.diagnostics.has_errors());
+        // Found by identifier, as before the round trip.
+        for original in result.diagnostics.iter() {
+            assert!(back.diagnostics.with_identifier(original.identifier()).next().is_some());
+        }
+    }
+}
+
+#[test]
+fn a_parse_result_and_its_diagnostics_share_the_trees_sources() {
+    let language = oracle_language(Recovery::Tolerant);
+    let result = Arc::new(parse(&language, "\\begin{A}\\emph{x\\end{A}"));
+    assert_eq!(result.diagnostics.len(), 3, "{:?}", result.diagnostics);
+    let mut writer = session_factory(seed_providers(&language))();
+    writer.serialize_parse_result(&result).unwrap();
+    let segment = writer.take_segment();
+    let count = |name: &str| segment.tables().iter().find(|t| t.name() == name).unwrap().entries().len();
+    assert_eq!(count("sources"), 1, "the tree, the diagnostics, and every frame share one source entry");
+    assert_eq!(count("diagnostics"), 3);
+    assert_eq!(count("trees"), 1);
+    assert_eq!(count("parse-results"), 1);
+}
+
 // --- determinism ------------------------------------------------------------------------
 
 /// The determinism input: macros, a minilatex list (the body-pushed item package),
@@ -920,7 +1026,7 @@ fn the_rendering_of_the_determinism_input_is_pinned_across_processes() {
 
 /// The pinned `(byte length, FNV-1a 64-bit digest)` of the determinism input's JSON.
 #[cfg(feature = "serde")]
-const PINNED_DETERMINISM_RENDERING: (usize, u64) = (7696, 15_178_594_088_035_620_013);
+const PINNED_DETERMINISM_RENDERING: (usize, u64) = (7804, 10_008_825_348_294_994_022);
 
 // --- helpers ------------------------------------------------------------------------------
 
@@ -1058,7 +1164,9 @@ mod rendering {
             r#"{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},"#,
             r#"{"kind":{"callable":{"callable_type":"macro","name":"e","spec":{"$index":[2,0]},"arguments":[{"region":{"children":{"start":0,"end":1},"content":{"start":0,"end":1},"content_parent":2},"ext":null}],"slots":[],"invocation_syntax":{"macro":{"escape_char":"\\","post_space":{"owned":""}}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":3}},"#,
             r#"{"kind":{"group":{"group_type":"content","open":{"spanned":{"start":2,"end":3}},"close":{"spanned":{"start":4,"end":5}}}},"span":{"source":{"$index":[0,0]},"start":2,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":3,"end":4}},"#,
-            r#"{"kind":{"chars":{"content":{"spanned":{"start":3,"end":4}}}},"span":{"source":{"$index":[0,0]},"start":3,"end":4},"state":{"$index":[1,1]},"ext":null,"children":{"start":4,"end":4}}]}}]}]}"#,
+            r#"{"kind":{"chars":{"content":{"spanned":{"start":3,"end":4}}}},"span":{"source":{"$index":[0,0]},"start":3,"end":4},"state":{"$index":[1,1]},"ext":null,"children":{"start":4,"end":4}}]}}]},"#,
+            r#"{"name":"diagnostics","id":5,"start":0,"entries":[]},"#,
+            r#"{"name":"parse-results","id":6,"start":0,"entries":[]}]}"#,
         );
         assert_eq!(json, expected);
     }

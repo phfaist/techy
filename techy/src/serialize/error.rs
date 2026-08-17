@@ -591,6 +591,34 @@ pub enum DeserializeError {
         /// The key the spec was defined under.
         key: DefinitionKey,
     },
+    /// A serialized diagnostic's condition projection (its `data`) holds a value of a
+    /// kind a [`DiagnosticValue`](crate::error::DiagnosticValue) cannot hold — a byte
+    /// string or a table position — somewhere inside it: the projection is not one a
+    /// condition's [`serializable_data`](crate::error::DiagnosticInfo::serializable_data)
+    /// could have produced.
+    UnrepresentableDiagnosticValue {
+        /// The kind of the offending value: `bytes` or `index`.
+        kind: &'static str,
+    },
+    /// A serialized diagnostics collection's counts contradict one another: `retained`
+    /// diagnostics were listed, `retained_errors` of them of error severity, under a
+    /// retention cap of `limit` with `suppressed` pushes beyond it and `error_count`
+    /// error-severity pushes in all — but a live collection always has
+    /// `retained <= limit`, `suppressed > 0` only when `retained == limit`, and
+    /// `retained_errors <= error_count <= retained_errors + suppressed`
+    /// (the invariants [`Diagnostics::push`](crate::error::Diagnostics::push) maintains).
+    InconsistentDiagnosticCounts {
+        /// The number of diagnostics listed.
+        retained: usize,
+        /// How many of them have error severity.
+        retained_errors: usize,
+        /// The recorded retention cap.
+        limit: usize,
+        /// The recorded number of pushes beyond the cap.
+        suppressed: usize,
+        /// The recorded number of error-severity pushes.
+        error_count: usize,
+    },
     /// The failure happened while deserializing entry `index` of table `table`, whose
     /// identifier is `identifier` when it is known (a table holding one kind of object
     /// has a fixed identifier; an entry of any other table carries its own, unless the
@@ -811,6 +839,22 @@ impl fmt::Display for DeserializeError {
                 "the provider `{provider}` of the reading environment has no definition \
                  under {callable_type} with {key}"
             ),
+            DeserializeError::UnrepresentableDiagnosticValue { kind } => write!(
+                f,
+                "the diagnostic's condition data holds a value of kind `{kind}`, which a \
+                 DiagnosticValue cannot hold (only null, booleans, integers, strings, lists, \
+                 and string-keyed maps)"
+            ),
+            DeserializeError::InconsistentDiagnosticCounts { retained, retained_errors, limit, suppressed, error_count } => {
+                write!(
+                    f,
+                    "the diagnostics collection's counts are inconsistent: {retained} diagnostics \
+                     listed ({retained_errors} errors) under a retention limit of {limit}, with \
+                     {suppressed} suppressed and {error_count} errors in all (a live collection has \
+                     retained <= limit, suppressed > 0 only when retained == limit, and \
+                     retained errors <= error count <= retained errors + suppressed)"
+                )
+            }
             DeserializeError::InEntry { table, index, identifier, cause } => match identifier {
                 Some(identifier) => write!(
                     f,

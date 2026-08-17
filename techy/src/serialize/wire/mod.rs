@@ -1,7 +1,8 @@
 //! The wire layer's conversion traits — [`ToSerialValue`] and [`FromSerialValue`] —
 //! and their internal derives: how the crate's own wire structs (the serialized shape
 //! of sources — [`source`], of states — [`state`], of specs and providers — [`specs`],
-//! of trees — [`tree`]; diagnostics to be added here) convert to and from
+//! of trees — [`tree`], of diagnostics — [`diagnostic`], of parse results —
+//! [`parse_result`]) convert to and from
 //! [`SerialValue`], unconditionally (without the `serde`
 //! cargo feature, which gates only the serde bridge for implementer payloads).
 //!
@@ -447,6 +448,8 @@ pub(crate) fn expect_data_variant<'a>(
     }
 }
 
+pub(crate) mod diagnostic;
+pub(crate) mod parse_result;
 pub(crate) mod source;
 pub(crate) mod specs;
 pub(crate) mod state;

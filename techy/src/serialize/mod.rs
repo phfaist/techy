@@ -82,11 +82,14 @@
 //! crate's own object kinds — the sources table ([`SourceSerdeDriver`]), the states
 //! table ([`StateSerdeDriver`]), the specs and providers tables
 //! ([`SpecSerdeDriver`], [`ProviderSerdeDriver`], dispatching tables whose readers a
-//! language or framework registers), and the trees table ([`TreeSerdeDriver`]) — in
-//! that order; [`SerdeSession::standard_tables`] returns their handles
-//! ([`StandardTables`]), and the extension traits [`StandardTableInterning`],
-//! [`StandardTableReading`], and [`TreeSerialization`] intern and read by kind
-//! (`cx.intern_source(…)`, `cx.state(…)`, `session.serialize_tree(…)`). A source's
+//! language or framework registers), the trees table ([`TreeSerdeDriver`]), the
+//! diagnostics table ([`DiagnosticSerdeDriver`]), and the parse-results table
+//! ([`ParseResultSerdeDriver`]) — in that order; [`SerdeSession::standard_tables`]
+//! returns their handles ([`StandardTables`]), and the extension traits
+//! [`StandardTableInterning`], [`StandardTableReading`], [`TreeSerialization`],
+//! [`DiagnosticSerialization`], and [`ParseResultSerialization`] intern and read by
+//! kind (`cx.intern_source(…)`, `cx.state(…)`, `session.serialize_tree(…)`,
+//! `session.serialize_parse_result(…)`). A source's
 //! text is either *embedded* in its entry or *referenced* — kept outside the
 //! serialized form, described by its length and an optional *digest* (a fixed-size
 //! fingerprint of the text computed by a hash function the writer chooses, stored as
@@ -96,9 +99,35 @@
 //! entry carries its token rules, mode, ext, and scope stack; the derived caches are
 //! rebuilt on reading. A tree's entry carries its nodes in storage order (spans, states,
 //! specs, and exts referring to the other tables); the reader rebuilds the tree through
-//! the node builder, minting a fresh layout tag. Every state and every source is written
-//! once however often it is referred to, and read back as one shared object; a tree is
-//! a value, written in full on every call.
+//! the node builder, minting a fresh layout tag. A diagnostic's entry carries its
+//! severity, its condition's identifier and serialization projection, its rendered
+//! message, its span, and its traceback frames; the reader rebuilds it with a
+//! [`DeserializedCondition`] as its condition — the written identifier, projection, and
+//! message as values, so that consumers on the far side match on the identifier
+//! ([`Diagnostic::identifier`](crate::error::Diagnostic::identifier)) rather than
+//! downcast to the original condition type. A parse result's entry ties a parse
+//! together — its tree's position, its diagnostics' positions with the collection's
+//! retention cap and counts, and its session extension. Every state and every source is
+//! written once however often it is referred to, and read back as one shared object; a
+//! tree and a diagnostic are values, written in full on every call; a parse result is
+//! interned by identity (its `Arc`) and read back as the shared `Arc` the session
+//! holds.
+//!
+//! **Streams as JSON Lines.** With the `serde` feature, the canonical stream
+//! rendering is one segment per line: each [`Segment`] a session emits is encoded on
+//! its own line with `serde_json::to_string(&segment)` (a segment is one JSON object,
+//! its canonical rendering never contains a raw line break) and appended to the
+//! stream; a reading session decodes each line with
+//! `serde_json::from_str::<Segment>(line)` and absorbs the segments in order with
+//! [`SerdeSession::push_segment`]. Every line is an independently valid segment
+//! (each carries the version and the full table directory), so a stream can be
+//! appended to by appending lines, split into per-file or per-message pieces, or
+//! truncated with only its last, incomplete line lost; there is no end-of-stream
+//! marker — the stream ends where the input ends. A reading session may then intern
+//! further objects and emit segments of its own, which continue the same stream
+//! (reading then appending). The same conventions hold for any other serde format
+//! that frames its values (one segment per framed value, in order); the crate itself
+//! calls no encoder — the engine emits and absorbs `Segment` values only.
 //!
 //! **Specs and providers: identity or a self-contained form.** A callable spec or a
 //! provider is serialized either by *identity* — a reference the reading side resolves
@@ -122,9 +151,10 @@
 //! (the latexlike preset's [`latexlike::serialize::register`](crate::latexlike::serialize::register)).
 //!
 //! **What exists so far.** This module provides the value model, the error types, the
-//! capability traits, the engine, the drivers of the sources, states, specs, providers,
-//! and trees tables with the crate's own spec and provider serialization, and (with
-//! the feature) the rendering layer; the diagnostics driver is not yet present.
+//! capability traits, the engine, the drivers of the seven standard tables with the
+//! crate's own spec and provider serialization, and (with the feature) the rendering
+//! layer. The vocabulary of the serialized form (table names, identifiers, key names,
+//! enum strings) is provisional until it is finalized before the schema is frozen.
 
 mod drivers;
 mod engine;
@@ -142,7 +172,9 @@ pub(crate) mod bridge;
 mod render;
 
 pub use drivers::{
-    register_core_readers, KnownProviders, ProviderIndex, ProviderRecipe, ProviderSerdeDriver,
+    register_core_readers, DeserializedCondition, DiagnosticIndex, DiagnosticSerdeDriver,
+    DiagnosticSerialization, KnownProviders, ParseResultIndex, ParseResultSerdeDriver,
+    ParseResultSerialization, ProviderIndex, ProviderRecipe, ProviderSerdeDriver,
     ReferencedSource, SourceDigest, SourceIndex, SourceSerdeDriver, SourceTextForm,
     SourceTextPolicy, SourceTextSupplier, SpecIndex, SpecSerdeDriver, StandardTableInterning,
     StandardTableReading, StandardTables, StateIndex, StateSerdeDriver, TreeIndex,

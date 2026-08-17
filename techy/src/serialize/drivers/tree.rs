@@ -543,21 +543,32 @@ impl<L: SerializableLang> TreeSerialization<L> for SerdeSession<L> {
             .table_handle::<TreeSerdeDriver<L>>(TREES_TABLE)
             .ok_or_else(|| DeserializeError::UnknownTableName { name: TREES_TABLE.to_string() })?;
         let object = self.object(handle, position)?;
-        match object.downcast::<NodeTree<L, A>>() {
-            Ok(tree) => Ok((*tree).clone()),
-            Err(object) => {
-                // The stored tree's codec is registered (it was read through it); the
-                // requested type may not be.
-                let stored = registered_identifier(self, (*object).type_id())
-                    .unwrap_or_else(|| String::from("(unregistered)"));
-                let requested = core::any::type_name::<A>();
-                let requested_identifier = registered_identifier(self, TypeId::of::<NodeTree<L, A>>())
-                    .map_or_else(|| String::from("unregistered"), |identifier| alloc::format!("`{identifier}`"));
-                Err(DeserializeError::failed(alloc::format!(
-                    "the tree at this position was serialized under `{stored}` and cannot be read as \
-                     annotation type `{requested}` ({requested_identifier})"
-                )))
-            }
+        tree_of_object(self, object)
+    }
+}
+
+/// The `NodeTree<L, A>` a trees-table object holds, cloned out — or, when the object
+/// is a tree of another annotation type, the error naming the identifier it was
+/// serialized under and the annotation type requested. Shared by the tree sugar and
+/// the parse-result reader.
+pub(crate) fn tree_of_object<L: SerializableLang, A: Clone + Send + Sync + 'static>(
+    session: &mut SerdeSession<L>,
+    object: Arc<dyn Any + Send + Sync>,
+) -> Result<NodeTree<L, A>, DeserializeError> {
+    match object.downcast::<NodeTree<L, A>>() {
+        Ok(tree) => Ok((*tree).clone()),
+        Err(object) => {
+            // The stored tree's codec is registered (it was read through it); the
+            // requested type may not be.
+            let stored =
+                registered_identifier(session, (*object).type_id()).unwrap_or_else(|| String::from("(unregistered)"));
+            let requested = core::any::type_name::<A>();
+            let requested_identifier = registered_identifier(session, TypeId::of::<NodeTree<L, A>>())
+                .map_or_else(|| String::from("unregistered"), |identifier| alloc::format!("`{identifier}`"));
+            Err(DeserializeError::failed(alloc::format!(
+                "the tree at this position was serialized under `{stored}` and cannot be read as \
+                 annotation type `{requested}` ({requested_identifier})"
+            )))
         }
     }
 }

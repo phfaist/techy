@@ -217,7 +217,7 @@ where
 
     let mut reader = setup();
     reader.push_segment(segment).unwrap();
-    let trees = reader.standard_tables().unwrap().trees;
+    let trees = reader.table_handle::<super::TreeSerdeDriver<L>>("trees").expect("the trees table");
     let back: NodeTree<L, A> = reader.tree(trees.position(position.index())).unwrap();
     assert_trees_equivalent(tree, &back, &annotation_eq);
     back
