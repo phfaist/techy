@@ -1021,7 +1021,8 @@ mod serde_rendering {
                 r#""forbidden_chars":{"chars":""}},"#,
                 r#""mode":null,"ext":null,"scopes":[{"$index":[3,0]}]}]},"#,
                 r#"{"name":"specs","id":2,"start":0,"entries":[]},"#,
-                r#"{"name":"providers","id":3,"start":0,"entries":[{"id":"toy.provider","data":"pkg"}]}"#,
+                r#"{"name":"providers","id":3,"start":0,"entries":[{"id":"toy.provider","data":"pkg"}]},"#,
+                r#"{"name":"trees","id":4,"start":0,"entries":[]}"#,
                 r#"]}"#,
             )
         );

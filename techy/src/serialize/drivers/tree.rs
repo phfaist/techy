@@ -666,10 +666,11 @@ fn rebuild_argument<L: SerializableLang>(
     match &wire.region {
         Some(region) => {
             let region = staged_region(region, callable_index, build_id_of)?;
-            let ext_value = wire
-                .ext
-                .as_ref()
-                .ok_or_else(|| DeserializeError::failed("a provided argument carries an ext"))?;
+            // A provided argument's ext follows its region: an ext whose serialized form
+            // is null (the unit ext, an absent optional inside the ext) is omitted from
+            // the wire, and reads back from null.
+            let null = SerialValue::Null;
+            let ext_value = wire.ext.as_ref().unwrap_or(&null);
             let ext = <ArgumentExt<L> as DeserializableValue<L>>::deserialize_value(ext_value, cx)?;
             Ok(ParsedArgument::provided(spec, region, ext))
         }

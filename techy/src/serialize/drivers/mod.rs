@@ -51,3 +51,5 @@ pub(crate) const CORE_TREE_IDENTIFIER: &str = "core.tree";
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tree_tests;

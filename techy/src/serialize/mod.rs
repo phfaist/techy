@@ -146,3 +146,7 @@ pub use bridge::{from_value, serial_bytes, to_value};
 mod tests;
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests;
+
+// Test helpers reachable in-crate (the tree driver's tests, and the preset's later).
+#[cfg(test)]
+pub(crate) mod tree_support;
