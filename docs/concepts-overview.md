@@ -33,13 +33,26 @@ policy tools.
 ## Tokens and token rules
 
 [`Token`](crate::core::Token)s are minimal, structural, opaque values produced
-by a [`TokenReader`](crate::core::TokenReader) (the standard implementation is
-[`StdTokenReader`](crate::core::StdTokenReader), whose token type is
-[`StdToken`](crate::core::StdToken)). Nothing is read off a token directly: a
+by a [`TokenReader`](crate::core::TokenReader). Which token type a language
+uses is its own declaration ([`Lang::Token`](crate::core::Lang::Token)); the
+standard reader ([`StdTokenReader`](crate::core::StdTokenReader)) produces
+[`StdToken`](crate::core::StdToken)s. Nothing is read off a token directly: a
 parser asks the reader what a token *is*
 ([`token_kind`](crate::core::TokenReader::token_kind)) and where it is
 ([`source_span_of`](crate::core::TokenReader::source_span_of) and its
-companions). A token is an atomic unit identifying *what to parse next*:
+companions, which answer with a [span](#sources-and-spans) — a source and a
+byte range in it — for the whole token or for the stretch between two of its
+[edges](crate::core::TokenEdge), the five boundaries running from where its
+leading whitespace begins to where its trailing whitespace ends). A place in
+the token *stream*, as opposed to a place in the text, is a
+[`Lang::StreamPosition`](crate::core::Lang::StreamPosition): opaque as well,
+handed out by the reader alone
+([`position_here`](crate::core::TokenReader::position_here),
+[`position_at`](crate::core::TokenReader::position_at)), and the value a
+parser uses to send the stream back to a place it has been
+([`move_to_position`](crate::core::TokenReader::move_to_position)) or to ask
+for the span between two such places. A token is an atomic unit identifying
+*what to parse next*:
 [`TokenKind`](crate::core::TokenKind) — the reader's answer — is a small closed
 set, a
 [`Char`](crate::core::TokenKind::Char) token covers exactly one character
@@ -49,7 +62,8 @@ every stream. Tokens carry no macro/environment taxonomy: `\begin` is a
 [`Command`](crate::core::TokenKind::Command) token like any other, and what its
 name means is decided at parse time — the one exception is
 [`Specials`](crate::core::TokenKind::Specials), where recognition *is*
-resolution, so the token carries its [spec](#callable-specs-and-arguments). Tokenization behavior is plain data
+resolution, so the reader's answer for the token already names its
+[spec](#callable-specs-and-arguments). Tokenization behavior is plain data
 — [`TokenRules`](crate::core::TokenRules) stored in the parsing state — so it
 can change mid-parse through state transitions.
 

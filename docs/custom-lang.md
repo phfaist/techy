@@ -76,12 +76,24 @@ detection priority and the three distinct spellings of "off": flag `false`
 = disabled, data preserved; empty data = nothing recognized; and, beyond
 both runtime spellings, a feature can be *absent* — the language does not
 have it at all, a compile-time declaration covered in
-[the next section](#declaring-which-features-the-language-has). A language
-whose tokenization *behavior* — not just data —
-differs implements the [`TokenReader`](crate::core::TokenReader) trait
-instead. The preset's canonical rules
+[the next section](#declaring-which-features-the-language-has). The preset's
+canonical rules
 ([`default_token_rules`](crate::latexlike::default_token_rules)) are the
-worked example.
+worked example of rules as data.
+
+A language whose tokenization *behavior* — not just data — differs
+implements the [`TokenReader`](crate::core::TokenReader) trait instead, and
+its driver returns that reader from
+[`make_token_reader`](crate::core::ParseDriver::make_token_reader) (see
+[The driver](#the-driver)). What such a reader produces is the language's
+own choice, declared as [`Lang::Token`](crate::core::Lang::Token) and
+[`Lang::StreamPosition`](crate::core::Lang::StreamPosition); construct
+parsers read neither directly, they ask the reader. Keeping the standard
+token type ([`StdToken`](crate::core::StdToken)) is the least work: hold an
+inner [`StdTokenReader`](crate::core::StdTokenReader) over the same content,
+build tokens with the `StdToken` constructors, and delegate every question
+about a token to the inner reader — the `TokenReader` page shows that shape
+as a compiling example.
 
 **Specials** — callables triggered by plain character sequences (`~`,
 `--`) — are recognized by two `Lang` hooks, and here sits a documented
@@ -425,7 +437,9 @@ the group descent-delta channel, and construct provision. Every method but
 [`make_token_reader`](crate::core::ParseDriver::make_token_reader) has a
 working default, and that one's standard body is the one-liner
 `Box::new(StdTokenReader::new(source))`, so a driver that supplies it is
-already complete; override what else your language needs. (Parsing depth is
+already complete; override what else your language needs. That hook is also
+where a custom reader is installed ([Token rules and specials
+recognition](#token-rules-and-specials-recognition) above). (Parsing depth is
 limited by the engine's own guard, configured on the language value with
 [`with_descent_guard_init`](crate::core::Language::with_descent_guard_init)
 — it is not a driver concern.)

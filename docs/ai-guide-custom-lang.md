@@ -38,6 +38,8 @@ method has a working default. Contracts live on
 | [`Event`](crate::core::Lang::Event) | semantic transition events on deltas; two classes (see below) | `()` |
 | [`SessionExt`](crate::core::Lang::SessionExt) | parse-global mutable extension on the session (history accumulation, caches) | `()` |
 | [`SourceOrigin`](crate::core::Lang::SourceOrigin) | origin metadata type of sources | `Option<String>` |
+| [`Token`](crate::core::Lang::Token) | the token type this language's readers produce — opaque to construct parsers, which hold and pass tokens but read nothing off them | [`StdToken`](crate::core::StdToken)`<Self>` |
+| [`StreamPosition`](crate::core::Lang::StreamPosition) | the reader-defined place in the token stream — opaque too, and obtainable only from a reader | [`StdStreamPosition`](crate::core::StdStreamPosition) |
 | [`NodeExts`](crate::core::Lang::NodeExts) | per-node / per-argument / per-slot extension type bundle | `()` |
 | [`InvocationSyntax`](crate::core::Lang::InvocationSyntax) | recorded trigger-spelling facts per callable invocation — this channel makes recomposition accuracy the language's choice | `()` |
 | [`Driver`](crate::core::Lang::Driver) | the language's [`ParseDriver`](crate::core::ParseDriver) type | [`StdParseDriver`](crate::core::StdParseDriver) |
@@ -118,8 +120,17 @@ scoped, data preserved; **empty** = no rules data, nothing recognized;
 **absent** = the language has no such feature at all, declared at compile
 time via [`Lang::Features`](crate::core::Lang::Features) (see the `Lang`
 table). Different tokenization *behavior* (not
-just data) = implement the [`TokenReader`](crate::core::TokenReader)
-trait. Worked example:
+just data) = implement the [`TokenReader`](crate::core::TokenReader) trait
+and return your reader from the driver's
+[`make_token_reader`](crate::core::ParseDriver::make_token_reader) (the one
+driver method without a default; the standard body is
+`Box::new(StdTokenReader::new(source))`). A reader that produces standard
+tokens ([`StdToken`](crate::core::StdToken)) keeps an inner
+[`StdTokenReader`](crate::core::StdTokenReader) over the same content, mints
+its tokens with the `StdToken` constructors and delegates every question
+about a token to that inner reader — the pattern, with a compiling example,
+is on the [`TokenReader`](crate::core::TokenReader) page. Worked example of
+rules as data:
 [`default_token_rules`](crate::latexlike::default_token_rules).
 
 **Specials trap (silent)**: specials recognition uses two `Lang` hooks that
@@ -260,7 +271,8 @@ whole toolkit:
 
 | Need | Use |
 |---|---|
-| read tokens | `cx.tokens` ([`TokenReader`](crate::core::TokenReader)) — it also answers where a token is ([`source_span_of`](crate::core::TokenReader::source_span_of)) and where the stream stands ([`position_here`](crate::core::TokenReader::position_here)); prefer [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token) (maps tokenizer errors per recovery policy) |
+| read tokens | `cx.tokens` ([`TokenReader`](crate::core::TokenReader)) — tokens are opaque, so every question about one goes to the reader: what it is ([`token_kind`](crate::core::TokenReader::token_kind), answering a [`TokenKind`](crate::core::TokenKind) view), where it is ([`source_span_of`](crate::core::TokenReader::source_span_of), or [`source_span_between`](crate::core::TokenReader::source_span_between) two [`TokenEdge`](crate::core::TokenEdge)s — the five boundaries of a token, from where its leading whitespace begins to where its trailing whitespace ends), and where the stream stands ([`position_here`](crate::core::TokenReader::position_here), [`position_at`](crate::core::TokenReader::position_at)); reposition with [`move_to(&token, edge)`](crate::core::TokenReader::move_to) or [`move_to_position(&position)`](crate::core::TokenReader::move_to_position); prefer [`cx.probe_token(&state)`](crate::core::constructs::ParseContext::probe_token) (maps tokenizer errors per recovery policy) |
+| locate what you stage | [`cx.source_span_within(&begin, &end)`](crate::core::constructs::ParseContext::source_span_within) turns two stream positions into the [`SourceSpan`](crate::source::SourceSpan) a multi-token construct stages with; [`cx.here()`](crate::core::constructs::ParseContext::here) is the empty span at the current position (the anchor for a problem reported where the parser stands). There is no source handle on the context: every span comes from the reader |
 | stage a node | [`cx.stage_node(kind, span, state, children)`](crate::core::constructs::ParseContext::stage_node) — the single staging entry point; mints the node ext, returns `Result`: a [`BuildId`](crate::core::node::BuildId), or a [`NodeBuildError`](crate::core::node::NodeBuildError) to lift — contract violations via `implementation_error`, the ext mint's own reported failure ([`ExtMintFailed`](crate::core::node::NodeBuildError::ExtMintFailed)) as a [`HookFailed`](crate::error::HookFailed) condition; neither is swallowed by tolerant recovery; children staged first, bottom-up |
 | derive/scope state | [`cx.derive_state(&delta)`](crate::core::constructs::ParseContext::derive_state); [`cx.with_parsing_state`](crate::core::constructs::ParseContext::with_parsing_state) / [`with_derived_state`](crate::core::constructs::ParseContext::with_derived_state) scope with structural restore — state-scoping utilities only, never a route into a sub-parse |
 | run a sub-parser (descend) | [`cx.parse_construct(parser, state, frame)`](crate::core::constructs::ParseContext::parse_construct) — the one entry point every `ConstructParser` run MUST go through (`state: None` = the current state, same scoping; optional traceback frame). For child content and groups, the thin wrappers [`cx.parse_nodes(state, stop, child_states)`](crate::core::constructs::ParseContext::parse_nodes) / [`cx.parse_group(…)`](crate::core::constructs::ParseContext::parse_group) add the driver's parser factories — never instantiate loop parsers yourself (driver factories must apply) |

@@ -33,10 +33,14 @@ hooks). Calling [`parse()`](crate::core::Language::parse) (or
 pre-minted [`Source`](crate::source::Source)) sets up three transient
 objects and runs the parse to completion:
 
-- a **token reader** ([`StdTokenReader`](crate::core::StdTokenReader))
-  over the source content, which produces
+- a **token reader** — the one the driver's
+  [`make_token_reader`](crate::core::ParseDriver::make_token_reader) hook
+  returns, [`StdTokenReader`](crate::core::StdTokenReader) unless the
+  language supplies its own — over the source content, which produces
   [`Token`](crate::core::Token)s on demand under whatever token rules the
-  current parsing state holds;
+  current parsing state holds. A token is opaque: whoever holds one asks the
+  reader what it is and where it is
+  ([the concept](crate::guide::concepts_overview#tokens-and-token-rules));
 - a **session** ([`ParserSession`](crate::core::ParserSession)) — the root
   object of the parse, accumulating everything the parse produces: the
   staged nodes, the [diagnostics](crate::error::Diagnostics) sink, and the
@@ -84,7 +88,9 @@ syntax:
 - **A command token** (`\emph`) is where definition lookup happens: the
   loop asks the driver's
   [`resolve_command`](crate::core::ParseDriver::resolve_command) hook to
-  resolve the name under the current state. A successful resolution names
+  resolve the token under the current state — the hook receives the token
+  and the reader that produced it, so a language may decide on any detail of
+  the trigger, not just its name. A successful resolution names
   the invocation form and the spec
   ([`ResolvedCallable`](crate::core::specs::ResolvedCallable)); the loop
   then consumes the trigger token, builds an
@@ -95,8 +101,8 @@ syntax:
   and, in tolerant parsing, recovered as a character-run node over the
   token's span.
 - **A specials token** (`~`, `--`) skips resolution entirely: for specials,
-  recognition *is* resolution — the token already carries its resolved spec
-  from the tokenizer's specials scan (see
+  recognition *is* resolution — the reader's answer for the token already
+  names the spec the specials scan resolved (see
   [`TokenKind::Specials`](crate::core::TokenKind); the asymmetry is
   documented on [`resolve_command`](crate::core::ParseDriver::resolve_command)).
   The loop dispatches the invocation the same way from there.
