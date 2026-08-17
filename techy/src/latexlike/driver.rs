@@ -21,22 +21,21 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 
-use crate::constructs::{FromInvocation, Invocation};
 use crate::engine::{resolve_command_in_scopes, CommandResolution, ParseDriver};
 use crate::error::Recovery;
 use crate::node::{CallableData, NodeKind, ParsedArguments, ParsedSlots};
-use crate::source::{IntoSourceResolver, Source, SourceResolver, SourceSpan, Span};
+use crate::source::{IntoSourceResolver, Source, SourceResolver, SourceSpan};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::state::{
     CommandOverrides, CommentOverrides, ForbiddenCharsOverrides, GroupOverrides,
     ParagraphOverrides, ParsingState, ParsingStateDelta, ParsingStateStack, SpecialsOverrides,
     TokenRulesOverrides, WhitespaceOverrides,
 };
-use crate::token::{GroupRule, StdTokenReader, Token, TokenKind, TokenReader};
+use crate::token::{GroupRule, StdTokenReader, Token, TokenReader};
 
 use super::{
-    Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType, LatexlikeLang,
-    LatexlikeMode,
+    Latexlike, LatexlikeCallableType, LatexlikeEvent, LatexlikeGroupType,
+    LatexlikeInvocationSyntax, LatexlikeLang, LatexlikeMode,
 };
 
 /// How [`LatexlikeDriver`] emits the node for a paragraph-break token (a whitespace
@@ -275,33 +274,17 @@ pub fn make_paragraph_break_node<LLL: LatexlikeLang>(
             let spec: Arc<dyn CallableSpec<LLL>> = Arc::new(ParagraphBreakSpec);
             // Name-as-written: the actual whitespace run the break span covers.
             let name = break_span.content();
-            // The synthetic trigger token the standard constructor reads: the break
-            // token this hook was called for, rebuilt from its span. (The invocation
-            // bundle still carries a token in this stage of the token rework.)
-            let token: Token<'_, LLL> = Token::new(
-                TokenKind::ParagraphBreak,
-                break_span.span(),
-                Span::empty(break_span.start()),
-            );
-            // The preset's specials staging site consults the standard
-            // constructor ([`FromInvocation`]) like every std site — over a
-            // synthetic invocation bundling the break token — so a family
-            // member's payload records whatever its constructor answers for a
-            // specials-formed trigger (the preset enum: the unit `Specials`).
-            let invocation = Invocation {
-                callable_type: LLL::CallableTypeId::specials_callable(),
-                name,
-                spec: &spec,
-                token: &token,
-            };
-            let invocation_syntax = LLL::InvocationSyntax::from_invocation(&invocation);
+            // A paragraph break is a specials-formed callable, so its payload is
+            // whatever the family member's specials form answers
+            // ([`LatexlikeInvocationSyntax::specials_form`]; the preset enum: the
+            // unit `Specials`, recording nothing beyond the node's `name`).
             NodeKind::callable(CallableData {
-                callable_type: invocation.callable_type,
-                name: invocation.name.into(),
+                callable_type: LLL::CallableTypeId::specials_callable(),
+                name: name.into(),
                 spec,
                 arguments: ParsedArguments::empty(),
                 slots: ParsedSlots::empty(),
-                invocation_syntax,
+                invocation_syntax: LLL::InvocationSyntax::specials_form(),
             })
         }
     }

@@ -607,12 +607,22 @@ initialized at `:194`, read nowhere in these files; 2b removes it.
 3. **`ParseContext`'s `Debug` prints `at` instead of `pos` + `source`** — one
    reader-answered `SourceSpan` carries both facts, and the `source` field it printed is
    removed in 2b.
-4. **The latexlike `Specials` paragraph-break shape synthesizes a token.** The hook now
-   receives only the break's span, but the payload still comes from
-   `FromInvocation::from_invocation(&Invocation { token, .. })`, so the behavior function
-   rebuilds a `ParagraphBreak` token from the span it was handed. This is an interim: in
-   Stage 3b `from_invocation` also needs a *reader*, which this hook does not have — see
-   open question 2.
+4. **The latexlike `Specials` paragraph-break payload comes from `specials_form()`**
+   (orchestrator ruling, 2026-08-17). The hook now receives only the break's span, and a
+   paragraph break *is* a specials-formed callable
+   (`callable_type: specials_callable()`), so the behavior function mints its payload
+   with `LLL::InvocationSyntax::specials_form()`
+   ([`LatexlikeInvocationSyntax`](techy/src/latexlike/lang.rs)) instead of consulting
+   `FromInvocation` over a synthesized token. For the preset that is byte-for-byte the
+   payload `from_invocation` answered for a `ParagraphBreak` trigger (the unit
+   `Specials` variant — its `_ =>` arm), confirmed by the unchanged paragraph-break
+   tests (`paragraph_break_pillar_is_the_driver_behavior`,
+   `paragraph_breaks_can_emit_specials_nodes`,
+   `specials_and_paragraph_breaks_reemit_name_as_written`,
+   `paragraph_breaks_round_trip_in_both_styles`). No token, no reader, nothing for a
+   later stage to revisit; `name = break_span.content()` is unchanged. *(An earlier
+   revision of this branch rebuilt a `ParagraphBreak` token from the span to reach
+   `FromInvocation`; that interim is gone.)*
 5. **`stage_invocation`'s invalid-span error keeps its own wording** (an
    `invocation_span_within` helper) rather than reusing
    `ParseContext::source_span_within`'s message, because §1.9 pins the "invalid computed
@@ -632,13 +642,10 @@ initialized at `:194`, read nowhere in these files; 2b removes it.
    doctests), including the environment/`\input`/expression-position span assertions and
    the parse-tree byte-partition oracle. Nothing to rule on — recorded because §1.9 asked
    for it explicitly.
-2. **The paragraph-break hook and `FromInvocation` (deviation 4).** In the final design
-   `from_invocation(invocation, tokens)` needs a reader and an `L::Token`, and
-   `make_paragraph_break_node` has neither. Stage 3b must decide how a callable-shaped
-   paragraph break mints its invocation-syntax payload — a `Default`-ish payload, a
-   dedicated hook parameter, or handing the hook the token after all. The interim
-   (rebuild a token from the span) keeps today's behavior exactly and is confined to
-   `latexlike/driver.rs`.
+2. ~~The paragraph-break hook and `FromInvocation`~~ — **closed** (orchestrator,
+   2026-08-17): no reader and no token are needed, because the payload of a
+   specials-formed callable is `LLL::InvocationSyntax::specials_form()`. Implemented as
+   deviation 4; nothing is left for Stage 3b here.
 3. **`GroupParser`'s extra lifetime** (deviation 1) is churn that 3b undoes. If a
    reviewer prefers, the alternative is for `GroupParser` to store the open token's
    `SourceSpan` plus its `Start` position instead of the token — no lifetime, but it
