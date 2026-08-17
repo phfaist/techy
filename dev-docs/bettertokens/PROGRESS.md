@@ -1290,12 +1290,15 @@ integration + 84 doctests, 0 failed), `cargo clippy --all-targets -- -D warnings
 
 - **Branch**: `bt-3b-opaque` (off `bt-3a-view` at `1e96803`).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-3b-opaque`.
-- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Status**: reviewed (READY TO MERGE; review round 1 + three user rulings applied).
+  Date: 2026-08-17.
 - **Merge**: together with `bt-3a-view` (§5) — `TokenKindView` never reaches `main`.
 - **Commits** (`git log --oneline bt-3a-view..bt-3b-opaque`, newest first; the
-  PROGRESS update follows this list):
+  PROGRESS updates follow the lists):
 
 ```
+a1a36cb core: resolvers and reader-less hooks take the token and its reader
+f19bbe5 token: the test-only accessors are `cfg(test)`, and two review polish items
 683525a token: pin the `Lang::Token` contract for the trivial blanket impl
 d60d676 docs: the panics list, the guides, and the `Lang` doctest for opaque tokens
 ea6ec24 tests: the custom reader over standard tokens, from outside the crate
@@ -1416,7 +1419,12 @@ same result on both trees (257 816 nodes, 0 diagnostics):
 | baseline `7825789` (throwaway worktree, example copied in untracked) | 201.4, 195.2, 201.4, 216.8, 201.3 | **201.4 ms** |
 
 **+5.7 %** — within the ≤ 10 % budget and inside 2b's measured +3–7 % band, i.e. 3b adds
-nothing measurable on top of the position/edge work. No new per-token `Arc` clone
+nothing measurable on top of the position/edge work. **The reviewer measured
+independently** on the same example: a clean interleaved pass gave 189.7 ms on the
+branch against 173.7 ms on the baseline (**+9.2 %**), and a noisier pass **+11.6 %** —
+so the true figure sits near the top of the budget rather than comfortably inside it,
+and the spread between passes exceeds the effect being measured. **Stage 4 re-measures**
+(§6's gates) and rules on whether anything is owed. No new per-token `Arc` clone
 appeared: a `GroupOpen` token still holds the one `Arc<GroupRule>` the prefix-table
 match hands it and a `Specials` token the one `Arc<dyn CallableSpec>` the scan hook
 returns, exactly as before; the token now stores *fewer* words (no `&str` pairs). The
@@ -1486,3 +1494,117 @@ throwaway worktree was removed with `git worktree remove --force`.
    `techy::core` topology line still reads "tokens (Token, TokenKind, TokenRules,
    TokenReader, StdTokenReader)". `Token` is now a trait and `StdToken` is a new
    public item next to it, so that line may deserve `StdToken` — the user's call.
+
+### Review round 1 + rulings O-1b, O-5 and the two reader-less hooks (2026-08-17)
+
+The stage came back **READY TO MERGE after one required fix**; the user issued three
+rulings in the same round, all applied here (two commits: `f19bbe5` the fix and the
+polish, `a1a36cb` the rulings — they touch the same call sites, so splitting them
+further would only produce non-building intermediates).
+
+**Required fix (reviewer).** `StdToken::span`, `pre_space` and `with_pre_space` are
+`#[cfg(test)]`, not `#[allow(dead_code)]`: every caller is test-only (the token
+module's own tests, the `cfg(test)` list reader), which is now what their comments
+say. This supersedes deviation 3 above.
+
+**Suggestions (both applied).** `TokenReader::next` sits directly after `peek` (§1.6's
+order); `TokenListReader::tokens()`, dead since the July 2026 demotion to test-only,
+is deleted.
+
+**Ruling O-1b (user, superseding O-1's view-only form; §1.10 and §1.17 on `main` at
+`511110f`).** "Passing a view is poor design": the driver-level resolvers receive the
+**token and a read-only reference to its reader** instead.
+
+- `ParseDriver::resolve_command(&self, state, token: &L::Token, tokens: &dyn TokenReader<'_, L>)`,
+  and likewise `CommandResolver::resolve_command` (the `()` and `ScopesCommandResolver`
+  impls), `StdParseDriver`'s forwarding, the latexlike driver's override, and
+  `resolve_command_in_scopes(state, token, tokens, callable_type)` — which asks
+  `tokens.token_kind(token)` and matches `Command { name, escape_char }` exactly as
+  before (anything else → `Unresolved`).
+- **`CallableQuery<'a, L>` drops the token entirely**: `callable_type`, `name`,
+  `syntax` — `token_kind`/`with_token_kind` are gone, and its rustdoc states that
+  scopes and packages look up by name and callable syntax while a language that must
+  dispatch on token details does so in `ParseDriver::resolve_command`. Stage 3a's
+  `with_token_kind` test is deleted; the three test resolvers that attached a
+  token/view drop the attachment.
+- Callers: `nodes_parser.rs` and `argument_parsers.rs` pass `(&token, &*cx.tokens)` —
+  probe P6's shape, and the borrow checker accepts it as written (the shared reborrow
+  of `cx.tokens` coexists with the loop's `Copy` view, which borrows the token, not the
+  reader). The driver tests in `engine/mod.rs` read a real `\foo` token from a small
+  source through a `StdTokenReader` (a local `command_token` helper scans under rules
+  with a `\`-command rule) and hand that reader to the hook; `tests/lang_features.rs`'s
+  `FixedTableResolver` reads its name with `tokens.token_kind(token)`.
+- The 3a form never reaches `main`: 3a and 3b merge together.
+
+**Ruling O-5 (user): `Invocation` drops `kind`.** The field cached a reader answer;
+every consumer holds a reader already, so the latexlike `from_invocation`,
+`argument_parsers.rs`'s requires-content spelling and `latexlike/environments.rs`'s two
+trigger checks call `token_kind` on the spot (`tokens.token_kind(invocation.token)` /
+`cx.tokens.token_kind(self.invocation.token)`). The bundle is now "the resolution
+result plus the token", which its rustdoc says. No reader parameter was added to
+`make_invocation_parser`, and no reader reference was put inside `Invocation` (it is
+stored across the invocation parser's own parse, during which the same reader is
+mutably borrowed through `cx.tokens` — it cannot compile). One test consequence worth
+recording: `from_invocation`'s specials case used to be provable with a `Specials` view
+over a `Command` token; it now reads a **real** `~` token (the minilatex package
+supplies the trigger), which is a stricter test.
+
+**Ruling (user): the two reader-less hooks take the token and its reader**, on O-1b's
+principle. `TokenStopKind::Predicate` is
+`&dyn Fn(&L::Token, &dyn TokenReader<'_, L>) -> Result<bool, ParseError>` and
+`GroupChildState::Compute` is
+`&dyn Fn(&Arc<ParsingState<L>>, &L::Token, &dyn TokenReader<'_, L>) -> Result<Arc<ParsingState<L>>, ParseError>`;
+the consultation sites pass `(&token, &*cx.tokens)`. `NodesParser::token_stop` takes
+the token and the reader too and queries the view once for its built-in arms — the
+one extra `token_kind` call per iteration happens only where a token stop condition is
+configured. The four test closures ask the reader themselves. No higher-ranked
+lifetime annotation was needed (`dyn Fn(&…)` supplies it).
+
+**§1 deviations from this round:** none. `Invocation.kind` (a §1.16 default and probe
+P2's finding) and the view-carrying resolve chain (§1.10 as of the previous plan
+revision) are both superseded by the rulings, which the plan on `main` already
+records.
+
+### Gates after the review round (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+
+$ cargo test
+running 1054 tests   test result: ok. 1054 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 30 tests     test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 9 tests      test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 13 tests     test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 23 tests     test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 0 tests × 3  test result: ok. (serialize_golden, serialize_perf, serialize_stream)
+running 1 test       test result: ok. 1 passed (techy-derive unit)
+running 90 tests     test result: ok. 85 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out  (doctests)
+running 2 tests      test result: ok. 0 passed; 0 failed; 2 ignored  (techy-derive doctests)
+
+$ cargo clippy --all-targets -- -D warnings
+    Checking techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.24s
+(no warnings)
+
+$ rm -rf target/doc && cargo docs
+ Documenting techy v0.1.0 (…/bt-3b-opaque/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
+   Generated …/target/doc/techy/index.html and 1 other file
+
+$ scripts/check_semver.sh
+     Summary semver requires new major version: 20 major and 0 minor checks failed
+
+$ cargo test -p techy --lib constructs::nodes_parser
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 975 filtered out
+
+$ cargo test -p techy --lib token::list_reader
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1040 filtered out
+```
+
+The unit count moves 1055 → 1054: the `with_token_kind` test goes with the field it
+tested. The semver categories are unchanged from the first run (the same 20; O-1b adds
+`method_parameter_count_changed`/`struct_pub_field_missing` entries to families already
+failing, and removes `CallableQuery::with_token_kind` — a method Stage 3a introduced,
+which never reached `main`).
