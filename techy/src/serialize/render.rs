@@ -49,9 +49,12 @@ pub(crate) const COMPACT_VARIANTS: &[&str] =
 
 /// The compact-rendering variant name of `value`'s kind.
 pub(crate) fn compact_variant_name(value: &SerialValue) -> &'static str {
+    // Invariant: the index is one of 0..8, the positions of `COMPACT_VARIANTS`.
     COMPACT_VARIANTS[compact_variant_index(value) as usize]
 }
 
+/// The compact-rendering variant index of `value`'s kind: its position in
+/// [`COMPACT_VARIANTS`], always within it.
 fn compact_variant_index(value: &SerialValue) -> u32 {
     match value {
         SerialValue::Null => 0,
@@ -123,7 +126,7 @@ fn serialize_canonical<S: Serializer>(value: &SerialValue, serializer: S) -> Res
 
 fn serialize_compact<S: Serializer>(value: &SerialValue, serializer: S) -> Result<S::Ok, S::Error> {
     let index = compact_variant_index(value);
-    let name = COMPACT_VARIANTS[index as usize];
+    let name = compact_variant_name(value);
     match value {
         SerialValue::Null => serializer.serialize_unit_variant(VALUE_SENTINEL, index, name),
         SerialValue::Bool(b) => serializer.serialize_newtype_variant(VALUE_SENTINEL, index, name, b),
