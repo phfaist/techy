@@ -19,10 +19,10 @@ use alloc::sync::Arc;
 use core::fmt;
 
 use crate::constructs::{
-    EnvironmentBeginSyntaxData, EnvironmentTerminatorSyntaxData, FromInvocation,
-    Invocation, NameGroup,
+    node_text_content, EnvironmentBeginSyntaxData, EnvironmentTerminatorSyntaxData,
+    FromInvocation, Invocation, NameGroup,
 };
-use crate::source::{Source, Span, TextContent};
+use crate::source::{Source, SourceSpan, TextContent};
 use crate::state::{InvocationSyntax, Lang};
 use crate::token::{GroupRule, TokenKind};
 
@@ -300,9 +300,16 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// nothing but a terminator string, `None` when the body
     /// closed without consuming one (mismatch, malformed terminator, end of
     /// input) — the end side then stays empty.
+    ///
+    /// The parsed facts are source-qualified spans, as the reader answered them;
+    /// `node_span` is the extent of the node being staged, against which each fact
+    /// that the record keeps as a span is checked (a fact from another source — only
+    /// reachable under a reader serving one parse from several sources — is recorded
+    /// as text, or not at all).
     fn from_parsed(
         begin: EnvironmentBeginSyntaxData<L>,
         terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
+        node_span: &SourceSpan<L::SourceOrigin>,
     ) -> Self;
 
     /// The begin-side spelling as recorded, resolved around `name` (the
@@ -374,22 +381,23 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
     fn from_parsed(
         begin: EnvironmentBeginSyntaxData<L>,
         terminator: Option<EnvironmentTerminatorSyntaxData<L>>,
+        node_span: &SourceSpan<L::SourceOrigin>,
     ) -> Self {
         let transcribe_side = |escape_char: char,
-                               command_word: Span,
-                               post_space: Span,
+                               command_word: &SourceSpan<L::SourceOrigin>,
+                               post_space: &SourceSpan<L::SourceOrigin>,
                                name_group: &NameGroup<L>| {
             StdEnvironmentSideSyntax {
                 escape_char,
-                command_word: TextContent::Spanned(command_word),
-                post_space: TextContent::Spanned(post_space),
+                command_word: node_text_content(command_word, node_span),
+                post_space: node_text_content(post_space, node_span),
                 name_group_rule: Arc::clone(&name_group.rule),
             }
         };
         let begin_side = transcribe_side(
             begin.escape_char,
-            begin.command_word,
-            begin.post_space,
+            &begin.command_word,
+            &begin.post_space,
             &begin.name_group,
         );
         let end = match &terminator {
@@ -398,12 +406,7 @@ impl<L: LatexlikeLang> EnvironmentSyntax<L> for StdEnvironmentSyntax<L> {
                 command_word,
                 post_space,
                 name_group,
-            }) => Some(transcribe_side(
-                *escape_char,
-                *command_word,
-                *post_space,
-                name_group,
-            )),
+            }) => Some(transcribe_side(*escape_char, command_word, post_space, name_group)),
             Some(EnvironmentTerminatorSyntaxData::Literal { .. }) => {
                 // In latexlike, environments should NOT report a Literal terminator if we
                 // want an accurate StdEnvironmentSyntax.
@@ -449,6 +452,8 @@ impl<L: Lang> fmt::Debug for StdEnvironmentSyntax<L> {
 
 #[cfg(test)]
 mod tests {
+    use crate::source::Span;
+
     use alloc::boxed::Box;
     use alloc::string::ToString;
     use alloc::vec;
@@ -774,15 +779,28 @@ mod tests {
                     Latexlike,
                     (BuildId, Option<Box<ParsingStateDelta<Latexlike>>>),
                 > {
-                    // Consume raw bytes through the end of the line.
-                    let source = Arc::clone(&cx.source);
-                    let content = source.content();
-                    let start = cx.tokens.pos();
-                    let end = content[start..]
-                        .find('\n')
-                        .map(|i| start + i)
-                        .unwrap_or(content.len());
-                    cx.tokens.move_to_pos(end);
+                    // Consume the rest of the line, raw: under a state with every
+                    // recognizer off (the verbatim recipe) every byte arrives as a
+                    // `Char` token, so the read stops at the line's newline without
+                    // consuming it.
+                    let raw = cx.derive_state(&ParsingStateDelta::new().rules(
+                        TokenRulesOverrides {
+                            groups: crate::state::GroupOverrides {
+                                expecting_close: Some(None),
+                                ..crate::state::GroupOverrides::disable()
+                            },
+                            ..TokenRulesOverrides::disable_all()
+                        },
+                    ))?;
+                    while let Some(token) = cx.probe_token(&raw)? {
+                        match &token.kind {
+                            crate::token::TokenKind::Char('\n') => break,
+                            crate::token::TokenKind::Char(_) => cx
+                                .tokens
+                                .move_to_edge(&token, crate::token::TokenEdge::EndPastPostSpace),
+                            _ => break,
+                        }
+                    }
                     // The claimed extent is where the reader now stands.
                     let end = cx.tokens.position_here();
                     let id = cx.stage_invocation(

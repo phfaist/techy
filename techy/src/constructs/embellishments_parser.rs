@@ -56,15 +56,15 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::TokenKind;
+use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{
     parse_expression_node, scan_argument_noise, stage_pre_space,
 };
-use super::{ConstructParserResult, FromInvocation, ParseContext};
+use super::{node_text_content, ConstructParserResult, FromInvocation, ParseContext};
 
 /// The embellishment-arguments parser (xparse's `e{<chars>}` argument type): marker
 /// alternatives (`^`, `_`, `'`, …), each followed by one expression (at most plain
@@ -159,24 +159,36 @@ where
             }
 
             // Committed: the wrapper group over the expression's nodes, the marker as
-            // its open delimiter (pylatexenc's `(marker, '')` shape).
-            let end = wrapper_children
+            // its open delimiter (pylatexenc's `(marker, '')` shape). The wrapper runs
+            // from the marker to the end of the expression's last staged node, when
+            // that node lies in the marker's own source; to the marker's end
+            // otherwise.
+            let child_span = wrapper_children
                 .last()
                 .and_then(|last| cx.staged_nodes().get(*last))
-                .map(|child| child.span().end())
-                .unwrap_or(marker_span.end());
-            let span = Span::new(marker_span.start(), end);
+                .map(|child| child.span().clone())
+                .filter(|child| {
+                    child.same_source(&marker_span) && child.end() >= marker_span.end()
+                });
+            let span = match child_span {
+                Some(child) => SourceSpan::new(
+                    marker_span.source(),
+                    marker_span.start()..child.end(),
+                ),
+                None => marker_span.clone(),
+            };
             let data = GroupData::untyped(
-                TextContent::Spanned(marker_span),
+                node_text_content(&marker_span, &span),
                 TextContent::empty(),
             );
-            let wrapper = cx.stage_node(
+            let wrapper = cx
+                .stage_node(
                     NodeKind::group(data),
-                    SourceSpan::new(&cx.source, span),
+                    span.clone(),
                     Arc::clone(&cx.state),
                     wrapper_children,
                 )
-                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
+                .map_err(|error| cx.staging_error(error, span))?;
 
             used[marker_index] = true;
             nodes.extend(noise.nodes);
@@ -221,12 +233,15 @@ impl EmbellishmentsArgumentParser {
     /// and settle on the **longest** fully matched one. On a match, the reader stands
     /// at the marker's end and `Some((marker index, marker span))` is returned; on a
     /// miss the reader is *not* rewound (the caller owns the rewind target).
+    // The return type spells the scan's answer; an alias would name one method's
+    // tuple, not a concept.
+    #[allow(clippy::type_complexity)]
     fn scan_marker<'s, L: Lang>(
         &self,
         cx: &mut ParseContext<'_, 's, L>,
         first: &crate::token::Token<'s, L>,
         used: &[bool],
-    ) -> ConstructParserResult<L, Option<(usize, Span)>> {
+    ) -> ConstructParserResult<L, Option<(usize, SourceSpan<L::SourceOrigin>)>> {
         let TokenKind::Char(first_char) = &first.kind else { return Ok(None) };
 
         let available = |candidate: &str| {
@@ -249,9 +264,11 @@ impl EmbellishmentsArgumentParser {
         if !prefixes_any(&run) {
             return Ok(None);
         }
-        cx.tokens.move_past(first, true);
-        let mut end = first.span.end();
-        let mut best: Option<(usize, usize)> = available(&run).map(|index| (index, end));
+        cx.tokens.move_to_edge(first, TokenEdge::EndPastPostSpace);
+        // The best-so-far match is kept as the *token* it ends on: only the reader can
+        // say where that is.
+        let mut best: Option<(usize, crate::token::Token<'s, L>)> =
+            available(&run).map(|index| (index, first.clone()));
 
         let state = Arc::clone(&cx.state);
         loop {
@@ -266,18 +283,21 @@ impl EmbellishmentsArgumentParser {
             if !prefixes_any(&run) {
                 break;
             }
-            cx.tokens.move_past(&token, true);
-            end = token.span.end();
+            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
             if let Some(index) = available(&run) {
-                best = Some((index, end));
+                best = Some((index, token.clone()));
             }
         }
 
-        let Some((index, match_end)) = best else { return Ok(None) };
+        let Some((index, last)) = best else { return Ok(None) };
         // The scan may have read past the settled match (a longer alternative that
         // never completed): stand the reader at the marker's end.
-        cx.tokens.move_to_pos(match_end);
-        Ok(Some((index, Span::new(first.span.start(), match_end))))
+        cx.tokens.move_to_edge(&last, TokenEdge::EndPastPostSpace);
+        let span = cx.source_span_within(
+            &cx.tokens.position_at(first, TokenEdge::Start),
+            &cx.tokens.position_at(&last, TokenEdge::EndPastPostSpace),
+        )?;
+        Ok(Some((index, span)))
     }
 }
 

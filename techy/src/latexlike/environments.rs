@@ -80,10 +80,10 @@ use crate::node::{
 use core::marker::PhantomData;
 
 use crate::scopes::{CallableQuery, CallableSyntax, SpecProvenance};
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::state::ParsingStateDelta;
-use crate::token::GroupRule;
+use crate::token::{GroupRule, TokenEdge};
 
 use super::invocation_syntax::EnvironmentSyntax;
 use super::lang::{
@@ -180,17 +180,16 @@ impl fmt::Display for OrphanEnd {
 /// [`EnvironmentBehavior`]'s hooks receive from the `\begin` composition. Grows by
 /// field as behavior hooks demand (`#[non_exhaustive]`); built only by the
 /// composition.
-#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub struct EnvironmentInvocation<'p> {
+pub struct EnvironmentInvocation<'p, LLL: LatexlikeLang = Latexlike> {
     /// The `\begin` trigger token's span — the anchor of body-level diagnostics
     /// (missing terminator).
-    pub trigger_span: Span,
+    pub trigger_span: SourceSpan<LLL::SourceOrigin>,
     /// The environment's name as written inside the name group (`itemize`,
     /// `figure*`).
     pub name: &'p str,
     /// The name's span (the name group's interior).
-    pub name_span: Span,
+    pub name_span: SourceSpan<LLL::SourceOrigin>,
     /// The begin trigger's escape character as written — the canonical escape a
     /// takeover body composes its terminator spelling from
     /// ([`VerbatimBehavior`]'s literal `\end{name}`).
@@ -203,6 +202,37 @@ pub struct EnvironmentInvocation<'p> {
     /// [`BeginSpec`](BeginSpec::end_command_name): the body's stop condition, and the
     /// command word a takeover body composes its terminator spelling from.
     pub end_command_name: &'p str,
+}
+
+// Manual impls: derives would demand `LLL: Clone`/`LLL: Debug` although only spans
+// and borrowed strings are held.
+
+impl<LLL: LatexlikeLang> Clone for EnvironmentInvocation<'_, LLL> {
+    fn clone(&self) -> Self {
+        EnvironmentInvocation {
+            trigger_span: self.trigger_span.clone(),
+            name: self.name,
+            name_span: self.name_span.clone(),
+            escape_char: self.escape_char,
+            name_group_open: self.name_group_open,
+            name_group_close: self.name_group_close,
+            end_command_name: self.end_command_name,
+        }
+    }
+}
+
+impl<LLL: LatexlikeLang> fmt::Debug for EnvironmentInvocation<'_, LLL> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnvironmentInvocation")
+            .field("trigger_span", &self.trigger_span)
+            .field("name", &self.name)
+            .field("name_span", &self.name_span)
+            .field("escape_char", &self.escape_char)
+            .field("name_group_open", &self.name_group_open)
+            .field("name_group_close", &self.name_group_close)
+            .field("end_command_name", &self.end_command_name)
+            .finish()
+    }
 }
 
 /// The behavior of one environment, behind [`EnvironmentSpec`] — the wrapper's inner
@@ -245,7 +275,7 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// implementation wraps its delta in `Ok(...)` and that is the only change.
     fn body_state_delta(
         &self,
-        invocation: EnvironmentInvocation<'_>,
+        invocation: EnvironmentInvocation<'_, LLL>,
     ) -> Result<Option<ParsingStateDelta<LLL>>, ParseError<LLL::SourceOrigin>> {
         let _ = invocation;
         Ok(None)
@@ -260,7 +290,7 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
     /// invocation-syntax recording).
     fn make_body_parser<'p>(
         &'p self,
-        invocation: EnvironmentInvocation<'p>,
+        invocation: EnvironmentInvocation<'p, LLL>,
     ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
         default_body_parser(invocation)
     }
@@ -271,11 +301,11 @@ pub trait EnvironmentBehavior<LLL: LatexlikeLang = Latexlike>:
 /// over the preset's terminator shape, stopping on the invocation's own terminator
 /// command.
 fn default_body_parser<'p, LLL: LatexlikeLang>(
-    invocation: EnvironmentInvocation<'p>,
+    invocation: EnvironmentInvocation<'p, LLL>,
 ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
     Box::new(
         EnvironmentBodyParser::new(
-            invocation.trigger_span,
+            invocation.trigger_span.clone(),
             invocation.name,
             invocation.end_command_name,
             LLL::GroupTypeId::content_group(),
@@ -369,7 +399,7 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for VerbatimBehavior<LLL> {
 
     fn make_body_parser<'p>(
         &'p self,
-        invocation: EnvironmentInvocation<'p>,
+        invocation: EnvironmentInvocation<'p, LLL>,
     ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
         // The terminator's pieces, taken from the invocation's own spellings (the
         // begin trigger's escape char and the begin name group's delimiters): the
@@ -379,7 +409,7 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for VerbatimBehavior<LLL> {
         // bytes and the group class are all that is recorded from it.
         Box::new(
             VerbatimBodyParser::new(
-                invocation.trigger_span,
+                invocation.trigger_span.clone(),
                 invocation.name,
                 VerbatimBodyTerminator::StopEnvironmentCommand {
                     escape_char: invocation.escape_char,
@@ -427,14 +457,14 @@ impl<LLL: LatexlikeLang> EnvironmentBehavior<LLL> for BodyDeltaOverride<LLL> {
     /// `Result`.
     fn body_state_delta(
         &self,
-        _invocation: EnvironmentInvocation<'_>,
+        _invocation: EnvironmentInvocation<'_, LLL>,
     ) -> Result<Option<ParsingStateDelta<LLL>>, ParseError<LLL::SourceOrigin>> {
         Ok(Some(self.delta.clone()))
     }
 
     fn make_body_parser<'p>(
         &'p self,
-        invocation: EnvironmentInvocation<'p>,
+        invocation: EnvironmentInvocation<'p, LLL>,
     ) -> Box<dyn ConstructParser<LLL, Output = EnvironmentBody<LLL>> + 'p> {
         self.inner.make_body_parser(invocation)
     }
@@ -794,16 +824,25 @@ where
         // command-initiated, so a non-command trigger is a documented-contract
         // violation by whatever dispatched this composition — an implementation
         // error, not a source condition.
-        let crate::token::TokenKind::Command { escape_char, post_space, .. } =
-            &trigger.kind
-        else {
+        let crate::token::TokenKind::Command { escape_char, .. } = &trigger.kind else {
             return Err(cx.implementation_error(
                 "the std environment composition requires a Command trigger \
                  (custom trigger shapes need their own composition and Env type)",
                 cx.tokens.source_span_of(trigger),
             ));
         };
-        let (escape_char, post_space) = (*escape_char, *post_space);
+        let escape_char = *escape_char;
+        // The trigger's own spelling facts, as the reader answers them: the command
+        // itself (escape character included) and the syntactic post-space after it.
+        let trigger_span = cx.tokens.source_span_of(trigger);
+        let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);
+        let command =
+            cx.tokens.source_span_between(trigger, TokenEdge::Start, TokenEdge::End);
+        let post_space = cx.tokens.source_span_between(
+            trigger,
+            TokenEdge::End,
+            TokenEdge::EndPastPostSpace,
+        );
 
         // The begin-side scaffolding scan, composition-owned: the rigid name
         // group must be the immediately next token, of the language's content
@@ -815,38 +854,34 @@ where
             // included, the trigger's own post-space excluded (`\begin` out of
             // `\begin [x]`) — since the opening command's name is this spec's
             // registration name, not a fixed spelling.
-            let command = String::from(
-                &cx.source.content()
-                    [Span::new(trigger.span.start(), post_space.start()).range()],
-            );
             cx.recover(
-                MalformedBegin::new(command),
-                SourceSpan::new(&cx.source, trigger.span),
+                MalformedBegin::new(String::from(command.content())),
+                trigger_span.clone(),
             )?;
             // Chars fallback over the trigger alone (markup in a Chars node is the
             // accepted tolerant-recovery artifact); nothing past it is consumed.
-            let id = cx.stage_node(
-                    NodeKind::chars(trigger.span),
-                    SourceSpan::new(&cx.source, trigger.span),
+            let id = cx
+                .stage_node(
+                    NodeKind::chars(trigger_span.span()),
+                    trigger_span.clone(),
                     Arc::clone(&cx.state),
                     vec![],
                 )
-                .map_err(|error| {
-                    cx.implementation_error(error, SourceSpan::new(&cx.source, trigger.span))
-                })?;
+                .map_err(|error| cx.implementation_error(error, trigger_span))?;
             return Ok((id, None));
         };
-        let source = Arc::clone(&cx.source);
-        let name = &source.content()[name_group.name_span.range()];
+        let name = name_group.name.content();
 
         // The begin side's spelling facts (escape char, command word, post-space,
         // matched name group) — recorded, no longer normalized away; handed to the
         // record's constructor at staging time.
+        // The command *word* is the command minus its escape character, which is the
+        // command's first character by construction.
         let begin_syntax = EnvironmentBeginSyntaxData {
             escape_char,
-            command_word: Span::new(
-                trigger.span.start() + escape_char.len_utf8(),
-                post_space.start(),
+            command_word: SourceSpan::new(
+                command.source(),
+                (command.start() + escape_char.len_utf8())..command.end(),
             ),
             post_space,
             name_group: name_group.clone(),
@@ -864,16 +899,11 @@ where
             .state
             .scopes()
             .retrieve_spec(&query, &cx.state)
-            .map_err(|error| {
-                cx.implementation_error(error, SourceSpan::new(&cx.source, name_group.name_span))
-            })?;
+            .map_err(|error| cx.implementation_error(error, name_group.name.clone()))?;
         let spec: Arc<dyn CallableSpec<LLL>> = match resolved {
             Some(spec) => spec,
             None => {
-                cx.recover(
-                    UnknownEnvironment::new(name),
-                    SourceSpan::new(&cx.source, name_group.name_span),
-                )?;
+                cx.recover(UnknownEnvironment::new(name), name_group.name.clone())?;
                 // Tolerant fallback: an argument-less body-only environment, so the
                 // body still parses to its terminator.
                 Arc::new(EnvironmentSpec::<LLL>::new(vec![]))
@@ -883,11 +913,7 @@ where
         // Declared arguments: the shared core loop; the argument frames quote the
         // *environment's* name, not `\begin`.
         let (mut children, arguments) =
-            parse_declared_arguments(
-                cx,
-                &spec,
-                &SourceSpan::new(&cx.source, name_group.name_span),
-            )?;
+            parse_declared_arguments(cx, &spec, &name_group.name)?;
 
         // The environment's behavior, through the funnel downcast. A
         // non-`EnvironmentSpec` registration has no behavior to offer and gets the
@@ -903,9 +929,9 @@ where
         // command name comes from the dispatching spec.
         let name_group_rule = Arc::clone(&name_group.rule);
         let env_invocation = EnvironmentInvocation {
-            trigger_span: trigger.span,
+            trigger_span: trigger_span.clone(),
             name,
-            name_span: name_group.name_span,
+            name_span: name_group.name.clone(),
             escape_char,
             name_group_open: &name_group_rule.open,
             name_group_close: &name_group_rule.close,
@@ -919,7 +945,7 @@ where
         // (body_state_delta's contract), with the live traceback attached here.
         let body_delta = match behavior {
             Some(b) => b
-                .body_state_delta(env_invocation)
+                .body_state_delta(env_invocation.clone())
                 .map_err(|error| cx.attach_hook_frames(error))?,
             None => None,
         };
@@ -940,7 +966,7 @@ where
         if passthrough.is_some() {
             return Err(cx.implementation_error(
                 "the environment body parser must return no pass-through state delta",
-                SourceSpan::new(&cx.source, trigger.span),
+                trigger_span,
             ));
         }
 
@@ -951,7 +977,10 @@ where
         // which consumed its terminator as one token but was given its pieces; a
         // body that closed without a terminator (mismatch, malformed, end of input)
         // leaves the end side empty.
-        let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator);
+        // The node's own extent, needed before the payload: the record converts each
+        // source-qualified fact it was handed into node data against it.
+        let node_span = cx.source_span_within(&trigger_start, &body.end)?;
+        let env_syntax = Env::<LLL>::from_parsed(begin_syntax, body.terminator, &node_span);
 
         let offset = children.len() as u32;
         children.push(body.body);
@@ -980,18 +1009,14 @@ where
             // gap; whitespace after `\end{…}` stays sibling content).
             invocation_syntax: LLL::InvocationSyntax::environment_form(env_syntax),
         };
-        let id = cx.stage_node(
+        let id = cx
+            .stage_node(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, trigger.span.start()..body.end),
+                node_span.clone(),
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| {
-                cx.staging_error(
-                    error,
-                    SourceSpan::new(&cx.source, Span::new(trigger.span.start(), body.end)),
-                )
-            })?;
+            .map_err(|error| cx.staging_error(error, node_span))?;
         Ok((id, None))
     }
 }
@@ -1011,42 +1036,43 @@ impl<LLL: LatexlikeLang> ConstructParser<LLL> for OrphanEndParser<'_, '_, LLL> {
     ) -> ConstructParserResult<LLL, (BuildId, Option<Box<ParsingStateDelta<LLL>>>)>
     {
         let trigger = self.invocation.token;
-        let source = Arc::clone(&cx.source);
+        let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);
         // The command word's end, for the quoted spelling of a terminator whose name
         // group never parsed: a command trigger's own post-space is consumed with it
         // and would read as a trailing blank inside the quotes. Any other trigger
         // shape (this spec is registrable under any syntax) quotes its whole extent.
         let command_end = match &trigger.kind {
-            crate::token::TokenKind::Command { post_space, .. } => post_space.start(),
-            _ => trigger.span.end(),
+            crate::token::TokenKind::Command { .. } => TokenEdge::End,
+            _ => TokenEdge::EndPastPostSpace,
         };
+        let after_trigger = cx.tokens.position_at(trigger, TokenEdge::EndPastPostSpace);
         let (name, end, quoted_end) =
             match read_rigid_name_group(cx, LLL::GroupTypeId::content_group())? {
-            Some(group) => (
-                Some(String::from(&source.content()[group.name_span.range()])),
-                group.end,
-                group.end,
-            ),
-            // Malformed name group: nothing past the trigger was consumed.
-            None => (None, trigger.span.end(), command_end),
-        };
-        let span = Span::new(trigger.span.start(), end);
+                // The preset's stream positions are `Copy` (`StdStreamPosition`).
+                Some(group) => {
+                    (Some(String::from(group.name.content())), group.end, group.end)
+                }
+                // Malformed name group: nothing past the trigger was consumed.
+                None => (
+                    None,
+                    after_trigger,
+                    cx.tokens.position_at(trigger, command_end),
+                ),
+            };
+        let span = cx.source_span_within(&trigger_start, &end)?;
         // The condition quotes the terminator as written — its command name is this
         // spec's registration name, not a fixed spelling.
-        let terminator = String::from(
-            &source.content()[Span::new(trigger.span.start(), quoted_end).range()],
-        );
-        cx.recover(
-            OrphanEnd::new(name, terminator),
-            SourceSpan::new(&cx.source, span),
-        )?;
-        let id = cx.stage_node(
-                NodeKind::chars(span),
-                SourceSpan::new(&cx.source, span),
+        let quoted = cx.source_span_within(&trigger_start, &quoted_end)?;
+        let terminator = String::from(quoted.content());
+        cx.recover(OrphanEnd::new(name, terminator), span.clone())?;
+        let id = cx
+            .stage_node(
+                NodeKind::chars(span.span()),
+                span.clone(),
                 Arc::clone(&cx.state),
                 vec![],
             )
-            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
+            .map_err(|error| cx.staging_error(error, span))?;
         Ok((id, None))
     }
 }
@@ -1690,10 +1716,11 @@ mod tests {
     // --- the spec surface --------------------------------------------------------------
 
     fn probe_invocation() -> EnvironmentInvocation<'static> {
+        let scratch: Arc<crate::source::Source> = Arc::new(crate::source::Source::new(""));
         EnvironmentInvocation {
-            trigger_span: Span::empty(0),
+            trigger_span: SourceSpan::new(&scratch, 0..0),
             name: "probe",
-            name_span: Span::empty(0),
+            name_span: SourceSpan::new(&scratch, 0..0),
             escape_char: '\\',
             name_group_open: "{",
             name_group_close: "}",

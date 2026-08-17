@@ -55,7 +55,7 @@ use crate::state::{
     CommandOverrides, CommentOverrides, FeaturePresence, Lang, LangFeatures,
     ParsingStateDelta, SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::TokenKind;
+use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{
     missing_mandatory, scan_argument_noise, stage_pre_space, staged_child_count,
@@ -194,7 +194,7 @@ where
         let contents_state = cx.derive_state(&self.contents_delta(&outer))?;
 
         stage_pre_space(cx, &mut noise.nodes, &open)?;
-        cx.tokens.move_past(&open, true);
+        cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
         let child_states = if self.restricted_descent {
             ChildStateSpec::inherit()
         } else {

@@ -60,10 +60,9 @@ use core::fmt;
 use crate::engine::ParseDriver;
 use crate::error::DiagnosticInfo;
 use crate::node::{ArgumentExt, ContentNodes};
-use crate::source::SourceSpan;
 use crate::spec::{ArgumentParser, ArgumentSpec, CallableSpec, ParsedArgumentNodes};
 use crate::state::Lang;
-use crate::token::TokenKind;
+use crate::token::{TokenEdge, TokenKind};
 
 use super::argument_parsers::{scan_argument_noise, stage_pre_space};
 use super::{ConstructParserResult, FromInvocation, Invocation, invocation_frame, ParseContext};
@@ -201,9 +200,10 @@ where
             // consuming anything; tolerant records the condition and keeps parsing —
             // the repeated field stays in the region (module docs).
             if seen[index] && !field.repeatable {
+                let span = cx.tokens.source_span_of(&token);
                 cx.recover(
                     RepeatedTackOnField::new(String::from(*name), *escape_char),
-                    SourceSpan::new(&cx.source, token.span),
+                    span,
                 )?;
             }
             seen[index] = true;
@@ -222,7 +222,7 @@ where
                 token: &token,
             };
             let frame = invocation_frame(cx, &invocation);
-            cx.tokens.move_past(&token, true);
+            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
             // A factory Err aborts under any policy ("could not build the
             // parser"), with the live traceback attached here.
             let driver = cx.driver;

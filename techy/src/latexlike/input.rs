@@ -61,7 +61,7 @@ use crate::node::{
 };
 use crate::engine::ParseDriver;
 use crate::scopes::SpecProvenance;
-use crate::source::Span;
+use crate::source::SourceSpan;
 use crate::spec::{ArgumentSpec, CallableSpec, FrameRole};
 use crate::token::TokenEdge;
 use crate::state::ParsingStateDelta;
@@ -326,7 +326,7 @@ where
         let reference: Option<String> = arguments
             .first()
             .and_then(|argument| argument_text_span(cx, argument, &children))
-            .map(|span| cx.source.content()[span.range()].to_string());
+            .map(|span| span.content().to_string());
 
         // 3. Resolve + attach through the single raising site, driving the root
         //    nodes-parse shape under the state at the `\input` point.
@@ -393,24 +393,28 @@ where
     }
 }
 
-/// The byte extent, in the context's source, of a staged argument's **content**
-/// (its designated content nodes): a delimited group argument's interior, a bare
-/// expression's own span; an empty group interior anchors after the open
-/// delimiter. `None` for an absent argument (or content in no staged node).
+/// The extent of a staged argument's **content** (its designated content nodes): a
+/// delimited group argument's interior, a bare expression's own span; an empty group
+/// interior anchors after the open delimiter. `None` for an absent argument, for
+/// content in no staged node, and for content whose nodes lie in more than one source
+/// (there is no single extent to report then).
 fn argument_text_span<LLL: LatexlikeLang>(
     cx: &ParseContext<'_, '_, LLL>,
     argument: &ParsedArgument<LLL>,
     children: &[BuildId],
-) -> Option<Span> {
+) -> Option<SourceSpan<LLL::SourceOrigin>> {
     let region = argument.region.as_ref()?;
     // At parse time the region is staged by construction (`finish` has not run).
     let (offsets, content) = region.staged()?;
     let region_nodes = children.get(offsets.start as usize..offsets.end as usize)?;
     let staged = cx.staged_nodes();
-    let span_of = |ids: &[BuildId]| -> Option<Span> {
-        let first = staged.get(*ids.first()?)?.span().start();
-        let last = staged.get(*ids.last()?)?.span().end();
-        Some(Span::new(first, last))
+    let span_of = |ids: &[BuildId]| -> Option<SourceSpan<LLL::SourceOrigin>> {
+        let first = staged.get(*ids.first()?)?.span().clone();
+        let last = staged.get(*ids.last()?)?.span();
+        if !first.same_source(last) || last.end() < first.start() {
+            return None;
+        }
+        Some(SourceSpan::new(first.source(), first.start()..last.end()))
     };
     match content {
         ContentNodes::InRegion(range) => {
@@ -426,7 +430,8 @@ fn argument_text_span<LLL: LatexlikeLang>(
             // Empty content (`\input{}`): anchor after the open delimiter.
             if let NodeKind::Group(group) = view.kind() {
                 let open_len = group.open.resolve(view.span().source()).len();
-                return Some(Span::empty(view.span().start() + open_len));
+                let at = view.span().start() + open_len;
+                return Some(SourceSpan::new(view.span().source(), at..at));
             }
             None
         }

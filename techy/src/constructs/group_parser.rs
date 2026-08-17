@@ -53,7 +53,7 @@ use crate::token::{GroupRule, Token, TokenEdge};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
-use super::{ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
+use super::{node_text_content, ConstructParser, ConstructParserResult, FromInvocation, ParseContext};
 
 /// Condition: a delimited group was never closed with its expected delimiter — detected
 /// by [`GroupParser`], which defines the condition next to its detection site.
@@ -224,17 +224,11 @@ where
 
         let span = cx
             .source_span_within(&cx.tokens.position_at(&self.open, TokenEdge::Start), &end)?;
-        // The recorded delimiters are node-relative spans of the node's own source;
-        // a delimiter from another source is recorded as owned text instead.
-        let open = match open_span.same_source(&span) {
-            true => TextContent::Spanned(open_span.span()),
-            false => TextContent::Owned(open_span.content().into()),
-        };
-        let close = match close_span {
-            Some(close_span) if close_span.same_source(&span) => {
-                TextContent::Spanned(close_span.span())
-            }
-            Some(close_span) => TextContent::Owned(close_span.content().into()),
+        // The recorded delimiters are node data: a node-relative span of the node's
+        // own source, or the delimiter's text when it comes from another source.
+        let open = node_text_content(&open_span, &span);
+        let close = match &close_span {
+            Some(close_span) => node_text_content(close_span, &span),
             None => TextContent::empty(),
         };
         let data = GroupData { group_type: Some(self.rule.group_type), open, close };

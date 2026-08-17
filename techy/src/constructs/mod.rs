@@ -87,7 +87,7 @@ use core::fmt;
 
 use crate::engine::{Frame, FrameTitle, ParseDriver, ParserSession, SessionDeriveError};
 use crate::error::{Diagnostic, DiagnosticData, DiagnosticInfo, HookFailed, ParseError, Severity};
-use crate::source::{Source, SourceSpan};
+use crate::source::{Source, SourceSpan, TextContent};
 use crate::spec::{CallableSpec, FrameRole};
 use crate::node::{
     BuildId, CallableData, NodeBuildError, NodeKind, ParsedArguments, ParsedSlots,
@@ -112,6 +112,24 @@ pub(crate) fn invocation_frame<L: Lang>(
             name: cx.tokens.source_span_between(token, TokenEdge::Start, TokenEdge::End),
         },
         span: cx.tokens.source_span_of(token),
+    }
+}
+
+/// Record a spelling fact the reader answered as node data on a node spanning
+/// `node_span`: a node-relative [`Span`](crate::source::Span) when the fact lies in
+/// the node's own source, the fact's text itself otherwise.
+///
+/// The one spelling of the node-data rule: a bare span means nothing without the
+/// source it indexes, so a fact from another source (only reachable under a reader
+/// that serves one parse from several sources) is recorded as owned text instead of
+/// as a span that would read against the wrong content.
+pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
+    fact: &SourceSpan<O>,
+    node_span: &SourceSpan<O>,
+) -> TextContent {
+    match fact.same_source(node_span) {
+        true => TextContent::Spanned(fact.span()),
+        false => TextContent::Owned(fact.content().into()),
     }
 }
 

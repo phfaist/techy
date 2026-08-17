@@ -48,21 +48,21 @@ use core::fmt;
 use crate::error::DiagnosticInfo;
 use crate::node::{ArgumentExt, ContentNodes, GroupData, NodeKind};
 use crate::engine::{Frame, FrameTitle};
-use crate::source::{SourceSpan, Span, TextContent};
+use crate::source::{SourceSpan, TextContent};
 use crate::spec::{ArgumentParser, ArgumentSpec, ParsedArgumentNodes};
 use crate::state::{
     CommandOverrides, CommentOverrides, FeaturePresence, GroupOverrides, Lang,
     LangFeatures, LangHasGroups, ParagraphOverrides, ParsingState, ParsingStateDelta,
     SpecialsOverrides, TokenRulesOverrides,
 };
-use crate::token::{GroupRule, Token, TokenKind};
+use crate::token::{GroupRule, Token, TokenEdge, TokenKind};
 
 use super::argument_parsers::stage_pre_space;
 use super::environment_parser::{
     EnvironmentBody, EnvironmentTerminatorSyntaxData, MissingEnvironmentTerminator,
     MissingTerminatorFound, NameGroup,
 };
-use super::{ConstructParser, ConstructParserResult, ParseContext};
+use super::{node_text_content, ConstructParser, ConstructParserResult, ParseContext};
 
 /// Condition: the input (or a tolerated unreadable token) ended inside a delimited
 /// verbatim region before its closing delimiter appeared. Tolerant recovery keeps the
@@ -138,12 +138,15 @@ pub fn verbatim_state_delta<L: LangHasGroups>(
 
 /// The result of the shared raw-content loop: where the content ended and whether the
 /// terminator was actually consumed (with its span).
-struct RawContentEnd {
+struct RawContentEnd<L: Lang> {
     /// End of the raw content (= the terminator's start when one was found).
-    content_end: usize,
+    content_end: L::StreamPosition,
     /// The consumed terminator's span, or `None` when the region ended without one
     /// (end of input, or a tolerated unreadable token).
-    terminator: Option<Span>,
+    terminator: Option<SourceSpan<L::SourceOrigin>>,
+    /// Just past the consumed terminator — equal to `content_end` when the region
+    /// ended without one.
+    end: L::StreamPosition,
 }
 
 /// Read raw content under `state` (a [`verbatim_state_delta`]-derived state) until the
@@ -157,7 +160,7 @@ fn read_raw_content<L: Lang>(
     state: &Arc<ParsingState<L>>,
     mut consume_close_as_content: impl FnMut(&Token<'_, L>) -> bool,
     mut on_char: impl FnMut(char),
-) -> ConstructParserResult<L, RawContentEnd> {
+) -> ConstructParserResult<L, RawContentEnd<L>> {
     loop {
         let Some(token) = cx.probe_token(state)? else {
             // A tolerated unreadable token: the standard reader has nothing left to
@@ -166,27 +169,35 @@ fn read_raw_content<L: Lang>(
             // region ends here; the enclosing content loop re-reads the error and
             // applies its own token recovery (the probe protocol,
             // DESIGN_RATIONALE.md [§dd-dr:errors]).
-            return Ok(RawContentEnd { content_end: cx.tokens.pos(), terminator: None });
+            let here = cx.tokens.position_here();
+            return Ok(RawContentEnd {
+                content_end: here.clone(),
+                terminator: None,
+                end: here,
+            });
         };
         match &token.kind {
             TokenKind::Char(c) => {
                 on_char(*c);
-                cx.tokens.move_past(&token, true);
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
             }
             TokenKind::GroupClose { .. } => {
-                cx.tokens.move_past(&token, true);
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                 if consume_close_as_content(&token) {
                     continue;
                 }
                 return Ok(RawContentEnd {
-                    content_end: token.span.start(),
-                    terminator: Some(token.span),
+                    content_end: cx.tokens.position_at(&token, TokenEdge::Start),
+                    terminator: Some(cx.tokens.source_span_of(&token)),
+                    end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                 });
             }
             TokenKind::EndOfStream => {
+                let end = cx.tokens.position_at(&token, TokenEdge::Start);
                 return Ok(RawContentEnd {
-                    content_end: token.span.start(),
+                    content_end: end.clone(),
                     terminator: None,
+                    end,
                 });
             }
             other => {
@@ -315,12 +326,11 @@ where
         cx: &mut ParseContext<'_, '_, L>,
         _spec: &ArgumentSpec<L>,
     ) -> ConstructParserResult<L, Option<ParsedArgumentNodes<L>>> {
-        let entry = cx.tokens.pos();
-
-        // Read the opening delimiter: one raw char after optional whitespace.
+        // Read the opening delimiter: one raw char after optional whitespace. Each
+        // "argument absent" exit below consumes nothing: the probe never moves the
+        // stream, so the reader is left exactly where this parse started.
         let probe_state = cx.derive_state(&self.delimiter_probe_delta())?;
         let Some(token) = cx.probe_token(&probe_state)? else {
-            cx.tokens.move_to_pos(entry);
             return Ok(None);
         };
         let open = match &token.kind {
@@ -329,22 +339,19 @@ where
             // anything else like end of input (a misbehaving reader is caught by the
             // content loop's implementation-error arm, not the recovery path).
             _ => {
+                let span = cx.tokens.source_span_of(&token);
                 cx.recover(
                     ExpectedVerbatimDelimiter::new(self.delimiters.map(|(open, _)| open)),
-                    SourceSpan::new(&cx.source, token.span),
+                    span,
                 )?;
-                cx.tokens.move_to_pos(entry);
                 return Ok(None);
             }
         };
         let close = match self.delimiters {
             Some((expected_open, close)) => {
                 if open != expected_open {
-                    cx.recover(
-                        ExpectedVerbatimDelimiter::new(expected_open),
-                        SourceSpan::new(&cx.source, token.span),
-                    )?;
-                    cx.tokens.move_to_pos(entry);
+                    let span = cx.tokens.source_span_of(&token);
+                    cx.recover(ExpectedVerbatimDelimiter::new(expected_open), span)?;
                     return Ok(None);
                 }
                 close
@@ -360,9 +367,10 @@ where
         // Committed: the whitespace becomes region noise, the delimiter is consumed.
         let mut nodes = Vec::new();
         stage_pre_space(cx, &mut nodes, &token)?;
-        cx.tokens.move_past(&token, true);
-        let open_span = token.span;
-        let content_start = cx.tokens.pos();
+        cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+        let open_span = cx.tokens.source_span_of(&token);
+        let open_start = cx.tokens.position_at(&token, TokenEdge::Start);
+        let content_start = cx.tokens.position_here();
 
         // The raw-content read under the recipe state, with the pairing depth counter:
         // nested opens (paired delimiters only) deepen, matched closes surface.
@@ -389,44 +397,45 @@ where
             },
         )?;
         if raw_end.terminator.is_none() {
-            cx.recover(
-                UnterminatedVerbatim::new(String::from(close)),
-                SourceSpan::new(&cx.source, open_span),
-            )?;
+            cx.recover(UnterminatedVerbatim::new(String::from(close)), open_span.clone())?;
         }
 
         // The decided group + chars shape (module docs): the chars node under the
         // verbatim state, the group under the surrounding state.
         let mut children = Vec::new();
-        if raw_end.content_end > content_start {
-            let span = Span::new(content_start, raw_end.content_end);
-            let id = cx.stage_node(
-                    NodeKind::chars(span),
-                    SourceSpan::new(&cx.source, span),
+        let content_span = cx.source_span_within(&content_start, &raw_end.content_end)?;
+        if !content_span.is_empty() {
+            let id = cx
+                .stage_node(
+                    NodeKind::chars(content_span.span()),
+                    content_span.clone(),
                     Arc::clone(&content_state),
                     vec![],
                 )
-                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
+                .map_err(|error| cx.staging_error(error, content_span))?;
             children.push(id);
         }
         let child_count = children.len() as u32;
-        let end = raw_end.terminator.map(|span| span.end()).unwrap_or(raw_end.content_end);
-        let group_span = Span::new(open_span.start(), end);
+        let group_span = cx.source_span_within(&open_start, &raw_end.end)?;
+        // The recorded delimiters are node data: a span only where the reader's answer
+        // lies in the node's own source, the text itself otherwise.
         let data = GroupData {
             group_type: Some(self.group_type),
-            open: TextContent::Spanned(open_span),
+            open: node_text_content(&open_span, &group_span),
             close: raw_end
                 .terminator
-                .map(TextContent::Spanned)
+                .as_ref()
+                .map(|span| node_text_content(span, &group_span))
                 .unwrap_or_else(TextContent::empty),
         };
-        let group = cx.stage_node(
+        let group = cx
+            .stage_node(
                 NodeKind::group(data),
-                SourceSpan::new(&cx.source, group_span),
+                group_span.clone(),
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, group_span)))?;
+            .map_err(|error| cx.staging_error(error, group_span))?;
         nodes.push(group);
         Ok(Some(ParsedArgumentNodes::new(
             nodes,
@@ -521,12 +530,17 @@ impl<L: Lang> VerbatimBodyTerminator<'_, L> {
         }
     }
 
-    /// The spelling facts reported for a consumed terminator occupying `span` —
-    /// the arm matching this terminator's own shape (the type docs). The
-    /// stop-command arm's spans are the pieces [`text`](Self::text) composed the
-    /// matched string from, laid out from `span`'s start in that same order; the
-    /// post-space span is empty, the composed spelling having no gap to record.
-    fn syntax_data(&self, span: Span) -> EnvironmentTerminatorSyntaxData<L> {
+    /// The spelling facts reported for a consumed terminator occupying `span` and
+    /// ending at the stream position `end` — the arm matching this terminator's own
+    /// shape (the type docs). The stop-command arm's spans are the pieces
+    /// [`text`](Self::text) composed the matched string from, laid out from `span`'s
+    /// start in that same order; the post-space span is empty, the composed spelling
+    /// having no gap to record.
+    fn syntax_data(
+        &self,
+        span: SourceSpan<L::SourceOrigin>,
+        end: L::StreamPosition,
+    ) -> EnvironmentTerminatorSyntaxData<L> {
         match self {
             VerbatimBodyTerminator::Literal { .. } => {
                 EnvironmentTerminatorSyntaxData::Literal { span }
@@ -537,17 +551,22 @@ impl<L: Lang> VerbatimBodyTerminator<'_, L> {
                 stop_command_name,
                 name_group_rule,
             } => {
+                // The matched string is the composed one byte for byte, so each
+                // piece's extent follows from its length, in the source the whole
+                // match was found in.
+                let piece = |start: usize, len: usize| {
+                    SourceSpan::new(span.source(), start..start + len)
+                };
                 let command_word_start = span.start() + escape_char.len_utf8();
                 let command_word_end = command_word_start + stop_command_name.len();
                 let name_start = command_word_end + name_group_rule.open.len();
-                let name_end = name_start + invocation_name.len();
                 EnvironmentTerminatorSyntaxData::Scanned {
                     escape_char: *escape_char,
-                    command_word: Span::new(command_word_start, command_word_end),
-                    post_space: Span::empty(command_word_end),
+                    command_word: piece(command_word_start, stop_command_name.len()),
+                    post_space: piece(command_word_end, 0),
                     name_group: NameGroup {
-                        name_span: Span::new(name_start, name_end),
-                        end: span.end(),
+                        name: piece(name_start, invocation_name.len()),
+                        end,
                         rule: Arc::clone(name_group_rule),
                     },
                 }
@@ -609,7 +628,7 @@ impl<L: Lang> fmt::Debug for VerbatimBodyTerminator<'_, L> {
 pub struct VerbatimBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{verbatim}`'s command token), anchoring
     /// the missing-terminator diagnostic.
-    trigger_span: Span,
+    trigger_span: SourceSpan<L::SourceOrigin>,
     /// The invocation name diagnostics call the environment.
     invocation_name: &'p str,
     /// The terminator specification.
@@ -621,7 +640,7 @@ pub struct VerbatimBodyParser<'p, L: Lang> {
     gobble_leading_newline: bool,
     /// The span of the invocation name as written, for the body's traceback frame
     /// (mirrors [`EnvironmentBodyParser`](super::EnvironmentBodyParser)).
-    invocation_name_span: Option<Span>,
+    invocation_name_span: Option<SourceSpan<L::SourceOrigin>>,
 }
 
 impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
@@ -630,7 +649,7 @@ impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
     /// ([`VerbatimBodyTerminator`]), minting its expected-close rule under
     /// `group_type`.
     pub fn new(
-        trigger_span: Span,
+        trigger_span: SourceSpan<L::SourceOrigin>,
         invocation_name: &'p str,
         terminator: VerbatimBodyTerminator<'p, L>,
         group_type: L::GroupTypeId,
@@ -655,7 +674,7 @@ impl<'p, L: LangHasGroups> VerbatimBodyParser<'p, L> {
 
     /// Provide the span of the invocation name as written, so the body's traceback
     /// frame can quote it (`environment ‘verbatim’`).
-    pub fn with_invocation_name_span(mut self, name_span: Span) -> Self {
+    pub fn with_invocation_name_span(mut self, name_span: SourceSpan<L::SourceOrigin>) -> Self {
         self.invocation_name_span = Some(name_span);
         self
     }
@@ -669,14 +688,13 @@ impl<L: LangHasGroups> ConstructParser<L> for VerbatimBodyParser<'_, L> {
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
         // The same environment-body traceback frame as the tokenized parser.
-        let title = match self.invocation_name_span {
-            Some(name_span) => FrameTitle::Quoted {
-                label: "environment",
-                name: SourceSpan::new(&cx.source, name_span),
-            },
+        let title = match &self.invocation_name_span {
+            Some(name_span) => {
+                FrameTitle::Quoted { label: "environment", name: name_span.clone() }
+            }
             None => FrameTitle::Static("environment body"),
         };
-        let frame = Frame { title, span: SourceSpan::new(&cx.source, self.trigger_span) };
+        let frame = Frame { title, span: self.trigger_span.clone() };
         cx.with_frame(frame, |cx| self.parse_body(cx))
     }
 }
@@ -690,7 +708,7 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
-        let body_start = cx.tokens.pos();
+        let body_start = cx.tokens.position_here();
         // Whatever shape the terminator was given in, the body reads up to one raw
         // string ([`VerbatimBodyTerminator::text`]).
         let close_rule = Arc::new(GroupRule {
@@ -709,23 +727,23 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
         if self.gobble_leading_newline {
             if let Some(token) = cx.probe_token(&verbatim_state)? {
                 if matches!(token.kind, TokenKind::Char('\n')) {
-                    cx.tokens.move_past(&token, true);
-                    let id = cx.stage_node(
-                            NodeKind::chars(token.span),
-                            SourceSpan::new(&cx.source, token.span),
+                    cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
+                    let span = cx.tokens.source_span_of(&token);
+                    let id = cx
+                        .stage_node(
+                            NodeKind::chars(span.span()),
+                            span.clone(),
                             Arc::clone(&verbatim_state),
                             vec![],
                         )
-                        .map_err(|error| {
-                            cx.staging_error(error, SourceSpan::new(&cx.source, token.span))
-                        })?;
+                        .map_err(|error| cx.staging_error(error, span))?;
                     children.push(id);
                     content_designation_start = 1;
                 }
             }
         }
 
-        let content_start = cx.tokens.pos();
+        let content_start = cx.tokens.position_here();
         let raw_end = read_raw_content(cx, &verbatim_state, |_| false, |_| ())?;
         if raw_end.terminator.is_none() {
             cx.recover(
@@ -733,43 +751,47 @@ impl<L: LangHasGroups> VerbatimBodyParser<'_, L> {
                     self.invocation_name,
                     MissingTerminatorFound::EndOfInput,
                 ),
-                SourceSpan::new(&cx.source, self.trigger_span),
+                self.trigger_span.clone(),
             )?;
         }
 
-        if raw_end.content_end > content_start {
-            let span = Span::new(content_start, raw_end.content_end);
-            let id = cx.stage_node(
-                    NodeKind::chars(span),
-                    SourceSpan::new(&cx.source, span),
+        let content_span = cx.source_span_within(&content_start, &raw_end.content_end)?;
+        if !content_span.is_empty() {
+            let id = cx
+                .stage_node(
+                    NodeKind::chars(content_span.span()),
+                    content_span.clone(),
                     Arc::clone(&verbatim_state),
                     vec![],
                 )
-                .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, span)))?;
+                .map_err(|error| cx.staging_error(error, content_span))?;
             children.push(id);
         }
 
         let child_count = children.len() as u32;
-        let body_span = Span::new(body_start, raw_end.content_end);
-        let body = cx.stage_node(
+        let body_span = cx.source_span_within(&body_start, &raw_end.content_end)?;
+        let body = cx
+            .stage_node(
                 NodeKind::list(),
-                SourceSpan::new(&cx.source, body_span),
+                body_span.clone(),
                 Arc::clone(&cx.state),
                 children,
             )
-            .map_err(|error| cx.staging_error(error, SourceSpan::new(&cx.source, body_span)))?;
-        let end = raw_end.terminator.map(|span| span.end()).unwrap_or(raw_end.content_end);
+            .map_err(|error| cx.staging_error(error, body_span))?;
+        let end = raw_end.end.clone();
         Ok((
             EnvironmentBody {
                 body,
-                end,
+                end: end.clone(),
                 content: ContentNodes::InChildrenOf(body, content_designation_start..child_count),
                 // The facts of the matched terminator, in the arm matching the shape
                 // it was given in: a bare span for a literal, the standard
                 // command-plus-name-group spelling for a stop command (no tokenized
                 // scan exists either way — the pieces are the ones the terminator
                 // string was composed from).
-                terminator: raw_end.terminator.map(|span| self.terminator.syntax_data(span)),
+                terminator: raw_end
+                    .terminator
+                    .map(|span| self.terminator.syntax_data(span, end.clone())),
             },
             None,
         ))
@@ -791,6 +813,8 @@ impl<L: Lang> fmt::Debug for VerbatimBodyParser<'_, L> {
 
 #[cfg(test)]
 mod tests {
+    use crate::source::Span;
+
     use super::super::{ChildStateSpec, NodesParser, StopCause, StopSpec};
     use super::*;
     use crate::engine::{
@@ -1275,7 +1299,10 @@ mod tests {
 
     struct BodyRun {
         result: ParseResult<VerbLang>,
-        end: usize,
+        /// Where the environment ends, as the body parser reported it.
+        end: crate::token::StdStreamPosition,
+        /// The same place as a byte offset, for the numeric assertions.
+        end_offset: usize,
         content: ContentNodes,
         body_id: BuildId,
         terminator: Option<EnvironmentTerminatorSyntaxData<VerbLang>>,
@@ -1328,10 +1355,16 @@ mod tests {
             &driver,
         );
         let mut parser =
-            VerbatimBodyParser::new(Span::empty(0), "verbatim", terminator, GT_VERB)
-                .with_gobble_leading_newline(gobble);
+            VerbatimBodyParser::new(
+                SourceSpan::new(&source, 0..0),
+                "verbatim",
+                terminator,
+                GT_VERB,
+            )
+            .with_gobble_leading_newline(gobble);
         let (body, delta) = parser.parse(&mut cx)?;
         assert!(delta.is_none());
+        let end_offset = cx.tokens.source_position_at(&body.end).pos();
         let span = {
             let staged = session.builder.staged_nodes();
             staged.get(body.body).unwrap().span().range()
@@ -1350,6 +1383,7 @@ mod tests {
         Ok(BodyRun {
             result,
             end: body.end,
+            end_offset,
             content: body.content,
             body_id: body.body,
             terminator: body.terminator,
@@ -1375,7 +1409,7 @@ mod tests {
         // The designation excludes the gobbled newline; `end` lies past the
         // terminator (the trailing "\n" stays enclosing content).
         assert_eq!(run.content, ContentNodes::InChildrenOf(run.body_id, 1..2));
-        assert_eq!(run.end, evpos + "\\end{verbatim}".len());
+        assert_eq!(run.end_offset, evpos + "\\end{verbatim}".len());
     }
 
     #[test]
@@ -1387,7 +1421,7 @@ mod tests {
         assert!(run.result.diagnostics.is_empty());
         let list = run.result.tree.root().child(0).unwrap();
         assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..evpos]));
-        assert_eq!(run.end, text.len());
+        assert_eq!(run.end_offset, text.len());
     }
 
     #[test]
@@ -1420,7 +1454,7 @@ mod tests {
         assert_eq!(run.result.diagnostics.len(), 1);
         let list = run.result.tree.root().child(0).unwrap();
         assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..]));
-        assert_eq!(run.end, text.len());
+        assert_eq!(run.end_offset, text.len());
         // Nothing was consumed, so no terminator facts are reported.
         assert!(run.terminator.is_none());
     }
@@ -1451,7 +1485,7 @@ mod tests {
         assert!(run.result.diagnostics.is_empty());
         let list = run.result.tree.root().child(0).unwrap();
         assert_eq!(list.child(1).unwrap().chars(), Some(&text[1..evpos]));
-        assert_eq!(run.end, evpos + "\\end{verbatim}".len());
+        assert_eq!(run.end_offset, evpos + "\\end{verbatim}".len());
     }
 
     #[test]
@@ -1474,8 +1508,8 @@ mod tests {
                 assert_eq!(escape_char, '\\');
                 assert_eq!(&text[command_word.range()], "end");
                 assert_eq!(post_space.range(), command_word.end()..command_word.end());
-                assert_eq!(&text[name_group.name_span.range()], "verbatim");
-                assert_eq!(name_group.end, text.len());
+                assert_eq!(name_group.name.content(), "verbatim");
+                assert_eq!(name_group.end, run.end);
                 assert_eq!(name_group.rule.group_type, GT_BRACE);
                 assert_eq!((&*name_group.rule.open, &*name_group.rule.close), ("{", "}"));
                 // The whole terminator is exactly the span the pieces tile.

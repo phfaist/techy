@@ -6,9 +6,9 @@ use core::fmt;
 use crate::engine::{Frame, FrameTitle};
 use crate::error::{DiagnosticInfo, ToDiagnosticValue};
 use crate::node::{BuildId, ContentNodes, NodeKind};
-use crate::source::{SourceSpan, Span};
+use crate::source::SourceSpan;
 use crate::state::{Lang, ParsingStateDelta};
-use crate::token::{GroupRule, TokenKind};
+use crate::token::{GroupRule, TokenEdge, TokenKind};
 
 use super::child_state::ChildStateSpec;
 use super::nodes_parser::{StopCause, StopSpec, TokenStopKind};
@@ -85,14 +85,15 @@ impl fmt::Display for MissingEnvironmentTerminator {
     }
 }
 
-/// A successfully read rigid name group: the name's byte span (the exact content between
-/// the delimiters, possibly empty), the position just past the close delimiter, and the
-/// group rule the delimiters matched.
+/// A successfully read rigid name group: the name (the exact content between the
+/// delimiters, possibly empty), the stream position just past the close delimiter, and
+/// the group rule the delimiters matched.
 pub struct NameGroup<L: Lang> {
-    /// The name's span between the delimiters.
-    pub name_span: Span,
-    /// The position just past the group's close delimiter.
-    pub end: usize,
+    /// The name between the delimiters — the text is its
+    /// [`content()`](SourceSpan::content).
+    pub name: SourceSpan<L::SourceOrigin>,
+    /// The stream position just past the group's close delimiter.
+    pub end: L::StreamPosition,
     /// The group rule the name group's delimiters matched — the `Arc` cloned from
     /// the matched `GroupOpen` token, so its `open`/`close` strings are the exact
     /// delimiter bytes as written (a name group never exists in delimiter-diverged
@@ -107,14 +108,18 @@ pub struct NameGroup<L: Lang> {
 
 impl<L: Lang> Clone for NameGroup<L> {
     fn clone(&self) -> Self {
-        NameGroup { name_span: self.name_span, end: self.end, rule: Arc::clone(&self.rule) }
+        NameGroup {
+            name: self.name.clone(),
+            end: self.end.clone(),
+            rule: Arc::clone(&self.rule),
+        }
     }
 }
 
 impl<L: Lang> fmt::Debug for NameGroup<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NameGroup")
-            .field("name_span", &self.name_span)
+            .field("name", &self.name)
             .field("end", &self.end)
             .field("rule", &self.rule)
             .finish()
@@ -130,16 +135,18 @@ impl<L: Lang> fmt::Debug for NameGroup<L> {
 /// record's constructor (the latexlike `EnvironmentSyntax::from_parsed`).
 ///
 /// Mirrors the [`Scanned`](EnvironmentTerminatorSyntaxData::Scanned) arm's
-/// fields: spans into the source being parsed, plus the matched name group.
+/// fields: source-qualified spans, as the reader answered them, plus the matched
+/// name group. A site that records one of these spans as node data converts it
+/// first (a span that is not in the node's own source is recorded as text).
 pub struct EnvironmentBeginSyntaxData<L: Lang> {
     /// The begin command's escape character as written.
     pub escape_char: char,
-    /// The command word's span (the name, without the escape character).
-    pub command_word: Span,
-    /// The command token's own syntactic post-space span (`\begin {name}`'s
+    /// The command word (the name, without the escape character).
+    pub command_word: SourceSpan<L::SourceOrigin>,
+    /// The command token's own syntactic post-space (`\begin {name}`'s
     /// tolerated inline whitespace).
-    pub post_space: Span,
-    /// The matched rigid name group (span, end, and the matched rule).
+    pub post_space: SourceSpan<L::SourceOrigin>,
+    /// The matched rigid name group (name, end, and the matched rule).
     pub name_group: NameGroup<L>,
 }
 
@@ -149,8 +156,8 @@ impl<L: Lang> Clone for EnvironmentBeginSyntaxData<L> {
     fn clone(&self) -> Self {
         EnvironmentBeginSyntaxData {
             escape_char: self.escape_char,
-            command_word: self.command_word,
-            post_space: self.post_space,
+            command_word: self.command_word.clone(),
+            post_space: self.post_space.clone(),
             name_group: self.name_group.clone(),
         }
     }
@@ -177,17 +184,18 @@ impl<L: Lang> fmt::Debug for EnvironmentBeginSyntaxData<L> {
 #[non_exhaustive]
 pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
     /// The tokenized flow consumed a well-formed terminator — the stop command
-    /// followed by its rigid name group — and reports its full spelling facts
-    /// (spans into the body's source).
+    /// followed by its rigid name group — and reports its full spelling facts, as
+    /// source-qualified spans (a site that records one of them as node data converts
+    /// it first).
     Scanned {
         /// The terminator command's escape character as written.
         escape_char: char,
-        /// The command word's span (the name, without the escape character).
-        command_word: Span,
-        /// The command token's own syntactic post-space span (`\end {name}`'s
+        /// The command word (the name, without the escape character).
+        command_word: SourceSpan<L::SourceOrigin>,
+        /// The command token's own syntactic post-space (`\end {name}`'s
         /// tolerated inline whitespace).
-        post_space: Span,
-        /// The matched rigid name group (span, end, and the matched rule).
+        post_space: SourceSpan<L::SourceOrigin>,
+        /// The matched rigid name group (name, end, and the matched rule).
         name_group: NameGroup<L>,
     },
     /// A body consumed its terminator as one **literal** string it was given no
@@ -198,7 +206,7 @@ pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
     /// too consumed the terminator as a single token.
     Literal {
         /// The consumed literal terminator's span.
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
     },
 }
 
@@ -214,12 +222,12 @@ impl<L: Lang> Clone for EnvironmentTerminatorSyntaxData<L> {
                 name_group,
             } => EnvironmentTerminatorSyntaxData::Scanned {
                 escape_char: *escape_char,
-                command_word: *command_word,
-                post_space: *post_space,
+                command_word: command_word.clone(),
+                post_space: post_space.clone(),
                 name_group: name_group.clone(),
             },
             EnvironmentTerminatorSyntaxData::Literal { span } => {
-                EnvironmentTerminatorSyntaxData::Literal { span: *span }
+                EnvironmentTerminatorSyntaxData::Literal { span: span.clone() }
             }
         }
     }
@@ -268,7 +276,6 @@ pub fn read_rigid_name_group<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     name_group_type: L::GroupTypeId,
 ) -> ConstructParserResult<L, Option<NameGroup<L>>> {
-    let entry = cx.tokens.pos();
     let Some(open) = cx.probe_token(&Arc::clone(&cx.state))? else {
         return Ok(None);
     };
@@ -280,7 +287,7 @@ pub fn read_rigid_name_group<L: Lang>(
         }
         _ => return Ok(None),
     };
-    cx.tokens.move_past(&open, true);
+    cx.tokens.move_to_edge(&open, TokenEdge::EndPastPostSpace);
 
     // The interior tokens are read under base + expecting_group_close (the memoized
     // derivation the group parser uses — the driver's descent delta included), so the
@@ -291,7 +298,10 @@ pub fn read_rigid_name_group<L: Lang>(
     match result? {
         Some(name_group) => Ok(Some(name_group)),
         None => {
-            cx.tokens.move_to_pos(entry);
+            // Nothing consumed: the reader goes back to the open delimiter, exactly
+            // where this read started (a name group's open delimiter has no
+            // pre-space — the match above requires it).
+            cx.tokens.move_to_edge(&open, TokenEdge::StartBeforePreSpace);
             Ok(None)
         }
     }
@@ -303,8 +313,8 @@ fn read_name_chars<L: Lang>(
     cx: &mut ParseContext<'_, '_, L>,
     rule: &Arc<GroupRule<L>>,
 ) -> ConstructParserResult<L, Option<NameGroup<L>>> {
-    let name_start = cx.tokens.pos();
-    let mut name_end = name_start;
+    let name_start = cx.tokens.position_here();
+    let mut name_end = name_start.clone();
     let state = Arc::clone(&cx.state);
     loop {
         let Some(token) = cx.probe_token(&state)? else {
@@ -315,14 +325,14 @@ fn read_name_chars<L: Lang>(
         }
         match &token.kind {
             TokenKind::Char(_) => {
-                name_end = token.span.end();
-                cx.tokens.move_past(&token, true);
+                name_end = cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace);
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
             }
             TokenKind::GroupClose { delim } if **delim == *rule.close => {
-                cx.tokens.move_past(&token, true);
+                cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace);
                 return Ok(Some(NameGroup {
-                    name_span: Span::new(name_start, name_end),
-                    end: token.span.end(),
+                    name: cx.source_span_within(&name_start, &name_end)?,
+                    end: cx.tokens.position_at(&token, TokenEdge::EndPastPostSpace),
                     rule: Arc::clone(rule),
                 }));
             }
@@ -336,11 +346,12 @@ pub struct EnvironmentBody<L: Lang> {
     /// The staged body `List` node: span = the body's content interior, children = the
     /// body's nodes (an empty body is an empty `List` — a region that exists).
     pub body: BuildId,
-    /// The position just past the environment's extent: past the consumed `\end{name}`
-    /// terminator — or, when the body closed without consuming one (name mismatch,
-    /// unexpected group close, end of input), the body's end. The driving invocation
-    /// parser ends the callable's span here.
-    pub end: usize,
+    /// The stream position just past the environment's extent: past the consumed
+    /// `\end{name}` terminator — or, when the body closed without consuming one (name
+    /// mismatch, unexpected group close, end of input), the body's end. The driving
+    /// invocation parser ends the callable's span here (`cx.source_span_within(&begin,
+    /// &body.end)`).
+    pub end: L::StreamPosition,
     /// The body slot's **content designation**, ready for the driving composition's
     /// [`ParsedSlot`](crate::node::ParsedSlot) record: which of the
     /// body's nodes are the slot's content. The standard parser designates all of the
@@ -364,7 +375,7 @@ impl<L: Lang> Clone for EnvironmentBody<L> {
     fn clone(&self) -> Self {
         EnvironmentBody {
             body: self.body,
-            end: self.end,
+            end: self.end.clone(),
             content: self.content.clone(),
             terminator: self.terminator.clone(),
         }
@@ -452,7 +463,7 @@ impl<L: Lang> fmt::Debug for EnvironmentBody<L> {
 pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// The invocation trigger's span (`\begin{name}`'s command token), anchoring the
     /// missing-terminator diagnostic (the group parser's unclosed-at-open precedent).
-    trigger_span: Span,
+    trigger_span: SourceSpan<L::SourceOrigin>,
     /// The invocation name the terminator must back-reference (`align` for
     /// `\begin{align} … \end{align}`), and the name diagnostics call the environment.
     invocation_name: &'p str,
@@ -467,7 +478,7 @@ pub struct EnvironmentBodyParser<'p, L: Lang> {
     /// Without it the frame falls back to the generic "environment body".
     /// (`invocation_name` itself is a borrowed `&str` and cannot ride in the
     /// allocation-free live frame — a span can.)
-    invocation_name_span: Option<Span>,
+    invocation_name_span: Option<SourceSpan<L::SourceOrigin>>,
 }
 
 impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
@@ -475,7 +486,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     /// span `trigger_span`), terminated by the command `stop_command_name` followed by
     /// its rigid name group of class `name_group_type`.
     pub fn new(
-        trigger_span: Span,
+        trigger_span: SourceSpan<L::SourceOrigin>,
         invocation_name: &'p str,
         stop_command_name: &'p str,
         name_group_type: L::GroupTypeId,
@@ -500,8 +511,8 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
 
     /// Provide the span of the invocation name as written in the source, so the body's
     /// traceback frame can quote it (`environment ‘align’`). Drivers that read the name
-    /// from a name group pass that group's interior span.
-    pub fn with_invocation_name_span(mut self, name_span: Span) -> Self {
+    /// from a name group pass that group's [`name`](NameGroup::name).
+    pub fn with_invocation_name_span(mut self, name_span: SourceSpan<L::SourceOrigin>) -> Self {
         self.invocation_name_span = Some(name_span);
         self
     }
@@ -512,11 +523,14 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
     /// Returns the environment's end position, plus the consumed terminator's
     /// spelling facts on the clean path ([`EnvironmentTerminatorSyntaxData::Scanned`];
     /// `None` on every recovery path — nothing well-formed was consumed).
+    // The return type spells the flow's two answers; an alias would name one method's
+    // tuple, not a concept.
+    #[allow(clippy::type_complexity)]
     fn finish_terminator(
         &self,
         cx: &mut ParseContext<'_, '_, L>,
-        body_end: usize,
-    ) -> ConstructParserResult<L, (usize, Option<EnvironmentTerminatorSyntaxData<L>>)> {
+    ) -> ConstructParserResult<L, (L::StreamPosition, Option<EnvironmentTerminatorSyntaxData<L>>)>
+    {
         // Re-read the stop token (its pre-space is already flushed as body content, so
         // it sits at its own span start). It was cleanly read under this same state
         // moments ago, so a mismatch here can only mean a misbehaving custom reader —
@@ -526,14 +540,12 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             return Err(cx.implementation_error(
                 "the matched environment stop token disappeared on re-peek \
                  (the token reader re-read the same position differently)",
-                SourceSpan::new(&cx.source, Span::empty(body_end)),
+                cx.here(),
             ));
         };
-        let (token_escape_char, token_post_space) = match &end_token.kind {
-            TokenKind::Command { name, escape_char, post_space }
-                if *name == self.stop_command_name =>
-            {
-                (*escape_char, *post_space)
+        let token_escape_char = match &end_token.kind {
+            TokenKind::Command { name, escape_char, .. } if *name == self.stop_command_name => {
+                *escape_char
             }
             _ => {
                 return Err(cx.implementation_error(
@@ -543,39 +555,50 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 ));
             }
         };
+        // The command token's own spelling facts, as the reader answers them: the whole
+        // command (escape character included) and the syntactic post-space that follows
+        // it. The command *word* is the command minus its escape character, which is
+        // the command's first character by construction.
+        let command = cx.tokens.source_span_between(&end_token, TokenEdge::Start, TokenEdge::End);
+        let command_word = SourceSpan::new(
+            command.source(),
+            (command.start() + token_escape_char.len_utf8())..command.end(),
+        );
+        let token_post_space =
+            cx.tokens.source_span_between(&end_token, TokenEdge::End, TokenEdge::EndPastPostSpace);
         // Consume the command whole (syntactic post-space included — `\end {name}`'s
         // tolerated inline whitespace); the name group must be the very next token.
-        cx.tokens.move_past(&end_token, true);
-        let after_command = cx.tokens.pos();
+        cx.tokens.move_to_edge(&end_token, TokenEdge::EndPastPostSpace);
+        let after_command = cx.tokens.position_here();
 
         match read_rigid_name_group(cx, self.name_group_type)? {
             Some(name_group) => {
-                let source = Arc::clone(&cx.source);
-                let name = &source.content()[name_group.name_span.range()];
+                let name = name_group.name.content();
                 if !self.match_invocation_name || name == self.invocation_name {
                     // The consumed terminator's spelling facts, straight off the
                     // command token (kind validated at the re-peek above) and the
                     // matched name group.
+                    let end = name_group.end.clone();
                     let facts = Some(EnvironmentTerminatorSyntaxData::Scanned {
                         escape_char: token_escape_char,
-                        command_word: Span::new(
-                            end_token.span.start() + token_escape_char.len_utf8(),
-                            token_post_space.start(),
-                        ),
+                        command_word,
                         post_space: token_post_space,
-                        name_group: name_group.clone(),
+                        name_group,
                     });
-                    Ok((name_group.end, facts))
+                    Ok((end, facts))
                 } else {
                     // Mismatch: close without consuming — rewind to the terminator
                     // command's start and leave the whole terminator for an enclosing
                     // level.
+                    let terminator_start =
+                        cx.tokens.position_at(&end_token, TokenEdge::Start);
+                    let span = cx.source_span_within(&terminator_start, &name_group.end)?;
                     cx.recover(
                         EnvironmentTerminatorMismatch::new(self.invocation_name, name),
-                        SourceSpan::new(&cx.source, end_token.span.start()..name_group.end),
+                        span,
                     )?;
-                    cx.tokens.move_to(&end_token, false);
-                    Ok((body_end, None))
+                    cx.tokens.move_to_edge(&end_token, TokenEdge::Start);
+                    Ok((terminator_start, None))
                 }
             }
             None => {
@@ -583,7 +606,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 // group read consumed nothing — the reader stands just past the
                 // command) and close. A reader that drifted from that position broke
                 // the read-consume contract — an implementation error, not recoverable.
-                if cx.tokens.pos() != after_command {
+                if cx.tokens.position_here() != after_command {
                     return Err(cx.implementation_error(
                         "the token reader moved during a failed terminator name-group \
                          read (a failed read must consume nothing)",
@@ -592,7 +615,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 }
                 cx.recover(
                     MalformedEnvironmentTerminator::new(self.invocation_name),
-                    SourceSpan::new(&cx.source, end_token.span),
+                    cx.tokens.source_span_of(&end_token),
                 )?;
                 Ok((after_command, None))
             }
@@ -613,15 +636,13 @@ where
         // The environment-body traceback frame ([§dd-dr:errors]), covering the body content *and*
         // the terminator flow — terminator diagnostics name the environment being
         // parsed. Anchored at the invocation trigger.
-        let title = match self.invocation_name_span {
-            Some(name_span) => FrameTitle::Quoted {
-                label: "environment",
-                name: SourceSpan::new(&cx.source, name_span),
-            },
+        let title = match &self.invocation_name_span {
+            Some(name_span) => {
+                FrameTitle::Quoted { label: "environment", name: name_span.clone() }
+            }
             None => FrameTitle::Static("environment body"),
         };
-        let frame =
-            Frame { title, span: SourceSpan::new(&cx.source, self.trigger_span) };
+        let frame = Frame { title, span: self.trigger_span.clone() };
         cx.with_frame(frame, |cx| self.parse_body(cx))
     }
 }
@@ -638,7 +659,7 @@ where
         &mut self,
         cx: &mut ParseContext<'_, '_, L>,
     ) -> ConstructParserResult<L, (EnvironmentBody<L>, Option<Box<ParsingStateDelta<L>>>)> {
-        let body_start = cx.tokens.pos();
+        let body_start = cx.tokens.position_here();
 
         // The content loop, stopping at the terminator command — `consume = false`,
         // deliberately: whether the terminator is consumed hinges on the name group
@@ -665,28 +686,26 @@ where
             ));
         }
 
-        // The body's content interior: the staged nodes tile it exactly (a stop token's
-        // pre-space is already flushed as body content). A last node no one staged (a
-        // child construct parser's implementation bug) falls back to the body's start —
-        // the builder diagnoses the foreign id when the body list is staged below.
-        let body_end = outcome
-            .nodes
-            .last()
-            .and_then(|&last| cx.staged_nodes().get(last))
-            .map(|node| node.span().end())
-            .unwrap_or(body_start);
+        // The body's content interior ends where the reader stands: the content loop
+        // leaves every stop token unconsumed at its own start, with its pre-space
+        // already flushed as body content, so this is exactly the end of the last
+        // staged node (the gap-free tiling contract) and — unlike a node's span end —
+        // it is a stream position, which is what the environment's extent is measured
+        // in.
+        let body_end = cx.tokens.position_here();
+        let body_span = cx.source_span_within(&body_start, &body_end)?;
 
         let (end, terminator) = match outcome.stop {
-            StopCause::TokenCondition { .. } => self.finish_terminator(cx, body_end)?,
+            StopCause::TokenCondition { .. } => self.finish_terminator(cx)?,
             StopCause::EndOfInput => {
                 cx.recover(
                     MissingEnvironmentTerminator::new(
                         self.invocation_name,
                         MissingTerminatorFound::EndOfInput,
                     ),
-                    SourceSpan::new(&cx.source, self.trigger_span),
+                    self.trigger_span.clone(),
                 )?;
-                (body_end, None)
+                (body_end.clone(), None)
             }
             // A group close nobody at this level asked for: close the body without
             // consuming it (decision 8's unwinding — the stray close is left for an
@@ -699,7 +718,7 @@ where
                     ),
                     span,
                 )?;
-                (body_end, None)
+                (body_end.clone(), None)
             }
             StopCause::NodeCondition => {
                 return Err(cx.implementation_error(
@@ -711,15 +730,14 @@ where
         };
 
         let child_count = outcome.nodes.len() as u32;
-        let body = cx.stage_node(
+        let body = cx
+            .stage_node(
                 NodeKind::list(),
-                SourceSpan::new(&cx.source, body_start..body_end),
+                body_span.clone(),
                 Arc::clone(&cx.state),
                 outcome.nodes,
             )
-            .map_err(|error| {
-                cx.staging_error(error, SourceSpan::new(&cx.source, Span::new(body_start, body_end)))
-            })?;
+            .map_err(|error| cx.staging_error(error, body_span))?;
         Ok((
             EnvironmentBody {
                 body,
@@ -747,6 +765,8 @@ impl<L: Lang> fmt::Debug for EnvironmentBodyParser<'_, L> {
 
 #[cfg(test)]
 mod tests {
+    use crate::source::Span;
+
     use super::super::invocation_parser::parse_declared_arguments;
     use super::super::{
         GroupArgumentParser, Invocation, MarkerArgumentParser, NodesParser,
@@ -967,22 +987,19 @@ mod tests {
 
             // Rigid scaffolding: the name group must be the immediately next token.
             let Some(name_group) = read_rigid_name_group(cx, GT_BRACE)? else {
-                cx.recover(
-                    MalformedBegin,
-                    SourceSpan::new(&cx.source, trigger.span),
-                )?;
+                let trigger_span = cx.tokens.source_span_of(trigger);
+                cx.recover(MalformedBegin, trigger_span.clone())?;
                 // Chars fallback over the trigger alone (markup in a Chars node is the
                 // accepted tolerant-recovery artifact); nothing past it is consumed.
                 let id = cx.stage_node(
-                    NodeKind::chars(trigger.span),
-                    SourceSpan::new(&cx.source, trigger.span),
+                    NodeKind::chars(trigger_span.span()),
+                    trigger_span,
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap();
                 return Ok((id, None));
             };
-            let source = Arc::clone(&cx.source);
-            let name = &source.content()[name_group.name_span.range()];
+            let name = name_group.name.content();
 
             // Resolve the environment's spec by name. A provider failure is an
             // operational error, not a source condition — abort via the
@@ -992,18 +1009,13 @@ mod tests {
                 .state
                 .scopes()
                 .retrieve_spec(&query, &cx.state)
-                .map_err(|error| {
-                    cx.implementation_error(
-                        error,
-                        SourceSpan::new(&cx.source, name_group.name_span),
-                    )
-                })?;
+                .map_err(|error| cx.implementation_error(error, name_group.name.clone()))?;
             let spec: Arc<dyn CallableSpec<EnvLang>> = match resolved {
                 Some(spec) => spec,
                 None => {
                     cx.recover(
                         UnknownEnvironment { name: name.into() },
-                        SourceSpan::new(&cx.source, name_group.name_span),
+                        name_group.name.clone(),
                     )?;
                     // Tolerant fallback: an argument-less body-only environment,
                     // so the body still parses to its terminator.
@@ -1014,11 +1026,7 @@ mod tests {
             // Arguments: the 6.5 machinery, shared with StdInvocationParser. The
             // argument frames quote the *environment's* name, not `\begin`'s.
             let (mut children, arguments) =
-                parse_declared_arguments(
-                    cx,
-                    &spec,
-                    &SourceSpan::new(&cx.source, name_group.name_span),
-                )?;
+                parse_declared_arguments(cx, &spec, &name_group.name)?;
 
             // The body: parsed under the slot's state (the body delta stacked on the
             // invocation's base, session-mediated; structural revert) up to and
@@ -1034,9 +1042,11 @@ mod tests {
                 Some(delta) => cx.derive_state(delta)?,
                 None => Arc::clone(&cx.state),
             };
+            let trigger_span = cx.tokens.source_span_of(trigger);
+            let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);
             let mut body_parser =
-                EnvironmentBodyParser::new(trigger.span, name, "end", GT_BRACE)
-                    .with_invocation_name_span(name_group.name_span);
+                EnvironmentBodyParser::new(trigger_span, name, "end", GT_BRACE)
+                    .with_invocation_name_span(name_group.name.clone());
             let (body, delta) =
                 cx.parse_construct(&mut body_parser, Some(slot_state), None)?;
             debug_assert!(delta.is_none());
@@ -1065,9 +1075,10 @@ mod tests {
                 // normalization, whitespace after `\end{…}` is sibling content.
                 invocation_syntax: (),
             };
+            let node_span = cx.source_span_within(&trigger_start, &body.end)?;
             let id = cx.stage_node(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, trigger.span.start()..body.end),
+                node_span,
                 Arc::clone(&cx.state),
                 children,
             ).unwrap();
@@ -1121,12 +1132,11 @@ mod tests {
         {
             const TERMINATOR: &str = "\\endraw";
             let trigger = self.invocation.token;
-            // The `\verb` idiom — "move_past(trigger, false)" expressed positionally
-            // (the uniform `parse` signature cannot tie the stored trigger token to the
-            // context's reader): reposition so the trigger's post-space bytes stay raw
-            // body content (they are not recorded post-space).
-            cx.tokens.move_to_pos(trigger.post_space().start());
-            let body_start = cx.tokens.pos();
+            // The `\verb` idiom: stand at the end of the trigger proper, so the
+            // trigger's post-space bytes stay raw body content (they are not recorded
+            // post-space).
+            cx.tokens.move_to_edge(trigger, TokenEdge::End);
+            let body_start = cx.tokens.position_here();
 
             // The verbatim state: every feature gate off, and the expected group close
             // *replaced* by the raw terminator. The expected close is ungated by
@@ -1156,30 +1166,37 @@ mod tests {
                 let terminator = loop {
                     let token = cx.tokens.peek(&cx.state).expect("raw body reads as chars");
                     match &token.kind {
-                        TokenKind::Char(_) => cx.tokens.move_past(&token, true),
+                        TokenKind::Char(_) => {
+                            cx.tokens.move_to_edge(&token, TokenEdge::EndPastPostSpace)
+                        }
                         TokenKind::GroupClose { .. } | TokenKind::EndOfStream => break token,
                         other => unreachable!("verbatim state yields only chars, got {}", other),
                     }
                 };
-                cx.tokens.move_past(&terminator, true); // past `\endraw`; no-op at stream end
+                // past `\endraw`; no-op at stream end
+                cx.tokens.move_to_edge(&terminator, TokenEdge::EndPastPostSpace);
                 terminator
             });
+            let terminator_start = cx.tokens.position_at(&terminator, TokenEdge::Start);
             let (body_end, end) = match &terminator.kind {
-                TokenKind::GroupClose { .. } => (terminator.span.start(), terminator.span.end()),
+                TokenKind::GroupClose { .. } => (
+                    terminator_start,
+                    cx.tokens.position_at(&terminator, TokenEdge::EndPastPostSpace),
+                ),
                 _ => {
-                    cx.recover(
-                        MissingRawTerminator,
-                        SourceSpan::new(&cx.source, trigger.span),
-                    )?;
-                    (terminator.span.start(), terminator.span.start())
+                    let trigger_span = cx.tokens.source_span_of(trigger);
+                    cx.recover(MissingRawTerminator, trigger_span)?;
+                    // This suite's stream positions are `Copy`.
+                    (terminator_start, terminator_start)
                 }
             };
 
+            let body_span = cx.source_span_within(&body_start, &body_end)?;
             let mut body_nodes = Vec::new();
-            if body_end > body_start {
+            if !body_span.is_empty() {
                 body_nodes.push(cx.stage_node(
-                    NodeKind::chars(Span::new(body_start, body_end)),
-                    SourceSpan::new(&cx.source, body_start..body_end),
+                    NodeKind::chars(body_span.span()),
+                    body_span.clone(),
                     Arc::clone(&cx.state),
                     vec![],
                 ).unwrap());
@@ -1187,7 +1204,7 @@ mod tests {
             let body_children = body_nodes.len() as u32;
             let list = cx.stage_node(
                 NodeKind::list(),
-                SourceSpan::new(&cx.source, body_start..body_end),
+                body_span,
                 Arc::clone(&cx.state),
                 body_nodes,
             ).unwrap();
@@ -1207,9 +1224,11 @@ mod tests {
                 slots,
                 invocation_syntax: (),
             };
+            let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);
+            let node_span = cx.source_span_within(&trigger_start, &end)?;
             let id = cx.stage_node(
                 NodeKind::callable(data),
-                SourceSpan::new(&cx.source, trigger.span.start()..end),
+                node_span,
                 Arc::clone(&cx.state),
                 vec![list],
             ).unwrap();
@@ -1366,7 +1385,7 @@ mod tests {
         let (outcome, delta) = parser.parse(&mut cx)?;
         assert_eq!(outcome.stop, StopCause::EndOfInput);
         assert!(delta.is_none());
-        let pos = cx.tokens.pos();
+        let pos = cx.here().start();
         let root_span = {
             let staged = session.builder.staged_nodes();
             match (outcome.nodes.first(), outcome.nodes.last()) {
@@ -1973,12 +1992,18 @@ mod tests {
             &mut session,
             &driver,
         );
-        let mut parser = EnvironmentBodyParser::new(Span::empty(0), "A", "end", GT_BRACE)
-            .with_match_invocation_name(false);
+        let mut parser = EnvironmentBodyParser::new(
+            SourceSpan::new(&source, 0..0),
+            "A",
+            "end",
+            GT_BRACE,
+        )
+        .with_match_invocation_name(false);
         let (body, delta) = parser.parse(&mut cx).expect("parse");
         assert!(delta.is_none());
-        assert_eq!(body.end, 15);
-        assert_eq!(cx.tokens.pos(), 15);
+        // The environment ends where the reader stands: past the consumed terminator.
+        assert_eq!(body.end, cx.tokens.position_here());
+        assert_eq!(cx.here().start(), 15);
 
         let result = session.finish(body.body).unwrap();
         crate::node::check_tree_invariants(&result.tree);
@@ -2026,7 +2051,7 @@ mod tests {
             &mut self,
             state: &Arc<ParsingState<EnvLang>>,
         ) -> crate::token::TokenResult<'s, EnvLang, Token<'s, EnvLang>> {
-            if self.inner.pos() == self.betray_at {
+            if TokenReader::<EnvLang>::position_here(&self.inner).offset() == self.betray_at {
                 self.peeks_at_betrayal += 1;
                 if self.peeks_at_betrayal >= 2 {
                     let span = Span::new(self.betray_at, self.betray_at + 1);
