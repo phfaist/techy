@@ -286,4 +286,23 @@ fn errors_display() {
     assert!(out_of_range.to_string().contains("argument #4"));
     let unexpected = DeserializeError::UnexpectedArgumentSpecPayload { index: usize::MAX }.to_string();
     assert!(unexpected.contains("does not override deserialize_argument_spec"), "{unexpected}");
+
+    // The node location wrappers render the node (and callable) and expose the cause.
+    let in_node: &dyn core::error::Error = &SerializeError::InNode {
+        node: 3,
+        callable: Some(String::from("frac")),
+        cause: Box::new(SerializeError::unsupported()),
+    };
+    assert_eq!(
+        in_node.to_string(),
+        "while serializing node #3 (callable `frac`) of the tree: serialization is unsupported by this type"
+    );
+    assert!(in_node.source().is_some());
+    let in_node: &dyn core::error::Error = &DeserializeError::InNode {
+        node: 0,
+        callable: None,
+        cause: Box::new(DeserializeError::failed("x")),
+    };
+    assert_eq!(in_node.to_string(), "while rebuilding node #0 of the tree: deserialization failed: x");
+    assert!(in_node.source().is_some());
 }

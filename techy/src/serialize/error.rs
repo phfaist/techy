@@ -37,7 +37,9 @@ impl fmt::Display for OriginLabel<'_> {
 /// driving them ([`SerdeSession::intern`](crate::serialize::SerdeSession::intern),
 /// [`SerializeContext::intern`](crate::serialize::SerializeContext::intern)) can
 /// report. Every variant names what failed; a failure inside a nested call is wrapped
-/// in [`InTable`](SerializeError::InTable) with the table it happened in.
+/// in [`InTable`](SerializeError::InTable) with the table it happened in, and a
+/// failure while serializing one node of a tree in [`InNode`](SerializeError::InNode)
+/// with the node's position.
 ///
 /// Not `PartialEq`: [`Failed`](SerializeError::Failed) carries an arbitrary
 /// underlying error.
@@ -138,10 +140,27 @@ pub enum SerializeError {
     },
     /// The failure happened while serializing an object into table `table`: the
     /// location wrapper the session adds around a driver's failure. Only the innermost
-    /// location is recorded — a `cause` is never itself an `InTable`.
+    /// table location is recorded — a `cause` is never itself an `InTable`. It may be
+    /// an [`InNode`](SerializeError::InNode) whose own cause is the `InTable` of another
+    /// table: the failure of an object a tree node interned (its spec, say).
     InTable {
         /// The table's name.
         table: &'static str,
+        /// The failure.
+        cause: Box<SerializeError>,
+    },
+    /// The failure happened while serializing node `node` of a tree — its payload, its
+    /// argument specs, or an object it interned: the location wrapper the tree driver
+    /// ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds around a per-node
+    /// failure, itself wrapped in the [`InTable`](SerializeError::InTable) of the trees
+    /// table. `node` is the node's position in the tree's storage order (root first);
+    /// `callable` is the invocation name when the node is a callable. Only the
+    /// innermost node is recorded — a `cause` is never itself an `InNode`.
+    InNode {
+        /// The node's position in storage order.
+        node: u32,
+        /// The callable's invocation name, when the node is a callable.
+        callable: Option<String>,
         /// The failure.
         cause: Box<SerializeError>,
     },
@@ -176,11 +195,20 @@ impl SerializeError {
     }
 
     /// Wrap a driver's failure with the table it happened in — unless it already
-    /// carries a location (only the innermost is kept).
+    /// carries a table location (only the innermost is kept).
     pub(crate) fn in_table(self, table: &'static str) -> SerializeError {
         match self {
             located @ SerializeError::InTable { .. } => located,
             cause => SerializeError::InTable { table, cause: Box::new(cause) },
+        }
+    }
+
+    /// Wrap a per-node failure of the tree driver with the node it happened at —
+    /// unless it already carries a node location (only the innermost is kept).
+    pub(crate) fn in_node(self, node: u32, callable: Option<String>) -> SerializeError {
+        match self {
+            located @ SerializeError::InNode { .. } => located,
+            cause => SerializeError::InNode { node, callable, cause: Box::new(cause) },
         }
     }
 }
@@ -242,6 +270,12 @@ impl fmt::Display for SerializeError {
             SerializeError::InTable { table, cause } => {
                 write!(f, "while serializing an object into table `{table}`: {cause}")
             }
+            SerializeError::InNode { node, callable, cause } => match callable {
+                Some(callable) => {
+                    write!(f, "while serializing node #{node} (callable `{callable}`) of the tree: {cause}")
+                }
+                None => write!(f, "while serializing node #{node} of the tree: {cause}"),
+            },
         }
     }
 }
@@ -253,7 +287,7 @@ impl core::error::Error for SerializeError {
                 cause.as_ref().map(|cause| &**cause as &(dyn core::error::Error + 'static))
             }
             SerializeError::Value(error) => Some(error),
-            SerializeError::InTable { cause, .. } => Some(&**cause),
+            SerializeError::InTable { cause, .. } | SerializeError::InNode { cause, .. } => Some(&**cause),
             _ => None,
         }
     }
@@ -271,7 +305,9 @@ impl core::error::Error for SerializeError {
 /// can report. Everything read is untrusted input: a malformed value, an index out of
 /// range, a reference cycle, or an unknown identifier is an error naming the culprit,
 /// never a panic. A failure inside a nested call is wrapped in
-/// [`InEntry`](DeserializeError::InEntry) with the entry it happened in.
+/// [`InEntry`](DeserializeError::InEntry) with the entry it happened in, and a failure
+/// while rebuilding one node of a tree in [`InNode`](DeserializeError::InNode) with
+/// the node's position.
 ///
 /// Not `PartialEq`: [`Failed`](DeserializeError::Failed) carries an arbitrary
 /// underlying error.
@@ -506,8 +542,10 @@ pub enum DeserializeError {
     /// identifier is `identifier` when it is known (a table holding one kind of object
     /// has a fixed identifier; an entry of any other table carries its own, unless the
     /// entry's shape itself was malformed): the location wrapper the session adds
-    /// around a driver's failure. Only the innermost location is recorded — a `cause`
-    /// is never itself an `InEntry`.
+    /// around a driver's failure. Only the innermost entry location is recorded — a
+    /// `cause` is never itself an `InEntry`. It may be an
+    /// [`InNode`](DeserializeError::InNode) whose own cause is the `InEntry` of another
+    /// table: the failure of an object a tree node refers to (its state, say).
     InEntry {
         /// The table's name.
         table: &'static str,
@@ -515,6 +553,22 @@ pub enum DeserializeError {
         index: u32,
         /// The entry's identifier, when known.
         identifier: Option<Cow<'static, str>>,
+        /// The failure.
+        cause: Box<DeserializeError>,
+    },
+    /// The failure happened while rebuilding node `node` of a tree — its structure,
+    /// its payload, or an object it refers to: the location wrapper the tree driver
+    /// ([`TreeSerdeDriver`](crate::serialize::TreeSerdeDriver)) adds around a per-node
+    /// failure, itself wrapped in the [`InEntry`](DeserializeError::InEntry) of the
+    /// tree's entry. `node` is the node's position in the serialized node list (the
+    /// tree's storage order, root first); `callable` is the invocation name when the
+    /// node is a callable. Only the innermost node is recorded — a `cause` is never
+    /// itself an `InNode`.
+    InNode {
+        /// The node's position in the serialized node list.
+        node: u32,
+        /// The callable's invocation name, when the node is a callable.
+        callable: Option<String>,
         /// The failure.
         cause: Box<DeserializeError>,
     },
@@ -542,7 +596,7 @@ impl DeserializeError {
     }
 
     /// Wrap a driver's failure with the entry it happened in — unless it already
-    /// carries a location (only the innermost is kept).
+    /// carries an entry location (only the innermost is kept).
     pub(crate) fn in_entry(
         self,
         table: &'static str,
@@ -552,6 +606,15 @@ impl DeserializeError {
         match self {
             located @ DeserializeError::InEntry { .. } => located,
             cause => DeserializeError::InEntry { table, index, identifier, cause: Box::new(cause) },
+        }
+    }
+
+    /// Wrap a per-node failure of the tree driver with the node it happened at —
+    /// unless it already carries a node location (only the innermost is kept).
+    pub(crate) fn in_node(self, node: u32, callable: Option<String>) -> DeserializeError {
+        match self {
+            located @ DeserializeError::InNode { .. } => located,
+            cause => DeserializeError::InNode { node, callable, cause: Box::new(cause) },
         }
     }
 }
@@ -693,6 +756,12 @@ impl fmt::Display for DeserializeError {
                 ),
                 None => write!(f, "while deserializing entry #{index} of table `{table}`: {cause}"),
             },
+            DeserializeError::InNode { node, callable, cause } => match callable {
+                Some(callable) => {
+                    write!(f, "while rebuilding node #{node} (callable `{callable}`) of the tree: {cause}")
+                }
+                None => write!(f, "while rebuilding node #{node} of the tree: {cause}"),
+            },
         }
     }
 }
@@ -704,7 +773,7 @@ impl core::error::Error for DeserializeError {
                 cause.as_ref().map(|cause| &**cause as &(dyn core::error::Error + 'static))
             }
             DeserializeError::Value(error) => Some(error),
-            DeserializeError::InEntry { cause, .. } => Some(&**cause),
+            DeserializeError::InEntry { cause, .. } | DeserializeError::InNode { cause, .. } => Some(&**cause),
             _ => None,
         }
     }
