@@ -353,7 +353,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
         &mut self,
         state: &Arc<ParsingState<L>>,
     ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
-        self.driver.probe_token(self.tokens, &self.source, self.session, state)
+        self.driver.probe_token(self.tokens, self.session, state)
     }
 
     /// Run `parser` as one **sub-parse** — the single entry point that every descent

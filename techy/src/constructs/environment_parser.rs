@@ -760,14 +760,14 @@ mod tests {
         CallableData, ChildRegion, ContentNodes, NodeRef, ParsedArguments, ParsedSlot,
         ParsedSlots, SlotRole,
     };
-    use crate::source::Source;
+    use crate::source::{Source, SourcePos};
     use crate::spec::{ArgumentSpec, CallableSpec, StdCallableSpec};
     use crate::state::{ParsingState, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdTokenReader,
-        Token, TokenListReader,
-        TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+        ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdStreamPosition,
+        StdTokenReader, Token, TokenEdge, TokenListReader, TokenReader, TokenRules,
+        TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::String;
@@ -1998,6 +1998,18 @@ mod tests {
         mode: Betrayal,
     }
 
+    impl<'s> FlakyReader<'s> {
+        /// Delegation goes through a `dyn` view: the inner reader's `TokenReader` impl is
+        /// generic over the language, which plain method syntax cannot infer here.
+        fn inner(&self) -> &dyn TokenReader<'s, EnvLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, EnvLang> {
+            &mut self.inner
+        }
+    }
+
     impl<'s> TokenReader<'s, EnvLang> for FlakyReader<'s> {
         fn peek(
             &mut self,
@@ -2016,10 +2028,13 @@ mod tests {
                             crate::token::TokenErrorKind::ForbiddenChar(
                                 crate::token::ForbiddenChar::new('\\'),
                             ),
-                            span,
+                            SourceSpan::new(self.inner.source(), span),
                             Some(crate::token::TokenRecovery {
                                 token: Token::new(TokenKind::Char('\\'), span, pre_space),
-                                resume_pos: span.end(),
+                                // In-crate test infrastructure may mint a position
+                                // directly; a third-party reader would take one from
+                                // the reader it delegates to.
+                                resume: StdStreamPosition::at(span.end()),
                             }),
                         )),
                     };
@@ -2028,16 +2043,56 @@ mod tests {
             TokenReader::peek(&mut self.inner, state)
         }
         fn move_past(&mut self, tok: &Token<'s, EnvLang>, skip_post_space: bool) {
-            TokenReader::move_past(&mut self.inner, tok, skip_post_space);
+            self.inner_mut().move_past(tok, skip_post_space);
         }
+
         fn move_to(&mut self, tok: &Token<'s, EnvLang>, rewind_pre_space: bool) {
-            TokenReader::move_to(&mut self.inner, tok, rewind_pre_space);
+            self.inner_mut().move_to(tok, rewind_pre_space);
         }
+
         fn move_to_pos(&mut self, pos: usize) {
-            self.inner.move_to_pos(pos);
+            self.inner_mut().move_to_pos(pos);
         }
+
         fn pos(&self) -> usize {
-            self.inner.pos()
+            self.inner().pos()
+        }
+
+        fn move_to_edge(&mut self, tok: &Token<'s, EnvLang>, edge: TokenEdge) {
+            self.inner_mut().move_to_edge(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &Token<'s, EnvLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &Token<'s, EnvLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
         }
     }
 

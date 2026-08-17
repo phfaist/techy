@@ -97,24 +97,75 @@ impl StdStreamPosition {
 /// [`ParsingState<L>`], not just `&TokenRules`: a custom reader keeps its tables in
 /// `L::StateExt`, which only the state exposes.
 ///
+/// # Positions, edges, and spans
+///
+/// A reader is the only interpreter of its own stream. Two vocabularies serve that:
+///
+/// - A **stream position** ([`Lang::StreamPosition`](crate::state::Lang::StreamPosition))
+///   names a place in the token stream. Only a reader mints one
+///   ([`position_here`](TokenReader::position_here),
+///   [`position_at`](TokenReader::position_at)), and a caller only gives it back
+///   ([`move_to_position`](TokenReader::move_to_position),
+///   [`source_span_within`](TokenReader::source_span_within)). Positions compare for
+///   equality, never for order.
+/// - A **[`TokenEdge`]** names one of a token's four boundaries. Asking for a position
+///   or a span at an edge is how a caller talks about where a token is without reading
+///   anything off the token.
+///
+/// Locations leave a reader in exactly one form: a
+/// [`SourceSpan`]/[`SourcePos`], which carries its own source. That is what lets a
+/// reader serve tokens from more than one source during a parse without its caller
+/// having to know.
+///
 /// # Contract
 ///
-/// - **`peek` is idempotent per (position, state instance):** repeated calls at the same
-///   position with the *same* `ParsingState` instance return the same result. The state
-///   arrives as an `&Arc` precisely so implementations may memoize on that key: clone
-///   the `Arc` into the cache — pointer identity is a sound key *only while a strong
-///   reference pins the allocation* (a dropped state's address can be recycled for a
-///   different state). A *different* state instance — even one derived with an empty
-///   delta — relieves `peek` of any obligation to repeat itself.
-/// - At the end of the stream `peek` returns the terminal, idempotent
-///   [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
-///   carries the final whitespace.
-/// - **Absent features yield no tokens:** a token kind belonging to a feature the
-///   language declares absent ([`Lang::Features`]) must never be produced — no
-///   `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
-///   `Specials`, or `ParagraphBreak` without theirs. The parsing machinery treats
-///   any such token as a violated contract and reports an implementation error
-///   instead of processing it — uniformly across token kinds.
+/// 1. **`peek` is speculative and idempotent per (stream position, state instance):**
+///    repeated calls at the same stream position with the *same* `ParsingState`
+///    instance return an equal token. The state arrives as an `&Arc` precisely so
+///    implementations may memoize on that key: clone the `Arc` into the cache — pointer
+///    identity is a sound key *only while a strong reference pins the allocation* (a
+///    dropped state's address can be recycled for a different state). A *different*
+///    state instance — even one derived with an empty delta — relieves `peek` of any
+///    obligation to repeat itself. [`move_to_edge`](TokenReader::move_to_edge),
+///    [`move_to_position`](TokenReader::move_to_position) and
+///    [`next`](TokenReader::next) commit; `peek` alone never moves the stream.
+/// 2. **A peeked token's [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) edge is
+///    the stream position the peek happened at:** `move_to_edge(&tok,
+///    StartBeforePreSpace)` right after a `peek` does nothing, and later returns the
+///    stream to exactly where that peek happened.
+/// 3. **Tokens and positions stay usable for the whole parse:** every token and every
+///    position a reader hands out remains a valid argument to `move_to_edge`,
+///    `move_to_position`, `position_at`, `source_span_between` and `source_span_within`
+///    until the parse ends — a reader serving several sources must keep them all
+///    addressable.
+/// 4. **Interpretation stays with the issuing reader** (or a reader over the same
+///    content): handing a token or a position to a reader that did not produce it is a
+///    caller-contract violation. [`StdTokenReader`] cannot detect it and answers from
+///    the offsets the token carries.
+/// 5. **Absent features yield no tokens:** a token kind belonging to a feature the
+///    language declares absent ([`Lang::Features`]) must never be produced — no
+///    `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,
+///    `Specials`, or `ParagraphBreak` without theirs. The parsing machinery treats
+///    any such token as a violated contract and reports an implementation error
+///    instead of processing it — uniformly across token kinds.
+/// 6. **Edge order does not matter to `source_span_between`:** the result is the span
+///    between the two edges in reading order, whichever order they are named in. Two
+///    equal edges give the empty span at that edge.
+///
+/// At the end of the stream `peek` returns the terminal, idempotent
+/// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
+/// carries the final whitespace.
+///
+/// # Writing a reader over standard tokens
+///
+/// A reader that produces the same tokens as [`StdTokenReader`] but decides differently
+/// *which* token comes next (re-classifying a character, splicing in content) does not
+/// have to reimplement interpretation: keep an inner `StdTokenReader` over the same
+/// content, produce tokens with it, and delegate the position and span methods to it.
+/// Because the inner reader is generic over the language, delegation goes through a
+/// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it (plain method
+/// syntax on the concrete inner reader cannot infer the language). A fuller example
+/// accompanies the token type itself.
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
     fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
@@ -141,6 +192,67 @@ pub trait TokenReader<'s, L: Lang> {
 
     /// Current byte position.
     fn pos(&self) -> usize;
+
+    // --- navigation by edge and by position ------------------------------------------
+
+    /// Reposition the stream at `edge` of `tok` — forward or backward.
+    ///
+    /// This is the position-based navigation the parse loops use: `move_to_edge(&tok,
+    /// TokenEdge::EndPastPostSpace)` consumes the token, `move_to_edge(&tok,
+    /// TokenEdge::Start)` puts it back to be read again, and
+    /// [`StartBeforePreSpace`](TokenEdge::StartBeforePreSpace) also gives back the
+    /// whitespace before it.
+    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge);
+
+    /// Reposition the stream at a position this reader handed out earlier.
+    ///
+    /// Deliberately bidirectional — it serves rewinds as well as resumes — so
+    /// implementations assert nothing about the direction of the move. When adopting a
+    /// [`TokenRecovery`](super::TokenRecovery), the *caller* enforces the
+    /// [advancement contract](super::TokenRecovery#contract-resume-must-move-the-stream).
+    fn move_to_position(&mut self, at: &L::StreamPosition);
+
+    // --- where a token is -------------------------------------------------------------
+
+    /// The source span delimited by two edges of `tok`, in either argument order (see
+    /// contract clause 6).
+    fn source_span_between(
+        &self,
+        tok: &Token<'s, L>,
+        a: TokenEdge,
+        b: TokenEdge,
+    ) -> SourceSpan<L::SourceOrigin>;
+
+    /// The token's own span: from [`Start`](TokenEdge::Start) to
+    /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — pre-space excluded,
+    /// post-space included.
+    fn source_span_of(&self, tok: &Token<'s, L>) -> SourceSpan<L::SourceOrigin> {
+        self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
+    }
+
+    // --- where the stream is ----------------------------------------------------------
+
+    /// The stream position the reader stands at.
+    fn position_here(&self) -> L::StreamPosition;
+
+    /// The stream position at `edge` of `tok`.
+    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition;
+
+    /// Where a stream position lies in text. An empty-span diagnostic anchor at a
+    /// position is [`SourceSpan::at`] of this.
+    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin>;
+
+    /// The source span running from `begin` to `end`, when the two positions delimit one
+    /// range of one source; `None` otherwise.
+    ///
+    /// `None` means the pair is incoherent — `end` before `begin`, or the two in
+    /// different sources. That is a caller bug (the caller lifts it to an
+    /// implementation error), not a source condition.
+    fn source_span_within(
+        &self,
+        begin: &L::StreamPosition,
+        end: &L::StreamPosition,
+    ) -> Option<SourceSpan<L::SourceOrigin>>;
 
     /// Parse the token at the current position and move past it (including its
     /// post-space): [`peek`](TokenReader::peek) + [`move_past`](TokenReader::move_past).
@@ -245,6 +357,17 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         self.content
     }
 
+    /// The largest offset at or before `offset` that is a valid position in the
+    /// content: within bounds and on a character boundary. Used to anchor the report of
+    /// an invalid position, which by definition is not itself an anchor.
+    fn nearest_valid_offset(&self, offset: usize) -> usize {
+        let mut offset = offset.min(self.content.len());
+        while !self.content.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    }
+
     // `pos`/`move_to_pos` exist both here and on the `TokenReader` trait: the trait
     // impl is generic over `L`, so calling through it on a concrete reader needs `L`
     // pinned by context — these inherent forms serve direct (non-generic) users. The
@@ -291,7 +414,10 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                     start,
                     s.len()
                 )))),
-                Span::empty(start.min(s.len())),
+                // The offending position is by definition not a valid anchor, so the
+                // error is reported at the nearest valid one at or before it (a
+                // `SourceSpan` must be in bounds and on char boundaries).
+                SourceSpan::new(self.source, Span::empty(self.nearest_valid_offset(start))),
                 None,
             ));
         }
@@ -336,8 +462,9 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             // byte range, and knows nothing about this reader's tokens or positions, so
             // it cannot describe how to carry on ([`SpecialsScanError`]). The reader
             // qualifies the range with its own source and attaches no recovery.
-            let scanned = L::scan_specials(state, s, pos)
-                .map_err(|error| TokenError::new(error.kind, error.span, None))?;
+            let scanned = L::scan_specials(state, s, pos).map_err(|error| {
+                TokenError::new(error.kind, SourceSpan::new(self.source, error.span), None)
+            })?;
             if let Some(m) = scanned {
                 // A malformed `end` from the hook would yield a zero-width token (the
                 // dispatch loop would never advance) or a span that panics when
@@ -355,7 +482,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                                 s.len()
                             ),
                         ))),
-                        Span::empty(pos),
+                        SourceSpan::new(self.source, Span::empty(pos)),
                         None,
                     ));
                 }
@@ -379,8 +506,11 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             let placeholder = Token::new(TokenKind::Char(c), span, pre_space);
             return Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(ForbiddenChar::new(c)),
-                span,
-                Some(TokenRecovery { token: placeholder, resume_pos: span.end() }),
+                SourceSpan::new(self.source, span),
+                Some(TokenRecovery {
+                    token: placeholder,
+                    resume: StdStreamPosition::at(span.end()),
+                }),
             ));
         }
 
@@ -492,8 +622,11 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                 TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
                     rule.escape_char,
                 )),
-                span,
-                Some(TokenRecovery { token: placeholder, resume_pos: span.end() }),
+                SourceSpan::new(self.source, span),
+                Some(TokenRecovery {
+                    token: placeholder,
+                    resume: StdStreamPosition::at(span.end()),
+                }),
             ));
         }
 
@@ -608,6 +741,48 @@ where
 
     fn pos(&self) -> usize {
         StdTokenReader::pos(self)
+    }
+
+    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge) {
+        self.pos = tok.edge_offset(edge);
+    }
+
+    fn move_to_position(&mut self, at: &L::StreamPosition) {
+        self.pos = at.offset();
+    }
+
+    fn source_span_between(
+        &self,
+        tok: &Token<'s, L>,
+        a: TokenEdge,
+        b: TokenEdge,
+    ) -> SourceSpan<L::SourceOrigin> {
+        let (a, b) = (tok.edge_offset(a), tok.edge_offset(b));
+        // Reading order, whichever order the edges were named in; equal edges give the
+        // empty span there.
+        SourceSpan::new(self.source, a.min(b)..a.max(b))
+    }
+
+    fn position_here(&self) -> L::StreamPosition {
+        StdStreamPosition::at(self.pos)
+    }
+
+    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition {
+        StdStreamPosition::at(tok.edge_offset(edge))
+    }
+
+    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin> {
+        SourcePos::new(self.source, at.offset())
+    }
+
+    fn source_span_within(
+        &self,
+        begin: &L::StreamPosition,
+        end: &L::StreamPosition,
+    ) -> Option<SourceSpan<L::SourceOrigin>> {
+        // One source, so the only incoherent pair is an inverted one.
+        (begin.offset() <= end.offset())
+            .then(|| SourceSpan::new(self.source, begin.offset()..end.offset()))
     }
 }
 
@@ -1692,13 +1867,14 @@ mod tests {
             err.kind(),
             TokenErrorKind::ForbiddenChar(ForbiddenChar { ch: '%' })
         ));
-        assert_eq!(err.span(), sp(0, 1));
+        assert_eq!(err.span(), &SourceSpan::new(&source, sp(0, 1)));
 
         // Tolerant continuation: use the recovery token, resume past it.
         let recovery = err.into_recovery().unwrap();
         assert_eq!(recovery.token, char_token('%', 0, Span::empty(0)));
-        assert_eq!(recovery.resume_pos, 1);
-        tr.move_to_pos(recovery.resume_pos);
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+        assert_eq!(recovery.resume, StdStreamPosition::at(1));
+        reader.move_to_position(&recovery.resume);
         assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
     }
 
@@ -1717,7 +1893,7 @@ mod tests {
                 escape_char: '\\',
             })
         ));
-        assert_eq!(err.span(), sp(2, 3));
+        assert_eq!(err.span(), &SourceSpan::new(&source, sp(2, 3)));
 
         // Recovery: a Char placeholder covering the dangling escape byte itself, so the
         // byte stays in the tree (the tolerant parse keeps the partition invariant).
@@ -1726,8 +1902,9 @@ mod tests {
             recovery.token,
             Token::new(TokenKind::Char('\\'), sp(2, 3), sp(1, 2)),
         );
-        assert_eq!(recovery.resume_pos, 3);
-        tr.move_to_pos(recovery.resume_pos);
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+        assert_eq!(recovery.resume, StdStreamPosition::at(3));
+        reader.move_to_position(&recovery.resume);
         assert_eq!(peek(&mut tr, &st).kind, TokenKind::EndOfStream);
     }
 

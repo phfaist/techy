@@ -221,7 +221,6 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
     fn probe_token<'s>(
         &self,
         tokens: &mut dyn TokenReader<'s, L>,
-        source: &Arc<Source<L::SourceOrigin>>,
         session: &ParserSession<L>,
         state: &Arc<ParsingState<L>>,
     ) -> ConstructParserResult<L, Option<Token<'s, L>>> {
@@ -231,7 +230,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
                 if self.recovery() == Recovery::Tolerant && error.recovery().is_some() {
                     return Ok(None);
                 }
-                let span = SourceSpan::new(source, error.span());
+                // The token error already says where it is, in its own reader's source.
+                let span = error.span().clone();
                 Err(ParseError::from_token_error(error.kind().clone(), span)
                     .with_frames(session.snapshot_frames()))
             }

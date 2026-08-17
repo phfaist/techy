@@ -462,12 +462,34 @@ mod plain_chars {
         use techy::core::constructs::{
             ConstructParser, ImplementationError, NodesParser, ParseContext, StopSpec,
         };
-        use techy::core::{ParserSession, Token, TokenKind, TokenReader, TokenResult};
+        use techy::core::{
+            ParserSession, StdStreamPosition, StdTokenReader, Token, TokenEdge, TokenKind,
+            TokenReader, TokenResult,
+        };
         use techy::error::DiagnosticInfo;
-        use techy::source::{Source, Span};
+        use techy::source::{Source, SourcePos, SourceSpan, Span};
 
-        struct CommentEmittingReader;
-        impl<'s> TokenReader<'s, PlainCharsLang> for CommentEmittingReader {
+        /// A reader that serves one hand-built token and leaves every position and span
+        /// question to an inner `StdTokenReader` over the same content — the documented
+        /// shape for a custom reader over standard tokens.
+        struct CommentEmittingReader<'s> {
+            inner: StdTokenReader<'s>,
+        }
+
+        impl<'s> CommentEmittingReader<'s> {
+            /// Delegation goes through a `dyn` view: the inner reader's `TokenReader`
+            /// impl is generic over the language, which plain method syntax cannot
+            /// infer here.
+            fn inner(&self) -> &dyn TokenReader<'s, PlainCharsLang> {
+                &self.inner
+            }
+
+            fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, PlainCharsLang> {
+                &mut self.inner
+            }
+        }
+
+        impl<'s> TokenReader<'s, PlainCharsLang> for CommentEmittingReader<'s> {
             fn peek(
                 &mut self,
                 _state: &Arc<ParsingState<PlainCharsLang>>,
@@ -484,20 +506,72 @@ mod plain_chars {
                     Span::empty(0),
                 ))
             }
-            fn move_past(&mut self, _tok: &Token<'s, PlainCharsLang>, _skip: bool) {}
-            fn move_to(&mut self, _tok: &Token<'s, PlainCharsLang>, _rewind: bool) {}
-            fn move_to_pos(&mut self, _pos: usize) {}
+
+            fn move_past(&mut self, tok: &Token<'s, PlainCharsLang>, skip: bool) {
+                self.inner_mut().move_past(tok, skip);
+            }
+
+            fn move_to(&mut self, tok: &Token<'s, PlainCharsLang>, rewind: bool) {
+                self.inner_mut().move_to(tok, rewind);
+            }
+
+            fn move_to_pos(&mut self, pos: usize) {
+                self.inner_mut().move_to_pos(pos);
+            }
+
             fn pos(&self) -> usize {
-                0
+                self.inner().pos()
+            }
+
+            fn move_to_edge(&mut self, tok: &Token<'s, PlainCharsLang>, edge: TokenEdge) {
+                self.inner_mut().move_to_edge(tok, edge);
+            }
+
+            fn move_to_position(&mut self, at: &StdStreamPosition) {
+                self.inner_mut().move_to_position(at);
+            }
+
+            fn source_span_between(
+                &self,
+                tok: &Token<'s, PlainCharsLang>,
+                a: TokenEdge,
+                b: TokenEdge,
+            ) -> SourceSpan {
+                self.inner().source_span_between(tok, a, b)
+            }
+
+            fn position_here(&self) -> StdStreamPosition {
+                self.inner().position_here()
+            }
+
+            fn position_at(
+                &self,
+                tok: &Token<'s, PlainCharsLang>,
+                edge: TokenEdge,
+            ) -> StdStreamPosition {
+                self.inner().position_at(tok, edge)
+            }
+
+            fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+                self.inner().source_position_at(at)
+            }
+
+            fn source_span_within(
+                &self,
+                begin: &StdStreamPosition,
+                end: &StdStreamPosition,
+            ) -> Option<SourceSpan> {
+                self.inner().source_span_within(begin, end)
             }
         }
 
         let driver = StdParseDriver::new(Recovery::Tolerant, ());
         let mut session = ParserSession::new();
-        let mut reader = CommentEmittingReader;
+        let source: Arc<Source> = Arc::new(Source::new("%c"));
+        let mut reader = CommentEmittingReader { inner: StdTokenReader::new(&source) };
         let mut cx = ParseContext::new(
             &mut reader,
-            Arc::new(Source::new("%c")),
+            Arc::clone(&source),
             Arc::new(ParsingState::<PlainCharsLang>::lang_initial().expect("seed state")),
             &mut session,
             &driver,

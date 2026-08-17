@@ -28,14 +28,16 @@
 //!
 //! [`StdTokenReader`]: super::StdTokenReader
 
+use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
-use crate::source::{Source, Span};
+use crate::source::{Source, SourcePos, SourceSpan, Span};
 use crate::state::{Lang, ParsingState};
 
 use super::error::TokenResult;
-use super::reader::TokenReader;
+use super::reader::{StdStreamPosition, TokenEdge, TokenReader};
 use super::token::{Token, TokenKind};
 
 /// A [`TokenReader`] serving tokens from a pre-built list (see the module docs for the
@@ -44,10 +46,31 @@ use super::token::{Token, TokenKind};
 /// The tokens must be in source order (ascending, non-overlapping spans — the order a
 /// scan produces); a trailing [`EndOfStream`](super::TokenKind::EndOfStream) token is
 /// permitted but not required (one is synthesized past the end of the list).
+///
+/// # Rejecting what this reader never issued
+///
+/// This reader is the mechanical guard behind the lockstep harness: it **panics** when
+/// handed a token or a stream position it did not issue, so a construct parser that
+/// invents either — instead of asking the reader — fails loudly rather than quietly
+/// producing a plausible wrong span. (Panicking is right here and only here: this is
+/// test infrastructure, and the violation is a bug in the test suite's own code.)
+///
+/// - A **token** is accepted when a listed token has the same span and the same kind, or
+///   when it is an end-of-stream token (which this reader synthesizes rather than serves
+///   from the list). `pre_space` is left out of the comparison because `peek` clips it
+///   to the current position.
+/// - A **position** is accepted when its offset is one this reader handed out: the set
+///   starts with the initial position and every edge offset of every listed token, and
+///   grows with every peeked token's edge offsets and every position the reader
+///   answers.
 pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
     tokens: Vec<Token<'s, L>>,
     pos: usize,
+    /// Every offset this reader has handed out as a stream position (see
+    /// [the validation rules](TokenListReader#rejecting-what-this-reader-never-issued)).
+    /// A `RefCell` because the position accessors take `&self`.
+    issued: RefCell<BTreeSet<usize>>,
 }
 
 impl<'s, L: Lang> TokenListReader<'s, L> {
@@ -64,7 +87,48 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
             "tokens must be in source order with non-overlapping spans"
         );
         let pos = tokens.first().map(|t| t.pre_space.start()).unwrap_or(0);
-        TokenListReader { source, tokens, pos }
+        let mut issued = BTreeSet::new();
+        issued.insert(pos);
+        for token in &tokens {
+            for edge in EVERY_EDGE {
+                issued.insert(token.edge_offset(edge));
+            }
+        }
+        TokenListReader { source, tokens, pos, issued: RefCell::new(issued) }
+    }
+
+    /// Record `offset` as one this reader handed out.
+    fn issue(&self, offset: usize) -> usize {
+        self.issued.borrow_mut().insert(offset);
+        offset
+    }
+
+    /// Panic unless `tok` is one this reader could have issued: a listed token with the
+    /// same span and kind, or an end-of-stream token (which the reader synthesizes past
+    /// the end of the list rather than serving from it). `pre_space` is excluded from
+    /// the comparison — `peek` clips it to the current position, so a token that came
+    /// out of this very reader need not compare equal to its list entry.
+    fn check_issued(&self, tok: &Token<'s, L>, what: &str) {
+        if matches!(tok.kind, TokenKind::EndOfStream) {
+            return;
+        }
+        let known = self
+            .tokens
+            .iter()
+            .any(|listed| listed.span == tok.span && listed.kind == tok.kind);
+        assert!(
+            known,
+            "TokenListReader::{what} was handed a token it never issued: {:?}",
+            tok
+        );
+    }
+
+    /// Panic unless `at` is an offset this reader handed out (see the type's docs).
+    fn check_position(&self, at: usize, what: &str) {
+        assert!(
+            self.issued.borrow().contains(&at),
+            "TokenListReader::{what} was handed a position it never issued: {at}"
+        );
     }
 
     /// The tokens being served.
@@ -87,7 +151,17 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     }
 }
 
-impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
+/// The four edges, for seeding the issued-offset set.
+const EVERY_EDGE: [TokenEdge; 4] = [
+    TokenEdge::StartBeforePreSpace,
+    TokenEdge::Start,
+    TokenEdge::End,
+    TokenEdge::EndPastPostSpace,
+];
+
+impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
+    for TokenListReader<'s, L>
+{
     fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
         match self.current() {
             Some(token) => {
@@ -99,13 +173,19 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
                     token.pre_space.start().max(self.pos).min(token.pre_space.end()),
                     token.pre_space.end(),
                 );
+                for edge in EVERY_EDGE {
+                    self.issue(token.edge_offset(edge));
+                }
                 Ok(token)
             }
-            None => Ok(Token::new(
-                TokenKind::EndOfStream,
-                Span::empty(self.pos),
-                Span::empty(self.pos),
-            )),
+            None => {
+                self.issue(self.pos);
+                Ok(Token::new(
+                    TokenKind::EndOfStream,
+                    Span::empty(self.pos),
+                    Span::empty(self.pos),
+                ))
+            }
         }
     }
 
@@ -133,6 +213,52 @@ impl<'s, L: Lang> TokenReader<'s, L> for TokenListReader<'s, L> {
 
     fn pos(&self) -> usize {
         self.pos
+    }
+
+    fn move_to_edge(&mut self, tok: &Token<'s, L>, edge: TokenEdge) {
+        self.check_issued(tok, "move_to_edge");
+        self.pos = self.issue(tok.edge_offset(edge));
+    }
+
+    fn move_to_position(&mut self, at: &L::StreamPosition) {
+        self.check_position(at.offset(), "move_to_position");
+        self.pos = at.offset();
+    }
+
+    fn source_span_between(
+        &self,
+        tok: &Token<'s, L>,
+        a: TokenEdge,
+        b: TokenEdge,
+    ) -> SourceSpan<L::SourceOrigin> {
+        self.check_issued(tok, "source_span_between");
+        let (a, b) = (tok.edge_offset(a), tok.edge_offset(b));
+        SourceSpan::new(self.source, a.min(b)..a.max(b))
+    }
+
+    fn position_here(&self) -> L::StreamPosition {
+        StdStreamPosition::at(self.issue(self.pos))
+    }
+
+    fn position_at(&self, tok: &Token<'s, L>, edge: TokenEdge) -> L::StreamPosition {
+        self.check_issued(tok, "position_at");
+        StdStreamPosition::at(self.issue(tok.edge_offset(edge)))
+    }
+
+    fn source_position_at(&self, at: &L::StreamPosition) -> SourcePos<L::SourceOrigin> {
+        self.check_position(at.offset(), "source_position_at");
+        SourcePos::new(self.source, at.offset())
+    }
+
+    fn source_span_within(
+        &self,
+        begin: &L::StreamPosition,
+        end: &L::StreamPosition,
+    ) -> Option<SourceSpan<L::SourceOrigin>> {
+        self.check_position(begin.offset(), "source_span_within");
+        self.check_position(end.offset(), "source_span_within");
+        (begin.offset() <= end.offset())
+            .then(|| SourceSpan::new(self.source, begin.offset()..end.offset()))
     }
 }
 

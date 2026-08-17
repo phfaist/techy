@@ -805,7 +805,9 @@ where
                 Ok(token) => (token, false),
                 Err(error) => {
                     let kind = error.kind().clone();
-                    let span = SourceSpan::new(&cx.source, error.span());
+                    // The error's location is already source-qualified: only the reader
+                    // knows which source it was reading.
+                    let span = error.span().clone();
                     match error.into_recovery() {
                         None => {
                             return Err(ParseError::from_token_error(kind, span)
@@ -817,15 +819,16 @@ where
                             cx.recover_boxed(kind.clone().into_condition(), span.clone())?;
                             // The recovery arm is the one arm that consumes no token,
                             // so loop progress rests entirely on the resume position
-                            // advancing the reader (the `TokenRecovery::resume_pos`
-                            // contract). A violating token source — a custom reader or
-                            // `Lang::scan_specials` — would otherwise re-read the same
-                            // error forever; degrade the hang into an abort, even in
-                            // tolerant mode: its promise is a best-effort tree, not
-                            // tolerance of non-termination.
-                            let before = cx.tokens.pos();
-                            cx.tokens.move_to_pos(recovery.resume_pos);
-                            if cx.tokens.pos() <= before {
+                            // moving the stream (the `TokenRecovery::resume`
+                            // contract). A violating token source — a custom reader —
+                            // would otherwise re-read the same error forever; degrade
+                            // the hang into an abort, even in tolerant mode: its
+                            // promise is a best-effort tree, not tolerance of
+                            // non-termination. Stream positions compare only for
+                            // equality, so the check is "different", not "greater".
+                            let before = cx.tokens.position_here();
+                            cx.tokens.move_to_position(&recovery.resume);
+                            if cx.tokens.position_here() == before {
                                 return Err(ParseError::from_token_error(kind, span)
                                     .with_frames(cx.session.snapshot_frames()));
                             }
@@ -1213,7 +1216,7 @@ mod tests {
         CallableQuery, CallableSyntax, Package, ProviderError, ScopeStack, SpecsProvider,
     };
     use crate::node::GroupData;
-    use crate::source::{Source, TextContent};
+    use crate::source::{Source, SourcePos, TextContent};
     use crate::spec::{CallableSpec, StdCallableSpec};
     use super::super::{InvocationChildState, StdInvocationParser};
     use crate::state::{
@@ -1222,7 +1225,7 @@ mod tests {
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
         GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
-        StdStreamPosition, StdTokenReader, TokenError,
+        StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
         TriggerChars, WhitespaceRules,
     };
@@ -2303,44 +2306,95 @@ mod tests {
         assert_eq!(err.span().range(), 2..3);
     }
 
-    /// A token source that violates the `TokenRecovery::resume_pos` advancement
-    /// contract: every `peek` reports a recoverable forbidden-char error whose
-    /// `resume_pos` is the current position, so adopting the recovery re-reads the
+    /// A token source that violates the `TokenRecovery::resume` advancement contract:
+    /// every `peek` reports a recoverable forbidden-char error whose `resume` is the
+    /// position the reader already stands at, so adopting the recovery re-reads the
     /// same error.
-    struct StuckRecoveryReader {
-        pos: usize,
+    struct StuckRecoveryReader<'s> {
+        inner: StdTokenReader<'s>,
     }
 
-    impl<'s> TokenReader<'s, TestLang> for StuckRecoveryReader {
+    impl<'s> StuckRecoveryReader<'s> {
+        /// Delegation goes through a `dyn` view: the inner reader's `TokenReader` impl is
+        /// generic over the language, which plain method syntax cannot infer here.
+        fn inner(&self) -> &dyn TokenReader<'s, TestLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, TestLang> {
+            &mut self.inner
+        }
+    }
+
+    impl<'s> TokenReader<'s, TestLang> for StuckRecoveryReader<'s> {
         fn peek(
             &mut self,
             _state: &Arc<ParsingState<TestLang>>,
         ) -> TokenResult<'s, TestLang, Token<'s, TestLang>> {
-            let span = Span::new(self.pos, self.pos + 1);
+            let here = self.inner().position_here();
+            let pos = self.inner().pos();
+            let span = Span::new(pos, pos + 1);
             Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(crate::token::ForbiddenChar::new('#')),
-                span,
+                SourceSpan::new(self.inner.source(), span),
                 Some(TokenRecovery {
-                    token: Token::new(TokenKind::Char('#'), span, Span::empty(self.pos)),
-                    resume_pos: self.pos, // the violation: does not advance
+                    token: Token::new(TokenKind::Char('#'), span, Span::empty(pos)),
+                    resume: here, // the violation: the stream does not move
                 }),
             ))
         }
 
-        fn move_past(&mut self, tok: &Token<'s, TestLang>, _skip_post_space: bool) {
-            self.pos = tok.span.end();
+        fn move_past(&mut self, tok: &Token<'s, TestLang>, skip_post_space: bool) {
+            self.inner_mut().move_past(tok, skip_post_space);
         }
 
-        fn move_to(&mut self, tok: &Token<'s, TestLang>, _rewind_pre_space: bool) {
-            self.pos = tok.span.start();
+        fn move_to(&mut self, tok: &Token<'s, TestLang>, rewind_pre_space: bool) {
+            self.inner_mut().move_to(tok, rewind_pre_space);
         }
 
         fn move_to_pos(&mut self, pos: usize) {
-            self.pos = pos;
+            self.inner_mut().move_to_pos(pos);
         }
 
         fn pos(&self) -> usize {
-            self.pos
+            self.inner().pos()
+        }
+
+        fn move_to_edge(&mut self, tok: &Token<'s, TestLang>, edge: TokenEdge) {
+            self.inner_mut().move_to_edge(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &Token<'s, TestLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &Token<'s, TestLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
         }
     }
 
@@ -2350,7 +2404,7 @@ mod tests {
         // (the recovery arm consumes no token), pushing one diagnostic per iteration.
         let st = state();
         let source: Arc<Source> = Arc::new(Source::new("ab"));
-        let mut reader = StuckRecoveryReader { pos: 0 };
+        let mut reader = StuckRecoveryReader { inner: StdTokenReader::new(&source) };
         let err = try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none())
             .expect_err("a non-advancing resume position must abort the parse");
         assert_eq!(err.identifier(), crate::token::ForbiddenChar::IDENTIFIER);
@@ -2430,6 +2484,18 @@ mod tests {
         inner: StdTokenReader<'s>,
     }
 
+    impl<'s> TabooReader<'s> {
+        /// Delegation goes through a `dyn` view: the inner reader's `TokenReader` impl is
+        /// generic over the language, which plain method syntax cannot infer here.
+        fn inner(&self) -> &dyn TokenReader<'s, TabooLang> {
+            &self.inner
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, TabooLang> {
+            &mut self.inner
+        }
+    }
+
     impl<'s> TokenReader<'s, TabooLang> for TabooReader<'s> {
         fn peek(
             &mut self,
@@ -2440,10 +2506,11 @@ mod tests {
                 let span = Span::new(pos, pos + 1);
                 return Err(TokenError::new(
                     TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
-                    span,
+                    SourceSpan::new(self.inner.source(), span),
                     Some(TokenRecovery {
                         token: Token::new(TokenKind::Char('!'), span, Span::empty(pos)),
-                        resume_pos: span.end(),
+                        // In-crate test infrastructure may mint a position directly.
+                        resume: StdStreamPosition::at(span.end()),
                     }),
                 ));
             }
@@ -2451,19 +2518,56 @@ mod tests {
         }
 
         fn move_past(&mut self, tok: &Token<'s, TabooLang>, skip_post_space: bool) {
-            TokenReader::move_past(&mut self.inner, tok, skip_post_space);
+            self.inner_mut().move_past(tok, skip_post_space);
         }
 
         fn move_to(&mut self, tok: &Token<'s, TabooLang>, rewind_pre_space: bool) {
-            TokenReader::move_to(&mut self.inner, tok, rewind_pre_space);
+            self.inner_mut().move_to(tok, rewind_pre_space);
         }
 
         fn move_to_pos(&mut self, pos: usize) {
-            self.inner.move_to_pos(pos);
+            self.inner_mut().move_to_pos(pos);
         }
 
         fn pos(&self) -> usize {
-            self.inner.pos()
+            self.inner().pos()
+        }
+
+        fn move_to_edge(&mut self, tok: &Token<'s, TabooLang>, edge: TokenEdge) {
+            self.inner_mut().move_to_edge(tok, edge);
+        }
+
+        fn move_to_position(&mut self, at: &StdStreamPosition) {
+            self.inner_mut().move_to_position(at);
+        }
+
+        fn source_span_between(
+            &self,
+            tok: &Token<'s, TabooLang>,
+            a: TokenEdge,
+            b: TokenEdge,
+        ) -> SourceSpan {
+            self.inner().source_span_between(tok, a, b)
+        }
+
+        fn position_here(&self) -> StdStreamPosition {
+            self.inner().position_here()
+        }
+
+        fn position_at(&self, tok: &Token<'s, TabooLang>, edge: TokenEdge) -> StdStreamPosition {
+            self.inner().position_at(tok, edge)
+        }
+
+        fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+            self.inner().source_position_at(at)
+        }
+
+        fn source_span_within(
+            &self,
+            begin: &StdStreamPosition,
+            end: &StdStreamPosition,
+        ) -> Option<SourceSpan> {
+            self.inner().source_span_within(begin, end)
         }
     }
 

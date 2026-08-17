@@ -7,6 +7,7 @@ use crate::source::Span;
 use crate::spec::CallableSpec;
 use crate::state::Lang;
 
+use super::reader::TokenEdge;
 use super::rules::GroupRule;
 
 /// What a token *is* — structural and minimal: it identifies *what to parse next*.
@@ -179,6 +180,20 @@ impl<'s, L: Lang> Token<'s, L> {
             );
         }
         Token { kind, span, pre_space }
+    }
+
+    /// The byte offset of one of the token's four boundaries, in the coordinates of the
+    /// content the issuing reader scans — the primitive behind the reader's
+    /// position and span answers.
+    pub(crate) fn edge_offset(&self, edge: TokenEdge) -> usize {
+        match edge {
+            TokenEdge::StartBeforePreSpace => self.pre_space.start(),
+            TokenEdge::Start => self.span.start(),
+            // Post-space is a trailing sub-range of `span`, so its start is the end of
+            // the token proper — for every kind (an empty post-space sits at `span.end`).
+            TokenEdge::End => self.post_space().start(),
+            TokenEdge::EndPastPostSpace => self.span.end(),
+        }
     }
 
     /// The token's post-space: syntactic whitespace consumed after the token proper.

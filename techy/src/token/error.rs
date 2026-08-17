@@ -1,8 +1,8 @@
 //! Token-level errors and the recovery-token mechanism.
 //!
 //! A [`TokenError`] may carry a [`TokenRecovery`]: a placeholder token to emit *as if*
-//! tokenization had succeeded, plus the position at which to resume reading. The token
-//! reader itself is policy-free — it always reports the error; the session-level
+//! tokenization had succeeded, plus the stream position at which to resume reading. The
+//! token reader itself is policy-free — it always reports the error; the session-level
 //! [`Recovery`](crate::error::Recovery) policy decides whether to abort (strict)
 //! or to record a [`Diagnostic`](crate::error::Diagnostic) and continue with the recovery
 //! token (tolerant). Conversion to Arc-span diagnostics happens there too; within the token
@@ -16,7 +16,7 @@ use alloc::boxed::Box;
 use core::fmt;
 
 use crate::error::{DiagnosticData, DiagnosticInfo};
-use crate::source::Span;
+use crate::source::SourceSpan;
 use crate::state::Lang;
 
 use super::token::Token;
@@ -104,39 +104,42 @@ impl TokenErrorKind {
 /// `Result` at payload-plus-tag size.
 pub struct TokenError<'s, L: Lang> {
     kind: TokenErrorKind,
-    span: Span,
+    span: SourceSpan<L::SourceOrigin>,
     recovery: Option<Box<TokenRecovery<'s, L>>>,
 }
 
 /// How to continue past a [`TokenError`] in tolerant mode: pretend `token` was read, then
-/// resume reading at `resume_pos`.
+/// resume reading at `resume`.
 ///
-/// `resume_pos` is explicit rather than derived from the token: a custom token source's
+/// `resume` is explicit rather than derived from the token: a custom token source's
 /// placeholder need not end where reading should resume (its span may stand for
 /// normalized or synthesized content), and the explicit position is what the content
 /// loop's advancement check (below) is enforced against.
 ///
-/// # Contract: `resume_pos` must advance the reader
+/// # Contract: `resume` must move the stream
 ///
-/// `resume_pos` must lie **strictly past** the position the failed read started from —
-/// in particular, past the error itself. The content loop's recovery arm consumes no
-/// token (the placeholder was never in the stream), so its termination rests entirely
-/// on this advancement; the loop treats a resume position that fails to advance the
-/// reader as a contract violation by the token source and aborts the parse with the
-/// token error, even in tolerant mode.
+/// `resume` must name a place the reader is not already at — in particular, one past
+/// the error. The content loop's recovery arm consumes no token (the placeholder was
+/// never in the stream), so its termination rests entirely on this move: after
+/// [`move_to_position(&resume)`](super::TokenReader::move_to_position) the loop
+/// compares [`position_here()`](super::TokenReader::position_here) with the position it
+/// held before, and treats an unchanged position as a contract violation by the token
+/// source — it aborts the parse with the token error, even in tolerant mode. Stream
+/// positions compare only for equality, so the check is "different", not "greater".
 pub struct TokenRecovery<'s, L: Lang> {
     /// The placeholder token to emit in place of the failed read.
     pub token: Token<'s, L>,
-    /// Byte position at which to resume reading — strictly past the failed read's start
-    /// position (see the [advancement contract](TokenRecovery#contract-resume_pos-must-advance-the-reader)).
-    pub resume_pos: usize,
+    /// The stream position at which to resume reading — one the reader minted, and not
+    /// the position the failed read started from (see the
+    /// [advancement contract](TokenRecovery#contract-resume-must-move-the-stream)).
+    pub resume: L::StreamPosition,
 }
 
 impl<'s, L: Lang> TokenError<'s, L> {
     /// Create a token error.
     pub fn new(
         kind: TokenErrorKind,
-        span: Span,
+        span: SourceSpan<L::SourceOrigin>,
         recovery: Option<TokenRecovery<'s, L>>,
     ) -> Self {
         TokenError { kind, span, recovery: recovery.map(Box::new) }
@@ -147,9 +150,10 @@ impl<'s, L: Lang> TokenError<'s, L> {
         &self.kind
     }
 
-    /// Where in the content the error occurred.
-    pub fn span(&self) -> Span {
-        self.span
+    /// Where the error occurred — source-qualified, so it is a diagnostic anchor as it
+    /// stands, whichever source the reader was reading.
+    pub fn span(&self) -> &SourceSpan<L::SourceOrigin> {
+        &self.span
     }
 
     /// The recovery possibility, if the tokenizer could construct one.
@@ -167,7 +171,7 @@ impl<'s, L: Lang> TokenError<'s, L> {
 
 impl<L: Lang> Clone for TokenRecovery<'_, L> {
     fn clone(&self) -> Self {
-        TokenRecovery { token: self.token.clone(), resume_pos: self.resume_pos }
+        TokenRecovery { token: self.token.clone(), resume: self.resume.clone() }
     }
 }
 
@@ -175,7 +179,7 @@ impl<L: Lang> Clone for TokenError<'_, L> {
     fn clone(&self) -> Self {
         TokenError {
             kind: self.kind.clone(),
-            span: self.span,
+            span: self.span.clone(),
             recovery: self.recovery.clone(),
         }
     }
@@ -183,7 +187,7 @@ impl<L: Lang> Clone for TokenError<'_, L> {
 
 impl<L: Lang> PartialEq for TokenRecovery<'_, L> {
     fn eq(&self, other: &Self) -> bool {
-        self.token == other.token && self.resume_pos == other.resume_pos
+        self.token == other.token && self.resume == other.resume
     }
 }
 
@@ -196,7 +200,7 @@ impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRecovery")
             .field("token", &self.token)
-            .field("resume_pos", &self.resume_pos)
+            .field("resume", &self.resume)
             .finish()
     }
 }

@@ -1966,10 +1966,30 @@ mod tests {
         // must abort even under Tolerant — reporting the argument absent instead would
         // record a spurious missing-argument diagnostic before the enclosing loop's
         // re-read aborted anyway.
-        use crate::token::{EndOfStreamAfterEscape, TokenError, TokenErrorKind, TokenResult};
+        use crate::source::SourcePos;
+        use crate::token::{
+            EndOfStreamAfterEscape, StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
+            TokenErrorKind, TokenResult,
+        };
 
-        struct BrokenReader;
-        impl<'s> TokenReader<'s, ArgLang> for BrokenReader {
+        /// Every read fails, unrecoverably; everything else is the inner reader's.
+        struct BrokenReader<'s> {
+            inner: StdTokenReader<'s>,
+        }
+
+        impl<'s> BrokenReader<'s> {
+            /// Delegation goes through a `dyn` view: the inner reader's `TokenReader` impl is
+            /// generic over the language, which plain method syntax cannot infer here.
+            fn inner(&self) -> &dyn TokenReader<'s, ArgLang> {
+                &self.inner
+            }
+
+            fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, ArgLang> {
+                &mut self.inner
+            }
+        }
+
+        impl<'s> TokenReader<'s, ArgLang> for BrokenReader<'s> {
             fn peek(
                 &mut self,
                 _state: &Arc<ParsingState<ArgLang>>,
@@ -1978,25 +1998,68 @@ mod tests {
                     TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
                         '\\',
                     )),
-                    Span::new(0, 1),
+                    SourceSpan::new(self.inner.source(), Span::new(0, 1)),
                     None, // unrecoverable
                 ))
             }
 
-            fn move_past(&mut self, _token: &Token<'s, ArgLang>, _skip_post_space: bool) {}
+            fn move_past(&mut self, tok: &Token<'s, ArgLang>, skip_post_space: bool) {
+                self.inner_mut().move_past(tok, skip_post_space);
+            }
 
-            fn move_to(&mut self, _token: &Token<'s, ArgLang>, _rewind_pre_space: bool) {}
+            fn move_to(&mut self, tok: &Token<'s, ArgLang>, rewind_pre_space: bool) {
+                self.inner_mut().move_to(tok, rewind_pre_space);
+            }
 
-            fn move_to_pos(&mut self, _pos: usize) {}
+            fn move_to_pos(&mut self, pos: usize) {
+                self.inner_mut().move_to_pos(pos);
+            }
 
             fn pos(&self) -> usize {
-                0
+                self.inner().pos()
+            }
+
+            fn move_to_edge(&mut self, tok: &Token<'s, ArgLang>, edge: TokenEdge) {
+                self.inner_mut().move_to_edge(tok, edge);
+            }
+
+            fn move_to_position(&mut self, at: &StdStreamPosition) {
+                self.inner_mut().move_to_position(at);
+            }
+
+            fn source_span_between(
+                &self,
+                tok: &Token<'s, ArgLang>,
+                a: TokenEdge,
+                b: TokenEdge,
+            ) -> SourceSpan {
+                self.inner().source_span_between(tok, a, b)
+            }
+
+            fn position_here(&self) -> StdStreamPosition {
+                self.inner().position_here()
+            }
+
+            fn position_at(&self, tok: &Token<'s, ArgLang>, edge: TokenEdge) -> StdStreamPosition {
+                self.inner().position_at(tok, edge)
+            }
+
+            fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+                self.inner().source_position_at(at)
+            }
+
+            fn source_span_within(
+                &self,
+                begin: &StdStreamPosition,
+                end: &StdStreamPosition,
+            ) -> Option<SourceSpan> {
+                self.inner().source_span_within(begin, end)
             }
         }
 
         let source: Arc<Source> = Arc::new(Source::new("x"));
         let st = state_with(&[]);
-        let mut reader = BrokenReader;
+        let mut reader = BrokenReader { inner: StdTokenReader::new(&source) };
         let mut session = ParserSession::new();
         let driver = ArgDriver { recovery: Recovery::Tolerant };
         let mut cx = ParseContext::new(

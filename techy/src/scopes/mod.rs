@@ -66,8 +66,7 @@ use crate::state::{
     ParsingStateDelta,
 };
 use crate::token::{
-    SpecialsMatch, SpecialsScanError, Token, TokenError, TokenErrorKind, TokenResult,
-    TriggerChars,
+    SpecialsMatch, SpecialsScanError, Token, TokenErrorKind, TriggerChars,
 };
 
 mod provenance;
