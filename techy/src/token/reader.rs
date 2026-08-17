@@ -166,7 +166,13 @@ impl StdStreamPosition {
 ///    slice where the token's offsets fall outside its content (a wrong answer beats a
 ///    new panic in library code), while
 ///    [`source_span_between`](TokenReader::source_span_between) hands those offsets to
-///    `SourceSpan::new`, whose registered always-on assert fires.
+///    `SourceSpan::new`, whose registered always-on assert fires. A foreign *position*
+///    is answered the same way: `StdTokenReader` passes it straight to `SourcePos::new`
+///    in [`source_position_at`](TokenReader::source_position_at) and to
+///    `SourceSpan::new` in [`source_span_within`](TokenReader::source_span_within), so
+///    a position this reader never handed out trips those same registered asserts —
+///    [`ParseContext::here`](crate::constructs::ParseContext::here) bottoms out there
+///    too, through `source_position_at`.
 /// 5. **Absent features yield no tokens:** a token kind belonging to a feature the
 ///    language declares absent ([`Lang::Features`]) must never be produced — no
 ///    `GroupOpen`/`GroupClose` without the groups feature, no `Command`, `Comment`,

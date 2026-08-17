@@ -1616,7 +1616,7 @@ which never reached `main`).
 - **Branch**: `bt-4-final` (off `main` at `8b25806`, which already contains Stages 1,
   2a, 2b, 3a and 3b).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-4-final`.
-- **Status**: implemented — awaiting review. Date: 2026-08-18.
+- **Status**: reviewed (READY) — merging. Date: 2026-08-18.
 - **Commits** (`git log --oneline main..bt-4-final`, newest first). Two commits are
   not in the list below because they were written after it: this PROGRESS/PLAN update
   itself ("bettertokens: Stage 4 — the final sweep, its numbers, and the plan's
