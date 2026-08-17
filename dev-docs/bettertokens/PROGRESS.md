@@ -404,11 +404,15 @@ The nine failing lints:
 
 - **Branch**: `bt-2a-core` (off `main` at `d5f37e0`, which already contains Stage 1).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-2a-core`.
-- **Status**: implemented — awaiting review. Date: 2026-08-17.
-- **Commits** (`git log --oneline main..bt-2a-core`, oldest last):
+- **Status**: implemented, review round 1 applied — awaiting re-review. Date:
+  2026-08-17.
+- **Commits** (`git log --oneline main..bt-2a-core`, oldest last; the newest is this
+  PROGRESS update itself, "bettertokens: PROGRESS.md — Stage 2a review round 1"):
 
 ```
-<this commit> bettertokens: PROGRESS.md — Stage 1 merged, Stage 2a implemented
+37d70dd core: anchor the invalid-node-span abort at the trigger
+ac9e1d9 latexlike: the paragraph break's payload is its specials form
+3f4b41c bettertokens: PROGRESS.md — Stage 1 merged, Stage 2a implemented
 65fe206 core: adapt the callers Stage 2a's signatures force
 396862a core: the error-callable parser and one renamed-parameter doc comment
 741151b core: the root and attached-source loops skip by position
@@ -451,8 +455,8 @@ $ cargo build
 
 $ cargo test
      Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
-running 1034 tests
-test result: ok. 1034 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+running 1035 tests
+test result: ok. 1035 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
      Running tests/acceptance.rs
 running 30 tests
 test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
@@ -491,7 +495,7 @@ $ rm -rf target/doc && cargo docs
 
 $ cargo test -p techy --lib constructs::nodes_parser
 running 79 tests
-test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 955 filtered out; finished in 0.05s
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 956 filtered out; finished in 0.02s
 
 $ cargo test -p techy --lib token::list_reader
 running 11 tests
@@ -633,12 +637,13 @@ initialized at `:194`, read nowhere in these files; 2b removes it.
    remaining case (an end before the trigger's start, taken from the trigger's own
    pre-space edge) is exercised strict and tolerant, plus once over multi-byte content.
    The `SourceSpan::new` assert that test used to guard against is now unreachable from
-   this path by construction.
+   this path by construction. The test also pins the error's **anchor** (the trigger's
+   span, `3..8`).
 
 ### Open questions
 
 1. **No existing test's expected node span changed.** The §1.9 rule was implemented as
-   written and the whole suite passes unmodified (1034 unit + 75 integration + 84
+   written and the whole suite passes unmodified (1035 unit + 75 integration + 84
    doctests), including the environment/`\input`/expression-position span assertions and
    the parse-tree byte-partition oracle. Nothing to rule on — recorded because §1.9 asked
    for it explicitly.
@@ -651,3 +656,38 @@ initialized at `:194`, read nowhere in these files; 2b removes it.
    `SourceSpan` plus its `Start` position instead of the token — no lifetime, but it
    diverges from §1.9's "`GroupParser::new(open: L::Token, rule)`" and would have to be
    put back in 3b.
+
+### Review round 1 (fixes applied 2026-08-17)
+
+The stage came back READY subject to three required fixes and two adopted
+suggestions; all five are on the branch.
+
+1. **This commit list** was written with a placeholder for its own SHA and predates two
+   commits. It is exact now: every earlier commit by SHA, the newest one (this PROGRESS
+   update) named in the sentence above the block.
+2. **The superseded `end_pos` spelling** left the remaining prose and comments:
+   `latexlike/invocation_syntax.rs:743, 902, 927`, `docs/construct-parsers.md:229`,
+   `docs/ai-guide-custom-lang.md:282` — all now `end` / `end: Some(&position)`.
+   `grep -rn "end_pos" techy docs` is **not** empty, and should not be: what remains is
+   the unrelated S0 accessor [`SourceSpan::end_pos`](techy/src/source/source.rs)
+   (`source.rs:274,348,648,652,653,748,750,751`, `line_index.rs:183` — the sibling of
+   `start_pos`, which no stage of this plan renames) and the substring inside the local
+   name `end_position` (`latexlike/serialize_tests.rs:529,538`,
+   `docs/construct-parsers.md:412,425,428,489`). Filtering those two out leaves nothing:
+   `grep -rn "end_pos" techy docs | grep -v end_position | grep -v "source/source.rs" | grep -v line_index.rs`
+   prints no lines.
+3. **The invalid-computed-span abort is anchored at the trigger again.** The port had it
+   at `self.here()`; on `main` it was the trigger's span, which is the meaningful
+   location for a report about a construct. `invocation_span_within` and
+   `invalid_invocation_span` take the trigger span and anchor there in every raising
+   path of `stage_invocation`, and the bad-end test asserts `error.span().range() == 3..8`.
+4. *(adopted suggestion)* New test
+   `stage_invocation_ignores_a_last_child_staged_in_another_source`: a child staged on a
+   second `Arc<Source>` cannot end the node, so the standard rule falls through to the
+   reader's position (`0..1`, as for a childless shape).
+5. *(adopted suggestion)* The `TakeParser` test parser records its group delimiters
+   through `same_source` (else `TextContent::Owned`), modelling §1.12 the way the
+   production sites do.
+
+Noted, not acted on: the per-node `SourceSpan` clones belong to 2b's timing gate, and
+the remaining `token.pre_space` reads are Stage 3a's.
