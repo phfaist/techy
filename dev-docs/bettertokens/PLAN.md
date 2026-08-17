@@ -488,6 +488,36 @@ Public/`pub(crate)` types that carried bare positions or spans:
 | `stage_pre_space(cx, nodes, pre_space: Span)` (`argument_parsers.rs`) | | `stage_pre_space(cx, nodes, tok: &L::Token)` — stages `source_span_between(tok, StartBeforePreSpace, Start)` when non-empty |
 | `stage(cx, kind, span: Span)` (`pub(super)`) | | `stage(cx, kind, span: SourceSpan)` |
 
+**Crate facts that changed after this plan was drafted** (commits `1c59e66..9a3c0ac`,
+almost all of them the new `techy::serialize` module) — an implementer writing new code
+in a touched file must honor them:
+
+- `CallableSpec<L>` and `SpecsProvider<L>` gained a **`SerializableObject<L>`
+  supertrait** (`spec/callable.rs:97`, `scopes/mod.rs`). Every spec/provider type —
+  including every *test* spec this plan rewrites or adds — needs the one-line empty
+  `impl crate::serialize::SerializableObject<TheLang> for TheSpec {}`.
+- `StdCallableSpec` gained fields: a struct literal now needs
+  `StdCallableSpec { arguments, ..Default::default() }`.
+- `NodeKind::List` is a **unit** variant (was `List { .. }`).
+- `minidefs::minilatex_package()` / `minilatex_item_package()` /
+  `latexlike::builtin_package()` return `Arc<Package<LLL>>` (was `Package<LLL>`).
+- The rustdoc link to the panics list is now `[Panics list](techy::guide::panics)`
+  (was `[crate-level Panics list](crate#panics)`) — the `StdToken` constructors use
+  the new spelling.
+- `Lang` itself is **unchanged** since `1c59e66` (`git diff 1c59e66..HEAD --
+  techy/src/state/lang.rs` is empty): the plan's "`Lang` gains exactly `Token`,
+  `StreamPosition`, and the `scan_specials` re-signature; no other `Lang` change"
+  still holds.
+- `techy/src/serialize/**` never reads a token, a `TokenReader`, a `StdTokenReader`,
+  `scan_specials`, or a span taken from a token. It serializes *node* data
+  (`CommentData::post_space`, the latexlike `InvocationSyntaxData::Macro { post_space }`
+  and `StdEnvironmentSideSyntax`, all already `TextContent`/`Span` node facts) and
+  `TokenRules` (state). Its only contact points with this plan are the 4 `impl Lang`
+  sites listed in §1.2 and two stub `ArgumentParser` impls that name
+  `ParseContext<'_, '_, L>` (`serialize/tests.rs:78`,
+  `serialize/drivers/tree_tests.rs:69`) — unaffected, since `ParseContext` keeps both
+  lifetime parameters.
+
 Site inventory (every non-test use of `move_to_pos`/`pos()`/`cx.source` outside the
 token module, with its replacement). Test-only sites follow the same rules.
 
@@ -518,6 +548,15 @@ token module, with its replacement). Test-only sites follow the same rules.
 | `engine/language.rs:184,245,269` | reader construction, skip, anchor | same |
 | `latexlike/invocation_syntax.rs:779-784` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
 | `latexlike/*.rs` (environments, input, driver, recompose) | `SourceSpan::new(&cx.source, ..)`, `token.kind` | reader queries / view |
+| `latexlike/invariants.rs:60` | doc comment: "a takeover's `stage_invocation(.., end_pos: Some)`" | reword to `end: Some(&position)` (Stage 2a, with the rename) |
+| `spec/callable.rs:162-171` `CallableSpec::make_invocation_parser<'a, 's>` | `invocation: Invocation<'a, 's, L>` | `make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>, ..)` (§1.10) — Stage 3b |
+| `latexlike/spec.rs:132-134` | `make_invocation_parser<'a, 's>(.., Invocation<'a, 's, LLL>)` | same — Stage 3b |
+| `constructs/child_state.rs:106` | `&Invocation<'_, '_, L>` in the compute-closure type | `&Invocation<'_, L>` — Stage 3b |
+| `token/mod.rs:50-67` (internal module facade) | `pub use` of `Token`, `TokenKind`, `TokenError`, `TokenRecovery`, `SpecialsMatch`, `StdTokenReader`, `TokenReader` | add `TokenEdge`, `StdStreamPosition` (Stage 1), `SpecialsScanError` (Stage 1), `StdToken` + the `Token` **trait** (Stage 3b). `techy::core` re-exports through this module, so it is edited first |
+| `core/mod.rs:60-66` (public facade) | the single `pub use crate::token::{ … };` block | add `StdStreamPosition`, `TokenEdge`, `SpecialsScanError` (Stage 1); add `StdToken` and let the existing `Token` entry export the **trait** (Stage 3b). `TokenKindView` is never exported. `Span`/`SourceSpan` are **not** re-exported here — they live on `techy::source` (`source/mod.rs:69-72`) |
+| `core/constructs.rs:54-70`, `core/specs.rs:40-52` (public facades) | re-export `ArgumentNoise`, `EnvironmentBody`, `EnvironmentTerminatorSyntaxData`, `FromInvocation`, `GroupParser`, `Invocation`, `NameGroup`, `NodesOutcome`, `StopCause`, `stage_pre_space`, `read_rigid_name_group`, `resolve_command_in_scopes` | **no edit**: these are name-only re-exports and no name changes. Stated so an implementer does not go looking |
+| `serialize/drivers/{tree_tests.rs:1280,1397, diagnostic_tests.rs:45, tests.rs:45}` | 4 `impl Lang for …` test languages in the `serialize` module (added after this plan was drafted) | the two associated types (§1.2); nothing else in `techy/src/serialize/**` touches tokens, readers, `ParseContext` spans, or `scan_specials` |
+| `token/rules.rs:20-21,251,288`, `token/mod.rs:22,34`, `state/mod.rs:27`, `docs/ai-guide.md:244` | prose/intra-doc mentions of `Lang::scan_specials`, `SpecialsMatch`, `TokenRecovery` "resume position" | reword to the new signatures; the intra-doc link targets survive the re-signature, so this is prose only (Stage 1 step 5 for the module docs, Stage 4 for `docs/ai-guide.md`) |
 | `docs/construct-parsers.md:58-63` (intra-doc links to `TokenReader::{move_past, move_to_pos, pos}` — `broken_intra_doc_links = deny`, so deleting those methods **breaks the docs build** until this is rewritten), `:195`, `:211`, `:334-384` (`Invocation<'a, 's, Latexlike>` in the doctest's `make_invocation_parser`), `:399-455` (the doctest body: `pos()`, `move_past`, `token.kind`, `token.span`, `SourceSpan::new(&cx.source, ..)`) | prose + doctest on the old API | rewrite to the new API (doctests must compile) |
 | `docs/ai-guide-custom-lang.md:263`, `:274` | `cx.tokens` row; `move_to_pos(token.post_space().start())` | `cx.tokens` row reworded; `move_to(&token, TokenEdge::End)` |
 | `docs/concepts-overview.md:36-46`, `docs/parsing-model.md:36`, `:101` | prose describing tokens as span-carrying values read by parsers | prose: opaque tokens, the reader interprets, `make_token_reader` |
@@ -715,10 +754,23 @@ Steps:
    on the trait now (they hold for the std readers already).
 
 Gates (all stages): `cargo build`, `cargo test` (unit + integration + doctests),
-`cargo clippy --all-targets -- -D warnings` (if the crate is clippy-clean on `main`;
-otherwise "no new warnings"), `rm -rf target/doc && cargo docs` (link check),
-`scripts/check_semver.sh` runs and its report is saved to PROGRESS.md (breaking
-changes are *expected*: soft freeze; do not "fix" them).
+`cargo clippy --all-targets -- -D warnings`, `rm -rf target/doc && cargo docs`
+(link check), `scripts/check_semver.sh` runs and its report is saved to PROGRESS.md.
+
+- **Clippy**: `main` at `9a3c0ac` **is clean** under `cargo clippy --all-targets --
+  -D warnings` (verified, exit 0). The gate is therefore "**clean**", not "no new
+  warnings" — a stage that leaves a single warning fails the gate.
+- **Docs**: `broken_intra_doc_links = deny`, and `docs/*.md` are included into rustdoc
+  through `techy/src/lib.rs`. Deleting `TokenReader::{move_past, move_to_pos, pos}`
+  therefore *breaks the docs build* until `docs/construct-parsers.md:58-63` is
+  rewritten — that rewrite belongs to the same stage as the deletion (2b), not to
+  Stage 4.
+- **Semver**: `cargo-semver-checks` 0.50.0 is installed; the baseline is the
+  `api-baseline` **branch** (`scripts/check_semver.sh`, `BASELINE_REV` overrides it).
+  The script clears `RUSTDOCFLAGS` itself (the workspace injects
+  `docs/rustdoc-header.html` by a root-relative path that does not resolve in
+  cargo-semver-checks' scratch builds) — do not set `RUSTDOCFLAGS` around it.
+  Breaking changes are *expected*: soft freeze; capture the report, do not "fix" them.
 
 Reviewer checklist (Stage 1): new items match §1.4–§1.8/§1.10 signatures verbatim (or
 the probe report's settled variants); contract clauses present; no behavior change in
@@ -743,7 +795,8 @@ positions; `StopCause<L>` with `after`; recovery arm already done), `group_parse
 `argument_parsers.rs` (`ArgumentNoise.start`, `stage_pre_space(tok)`, `stage(SourceSpan)`,
 anchors), `invocation_parser.rs`, `engine/language.rs` root loop, `attached_source.rs`
 loop, `engine/driver.rs` (`make_group_parser(open: &L::Token, ..)`,
-`make_paragraph_break_node(state, &SourceSpan)`). Every `SourceSpan::new(&cx.source,
+`make_paragraph_break_node(state, &SourceSpan)`), and the one doc comment that names
+the renamed parameter (`latexlike/invariants.rs:60`). Every `SourceSpan::new(&cx.source,
 ..)` in these files is replaced; `cx.source` reads in these files reach zero.
 
 **2b — the rest + deletion** (`bt-2b-rest` off `bt-2a-core`): `environment_parser.rs`
@@ -752,7 +805,9 @@ loop, `engine/driver.rs` (`make_group_parser(open: &L::Token, ..)`,
 `verbatim_parser.rs`, `embellishments_parser.rs`, `tack_on_parser.rs`,
 `chars_group_parser.rs`, `latexlike/*.rs` (`environments.rs` conversion with
 `same_source`; `input.rs`; `driver.rs`; `recompose.rs`; test `RestOfLineParser`),
-`docs/*.md` (§1.11 last row) and `techy/tests/*.rs`. Then **delete**:
+`docs/*.md` (the §1.11 docs rows) and `techy/tests/lang_features.rs` (the only
+integration test that names any of these symbols — verified by grep at `9a3c0ac`).
+Then **delete**:
 `TokenReader::{move_past, move_to(bool), move_to_pos, pos}`, `StdTokenReader::{pos,
 move_to_pos}`, `TokenListReader::move_to_pos`, `ParseContext::source` (and the
 `source` parameter of `ParseContext::new`), and rename `move_to_edge` → `move_to`;
@@ -799,7 +854,9 @@ name during the transition, introduce the view under the temporary name
 constructors, §1.3); rename `TokenKindView` → `TokenKind` (the only `TokenKind` left);
 add `trait Token<L>` and `Lang::Token` (+ `type Token = StdToken<Self>;` in all impls);
 `TokenError<L>`/`TokenRecovery<L>`/`TokenResult<L, T>` lose `'s`; `Invocation<'a, L>`,
-`make_invocation_parser<'a>` (driver + `CallableSpec`), `ParseDriver::probe_token`
+`make_invocation_parser<'a>` (`engine/driver.rs`, `spec/callable.rs:162-171`,
+`latexlike/spec.rs:132-134`) and the compute-closure type in
+`constructs/child_state.rs:106`, `ParseDriver::probe_token`
 signature (`Option<L::Token>`), `StdTokenReader`'s token construction, `TokenListReader`,
 every test that calls `Token::new` (`token/reader.rs` ≈50, `engine/mod.rs` 5,
 `nodes_parser.rs` 4, `environment_parser.rs` 2, `latexlike/*` 2, `list_reader.rs`) →
