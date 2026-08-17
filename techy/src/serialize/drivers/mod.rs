@@ -97,7 +97,7 @@ pub(crate) const DIAGNOSTIC_IDENTIFIER: &str = "core.diagnostic";
 pub(crate) const PARSE_RESULT_IDENTIFIER: &str = "core.parse-result";
 /// The identifier of a specs table entry holding a stamped spec's identity form
 /// (its provider's position plus the definition key).
-pub(crate) const SPEC_IDENTITY_IDENTIFIER: &str = "core.provider-spec";
+pub(crate) const SPEC_IDENTITY_IDENTIFIER: &str = "core.provider-spec-identity";
 /// The identifier of a specs table entry holding an error spec's self-contained form.
 pub(crate) const ERROR_SPEC_IDENTIFIER: &str = "core.error-spec";
 /// The identifier of a providers table entry holding a package (by name).

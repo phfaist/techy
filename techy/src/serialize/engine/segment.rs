@@ -38,10 +38,12 @@ use super::super::wire::{FromSerialValue, ToSerialValue};
 /// [`to_serial_value`](Segment::to_serial_value) / [`from_serial_value`](Segment::from_serial_value)
 /// convert a segment to and from a [`SerialValue`] — the map
 /// `{"version": <int>, "tables": [<table>, …]}`, each table the map `{"name": <str>,
-/// "id": <int>, "start": <int>, "entries": [<value>, …]}` — with the key names
+/// "table": <int>, "start": <int>, "entries": [<value>, …]}` (`table` being the
+/// writer's table id, the ordinal every table reference inside the entries uses) —
+/// with the key names
 /// provisional until the vocabulary of the serialized form is finalized. An entry of
 /// a table holding objects of one kind only is the entry's data itself; an entry of
-/// any other table is the map `{"id": <identifier>, "data": <value>}`. With the
+/// any other table is the map `{"identifier": <identifier>, "data": <value>}`. With the
 /// `serde` cargo feature the type implements `Serialize` and `Deserialize` by
 /// rendering that `SerialValue` (see [`SerialValue`]'s rendering), so a segment
 /// encodes through any serde format; in JSON, one segment per line is the canonical
@@ -61,7 +63,7 @@ pub struct Segment {
 pub struct SegmentTable {
     #[serial(name = "name")]
     name: String,
-    #[serial(name = "id")]
+    #[serial(name = "table")]
     id: TableId,
     #[serial(name = "start")]
     start: u32,
@@ -73,7 +75,7 @@ pub struct SegmentTable {
 /// data (a homogeneous table stores the bare data).
 #[derive(ToSerialValue, FromSerialValue)]
 pub(super) struct WireEntry {
-    #[serial(name = "id")]
+    #[serial(name = "identifier")]
     pub(super) identifier: Cow<'static, str>,
     #[serial(name = "data")]
     pub(super) data: SerialValue,

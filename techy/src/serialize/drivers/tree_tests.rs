@@ -24,7 +24,7 @@ use crate::error::Recovery;
 use crate::serialize::tree_support::{ignore_annotations, round_trip_tree};
 use crate::serialize::{
     DeserializableObject, DeserializableValue, DeserializeContext, DeserializeError, SerdeSession,
-    Segment, SerialEntry, SerialIndex, SerialValue, SerializableLang, SerializableObject,
+    Segment, SerialEntry, SerialIndex, SerialValue, SerialValueError, SerializableLang, SerializableObject,
     SerializableValue, SerializeContext, SerializeError, TreeSerialization,
 };
 
@@ -953,7 +953,7 @@ fn an_unregistered_annotation_identifier_is_rejected() {
     let trees = find_table_mut(&mut value, "trees");
     let entries = list_mut(map_field_mut(trees, "entries"));
     // A heterogeneous entry carries its identifier under the wire key `id`.
-    *map_field_mut(&mut entries[0], "id") = SerialValue::Str("mystery.tree".into());
+    *map_field_mut(&mut entries[0], "identifier") = SerialValue::Str("mystery.tree".into());
     let edited = Segment::from_serial_value(&value).unwrap();
     let mut reader = setup::<ToyLang>();
     let error = reader.push_segment(edited).unwrap_err();
@@ -1041,7 +1041,7 @@ fn a_content_parent_outside_its_region_is_rejected() {
         let callable = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "callable");
         let arguments = list_mut(map_field_mut(callable, "arguments"));
         let region = map_field_mut(&mut arguments[0], "region");
-        *map_field_mut(region, "content_parent") = SerialValue::Int(3);
+        *map_field_mut(map_field_mut(map_field_mut(region, "content"), "in_children_of"), "node") = SerialValue::Int(3);
     });
     match innermost(&error) {
         DeserializeError::Failed { detail, cause } => {
@@ -1058,28 +1058,45 @@ fn a_content_parent_outside_its_region_is_rejected() {
 
 #[test]
 fn a_content_parent_stored_before_its_callable_is_rejected() {
-    // Point a region's content parent at the root (an ancestor, stored before the
-    // callable — a content parent is a descendant, stored after it).
-    let error = push_edited(&callable_group_args_tree(), |segment| {
+    // Point a region's `in_children_of` content parent at the root (an ancestor,
+    // stored before the callable — a content parent is a descendant, stored after it).
+    let content_parent_edit = |segment: &mut SerialValue, node: i64| {
         let nodes = tree_nodes_mut(segment);
         let callable = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "callable");
         let arguments = list_mut(map_field_mut(callable, "arguments"));
         let region = map_field_mut(&mut arguments[0], "region");
-        *map_field_mut(region, "content_parent") = SerialValue::Int(0);
-    });
+        *map_field_mut(map_field_mut(map_field_mut(region, "content"), "in_children_of"), "node") = SerialValue::Int(node);
+    };
+    let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 0));
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
-    assert!(error.to_string().contains("node #0, is stored before its callable"), "{error}");
+    assert!(error.to_string().contains("node #0, is not stored after its callable"), "{error}");
+
+    // The callable itself (`in_children_of` naming the node whose region it is): the
+    // same error — the wire form for content among the callable's own children is
+    // `in_region`, and the callable is not a node inside its own region.
+    let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 1));
+    assert!(error.to_string().contains("node #1, is not stored after its callable"), "{error}");
 
     // And one out of range altogether.
-    let error = push_edited(&callable_group_args_tree(), |segment| {
+    let error = push_edited(&callable_group_args_tree(), |segment| content_parent_edit(segment, 99));
+    assert!(error.to_string().contains("node #99, is out of range"), "{error}");
+}
+
+#[test]
+fn a_region_content_of_an_unknown_form_is_rejected() {
+    // The content designation is one of two variants, `in_region` / `in_children_of`.
+    let error = push_edited(&callable_token_args_tree(), |segment| {
         let nodes = tree_nodes_mut(segment);
         let callable = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "callable");
         let arguments = list_mut(map_field_mut(callable, "arguments"));
         let region = map_field_mut(&mut arguments[0], "region");
-        *map_field_mut(region, "content_parent") = SerialValue::Int(99);
+        *map_field_mut(region, "content") =
+            SerialValue::Map(Vec::from([(String::from("somewhere"), SerialValue::Map(Vec::new()))]));
     });
-    assert!(error.to_string().contains("node #99, is out of range"), "{error}");
+    assert!(matches!(innermost(&error), DeserializeError::Value(SerialValueError::UnknownVariant { .. })), "{error}");
+    // A shape error is caught while the whole entry is read, before any node is staged.
+    assert!(matches!(error, DeserializeError::InEntry { table: "trees", .. }), "{error}");
 }
 
 #[test]
@@ -1089,7 +1106,7 @@ fn a_region_content_range_out_of_bounds_is_rejected() {
         let callable = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "callable");
         let arguments = list_mut(map_field_mut(callable, "arguments"));
         let region = map_field_mut(&mut arguments[0], "region");
-        *map_field_mut(map_field_mut(region, "content"), "end") = SerialValue::Int(9);
+        *map_field_mut(map_field_mut(map_field_mut(region, "content"), "in_region"), "end") = SerialValue::Int(9);
     });
     assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
     assert_eq!(read_node_location(&error), Some((1, Some("frac"))), "{error}");
@@ -1510,7 +1527,7 @@ fn a_small_tree_has_a_pinned_json_rendering() {
     let json = serde_json::to_string(&crate::serialize::to_value(entry).unwrap()).unwrap();
     assert_eq!(
         json,
-        r#"{"id":"core.tree","data":{"nodes":[{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},{"kind":{"chars":{"content":{"spanned":{"start":0,"end":2}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":2}}]}}"#
+        r#"{"identifier":"core.tree","data":{"nodes":[{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},{"kind":{"chars":{"content":{"spanned":{"start":0,"end":2}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":2}}]}}"#
     );
 }
 

@@ -897,7 +897,7 @@ impl IdentifierResolver<ToyLang, dyn Shape> for ScalingResolver {
 fn the_longest_matching_prefix_wins_then_registration_order() {
     let triangle = |side: i64| {
         SerialValue::Map(Vec::from([
-            (String::from("id"), SerialValue::Str("dyn.triangle".into())),
+            (String::from("identifier"), SerialValue::Str("dyn.triangle".into())),
             (String::from("data"), SerialValue::Int(side)),
         ]))
     };
@@ -1156,7 +1156,7 @@ fn an_unknown_identifier_fails_closed() {
         rt.shapes.id(),
         0,
         Vec::from([SerialValue::Map(Vec::from([
-            (String::from("id"), SerialValue::Str("toy.unknown".into())),
+            (String::from("identifier"), SerialValue::Str("toy.unknown".into())),
             (String::from("data"), SerialValue::Null),
         ]))]),
     );
@@ -1187,7 +1187,7 @@ fn a_declining_resolver_still_fails_closed() {
         rt.shapes.id(),
         0,
         Vec::from([SerialValue::Map(Vec::from([
-            (String::from("id"), SerialValue::Str("toy.mystery".into())),
+            (String::from("identifier"), SerialValue::Str("toy.mystery".into())),
             (String::from("data"), SerialValue::Null),
         ]))]),
     );
@@ -1266,7 +1266,7 @@ fn an_unknown_writer_table_reference_is_an_error() {
     // node-like heterogeneous table instead — use shapes with a data index.
     let (mut reader, rt) = full_session();
     let entry = SerialValue::Map(Vec::from([
-        (String::from("id"), SerialValue::Str("toy.square".into())),
+        (String::from("identifier"), SerialValue::Str("toy.square".into())),
         (String::from("data"), SerialValue::Index { table: TableId::new(7), index: 0 }),
     ]));
     let hostile = one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([entry]));
@@ -1449,7 +1449,7 @@ fn a_declining_resolver_is_asked_once_per_identifier_within_a_push() {
     shapes.register_resolver(&mut session, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) })).unwrap();
     let unknown = || {
         SerialValue::Map(Vec::from([
-            (String::from("id"), SerialValue::Str("dyn.unknown".into())),
+            (String::from("identifier"), SerialValue::Str("dyn.unknown".into())),
             (String::from("data"), SerialValue::Null),
         ]))
     };
@@ -1478,11 +1478,11 @@ fn a_resolver_answer_recorded_during_a_failed_push_is_forgotten() {
     let calls = Arc::new(AtomicUsize::new(0));
     rt.shapes.register_resolver(&mut reader, "dyn.", Arc::new(CountingResolver { calls: Arc::clone(&calls) })).unwrap();
     let triangle = SerialValue::Map(Vec::from([
-        (String::from("id"), SerialValue::Str("dyn.triangle".into())),
+        (String::from("identifier"), SerialValue::Str("dyn.triangle".into())),
         (String::from("data"), SerialValue::Int(3)),
     ]));
     let unknown = SerialValue::Map(Vec::from([
-        (String::from("id"), SerialValue::Str("toy.unknown".into())),
+        (String::from("identifier"), SerialValue::Str("toy.unknown".into())),
         (String::from("data"), SerialValue::Null),
     ]));
     let hostile = one_table_segment("shapes", rt.shapes.id(), 0, Vec::from([triangle.clone(), unknown]));
@@ -1560,7 +1560,7 @@ fn a_segment_round_trips_through_its_serial_value() {
 fn one_table_segment(name: &str, id: TableId, start: u32, entries: Vec<SerialValue>) -> Segment {
     let table = SerialValue::Map(Vec::from([
         (String::from("name"), SerialValue::Str(String::from(name))),
-        (String::from("id"), SerialValue::Int(i64::from(id.ordinal()))),
+        (String::from("table"), SerialValue::Int(i64::from(id.ordinal()))),
         (String::from("start"), SerialValue::Int(i64::from(start))),
         (String::from("entries"), SerialValue::List(entries)),
     ]));
@@ -1579,7 +1579,7 @@ fn two_table_segment(
     fn table((name, id, start, entries): (&str, TableId, u32, Vec<SerialValue>)) -> SerialValue {
         SerialValue::Map(Vec::from([
             (String::from("name"), SerialValue::Str(String::from(name))),
-            (String::from("id"), SerialValue::Int(i64::from(id.ordinal()))),
+            (String::from("table"), SerialValue::Int(i64::from(id.ordinal()))),
             (String::from("start"), SerialValue::Int(i64::from(start))),
             (String::from("entries"), SerialValue::List(entries)),
         ]))
@@ -1631,9 +1631,9 @@ mod serde_rendering {
             json,
             concat!(
                 r#"{"version":1,"tables":["#,
-                r#"{"name":"leaves","id":0,"start":0,"entries":["hi"]},"#,
-                r#"{"name":"shapes","id":1,"start":0,"entries":[{"id":"toy.square","data":{"side":2}}]},"#,
-                r#"{"name":"nodes","id":2,"start":0,"entries":[{"leaves":[{"$index":[0,0]}],"shape":{"$index":[1,0]}}]}"#,
+                r#"{"name":"leaves","table":0,"start":0,"entries":["hi"]},"#,
+                r#"{"name":"shapes","table":1,"start":0,"entries":[{"identifier":"toy.square","data":{"side":2}}]},"#,
+                r#"{"name":"nodes","table":2,"start":0,"entries":[{"leaves":[{"$index":[0,0]}],"shape":{"$index":[1,0]}}]}"#,
                 r#"]}"#,
             )
         );

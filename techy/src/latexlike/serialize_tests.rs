@@ -852,12 +852,12 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
     let mut value = segment.to_serial_value();
     let providers = find_table_entries_mut(&mut value, "providers");
     let fallback_position = providers.iter().position(|entry| {
-        matches!(map_field(entry, "id"), Some(SerialValue::Str(id)) if id == "core.fallback-provider")
+        matches!(map_field(entry, "identifier"), Some(SerialValue::Str(id)) if id == "core.fallback-provider")
     })
     .unwrap();
     let specs = find_table_entries_mut(&mut value, "specs");
     specs.push(SerialValue::Map(vec![
-        (String::from("id"), SerialValue::Str("core.provider-spec".into())),
+        (String::from("identifier"), SerialValue::Str("core.provider-spec-identity".into())),
         (
             String::from("data"),
             SerialValue::Map(vec![
@@ -866,7 +866,7 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
                     SerialValue::Index { table: crate::serialize::TableId::new(3), index: fallback_position as u32 },
                 ),
                 (String::from("callable_type"), SerialValue::Str("macro".into())),
-                (String::from("key"), SerialValue::Map(vec![(String::from("name"), SerialValue::Str("x".into()))])),
+                (String::from("definition"), SerialValue::Map(vec![(String::from("name"), SerialValue::Str("x".into()))])),
             ]),
         ),
     ]));
@@ -1026,7 +1026,7 @@ fn the_rendering_of_the_determinism_input_is_pinned_across_processes() {
 
 /// The pinned `(byte length, FNV-1a 64-bit digest)` of the determinism input's JSON.
 #[cfg(feature = "serde")]
-const PINNED_DETERMINISM_RENDERING: (usize, u64) = (7804, 10_008_825_348_294_994_022);
+const PINNED_DETERMINISM_RENDERING: (usize, u64) = (8003, 5_103_988_058_968_863_647);
 
 // --- helpers ------------------------------------------------------------------------------
 
@@ -1151,22 +1151,22 @@ mod rendering {
         let json = serde_json::to_string(&writer.take_segment()).unwrap();
         let expected = concat!(
             r#"{"version":1,"tables":["#,
-            r#"{"name":"sources","id":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"\\e{x}"}}]},"#,
-            r#"{"name":"states","id":1,"start":0,"entries":["#,
-            r#"{"rules":{"whitespace":{"enabled":true,"chars":" \t\n\r\u000b\f"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":"content","open":"{","close":"}"},{"group_type":{"math":"inline"},"open":"$","close":"$"},{"group_type":{"math":"display"},"open":"$$","close":"$$"},{"group_type":{"math":"inline"},"open":"\\(","close":"\\)"},{"group_type":{"math":"display"},"open":"\\[","close":"\\]"}],"temporary":[]},"commands":{"enabled":true,"rules":[{"escape_char":"\\","name_chars":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":true},"forbidden_chars":{"chars":""}},"mode":"text","ext":null,"scopes":[{"$index":[3,0]},{"$index":[3,1]}]},"#,
-            r#"{"rules":{"whitespace":{"enabled":true,"chars":" \t\n\r\u000b\f"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":"content","open":"{","close":"}"},{"group_type":{"math":"inline"},"open":"$","close":"$"},{"group_type":{"math":"display"},"open":"$$","close":"$$"},{"group_type":{"math":"inline"},"open":"\\(","close":"\\)"},{"group_type":{"math":"display"},"open":"\\[","close":"\\]"}],"temporary":[],"expecting_close":{"group_type":"content","open":"{","close":"}"}},"commands":{"enabled":true,"rules":[{"escape_char":"\\","name_chars":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":true},"forbidden_chars":{"chars":""}},"mode":"text","ext":null,"scopes":[{"$index":[3,0]},{"$index":[3,1]}]}]},"#,
-            r#"{"name":"specs","id":2,"start":0,"entries":[{"id":"core.provider-spec","data":{"provider":{"$index":[3,1]},"callable_type":"macro","key":"#,
+            r#"{"name":"sources","table":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"\\e{x}"}}]},"#,
+            r#"{"name":"states","table":1,"start":0,"entries":["#,
+            r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n\r\u000b\f"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":"content","open":"{","close":"}"},{"group_type":{"math":"inline"},"open":"$","close":"$"},{"group_type":{"math":"display"},"open":"$$","close":"$$"},{"group_type":{"math":"inline"},"open":"\\(","close":"\\)"},{"group_type":{"math":"display"},"open":"\\[","close":"\\]"}],"temporary":[]},"commands":{"enabled":true,"rules":[{"escape_char":"\\","name_chars":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":true},"forbidden_chars":{"chars":""}},"mode":"text","ext":null,"scopes":[{"$index":[3,0]},{"$index":[3,1]}]},"#,
+            r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n\r\u000b\f"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":"content","open":"{","close":"}"},{"group_type":{"math":"inline"},"open":"$","close":"$"},{"group_type":{"math":"display"},"open":"$$","close":"$$"},{"group_type":{"math":"inline"},"open":"\\(","close":"\\)"},{"group_type":{"math":"display"},"open":"\\[","close":"\\]"}],"temporary":[],"expecting_close":{"group_type":"content","open":"{","close":"}"}},"commands":{"enabled":true,"rules":[{"escape_char":"\\","name_chars":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"}]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":true},"forbidden_chars":{"chars":""}},"mode":"text","ext":null,"scopes":[{"$index":[3,0]},{"$index":[3,1]}]}]},"#,
+            r#"{"name":"specs","table":2,"start":0,"entries":[{"identifier":"core.provider-spec-identity","data":{"provider":{"$index":[3,1]},"callable_type":"macro","definition":"#,
             r#"{"name":"e"}}}]},"#,
-            r#"{"name":"providers","id":3,"start":0,"entries":[{"id":"core.package","data":"#,
-            r#"{"name":"_builtin"}},{"id":"core.package","data":"#,
+            r#"{"name":"providers","table":3,"start":0,"entries":[{"identifier":"core.package","data":"#,
+            r#"{"name":"_builtin"}},{"identifier":"core.package","data":"#,
             r#"{"name":"d"}}]},"#,
-            r#"{"name":"trees","id":4,"start":0,"entries":[{"id":"core.tree","data":{"nodes":["#,
+            r#"{"name":"trees","table":4,"start":0,"entries":[{"identifier":"core.tree","data":{"nodes":["#,
             r#"{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},"#,
-            r#"{"kind":{"callable":{"callable_type":"macro","name":"e","spec":{"$index":[2,0]},"arguments":[{"region":{"children":{"start":0,"end":1},"content":{"start":0,"end":1},"content_parent":2},"ext":null}],"slots":[],"invocation_syntax":{"macro":{"escape_char":"\\","post_space":{"owned":""}}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":3}},"#,
+            r#"{"kind":{"callable":{"callable_type":"macro","name":"e","spec":{"$index":[2,0]},"arguments":[{"region":{"children":{"start":0,"end":1},"content":{"in_children_of":{"node":2,"start":0,"end":1}}},"ext":null}],"slots":[],"invocation_syntax":{"macro":{"escape_char":"\\","post_space":{"owned":""}}}}},"span":{"source":{"$index":[0,0]},"start":0,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":3}},"#,
             r#"{"kind":{"group":{"group_type":"content","open":{"spanned":{"start":2,"end":3}},"close":{"spanned":{"start":4,"end":5}}}},"span":{"source":{"$index":[0,0]},"start":2,"end":5},"state":{"$index":[1,0]},"ext":null,"children":{"start":3,"end":4}},"#,
             r#"{"kind":{"chars":{"content":{"spanned":{"start":3,"end":4}}}},"span":{"source":{"$index":[0,0]},"start":3,"end":4},"state":{"$index":[1,1]},"ext":null,"children":{"start":4,"end":4}}]}}]},"#,
-            r#"{"name":"diagnostics","id":5,"start":0,"entries":[]},"#,
-            r#"{"name":"parse-results","id":6,"start":0,"entries":[]}]}"#,
+            r#"{"name":"diagnostics","table":5,"start":0,"entries":[]},"#,
+            r#"{"name":"parse-results","table":6,"start":0,"entries":[]}]}"#,
         );
         assert_eq!(json, expected);
     }

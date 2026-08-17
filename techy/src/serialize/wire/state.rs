@@ -21,7 +21,7 @@ use super::{FromSerialValue, ToSerialValue};
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireState {
     /// The tokenization rules.
-    #[serial(name = "rules")]
+    #[serial(name = "token_rules")]
     pub(crate) rules: WireTokenRules,
     /// The parsing mode, in the language's own form (`ModeId`'s value conversion).
     #[serial(name = "mode")]

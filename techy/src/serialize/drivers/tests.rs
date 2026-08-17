@@ -751,7 +751,7 @@ fn a_section_for_an_absent_feature_is_refused() {
     let states = entry_field_mut(&mut segment_value, &["tables"]);
     let SerialValue::List(parts) = states else { panic!() };
     let SerialValue::List(state_entries) = entry_field_mut(&mut parts[1], &["entries"]) else { panic!() };
-    *entry_field_mut(&mut state_entries[0], &["rules"]) = SerialValue::Map(Vec::new());
+    *entry_field_mut(&mut state_entries[0], &["token_rules"]) = SerialValue::Map(Vec::new());
     let mut reader = SerdeSession::<PlainLang>::new();
     reader.push_segment(Segment::from_serial_value(&segment_value).unwrap()).unwrap();
     let back = reader.state(reader.standard_tables().unwrap().states.position(0)).unwrap();
@@ -763,7 +763,7 @@ fn a_section_for_an_absent_feature_is_refused() {
     writer.intern_state(&plain).unwrap();
     let segment = writer.take_segment();
     let SerialValue::Map(fields) = &entries(&segment, "states")[0] else { panic!() };
-    assert_eq!(fields[0], (String::from("rules"), SerialValue::Map(Vec::new())));
+    assert_eq!(fields[0], (String::from("token_rules"), SerialValue::Map(Vec::new())));
 }
 
 #[test]
@@ -776,7 +776,7 @@ fn a_scope_stack_for_a_scopes_less_lang_is_refused() {
     // Strip the sections so that only the scope stack is at issue.
     let SerialValue::List(parts) = entry_field_mut(&mut segment_value, &["tables"]) else { panic!() };
     let SerialValue::List(state_entries) = entry_field_mut(&mut parts[1], &["entries"]) else { panic!() };
-    *entry_field_mut(&mut state_entries[0], &["rules"]) = SerialValue::Map(Vec::new());
+    *entry_field_mut(&mut state_entries[0], &["token_rules"]) = SerialValue::Map(Vec::new());
     let mut reader = session_with_environment(SerdeSession::<PlainLang>::new(), &providers);
     let error = reader.push_segment(Segment::from_serial_value(&segment_value).unwrap()).unwrap_err();
     assert!(matches!(innermost(&error), DeserializeError::FeatureAbsent { feature: "scopes" }), "{error}");
@@ -790,7 +790,7 @@ fn a_missing_section_reads_as_the_empty_rules_of_a_present_feature() {
     let mut writer = SerdeSession::<ToyLang>::new();
     writer.intern_state(&state).unwrap();
     let segment = edited_segment(&writer.take_segment(), "states", 0, |entry| {
-        let SerialValue::Map(sections) = entry_field_mut(entry, &["rules"]) else { panic!() };
+        let SerialValue::Map(sections) = entry_field_mut(entry, &["token_rules"]) else { panic!() };
         sections.retain(|(k, _)| k != "commands" && k != "comments");
     });
     let mut reader = SerdeSession::<ToyLang>::new();
@@ -814,8 +814,8 @@ fn an_expected_close_matching_no_rule_is_accepted_with_a_fresh_handle() {
     writer.intern_state(&state).unwrap();
     // The expected close becomes a rule that is neither in `rules` nor in `temporary`.
     let segment = edited_segment(&writer.take_segment(), "states", 0, |entry| {
-        *entry_field_mut(entry, &["rules", "groups", "expecting_close", "open"]) = SerialValue::Str("<".into());
-        *entry_field_mut(entry, &["rules", "groups", "expecting_close", "close"]) = SerialValue::Str(">".into());
+        *entry_field_mut(entry, &["token_rules", "groups", "expecting_close", "open"]) = SerialValue::Str("<".into());
+        *entry_field_mut(entry, &["token_rules", "groups", "expecting_close", "close"]) = SerialValue::Str(">".into());
     });
     let mut reader = SerdeSession::<ToyLang>::new();
     reader.push_segment(segment).unwrap();
@@ -873,7 +873,7 @@ fn a_hostile_state_shape_is_rejected() {
 
     // A two-character escape char.
     let error = push(edited_segment(&segment, "states", 0, |entry| {
-        let SerialValue::List(rules) = entry_field_mut(entry, &["rules", "commands", "rules"]) else { panic!() };
+        let SerialValue::List(rules) = entry_field_mut(entry, &["token_rules", "commands", "rules"]) else { panic!() };
         *entry_field_mut(&mut rules[0], &["escape_char"]) = SerialValue::Str("ab".into());
     }));
     assert!(matches!(innermost(&error), DeserializeError::Value(SerialValueError::TypeMismatch { .. })), "{error}");
@@ -885,7 +885,7 @@ fn a_hostile_state_shape_is_rejected() {
     assert!(matches!(innermost(&error), DeserializeError::Value(SerialValueError::MissingField { name: "scopes" })), "{error}");
     // A group type of the wrong kind (u32 expected).
     let error = push(edited_segment(&segment, "states", 0, |entry| {
-        let SerialValue::List(rules) = entry_field_mut(entry, &["rules", "groups", "rules"]) else { panic!() };
+        let SerialValue::List(rules) = entry_field_mut(entry, &["token_rules", "groups", "rules"]) else { panic!() };
         *entry_field_mut(&mut rules[0], &["group_type"]) = SerialValue::Str("math".into());
     }));
     assert!(matches!(innermost(&error), DeserializeError::Value(SerialValueError::TypeMismatch { .. })), "{error}");
@@ -1006,14 +1006,14 @@ mod serde_rendering {
             json,
             concat!(
                 r#"{"version":1,"tables":["#,
-                r#"{"name":"sources","id":0,"start":0,"entries":["#,
+                r#"{"name":"sources","table":0,"start":0,"entries":["#,
                 r#"{"origin":"a.tex","provenance":"primary","line_number_offset":1,"column_number_offset":1,"#,
                 r#""text":{"referenced":{"length":2,"digest":{"algorithm":"toy-sum","bytes":{"$bytes":"AAAAAAAAAMM="}}}}},"#,
                 r#"{"origin":null,"provenance":{"synthesized":{"description":"expansion","triggered_at":{"source":{"$index":[0,0]},"start":0,"end":1}}},"#,
                 r#""line_number_offset":1,"column_number_offset":1,"#,
                 r#""text":{"referenced":{"length":1,"digest":{"algorithm":"toy-sum","bytes":{"$bytes":"AAAAAAAAAHg="}}}}}"#,
                 r#"]},"#,
-                r#"{"name":"states","id":1,"start":0,"entries":[{"rules":{"#,
+                r#"{"name":"states","table":1,"start":0,"entries":[{"token_rules":{"#,
                 r#""whitespace":{"enabled":false,"chars":""},"#,
                 r#""paragraphs":{"enabled":false},"#,
                 r#""groups":{"enabled":true,"rules":[{"group_type":1,"open":"{","close":"}"}],"temporary":[],"expecting_close":{"group_type":1,"open":"{","close":"}"}},"#,
@@ -1022,11 +1022,11 @@ mod serde_rendering {
                 r#""specials":{"enabled":false},"#,
                 r#""forbidden_chars":{"chars":""}},"#,
                 r#""mode":null,"ext":null,"scopes":[{"$index":[3,0]}]}]},"#,
-                r#"{"name":"specs","id":2,"start":0,"entries":[]},"#,
-                r#"{"name":"providers","id":3,"start":0,"entries":[{"id":"toy.provider","data":"pkg"}]},"#,
-                r#"{"name":"trees","id":4,"start":0,"entries":[]},"#,
-                r#"{"name":"diagnostics","id":5,"start":0,"entries":[]},"#,
-                r#"{"name":"parse-results","id":6,"start":0,"entries":[]}"#,
+                r#"{"name":"specs","table":2,"start":0,"entries":[]},"#,
+                r#"{"name":"providers","table":3,"start":0,"entries":[{"identifier":"toy.provider","data":"pkg"}]},"#,
+                r#"{"name":"trees","table":4,"start":0,"entries":[]},"#,
+                r#"{"name":"diagnostics","table":5,"start":0,"entries":[]},"#,
+                r#"{"name":"parse-results","table":6,"start":0,"entries":[]}"#,
                 r#"]}"#,
             )
         );

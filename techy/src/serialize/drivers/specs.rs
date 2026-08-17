@@ -268,7 +268,8 @@ pub fn register_core_readers<L: SerializableLang>(session: &mut SerdeSession<L>)
 
 // --- SpecProvenance: the identity form of a stamped spec ------------------------------
 
-/// The identity form of a stamped spec: `{provider, callable_type, key}` — the
+/// The identity form of a stamped spec (identifier `core.provider-spec-identity`):
+/// `{provider, callable_type, definition}` — the
 /// defining provider's position in the providers table (interned here: the provider
 /// is written once, wherever it is referred to from), the invocation form in the
 /// language's own form, and the definition key (`{name: …}` or `{trigger: …}`). This

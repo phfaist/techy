@@ -716,18 +716,18 @@ fn a_diagnostic_and_a_parse_result_have_a_pinned_json_rendering() {
     let json = serde_json::to_string(&writer.take_segment()).unwrap();
     let expected = concat!(
         r#"{"version":1,"tables":["#,
-        r#"{"name":"sources","id":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"{a"}}]},"#,
-        r#"{"name":"states","id":1,"start":0,"entries":["#,
-        r#"{"rules":{"whitespace":{"enabled":true,"chars":" \t\n"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":0,"open":"{","close":"}"}],"temporary":[]},"commands":{"enabled":false,"rules":[]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":false},"forbidden_chars":{"chars":""}},"mode":null,"ext":null,"scopes":[]},"#,
-        r#"{"rules":{"whitespace":{"enabled":true,"chars":" \t\n"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":0,"open":"{","close":"}"}],"temporary":[],"expecting_close":{"group_type":0,"open":"{","close":"}"}},"commands":{"enabled":false,"rules":[]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":false},"forbidden_chars":{"chars":""}},"mode":null,"ext":null,"scopes":[]}]},"#,
-        r#"{"name":"specs","id":2,"start":0,"entries":[]},"#,
-        r#"{"name":"providers","id":3,"start":0,"entries":[]},"#,
-        r#"{"name":"trees","id":4,"start":0,"entries":[{"id":"core.tree","data":{"nodes":["#,
+        r#"{"name":"sources","table":0,"start":0,"entries":[{"origin":null,"provenance":"primary","line_number_offset":1,"column_number_offset":1,"text":{"embedded":"{a"}}]},"#,
+        r#"{"name":"states","table":1,"start":0,"entries":["#,
+        r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":0,"open":"{","close":"}"}],"temporary":[]},"commands":{"enabled":false,"rules":[]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":false},"forbidden_chars":{"chars":""}},"mode":null,"ext":null,"scopes":[]},"#,
+        r#"{"token_rules":{"whitespace":{"enabled":true,"chars":" \t\n"},"paragraphs":{"enabled":true},"groups":{"enabled":true,"rules":[{"group_type":0,"open":"{","close":"}"}],"temporary":[],"expecting_close":{"group_type":0,"open":"{","close":"}"}},"commands":{"enabled":false,"rules":[]},"comments":{"enabled":true,"rules":[{"start":"%"}]},"specials":{"enabled":false},"forbidden_chars":{"chars":""}},"mode":null,"ext":null,"scopes":[]}]},"#,
+        r#"{"name":"specs","table":2,"start":0,"entries":[]},"#,
+        r#"{"name":"providers","table":3,"start":0,"entries":[]},"#,
+        r#"{"name":"trees","table":4,"start":0,"entries":[{"identifier":"core.tree","data":{"nodes":["#,
         r#"{"kind":"list","span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":1,"end":2}},"#,
         r#"{"kind":{"group":{"group_type":0,"open":{"spanned":{"start":0,"end":1}},"close":{"owned":""}}},"span":{"source":{"$index":[0,0]},"start":0,"end":2},"state":{"$index":[1,0]},"ext":null,"children":{"start":2,"end":3}},"#,
         r#"{"kind":{"chars":{"content":{"spanned":{"start":1,"end":2}}}},"span":{"source":{"$index":[0,0]},"start":1,"end":2},"state":{"$index":[1,1]},"ext":null,"children":{"start":3,"end":3}}]}}]},"#,
-        r#"{"name":"diagnostics","id":5,"start":0,"entries":[{"severity":"error","identifier":"core.groups.unclosed-group","data":{"expected_close":"}","found":"end-of-input"},"message":"unclosed group: expected ‘}’ before end of input","span":{"source":{"$index":[0,0]},"start":0,"end":1},"frames":[]}]},"#,
-        r#"{"name":"parse-results","id":6,"start":0,"entries":[{"tree":{"$index":[4,0]},"diagnostics":{"items":[{"$index":[5,0]}],"limit":1000,"suppressed":0,"error_count":1},"session_ext":3}]}]}"#,
+        r#"{"name":"diagnostics","table":5,"start":0,"entries":[{"severity":"error","identifier":"core.groups.unclosed-group","message":"unclosed group: expected ‘}’ before end of input","data":{"expected_close":"}","found":"end-of-input"},"span":{"source":{"$index":[0,0]},"start":0,"end":1},"frames":[]}]},"#,
+        r#"{"name":"parse-results","table":6,"start":0,"entries":[{"tree":{"$index":[4,0]},"diagnostics":{"items":[{"$index":[5,0]}],"limit":1000,"suppressed":0,"error_count":1},"session_ext":3}]}]}"#,
     );
     assert_eq!(json, expected);
 }

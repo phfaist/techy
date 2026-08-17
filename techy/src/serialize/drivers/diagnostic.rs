@@ -151,8 +151,8 @@ impl<L: Lang> SerializableObject<L> for Diagnostic<L::SourceOrigin> {
         let wire = WireDiagnostic {
             severity: WireSeverity::from(self.severity()),
             identifier: String::from(self.identifier()),
-            data: SerialValue::from(self.data().serializable_data()),
             message: self.message(),
+            data: SerialValue::from(self.data().serializable_data()),
             span: serialize_span(self.span(), cx)?,
             frames,
         };

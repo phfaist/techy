@@ -73,7 +73,7 @@ pub(crate) struct WireFallback {
 }
 
 /// A spec by identity: the provider that defines it, the invocation form, and the
-/// key it is defined under.
+/// definition key it is defined under.
 #[derive(Debug, Clone, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireSpecIdentity {
     /// The defining provider.
@@ -82,8 +82,8 @@ pub(crate) struct WireSpecIdentity {
     /// The invocation form, in the language's own form.
     #[serial(name = "callable_type")]
     pub(crate) callable_type: SerialValue,
-    /// The key.
-    #[serial(name = "key")]
+    /// The definition key.
+    #[serial(name = "definition")]
     pub(crate) key: WireDefinitionKey,
 }
 

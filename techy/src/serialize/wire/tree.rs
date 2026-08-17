@@ -261,28 +261,52 @@ pub(crate) struct WireSlot {
 }
 
 /// One argument's or slot's child region in the builder-ready form the reader
-/// re-resolves: the region's node offsets within the callable's child list, the
-/// content nodes' offsets, and the storage index of the node whose children hold the
-/// content.
+/// re-resolves: the region's node offsets within the callable's child list, and the
+/// content designation ([`WireContent`]).
 ///
-/// - `children` are offsets into the callable's own child list `[0, child_count)`.
-/// - `content_parent` is the storage index of the node whose children hold the
-///   content: the callable itself when the content sits directly among the callable's
-///   children, otherwise a node inside the region (an argument's group, a slot's body
-///   list).
-/// - `content` are offsets: within the region's own node list when `content_parent` is
-///   the callable, otherwise within `content_parent`'s children.
+/// `children` are offsets into the callable's own child list `[0, child_count)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToSerialValue, FromSerialValue)]
 pub(crate) struct WireRegion {
     /// The region's node offsets within the callable's child list.
     #[serial(name = "children")]
     pub(crate) children: WireRange,
-    /// The content nodes' offsets (see the type docs).
+    /// Which nodes are the content, and where they sit.
     #[serial(name = "content")]
-    pub(crate) content: WireRange,
-    /// The storage index of the content parent.
-    #[serial(name = "content_parent")]
-    pub(crate) content_parent: u32,
+    pub(crate) content: WireContent,
+}
+
+/// A region's content designation — the wire form of
+/// [`ContentNodes`](crate::node::ContentNodes), variant for variant: the content
+/// nodes sit either directly in the region's own node list (`in_region`: offsets
+/// within that list) or among the children of a node inside the region (`in_children_of`:
+/// the storage index of that node — an argument's group, a slot's body list — and
+/// offsets within its child list).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToSerialValue, FromSerialValue)]
+pub(crate) enum WireContent {
+    /// Offsets `[start, end)` within the region's own node list.
+    #[serial(name = "in_region")]
+    InRegion {
+        /// The first content node's offset (inclusive).
+        #[serial(name = "start")]
+        start: u32,
+        /// The offset past the last content node (exclusive).
+        #[serial(name = "end")]
+        end: u32,
+    },
+    /// Offsets `[start, end)` within the child list of the node stored at `node`.
+    #[serial(name = "in_children_of")]
+    InChildrenOf {
+        /// The storage index of the node whose children hold the content: a node
+        /// inside the region, hence stored after the callable.
+        #[serial(name = "node")]
+        node: u32,
+        /// The first content child's offset (inclusive).
+        #[serial(name = "start")]
+        start: u32,
+        /// The offset past the last content child (exclusive).
+        #[serial(name = "end")]
+        end: u32,
+    },
 }
 
 /// A half-open range `[start, end)` of `u32`s.

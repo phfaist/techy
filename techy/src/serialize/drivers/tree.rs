@@ -47,7 +47,7 @@ use super::super::object::{DeserializableValue, SerializableLang, SerializableVa
 use super::super::value::{SerialEntry, SerialValue};
 use super::super::wire::state::WireGroupRule;
 use super::super::wire::tree::{
-    WireArgument, WireNode, WireNodeKind, WireRange, WireRegion, WireSlot, WireTree,
+    WireArgument, WireContent, WireNode, WireNodeKind, WireRange, WireRegion, WireSlot, WireTree,
 };
 use super::super::wire::{FromSerialValue, ToSerialValue};
 use super::source::{deserialize_span, serialize_span};
@@ -696,8 +696,9 @@ fn serialize_slot<L: SerializableLang>(
 }
 
 /// The builder-ready form of a resolved region (see [`WireRegion`]): its node offsets
-/// within the callable's child list, its content offsets, and the storage index of
-/// the content parent.
+/// within the callable's child list and its content designation — in the region's own
+/// node list when the content parent is the callable itself, else among the children
+/// of the content parent (a node inside the region).
 fn serialize_region<L: Lang>(
     region: &ChildRegion,
     callable_index: u32,
@@ -710,12 +711,16 @@ fn serialize_region<L: Lang>(
     let content_parent = region.content_parent().index() as u32;
     let content_range = region.content_range();
     let content = if content_parent == callable_index {
-        WireRange { start: content_range.start - region_start, end: content_range.end - region_start }
+        WireContent::InRegion { start: content_range.start - region_start, end: content_range.end - region_start }
     } else {
         let parent_start = nodes[content_parent as usize].children.start;
-        WireRange { start: content_range.start - parent_start, end: content_range.end - parent_start }
+        WireContent::InChildrenOf {
+            node: content_parent,
+            start: content_range.start - parent_start,
+            end: content_range.end - parent_start,
+        }
     };
-    WireRegion { children, content, content_parent }
+    WireRegion { children, content }
 }
 
 // --- reading ---------------------------------------------------------------------------
@@ -834,7 +839,7 @@ fn stage_node<L: SerializableLang, A>(
         children.push(build_id);
     }
 
-    let kind = rebuild_kind(index, wire, build_id_of, cx)?;
+    let kind = rebuild_kind(wire, build_id_of, cx)?;
     let span = deserialize_span(wire.span, cx)?;
     let state = cx.state(wire.state)?;
     let ext = <NodeExt<L> as DeserializableValue<L>>::deserialize_value(&wire.ext, cx)?;
@@ -885,7 +890,6 @@ fn builder_failure(error: NodeBuildError, build_id_of: &[Option<BuildId>]) -> De
 }
 
 fn rebuild_kind<L: SerializableLang>(
-    index: u32,
     wire: &WireNode,
     build_id_of: &[Option<BuildId>],
     cx: &mut DeserializeContext<'_, L>,
@@ -908,11 +912,11 @@ fn rebuild_kind<L: SerializableLang>(
             let arguments = arguments
                 .iter()
                 .enumerate()
-                .map(|(arg_index, wire)| rebuild_argument(arg_index, wire, &spec, index, build_id_of, cx))
+                .map(|(arg_index, wire)| rebuild_argument(arg_index, wire, &spec, build_id_of, cx))
                 .collect::<Result<Vec<_>, _>>()?;
             let slots = slots
                 .iter()
-                .map(|wire| rebuild_slot(wire, index, build_id_of, cx))
+                .map(|wire| rebuild_slot(wire, build_id_of, cx))
                 .collect::<Result<Vec<_>, _>>()?;
             let invocation_syntax =
                 <L::InvocationSyntax as DeserializableValue<L>>::deserialize_value(invocation_syntax, cx)?;
@@ -932,14 +936,13 @@ fn rebuild_argument<L: SerializableLang>(
     arg_index: usize,
     wire: &WireArgument,
     callable_spec: &Arc<dyn CallableSpec<L>>,
-    callable_index: u32,
     build_id_of: &[Option<BuildId>],
     cx: &mut DeserializeContext<'_, L>,
 ) -> Result<ParsedArgument<L>, DeserializeError> {
     let spec = callable_spec.deserialize_argument_spec(arg_index, wire.spec_payload.as_ref(), cx)?;
     match &wire.region {
         Some(region) => {
-            let region = staged_region(region, callable_index, build_id_of)?;
+            let region = staged_region(region, build_id_of)?;
             // A provided argument's ext follows its region: the writer writes it (null
             // for the unit ext), and the reader accepts a null value or an omitted key
             // alike as the ext's null form (an `Option<SerialValue>` field reads a
@@ -964,11 +967,10 @@ fn rebuild_argument<L: SerializableLang>(
 
 fn rebuild_slot<L: SerializableLang>(
     wire: &WireSlot,
-    callable_index: u32,
     build_id_of: &[Option<BuildId>],
     cx: &mut DeserializeContext<'_, L>,
 ) -> Result<ParsedSlot<L>, DeserializeError> {
-    let region = staged_region(&wire.region, callable_index, build_id_of)?;
+    let region = staged_region(&wire.region, build_id_of)?;
     let ext = <SlotExt<L> as DeserializableValue<L>>::deserialize_value(&wire.ext, cx)?;
     match &wire.name {
         Some(name) => Ok(ParsedSlot::new(region, name.as_str(), wire.role, ext)),
@@ -977,37 +979,33 @@ fn rebuild_slot<L: SerializableLang>(
 }
 
 /// Convert a wire region into the builder's staged form: the region's child offsets
-/// and its content designation ([`ContentNodes`]) in build-id terms. A content parent
-/// other than the callable itself must be a node inside the region — a descendant of
-/// the callable, stored after it, hence already staged; the builder checks that it lies
-/// inside the region's own subtree when the tree is finished.
-fn staged_region(
-    wire: &WireRegion,
-    callable_index: u32,
-    build_id_of: &[Option<BuildId>],
-) -> Result<ChildRegion, DeserializeError> {
+/// and its content designation ([`ContentNodes`]) in build-id terms. An
+/// `in_children_of` content parent must be a node inside the region — a descendant of
+/// the callable, stored after it, hence already staged (the callable itself is not
+/// staged yet, so naming it is that error too); the builder checks that it lies inside
+/// the region's own subtree when the tree is finished.
+fn staged_region(wire: &WireRegion, build_id_of: &[Option<BuildId>]) -> Result<ChildRegion, DeserializeError> {
     let children = wire.children.start..wire.children.end;
-    let content = wire.content.start..wire.content.end;
-    let content = if wire.content_parent == callable_index {
-        ContentNodes::InRegion(content)
-    } else {
-        let parent = wire.content_parent;
-        let build_id = match build_id_of.get(parent as usize) {
-            None => {
-                return Err(DeserializeError::failed(alloc::format!(
-                    "a region's content parent, node #{parent}, is out of range ({} nodes)",
-                    build_id_of.len()
-                )))
-            }
-            Some(None) => {
-                return Err(DeserializeError::failed(alloc::format!(
-                    "a region's content parent, node #{parent}, is stored before its callable (a \
-                     content parent is a node inside the region, stored after the callable)"
-                )))
-            }
-            Some(Some(build_id)) => *build_id,
-        };
-        ContentNodes::InChildrenOf(build_id, content)
+    let content = match wire.content {
+        WireContent::InRegion { start, end } => ContentNodes::InRegion(start..end),
+        WireContent::InChildrenOf { node: parent, start, end } => {
+            let build_id = match build_id_of.get(parent as usize) {
+                None => {
+                    return Err(DeserializeError::failed(alloc::format!(
+                        "a region's content parent, node #{parent}, is out of range ({} nodes)",
+                        build_id_of.len()
+                    )))
+                }
+                Some(None) => {
+                    return Err(DeserializeError::failed(alloc::format!(
+                        "a region's content parent, node #{parent}, is not stored after its callable (a \
+                         content parent is a node inside the region, stored after the callable)"
+                    )))
+                }
+                Some(Some(build_id)) => *build_id,
+            };
+            ContentNodes::InChildrenOf(build_id, start..end)
+        }
     };
     Ok(ChildRegion::new(children, content))
 }

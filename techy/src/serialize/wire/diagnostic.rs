@@ -1,7 +1,7 @@
 //! The serialized shape of a [`Diagnostic`](crate::error::Diagnostic): [`WireDiagnostic`]
-//! and its parts — the severity ([`WireSeverity`]), the condition's identifier, its
-//! serialization projection (a [`SerialValue`] holding the embedded
-//! [`DiagnosticValue`](crate::error::DiagnosticValue)), the rendered message, the span,
+//! and its parts — the severity ([`WireSeverity`]), the condition's identifier, the
+//! rendered message, the serialization projection (a [`SerialValue`] holding the
+//! embedded [`DiagnosticValue`](crate::error::DiagnosticValue)), the span,
 //! and the traceback frames ([`WireTraceFrame`]). Written and read by the crate's
 //! diagnostic driver ([`DiagnosticSerdeDriver`](crate::serialize::DiagnosticSerdeDriver)).
 
@@ -24,15 +24,15 @@ pub(crate) struct WireDiagnostic {
     /// The condition's wire identity (`Diagnostic::identifier`).
     #[serial(name = "identifier")]
     pub(crate) identifier: String,
+    /// The human-readable message, as rendered when the diagnostic was written
+    /// (`Diagnostic::message`).
+    #[serial(name = "message")]
+    pub(crate) message: String,
     /// The condition's serialization projection (`DiagnosticInfo::serializable_data`),
     /// embedded as a `SerialValue`; the reader accepts only the kinds a
     /// `DiagnosticValue` holds.
     #[serial(name = "data")]
     pub(crate) data: SerialValue,
-    /// The human-readable message, as rendered when the diagnostic was written
-    /// (`Diagnostic::message`).
-    #[serial(name = "message")]
-    pub(crate) message: String,
     /// Where in the source the condition occurred.
     #[serial(name = "span")]
     pub(crate) span: WireSpan,
