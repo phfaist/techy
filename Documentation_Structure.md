@@ -214,6 +214,11 @@ recorded in DESIGN_RATIONALE's "How to use and maintain this document" section).
 covered here.
 - dev-docs/archive/ - historical files, outdated, stale references. Do not touch.
 - dev-docs/extra/ - exploration of some wilder ideas. Possibly outdated. Do not touch.
+- dev-docs/serialize_schema.md - developer-facing description of the serialized form
+  written and read by `techy::serialize` (value model, segment envelope, standard
+  tables and entry layouts, generated worked example); read by maintainers of the wire
+  structs and by authors of readers in other languages. No `§dd-*` labels of its own;
+  developer docs cite it by file name.
 - Documentation_Structure.md (this file) - the standing specification of the project
   documentation system; lives at the repository root.
 
