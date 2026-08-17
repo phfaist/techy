@@ -512,7 +512,7 @@ node-relative reading is sound.
   -> NodeKind<L>` — replaces `(state, token, source_content)`: the span carries both
   the range (`.span()`, for the default `NodeKind::chars`) and the text (`.content()`,
   for a callable-shaped kind recording the spelling).
-- `make_group_parser<'p>(&self, open: &L::Token, rule, child_states)`.
+- `make_group_parser<'p>(&'p self, open: &L::Token, rule: Arc<GroupRule<L>>, child_states: ChildStateSpec<'p, L>)` — only the first parameter changes (`open_span: Span` → `open: &L::Token`); the `&'p self` receiver and the `'p` on `ChildStateSpec` stay (`engine/driver.rs:559-564`).
 - `make_invocation_parser<'a>(&'a self, invocation: Invocation<'a, L>)` (no `'s`).
 - `CallableSpec::make_invocation_parser` likewise (`techy/src/spec/callable.rs`).
 
@@ -577,7 +577,8 @@ old method and renames `move_to_edge` → `move_to` in one commit (afterwards
 | `argument_parsers.rs:148,174` `ArgumentNoise` | `start = pos()`, `move_to_pos(start)` | `start = position_here()`, `move_to_position(&start)` |
 | `argument_parsers.rs` `Span::empty(cx.tokens.pos())` (5 sites) | diagnostic anchor | `cx.here()` |
 | `embellishments_parser.rs:157` | `move_to_pos(noise.start)` | `move_to_position(&noise.start)` |
-| `embellishments_parser.rs:279` | `move_to_pos(match_end)` after over-scanning | keep the best-so-far token; `move_to(&best, EndPastPostSpace)` |
+| `embellishments_parser.rs:252,269` | `move_past(first, true)`, `move_past(&token, true)` | `move_to(&tok, EndPastPostSpace)` |
+| `embellishments_parser.rs:276-280` | `best: Option<(usize, usize)>` (index + end offset), `move_to_pos(match_end)` after over-scanning, and the returned `Span::new(first.span.start(), match_end)` | keep the best-so-far **token** in `best` (`L::Token` is `Clone`); `move_to(&best_token, EndPastPostSpace)`; the returned span becomes a `SourceSpan` = `cx.source_span_within(&position_at(first, Start), &position_at(&best_token, EndPastPostSpace))?` (the caller's use of that span changes with it — check `:157` and the marker-staging site) |
 | `environment_parser.rs:271-294` `read_rigid_name_group` | `entry = pos()`, `move_to_pos(entry)` | `move_to(&open, StartBeforePreSpace)` (or `entry = position_here()` + `move_to_position`) |
 | `environment_parser.rs:549` `after_command = pos()`, `:586` drift check | | `after_command = position_here()`; `position_here() != after_command` |
 | `environment_parser.rs:577` mismatch | `move_to(&end_token, false)` | `move_to(&end_token, Start)` |
