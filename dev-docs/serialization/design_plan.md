@@ -921,6 +921,159 @@ parallelizable across agents); M5 needs M3+M4; M6 needs M5.
 Newest first. Every working session appends: date, actor, milestone, what changed
 (branch/commits), what's next, blockers.
 
+- 2026-08-17 — M6 implementer agent — **M6 complete** on `techy-serialize` (worktree
+  `.claude/worktrees/techy-serialize`). Commits: `b65f4a1` the M5 review nits (matched
+  variant names in `expect_unit_variant`, `missing_standard_table` naming the missing
+  table in `register_core_readers`/`latexlike::serialize::register`,
+  `KnownProviders::resolve` CHECKS a recipe-built provider's `name()` against the key
+  (decision: check, not just document — `DeserializeError::Failed` naming both),
+  `Package::clone` wire consequence with the `ProviderRecipe` cross-reference,
+  `StdCallableSpec::provenance()` getter, "loaded data" → "part of the reading
+  program's own configuration" ×3, tree driver "Reading never panics", the D18 counter
+  re-asserted after the round trip, a feature-gated pinned `(len, fnv1a64)` rendering
+  digest of the determinism input as the cross-process pin); `034fef2` the diagnostic
+  and parse-result drivers; `92e2002` the stream tests; `b408849` the two transient
+  docs; plus the docs commit carrying this entry. Verified: `cargo build`/`test` green
+  with and without `--features serde` (1001/1035 unit — +26/+28 in
+  `serialize/drivers/diagnostic_tests.rs`, +4 latexlike parse-result tests, +1 pinned
+  digest —, 30+8+13+23+1 integration plus the feature-gated 4-test
+  `tests/serialize_stream.rs`, 75/76 doctests); `rm -rf target/doc && cargo docs` clean
+  both states; clippy clean on all new code. **What M6 built:**
+  - **Diagnostics table (D26; ordinal 5, `"diagnostics"`, homogeneous
+    `core.diagnostic`)** — `serialize/drivers/diagnostic.rs` + `wire/diagnostic.rs`:
+    `DiagnosticSerdeDriver<L>` over `Diagnostic<L::SourceOrigin>`, `DiagnosticIndex`;
+    plain-trait `SerializableObject`/`DeserializableObject` impls on
+    `Diagnostic<L::SourceOrigin>` (D13's list) the driver delegates to; wire
+    `{severity, identifier, data, message, span, frames: [{title, span}]}` — `severity`
+    a wire enum `note|warning|error` (+ `Severity` value-trait impls), `data` the
+    `DiagnosticValue` embedded verbatim, **`message`** the write-time `Display` (the
+    supervisor's addition — flagged for Q3), spans through the M3 span helpers (sources
+    shared with the tree). `impl From<DiagnosticValue> for SerialValue` and
+    `From<&DiagnosticValue>` (unconditional, infallible); the reverse conversion is
+    private to the driver and rejects `Bytes`/`Index` anywhere inside with the new
+    typed **`DeserializeError::UnrepresentableDiagnosticValue { kind }`**; feature-gated
+    `impl serde::Serialize for DiagnosticValue` delegating through the embedding (one
+    rendering path); **no `Deserialize` for `DiagnosticValue`** — nothing needs it (the
+    reader goes `SerialValue` → validated conversion). Read revives an ADAPTER condition:
+    public **`DeserializedCondition { identifier, data, message }`** (`new`, `data()`,
+    `Display` = the stored message; `impl DiagnosticInfo` with `const IDENTIFIER =
+    "core.serialization.deserialized-condition"` and the per-instance `identifier()`
+    override — exactly [§dd-dr:runtime-condition-identity]'s exception), rebuilt via
+    `Diagnostic::from_parts`; documented on the driver, the type, and the module: a
+    diagnostic read back answers the written `identifier()`, `serializable_data()`, and
+    `message()` (renders identically), `Diagnostics::with_identifier` finds it,
+    `downcast_ref::<Original>()` is `None` and `conditions::<Original>()` yields nothing
+    — the identifier is the contract across the boundary. Sugar
+    **`DiagnosticSerialization`** (`serialize_diagnostic(&Diagnostic) ->
+    DiagnosticIndex` — a diagnostic is a VALUE, wrapped in a fresh `Arc` per call like a
+    tree; `diagnostic(DiagnosticIndex) -> Diagnostic` owned clone), session-level like
+    `TreeSerialization`.
+  - **ParseResult wrapper (D26; ordinal 6, `"parse-results"`, homogeneous
+    `core.parse-result`)** — `drivers/parse_result.rs` + `wire/parse_result.rs`:
+    `ParseResultSerdeDriver<L>` over `ParseResult<L>`, `ParseResultIndex`, plain-trait
+    object impls on `ParseResult<L>`; wire `{tree: TreeIndex, diagnostics: {items:
+    [DiagnosticIndex], limit, suppressed, error_count}, session_ext: <SessionExt value>}`
+    — **the collection is a NESTED object** (mirrors `Diagnostics`, P1; the brief
+    sketched a flat form — flagged for Q3). Write: the tree cloned into a fresh
+    `Arc<dyn Any>` and interned into `trees` (unit annotation), each diagnostic cloned
+    into a fresh Arc and interned (values), the session ext through its value
+    conversion. Read: the tree through the trees table (a non-`()`-annotation entry is
+    the tree sugar's `Failed` error naming both identifiers — the downcast factored
+    into `pub(crate) tree_of_object`), the diagnostics cloned out of their entries, the
+    ext through `DeserializableValue`, then the counts VALIDATED against the invariants
+    `Diagnostics::push` maintains (`retained <= limit`; `suppressed > 0 ⇒ retained ==
+    limit`; `retained_errors <= error_count <= retained_errors + suppressed`) — the new
+    typed **`DeserializeError::InconsistentDiagnosticCounts { retained, retained_errors,
+    limit, suppressed, error_count }`** — and rebuilt with the new `pub(crate)
+    Diagnostics::from_parts(items, limit, suppressed, error_count)`. **Decision
+    (recorded):** the brief's "bound-check the counts as u32-sized sanity" was replaced
+    by these invariant checks (strictly stronger; a large-but-consistent `limit` is
+    harmless — a cap allocates nothing — and is accepted; a `usize` beyond `i64` cannot
+    be written at all: `IntegerOutOfRange`, so a `Diagnostics::with_limit(usize::MAX)`
+    "no cap" is NOT serializable — a limitation flagged for the user). New public
+    `Diagnostics::error_count()`. **Deviations from the brief (recorded):** the sugar
+    is `serialize_parse_result(&Arc<ParseResult<L>>)` (interned BY IDENTITY — the same
+    Arc twice yields the existing position, unlike a tree/diagnostic) and
+    `parse_result(ParseResultIndex) -> Arc<ParseResult<L>>` (the shared Arc, NOT an
+    owned clone) — because `Lang::SessionExt` is `Debug + Default + Send + Sync` and NOT
+    `Clone`, a `ParseResult` can neither be cloned into an Arc from a borrow nor cloned
+    out of one; documented on the trait. Sugar **`ParseResultSerialization`**.
+    `StandardTables` gains `diagnostics` and `parse_results`; **D9's six standard
+    tables became SEVEN** (plan patch for the supervisor: `SerdeSession::new()` registers
+    sources(0) … trees(4), diagnostics(5), parse-results(6)); every pinned segment
+    rendering gained the two empty directory rows; the tree round-trip harness finds the
+    trees table by name (a five-table `empty()` composition still works).
+  - **JSONL streaming (Part 3)** — a documented CONVENTION, no encoder in techy:
+    `techy::serialize` module docs ("Streams as JSON Lines": one `Segment` per line via
+    `serde_json::to_string`, read per line with `serde_json::from_str::<Segment>` and
+    pushed in order; each line independently valid yet stream-scoped; EOF ends the
+    stream; the same for any framing format; reading-then-appending shares
+    environment-held objects, not equal live objects made anew) and the feature-gated
+    integration test `techy/tests/serialize_stream.rs` (public API only): two latexlike
+    parse results as two lines, a second session reads them, appends a third parse
+    (packages resolved by identity through a `KnownProviders` holding the language's
+    seed providers → 0 new provider entries; the fresh parse's states are new entries —
+    identity, not equality), a third session reads all three lines (sharing asserted:
+    A/B share the seed state Arc; A/C's `\emph`/`\textit` specs' provider is one
+    package instance); a lone second line parses as a `Segment` but is
+    `SegmentOutOfOrder`; a truncated last line loses only itself; the same stream as
+    postcard length-prefixed frames, and the two renderings decode to equal segments.
+    **No helper proposed** — one line of `serde_json` per segment needs no wrapper.
+  - **Freeze prep (Part 4)** — `dev-docs/serialization/wire_vocabulary.md` (the complete
+    inventory: envelope/directory keys, the seven table names + ordinals, every entry
+    identifier, every key per object kind with file:line anchors, enum strings, the
+    latexlike vocabulary + serde renames + spec forms, the condition identifiers with
+    their derive-emitted projection keys, reserved JSON forms + base64 + compact-rendering
+    names, the `Option` omitted-vs-`null` map, the `Index`/`TableId`/content-frame
+    questions, a table of names that violate a scheme or read badly, the consolidated
+    OPEN list, and the **Q7 proposals**: adopt a zero-wire-byte check `arguments.len()
+    == spec.arguments().len()` on read — today the reader catches only an index BEYOND
+    the reading spec's declared count, not a reading spec with MORE arguments; consider
+    a language-identity string; skip node counts/source lengths/segment digests for v1)
+    and `dev-docs/serialization/schema_draft.md` (the abstract structure per table/entry
+    with one worked example per object kind cut from ONE real tolerant latexlike parse
+    `\e{x} {`, the segment/directory, stream conventions, the compatibility-policy
+    placeholder). Documented in passing: the writer WRITES a provided argument's unit ext
+    as `"ext": null` (the M4 log's "omits the key" describes the reader's tolerance) —
+    the tree.rs comment corrected.
+  - **Tests** (both feature states): `drivers/diagnostic_tests.rs` (a `DiagLang` toy with
+    `SessionExt = u32`) — every severity round-trips as a `DeserializedCondition`
+    (identifier, projection, message, `to_string`, `render`, span, frames; original type
+    not downcastable; the adapter's own `IDENTIFIER`); a real tolerant parse's
+    diagnostic; found by identifier not by type; sources shared with the tree (one source
+    entry; `same_source` after reading); a diagnostic is a value (two entries); parse
+    results with diagnostics + a non-unit session ext, clean, with suppressed pushes
+    (counts survive), interned by identity and read back shared, through the general
+    `intern`; the embedding, `Severity` strings, feature-gated `DiagnosticValue`
+    rendering; hostile: unknown severity, `Bytes`/`Index` inside the projection, frame
+    span out of range, span into the wrong table, span beyond the source, wrong-shaped
+    entry, diagnostics list out of range / wrong table, a parse result naming a
+    `String`-annotated tree, every inconsistent-count case (+ consistent edits incl. a
+    `1 << 40` cap read fine; a negative count is `IntegerOutOfRange`), a wrong-shaped
+    session ext, the sugar naming missing tables, determinism, a pinned JSON of one
+    diagnostic + one parse-result entry. `latexlike/serialize_tests.rs`: strict parse
+    results, tolerant parse results with tracebacks (`\emph{x`, `\begin{A}\emph{x\end{A}`,
+    lists; the traceback-presence expectations pinned per input), one source entry
+    shared by tree, diagnostics, and frames.
+  **Provisional wire names (Q3):** tables `diagnostics`, `parse-results`; identifiers
+  `core.diagnostic`, `core.parse-result`, condition `core.serialization.deserialized-condition`;
+  diagnostic keys `severity` (`note`/`warning`/`error`), `identifier`, `data`, `message`,
+  `span`, `frames` (`title`, `span`); parse-result keys `tree`, `diagnostics` (`items`,
+  `limit`, `suppressed`, `error_count`), `session_ext`. **Public API surface (new):**
+  `techy::serialize::{DiagnosticSerdeDriver, DiagnosticIndex, DiagnosticSerialization,
+  DeserializedCondition, ParseResultSerdeDriver, ParseResultIndex,
+  ParseResultSerialization}`; `StandardTables::{diagnostics, parse_results}`;
+  `DeserializeError::{UnrepresentableDiagnosticValue { kind }, InconsistentDiagnosticCounts
+  {…}}`; `impl From<DiagnosticValue> for SerialValue`, `impl From<&DiagnosticValue> for
+  SerialValue`; feature-gated `impl Serialize for DiagnosticValue`;
+  `SerializableValue`/`DeserializableValue` impls on `Severity`;
+  `SerializableObject`/`DeserializableObject` impls on `Diagnostic<L::SourceOrigin>` and
+  `ParseResult<L>`; `Diagnostics::error_count()`; `StdCallableSpec::provenance()`;
+  `KnownProviders::resolve` now checks the recipe-built name (behavior change).
+  Crate-internal: `Diagnostics::from_parts`, `tree_of_object`, `missing_standard_table`,
+  `STANDARD_TABLE_NAMES`, `expect_unit_variant(name: &str)`. Next: M6 review → user Q3/Q7
+  session over `wire_vocabulary.md` (+ `schema_draft.md`) → rename pass → M7. Blockers:
+  none.
 - 2026-08-17 — M5 implementer agent — **M5 complete** on `techy-serialize` (worktree
   `.claude/worktrees/techy-serialize`). Commits: `698f738` the M4 review leftovers
   (two pinned hostile node-text span tests — a `Chars` content span out of range, a
