@@ -100,7 +100,8 @@ The crate is organized in **three strata**:
 S2  presets      latexlike (module; [§dd-arch:latexlike]); later: flm (separate crate)
 S1  core         ONE mutually-recursive stratum, organized as topic modules:
                    Lang (+ NodeExtTypes) · state/ (ParsingState, deltas) · token/
-                   (Token<'s, L>, TokenRules, TokenReader, StdTokenReader) · spec/ +
+                   (the Token trait + StdToken, the TokenKind view, TokenEdge,
+                   StdStreamPosition, TokenRules, TokenReader, StdTokenReader) · spec/ +
                    scopes/ (CallableSpec; SpecsProvider, Package, Scope, ScopeStack)
                    · node/ (NodeTree, NodeKind, NodeRef) · constructs/ (ConstructParser
                    + standard parsers) · engine/ (Language<L>, ParseDriver,
@@ -216,14 +217,41 @@ seam), [§dd-dr:span-extend-to], [§dd-dr:include-chain-helpers]
 
 ## Tokens [§dd-arch:token]
 
-Tokens are **transient, span-based, zero-copy, minimal, and structural** — generic over
-`L: Lang` (`Clone`, not `Copy`; a `Specials` token carries an `Arc`). The kinds:
-single `Char`s (never runs), `GroupOpen`/`GroupClose`, `Command` (escape-led, with the
-firing escape char and syntactic post-space), `Specials` (carrying its full resolution),
-whole `Comment`s, `ParagraphBreak`, and a terminal idempotent `EndOfStream`. The `'s`
-lifetime borrows the current source content and never enters the node tree. The concrete
-shape lives in `src/token` (public path: `techy::core`); the full model with every argument is
-[§dd-dr:token-model].
+A **token** is a value produced by a token reader, held and passed on by construct
+parsers, and read by nobody but the reader that produced it. Its type is the language's
+own — `Lang::Token`, bounded by the marker trait `Token<L>` (`Clone + Debug + PartialEq +
+Send + Sync`) — and it is **opaque**: a parser asks the reader *what* a token is and
+*where* it is ([§dd-dr:token-opacity]). Tokens are transient, they never enter the node
+tree, and tokenization copies nothing out of the source ([§dd-dr:zero-copy-tokens]).
+
+The reader answers three families of questions:
+
+- **What a token is** — `token_kind(&token)` returns `TokenKind<'t, L>`, the closed *view*
+  enum: single `Char`s (never runs), `GroupOpen`/`GroupClose` (with the matched
+  delimiter, and for the open the resolved rule), `Command` (name and the escape
+  character that fired), `Specials` (its full resolution), whole `Comment`s (start
+  delimiter and content), `ParagraphBreak`, and a terminal idempotent `EndOfStream`. The
+  variants carry the written spellings as `&str` and **no spans**. The view borrows the
+  token — and the reader's content, for a reader that scans borrowed content — never the
+  reader itself, so a parser may hold a view while it goes on reading and moving.
+- **Where a token is** — `source_span_of(&token)` and `source_span_between(&token, a, b)`
+  answer `SourceSpan`s. `TokenEdge` names the five boundaries of a token in reading
+  order: `StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤ EndPastPostSpace`, where
+  `ContentStart` is where the token's own content begins past its leading marker (after a
+  comment's start delimiter, after a command's escape character; `= Start` otherwise).
+  Edges may coincide.
+- **Where the stream stands** — `position_here()` and `position_at(&token, edge)` answer
+  values of `Lang::StreamPosition`, opaque and obtainable only from the reader;
+  `source_position_at` and `source_span_within(&begin, &end)` turn positions back into
+  text locations ([§dd-dr:stream-position]). Repositioning is `move_to(&token, edge)` and
+  `move_to_position(&position)`, and nothing else.
+
+`StdToken<L>` is the token of the standard reader and of every language that uses it: it
+stores byte ranges and `Arc`s only — no strings, no lifetime — behind eight public
+constructors, one per kind, and its ranges are readable only by this crate's readers.
+`StdStreamPosition` is the matching stream position, a byte offset with no public
+constructor and no arithmetic. The concrete shapes live in `src/token` (public path:
+`techy::core`); the token taxonomy with every argument is [§dd-dr:token-model].
 
 - **No invocation forms at the token level**: no macro/environment taxonomy and no
   `CallableTypeId` on `Command` tokens — `\begin` is a `Command` exactly like
@@ -235,31 +263,55 @@ shape lives in `src/token` (public path: `techy::core`); the full model with eve
   recognized from `CommandRule` *data* (delta-changeable; fires unconditionally —
   unknown names resolve at parse time to fallback specs). `Specials` is recognized by
   the `Lang::scan_specials` *hook*, where recognition **is** resolution: the match
-  carries name and the full `(callable_type, spec)` pair, so scan/lookup mismatches are
-  unrepresentable. The hook hides behind the state-cached `TriggerChars`
-  first-character filter.
+  carries the full `(callable_type, spec)` pair and the name is the matched text, so
+  scan/lookup mismatches are unrepresentable. The hook hides behind the state-cached
+  `TriggerChars` first-character filter, works on a `&str`, and reports failures as
+  `SpecialsScanError` — plain errors, never recoveries ([§dd-dr:specials-scan-errors]).
 - **Group tokens carry their resolved rule**: `GroupOpen` holds the winning
   `Arc<GroupRule<L>>` (class + spellings), the same make-mismatch-impossible principle;
   `GroupClose` carries only the delimiter string. Group *classes*
   (`Lang::GroupTypeId`) are detached from delimiter spellings; delimiter pairs are
-  runtime rules data, mintable mid-parse ([§dd-dr:group-classes]).
-- **Syntactic vs. content whitespace**: `pre_space` (every token) is content whitespace
-  and becomes nodes; post-space exists only where tokenization syntax consumes
-  whitespace (multi-character command names, comment line ends) and is stored in those
-  variants. One primitive, `skip_whitespace`, enforces the paragraph rule everywhere:
+  runtime rules data, declarable mid-parse ([§dd-dr:group-classes]).
+- **Syntactic vs. content whitespace**: the whitespace preceding a token (its
+  *pre-space*, between the `StartBeforePreSpace` and `Start` edges) is content whitespace
+  and becomes nodes; post-space (between `End` and `EndPastPostSpace`) exists only where
+  tokenization syntax consumes whitespace — multi-character command names, comment line
+  ends. One primitive, `skip_whitespace`, enforces the paragraph rule everywhere:
   skipped whitespace never consumes a newline of a `\n\s*\n` sequence.
-- **`TokenReader<L>` is the behavior extension point** (catcode-like schemes keep their
-  tables in `L::StateExt` — hence `peek` receives the full `&ParsingState<L>`, never
-  bare rules). Contract: `peek` is idempotent per (position, state *instance*);
-  implementations may memoize on `Arc` pointer identity. `TokenListReader` is internal
-  test infrastructure only (the lockstep reader-agreement harness).
+- **`TokenReader<'s, L>` is the behavior extension point** (catcode-like schemes keep
+  their tables in `L::StateExt` — hence `peek` receives the full
+  `&Arc<ParsingState<L>>`, and nothing beyond the state:
+  [§dd-dr:reader-context-purity]). The trait has no associated types, so it stays
+  object-safe and a parse context holds `&mut dyn TokenReader<'s, L>`. Its documented
+  contract: `peek` is speculative and idempotent per (stream position, state *instance*)
+  and implementations may memoize on `Arc` pointer identity; a peeked token's
+  `StartBeforePreSpace` edge is the position the peek happened at; every token and every
+  position a reader hands out stays usable for the rest of the parse, and positions
+  compare with `==` only; interpretation stays with the issuing reader (or one over the
+  same content), a foreign token being a caller-contract violation the standard reader
+  cannot detect; a token kind belonging to an absent language feature is never produced;
+  and `source_span_between` is indifferent to the order of its two edges. A reader is
+  installed through `ParseDriver::make_token_reader` ([§dd-arch:engine],
+  [§dd-dr:token-reader-hook]).
+- **A custom reader over standard tokens** does not reimplement interpretation: it keeps
+  an inner `StdTokenReader` over the same content, builds tokens with the `StdToken`
+  constructors, and delegates `token_kind`, the span answers and the position answers to
+  the inner reader. `TokenListReader` — internal test infrastructure only — is the second
+  in-crate reader: the two-reader agreement harness runs every construct-parser parse
+  against both and, since the list reader rejects tokens and positions it never issued,
+  catches a parser that invents either ([§dd-dr:token-list-reader-demoted]).
 - Tokenization priority: paragraph break → expected group close → longest delimiter →
   command escapes → comment starts → specials scan → forbidden check → `Char`. The
   ambiguous-delimiter case (`$…$`) is resolved by data
   ([§dd-dr:expecting-group-close]), not by privileged mode state.
 
 Decisions behind this section (full topic: [§dd-dr:tokens]): [§dd-dr:minimal-tokens], [§dd-dr:token-model],
-[§dd-dr:zero-copy-tokens], [§dd-dr:token-reader], [§dd-dr:expecting-group-close],
+[§dd-dr:token-opacity] (opaque tokens, the reader-answered view),
+[§dd-dr:stream-position] (opaque positions, the five edges, the two moves),
+[§dd-dr:zero-copy-tokens], [§dd-dr:token-reader],
+[§dd-dr:reader-context-purity] (the reader sees only the parsing state),
+[§dd-dr:specials-scan-errors] (the scan hook reports errors, never recoveries),
+[§dd-dr:expecting-group-close],
 [§dd-dr:group-classes], [§dd-dr:command-escape-char],
 [§dd-dr:token-contract-hardening] (the third-party-implementor contract batch),
 [§dd-dr:token-list-reader-demoted], [§dd-dr:multi-newline-paragraphs],
@@ -557,8 +609,16 @@ transformation topic ([§dd-dr:transform]): [§dd-dr:node-annotations],
 ## Construct parsers [§dd-arch:constructs]
 
 Everything a parser needs rides in one context value: `ParseContext` bundles the token
-reader, the `Arc<Source>` (byte spans become `SourceSpan`s at this layer), the current
-state, the session, and the language's driver. `ConstructParser::parse(&mut self, cx)`
+reader, the current state, the session, and the language's driver. It carries **no**
+source handle ([§dd-dr:no-context-source]): every `SourceSpan` a parser stages comes from
+the reader — one token's span, the span between two of that token's edges, or
+`cx.source_span_within(&begin, &end)` over two stream positions — or from a `SourceSpan`
+the parser already holds; `cx.here()` is the empty span at the reader's current position,
+the anchor most diagnostics use. Node data keeps node-relative byte ranges, so a reader
+answer becomes node data through `node_text_content`, which records it as spanned when it
+passes a `same_source` check against the node's span and as owned text otherwise.
+
+`ConstructParser::parse(&mut self, cx)`
 returns `(output, Option<Box<ParsingStateDelta<L>>>)` — the caller-applies-deltas law;
 the delta side is boxed so the mostly-`None` pass-through value rides the parse
 recursion as one pointer ([§dd-dr:descent-guard]).
@@ -574,12 +634,13 @@ parsers) are immutable `Arc`-shared data — the two-tier ownership model
 ```
 loop:
   tok = tokens.peek(state)
-  match tok.kind:
+  match tokens.token_kind(&tok):
     Char            -> accumulate chars run (pre_space joins; whitespace-only runs allowed)
     ParagraphBreak  -> own node via driver.make_paragraph_break_node
     GroupOpen(rule) -> group parser under the session-memoized interior state
     Comment         -> comment node straight from the whole-comment token
-    Command(name)   -> driver.resolve_command -> spec.make_invocation_parser(invocation)
+    Command(name)   -> driver.resolve_command(state, &tok, tokens)
+                       -> spec.make_invocation_parser(invocation)
                        (Unresolved/Failed -> diagnose + span-backed chars recovery)
     Specials(..)    -> make_invocation_parser likewise (resolution rides the token)
     GroupClose      -> stop-condition match? stop : StopCause::UnexpectedGroupClose
@@ -593,6 +654,19 @@ returns (nodes, StopCause) — the caller interprets the ending.
   `\end{align}` is a problem ([§dd-dr:stop-conditions]). The predicates are
   fallible: an erring predicate aborts the parse instead of silently continuing
   ([§dd-dr:hook-fallibility]).
+- **Where a parse output names a place in the stream, it carries a stream position**, not
+  a number: `StopCause`'s two token-bearing causes carry the matched token's `SourceSpan`
+  *and* `after` (just past the token), `EnvironmentBody::end` is where the environment's
+  extent ends, `NameGroup` pairs the name's `SourceSpan` with the position past its close
+  delimiter, and `ArgumentNoise::start` is where the absent-argument rewind returns to.
+  A caller resumes with `move_to_position` and computes an extent with
+  `cx.source_span_within` ([§dd-dr:stream-position]).
+- **`Invocation` is the resolution result plus the token** (invocation form, name, spec,
+  and the token that triggered it) — nothing about the token is cached beside it. Hooks
+  that must interpret a token while holding no reader are handed the reader for the call:
+  the resolution chain (`ParseDriver::resolve_command`, `CommandResolver`,
+  `resolve_command_in_scopes`), the token stop predicate, the group child-state compute
+  arm, and `FromInvocation::from_invocation` ([§dd-dr:token-opacity]).
 - **Descent-state policy** is per-use configuration (`ChildStateSpec`:
   inherit/fixed/compute, one level deep by design — [§dd-dr:child-state-spec]); group
   interiors always carry their `expecting_group_close` and are deduplicated through
@@ -660,7 +734,9 @@ returns (nodes, StopCause) — the caller interprets the ending.
   per-parser decisions: [§dd-dr:parity-gap-list], [§dd-dr:parity-parsers]. (No
   `CommentParser`: whole-comment tokens made it vestigial.)
 
-Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context], [§dd-dr:token-kind-dispatch],
+Decisions behind this section (full topic: [§dd-dr:parsers-engine]): [§dd-dr:parse-context],
+[§dd-dr:no-context-source] (no source handle; spans and positions come from the reader),
+[§dd-dr:token-kind-dispatch],
 [§dd-dr:parser-temporaries], [§dd-dr:invocation-parser-factory],
 [§dd-dr:stop-conditions], [§dd-dr:child-state-spec], [§dd-dr:slot-terminators],
 [§dd-dr:terminator-mismatch-recovery], [§dd-dr:optional-group-balancing],
@@ -682,21 +758,27 @@ staging; restaged copies carry their exts verbatim, never re-minted;
 `StateData`/`ParsingState`); only `Language<L>` is genuinely an orchestration type.
 
 **`ParseDriver` is the parse-behavior instance** ([§dd-dr:parse-driver]): everything
-that only runs while a parse is driven lives on `Lang::Driver` — construct-parser
+that only runs while a parse is driven lives on `Lang::Driver` — the token reader for the
+parse (`make_token_reader`, the one item with no default body: both construction sites,
+the root parse and each attached source, go through it, so installing a custom tokenizer
+is one method — [§dd-dr:token-reader-hook]), construct-parser
 provision (`make_nodes_parser`/`make_group_parser`/`make_invocation_parser`
 interception; one override applies to every descent site through the `cx` wrappers),
 the group descent-delta channel (`group_interior_delta` — the math plug is one line of
 mode-bearing data), the context-dependent event lowering (`resolve_state_event` over
 the lent enclosing-state stack; [§dd-dr:enclosing-state-stack]), the `Recovery`
-policy and the recover path, and the parse-time
-hooks (`resolve_command` with its three-outcome `CommandResolution`
-([§dd-dr:resolution-detail], [§dd-dr:resolver-failure]), `make_paragraph_break_node`,
+policy and the recover path, the probing peek (`probe_token`, reading through the reader
+it is handed and answering an `Option<L::Token>` under that policy), and the parse-time
+hooks (`resolve_command` — receiving the triggering token together with a shared
+reference to the reader that produced it, and answering the three-outcome
+`CommandResolution` ([§dd-dr:resolution-detail], [§dd-dr:resolver-failure],
+[§dd-dr:token-opacity]) — `make_paragraph_break_node`,
 `refine_diagnostic`, `observe_transition`, and the once-per-parse
 `observe_parse_start` — parse-initialization diagnostics, e.g. the preset's
 all-escape-shadowed provider check). Drivers are instances, so behavior carries
 configuration static hooks never could; preset parsers reach preset helper methods
-fully typed. Every item is defaulted — `impl ParseDriver<L> for D {}` is a
-complete driver. The parsing-depth guard is engine-fixed, not a driver choice:
+fully typed. Every item but `make_token_reader` is defaulted — a driver writes that one
+method and inherits the rest. The parsing-depth guard is engine-fixed, not a driver choice:
 the engine always uses `StdDescentGuard` (the `DescentGuard` trait states its
 contract; wiring in another implementation is deliberately not offered). The
 guard's per-language **configuration** travels on `Language`
@@ -757,7 +839,9 @@ diagnostics, and the session extension (`session_ext` — the read-back for
 documents": `Language` owns no per-parse state ([§dd-dr:stateless-language]).
 
 Decisions behind this section: [§dd-dr:language-init] (explicit mandatory initial
-state; the seed+packages construction path), [§dd-dr:hook-fallibility] (which
+state; the seed+packages construction path),
+[§dd-dr:token-reader-hook] (`make_token_reader`: the one required driver method, and
+where a custom tokenizer is installed), [§dd-dr:hook-fallibility] (which
 hooks return `Result`; the `HookFailed` condition and the three-way condition
 split; the deliberately infallible remainder), [§dd-dr:parse-driver],
 [§dd-dr:descent-guard] (the engine-fixed `StdDescentGuard`, the
@@ -803,11 +887,12 @@ generated by `techy-derive` (build-time only). Every diagnostic carries an Arc-b
   not); `<area>` names a concept, never a file/module/type; the first segment names
   the defining vocabulary — preset conditions keep `latexlike.*` even inside a foreign
   `Lang`'s parse ([§dd-dr:wire-identifier-stability]).
-- **Tolerant parsing is first-class** ([§dd-dr:tolerant-parsing]): tokenizer errors may
-  carry a recovery token (`TokenRecovery`, with an explicit `resume_pos` that must
-  advance the reader — violations abort even in tolerant mode,
-  [§dd-dr:resume-pos-contract]); the session's `Recovery` policy decides record-and-
-  continue versus abort. Diagnostics accumulate on the session, capped with counted
+- **Tolerant parsing is first-class** ([§dd-dr:tolerant-parsing]): a tokenizer error
+  (`TokenError`) carries a source-qualified location — the reader is the party that knows
+  which source its offsets belong to — and may carry a recovery token (`TokenRecovery`,
+  whose explicit `resume` is a stream position that must move the reader; violations
+  abort even in tolerant mode, [§dd-dr:resume-pos-contract]); the session's `Recovery`
+  policy decides record-and-continue versus abort. Diagnostics accumulate on the session, capped with counted
   suppression (the cap is the driver's per-parse `diagnostics_limit()` choice), and
   render collections through one shared `LineIndexCache`
   ([§dd-dr:diagnostics-retention]) — every rendering entry point also has a `_with`
