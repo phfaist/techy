@@ -940,9 +940,10 @@ fn rebuild_argument<L: SerializableLang>(
     match &wire.region {
         Some(region) => {
             let region = staged_region(region, callable_index, build_id_of)?;
-            // A provided argument's ext follows its region: an ext whose serialized form
-            // is null (the unit ext, an absent optional inside the ext) is omitted from
-            // the wire, and reads back from null.
+            // A provided argument's ext follows its region: the writer writes it (null
+            // for the unit ext), and the reader accepts a null value or an omitted key
+            // alike as the ext's null form (an `Option<SerialValue>` field reads a
+            // present null as `None`).
             let null = SerialValue::Null;
             let ext_value = wire.ext.as_ref().unwrap_or(&null);
             let ext = <ArgumentExt<L> as DeserializableValue<L>>::deserialize_value(ext_value, cx)?;
