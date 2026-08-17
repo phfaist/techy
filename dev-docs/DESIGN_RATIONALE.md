@@ -5636,6 +5636,122 @@ is eroding — tighten the docs or reconsider the seam), or runtime-minted
 identifiers need collision policing across embeddings (that would need a
 deliberate namespace-registration design, not an ad-hoc exception).
 
+## Serialization [§dd-dr:serialization]
+
+The decisions behind `techy::serialize` ([§dd-arch:serialization]). The serialized
+form itself is described in `dev-docs/serialize_schema.md`; the user-facing contract
+is the `techy::serialize` rustdoc.
+
+#### Capability traits: supertrait write dispatch, registry read dispatch [§dd-dr:serialize-capability-traits]
+
+Status: DECIDED (user-led design sessions).
+
+Serialization is a capability of the object, not a derive on the live type: the write
+half is `SerializableObject`, a defaulted supertrait of `CallableSpec` and
+`SpecsProvider` (so it is reachable through the trait objects trees hold — the concrete
+type behind `Arc<dyn CallableSpec>` is unknown at write time — and needs no
+registration; a non-participant writes an empty impl); the read half is the opt-in
+`DeserializableObject` on concrete types, dispatched by identifier through readers a
+language registers once per session plus prefix-keyed resolvers for open type sets
+(fail-closed: an unknown identifier is an error). Embedded values use the parallel
+`SerializableValue`/`DeserializableValue` pair, and `SerializableLang` — an item-less
+trait whose bounds require both of every type a language supplies — gates the whole
+capability per language: contexts exist only for such a language, so the methods are
+statically uncallable for any other. Decisive reasons: serde derives on live types are
+impossible (trait objects everywhere, `Arc` sharing is semantic) and would couple the
+schema to internal layout; a per-type write registry buys nothing once objects
+self-describe; the trait surface is unconditional, so enabling the `serde` cargo
+feature adds no obligation to any implementer (feature additivity).
+
+Rejected alternatives: erased-serde/typetag (dependency, link-time registries, Rust
+type names as wire identity); a `SerializableObjects` `Lang` feature (conditional
+supertraits are inexpressible; no data layout changes with presence); cargo-gated
+trait surfaces (additivity violation); closure-pair registries (`ser_fn`/`de_fn`) as
+the public registration API; write-side resolvers (a compile-time closed type set —
+a downcast list in disguise); a public `ToSerialValue` derive for implementer payloads
+(the serde bridge serves that; the internal derive stays for core wire structs).
+
+Revisit if: a concrete need for write-side dispatch by something other than the
+object's own type appears (the reader-entry design keeps a write resolver chain purely
+additive).
+
+#### Instance, not lookup: identity through `Weak` provenance stamps [§dd-dr:instance-not-lookup]
+
+Status: DECIDED (user-led design sessions).
+
+Serialization captures the object the parser actually got — never "how to look it up
+again". A spec that holds parsers is written **by identity**: a `SpecProvenance` stamp
+(`Weak<dyn SpecsProvider>` + callable type + definition key), handed out by
+`Package::new_shared`, becomes a reference to the provider's entry plus the key,
+resolved on reading in the reader's own environment (`KnownProviders`: held packages by
+name, recipes for the rest) to the very instance that package holds; self-contained
+types write a constructor recipe. Decisive reason: a lookup (`retrieve_spec`,
+specials scanning) is a parse-time event whose answer may legitimately differ later or
+without the token — the `\today` case — so re-running it, even after verifying it at
+write time, validates today's answer, not read-time validity. `Weak` because a strong
+back-reference would close an ownership cycle with the package's spec `Arc`s; a stamp
+is process-local and never wire material.
+
+Rejected alternatives: symbolic re-query through the rehydrated scope stack;
+enumeration-based reverse maps over `iter_symbols` (enumeration is not a lookup
+contract); parser-recorded resolution provenance (parse-time truth, hot-path cost);
+verified write-time replay; an eager "known-objects map" (O(environment) setup for an
+O(stream) need).
+
+Revisit if: this principle is ever relaxed — most of the rejected routes come back
+with it. Don't.
+
+#### The value model and the canonical-rendering discipline; the feature gates rendering only [§dd-dr:serial-value-model]
+
+Status: DECIDED (user-led design sessions; `Map` order and the `$`-key rule ruled by
+the user at the vocabulary pass).
+
+`SerialValue` holds exactly what the canonical JSON rendering round-trips
+distinguishably: null, bool, `i64` (every integer width; out of range is an error),
+string, bytes (pinned base64 form), list, ordered string-keyed map (equality
+order-sensitive, keys never beginning with `$` — reserved for `$bytes`/`$index`, no
+escaping), and a table reference — no floats, no sized-int variants, so two values
+render identically exactly when they are equal (golden files, content-addressed caches,
+dedup). Nesting is bounded (`MAX_NESTING_DEPTH` = 64, enforced at every read rim and
+on the writer). The `serde` cargo feature gates **rendering only**: the value model,
+the engine, and the capability traits are dependency-free plain Rust; core wire
+structs convert through an internal derive, implementer payloads through the serde
+bridge (`to_value`/`from_value`); an absent `Option` field is an omitted key in both.
+
+Rejected alternatives: floats and sized ints in the value (collapse in the rendering
+→ unequal values with identical bytes); a `$$` escape for user `$`-keys (a typed error
+instead); a public schema document maintained by hand (the wire structs are the
+schema; the description is generated/checked from them).
+
+Revisit if: a consumer needs a numeric type the model cannot hold without breaking the
+canonical-form law (a string encoding is the expected answer), or a format without its
+own recursion limit needs a different bound.
+
+#### Session-scoped positions, segments, and streams [§dd-dr:serialize-sessions-segments]
+
+Status: DECIDED (user-led design sessions; segment envelope, `main`, and `profile`
+ruled by the user at the vocabulary pass).
+
+One `SerdeSession` type serves both directions: it interns by `Arc` identity into
+per-kind tables (write once, share on read), emits **segments** (the entries new since
+the previous emission, every table in a directory by name and writer-side id, a
+version in every segment, an optional main entry, a caller-declared profile in `meta`),
+and absorbs them in order (validated as untrusted input; translated by table name;
+absorb-all-then-append). Positions are stream-scoped on the wire and session-scoped as
+typed values in Rust code (a typed position carries its session's `TableId`; between
+sessions a position travels as table name + `u32`). Decisive reasons: the cache use
+case (read yesterday's stream, append today's parses without rewriting what is held)
+and the sharing law (identity must survive across trees in one stream) fix the design;
+JSON Lines with a version per segment makes every line an independently valid value.
+
+Rejected alternatives: separate reader/writer types (reading then appending is the
+natural flow); a version in the first segment only (a split or truncated stream would
+lose it); an end-of-stream marker (appending would need rewriting); a stream-identity
+field (deferred: the caller's obligation, narrowed by the profile).
+
+Revisit if: a use case needs enforced stream identity or a reader for older layout
+versions (a version bump then comes with a read-old/convert/refuse policy).
+
 ## Dependencies [§dd-dr:dependencies]
 
 #### Absolute minimal mandatory dependencies [§dd-dr:minimal-dependencies]
@@ -5935,6 +6051,20 @@ re-opens a settled argument:
   names for the guard family — they collide with the crate's data-stack
   vocabulary (scope stack, frame stack, enclosing-state stack); the vocabulary is
   *descent* (`DescentGuard`, `DescentLimitExceeded`, `DescentLimitApproaching`).
+- From the serialization design ([§dd-dr:serialization]): `SerializedIndex` — the
+  driver's associated type is `Index` and its bound `SerialIndex` (the `Serial*`
+  wire-data family; `…Index` = a table position, neither a `…Ref` handle nor a
+  process-local `…Id`); `resolve` as the read accessor — positions are read with
+  `object`/`tree`/`parse_result` ("resolve" is source- and command-resolution
+  vocabulary); `ReadEntry` — the read-side unit is `ObjectReader`; the `$$` escaping
+  of user map keys beginning with `$` — a typed error (`ReservedMapKey`) instead;
+  `Document` (type) and "document" as public vocabulary for the parsed content — FLM
+  owns the word; the units are *segment* and *stream*, the content is
+  "text"/"input"/"source"; the verbs dump/load/revive/resurrect — the public verb
+  pair is serialize/deserialize; `register_all()`/write-side registration and
+  `SerializableObjects` as a `LangFeature` — objects self-describe, the lang gate is
+  `SerializableLang` ([§dd-dr:serialize-capability-traits]); a public `ToSerialValue`
+  derive — the serde bridge ([§dd-dr:serial-value-model]).
 
 ## Crate organization and dependency model [§dd-dr:crates]
 

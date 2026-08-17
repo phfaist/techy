@@ -104,7 +104,8 @@ S1  core         ONE mutually-recursive stratum, organized as topic modules:
                    scopes/ (CallableSpec; SpecsProvider, Package, Scope, ScopeStack)
                    · node/ (NodeTree, NodeKind, NodeRef) · constructs/ (ConstructParser
                    + standard parsers) · engine/ (Language<L>, ParseDriver,
-                   ParserSession, ParseResult)
+                   ParserSession, ParseResult) · serialize/ (SerdeSession, the
+                   capability traits, standard-table drivers; [§dd-arch:serialization])
                  Modules are topics for navigation, NOT dependency ranks.
 S0  foundation   Lang-free true DAG:
                    source/ (Source, SourceSpan, SourceProvenance, SourceResolver,
@@ -138,8 +139,8 @@ Within S1 the useful distinction is not vertical but by **role**: plain data
 
 **Public export topology:**
 the public API is exposed through re-export facades with one canonical path per
-item — `techy::{source, error, extract, transform, visit, recompose}` top-level,
-`techy::core` as a flat machinery hub with extracted satellites
+item — `techy::{source, error, extract, transform, visit, recompose, serialize}`
+top-level, `techy::core` as a flat machinery hub with extracted satellites
 `core::{constructs, specs, node}`, `techy::latexlike` — and internal
 src modules are private (internal reorganization is never public-breaking).
 The topic modules sketched above describe the *internal* organization only. Full
@@ -843,6 +844,43 @@ Decisions behind this section (full topic: [§dd-dr:errors]): [§dd-dr:panic-pol
 adapter-scoped `identifier()` override), [§dd-dr:parse-traceback],
 [§dd-dr:refine-diagnostic-hook], [§dd-dr:diagnostics-retention],
 [§dd-dr:diagnostics-position-sort].
+
+## Serialization [§dd-arch:serialization]
+
+`techy::serialize` converts the objects consumers handle — node trees (with
+annotations), parsing states, sources, callable specs and providers, diagnostics,
+parse results — to and from a format-independent value model (`SerialValue`), for
+caches, inter-process exchange, snapshot tests, and inspection. Three strata sit over
+one data path: a **foundation** that knows no object kind (the value model, the
+capability traits, `SerdeSession` with its tables, contexts, segments, and errors),
+the **core scaffolding** (the drivers and wire structures of the seven standard
+tables — sources, states, specs, providers, trees, diagnostics, parse-results — with
+typed positions and by-kind extension traits), and the **presets/frameworks** stratum
+(a language's `SerializableLang` opt-in, its value conversions and object impls, its
+`register` helper for readers). Live object → wire structure → `SerialValue` → table
+entry → `Segment`; reading reverses it with validation at every step
+([§dd-dr:serialize-sessions-segments]).
+
+The capability is two trait pairs: `SerializableObject` (a supertrait of
+`CallableSpec` and `SpecsProvider`, defaulted, so writing dispatches through the trait
+object without registration) with the opt-in `DeserializableObject` read through
+identifier-keyed readers and prefix resolvers; and `SerializableValue` /
+`DeserializableValue` for embedded values, required of every type a language supplies
+by the item-less `SerializableLang` bound ([§dd-dr:serialize-capability-traits]).
+Interning by `Arc` identity writes each shared object once, so sharing survives; specs
+and providers travel **by identity** (a `Weak` provenance stamp handed out by
+`Package::new_shared`, resolved in the reader's `KnownProviders`) or in a
+**self-contained** form — never as a lookup to re-run ([§dd-dr:instance-not-lookup]).
+The value model holds only what the canonical JSON rendering round-trips
+distinguishably, and the optional `serde` cargo feature gates rendering alone
+([§dd-dr:serial-value-model]). Positions are stream-scoped in segments and
+session-scoped in Rust code; a session reads then appends. Every read is fail-closed
+validation of untrusted input; the developer description of the serialized form is
+`dev-docs/serialize_schema.md`.
+
+Decisions behind this section (full topic: [§dd-dr:serialization]):
+[§dd-dr:serialize-capability-traits], [§dd-dr:instance-not-lookup],
+[§dd-dr:serial-value-model], [§dd-dr:serialize-sessions-segments].
 
 # Generics strategy [§dd-arch:generics]
 
