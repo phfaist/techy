@@ -858,6 +858,25 @@ $ grep -rn "cx\.source\b\|self\.source\b" \
 techy/src/latexlike/node_ref.rs:83:            Some((_escape_char, post_space)) => post_space.resolve(self.source()),
 ```
 
+§4 also asks for the docs-only form of the grep. It is **not** empty, and the two lines
+it prints are **not** a regression — both are the *new* names, matched as substrings of
+the old ones:
+
+```
+$ grep -rn "move_to_pos\|move_past\|\.pos()\|cx\.source" docs
+docs/construct-parsers.md:62:([`move_to_position`](crate::core::TokenReader::move_to_position)). Prefer
+docs/construct-parsers.md:457:        let content: SourceSpan = cx.source_span_within(&start, &content_end)?;
+```
+
+`move_to_pos` matches inside `move_to_position`, and `cx.source` inside
+`cx.source_span_within`. Anchoring the two patterns at a word boundary — which is how
+the same grep is written for `techy/src` — gives the empty result §4 describes:
+
+```
+$ grep -rn "move_to_pos\b\|move_past\|\.pos()\|cx\.source\b" docs
+(no output; exit 1)
+```
+
 The single hit is `NodeRef::source()` — a node view resolving a `TextContent` against
 the node's own source, nothing to do with a parse context or a reader. `cx.source`
 itself has **zero** hits anywhere. (The delegating `#[cfg(test)]` readers reach their
@@ -939,10 +958,15 @@ path were left as they are. (Baseline worktree
    was already computing the same range one statement later, for staging). The begin
    side is checked too, though under a single-source reader it can never fail.
 3. **`EnvironmentBodyParser::new` / `VerbatimBodyParser::new` / their
-   `with_invocation_name_span`, and `EnvironmentInvocation`'s two span fields, take
-   `SourceSpan`s.** §1.11 does not list them (it lists their *outputs*), but they were
-   bare `Span`s handed in by a caller and paired with `cx.source` inside the parser —
-   the exact pattern this stage removes. Same reasoning as 2a's deviation 2
+   `with_invocation_name_span`, `EnvironmentInvocation`'s two span fields, and
+   `EnvironmentBeginSyntaxData`'s `command_word`/`post_space` fields take
+   `SourceSpan`s.** §1.11 lists only the *terminator* type
+   (`EnvironmentTerminatorSyntaxData`) and none of the parser constructors, but every
+   one of these was a bare `Span` handed across a seam and paired with `cx.source` on
+   the other side — the exact pattern this stage removes. The begin data in particular
+   mirrors the terminator data field for field (its own rustdoc says so) and is handed
+   to the same `from_parsed`, so leaving it a bare `Span` would have split one record's
+   two sides across two conventions. Same reasoning as 2a's deviation 2
    (`parse_declared_arguments`).
 4. **`latexlike/input.rs`'s `argument_text_span` answers a `SourceSpan`** (it answered a
    bare `Span` the caller indexed into `cx.source`). It now also answers `None` when the
@@ -956,10 +980,16 @@ path were left as they are. (Baseline worktree
    the deleted `move_to_pos`/`pos`. The scanner's own tests must start mid-content and
    read the position back as a number; `StdStreamPosition::at`/`offset` are `pub(crate)`
    and this is their own module. No non-test code mints a position from an offset.
-7. **`docs/construct-parsers.md` line 60 and `token/list_reader.rs`'s module doc link
-   `move_to_edge` for one commit** (the port commit) and become `move_to` in the rename
-   commit — `broken_intra_doc_links = deny` forbids linking a method that does not exist
-   yet.
+7. **The deletion and the rename are two commits, not one.** §4 asks for the rename
+   `move_to_edge` → `move_to` "in ONE commit"; it is one commit (`63c2100`), but it is
+   *separate* from the deletion commit (`4b3f29c`) that removes `move_past`, the
+   two-flag `move_to`, `move_to_pos` and `pos` — the rename cannot land until the old
+   `move_to` name is free, so the two cannot be merged into a single commit. Because of
+   that ordering, `docs/construct-parsers.md` line 60 and `token/list_reader.rs`'s
+   module doc link `move_to_edge` for exactly one commit (`4b3f29c`) and become
+   `move_to` in `63c2100`; `broken_intra_doc_links = deny` forbids linking a method
+   that does not exist yet. **At the branch tip both names are correct and
+   `grep -rn move_to_edge techy docs` is empty.**
 
 ### Open questions
 

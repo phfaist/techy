@@ -3454,13 +3454,10 @@ mod tests {
                     &cx.tokens.position_at(self.invocation.token, TokenEdge::Start),
                     &end,
                 )?;
-                // Node data sub-spans are node-relative spans of the node's own
-                // source; a delimiter from elsewhere is recorded as owned text
-                // (the production sites' rule, modelled here too).
-                let delimiter = |at: &SourceSpan| match at.same_source(&span) {
-                    true => TextContent::Spanned(at.span()),
-                    false => TextContent::Owned(at.content().into()),
-                };
+                // Node data sub-spans go through the shared recording rule, exactly
+                // as the production sites do.
+                let delimiter =
+                    |at: &SourceSpan| super::super::node_text_content(at, &span);
                 let data: GroupData<CmdLang> =
                     GroupData::untyped(delimiter(&open_span), delimiter(&close_span));
                 let id = cx.stage_node(
