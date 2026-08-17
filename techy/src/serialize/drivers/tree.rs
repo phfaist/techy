@@ -101,6 +101,16 @@ crate::serial_index! {
 /// conversion writes and reads owned text only, and ext values must not carry spans
 /// relative to the node's source (the contract [`NodeTree::materialize`] states — it
 /// leaves ext values untouched).
+///
+/// # Panics
+///
+/// The writer calls [`InvocationSyntax::materialized`] on each callable node's
+/// invocation syntax: a live tree that violates the [`TextContent::Spanned`]
+/// invariant — a span-backed text of the invocation syntax whose byte range is not a
+/// valid range of the node's source — panics there, exactly as
+/// [`NodeTree::materialize`] does on such a tree (the crate-wide contract on
+/// span-backed text; a tree built by the parser or the node builder never violates
+/// it). Reading panics on no input.
 pub struct TreeSerdeDriver<L: SerializableLang> {
     lang: core::marker::PhantomData<fn() -> L>,
 }
@@ -707,7 +717,7 @@ fn serialize_region<L: Lang>(
 /// (the builder drops staged nodes the root does not reach) and none is claimed twice.
 /// A failure at a node is wrapped in [`DeserializeError::InNode`] with the node's
 /// position and, for a callable, its name.
-fn rebuild_tree<L: SerializableLang, A: Clone>(
+fn rebuild_tree<L: SerializableLang, A>(
     wire_nodes: Vec<WireNode>,
     annotations: Vec<A>,
     cx: &mut DeserializeContext<'_, L>,

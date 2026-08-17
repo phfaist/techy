@@ -828,6 +828,63 @@ fn a_span_off_a_char_boundary_is_rejected() {
 }
 
 #[test]
+fn a_chars_content_span_out_of_range_is_rejected() {
+    // The node's own span is fine; the chars payload's byte range runs past the
+    // source. The builder's residency check catches it, named at the node.
+    let error = push_edited(&chars_group_tree(), |segment| {
+        let nodes = tree_nodes_mut(segment);
+        let chars = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "chars");
+        *map_field_mut(chars, "content") = SerialValue::Map(Vec::from([(
+            String::from("spanned"),
+            SerialValue::Map(Vec::from([
+                (String::from("start"), SerialValue::Int(0)),
+                (String::from("end"), SerialValue::Int(9_999)),
+            ])),
+        )]));
+    });
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert_eq!(read_node_location(&error), Some((1, None)), "{error}");
+    assert!(error.to_string().contains("chars content span 0..9999"), "{error}");
+}
+
+#[test]
+fn a_group_delimiter_span_off_a_char_boundary_is_rejected() {
+    // "café": a group open delimiter ending mid-é (é is two bytes at 3..5).
+    let src = source("café");
+    let st = state();
+    let mut builder = NodeTreeBuilder::<ToyLang, ()>::new();
+    let inner = builder
+        .add(NodeKind::chars(Span::new(0, 3)), span(&src, 0..3), Arc::clone(&st), Vec::new(), (), ())
+        .unwrap();
+    let group = builder
+        .add(
+            NodeKind::group(GroupData::new(GT_BRACE, Span::new(0, 1), Span::new(1, 2))),
+            span(&src, 0..5),
+            Arc::clone(&st),
+            Vec::from([inner]),
+            (),
+            (),
+        )
+        .unwrap();
+    let root = builder.add(NodeKind::list(), span(&src, 0..5), st, Vec::from([group]), (), ()).unwrap();
+    let tree = builder.finish(root).unwrap();
+    let error = push_edited(&tree, |segment| {
+        let nodes = tree_nodes_mut(segment);
+        let group = map_field_mut(map_field_mut(&mut nodes[1], "kind"), "group");
+        *map_field_mut(group, "open") = SerialValue::Map(Vec::from([(
+            String::from("spanned"),
+            SerialValue::Map(Vec::from([
+                (String::from("start"), SerialValue::Int(0)),
+                (String::from("end"), SerialValue::Int(4)),
+            ])),
+        )]));
+    });
+    assert!(matches!(innermost(&error), DeserializeError::Failed { .. }), "{error}");
+    assert_eq!(read_node_location(&error), Some((1, None)), "{error}");
+    assert!(error.to_string().contains("group open delimiter span 0..4"), "{error}");
+}
+
+#[test]
 fn children_out_of_bounds_and_backwards_are_rejected() {
     let out = push_edited(&chars_group_tree(), |segment| {
         let nodes = tree_nodes_mut(segment);
