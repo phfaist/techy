@@ -10,7 +10,8 @@
 //! **Identity and self-contained forms.** A provider or spec is serialized either by
 //! *identity* — a reference the reading side resolves against the live objects it
 //! already holds — or in a *self-contained* form the reading side rebuilds an
-//! equivalent object from. Packages are loaded data: identity by name. A package's
+//! equivalent object from. A package is part of the reading program's own
+//! configuration: identity by name. A package's
 //! specs hold argument parsers, which have no serialized form: identity through the
 //! provenance stamp the (shared) package handed out — a reference to the package's
 //! own entry plus the definition key, resolved by looking the key up in the reading
@@ -158,8 +159,11 @@ impl<L: Lang> KnownProviders<L> {
     }
 
     /// Register `recipe` as the way to build the provider named `name` when no
-    /// provider is held under that name. Returns the recipe previously registered
-    /// under `name`, if any (replaced).
+    /// provider is held under that name. The provider the recipe builds must answer
+    /// `name` as its own [`name()`](crate::scopes::SpecsProvider::name):
+    /// [`resolve`](KnownProviders::resolve) checks it and reports a recipe that builds
+    /// a provider of another name as an error. Returns the recipe previously
+    /// registered under `name`, if any (replaced).
     pub fn register_recipe(
         &mut self,
         name: impl Into<String>,
@@ -179,13 +183,24 @@ impl<L: Lang> KnownProviders<L> {
     ///
     /// # Errors
     ///
-    /// The recipe's own failure.
+    /// The recipe's own failure; the recipe built a provider whose
+    /// [`name()`](crate::scopes::SpecsProvider::name) is not `name`
+    /// ([`DeserializeError::Failed`], naming both).
     pub fn resolve(&self, name: &str) -> Result<Option<Arc<dyn SpecsProvider<L>>>, DeserializeError> {
         if let Some(provider) = self.providers.get(name) {
             return Ok(Some(Arc::clone(provider)));
         }
         match self.recipes.get(name) {
-            Some(recipe) => recipe.build().map(Some),
+            Some(recipe) => {
+                let provider = recipe.build()?;
+                if provider.name() != name {
+                    return Err(DeserializeError::failed(format!(
+                        "the recipe registered for provider `{name}` built a provider named `{}`",
+                        provider.name()
+                    )));
+                }
+                Ok(Some(provider))
+            }
             None => Ok(None),
         }
     }
@@ -234,13 +249,9 @@ impl<L: Lang> fmt::Debug for KnownProviders<L> {
 /// registered (the function was called twice, or a language helper already called
 /// it).
 pub fn register_core_readers<L: SerializableLang>(session: &mut SerdeSession<L>) -> Result<(), RegistrationError> {
-    let tables = session.standard_tables().ok_or_else(|| {
-        let missing = [super::SPECS_TABLE, super::PROVIDERS_TABLE]
-            .into_iter()
-            .find(|name| session.table_ordinal_by_name(name).is_none())
-            .unwrap_or(super::SPECS_TABLE);
-        RegistrationError::UnknownTableName { name: String::from(missing) }
-    })?;
+    let tables = session
+        .standard_tables()
+        .ok_or_else(|| RegistrationError::UnknownTableName { name: String::from(super::missing_standard_table(session)) })?;
     tables.specs.register_type::<SpecProvenance<L>>(session, SPEC_IDENTITY_IDENTIFIER, |spec| spec)?;
     tables.specs.register_type::<ErrorCallableSpec>(session, ERROR_SPEC_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<L>>

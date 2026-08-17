@@ -701,6 +701,7 @@ fn a_provider_whose_answer_changes_later_still_reads_back_the_parsed_instance() 
     assert!(Arc::ptr_eq(parsed.spec().unwrap(), &(Arc::clone(&counting.first) as Arc<dyn CallableSpec<Latexlike>>)));
     assert_eq!(counting.calls.load(Ordering::SeqCst), 1);
 
+    let counter = Arc::clone(&counting);
     let factory = move || {
         let mut session = SerdeSession::<Latexlike>::new();
         let mut known = KnownProviders::<Latexlike>::new();
@@ -721,6 +722,7 @@ fn a_provider_whose_answer_changes_later_still_reads_back_the_parsed_instance() 
     let spec = node.spec().unwrap();
     let counted = (&**spec as &dyn Any).downcast_ref::<CountedSpec>().unwrap();
     assert_eq!(counted.which, "first");
+    assert_eq!(counter.calls.load(Ordering::SeqCst), 1, "the round trip asked the provider nothing");
 }
 
 // --- scopes and fallback providers --------------------------------------------------------
@@ -875,10 +877,14 @@ fn a_hostile_state_over_read_providers_freezes_without_panicking() {
 
 // --- determinism ------------------------------------------------------------------------
 
+/// The determinism input: macros, a minilatex list (the body-pushed item package),
+/// specials, and math — states, specs, and providers of every kind on the wire.
+const DETERMINISM_INPUT: &str = "\\emph{a} \\begin{itemize}\\item x~y\\end{itemize} $m$";
+
 #[test]
 fn two_sessions_emit_identical_segments() {
     let language = oracle_language(Recovery::Strict);
-    let result = parse(&language, "\\emph{a} \\begin{itemize}\\item x~y\\end{itemize} $m$");
+    let result = parse(&language, DETERMINISM_INPUT);
     let factory = session_factory(seed_providers(&language));
     let mut a = factory();
     let mut b = factory();
@@ -886,6 +892,35 @@ fn two_sessions_emit_identical_segments() {
     b.serialize_tree(&result.tree).unwrap();
     assert_eq!(a.take_segment(), b.take_segment());
 }
+
+/// Cross-process determinism: the JSON rendering of the determinism input is pinned
+/// by its length and a 64-bit FNV-1a digest (a rendering snapshot recorded by an
+/// earlier run of this test — two sessions of one process agreeing proves less, since
+/// they share every process-wide state; a hash-map iteration order that reached the
+/// wire would show up here). On a mismatch the message carries the JSON, so that a
+/// deliberate change of the wire vocabulary can re-pin it. The small-parse
+/// `a_small_latexlike_parse_has_a_pinned_json_rendering` pins the exact text.
+#[cfg(feature = "serde")]
+#[test]
+fn the_rendering_of_the_determinism_input_is_pinned_across_processes() {
+    let language = oracle_language(Recovery::Strict);
+    let result = parse(&language, DETERMINISM_INPUT);
+    let mut session = session_factory(seed_providers(&language))();
+    session.serialize_tree(&result.tree).unwrap();
+    let json = serde_json::to_string(&session.take_segment()).unwrap();
+    let digest = json.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    assert_eq!(
+        (json.len(), digest),
+        PINNED_DETERMINISM_RENDERING,
+        "the rendering changed; re-pin (len, fnv1a64) if the change is deliberate:\n{json}"
+    );
+}
+
+/// The pinned `(byte length, FNV-1a 64-bit digest)` of the determinism input's JSON.
+#[cfg(feature = "serde")]
+const PINNED_DETERMINISM_RENDERING: (usize, u64) = (7696, 15_178_594_088_035_620_013);
 
 // --- helpers ------------------------------------------------------------------------------
 

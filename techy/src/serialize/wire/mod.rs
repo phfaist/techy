@@ -422,8 +422,8 @@ pub(crate) fn unknown_variant(name: &str, variants: &'static [&'static str]) -> 
     SerialValueError::UnknownVariant { name: String::from(name), expected: variants }
 }
 
-/// A unit variant carries no data.
-pub(crate) fn expect_unit_variant(name: &'static str, payload: Option<&SerialValue>) -> Result<(), SerialValueError> {
+/// A unit variant carries no data; `name` is the variant name that was read.
+pub(crate) fn expect_unit_variant(name: &str, payload: Option<&SerialValue>) -> Result<(), SerialValueError> {
     match payload {
         None => Ok(()),
         Some(_) => Err(SerialValueError::TypeMismatch {

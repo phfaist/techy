@@ -110,7 +110,7 @@ crate::serial_index! {
 /// valid range of the node's source — panics there, exactly as
 /// [`NodeTree::materialize`] does on such a tree (the crate-wide contract on
 /// span-backed text; a tree built by the parser or the node builder never violates
-/// it). Reading panics on no input.
+/// it). Reading never panics: every wire input is validated.
 pub struct TreeSerdeDriver<L: SerializableLang> {
     lang: core::marker::PhantomData<fn() -> L>,
 }

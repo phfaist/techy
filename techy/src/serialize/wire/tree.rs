@@ -110,14 +110,7 @@ impl ToSerialValue for SlotRole {
 impl FromSerialValue for SlotRole {
     fn from_serial_value(value: &SerialValue) -> Result<Self, SerialValueError> {
         let (name, payload) = read_variant(value, "SlotRole", &["content", "attached", "hidden"])?;
-        expect_unit_variant(
-            match name {
-                "content" => "content",
-                "attached" => "attached",
-                _ => "hidden",
-            },
-            payload,
-        )?;
+        expect_unit_variant(name, payload)?;
         Ok(match name {
             "content" => SlotRole::Content,
             "attached" => SlotRole::Attached,

@@ -104,7 +104,8 @@
 //! provider is serialized either by *identity* — a reference the reading side resolves
 //! against the live objects it already holds — or in a *self-contained* form the
 //! reading side rebuilds an equivalent object from; each type's own impl decides. A
-//! [`Package`](crate::core::specs::Package) is loaded data and goes by identity: its
+//! [`Package`](crate::core::specs::Package) is part of the reading program's own
+//! configuration and goes by identity: its
 //! name, resolved through the [`KnownProviders`] directory the reading program sets as
 //! the session's user data — the providers it holds, by name, plus
 //! [`ProviderRecipe`]s to build the ones it does not hold. A spec that holds parsers
@@ -160,6 +161,7 @@ pub use value::{SerialEntry, SerialIndex, SerialValue, TableId};
 
 // Shared bodies of the crate's own spec serialization, for the preset's impls.
 pub(crate) use drivers::specs::{read_unit_recipe, serialize_stamped_spec, unit_recipe_value};
+pub(crate) use drivers::missing_standard_table;
 
 // The typed-position macro is defined at the crate root (as every `macro_rules!`
 // export is) and hidden there; this is its canonical, documented path.

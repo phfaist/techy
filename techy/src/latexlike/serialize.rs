@@ -174,7 +174,7 @@ impl<L: Lang> DeserializableValue<L> for CallableType {
         L: SerializableLang,
     {
         let (name, payload) = read_variant(value, "CallableType", names::CALLABLE_TYPES)?;
-        expect_unit_variant(names::CALLABLE_TYPES[0], payload)?;
+        expect_unit_variant(name, payload)?;
         Ok(match name {
             names::MACRO => CallableType::Macro,
             names::ENVIRONMENT => CallableType::Environment,
@@ -202,7 +202,7 @@ impl<L: Lang> DeserializableValue<L> for MathGroupForm {
         L: SerializableLang,
     {
         let (name, payload) = read_variant(value, "MathGroupForm", names::MATH_GROUP_FORMS)?;
-        expect_unit_variant(names::MATH_GROUP_FORMS[0], payload)?;
+        expect_unit_variant(name, payload)?;
         Ok(if name == names::INLINE { MathGroupForm::Inline } else { MathGroupForm::Display })
     }
 }
@@ -263,7 +263,7 @@ impl<L: Lang> DeserializableValue<L> for Mode {
         L: SerializableLang,
     {
         let (name, payload) = read_variant(value, "Mode", names::MODES)?;
-        expect_unit_variant(names::MODES[0], payload)?;
+        expect_unit_variant(name, payload)?;
         Ok(if name == names::TEXT { Mode::Text } else { Mode::Math })
     }
 }
@@ -667,9 +667,9 @@ where
     ArgumentExt<LLL>: Default,
 {
     register_core_readers(session)?;
-    let Some(tables) = session.standard_tables() else {
-        return Err(RegistrationError::UnknownTableName { name: String::from("specs") });
-    };
+    let tables = session.standard_tables().ok_or_else(|| RegistrationError::UnknownTableName {
+        name: String::from(crate::serialize::missing_standard_table(session)),
+    })?;
     tables.specs.register_type::<BeginSpec<LLL>>(session, BEGIN_IDENTIFIER, |spec| {
         Arc::new(spec) as Arc<dyn CallableSpec<LLL>>
     })?;

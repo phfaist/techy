@@ -850,7 +850,8 @@ fn modes_admit<M: Eq>(visible_modes: &Option<Vec<M>>, mode: &M) -> bool {
 /// **Serialization.** A package is serialized by *identity*: its entry carries the
 /// package's name only, and the reading side looks the name up among the providers
 /// it already holds ([`KnownProviders`](crate::serialize::KnownProviders)) — a package
-/// is loaded data, not something to describe in full. Its *definitions* are
+/// is part of the reading program's own configuration, not something to describe in
+/// full. Its *definitions* are
 /// serialized by identity too, when the package was built **shared**
 /// ([`new_shared`](Package::new_shared)): the specs it hands out
 /// [`SpecProvenance`] stamps for ([`provenance_for`](Package::provenance_for),
@@ -1279,6 +1280,16 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
 /// their spec `Arc`s), and the visibility, but not the shared identity — the clone
 /// hands out no provenance stamps of its own, and the stamps its specs may carry keep
 /// naming the package they were cloned from.
+///
+/// Consequence for serialization: a parse driven by a clone (the clone in the scope
+/// stack, its specs stamped by the original) serializes the clone and the original
+/// as two provider entries of one name — the states refer to the clone, the specs to
+/// the original — and a reading side that resolves the name through a
+/// [`ProviderRecipe`](crate::serialize::ProviderRecipe) alone rebuilds the two entries
+/// as two packages, so the spec a tree node holds is not the instance held by the
+/// package in the rebuilt state's scope stack (a reading side that holds the very
+/// `Arc`s in its [`KnownProviders`](crate::serialize::KnownProviders) resolves both
+/// entries to that one instance).
 impl<L: Lang> Clone for Package<L> {
     fn clone(&self) -> Self {
         Package {

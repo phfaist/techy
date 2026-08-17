@@ -46,6 +46,25 @@ pub(crate) const PROVIDERS_TABLE: &str = "providers";
 /// The name of the trees table.
 pub(crate) const TREES_TABLE: &str = "trees";
 
+/// The names of the standard tables, in registration order.
+pub(crate) const STANDARD_TABLE_NAMES: &[&str] =
+    &[SOURCES_TABLE, STATES_TABLE, SPECS_TABLE, PROVIDERS_TABLE, TREES_TABLE];
+
+/// The name of the first standard table `session` lacks (by name), or the string
+/// "standard tables" when every name is registered but not with the standard
+/// driver type — what a registration helper names when
+/// [`SerdeSession::standard_tables`](crate::serialize::SerdeSession::standard_tables)
+/// answers `None`.
+pub(crate) fn missing_standard_table<L: crate::serialize::SerializableLang>(
+    session: &crate::serialize::SerdeSession<L>,
+) -> &'static str {
+    STANDARD_TABLE_NAMES
+        .iter()
+        .copied()
+        .find(|name| session.table_ordinal_by_name(name).is_none())
+        .unwrap_or("standard tables")
+}
+
 /// The identifier of every entry of the sources table.
 pub(crate) const SOURCE_IDENTIFIER: &str = "core.source";
 /// The identifier of every entry of the states table.
