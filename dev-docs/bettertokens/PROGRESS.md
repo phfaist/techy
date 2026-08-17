@@ -699,17 +699,19 @@ the remaining `token.pre_space` reads are Stage 3a's.
 - **Branch**: `bt-2b-rest` (off `bt-2a-core` at `0af4276`, which `main` has since
   fast-forwarded to).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-2b-rest`.
-- **Status**: implemented — awaiting review. Date: 2026-08-17.
-- **Commits** (`git log --oneline bt-2a-core..bt-2b-rest`, newest first; the PROGRESS
-  update itself follows this list):
+- **Status**: reviewed and merged (`main` a8f36a1). Date: 2026-08-17.
+- **Commits** (`git log --oneline d736e72..a8f36a1`, newest first — the post-rebase
+  SHAs, review polish and the PROGRESS update included):
 
 ```
-8c81564 bettertokens: the parse-throughput probe example
-6bdbbb9 core: `ParseContext` holds no source
-63c2100 token: `move_to_edge` is `move_to`
-4b3f29c token: delete the positional navigation API
-9fc838b core: the last construct-parser callers and the guides off bare positions
-6cf35a6 core: the environment and verbatim families on reader answers
+a8f36a1 bettertokens: review polish — one recording rule, sharper progress notes
+85e1466 bettertokens: PROGRESS.md — Stage 2a merged, Stage 2b implemented
+16f6d60 bettertokens: the parse-throughput probe example
+d201e96 core: `ParseContext` holds no source
+8f852b7 token: `move_to_edge` is `move_to`
+e6d47d6 token: delete the positional navigation API
+bcf2ea1 core: the last construct-parser callers and the guides off bare positions
+4cdb737 core: the environment and verbatim families on reader answers
 ```
 
 ### What changed, per file
@@ -1004,3 +1006,246 @@ path were left as they are. (Baseline worktree
    issued. With `move_to_pos` gone there is no other way to reach that state from
    outside the reader — which is the point of the design, but it does mean the clipping
    behavior is only reachable in tests through a hand-built list. No action taken.
+
+---
+
+## Stage 3a — the token view (§5)
+
+- **Branch**: `bt-3a-view` (off `main` at `a8f36a1`, which already contains Stages 1,
+  2a and 2b).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-3a-view`.
+- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Commits** (`git log --oneline main..bt-3a-view`, newest first; the PROGRESS update
+  itself follows this list):
+
+```
+507d7da docs: the guide doctest and the new tests for the view
+7b94504 core: construct parsers read tokens through the reader's view
+d8ef0c1 core: the resolve chain works from the token's view
+a118cb9 token: the parser-facing token view and `TokenReader::token_kind`
+```
+
+The third commit is the big one: the kind-read port and the two signature changes it
+forces (`Invocation.kind`, `FromInvocation`) cannot be split without a non-building
+intermediate state. Each commit builds and is green on the gates.
+
+### What changed, per file
+
+| File | Change |
+|---|---|
+| `techy/src/token/token.rs` | new `TokenKindView<'t, L>` (§1.3's variants and fields, no span fields) with manual `Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Display` and `as_str`; `Token::edge_offset` gains the `ContentStart` arm (comment: the start delimiter's end; command: past the escape character; otherwise the token's start); three new unit tests |
+| `techy/src/token/reader.rs` | `TokenEdge::ContentStart` (fifth variant, between `Start` and `End`) with the `≤`-ordering rustdoc; `TokenReader::token_kind<'t>(&self, &'t Token<'_, L>) -> TokenKindView<'t, L> where 's: 't` (required, rustdoc per §1.6/§1.15) and its `StdTokenReader` impl; the trait's "Positions, edges, and spans" section and `move_to`'s docs restated for five edges; four new unit tests |
+| `techy/src/token/list_reader.rs` | `token_kind` (same interpretation, issued-token check first); `EVERY_EDGE` and the lockstep edge matrix cover `ContentStart`; three new tests (view lockstep, the comment's delimiter/content as edges, a forged token rejected) |
+| `techy/src/token/mod.rs`, `techy/src/core/mod.rs` | facades export `TokenKindView` (temporary — 3b renames it `TokenKind`); the token module's design highlights say what a token *is* is a reader answer too |
+| `techy/src/scopes/mod.rs` | `CallableQuery<'a, L>` (the `'s` is gone): `token: Option<&Token>` → `token_kind: Option<TokenKindView<'a, L>>`, `with_token` → `with_token_kind`, rustdoc per §1.10; one new unit test |
+| `techy/src/engine/driver.rs` | `ParseDriver::resolve_command`, `CommandResolver::resolve_command` and `resolve_command_in_scopes` take `token_kind: TokenKindView<'_, L>`; the query is built with `with_token_kind`; rustdoc on why a resolver sees the view |
+| `techy/src/constructs/mod.rs` | `Invocation.kind: TokenKindView<'a, L>` and `name: &'a str` (from the view); `FromInvocation::from_invocation(&Invocation, &dyn TokenReader)`, `stage_invocation` passing `&*self.tokens`; new `pub(crate) comment_node_kind(cx, token)` — the comment node's three sub-spans as three edge answers |
+| `techy/src/constructs/nodes_parser.rs` | one `cx.tokens.token_kind(&token)` per loop iteration, matched on in the dispatch and in `token_stop`; `take_pre_space` compares edge positions; `TokenStopKind::Predicate` takes the view; the comment arm stages through `comment_node_kind`; test predicates, harness and `TakeParser` ported |
+| `techy/src/constructs/argument_parsers.rs` | the noise scan, `parse_expression_node`, the group-class and minted-group probes and the marker run read the view; the requires-content spelling comes from `invocation.kind`; the two `Invocation` sites set `kind` |
+| `techy/src/constructs/child_state.rs` | `GroupChildState::Compute` receives the open token's view (see deviations) |
+| `techy/src/constructs/{environment,verbatim,embellishments,tack_on,group,chars_group}_parser.rs` | every kind match through the reader; the "rigid"/"contiguous" pre-space tests become edge comparisons; `read_raw_content`'s close-as-content callback takes the view |
+| `techy/src/latexlike/invocation_syntax.rs` | `FromInvocation for InvocationSyntaxData` reads `invocation.kind` and takes the post-space from `tokens.source_span_between(token, End, EndPastPostSpace)`; the rest-of-line test parser reads views; one new unit test |
+| `techy/src/latexlike/environments.rs`, `techy/src/latexlike/driver.rs` | the composition's trigger checks read `self.invocation.kind`; the preset's `resolve_command` takes the view |
+| `techy/src/engine/mod.rs` | the one-char test parser reads the view; the three `resolve_command` tests pass a `TokenKindView::Command` literal instead of building a token |
+| `techy/tests/lang_features.rs` | `CommentEmittingReader` implements `token_kind` by delegation (the documented custom-reader shape, from outside the crate); `FixedTableResolver` takes the view; the groups-only reader test matches on the view and reads pre-space through the reader |
+| `docs/construct-parsers.md` | the takeover doctest reads `cx.tokens.token_kind(&token)` and matches `TokenKindView` |
+
+### Gate results (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-3a-view/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.01s
+```
+
+```
+$ cargo test
+     Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
+test result: ok. 1050 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+     Running tests/acceptance.rs (target/debug/deps/acceptance-7b2cb805b784ba43)
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/derive_conditions.rs (target/debug/deps/derive_conditions-71de9c4e022af742)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lang_features.rs (target/debug/deps/lang_features-578eec6f554508fe)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/recompose_oracle.rs (target/debug/deps/recompose_oracle-d968565b496d485e)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/serialize_golden.rs (target/debug/deps/serialize_golden-cb6930c3a4ed679f)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/serialize_perf.rs (target/debug/deps/serialize_perf-d51c13b362cfaaf8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/serialize_stream.rs (target/debug/deps/serialize_stream-fb6aa0095a29ae64)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/techy_derive-630a7db7dcf42893)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests techy
+test result: ok. 84 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 26.64s
+   Doc-tests techy_derive
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+(1050 unit tests: 1035 at the branch point plus the 15 this stage adds.)
+
+```
+$ cargo clippy --all-targets -- -D warnings
+    Checking techy v0.1.0 (…/bt-3a-view/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.64s
+```
+
+```
+$ rm -rf target/doc && cargo docs
+ Documenting techy-derive v0.1.0 (…/bt-3a-view/techy-derive)
+ Documenting techy v0.1.0 (…/bt-3a-view/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.57s
+   Generated …/bt-3a-view/target/doc/techy/index.html and 1 other file
+```
+
+Lockstep suites:
+
+```
+$ cargo test -p techy --lib constructs::nodes_parser
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 971 filtered out; finished in 0.07s
+
+$ cargo test -p techy --lib token::list_reader
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1036 filtered out; finished in 0.01s
+```
+
+### Semver report (`scripts/check_semver.sh`)
+
+Breaking changes are expected (soft freeze) and were not "fixed".
+
+```
+    Checking techy v0.1.0 -> v0.1.0 (no change; assume minor)
+     Checked [   0.061s] 196 checks: 179 pass, 17 fail, 0 warn, 58 skip
+     Summary semver requires new major version: 17 major and 0 minor checks failed
+    Finished [   3.420s] techy
+```
+
+The same **17 lints** as Stage 2b — no new lint category. Five of them gain entries
+from this stage:
+
+| Lint | Entry added by 3a |
+|---|---|
+| `constructible_struct_adds_field` | `CallableQuery.token_kind`, `Invocation.kind` |
+| `inherent_method_missing` | `CallableQuery::with_token` |
+| `struct_pub_field_missing` | `CallableQuery::token` |
+| `trait_method_parameter_count_changed` | `FromInvocation::from_invocation` 1 → 2 |
+| `type_mismatched_generic_lifetimes` | `CallableQuery` 2 → 1 lifetime params |
+
+Not reported by any lint, but breaking all the same (the tool has no lint for a changed
+parameter *type*, a new required trait method on a lifetime-parameterized trait, or a
+new enum variant here): `TokenReader::token_kind` (new required method),
+`ParseDriver::resolve_command` / `CommandResolver::resolve_command` /
+`resolve_command_in_scopes` taking a view, `TokenStopKind::Predicate` and
+`GroupChildState::Compute` taking a view, and `TokenEdge::ContentStart`.
+
+### The 3a completion greps
+
+Token *kind* reads outside the token module:
+
+```
+$ grep -rn "\.kind\b" techy/src techy/tests docs | grep -v "^techy/src/token/" \
+    | grep -v "node\.kind\|\.kind()\|NodeKind\|kind:"
+techy/src/latexlike/invocation_syntax.rs:127:        match invocation.kind {
+techy/src/latexlike/environments.rs:828:            self.invocation.kind
+techy/src/latexlike/environments.rs:1045:        let command_end = match self.invocation.kind {
+techy/src/constructs/argument_parsers.rs:352:        let spelling = match invocation.kind {
+techy/src/constructs/mod.rs:1274:            .field("kind", &self.kind)
+techy/src/constructs/nodes_parser.rs:211:        match self.kind {
+techy/src/constructs/nodes_parser.rs:763:        let matches = match &cond.kind {
+techy/src/constructs/nodes_parser.rs:1293:            .field("kind", &self.kind)
+techy/src/scopes/mod.rs:2702:        assert!(error.kind.to_string().contains("scan broke"));
+techy/src/serialize/**, techy/src/node/**, techy/tests/derive_conditions.rs (node and
+diagnostic data, not tokens — elided here for length)
+```
+
+**No token-kind read is left.** The nine remaining lines are: `invocation.kind` (the
+view field this stage adds — read, not computed), the `Debug` impls of `Invocation` and
+`TokenStopCondition`, `UnusableRecoveryToken.kind` and `TokenStopCondition.kind` (the
+parsers' own condition enums), and a `SpecialsScanError.kind` assertion. The `serialize`
+/ `node` hits are `NodeData.kind` and wire-record fields.
+
+Token *span* / *whitespace* reads outside the token module:
+
+```
+$ grep -rn "token\.span\|tok\.span\|\.pre_space\b\|\.post_space()" techy/src techy/tests docs \
+    | grep -v "^techy/src/token/"
+techy/src/latexlike/arguments.rs:727:        assert_eq!(m.post_space(), Some(" "));
+techy/src/latexlike/invocation_syntax.rs:530,535,586,643,733
+techy/src/latexlike/environments.rs:1247,1288
+techy/tests/acceptance.rs:393,397,450,563,606
+docs/learn-by-example.md:186
+```
+
+Every one is `NodeRef::post_space()` — the latexlike *node* accessor reading the
+recorded payload, not a token. **No `Token` field is read outside `techy/src/token/`**,
+by any reader impl or otherwise: the five `cfg(test)` delegating readers
+(`BrokenReader`, `StuckRecoveryReader`, `FlakyReader`, `TabooReader`,
+`CommentEmittingReader`) delegate every question to their inner `StdTokenReader` and
+only *construct* tokens (`Token::new(TokenKind::…, span, pre_space)` from their own
+locals), so they match neither grep.
+
+### Decisions taken under §1.16
+
+- **`Invocation.kind` is kept as a field** — probe P2 confirmed the shape compiles and
+  survives holding the view across a sub-parse (the receiver's lifetime stays out of
+  `token_kind`'s return type). No `Invocation.name: String` fallback was needed; `name`
+  is now `&'a str` taken from the view.
+- **The view's manual impls** are `Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Display`
+  (never a derive — probe finding 6), with `Specials` specs compared by `Arc::ptr_eq`
+  and `GroupOpen` rules structurally, exactly as the stored `TokenKind` compares.
+- **`TokenKindView` lives in `techy/src/token/token.rs`** (§5 leaves the choice open),
+  next to the stored kind it mirrors — 3b merges the two.
+- **User ruling 2026-08-17: a fifth edge `TokenEdge::ContentStart`** ("where the token's
+  own content begins, past its leading marker"), declared between `Start` and `End`, so
+  the five offsets satisfy `StartBeforePreSpace ≤ Start ≤ ContentStart ≤ End ≤
+  EndPastPostSpace` (`≤`: edges coincide where a kind has no pre-space, no leading
+  marker, or no post-space). The comment node's three sub-spans are then three reader
+  answers and the parser computes nothing. This replaced the interim the stage brief
+  described (deriving the sub-spans from `start_delim.len()` plus a new `TokenReader`
+  contract clause); no such clause is on the trait.
+
+### Deviations from §1/§5
+
+1. **Two more reader-less hooks take the view, which §1 does not list.**
+   `TokenStopKind::Predicate` (`&dyn Fn(&Token) -> Result<bool, _>` →
+   `&dyn Fn(TokenKindView<'_, L>) -> Result<bool, _>`) and `GroupChildState::Compute`
+   (`&dyn Fn(&Arc<ParsingState>, &Token) -> …` → `… TokenKindView<'_, L> …`). Both
+   receive a token and no reader, and both exist *only* to look at the token's kind —
+   the predicate matches kinds, the compute closure keys on the open delimiter's rule.
+   Leaving them on `&Token` would have made the stage's completion grep impossible to
+   satisfy (their only in-tree callers read `token.kind`) and would leave two hooks that
+   3b's opaque token renders useless. The reasoning is ruling O-1's, applied where the
+   same situation recurs: what a reader-less party can know about a token is the view.
+   Callers: two test predicates and two test compute closures — no production caller.
+2. **`comment_node_kind` is a new `pub(crate)` free function** in
+   `techy/src/constructs/mod.rs`, beside `node_text_content`. §1 does not name it, but
+   the comment staging rule now has two call sites (`nodes_parser.rs`,
+   `argument_parsers.rs`) and, with the `ContentStart` edge, one obvious spelling; a
+   single home keeps the two in step (the same argument as 2b's `node_text_content`).
+3. **`StdTokenReader::token_kind` slices the comment delimiter with
+   `content.get(..).unwrap_or("")`, not `content[..]`.** A token this reader never
+   issued (contract clause 4 — it cannot detect the violation) may carry a span this
+   content does not have; indexing would be a new always-on panic in library code, which
+   the panic policy does not allow without a registered exception. The delimiter reads as
+   empty instead. `TokenListReader` rejects such a token before it gets that far.
+4. **`Invocation.name` is `&'a str`, not `&'s str`.** It comes from the view now, whose
+   lifetime is the token's borrow. Since `token: &'a Token<'s, L>` implies `'s: 'a`,
+   every existing caller still compiles. 3b drops `'s` entirely.
+5. **The `docs/*.md` prose links to `TokenKind`** (`concepts-overview.md`,
+   `parsing-model.md`) were left alone: they resolve today and keep resolving in 3b,
+   where the view *is* `TokenKind`. Only the intra-doc links in files that no longer
+   import the stored kind were repointed at `TokenKindView`
+   (`nodes_parser.rs`, `latexlike/driver.rs`, `verbatim_parser.rs`, `group_parser.rs`,
+   `embellishments_parser.rs`, `tack_on_parser.rs`).
+
+### Open questions
+
+1. **The two extra view-taking hooks** (deviation 1) are the only judgment call in the
+   stage that §1 does not spell out. The conservative alternative — leave both on
+   `&Token` — is not viable in 3b, so the change is brought forward here rather than
+   deferred; flagged for the reviewer, not decided beyond ruling O-1's principle.
+2. **No existing test's expected node span or payload changed.** The whole suite passes
+   unmodified, the comment sub-spans included (the `ContentStart` edge reproduces the
+   stored token's `start`/`content`/`post_space` exactly). Recorded because the comment
+   staging rule changed shape.
