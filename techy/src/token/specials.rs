@@ -6,8 +6,9 @@
 //! scope, changing with scope-stack ops, so their recognition is delegated to a
 //! [`Lang`](crate::state::Lang) hook (`Lang::scan_specials`) instead of being enumerated in
 //! the rules. Recognition and resolution happen in one call: a
-//! [`SpecialsMatch`] carries both the name and the resolved spec, which removes
-//! normalization and scoping mismatches between scanning and lookup by construction.
+//! [`SpecialsMatch`] carries the resolved spec, and the matched text is the name, which
+//! removes normalization and scoping mismatches between scanning and lookup by
+//! construction.
 //!
 //! The hot path is protected by [`TriggerChars`]: the set of characters that may start a
 //! specials trigger, reported by `Lang::specials_trigger_chars` and cached per parsing
@@ -19,23 +20,29 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use core::fmt;
 
+use crate::source::Span;
 use crate::spec::CallableSpec;
 use crate::state::Lang;
+
+use super::error::TokenErrorKind;
 
 /// A successful specials scan: a callable trigger matched at the scanned position.
 ///
 /// Returned by `Lang::scan_specials(state, content, pos)`. Positions are absolute byte
 /// offsets into `content` (not relative to the scanned tail), so spans in errors and in the
 /// resulting token need no offset arithmetic.
-pub struct SpecialsMatch<'s, L: Lang> {
-    /// Byte offset one past the end of the matched trigger (the token's `span.end`).
+pub struct SpecialsMatch<L: Lang> {
+    /// Byte offset one past the end of the matched trigger.
+    ///
+    /// The matched text is `content[pos..end]`, and that text *is* the specials name
+    /// the reader records on the token — which is why the match carries no separate
+    /// name.
     ///
     /// **Contract:** the match must be non-empty and boundary-aligned — `end` must
-    /// satisfy `pos < end <= content.len()` and fall on a `char` boundary, and `name`
-    /// should be the matched slice `&content[pos..end]`. A zero-width match would
-    /// produce a token that never advances the parse (an infinite loop); an
-    /// out-of-range or mid-codepoint `end` would produce an invalid span. The
-    /// standard reader validates the contract at the call site and reports a
+    /// satisfy `pos < end <= content.len()` and fall on a `char` boundary. A
+    /// zero-width match would produce a token that never advances the parse (an
+    /// infinite loop); an out-of-range or mid-codepoint `end` would produce an invalid
+    /// span. The standard reader validates the contract at the call site and reports a
     /// violation as an unrecoverable implementation error — never a panic.
     pub end: usize,
     /// The invocation form the trigger resolved to (recorded on the token; the dispatch
@@ -43,23 +50,38 @@ pub struct SpecialsMatch<'s, L: Lang> {
     /// resolution is the *(callable type, spec)* pair — the same shape as
     /// [`ResolvedCallable`](crate::engine::ResolvedCallable).
     pub callable_type: L::CallableTypeId,
-    /// The specials name recorded on the token and later on the node — usually the matched
-    /// string itself. Borrowed from the scanned content (zero-copy).
-    pub name: &'s str,
     /// The resolved behavior spec. Never absent: unknown-name policy (fallback specs) is
     /// the scan implementation's business, applied *before* returning a match.
     pub spec: Arc<dyn CallableSpec<L>>,
 }
 
-impl<L: Lang> fmt::Debug for SpecialsMatch<'_, L> {
+impl<L: Lang> fmt::Debug for SpecialsMatch<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SpecialsMatch")
             .field("end", &self.end)
             .field("callable_type", &self.callable_type)
-            .field("name", &self.name)
             .field("spec", &self.spec)
             .finish()
     }
+}
+
+/// A failed specials scan, in the scanned content's own coordinates.
+///
+/// The scan hook detects a trigger in a `&str`. It knows neither the reader's token
+/// type nor the reader's stream positions, so it cannot describe how to carry on past
+/// the failure — recovery is the reader's business. A scan failure is therefore a plain
+/// condition plus a byte range: the reader turns it into a
+/// [`TokenError`](super::TokenError) qualified by its own source, with no recovery, and
+/// that error aborts the parse even under tolerant recovery.
+///
+/// A document-level condition the scan *can* carry on from is expressed the way the
+/// hook expresses everything else — as a match to a spec whose parser diagnoses it.
+#[derive(Debug, Clone)]
+pub struct SpecialsScanError {
+    /// What went wrong.
+    pub kind: TokenErrorKind,
+    /// Where in the scanned content it went wrong.
+    pub span: Span,
 }
 
 /// The characters that may start a specials trigger in some parsing state.

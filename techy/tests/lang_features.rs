@@ -47,7 +47,8 @@ mod support {
     use techy::core::{
         CommandResolver, CommandRule, CommandRules, FeatureAbsent, FeaturePresent,
         FinalizeError, GroupRule, GroupRules, Lang, LangFeatures, Language, NoLangFeatures,
-        ParseResult, ParsingState, SpecialsMatch, StateData, StdParseDriver, Token,
+        ParseResult, ParsingState, SpecialsMatch, SpecialsScanError, StateData,
+        StdParseDriver, Token,
         TokenKind, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use techy::error::Recovery;
@@ -70,11 +71,10 @@ mod support {
     fn scan_tilde<'s, L: Lang<CallableTypeId = u32>>(
         content: &'s str,
         pos: usize,
-    ) -> Option<SpecialsMatch<'s, L>> {
+    ) -> Option<SpecialsMatch<L>> {
         content[pos..].starts_with('~').then(|| SpecialsMatch {
             end: pos + 1,
             callable_type: CT_COMMAND,
-            name: &content[pos..pos + 1],
             spec: Arc::new(StdCallableSpec::default()),
         })
     }
@@ -111,11 +111,11 @@ mod support {
             })
         }
 
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             Ok(scan_tilde(content, pos))
         }
 
@@ -194,11 +194,11 @@ mod support {
             })
         }
 
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             Ok(scan_tilde(content, pos))
         }
 

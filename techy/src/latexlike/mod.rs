@@ -128,8 +128,8 @@ use crate::state::{
 };
 use crate::token::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
-    GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, StdStreamPosition,
-    TokenResult, TokenRules, TriggerChars, WhitespaceRules,
+    GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
+    StdStreamPosition, TokenRules, TriggerChars, WhitespaceRules,
 };
 
 /// The form in which a math group appears: inline or display — the typed class
@@ -428,11 +428,11 @@ impl Lang for Latexlike {
 
     /// The standard scope-stack fold: every provider is consulted innermost-first,
     /// the longest match wins ([`ScopeStack::scan_specials`]).
-    fn scan_specials<'s>(
+    fn scan_specials(
         state: &ParsingState<Self>,
-        content: &'s str,
+        content: &str,
         pos: usize,
-    ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+    ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
         state.scopes().scan_specials(state, content, pos)
     }
 

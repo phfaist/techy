@@ -63,5 +63,5 @@ pub use rules::{
     CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
-pub use specials::{SpecialsMatch, TriggerChars};
+pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
 pub use token::{Token, TokenKind};

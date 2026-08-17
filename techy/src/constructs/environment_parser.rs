@@ -765,7 +765,8 @@ mod tests {
     use crate::state::{ParsingState, StateData, TokenRulesOverrides};
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
-        ParagraphRules, SpecialsMatch, SpecialsRules, StdTokenReader, Token, TokenListReader,
+        ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdTokenReader,
+        Token, TokenListReader,
         TokenReader, TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
@@ -800,16 +801,15 @@ mod tests {
         type Driver = EnvDriver;
 
         // The tokenizer-layer hooks stay on `Lang` (7.2 placement doctrine).
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             if content[pos..].starts_with('~') {
                 Ok(Some(SpecialsMatch {
                     end: pos + 1,
                     callable_type: CT_SPECIALS,
-                    name: &content[pos..pos + 1],
                     spec: Arc::new(StdCallableSpec::default()),
                 }))
             } else {

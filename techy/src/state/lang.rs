@@ -13,7 +13,7 @@ use core::hash::Hash;
 use crate::engine::{ParseDriver, StdParseDriver};
 use crate::node::{NodeBuildError, NodeExt, NodeKind, StagedChildren};
 use crate::source::{Source, SourceOrigin, SourceSpan};
-use crate::token::{SpecialsMatch, StdStreamPosition, TokenResult, TriggerChars};
+use crate::token::{SpecialsMatch, SpecialsScanError, StdStreamPosition, TriggerChars};
 
 use super::features::{AllLangFeatures, LangFeatures};
 use super::parsing_state::{FinalizeError, ParsingState, StateData};
@@ -384,9 +384,9 @@ pub trait Lang: Sized + 'static {
 
     /// Specials scan: is a callable-triggering character sequence at `content[pos..]`?
     ///
-    /// Recognition and resolution happen in one call — a [`SpecialsMatch`] carries both
-    /// the name and the resolved spec (unknown-name fallback policy included), which
-    /// makes scanning/lookup mismatches impossible by construction. Typically implemented
+    /// Recognition and resolution happen in one call — a [`SpecialsMatch`] carries the
+    /// resolved spec (unknown-name fallback policy included) and the matched text is the
+    /// name, which makes scanning/lookup mismatches impossible by construction. Typically implemented
     /// as a fold over the state's scope stack
     /// ([`ScopeStack::scan_specials`](crate::scopes::ScopeStack::scan_specials)). Positions are
     /// absolute byte offsets into `content`; `pos` is passed through to implementations
@@ -398,13 +398,13 @@ pub trait Lang: Sized + 'static {
     ///
     /// - A returned match must be non-empty and boundary-aligned: see the contract on
     ///   [`SpecialsMatch::end`]. A zero-width match would hang the parse loop; the
-    ///   reader debug-asserts the contract.
-    /// - May fail recoverably, but the recovery-token protocol has teeth: a
-    ///   [`TokenError`](crate::token::TokenError) *without* a recovery token aborts the
-    ///   parse even in tolerant mode, and a recovery's `resume_pos` must strictly
-    ///   advance past the failed read's start (see
-    ///   [`TokenRecovery::resume_pos`](crate::token::TokenRecovery)) — the content loop
-    ///   aborts otherwise.
+    ///   reader validates the contract.
+    /// - A failure is a [`SpecialsScanError`]: a condition plus a byte range in
+    ///   `content`. The hook cannot describe how to carry on past it — it knows neither
+    ///   the reader's token type nor its stream positions — so the reader lifts the
+    ///   failure into an unrecoverable [`TokenError`](crate::token::TokenError), which
+    ///   aborts the parse even in tolerant mode. A condition the scan *can* carry on
+    ///   from is expressed as a match to a spec whose parser diagnoses it.
     /// - Specials have the *lowest* recognition precedence: the reader tries group
     ///   delimiters, command escapes, and comment starts first, so a trigger that
     ///   overlaps any of those silently never fires (no diagnostic). The `Lang` author
@@ -413,11 +413,11 @@ pub trait Lang: Sized + 'static {
     /// Only consulted when the current character is in
     /// [`specials_trigger_chars`](Lang::specials_trigger_chars) (cached per state).
     /// The default recognizes nothing.
-    fn scan_specials<'s>(
+    fn scan_specials(
         state: &ParsingState<Self>,
-        content: &'s str,
+        content: &str,
         pos: usize,
-    ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+    ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
         let _ = (state, content, pos);
         Ok(None)
     }

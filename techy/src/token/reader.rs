@@ -332,7 +332,13 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         if <L::Features as LangFeatures>::Specials::PRESENT
             && state.trigger_chars().is_some_and(|trigger_chars| trigger_chars.may_start(c))
         {
-            if let Some(m) = L::scan_specials(state, s, pos)? {
+            // A scan failure is unrecoverable here: the hook reports a condition and a
+            // byte range, and knows nothing about this reader's tokens or positions, so
+            // it cannot describe how to carry on ([`SpecialsScanError`]). The reader
+            // qualifies the range with its own source and attaches no recovery.
+            let scanned = L::scan_specials(state, s, pos)
+                .map_err(|error| TokenError::new(error.kind, error.span, None))?;
+            if let Some(m) = scanned {
                 // A malformed `end` from the hook would yield a zero-width token (the
                 // dispatch loop would never advance) or a span that panics when
                 // sliced. The hook is outer-layer code, so the contract is validated,
@@ -356,7 +362,8 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                 return Ok(Token::new(
                     TokenKind::Specials {
                         callable_type: m.callable_type,
-                        name: m.name,
+                        // The matched text is the name (the `SpecialsMatch` contract).
+                        name: &s[pos..m.end],
                         spec: m.spec,
                     },
                     Span::new(pos, m.end),
@@ -613,7 +620,8 @@ mod tests {
     use crate::state::StateData;
     use crate::token::{
         CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule, GroupRules,
-        ParagraphRules, SpecialsMatch, SpecialsRules, TriggerChars, WhitespaceRules,
+        ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, TriggerChars,
+        WhitespaceRules,
     };
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -1433,11 +1441,11 @@ mod tests {
             TriggerChars::Only("~&-".into())
         }
 
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             // Longest-first over a hardcoded trigger list — a stand-in for the preset
             // dispatching to its libraries (Phase 4+).
             for trigger in ["---", "~~", "~", "&"] {
@@ -1445,7 +1453,6 @@ mod tests {
                     return Ok(Some(SpecialsMatch {
                         end: pos + trigger.len(),
                         callable_type: 7,
-                        name: &content[pos..pos + trigger.len()],
                         spec: Arc::new(StubSpec),
                     }));
                 }
@@ -1531,15 +1538,14 @@ mod tests {
         fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
             TriggerChars::Only("~".into())
         }
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             Ok(Some(SpecialsMatch {
                 end: pos, // contract violation: a match must advance
                 callable_type: 7,
-                name: &content[pos..pos],
                 spec: Arc::new(BadEndStubSpec),
             }))
         }
@@ -1643,11 +1649,11 @@ mod tests {
             fn specials_trigger_chars(_data: &StateData<Self>) -> TriggerChars {
                 TriggerChars::Only("~".into())
             }
-            fn scan_specials<'s>(
+            fn scan_specials(
                 _state: &ParsingState<Self>,
-                _content: &'s str,
+                _content: &str,
                 _pos: usize,
-            ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+            ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
                 panic!("scan_specials consulted for a non-trigger character");
             }
             fn make_node_ext(

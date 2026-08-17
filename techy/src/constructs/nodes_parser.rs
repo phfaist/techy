@@ -1221,7 +1221,8 @@ mod tests {
     };
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
-        GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, StdStreamPosition, StdTokenReader, TokenError,
+        GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
+        StdStreamPosition, StdTokenReader, TokenError,
         TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
         TriggerChars, WhitespaceRules,
     };
@@ -1337,16 +1338,15 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             if content[pos..].starts_with('~') {
                 Ok(Some(SpecialsMatch {
                     end: pos + 1,
                     callable_type: CT_SPECIALS,
-                    name: &content[pos..pos + 1],
                     spec: Arc::new(StdCallableSpec::default()),
                 }))
             } else {
@@ -2392,21 +2392,16 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
-        fn scan_specials<'s>(
+        fn scan_specials(
             _state: &ParsingState<Self>,
-            content: &'s str,
+            content: &str,
             pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             if content[pos..].starts_with('!') {
-                let span = Span::new(pos, pos + 1);
-                Err(TokenError::new(
-                    TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
-                    span,
-                    Some(TokenRecovery {
-                        token: Token::new(TokenKind::Char('!'), span, Span::empty(pos)),
-                        resume_pos: pos + 1,
-                    }),
-                ))
+                Err(SpecialsScanError {
+                    kind: TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
+                    span: Span::new(pos, pos + 1),
+                })
             } else {
                 Ok(None)
             }
@@ -2425,22 +2420,80 @@ mod tests {
         }
     }
 
+    /// A reader that reports a recoverable `Custom` token error on `!`, delegating
+    /// everything else to an inner `StdTokenReader`.
+    ///
+    /// A scan hook can no longer describe a recovery (`SpecialsScanError` carries a
+    /// condition and a range, nothing else), so the *recoverable* half of the `Custom`
+    /// extension point is exercised where recoveries live: in a reader.
+    struct TabooReader<'s> {
+        inner: StdTokenReader<'s>,
+    }
+
+    impl<'s> TokenReader<'s, TabooLang> for TabooReader<'s> {
+        fn peek(
+            &mut self,
+            state: &Arc<ParsingState<TabooLang>>,
+        ) -> TokenResult<'s, TabooLang, Token<'s, TabooLang>> {
+            let pos = self.inner.pos();
+            if self.inner.content()[pos..].starts_with('!') {
+                let span = Span::new(pos, pos + 1);
+                return Err(TokenError::new(
+                    TokenErrorKind::Custom(Box::new(TabooChar { ch: '!' })),
+                    span,
+                    Some(TokenRecovery {
+                        token: Token::new(TokenKind::Char('!'), span, Span::empty(pos)),
+                        resume_pos: span.end(),
+                    }),
+                ));
+            }
+            TokenReader::peek(&mut self.inner, state)
+        }
+
+        fn move_past(&mut self, tok: &Token<'s, TabooLang>, skip_post_space: bool) {
+            TokenReader::move_past(&mut self.inner, tok, skip_post_space);
+        }
+
+        fn move_to(&mut self, tok: &Token<'s, TabooLang>, rewind_pre_space: bool) {
+            TokenReader::move_to(&mut self.inner, tok, rewind_pre_space);
+        }
+
+        fn move_to_pos(&mut self, pos: usize) {
+            self.inner.move_to_pos(pos);
+        }
+
+        fn pos(&self) -> usize {
+            self.inner.pos()
+        }
+    }
+
     #[test]
     fn custom_token_condition_flows_through_the_lift_unwrapped() {
         let st = state_with(rules::<TabooLang>());
 
-        // Tolerant: a diagnostic with the language's own identifier; the placeholder
-        // char joins the content run.
+        // A scan-hook failure is unrecoverable: both policies abort, carrying the
+        // language's own condition.
+        for recovery in [Recovery::Tolerant, Recovery::Strict] {
+            let source: Arc<Source> = Arc::new(Source::new("a!b"));
+            let mut reader = StdTokenReader::new(&source);
+            let err = try_run(&source, &mut reader, &st, recovery, StopSpec::none())
+                .expect_err("a specials scan error carries no recovery");
+            assert_eq!(err.identifier(), TabooChar::IDENTIFIER);
+            // The downcast reaches the payload directly: the lift unwraps `Custom` —
+            // never double-boxed.
+            assert!(err.data().downcast_ref::<TabooChar>().is_some());
+        }
+
+        // The same condition reported *recoverably* by a reader: tolerant mode records
+        // the diagnostic (payload unwrapped) and the placeholder char joins the run.
         let source: Arc<Source> = Arc::new(Source::new("a!b"));
-        let mut reader = StdTokenReader::new(&source);
+        let mut reader = TabooReader { inner: StdTokenReader::new(&source) };
         let parsed =
             try_run(&source, &mut reader, &st, Recovery::Tolerant, StopSpec::none()).unwrap();
         assert_eq!(shapes(&parsed.result), ["chars 0..3 \"a!b\""]);
         assert_eq!(parsed.result.diagnostics.len(), 1);
         let diagnostic = parsed.result.diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.identifier(), TabooChar::IDENTIFIER);
-        // The downcast reaches the payload directly: the lift unwraps `Custom` — never
-        // double-boxed.
         assert_eq!(
             diagnostic.data().downcast_ref::<TabooChar>(),
             Some(&TabooChar { ch: '!' })
@@ -2448,7 +2501,7 @@ mod tests {
 
         // Strict: the same condition rides the ParseError.
         let source: Arc<Source> = Arc::new(Source::new("a!b"));
-        let mut reader = StdTokenReader::new(&source);
+        let mut reader = TabooReader { inner: StdTokenReader::new(&source) };
         let err = try_run(&source, &mut reader, &st, Recovery::Strict, StopSpec::none())
             .unwrap_err();
         assert_eq!(err.identifier(), TabooChar::IDENTIFIER);
@@ -4685,11 +4738,11 @@ mod tests {
         type InvocationSyntax = ();
         type Driver = crate::engine::StdParseDriver;
 
-        fn scan_specials<'s>(
-            state: &ParsingState<Self>,
-            content: &'s str,
-            pos: usize,
-        ) -> TokenResult<'s, Self, Option<SpecialsMatch<'s, Self>>> {
+        fn scan_specials(
+        state: &ParsingState<Self>,
+        content: &str,
+        pos: usize,
+    ) -> Result<Option<SpecialsMatch<Self>>, SpecialsScanError> {
             state.scopes().scan_specials(state, content, pos)
         }
 

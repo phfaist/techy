@@ -66,7 +66,8 @@ use crate::state::{
     ParsingStateDelta,
 };
 use crate::token::{
-    SpecialsMatch, Token, TokenError, TokenErrorKind, TokenResult, TriggerChars,
+    SpecialsMatch, SpecialsScanError, Token, TokenError, TokenErrorKind, TokenResult,
+    TriggerChars,
 };
 
 mod provenance;
@@ -508,12 +509,12 @@ pub trait SpecsProvider<L: Lang>: fmt::Debug + Send + Sync + Any + SerializableO
     /// [`ImplementationError`](crate::constructs::ImplementationError) rather
     /// than panic ([`Package`] does). The default body below and implementations
     /// that ignore `pos` answer `Ok(None)`.
-    fn scan_specials<'s>(
+    fn scan_specials(
         &self,
         state: &ParsingState<L>,
-        content: &'s str,
+        content: &str,
         pos: usize,
-    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+    ) -> Result<Option<SpecialsMatch<L>>, SpecialsScanError> {
         let _ = (state, content, pos);
         Ok(None)
     }
@@ -1173,12 +1174,12 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
     /// carrying an [`ImplementationError`] whose message names which of the two
     /// cases applies — checked before the visibility gate, so a caller bug is
     /// reported regardless of the package's mode visibility.
-    fn scan_specials<'s>(
+    fn scan_specials(
         &self,
         state: &ParsingState<L>,
-        content: &'s str,
+        content: &str,
         pos: usize,
-    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
+    ) -> Result<Option<SpecialsMatch<L>>, SpecialsScanError> {
         // Caller contract violation — same error spelling as the token
         // reader's own `Lang::scan_specials` match-end validation: a
         // `Custom`-wrapped `ImplementationError`, no recovery (an
@@ -1191,17 +1192,16 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
             } else {
                 "not a character boundary"
             };
-            return Err(TokenError::new(
-                TokenErrorKind::Custom(Box::new(ImplementationError::new(
+            return Err(SpecialsScanError {
+                kind: TokenErrorKind::Custom(Box::new(ImplementationError::new(
                     alloc::format!(
                         "Package::scan_specials called with an invalid position {pos} \
                          ({case}; content length {})",
                         content.len()
                     ),
                 ))),
-                Span::empty(pos.min(content.len())),
-                None,
-            ));
+                span: Span::empty(pos.min(content.len())),
+            });
         };
         if !self.visible_in(state.mode()) {
             return Ok(None);
@@ -1219,7 +1219,6 @@ impl<L: Lang> SpecsProvider<L> for Package<L> {
                 return Ok(Some(SpecialsMatch {
                     end,
                     callable_type: entry.callable_type,
-                    name: &content[pos..end],
                     spec: Arc::clone(&entry.spec),
                 }));
             }
@@ -1791,13 +1790,13 @@ impl<L: Lang> ScopeStack<L> {
     /// `pos` is passed through to every provider unchecked, under the `pos`
     /// contract documented on [`SpecsProvider::scan_specials`] (within
     /// `content`'s bounds, on a character boundary).
-    pub fn scan_specials<'s>(
+    pub fn scan_specials(
         &self,
         state: &ParsingState<L>,
-        content: &'s str,
+        content: &str,
         pos: usize,
-    ) -> TokenResult<'s, L, Option<SpecialsMatch<'s, L>>> {
-        let mut best: Option<SpecialsMatch<'s, L>> = None;
+    ) -> Result<Option<SpecialsMatch<L>>, SpecialsScanError> {
+        let mut best: Option<SpecialsMatch<L>> = None;
         for provider in self.entries().iter().rev() {
             if let Some(matched) = provider.scan_specials(state, content, pos)? {
                 // Strictly longer wins; an equal-length later (outer) match loses.
@@ -2569,18 +2568,18 @@ mod tests {
         let mut package = specials_package("lig", &[("--", &short), ("---", &long)]);
         let st = state_with(ScopeStack::new());
 
+        // The match reports its end; the matched text `content[pos..end]` is the name.
         let matched = package.scan_specials(&st, "---x", 0).unwrap().unwrap();
         assert_eq!(matched.end, 3);
-        assert_eq!(matched.name, "---");
         assert!(Arc::ptr_eq(&matched.spec, &long));
 
         let matched = package.scan_specials(&st, "--x", 0).unwrap().unwrap();
-        assert_eq!((matched.end, matched.name), (2, "--"));
+        assert_eq!(matched.end, 2);
         assert!(package.scan_specials(&st, "x--", 0).unwrap().is_none());
 
         // Positions are absolute; matching mid-content works on byte offsets.
         let matched = package.scan_specials(&st, "a--b", 1).unwrap().unwrap();
-        assert_eq!((matched.end, matched.name), (3, "--"));
+        assert_eq!(matched.end, 3);
 
         // Re-inserting an existing trigger replaces its resolution.
         let replacement = new_spec();
@@ -2593,8 +2592,8 @@ mod tests {
     }
 
     /// The `pos` contract: an invalid position (out of the content's bounds or
-    /// not a character boundary) answers an implementation-error `TokenError` —
-    /// never a panic, never a silent no-match — while every valid boundary
+    /// not a character boundary) answers an implementation-error `SpecialsScanError`
+    /// — never a panic, never a silent no-match — while every valid boundary
     /// position scans as before.
     #[test]
     fn package_scan_specials_rejects_invalid_positions_with_an_error() {
@@ -2604,16 +2603,23 @@ mod tests {
 
         // Out of range — the message names the case.
         let error = package.scan_specials(&st, "--", 7).unwrap_err();
-        assert!(error.to_string().contains("extension contract violation"));
-        assert!(error.to_string().contains("invalid position 7"));
-        assert!(error.to_string().contains("out of the content's bounds"), "{error}");
-        assert!(error.recovery().is_none());
+        assert!(error.kind.to_string().contains("extension contract violation"));
+        assert!(error.kind.to_string().contains("invalid position 7"));
+        assert!(
+            error.kind.to_string().contains("out of the content's bounds"),
+            "{:?}",
+            error
+        );
 
         // Mid-character: `é` is two bytes, so pos 1 is not a character boundary —
         // named as the boundary case, not the bounds case.
         let error = package.scan_specials(&st, "é--", 1).unwrap_err();
-        assert!(error.to_string().contains("invalid position 1"));
-        assert!(error.to_string().contains("not a character boundary"), "{error}");
+        assert!(error.kind.to_string().contains("invalid position 1"));
+        assert!(
+            error.kind.to_string().contains("not a character boundary"),
+            "{:?}",
+            error
+        );
 
         // Valid boundary positions are unaffected — end of content included.
         assert!(package.scan_specials(&st, "x--", 1).unwrap().is_some());
@@ -2638,7 +2644,7 @@ mod tests {
         // Longest wins across providers: `---` (outer) beats `--` (inner) — the
         // pylatexenc parity case.
         let matched = stack.scan_specials(&st, "---", 0).unwrap().unwrap();
-        assert_eq!(matched.name, "---");
+        assert_eq!(matched.end, 3);
         assert!(Arc::ptr_eq(&matched.spec, &outer_long));
 
         // Equal length is the same spelling: the tie goes innermost — shadowing.
@@ -2665,19 +2671,18 @@ mod tests {
             ) -> Result<Option<Arc<dyn CallableSpec<PlainLang>>>, ProviderError> {
                 Ok(None)
             }
-            fn scan_specials<'s>(
+            fn scan_specials(
                 &self,
                 _state: &ParsingState<PlainLang>,
-                _content: &'s str,
+                _content: &str,
                 _pos: usize,
-            ) -> TokenResult<'s, PlainLang, Option<SpecialsMatch<'s, PlainLang>>> {
-                Err(TokenError::new(
-                    TokenErrorKind::Custom(Box::new(
+            ) -> Result<Option<SpecialsMatch<PlainLang>>, SpecialsScanError> {
+                Err(SpecialsScanError {
+                    kind: TokenErrorKind::Custom(Box::new(
                         crate::constructs::ImplementationError::new("scan broke".to_string()),
                     )),
-                    crate::source::Span::new(0, 1),
-                    None,
-                ))
+                    span: crate::source::Span::new(0, 1),
+                })
             }
             fn specials_trigger_chars(&self) -> TriggerChars {
                 TriggerChars::Any
@@ -2691,7 +2696,7 @@ mod tests {
         let st = state_with(ScopeStack::new());
 
         let error = stack.scan_specials(&st, "-", 0).unwrap_err();
-        assert!(error.to_string().contains("scan broke"));
+        assert!(error.kind.to_string().contains("scan broke"));
         assert_eq!(stack.specials_trigger_chars(), TriggerChars::Any);
     }
 
