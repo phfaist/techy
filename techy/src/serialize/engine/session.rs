@@ -673,7 +673,11 @@ impl<L: SerializableLang> SerdeSession<L> {
             }
             // The nesting bound, checked without recursion before any entry is walked
             // (translated, parsed, or handed to a driver): every entry of this
-            // segment must fit a segment's serialized form.
+            // segment must fit a segment's serialized form. For a segment obtained
+            // from the wire this is defense in depth — `Segment::from_serial_value`
+            // and the serde `Deserialize` impl already bound the whole value, which
+            // implies the per-entry bound — but a `Segment` built in memory reaches
+            // here unchecked.
             for (offset, entry) in entries.iter().enumerate() {
                 if let Err(error) = check_entry_nesting(entry) {
                     // `offset < entries.len()`, which fits `u32` (checked above).

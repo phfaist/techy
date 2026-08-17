@@ -222,7 +222,8 @@ pub mod serial_bytes {
 /// maps → `Map` (keys must be strings — `char` keys, unit enum variants, and newtype
 /// structs wrapping a string count as their string form; anything else is an error —
 /// and no key, field name, or variant name used as a map key may begin with `$`, the
-/// value model's reserved prefix);
+/// value model's reserved prefix — a unit variant, rendered as a string *value*, is
+/// unrestricted);
 /// newtype structs → their content (except the table-position sentinel, which becomes
 /// [`Index`](SerialValue::Index)); enums in serde's externally tagged form (the
 /// variant name, then its data) — a unit variant → `Str` of the variant name, a

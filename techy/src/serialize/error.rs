@@ -1038,8 +1038,10 @@ impl core::error::Error for RegistrationError {}
 /// (`to_value`/`from_value`, available with the `serde` cargo feature) and the crate's
 /// own conversions of its wire structures report. Writes fail on data the value model
 /// cannot hold — floating-point numbers, integers outside `i64`, maps with non-string
-/// keys or with keys beginning with `$`, values nesting deeper than the bound. Reads
-/// treat the value as untrusted input: a value of the wrong kind, an unknown,
+/// keys or with keys beginning with `$` (`to_value` itself does not check nesting
+/// depth; a session refuses to intern a value nesting deeper than the bound, and
+/// reports that as this type's [`NestingTooDeep`](SerialValueError::NestingTooDeep)).
+/// Reads treat the value as untrusted input: a value of the wrong kind, an unknown,
 /// missing, or repeated map key, an unknown enum variant, or a value nesting deeper
 /// than the bound is an error, never a panic. The type is available without the
 /// `serde` feature: the crate's own conversions use it too.
@@ -1105,10 +1107,14 @@ pub enum SerialValueError {
     /// A value nests deeper than the value model allows: more than `limit` lists and
     /// maps enclose some part of it (see
     /// [`SerialValue::MAX_NESTING_DEPTH`](crate::serialize::SerialValue::MAX_NESTING_DEPTH),
-    /// which is `limit`, and how a segment's own structure counts). Reported when a
-    /// value is read through serde, when a segment is converted from its serialized
-    /// form or absorbed by a session, and when a session interns an object whose
-    /// entry would exceed the bound.
+    /// which is `limit`, and how a segment's own structure counts). Reported as this
+    /// variant when a segment is converted from its serialized form or absorbed by a
+    /// session, and when a session interns an object whose entry would exceed the
+    /// bound. When a value is read through serde (the `Deserialize` impls of
+    /// `SerialValue` and `Segment`, with the `serde` feature), the same check fires,
+    /// but the error then arrives as the format's own error type — for a format whose
+    /// error is not this type, as its `custom` error carrying this variant's message —
+    /// not as this variant.
     NestingTooDeep {
         /// The bound: the greatest nesting depth allowed.
         limit: usize,

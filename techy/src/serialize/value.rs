@@ -30,10 +30,11 @@ use alloc::vec::Vec;
 ///
 /// A value's *nesting depth* is the number of lists and maps that enclose its most
 /// deeply nested part ([`nesting_depth`](SerialValue::nesting_depth)); it is bounded
-/// by [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH) wherever a value crosses
-/// the serialization boundary — read through serde, converted to or from a
-/// [`Segment`](crate::serialize::Segment), interned into a session — so that a
-/// hostile input cannot make a reader recurse without limit. See the constant.
+/// by [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH) at every point where a
+/// value enters or leaves a session or a serialized form — read through serde,
+/// converted to or from a [`Segment`](crate::serialize::Segment), interned into a
+/// session — so that a hostile input cannot make a reader recurse without limit.
+/// See the constant.
 ///
 /// # Rendering through serde
 ///
@@ -108,13 +109,14 @@ impl SerialValue {
     ///
     /// The bound is well above what any serialized object of this crate needs (a
     /// tree's entry nests about ten levels), and below the default recursion limit
-    /// of the common JSON reader (128), so that the same bound is in force whatever
+    /// of the `serde_json` reader (128), so that the same bound is in force whatever
     /// the format.
     pub const MAX_NESTING_DEPTH: usize = 64;
 
     /// The value's nesting depth: the number of lists and maps that enclose its most
     /// deeply nested part — `0` for a value that is not a list or a map, `1` for a
-    /// list or map holding no list or map, and so on (`[[1]]` has depth `2`). Computed
+    /// list or map holding no list or map, and so on (a list holding one list holding
+    /// one integer — `[[1]]` in JSON — has depth `2`). Computed
     /// without recursion, so any value can be measured. Compare with
     /// [`MAX_NESTING_DEPTH`](SerialValue::MAX_NESTING_DEPTH).
     pub fn nesting_depth(&self) -> usize {

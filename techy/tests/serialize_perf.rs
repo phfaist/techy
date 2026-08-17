@@ -158,7 +158,7 @@ fn a_long_stream_is_read_then_appended_in_linear_time() {
     });
     let parse_results = reader.standard_tables().unwrap().parse_results;
     let last = reader.parse_result(parse_results.position((2 * SEGMENTS - 1) as u32)).unwrap();
-    assert_eq!(last.tree.root().children().len() > 1, true);
+    assert!(last.tree.root().children().len() > 1);
     let first = reader.parse_result(parse_results.position(0)).unwrap();
     assert_eq!(first.diagnostics.len(), parses[0].diagnostics.len());
 }

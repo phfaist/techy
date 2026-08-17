@@ -12,7 +12,8 @@
 //! every test: the files double as pinned readable inputs.
 //!
 //! **Regenerating** after an intended wire change: run the tests with the
-//! environment variable `UPDATE_GOLDEN` set —
+//! environment variable `UPDATE_GOLDEN` set to exactly `1` (any other value leaves the
+//! files alone; a banner on standard error announces each regeneration) —
 //!
 //! ```text
 //! UPDATE_GOLDEN=1 cargo test --features serde -p techy --test serialize_golden
@@ -72,7 +73,8 @@ fn parse_golden(content: &str) -> Vec<Segment> {
 fn check_golden(name: &str, segments: &[Segment]) -> Vec<Segment> {
     let path = golden_dir().join(name);
     let rendered = render_golden(segments);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+    if std::env::var("UPDATE_GOLDEN").ok().as_deref() == Some("1") {
+        eprintln!("=== UPDATE_GOLDEN=1: regenerating the golden file {} ===", path.display());
         std::fs::create_dir_all(golden_dir()).expect("the golden directory is writable");
         std::fs::write(&path, &rendered).expect("the golden file is writable");
     }
