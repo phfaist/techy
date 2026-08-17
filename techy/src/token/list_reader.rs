@@ -448,7 +448,7 @@ mod tests {
             reader.token_kind(&token),
             TokenKind::Comment { start_delim: "%", content: "% note" }
         );
-        // The same two facts as edge answers — what the comment node records.
+        // The same two spans as edge answers — what the comment node records.
         assert_eq!(
             reader
                 .source_span_between(&token, TokenEdge::Start, TokenEdge::ContentStart)

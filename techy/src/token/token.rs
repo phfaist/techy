@@ -24,7 +24,7 @@ use super::rules::GroupRule;
 ///
 /// The bounds are what the machinery needs of any token: `Clone` (parsers keep a
 /// token while they read on), `Debug` (diagnostics and test failures), `PartialEq`
-/// (equality compares the facts the reader recorded — test harnesses compare tokens
+/// (equality compares what the reader recorded — test harnesses compare tokens
 /// produced by two readers over the same content), and `Send + Sync` (a token may
 /// travel with a parse that crosses threads).
 ///
@@ -266,8 +266,8 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
     }
 }
 
-/// What an [`StdToken`] records about its own kind: the facts that are *not*
-/// recoverable from the content the issuing reader scans. Everything textual
+/// What an [`StdToken`] records about its own kind: what is *not* recoverable from
+/// the content the issuing reader scans. Everything textual
 /// (delimiters, names, comment text) is left to the reader, which slices its content
 /// at the token's edges when asked for the [`TokenKind`] view.
 ///
@@ -338,9 +338,9 @@ pub(crate) enum StdTokenKindData<L: Lang> {
 /// none to read — which is what keeps a token's meaning tied to the reader that
 /// issued it.
 ///
-/// # Minting tokens
+/// # Building tokens
 ///
-/// The constructors below are public precisely so such a reader can mint tokens: one
+/// The constructors below are public precisely so such a reader can build tokens: one
 /// per kind, each taking the spans the reader determined. The spans are
 /// *reader-relative* — offsets into the content the issuing reader scans, which for a
 /// [`StdTokenReader`](super::StdTokenReader) are offsets into its
@@ -453,7 +453,7 @@ impl<L: Lang> StdToken<L> {
         }
     }
 
-    /// A specials-trigger token, carrying the resolution the `Lang::scan_specials` hook
+    /// A specials token, carrying the resolution the `Lang::scan_specials` hook
     /// returned. The specials name is the matched text, i.e. `span`'s content.
     ///
     /// # Panics
@@ -530,8 +530,8 @@ impl<L: Lang> StdToken<L> {
         }
     }
 
-    /// What the token is, as the issuing reader recorded it — the facts a reader turns
-    /// into a [`TokenKind`] view, together with the content it scans.
+    /// What the token is, as the issuing reader recorded it — what a reader turns into
+    /// a [`TokenKind`] view, together with the content it scans.
     pub(crate) fn kind_data(&self) -> &StdTokenKindData<L> {
         &self.kind
     }
@@ -676,8 +676,8 @@ impl<L: Lang> PartialEq for StdTokenKindData<L> {
 
 impl<L: Lang> Eq for StdTokenKindData<L> {}
 
-/// Equality compares the facts the issuing reader recorded: the kind data, the token's
-/// span, and its pre-space. Two readers over the same content therefore produce equal
+/// Equality compares everything the issuing reader recorded: the kind data, the
+/// token's span, and its pre-space. Two readers over the same content therefore produce equal
 /// tokens — what the lockstep test harnesses rest on.
 impl<L: Lang> PartialEq for StdToken<L> {
     fn eq(&self, other: &Self) -> bool {

@@ -184,7 +184,7 @@ impl<L: Lang> fmt::Debug for EnvironmentBeginSyntaxData<L> {
 #[non_exhaustive]
 pub enum EnvironmentTerminatorSyntaxData<L: Lang> {
     /// The tokenized flow consumed a well-formed terminator — the stop command
-    /// followed by its rigid name group — and reports its full spelling facts, as
+    /// followed by its rigid name group — and reports its full spelling, as
     /// source-qualified spans (a site that records one of them as node data converts
     /// it first).
     Scanned {
@@ -563,7 +563,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
                 ));
             }
         };
-        // The command token's own spelling facts, as the reader answers them: the whole
+        // The command token's own spelling, as the reader answers it: the whole
         // command (escape character included) and the syntactic post-space that follows
         // it. The command *word* is the command minus its escape character, which is
         // the command's first character by construction.
@@ -583,7 +583,7 @@ impl<'p, L: Lang> EnvironmentBodyParser<'p, L> {
             Some(name_group) => {
                 let name = name_group.name.content();
                 if !self.match_invocation_name || name == self.invocation_name {
-                    // The consumed terminator's spelling facts, straight off the
+                    // The consumed terminator's spelling, straight off the
                     // command token (kind validated at the re-peek above) and the
                     // matched name group.
                     let end = name_group.end.clone();
@@ -2069,7 +2069,7 @@ mod tests {
                             SourceSpan::new(self.inner.source(), span),
                             Some(crate::token::TokenRecovery {
                                 token: StdToken::char('\\', span, pre_space),
-                                // In-crate test infrastructure may mint a position
+                                // In-crate test infrastructure may build a position
                                 // directly; a third-party reader would take one from
                                 // the reader it delegates to.
                                 resume: StdStreamPosition::at(span.end()),

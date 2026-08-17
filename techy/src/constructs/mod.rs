@@ -136,7 +136,7 @@ pub(crate) fn node_text_content<O: crate::source::SourceOrigin>(
 /// The `Comment` node kind for a comment token, plus the node's span: the delimiter,
 /// the text, and the syntactic post-space, each as a span of the node's own source.
 ///
-/// All four facts are reader answers about the token's edges — the delimiter is
+/// All four spans are reader answers about the token's edges — the delimiter is
 /// `Start..ContentStart`, the content `ContentStart..End`, the post-space
 /// `End..EndPastPostSpace`, and the node's span the token's own. The parser computes
 /// none of them itself.
@@ -328,7 +328,7 @@ impl<'a, 's, L: Lang> ParseContext<'a, 's, L> {
     /// arity: the restage side passes driver-tiled bundles because the region
     /// arithmetic is owned by the other party there.
     ///
-    /// The node's span starts at the trigger token's start; where it ends is
+    /// The node's span starts where the trigger starts; where it ends is
     /// decided by `end`, in three cases:
     ///
     /// - `Some(end)`: at that stream position — for takeovers whose consumed extent
@@ -1262,8 +1262,8 @@ pub struct Invocation<'a, L: Lang> {
     pub name: &'a str,
     /// The behavior spec driving the parse.
     pub spec: &'a Arc<dyn CallableSpec<L>>,
-    /// The trigger token. Only a [`TokenReader`] interprets it: hand it back to
-    /// `cx.tokens` to learn what the trigger is and where it lies.
+    /// The token that triggered this invocation. Only a [`TokenReader`] interprets
+    /// it: hand it back to `cx.tokens` to learn what the trigger is and where it lies.
     pub token: &'a L::Token,
 }
 
@@ -1289,9 +1289,9 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
 /// the preset's specials sites — under a bound-where-used
 /// (`where L::InvocationSyntax: FromInvocation<L>`): a standard parser's knowledge
 /// about a custom payload is exactly "what the invocation bundle shows", and the
-/// bound says so. The bundle carries the trigger token, and the reader arrives
-/// alongside, so the constructor can ask what was matched (spelling, escape
-/// character) and where — the syntactic post-space, say.
+/// bound says so. The bundle carries the token that triggered the invocation, and
+/// the reader arrives alongside, so the constructor can ask what was matched
+/// (spelling, escape character) and where — the syntactic post-space, say.
 ///
 /// Deliberately **separate from the required data bound**: a language whose
 /// payload cannot be built from an `Invocation` alone stages its callables through
@@ -1303,7 +1303,7 @@ impl<L: Lang> fmt::Debug for Invocation<'_, L> {
 /// and latexlike-family languages satisfy the bound out of the box.
 pub trait FromInvocation<L: Lang>: Sized {
     /// The payload recording `invocation`'s trigger spelling. Pure transcription:
-    /// asks `tokens` what the trigger token is
+    /// asks `tokens` what the token that triggered the invocation is
     /// ([`token_kind`](TokenReader::token_kind)) and where any spelling it records
     /// lies, since only the reader knows either. Performs no parsing and consumes
     /// nothing; the reader arrives as a shared borrow for the duration of the call,

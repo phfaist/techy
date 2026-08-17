@@ -912,7 +912,7 @@ mod tests {
 
     // --- the default driver's hook defaults ---------------------------------------------
 
-    /// The trigger token of `source`, and the reader that produced it — what a
+    /// The command token of `source`, and the reader that produced it — what a
     /// resolver hook receives, since it reads the token through that reader. The scan
     /// runs under rules recognizing `\name` commands; resolution then consults
     /// whatever state the test built.

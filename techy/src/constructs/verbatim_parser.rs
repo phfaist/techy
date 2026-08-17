@@ -532,7 +532,7 @@ impl<L: Lang> VerbatimBodyTerminator<'_, L> {
         }
     }
 
-    /// The spelling facts reported for a consumed terminator occupying `span` and
+    /// The spelling reported for a consumed terminator occupying `span` and
     /// ending at the stream position `end` — the arm matching this terminator's own
     /// shape (the type docs). The stop-command arm's spans are the pieces
     /// [`text`](Self::text) composed the matched string from, laid out from `span`'s

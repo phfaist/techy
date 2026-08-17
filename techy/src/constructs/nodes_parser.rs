@@ -2694,7 +2694,7 @@ mod tests {
                     SourceSpan::new(self.inner.source(), span),
                     Some(TokenRecovery {
                         token: StdToken::char('!', span, Span::empty(pos)),
-                        // In-crate test infrastructure may mint a position directly.
+                        // In-crate test infrastructure may build a position directly.
                         resume: StdStreamPosition::at(span.end()),
                     }),
                 ));

@@ -829,7 +829,7 @@ where
                 cx.tokens.source_span_of(trigger),
             ));
         };
-        // The trigger's own spelling facts, as the reader answers them: the command
+        // The trigger's own spelling, as the reader answers it: the command
         // itself (escape character included) and the syntactic post-space after it.
         let trigger_span = cx.tokens.source_span_of(trigger);
         let trigger_start = cx.tokens.position_at(trigger, TokenEdge::Start);

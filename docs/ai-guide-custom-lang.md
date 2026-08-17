@@ -126,7 +126,7 @@ and return your reader from the driver's
 driver method without a default; the standard body is
 `Box::new(StdTokenReader::new(source))`). A reader that produces standard
 tokens ([`StdToken`](crate::core::StdToken)) keeps an inner
-[`StdTokenReader`](crate::core::StdTokenReader) over the same content, mints
+[`StdTokenReader`](crate::core::StdTokenReader) over the same content, builds
 its tokens with the `StdToken` constructors and delegates every question
 about a token to that inner reader — the pattern, with a compiling example,
 is on the [`TokenReader`](crate::core::TokenReader) page. Worked example of

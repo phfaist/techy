@@ -172,8 +172,8 @@ pub trait ParseDriver<L: Lang>: fmt::Debug + Send + Sync {
 
     // --- tokenization ---------------------------------------------------------
 
-    /// Build the token reader for one parse over `source` — **the door for custom
-    /// tokenization**.
+    /// Build the token reader for one parse over `source` — **the one place custom
+    /// tokenization is installed**.
     ///
     /// Both reader-construction sites go through this hook:
     /// [`Language::parse_source`](super::Language::parse_source) for the root parse and

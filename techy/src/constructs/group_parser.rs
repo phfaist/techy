@@ -3,10 +3,10 @@
 //!
 //! # Contract
 //!
-//! Constructed with the opening delimiter's span and its resolved
-//! [`GroupRule`] — the two facts the
-//! [`GroupOpen`](crate::token::TokenKind::GroupOpen)
-//! trigger token carries. The **caller consumes the trigger token** before running the
+//! Constructed with the opening delimiter's token and its resolved
+//! [`GroupRule`] — the token to ask the reader about the delimiter, the rule as the
+//! [`GroupOpen`](crate::token::TokenKind::GroupOpen) view reported it. The **caller
+//! consumes that token** before running the
 //! parser (the dispatch-loop arm that peeked it, under the state that tokenized it —
 //! the same at-match-time atomicity rule as the stop-condition consume flag; it also
 //! keeps this parser free of `'s`-bound token storage, which the uniform

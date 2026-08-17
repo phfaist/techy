@@ -111,7 +111,7 @@ impl<L: Lang, Env: InvocationSyntax<L>> InvocationSyntax<L> for InvocationSyntax
 
 /// The standard-site constructor ([`FromInvocation`]): a
 /// [`Command`](TokenKind::Command) trigger records its
-/// [`Macro`](InvocationSyntaxData::Macro) facts from the reader's answers — what the
+/// [`Macro`](InvocationSyntaxData::Macro) spelling from the reader's answers — what the
 /// trigger is, and where its syntactic post-space lies; every
 /// other trigger (a specials token, a paragraph-break token at the preset's
 /// specials site) records [`Specials`](InvocationSyntaxData::Specials). The
@@ -313,9 +313,9 @@ pub trait EnvironmentSyntax<L: LatexlikeLang>: InvocationSyntax<L> {
     /// closed without consuming one (mismatch, malformed terminator, end of
     /// input) — the end side then stays empty.
     ///
-    /// The parsed facts are source-qualified spans, as the reader answered them;
-    /// `node_span` is the extent of the node being staged, against which each fact
-    /// that the record keeps as a span is checked (a fact from another source — only
+    /// The parsed spellings are source-qualified spans, as the reader answered them;
+    /// `node_span` is the extent of the node being staged, against which each span
+    /// the record keeps is checked (a span from another source — only
     /// reachable under a reader serving one parse from several sources — is recorded
     /// as text, or not at all).
     fn from_parsed(

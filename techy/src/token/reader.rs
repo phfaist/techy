@@ -85,7 +85,7 @@ pub enum TokenEdge {
 /// ([`move_to_position`](TokenReader::move_to_position),
 /// [`source_span_within`](TokenReader::source_span_within)); there is deliberately no
 /// public constructor and no arithmetic, so a position cannot be invented or shifted
-/// outside the reader that minted it.
+/// outside the reader that produced it.
 ///
 /// Positions compare with `==` only. Two positions of the same reader are equal exactly
 /// when they name the same place, which is what the parse loops need ("did the reader
@@ -94,8 +94,8 @@ pub enum TokenEdge {
 pub struct StdStreamPosition(usize);
 
 impl StdStreamPosition {
-    /// The position at byte offset `offset`. In-crate readers only: minting a position
-    /// is the issuing reader's privilege (see the type's documentation).
+    /// The position at byte offset `offset`. In-crate readers only: producing a
+    /// position is the issuing reader's privilege (see the type's documentation).
     pub(crate) fn at(offset: usize) -> Self {
         StdStreamPosition(offset)
     }
@@ -113,10 +113,10 @@ impl StdStreamPosition {
 ///
 /// # Positions, edges, and spans
 ///
-/// A reader is the only interpreter of its own stream. Two vocabularies serve that:
+/// A reader is the only interpreter of its own stream. Two kinds of value serve that:
 ///
 /// - A **stream position** ([`Lang::StreamPosition`](crate::state::Lang::StreamPosition))
-///   names a place in the token stream. Only a reader mints one
+///   names a place in the token stream. Only a reader produces one
 ///   ([`position_here`](TokenReader::position_here),
 ///   [`position_at`](TokenReader::position_at)), and a caller only gives it back
 ///   ([`move_to_position`](TokenReader::move_to_position),
@@ -186,7 +186,7 @@ impl StdStreamPosition {
 /// A reader that produces the same tokens as [`StdTokenReader`] but decides differently
 /// *which* token comes next (re-classifying a character, splicing in content) does not
 /// have to reimplement interpretation: keep an inner `StdTokenReader` over the same
-/// content, mint tokens with the [`StdToken`] constructors (its spans are offsets into
+/// content, build tokens with the [`StdToken`] constructors (its spans are offsets into
 /// that content, which the inner reader also answers with
 /// [`source_span_between`](TokenReader::source_span_between)), and delegate every
 /// interpretive method to the inner reader. Nothing is read off a token — there is
@@ -228,7 +228,7 @@ impl StdStreamPosition {
 ///         state: &Arc<ParsingState<MyLang>>,
 ///     ) -> TokenResult<MyLang, StdToken<MyLang>> {
 ///         let token = self.inner_mut().peek(state)?;
-///         // … re-classify or replace `token`, minting with `StdToken::…` and spans
+///         // … re-classify or replace `token`, building it with `StdToken::…` and spans
 ///         // taken from `self.inner.content()` or from the inner reader's answers.
 ///         Ok(token)
 ///     }
@@ -1091,7 +1091,7 @@ mod tests {
 
     /// Put the reader at a byte offset. The scanner's own tests read from places no
     /// token walk reaches (mid-content starts, deliberately invalid offsets), and this
-    /// module — the reader's own — is where positions may be minted from offsets.
+    /// module — the reader's own — is where positions may be built from offsets.
     fn seek<L>(tr: &mut StdTokenReader<'_>, offset: usize)
     where
         L: Lang<

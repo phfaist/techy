@@ -98,8 +98,8 @@ pub fn parse_declared_arguments<L: Lang>(
 /// # Contract
 ///
 /// Constructed around the resolved [`Invocation`], which travels inside the parser
-/// instance. The **caller consumes the
-/// trigger token whole** — `move_to(token, TokenEdge::EndPastPostSpace)`,
+/// instance. The **caller consumes the token that triggered the invocation, whole** —
+/// `move_to(token, TokenEdge::EndPastPostSpace)`,
 /// syntactic post-space included —
 /// before running the parser (the dispatch-loop arm that peeked it, mirroring the
 /// [`GroupParser`](super::GroupParser) contract; loop progress holds by construction,

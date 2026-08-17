@@ -128,7 +128,7 @@ pub struct TokenError<L: Lang> {
 pub struct TokenRecovery<L: Lang> {
     /// The placeholder token to emit in place of the failed read.
     pub token: L::Token,
-    /// The stream position at which to resume reading — one the reader minted, and not
+    /// The stream position at which to resume reading — one the reader produced, and not
     /// the position the failed read started from (see the
     /// [advancement contract](TokenRecovery#contract-resume-must-move-the-stream)).
     pub resume: L::StreamPosition,
