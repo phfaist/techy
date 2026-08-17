@@ -32,7 +32,7 @@ use super::error::{
 };
 use super::rules::{CommandRule, TokenRules};
 use super::specials::SpecialsScanError;
-use super::token::{Token, TokenKind};
+use super::token::{Token, TokenKind, TokenKindView};
 
 /// One of the four boundaries of a token, in reading order.
 ///
@@ -156,6 +156,13 @@ impl StdStreamPosition {
 /// 6. **Edge order does not matter to `source_span_between`:** the result is the span
 ///    between the two edges in reading order, whichever order they are named in. Two
 ///    equal edges give the empty span at that edge.
+/// 7. **A comment view's two texts are the token's own bytes, in order:** for a
+///    [`Comment`](TokenKindView::Comment) token, `start_delim` followed by `content`
+///    is exactly what lies between the token's [`Start`](TokenEdge::Start) and
+///    [`End`](TokenEdge::End) edges. That is what lets a parser record the comment's
+///    three parts as spans of the node it stages — the delimiter runs from the
+///    token's start for `start_delim.len()` bytes, the content from there to where
+///    the post-space begins.
 ///
 /// At the end of the stream `peek` returns the terminal, idempotent
 /// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
@@ -192,6 +199,25 @@ pub trait TokenReader<'s, L: Lang> {
     /// [`TokenRecovery`](super::TokenRecovery), the *caller* enforces the
     /// [advancement contract](super::TokenRecovery#contract-resume-must-move-the-stream).
     fn move_to_position(&mut self, at: &L::StreamPosition);
+
+    // --- what a token is --------------------------------------------------------------
+
+    /// The parser-facing view of `tok`: what the token *is*, with the written
+    /// spellings this reader resolved.
+    ///
+    /// This is the only way a construct parser reads a token. The returned
+    /// [`TokenKindView`] borrows from the token (and, for a reader that scans borrowed
+    /// content, from that content) — never from the reader, so a parser may hold it
+    /// while it goes on reading and moving the stream.
+    ///
+    /// The view carries no location: where the token is comes from
+    /// [`source_span_of`](TokenReader::source_span_of),
+    /// [`source_span_between`](TokenReader::source_span_between) and
+    /// [`position_at`](TokenReader::position_at). For a comment token, contract clause
+    /// 7 fixes how the view's two texts relate to those edges.
+    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    where
+        's: 't;
 
     // --- where a token is -------------------------------------------------------------
 
@@ -724,6 +750,34 @@ where
 
     fn move_to_position(&mut self, at: &L::StreamPosition) {
         self.pos = at.offset();
+    }
+
+    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    where
+        's: 't,
+    {
+        match &tok.kind {
+            TokenKind::Char(c) => TokenKindView::Char(*c),
+            TokenKind::GroupOpen { delim, rule } => TokenKindView::GroupOpen { delim, rule },
+            TokenKind::GroupClose { delim } => TokenKindView::GroupClose { delim },
+            TokenKind::Command { name, escape_char, .. } => {
+                TokenKindView::Command { name, escape_char: *escape_char }
+            }
+            TokenKind::Specials { callable_type, name, spec } => {
+                TokenKindView::Specials { callable_type: *callable_type, name, spec }
+            }
+            // The delimiter is a span into this reader's content (that is where the
+            // token's spans live, contract clause 4); the content string the token
+            // already holds. A token this reader never issued — a caller-contract
+            // violation it cannot detect — may carry a span this content does not
+            // have; the delimiter then reads as empty rather than panicking.
+            TokenKind::Comment { start, content, .. } => TokenKindView::Comment {
+                start_delim: self.content.get(start.start()..start.end()).unwrap_or(""),
+                content,
+            },
+            TokenKind::ParagraphBreak => TokenKindView::ParagraphBreak,
+            TokenKind::EndOfStream => TokenKindView::EndOfStream,
+        }
     }
 
     fn source_span_between(
@@ -1948,6 +2002,105 @@ mod tests {
         let source = Arc::new(Source::new("x"));
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
+    }
+
+    // --- the token view ---------------------------------------------------------------
+
+    #[test]
+    fn the_view_reports_what_each_token_kind_is() {
+        //                                    0....5....10...15...20
+        let source = Arc::new(Source::new("a{\\vec  }% note\nb"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let token = reader.next(&st).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKindView::Char('a'));
+
+        let token = reader.next(&st).unwrap();
+        match reader.token_kind(&token) {
+            TokenKindView::GroupOpen { delim, rule } => {
+                assert_eq!(delim, "{");
+                assert_eq!(rule.group_type, BRACES);
+            }
+            other => panic!("expected a group open, got {other:?}"),
+        }
+
+        let token = reader.next(&st).unwrap();
+        assert_eq!(
+            reader.token_kind(&token),
+            TokenKindView::Command { name: "vec", escape_char: '\\' }
+        );
+
+        let token = reader.next(&st).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKindView::GroupClose { delim: "}" });
+
+        // The comment's two texts are the token's own bytes in order (contract
+        // clause 7): `%` then ` note`, the newline being post-space.
+        let token = reader.next(&st).unwrap();
+        assert_eq!(
+            reader.token_kind(&token),
+            TokenKindView::Comment { start_delim: "%", content: " note" }
+        );
+        let body = reader.source_span_between(&token, TokenEdge::Start, TokenEdge::End);
+        assert_eq!(body.content(), "% note");
+
+        let token = reader.next(&st).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKindView::Char('b'));
+
+        let token = reader.next(&st).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKindView::EndOfStream);
+    }
+
+    #[test]
+    fn the_view_of_a_paragraph_break_carries_no_data() {
+        let source = Arc::new(Source::new("a\n\nb"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+        let _ = reader.next(&st).unwrap();
+        let token = reader.next(&st).unwrap();
+        assert_eq!(reader.token_kind(&token), TokenKindView::ParagraphBreak);
+        assert_eq!(reader.token_kind(&token).as_str(), "ParagraphBreak");
+    }
+
+    #[test]
+    fn the_view_of_a_specials_token_carries_its_resolution() {
+        let source = Arc::new(Source::new("a&b"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = specials_state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, SpecialsLang> = &mut tr;
+
+        let _ = reader.next(&st).unwrap();
+        let token = reader.next(&st).unwrap();
+        match reader.token_kind(&token) {
+            TokenKindView::Specials { callable_type, name, spec } => {
+                assert_eq!(callable_type, 7);
+                assert_eq!(name, "&");
+                assert_eq!(format!("{:?}", spec), "StubSpec");
+            }
+            other => panic!("expected specials, got {other:?}"),
+        }
+        // Two views of the same token are equal (the spec compares by `Arc` identity).
+        assert_eq!(reader.token_kind(&token), reader.token_kind(&token));
+    }
+
+    #[test]
+    fn a_view_is_copy_and_survives_further_reading() {
+        let source = Arc::new(Source::new("\\vec  x"));
+        let mut tr = StdTokenReader::new(&source);
+        let st = state(latex_rules());
+        let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
+
+        let token = reader.next(&st).unwrap();
+        let kind = reader.token_kind(&token);
+        // The view borrows the token and the content, never the reader: reading on and
+        // moving the stream leaves it usable, and it copies rather than moves.
+        let _next = reader.next(&st).unwrap();
+        reader.move_to(&token, TokenEdge::Start);
+        let copy = kind;
+        assert_eq!(kind, copy);
+        assert_eq!(kind.to_string(), "Command(\\vec)");
     }
 
     // --- positions, edges, spans -----------------------------------------------------

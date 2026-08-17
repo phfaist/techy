@@ -1,4 +1,5 @@
-//! The token types: [`Token`] and [`TokenKind`].
+//! The token types: [`Token`], its stored [`TokenKind`], and the parser-facing
+//! [`TokenKindView`].
 
 use alloc::sync::Arc;
 use core::fmt;
@@ -119,6 +120,209 @@ pub enum TokenKind<'s, L: Lang> {
     /// no paragraph break — a trailing `…\n\n` yields its `ParagraphBreak` token first),
     /// so trailing whitespace reaches the node tree like any other whitespace.
     EndOfStream,
+}
+
+/// The parser-facing view of a token: **what a token is**, and nothing about where it
+/// is.
+///
+/// A construct parser never reads a token itself; it asks the reader that produced it
+/// ([`TokenReader::token_kind`](super::TokenReader::token_kind)) and matches on the
+/// answer. *Where* the token sits is a separate family of reader answers
+/// ([`source_span_of`](super::TokenReader::source_span_of),
+/// [`source_span_between`](super::TokenReader::source_span_between),
+/// [`position_at`](super::TokenReader::position_at)) — which is why this type has no
+/// span fields: only the reader knows which source a token came from, so only the
+/// reader can name a location.
+///
+/// The view borrows from the token, and — for a reader that scans borrowed content —
+/// from that content; it never borrows the reader. A parser may therefore hold a view
+/// while it goes on reading and moving the stream. The view is `Copy`: pass it by
+/// value.
+///
+/// The variants mirror [`TokenKind`]'s, with the written spellings the reader
+/// resolved: `delim`, `name`, `start_delim` and `content` are text, where the reader's
+/// own token records whatever it finds convenient.
+pub enum TokenKindView<'t, L: Lang> {
+    /// A single ordinary content character. With whitespace handling disabled,
+    /// whitespace characters appear as ordinary `Char` tokens too.
+    Char(char),
+    /// An opening group delimiter (`{`, `[`, `$`, `\(`, … — whatever the rules
+    /// declare).
+    GroupOpen {
+        /// The delimiter as matched.
+        delim: &'t str,
+        /// The [`GroupRule`] that matched, as resolved by the tokenizer's priority
+        /// order. It travels with the token so the parser learns the close delimiter
+        /// to expect and the group's class without re-deriving the match.
+        rule: &'t Arc<GroupRule<L>>,
+    },
+    /// A closing group delimiter.
+    GroupClose {
+        /// The delimiter as matched.
+        delim: &'t str,
+    },
+    /// A command: escape character followed by a name (`\textbf`, `\&`, `\begin`).
+    /// Resolution to a spec happens at parse time
+    /// ([`ParseDriver::resolve_command`](crate::engine::ParseDriver::resolve_command)).
+    Command {
+        /// The command name, without the escape character.
+        name: &'t str,
+        /// The escape character that introduced the command — a syntactic fact
+        /// parse-time lookup needs when several command syntaxes coexist.
+        escape_char: char,
+    },
+    /// A specials trigger (`~`, `&`, `---`, …), recognized *and* resolved by the
+    /// `Lang::scan_specials` hook, so the view carries the full resolution.
+    Specials {
+        /// The invocation form the trigger resolved to.
+        callable_type: L::CallableTypeId,
+        /// The specials name (the matched text).
+        name: &'t str,
+        /// The resolved behavior spec.
+        spec: &'t Arc<dyn CallableSpec<L>>,
+    },
+    /// A whole comment: start delimiter plus content, up to (not including) the
+    /// terminating newline. The two texts are the token's own bytes in order — see the
+    /// [`TokenReader`](super::TokenReader#contract) contract, clause 7.
+    Comment {
+        /// The start delimiter as matched (`%` in LaTeX).
+        start_delim: &'t str,
+        /// The comment text after the start delimiter, without the newline.
+        content: &'t str,
+    },
+    /// A paragraph break: a whitespace run containing two or more newlines.
+    ParagraphBreak,
+    /// End of the token stream. Terminal and idempotent: every further read at the end
+    /// yields it again.
+    EndOfStream,
+}
+
+impl<L: Lang> TokenKindView<'_, L> {
+    /// The variant's static name — the bare name without the variant's data
+    /// (`"Char"`, `"GroupOpen"`, `"GroupClose"`, `"Command"`, `"Specials"`,
+    /// `"Comment"`, `"ParagraphBreak"`, or `"EndOfStream"`), as
+    /// [`TokenKind::as_str`] answers it for the stored kind: for log labels and
+    /// name-keyed tables.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            TokenKindView::Char(_) => "Char",
+            TokenKindView::GroupOpen { .. } => "GroupOpen",
+            TokenKindView::GroupClose { .. } => "GroupClose",
+            TokenKindView::Command { .. } => "Command",
+            TokenKindView::Specials { .. } => "Specials",
+            TokenKindView::Comment { .. } => "Comment",
+            TokenKindView::ParagraphBreak => "ParagraphBreak",
+            TokenKindView::EndOfStream => "EndOfStream",
+        }
+    }
+}
+
+// Manual impls: derives would demand `L: Clone/Copy/Debug/PartialEq` bounds although no
+// `L` value is stored (only its `CallableTypeId` and borrowed spec/rule handles).
+
+impl<L: Lang> Clone for TokenKindView<'_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Lang> Copy for TokenKindView<'_, L> {}
+
+/// Equality note: two `Specials` views are equal when their names match and they carry
+/// *the same* spec (`Arc` pointer identity) — specs are shared behavior objects without
+/// their own equality. `GroupOpen` rules, by contrast, are plain data and compare
+/// structurally. Same rules as [`TokenKind`]'s equality.
+impl<L: Lang> PartialEq for TokenKindView<'_, L> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TokenKindView::Char(a), TokenKindView::Char(b)) => a == b,
+            (
+                TokenKindView::GroupOpen { delim: d1, rule: r1 },
+                TokenKindView::GroupOpen { delim: d2, rule: r2 },
+            ) => d1 == d2 && r1 == r2,
+            (
+                TokenKindView::GroupClose { delim: d1 },
+                TokenKindView::GroupClose { delim: d2 },
+            ) => d1 == d2,
+            (
+                TokenKindView::Command { name: n1, escape_char: e1 },
+                TokenKindView::Command { name: n2, escape_char: e2 },
+            ) => n1 == n2 && e1 == e2,
+            (
+                TokenKindView::Specials { callable_type: t1, name: n1, spec: s1 },
+                TokenKindView::Specials { callable_type: t2, name: n2, spec: s2 },
+            ) => t1 == t2 && n1 == n2 && Arc::ptr_eq(s1, s2),
+            (
+                TokenKindView::Comment { start_delim: d1, content: c1 },
+                TokenKindView::Comment { start_delim: d2, content: c2 },
+            ) => d1 == d2 && c1 == c2,
+            (TokenKindView::ParagraphBreak, TokenKindView::ParagraphBreak) => true,
+            (TokenKindView::EndOfStream, TokenKindView::EndOfStream) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<L: Lang> Eq for TokenKindView<'_, L> {}
+
+impl<L: Lang> fmt::Debug for TokenKindView<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKindView::Char(c) => f.debug_tuple("Char").field(c).finish(),
+            TokenKindView::GroupOpen { delim, rule } => f
+                .debug_struct("GroupOpen")
+                .field("delim", delim)
+                .field("rule", rule)
+                .finish(),
+            TokenKindView::GroupClose { delim } => {
+                f.debug_struct("GroupClose").field("delim", delim).finish()
+            }
+            TokenKindView::Command { name, escape_char } => f
+                .debug_struct("Command")
+                .field("name", name)
+                .field("escape_char", escape_char)
+                .finish(),
+            TokenKindView::Specials { callable_type, name, spec } => f
+                .debug_struct("Specials")
+                .field("callable_type", callable_type)
+                .field("name", name)
+                .field("spec", spec)
+                .finish(),
+            TokenKindView::Comment { start_delim, content } => f
+                .debug_struct("Comment")
+                .field("start_delim", start_delim)
+                .field("content", content)
+                .finish(),
+            TokenKindView::ParagraphBreak => write!(f, "ParagraphBreak"),
+            TokenKindView::EndOfStream => write!(f, "EndOfStream"),
+        }
+    }
+}
+
+/// The `Display` form shows each kind's *written* spelling: `Command(\foo)` renders the
+/// escape character that actually fired (so `\foo` and `@foo` are distinguishable),
+/// delimiters and specials appear as matched, and comment content is truncated to a
+/// preview — as [`TokenKind`]'s `Display` does for the stored kind.
+impl<L: Lang> fmt::Display for TokenKindView<'_, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKindView::Char(c) => write!(f, "Char({:?})", c),
+            TokenKindView::GroupOpen { delim, rule } => {
+                write!(f, "GroupOpen({}, {:?})", delim, rule.group_type)
+            }
+            TokenKindView::GroupClose { delim } => write!(f, "GroupClose({})", delim),
+            TokenKindView::Command { name, escape_char } => {
+                write!(f, "Command({}{})", escape_char, name)
+            }
+            TokenKindView::Specials { name, .. } => write!(f, "Specials({})", name),
+            TokenKindView::Comment { content, .. } => {
+                let (preview, truncated) = truncate_for_display(content);
+                write!(f, "Comment({:?}{})", preview, if truncated { "…" } else { "" })
+            }
+            TokenKindView::ParagraphBreak => write!(f, "ParagraphBreak"),
+            TokenKindView::EndOfStream => write!(f, "EndOfStream"),
+        }
+    }
 }
 
 /// A token, with its byte [`Span`] and surrounding-whitespace information.
@@ -404,7 +608,7 @@ impl<L: Lang> fmt::Display for TokenKind<'_, L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Token, TokenKind, truncate_for_display};
+    use super::{Token, TokenKind, TokenKindView, truncate_for_display};
     use crate::source::Span;
     use crate::state::TrivialLang;
     use alloc::format;
@@ -466,6 +670,95 @@ mod tests {
         for kind in &kinds {
             assert_eq!(kind.as_str(), expected(kind));
         }
+    }
+
+    #[test]
+    fn the_views_as_str_answers_the_bare_variant_name() {
+        use crate::spec::StdCallableSpec;
+        use crate::token::GroupRule;
+        use alloc::sync::Arc;
+        use alloc::vec;
+
+        // The duplicate name table is deliberate and exhaustive (no `_` arm): adding or
+        // renaming a variant fails compilation here, keeping `as_str` in step.
+        fn expected(kind: &TokenKindView<'_, PlainLang>) -> &'static str {
+            match kind {
+                TokenKindView::Char(_) => "Char",
+                TokenKindView::GroupOpen { .. } => "GroupOpen",
+                TokenKindView::GroupClose { .. } => "GroupClose",
+                TokenKindView::Command { .. } => "Command",
+                TokenKindView::Specials { .. } => "Specials",
+                TokenKindView::Comment { .. } => "Comment",
+                TokenKindView::ParagraphBreak => "ParagraphBreak",
+                TokenKindView::EndOfStream => "EndOfStream",
+            }
+        }
+
+        let rule: Arc<GroupRule<PlainLang>> =
+            Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        let spec: Arc<dyn crate::spec::CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::default());
+        let kinds: vec::Vec<TokenKindView<'_, PlainLang>> = vec![
+            TokenKindView::Char('a'),
+            TokenKindView::GroupOpen { delim: "{", rule: &rule },
+            TokenKindView::GroupClose { delim: "}" },
+            TokenKindView::Command { name: "frac", escape_char: '\\' },
+            TokenKindView::Specials { callable_type: 0, name: "~", spec: &spec },
+            TokenKindView::Comment { start_delim: "%", content: " note" },
+            TokenKindView::ParagraphBreak,
+            TokenKindView::EndOfStream,
+        ];
+        for kind in &kinds {
+            assert_eq!(kind.as_str(), expected(kind));
+        }
+    }
+
+    #[test]
+    fn views_compare_specs_by_identity_and_rules_structurally() {
+        use crate::spec::StdCallableSpec;
+        use crate::token::GroupRule;
+        use alloc::sync::Arc;
+
+        let one: Arc<dyn crate::spec::CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::default());
+        let same = Arc::clone(&one);
+        let other: Arc<dyn crate::spec::CallableSpec<PlainLang>> =
+            Arc::new(StdCallableSpec::default());
+        let view = |spec| TokenKindView::<PlainLang>::Specials {
+            callable_type: 0,
+            name: "~",
+            spec,
+        };
+        assert_eq!(view(&one), view(&same));
+        assert_ne!(view(&one), view(&other));
+
+        // Rules are plain data: two equal rules in different allocations compare equal.
+        let rule: Arc<GroupRule<PlainLang>> =
+            Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        let twin: Arc<GroupRule<PlainLang>> =
+            Arc::new(GroupRule { group_type: 0, open: "{".into(), close: "}".into() });
+        assert_eq!(
+            TokenKindView::<PlainLang>::GroupOpen { delim: "{", rule: &rule },
+            TokenKindView::GroupOpen { delim: "{", rule: &twin }
+        );
+    }
+
+    #[test]
+    fn the_views_display_renders_the_written_spelling() {
+        use alloc::string::ToString;
+        assert_eq!(
+            TokenKindView::<PlainLang>::Command { name: "vec", escape_char: '@' }
+                .to_string(),
+            "Command(@vec)"
+        );
+        assert_eq!(
+            TokenKindView::<PlainLang>::Comment {
+                start_delim: "%",
+                content: "0123456789012345678901234567890",
+            }
+            .to_string(),
+            "Comment(\"012345678901234567890123\"…)"
+        );
     }
 
     #[test]

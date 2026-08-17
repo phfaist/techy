@@ -39,7 +39,7 @@ use crate::state::{Lang, ParsingState};
 
 use super::error::TokenResult;
 use super::reader::{StdStreamPosition, TokenEdge, TokenReader};
-use super::token::{Token, TokenKind};
+use super::token::{Token, TokenKind, TokenKindView};
 
 /// A [`TokenReader`] serving tokens from a pre-built list (see the module docs for the
 /// fidelity contract).
@@ -191,6 +191,36 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
     fn move_to_position(&mut self, at: &L::StreamPosition) {
         self.check_position(at.offset(), "move_to_position");
         self.pos = at.offset();
+    }
+
+    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    where
+        's: 't,
+    {
+        self.check_issued(tok, "token_kind");
+        match &tok.kind {
+            TokenKind::Char(c) => TokenKindView::Char(*c),
+            TokenKind::GroupOpen { delim, rule } => TokenKindView::GroupOpen { delim, rule },
+            TokenKind::GroupClose { delim } => TokenKindView::GroupClose { delim },
+            TokenKind::Command { name, escape_char, .. } => {
+                TokenKindView::Command { name, escape_char: *escape_char }
+            }
+            TokenKind::Specials { callable_type, name, spec } => {
+                TokenKindView::Specials { callable_type: *callable_type, name, spec }
+            }
+            // Interpreted exactly as `StdTokenReader` interprets it: the delimiter is
+            // the run of this source's content the token's `start` span names.
+            TokenKind::Comment { start, content, .. } => TokenKindView::Comment {
+                start_delim: self
+                    .source
+                    .content()
+                    .get(start.start()..start.end())
+                    .unwrap_or(""),
+                content,
+            },
+            TokenKind::ParagraphBreak => TokenKindView::ParagraphBreak,
+            TokenKind::EndOfStream => TokenKindView::EndOfStream,
+        }
     }
 
     fn source_span_between(
@@ -375,6 +405,52 @@ mod tests {
         // Reading again after the rewind yields the same token from both.
         assert_eq!(TokenReader::peek(&mut std_r, &st).unwrap(), token);
         assert_eq!(TokenReader::peek(&mut list_r, &st).unwrap(), token);
+    }
+
+    #[test]
+    fn the_token_view_matches_the_std_readers_view() {
+        // Both readers interpret the same tokens over the same content, so their views
+        // agree kind for kind — the lockstep guarantee the construct-parser suites rest
+        // on.
+        let source: Arc<Source> = Arc::new(Source::new("a{\\vec  }% note\nb"));
+        let st = state();
+        let mut std_r = StdTokenReader::new(&source);
+        let mut list_r = TokenListReader::new(&source, scan(&source));
+        loop {
+            let token = TokenReader::next(&mut std_r, &st).unwrap();
+            let listed = TokenReader::next(&mut list_r, &st).unwrap();
+            let std_reader: &dyn TokenReader<'_, TestLang> = &std_r;
+            let list_reader: &dyn TokenReader<'_, TestLang> = &list_r;
+            assert_eq!(list_reader.token_kind(&listed), std_reader.token_kind(&token));
+            if matches!(token.kind, TokenKind::EndOfStream) {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn the_comment_view_names_the_delimiter_and_the_text_between_it_and_the_post_space() {
+        let source: Arc<Source> = Arc::new(Source::new("%% note\nx"));
+        let st = state();
+        let mut lr = TokenListReader::new(&source, scan(&source));
+        let token = TokenReader::next(&mut lr, &st).unwrap();
+        let reader: &dyn TokenReader<'_, TestLang> = &lr;
+        // The rules define `%` as the only comment start, so the second `%` is content.
+        assert_eq!(
+            reader.token_kind(&token),
+            TokenKindView::Comment { start_delim: "%", content: "% note" }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "was handed a token it never issued")]
+    fn the_view_of_a_foreign_token_is_rejected() {
+        let source: Arc<Source> = Arc::new(Source::new("ab"));
+        let other: Arc<Source> = Arc::new(Source::new("zz"));
+        let lr = TokenListReader::new(&source, scan(&source));
+        let foreign = scan(&other);
+        let reader: &dyn TokenReader<'_, TestLang> = &lr;
+        let _ = reader.token_kind(&foreign[0]);
     }
 
     #[test]

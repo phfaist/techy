@@ -788,8 +788,8 @@ mod tests {
     use crate::token::{
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRules,
         ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError, StdStreamPosition,
-        StdTokenReader, Token, TokenEdge, TokenListReader, TokenReader, TokenRules,
-        TriggerChars, WhitespaceRules,
+        StdTokenReader, Token, TokenEdge, TokenKindView, TokenListReader, TokenReader,
+        TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::String;
@@ -2083,6 +2083,13 @@ mod tests {
 
         fn move_to_position(&mut self, at: &StdStreamPosition) {
             self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t Token<'_, EnvLang>) -> TokenKindView<'t, EnvLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
         }
 
         fn source_span_between(

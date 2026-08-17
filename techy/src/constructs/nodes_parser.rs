@@ -1331,8 +1331,8 @@ mod tests {
         CommandRule, CommandRules, CommentRule, CommentRules, ForbiddenCharsRules, GroupRule,
         GroupRules, ParagraphRules, SpecialsMatch, SpecialsRules, SpecialsScanError,
         StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
-        TokenErrorKind, TokenListReader, TokenReader, TokenRecovery, TokenResult, TokenRules,
-        TriggerChars, WhitespaceRules,
+        TokenErrorKind, TokenKindView, TokenListReader, TokenReader, TokenRecovery,
+        TokenResult, TokenRules, TriggerChars, WhitespaceRules,
     };
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -2499,6 +2499,13 @@ mod tests {
             self.inner_mut().move_to_position(at);
         }
 
+        fn token_kind<'t>(&self, tok: &'t Token<'_, TestLang>) -> TokenKindView<'t, TestLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
+        }
+
         fn source_span_between(
             &self,
             tok: &Token<'_, TestLang>,
@@ -2655,6 +2662,13 @@ mod tests {
 
         fn move_to_position(&mut self, at: &StdStreamPosition) {
             self.inner_mut().move_to_position(at);
+        }
+
+        fn token_kind<'t>(&self, tok: &'t Token<'_, TabooLang>) -> TokenKindView<'t, TabooLang>
+        where
+            's: 't,
+        {
+            self.inner().token_kind(tok)
         }
 
         fn source_span_between(

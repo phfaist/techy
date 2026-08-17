@@ -73,4 +73,4 @@ pub use rules::{
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
 pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
-pub use token::{Token, TokenKind};
+pub use token::{Token, TokenKind, TokenKindView};

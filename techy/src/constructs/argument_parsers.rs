@@ -1967,7 +1967,7 @@ mod tests {
         use crate::source::SourcePos;
         use crate::token::{
             EndOfStreamAfterEscape, StdStreamPosition, StdTokenReader, TokenEdge, TokenError,
-            TokenErrorKind, TokenResult,
+            TokenErrorKind, TokenKindView, TokenResult,
         };
 
         /// Every read fails, unrecoverably; everything else is the inner reader's.
@@ -2008,6 +2008,13 @@ mod tests {
 
             fn move_to_position(&mut self, at: &StdStreamPosition) {
                 self.inner_mut().move_to_position(at);
+            }
+
+            fn token_kind<'t>(&self, tok: &'t Token<'_, ArgLang>) -> TokenKindView<'t, ArgLang>
+            where
+                's: 't,
+            {
+                self.inner().token_kind(tok)
             }
 
             fn source_span_between(

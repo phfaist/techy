@@ -464,7 +464,7 @@ mod plain_chars {
         };
         use techy::core::{
             ParserSession, StdStreamPosition, StdTokenReader, Token, TokenEdge, TokenKind,
-            TokenReader, TokenResult,
+            TokenKindView, TokenReader, TokenResult,
         };
         use techy::error::DiagnosticInfo;
         use techy::source::{Source, SourcePos, SourceSpan, Span};
@@ -514,6 +514,13 @@ mod plain_chars {
 
             fn move_to_position(&mut self, at: &StdStreamPosition) {
                 self.inner_mut().move_to_position(at);
+            }
+
+            fn token_kind<'t>(&self, tok: &'t Token<'_, PlainCharsLang>) -> TokenKindView<'t, PlainCharsLang>
+            where
+                's: 't,
+            {
+                self.inner().token_kind(tok)
             }
 
             fn source_span_between(
