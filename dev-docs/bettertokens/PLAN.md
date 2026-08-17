@@ -14,8 +14,9 @@ Repository facts the plan relies on (verify with `git log` if in doubt): workspa
 `/Users/philippe/projects/techy`, crate `techy/` (`techy/src/…`), integration tests
 `techy/tests/`, user guides `docs/*.md` (included into rustdoc through
 `techy/src/lib.rs`, so their Rust code blocks are **doctests**), rust-version 1.86,
-`missing_docs = deny`, `broken_intra_doc_links = deny`. Line numbers quoted below are
-from the design session's tree (commit `1c59e66`); treat them as pointers.
+`missing_docs = deny`, `broken_intra_doc_links = deny`. Line numbers quoted below were
+refreshed against commit `9a3c0ac` (the design session's tree was `1c59e66`); treat them
+as pointers.
 
 **Two standing instructions from the user (binding):**
 
@@ -120,10 +121,36 @@ pub trait Lang: Sized + 'static {
 }
 ```
 
-Every `impl Lang` in the crate (49 sites: `TrivialLang`, `Latexlike` and its family
-members, and the test languages in `constructs/*`, `engine/*`, `node/mod.rs`,
-`scopes/mod.rs`, `spec/mod.rs`, `state/*`, `token/reader.rs`) and in
-`techy/tests/lang_features.rs` gains:
+Every explicit `impl Lang for …` gains the two associated types. Recounted at
+`9a3c0ac` with
+`grep -rnE '\bimpl(<[^>]*>)? Lang for|impl crate::(state|core)::Lang for|impl techy::core::Lang for' techy/src techy/tests docs`:
+**57 sites** — 53 in `techy/src`, 3 in `techy/tests/lang_features.rs`, 1 in a
+**doctest** (`docs/custom-lang.md:196`, which must compile). Per file:
+
+| File | Sites |
+|---|---|
+| `techy/src/constructs/nodes_parser.rs` | 16 |
+| `techy/src/engine/mod.rs` | 6 |
+| `techy/src/engine/language.rs` | 5 |
+| `techy/src/state/parsing_state.rs` | 5 |
+| `techy/src/node/mod.rs` | 4 |
+| `techy/src/token/reader.rs` | 4 |
+| `techy/tests/lang_features.rs` | 3 |
+| `techy/src/latexlike/mod.rs` | 2 |
+| `techy/src/serialize/drivers/tree_tests.rs` | 2 |
+| `techy/src/constructs/argument_parsers.rs` | 1 |
+| `techy/src/constructs/attached_source.rs` | 1 |
+| `techy/src/constructs/environment_parser.rs` | 1 |
+| `techy/src/constructs/verbatim_parser.rs` | 1 |
+| `techy/src/scopes/mod.rs` | 1 |
+| `techy/src/serialize/drivers/diagnostic_tests.rs` | 1 |
+| `techy/src/serialize/drivers/tests.rs` | 1 |
+| `techy/src/spec/mod.rs` | 1 |
+| `techy/src/state/lang.rs` | 1 — **the blanket `impl<T: TrivialLang> Lang for T`** (`state/lang.rs:524`) |
+| `docs/custom-lang.md` | 1 (doctest, line 196) |
+
+The ~30 `impl TrivialLang for X {}` sites need **no** edit: they receive both
+associated types from the blanket impl. Each site gains:
 
 ```rust
     type Token = StdToken<Self>;
@@ -472,25 +499,29 @@ token module, with its replacement). Test-only sites follow the same rules.
 | `embellishments_parser.rs:279` | `move_to_pos(match_end)` after over-scanning | keep the best-so-far token; `move_to(&best, EndPastPostSpace)` |
 | `environment_parser.rs:271-294` `read_rigid_name_group` | `entry = pos()`, `move_to_pos(entry)` | `move_to(&open, StartBeforePreSpace)` (or `entry = position_here()` + `move_to_position`) |
 | `environment_parser.rs:549` `after_command = pos()`, `:586` drift check | | `after_command = position_here()`; `position_here() != after_command` |
-| `environment_parser.rs:594` mismatch | `move_to(&end_token, false)` | `move_to(&end_token, Start)` |
-| `environment_parser.rs:638-705` body start/anchors | `pos()` | `position_here()`, `cx.here()` |
-| `environment_parser.rs:1102` test `RawBlockParser` | `move_to_pos(trigger.post_space().start())` | `move_to(self.invocation.token, End)` (compiles now: no lifetime coupling) |
+| `environment_parser.rs:577` mismatch | `move_to(&end_token, false)` | `move_to(&end_token, Start)` |
+| `environment_parser.rs:641-708` body start/anchors | `pos()` | `position_here()`, `cx.here()` |
+| `environment_parser.rs:1109` test `RawBlockParser` | `move_to_pos(trigger.post_space().start())` | `move_to(self.invocation.token, End)` (compiles now: no lifetime coupling) |
 | `verbatim_parser.rs:318-347` | `entry = pos()`, `move_to_pos(entry)` ×3 after non-consuming probes | delete (no-ops) — or `entry = position_here()`/`move_to_position` if the reviewer prefers explicitness |
-| `verbatim_parser.rs:169,365,690,723` | `content_start/end = pos()` | positions/`source_span_within` |
-| `nodes_parser.rs:823-825` recovery arm | `before = pos(); move_to_pos(resume_pos); pos() <= before` | `before = position_here(); move_to_position(&recovery.resume); position_here() == before → abort` |
-| `nodes_parser.rs:509-560` chars run (`take_pre_space`, `extend_run`, `flush`) | `Span` arithmetic + `SourceSpan::new(&cx.source, run)` | run = `Option<(L::StreamPosition, L::StreamPosition)>`; extend: `position_at(&tok, StartBeforePreSpace) == run.end` else the existing "gap-free contract" implementation error; `run.end = position_at(&tok, EndPastPostSpace)` (pre-space-only extension: `Start`); flush: `cx.source_span_within(&start, &end)?` → `NodeKind::chars(span.span())` staged with `span` |
+| `verbatim_parser.rs:169,365,693,726` | `content_start/end = pos()` | positions/`source_span_within` |
+| `nodes_parser.rs:826-828` recovery arm | `before = pos(); move_to_pos(resume_pos); pos() <= before` | `before = position_here(); move_to_position(&recovery.resume); position_here() == before → abort` |
+| `nodes_parser.rs:512-563` chars run (`take_pre_space`, `extend_run`, `flush`) | `Span` arithmetic + `SourceSpan::new(&cx.source, run)` | run = `Option<(L::StreamPosition, L::StreamPosition)>`; extend: `position_at(&tok, StartBeforePreSpace) == run.end` else the existing "gap-free contract" implementation error; `run.end = position_at(&tok, EndPastPostSpace)` (pre-space-only extension: `Start`); flush: `cx.source_span_within(&start, &end)?` → `NodeKind::chars(span.span())` staged with `span` |
 | `nodes_parser.rs` stop-token matching, dispatch | `token.kind` | `cx.tokens.token_kind(&token)` |
 | `group_parser.rs:189-227` | `Span::empty(pos())`, `(TextContent::Spanned(span), span.end())`, `SourceSpan::new(&cx.source, ..)` | `cx.here()`; close = `Spanned(span.span())` if `span.same_source(&node_span)` else `Owned(span.content())`; end position from `StopCause::after` / `position_here()`; node span = `cx.source_span_within(&position_at(&open, Start), &end)?` |
 | `invocation_parser.rs:64` | `SourceSpan::new(&cx.source, Span::empty(pos()))` | `cx.here()` |
-| `tack_on_parser.rs:175`, `chars_group_parser.rs` | anchors / spans | `cx.here()` / reader spans |
+| `tack_on_parser.rs:175`, `:206` | `Span::empty(cx.tokens.pos())`, `SourceSpan::new(&cx.source, token.span)` | `cx.here()`, `cx.tokens.source_span_of(&token)` |
+| `chars_group_parser.rs:180` | `TokenKind::GroupOpen { rule, .. }` match | `cx.tokens.token_kind(&token)` (Stage 3a only — this file has **no** `pos()`/`move_to_pos`/`cx.source` site) |
 | `constructs/mod.rs:103-117` `invocation_frame` | `SourceSpan::new(&cx.source, ..)` | §1.9 |
 | `constructs/mod.rs:262-330` `stage_invocation` | `end_pos: Option<usize>`, `self.source.content().get(..)` | §1.9 |
-| `constructs/mod.rs:431,442` guard anchors, `:792` | `pos()` | `self.here()` |
-| `attached_source.rs:160-166` reader construction, `:195` skip | `StdTokenReader::new(content)`, `move_to_pos(span.end())` | `driver.make_token_reader(&source)`, `move_to_position(&after)` |
+| `constructs/mod.rs:434,445` guard anchors, `:795` | `pos()` | `self.here()` |
+| `attached_source.rs:155-162` reader construction, `:195` skip | `StdTokenReader::new(content)`, `move_to_pos(span.end())` | `driver.make_token_reader(&source)`, `move_to_position(&after)` |
 | `engine/language.rs:184,245,269` | reader construction, skip, anchor | same |
-| `latexlike/invocation_syntax.rs:777-782` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
+| `latexlike/invocation_syntax.rs:779-784` test `RestOfLineParser` | raw `find('\n')` + `move_to_pos(end)` | read `Char` tokens under a derived state with every feature gate off (the verbatim recipe) until a `'\n'` char, `move_to(&last, EndPastPostSpace)`; `stage_invocation(.., Some(&position_here()))` |
 | `latexlike/*.rs` (environments, input, driver, recompose) | `SourceSpan::new(&cx.source, ..)`, `token.kind` | reader queries / view |
-| `docs/construct-parsers.md:400-450`, `docs/ai-guide-custom-lang.md:263-274`, `docs/custom-lang.md`, `docs/concepts-overview.md`, `docs/parsing-model.md` | prose + doctests naming `move_to_pos`, `pos`, `move_past`, `cx.source`, `token.span` | rewrite to the new API (doctests must compile) |
+| `docs/construct-parsers.md:58-63` (intra-doc links to `TokenReader::{move_past, move_to_pos, pos}` — `broken_intra_doc_links = deny`, so deleting those methods **breaks the docs build** until this is rewritten), `:195`, `:211`, `:334-384` (`Invocation<'a, 's, Latexlike>` in the doctest's `make_invocation_parser`), `:399-455` (the doctest body: `pos()`, `move_past`, `token.kind`, `token.span`, `SourceSpan::new(&cx.source, ..)`) | prose + doctest on the old API | rewrite to the new API (doctests must compile) |
+| `docs/ai-guide-custom-lang.md:263`, `:274` | `cx.tokens` row; `move_to_pos(token.post_space().start())` | `cx.tokens` row reworded; `move_to(&token, TokenEdge::End)` |
+| `docs/concepts-overview.md:36-46`, `docs/parsing-model.md:36`, `:101` | prose describing tokens as span-carrying values read by parsers | prose: opaque tokens, the reader interprets, `make_token_reader` |
+| `docs/custom-lang.md:196` `impl Lang for BracesOnlyLang` (doctest), `:81`, `:89` | `impl Lang` block; `TokenReader`/`scan_specials` prose | add `type Token`/`type StreamPosition`; prose to the new hook signature |
 
 ### 1.12 Span rules at staging (unchanged model, new spelling)
 
@@ -653,19 +684,25 @@ Steps:
    `source_span_within`. `next()` default unchanged for now.
 2. `StdTokenReader::new(source: &'s Arc<Source<O>>)` (was `&'s str`); implement the new
    methods; keep the old ones for now. Update every construction site (2 real + tests).
-3. `Lang::StreamPosition` + `type StreamPosition = StdStreamPosition;` in all 49 + 3
-   (`tests/lang_features.rs`) impls.
+3. `Lang::StreamPosition` + `type StreamPosition = StdStreamPosition;` in all 57
+   explicit `impl Lang for …` sites of the §1.2 table — 53 in `techy/src`
+   (including the blanket `impl<T: TrivialLang> Lang for T` at `state/lang.rs:524`,
+   which covers every `impl TrivialLang` site), 3 in `techy/tests/lang_features.rs`,
+   and the **doctest** at `docs/custom-lang.md:196` (it must compile). Four of the
+   `techy/src` sites are in `techy/src/serialize/**`
+   (`drivers/tree_tests.rs` ×2, `drivers/diagnostic_tests.rs`, `drivers/tests.rs`) —
+   a module that did not exist when this plan was drafted.
 4. `token/error.rs`: `TokenError { kind, span: SourceSpan, recovery }`, `TokenRecovery {
    token, resume: L::StreamPosition }`, `TokenResult<'s, L, T>` keeps `'s` for now
    (token still has it). Update the std reader's recovery construction and the content
-   loop (`nodes_parser.rs:800-830`: `move_to_position(&resume)`, `position_here()`
+   loop (`nodes_parser.rs:803-833`: `move_to_position(&resume)`, `position_here()`
    equality check), `ParseDriver::probe_token` (drop `source`), `ParseContext::probe_token`.
 5. `token/specials.rs` + `state/lang.rs` + `scopes/mod.rs` (`SpecsProvider`, `Package`,
    `ScopeStack`) + `latexlike/mod.rs`: `SpecialsScanError`, `SpecialsMatch<L>` without
    `name`, `scan_specials(..) -> Result<Option<SpecialsMatch<L>>, SpecialsScanError>`;
    the std reader lifts scan errors (`recovery: None`) and slices `content[pos..end]`
    for the token's `Specials { name }` string. Update the test hooks that produced
-   recoveries (`nodes_parser.rs:2293,2373`, `environment_parser.rs:2001`): they now
+   recoveries (`nodes_parser.rs:2296,2376`, `environment_parser.rs:2010`): they now
    either return `Ok(None)`/a diagnosing-spec match, or an `Err` (unrecoverable) —
    keep each test's intent (a recoverable token error is still exercised through the
    std reader's own recoveries: forbidden char, dangling escape).
