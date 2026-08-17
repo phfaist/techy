@@ -1015,7 +1015,8 @@ fn staged_region(wire: &WireRegion, build_id_of: &[Option<BuildId>]) -> Result<C
     Ok(ChildRegion::new(children, content))
 }
 
-// --- value conversions of core payload types (D23; a language's own codecs reuse them)
+// --- value conversions of core payload types (owned text only, see the TreeSerdeDriver
+// docs; a language's own conversions reuse them)
 
 /// The value conversion of textual content — for text inside a language-typed payload
 /// (a callable's invocation syntax, an ext value) — carries **owned text only**:

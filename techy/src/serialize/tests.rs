@@ -22,7 +22,7 @@ use super::{
 // --- the two test langs ---------------------------------------------------------------
 
 /// A language that NEVER implements `SerializableLang` — permanently, by design: it
-/// exists to pin the vacant-vtable behavior of the capability methods (D17). Every
+/// exists to pin the vacant-vtable behavior of the capability methods (cf. [§dd-dr:serialize-capability-traits]). Every
 /// spec/provider trait object of this lang must still be built and usable for the
 /// non-serialization methods although `serialize_object` and the argument-spec pair
 /// can neither be called nor reached (no context value exists for this lang). Do not
@@ -89,7 +89,7 @@ fn two_argument_spec<L: Lang>() -> StdCallableSpec<L> {
     ])
 }
 
-// --- D17: the vacant vtable ---------------------------------------------------------------
+// --- the vacant vtable ([§dd-dr:serialize-capability-traits]) ---------------------------------------------------------------
 
 /// `dyn CallableSpec<NeverSerializableLang>` / `dyn SpecsProvider<NeverSerializableLang>`
 /// are built and dispatch their non-gated methods although the gated capability
@@ -163,7 +163,7 @@ fn serialize_object_defaults_to_unsupported_and_dispatches_overrides() {
     });
 }
 
-// --- D21: the argument-spec index rule ----------------------------------------------------
+// --- the argument-spec index rule (`CallableSpec::serialize_argument_spec`) ----------------------------------------------------
 
 /// The write default: `Ok(None)` exactly when the parsed argument's `Arc` is the
 /// declared one at that index (pointer identity); out-of-band otherwise, including

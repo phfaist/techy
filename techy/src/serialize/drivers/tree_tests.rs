@@ -1,5 +1,5 @@
 //! Tests of the tree driver (M4): round-trips of hand-built and parsed trees covering
-//! every node kind and region shape, the D21 argument-spec index rule and its
+//! every node kind and region shape, the argument-spec index rule and its
 //! override, multi-tree sharing, the fresh layout tag, a hostile-input battery, and —
 //! under the `serde` feature — a pinned JSON snapshot.
 
@@ -74,7 +74,7 @@ impl<L: Lang> ArgumentParser<L> for ToyArgParser {
 }
 
 /// A self-describing callable spec: its name and its argument names. Its declared
-/// argument specs are the ones parsed arguments point at (the D21 index rule); the
+/// argument specs are the ones parsed arguments point at (the argument-spec index rule of `CallableSpec::serialize_argument_spec`); the
 /// argument parser is a stub (parsers are not serialized).
 struct ToySpec<L: Lang> {
     name: String,
@@ -157,7 +157,7 @@ impl<L: SerializableLang> DeserializableObject<L> for ToySpec<L> {
 }
 
 /// A callable spec whose parsed arguments carry an *out-of-band* argument spec (one it
-/// does not declare): it overrides the D21 pair, serializing each argument spec's name
+/// does not declare): it overrides the `serialize_argument_spec`/`deserialize_argument_spec` pair, serializing each argument spec's name
 /// and rebuilding it on read.
 #[derive(Debug)]
 struct OobSpec {
@@ -472,10 +472,10 @@ fn a_tree_of_source_span_annotations_round_trips() {
     round_trip_tree(setup_span_annotations, &tree, span_annotation_eq);
 }
 
-// --- D21: the argument-spec index rule and its override -------------------------------
+// --- the argument-spec index rule and its override -------------------------------
 
 /// A callable whose one provided argument carries an *out-of-band* argument spec,
-/// handled by [`OobSpec`]'s override of the D21 pair.
+/// handled by [`OobSpec`]'s override of the argument-spec method pair.
 fn oob_tree() -> NodeTree<ToyLang, ()> {
     let src = source("\\x{q}");
     let st = state();
@@ -519,7 +519,7 @@ fn an_overriding_spec_round_trips_its_out_of_band_argument_spec() {
 
 #[test]
 fn an_out_of_band_argument_spec_without_an_override_is_a_write_error() {
-    // A default-D21 spec (ToySpec) declaring one argument, but the parsed argument
+    // A spec with the default index rule (ToySpec) declaring one argument, but the parsed argument
     // points at a different argument-spec Arc: the write fails naming node and callable.
     let src = source("\\x{q}");
     let st = state();

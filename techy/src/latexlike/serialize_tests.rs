@@ -3,7 +3,7 @@
 //! body-pushed item package, specials, math, comments, verbatim, paragraph breaks in
 //! both styles, `\input` across sources), the identity and self-contained spec forms,
 //! the reading environment (held providers and recipes), the instance-not-lookup
-//! guarantee (D18), scopes and fallback providers, the failure surface (unstamped
+//! guarantee ([§dd-dr:instance-not-lookup]), scopes and fallback providers, the failure surface (unstamped
 //! specs, dropped providers, unregistered identifiers, missing providers), a hostile
 //! state, determinism, and — under the `serde` feature — the vocabulary parity between
 //! the value conversions and the serde derives plus a pinned JSON rendering.
@@ -558,7 +558,7 @@ fn a_stamped_begin_spec_prefers_identity() {
     assert!(Arc::ptr_eq(&back, &begin_spec));
 }
 
-// --- D18: instance, not lookup ------------------------------------------------------------
+// --- instance, not lookup ([§dd-dr:instance-not-lookup]) ------------------------------------------------------------
 
 #[test]
 fn a_mode_restricted_definition_resolves_by_identity_regardless_of_mode() {
@@ -1171,18 +1171,18 @@ mod rendering {
         assert_eq!(json, expected);
     }
 
-    /// The setup of the schema draft's worked example
-    /// (`dev-docs/serialization/schema_draft.md`): a tolerant parse of `\e{x} {`
+    /// The setup of the schema description's worked example
+    /// (`dev-docs/serialize_schema.md`): a tolerant parse of `\e{x} {`
     /// (a macro `\e` with one mandatory argument, defined in a shared package `d`;
     /// then an unclosed group) serialized as a parse result into a fresh session
     /// declaring the profile `schema-draft example`, the segment naming the parse
-    /// result as its main entry. Ignored: run it to REGENERATE the draft's example
-    /// after a wire change —
+    /// result as its main entry. Ignored: run it to REGENERATE the description's
+    /// example after a wire change —
     /// `cargo test --features serde -p techy --lib schema_draft_worked_example -- --ignored --nocapture`
-    /// — and paste its output; the draft's example is never edited by hand. Prints
-    /// the exact canonical line first, then a readable per-entry layout.
+    /// — and paste its output; the description's example is never edited by hand.
+    /// Prints the exact canonical line first, then a readable per-entry layout.
     #[test]
-    #[ignore = "prints the schema draft's worked example; run with --ignored --nocapture to regenerate it"]
+    #[ignore = "prints the schema description's worked example; run with --ignored --nocapture to regenerate it"]
     fn schema_draft_worked_example() {
         let defs = Package::<Latexlike>::new_shared("d", |package| {
             package.define_macro("e", ["m"]).unwrap();
@@ -1233,7 +1233,7 @@ mod rendering {
 
     /// Print a map value with its keys one per line and, for a value that is itself a
     /// map of several keys, that map's keys one per line too (compact below that):
-    /// the readable layout of the schema draft's examples.
+    /// the readable layout of the schema description's examples.
     fn print_two_levels(value: &SerialValue) {
         fn compact(value: &SerialValue) -> String {
             serde_json::to_string(value).unwrap()

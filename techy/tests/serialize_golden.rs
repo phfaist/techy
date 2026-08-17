@@ -2,7 +2,7 @@
 //! renderings of three small streams under `tests/golden/serialize/`, so that any
 //! change to the wire form — a key name, an ordering, an entry shape, the sharing
 //! between entries — shows up as a readable diff of a checked-in file, and so that
-//! the rendering is pinned across processes and machines (determinism, D10).
+//! the rendering is pinned across processes and machines (determinism; cf. [§dd-dr:serialize-sessions-segments]).
 //!
 //! Each golden file holds the segments of one stream, in order, as pretty-printed
 //! JSON documents separated by a blank line (`serde_json::to_string_pretty`; the
@@ -186,11 +186,12 @@ fn golden_state_and_source() {
     assert_eq!(state.scopes().providers().len(), language.initial_state().scopes().providers().len());
 }
 
-// --- (ii) the schema draft's worked example ---------------------------------------------------
+// --- (ii) the schema description's worked example ---------------------------------------------
 
-/// The schema draft's example: a tolerant parse of `\e{x} {` with a shared package
-/// defining `\e{m}`, the parse result as the segment's main entry (the same input the
-/// draft's generator uses, with this file's profile).
+/// The schema description's example (`dev-docs/serialize_schema.md`): a tolerant
+/// parse of `\e{x} {` with a shared package defining `\e{m}`, the parse result as the
+/// segment's main entry (the same input the description's generator uses, with this
+/// file's profile).
 #[test]
 fn golden_schema_example() {
     fn defs() -> Arc<dyn SpecsProvider<Latexlike>> {
