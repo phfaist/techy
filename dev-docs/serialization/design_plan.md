@@ -55,7 +55,7 @@ become public and frozen at v1 (not frozen yet).
 │   per framework; vocabulary; provenance-stamping package builders    │
 ├───────────────────────────────────────────────────────────────────────┤
 │ core scaffolding:  drivers for the standard tables (sources, states, │
-│   specs, providers, trees, diagnostics); wire structs; context       │
+│   specs, providers, trees, diagnostics, parse-results); wire structs; │
 │   extension traits (cx.intern_spec(…) sugar); typed indices          │
 ├───────────────────────────────────────────────────────────────────────┤
 │ foundation (type-blind):  SerialValue, SerialEntry, SerialIndex,     │
@@ -171,6 +171,8 @@ live object ──SerializableObject impl──▶ wire struct ──▶ SerialV
   then appending is the natural flow (use case 1): absorb segments, add trees, emit a
   segment containing only new entries. Construction requires `L: SerializableLang`.
   Core ships a standard-tables constructor (sources, states, specs, providers, trees,
+  diagnostics — and, since M6, parse-results as a seventh: the `ParseResult` wrapper
+  is itself a table entry, uniform with everything else, P3;
   diagnostics pre-wired); presets/frameworks extend it. `SerdeSession::<L>::new()` IS
   that standard-tables constructor (§6 usage); if M2 finds a need for empty/custom
   composition, that is a separate constructor to name then.
@@ -621,42 +623,15 @@ Facade: `techy::serialize`. "Construct"-based names are off-limits
 
 ---
 
-## 5. Illustrative segment sketch (JSON rendering; names NOT final — Q3)
+## 5. Illustrative segment sketch — SUPERSEDED
 
-```json
-{
-  "version": 1,
-  "sources": [
-    { "text": "Hello \\emph{world}.", "origin": "intro.tex", "provenance": "primary" },
-    { "ref": { "origin": "chapter1.tex", "len": 48210,
-               "digest": { "algorithm": "sha256", "bytes": "b64:…" } } }
-  ],
-  "providers": [
-    { "id": "latexlike.package", "data": { "name": "base-formatting" } },
-    { "id": "core.scope", "data": { "name": "toplevel",
-        "definitions": [ { "ct": "macro", "name": "abc",
-                           "spec": { "$": ["specs", 1] } } ] } }
-  ],
-  "specs": [
-    { "id": "latexlike.pkg-spec",
-      "data": { "provider": { "$": ["providers", 0] }, "ct": "macro", "name": "emph" } },
-    { "id": "latexlike.macro-recipe",
-      "data": { "args": 3, "opt_default": "x", "body": "…" } }
-  ],
-  "states": [
-    { "rules": { "…": "…" }, "mode": "text", "ext": null,
-      "scopes": [ { "$": ["providers", 0] }, { "$": ["providers", 1] } ] }
-  ],
-  "trees": [ { "nodes": [ { "kind": "chars", "src": 0, "start": 0, "end": 6,
-                            "state": 0, "…": "…" } ],
-               "annotations": null } ],
-  "diagnostics": []
-}
-```
-
-Note: state entries render bare (homogeneous table — no per-entry identifier);
-spec/provider entries render `{id, data}` (heterogeneous). A later segment in the same
-stream contains only new table entries plus new trees, referencing earlier indices.
+The early hand-written sketch that lived here (2026-08-13) is stale in form and names.
+The accurate rendering of a real parse — segment directory, sources, states, spec
+identity, providers, tree nodes, a diagnostic and a parse result — is
+`dev-docs/serialization/schema_draft.md` (M6; reproduced byte-for-byte by the reviewer),
+and the complete name inventory with the open naming questions is
+`dev-docs/serialization/wire_vocabulary.md`. Both are transient companions of this
+plan (same lifecycle: promoted or deleted at M7 with the user).
 
 ---
 
@@ -870,10 +845,15 @@ merge outside the sandboxed primary checkout.
   `LineIndex`);
   a nesting-depth bound for `SerialValue`'s serde `Deserialize` (and `Segment`'s,
   AND the unconditional `Segment::from_serial_value` — recursive clone/drop of deep
-  values, M2 review) so formats without their own recursion limit (binary use case
-  1) cannot overflow the stack on hostile input — depth-carrying `DeserializeSeed`
-  or an equivalent (M1 review finding: serde_json's own limit protects JSON;
-  postcard does not);
+  values, M2 review; the M6 review measured `push_segment` overflowing at depth
+  ≈4000–5000 and `Segment::from_serial_value` at 5000–10000 — a bound at the segment
+  rim covers the DiagnosticValue conversions too) so formats without their own
+  recursion limit (binary use case 1) cannot overflow the stack on hostile input —
+  depth-carrying `DeserializeSeed` or an equivalent (M1 review finding: serde_json's
+  own limit protects JSON; postcard does not); fix the pre-existing deny-level
+  `clippy::never_loop` in `latexlike/mod.rs` so `cargo clippy` passes on the
+  workspace; the wire width of `usize` counts/offsets (a 64-bit-written stream with
+  values above `u32::MAX` is unreadable on a 32-bit reader — decide/document);
   rustdoc pass per the user's documentation-clarity rules (user-facing rustdoc: no
   metaphors, no undefined jargon, coined terms defined on first use; error/Panics
   sections exhaustive — target: no panics on any input); performance sanity (large
@@ -1783,6 +1763,15 @@ Newest first. Every working session appends: date, actor, milestone, what change
   `#![allow(dead_code)]` until the first non-test wire structs (M3). Sandbox note:
   fetching the new dev-deps needed one `cargo fetch` outside the sandbox (registry
   cache write). Next: M1 review → M2 (engine). Blockers: none.
+- 2026-08-17 — supervisor (main session) — M6 reviewed (Opus 5; APPROVE WITH NITS;
+  inventory + schema draft verified against the code; nits queued for the rename
+  pass). Plan patches: seven standard tables (D9, §2), §5 sketch superseded by
+  `schema_draft.md`, M7 items (depth bound scope, clippy, usize widths). Design
+  questions queued for the user with the Q3/Q7 pass: `Deserialize for DiagnosticValue`
+  (D1 promises it; not built), trees/diagnostics as values vs parse results by
+  identity, equality-based state dedup on read-then-append (M7 optional),
+  `DeserializedCondition`'s facade home. Next: user Q3/Q7 session → rename pass →
+  M7.
 - 2026-08-17 — supervisor (main session) — M5 reviewed (Opus 5; APPROVE WITH NITS —
   one doc line; hostile-probe crate + cross-process determinism clean; nits folded
   into the M6 brief). Plan patches: Q5 RESOLVED, §7 M5 bullet re-scoped, Q3 list
