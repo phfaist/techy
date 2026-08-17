@@ -404,8 +404,8 @@ The nine failing lints:
 
 - **Branch**: `bt-2a-core` (off `main` at `d5f37e0`, which already contains Stage 1).
 - **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-2a-core`.
-- **Status**: implemented, review round 1 applied — awaiting re-review. Date:
-  2026-08-17.
+- **Status**: reviewed and merged to `main` (`main` = `0af4276`, fast-forward).
+  Date: 2026-08-17.
 - **Commits** (`git log --oneline main..bt-2a-core`, oldest last; the newest is this
   PROGRESS update itself, "bettertokens: PROGRESS.md — Stage 2a review round 1"):
 
@@ -691,3 +691,286 @@ suggestions; all five are on the branch.
 
 Noted, not acted on: the per-node `SourceSpan` clones belong to 2b's timing gate, and
 the remaining `token.pre_space` reads are Stage 3a's.
+
+---
+
+## Stage 2b — the rest of the port, and the old API deleted (§4)
+
+- **Branch**: `bt-2b-rest` (off `bt-2a-core` at `0af4276`, which `main` has since
+  fast-forwarded to).
+- **Worktree**: `/Users/philippe/projects/techy/.claude/worktrees/bt-2b-rest`.
+- **Status**: implemented — awaiting review. Date: 2026-08-17.
+- **Commits** (`git log --oneline bt-2a-core..bt-2b-rest`, newest first; the PROGRESS
+  update itself follows this list):
+
+```
+8c81564 bettertokens: the parse-throughput probe example
+6bdbbb9 core: `ParseContext` holds no source
+63c2100 token: `move_to_edge` is `move_to`
+4b3f29c token: delete the positional navigation API
+9fc838b core: the last construct-parser callers and the guides off bare positions
+6cf35a6 core: the environment and verbatim families on reader answers
+```
+
+### What changed, per file
+
+| File | Change |
+|---|---|
+| `techy/src/constructs/environment_parser.rs` | `NameGroup { name: SourceSpan, end: L::StreamPosition }`; `EnvironmentBody::end: L::StreamPosition`; `EnvironmentBeginSyntaxData`/`EnvironmentTerminatorSyntaxData` fields are `SourceSpan`s; `EnvironmentBodyParser::{new, with_invocation_name_span}` take `SourceSpan`s; `read_rigid_name_group` rewinds with `move_to(&open, StartBeforePreSpace)`, `read_name_chars` runs on positions; the terminator flow uses `position_here()`, an equality drift check and `move_to(&end_token, Start)`; the body's content end is the reader's position at the stop (deviation 1); the test `RawBlockParser` uses `move_to(trigger, End)` |
+| `techy/src/constructs/verbatim_parser.rs` | `RawContentEnd<L> { content_end, terminator: Option<SourceSpan>, end }` (all reader answers, §1.16 decision); `VerbatimBodyTerminator::syntax_data(span, end)`; `VerbatimBodyParser` takes `SourceSpan`s; the three `entry`/`move_to_pos(entry)` no-ops deleted (§1.16 decision); the group's delimiters recorded through `node_text_content` |
+| `techy/src/constructs/embellishments_parser.rs` | the marker over-scan keeps the best-so-far **token** and returns a `SourceSpan`; the wrapper group's span comes from the marker span and the last staged child (same-source-checked); `move_to(&tok, EndPastPostSpace)` |
+| `techy/src/constructs/tack_on_parser.rs`, `chars_group_parser.rs` | the last `move_past` and the repeated-field span (`source_span_of`) |
+| `techy/src/constructs/group_parser.rs` | the delimiter recording now calls the shared `node_text_content` (was written out inline in 2a) |
+| `techy/src/constructs/mod.rs` | new `pub(crate) fn node_text_content(fact, node_span)` — the one spelling of §1.12's node-data rule; `ParseContext::source` and the `new` parameter removed, the type's rustdoc says so |
+| `techy/src/latexlike/environments.rs` | `EnvironmentInvocation<'p, LLL>` carries `SourceSpan`s (manual `Clone`/`Debug`, no longer `Copy`); the composition takes the trigger's command/post-space spans from the reader, computes the node span before the payload and hands it to `from_parsed`; `parse_declared_arguments(&name_group.name)`; `OrphanEndParser` on positions |
+| `techy/src/latexlike/invocation_syntax.rs` | `EnvironmentSyntax::from_parsed(begin, terminator, node_span)` — the record converts each source-qualified fact against the node's own span (deviation 2); the test `RestOfLineParser` reads `Char` tokens under a features-off state |
+| `techy/src/latexlike/input.rs` | `argument_text_span` answers a `SourceSpan` (same-source-checked), so the `\input` reference is read off it |
+| `techy/src/engine/mod.rs` | the test one-char parser stages the reader's span; the context-helper's source parameter dropped |
+| `techy/src/token/reader.rs` | `move_past`, the two-flag `move_to`, `move_to_pos` and `pos` deleted from the trait, from `StdTokenReader`'s inherent methods and from its impl; `move_to_edge` renamed `move_to`; `next`'s default is `peek` + `move_to(EndPastPostSpace)`; the movement test restated in edges; test helpers `seek`/`at` (the reader's own module is where positions may be minted from offsets) |
+| `techy/src/token/list_reader.rs` | the same four methods and the inherent `move_to_pos` deleted, with their issued-offset bookkeeping; the lockstep movement test restated in edges; the mid-pre-space peek test lands there by consuming a hand-built filler token |
+| `techy/src/constructs/{nodes_parser,argument_parsers}.rs`, `techy/tests/lang_features.rs` | the delegating test readers lose the four methods; `StuckRecoveryReader`/`TabooReader` read their offset off `position_here()` |
+| `docs/construct-parsers.md`, `docs/ai-guide-custom-lang.md`, `docs/parsing-model.md` | the deleted names are gone: `ParseContext` bundles four inputs, repositioning is `move_to`/`move_to_position`, the `\verb` idiom is `move_to(token, TokenEdge::End)` |
+| `techy/examples/bt_timing.rs` | new: the throughput probe (deleted in Stage 4) |
+
+### Gate results (verbatim)
+
+```
+$ cargo build
+   Compiling techy v0.1.0 (…/bt-2b-rest/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+
+$ cargo test
+     Running unittests src/lib.rs (target/debug/deps/techy-94158093885f6495)
+running 1035 tests
+test result: ok. 1035 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+     Running tests/acceptance.rs
+running 30 tests
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/derive_conditions.rs
+running 9 tests
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lang_features.rs
+running 13 tests
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/recompose_oracle.rs
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/serialize_golden.rs / serialize_perf.rs / serialize_stream.rs
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out (each)
+     Running unittests src/lib.rs (techy_derive)
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests techy
+running 89 tests
+test result: ok. 84 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 21.93s
+   Doc-tests techy_derive
+running 2 tests
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+(clean — no warnings, exit 0)
+
+$ rm -rf target/doc && cargo docs
+ Documenting techy-derive v0.1.0 (…/bt-2b-rest/techy-derive)
+ Documenting techy v0.1.0 (…/bt-2b-rest/techy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
+   Generated …/target/doc/techy/index.html and 1 other file
+(no broken intra-doc links)
+
+$ cargo test -p techy --lib constructs::nodes_parser
+running 79 tests
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 956 filtered out; finished in 0.04s
+
+$ cargo test -p techy --lib token::list_reader
+running 11 tests
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1024 filtered out; finished in 0.00s
+```
+
+### Semver report (`scripts/check_semver.sh`)
+
+Breaking changes are expected (soft freeze) and were not "fixed".
+
+```
+    Checking techy v0.1.0 -> v0.1.0 (no change; assume minor)
+     Checked [   0.045s] 196 checks: 179 pass, 17 fail, 0 warn, 58 skip
+     Summary semver requires new major version: 17 major and 0 minor checks failed
+    Finished [   3.023s] techy
+```
+
+The 17 failing lints — the 14 Stage 1 and 2a already reported, plus three lints this
+stage adds entries to:
+
+| Lint | Item | Stage |
+|---|---|---|
+| `auto_trait_impl_removed` | `BeginSpec` no longer `UnwindSafe`/`RefUnwindSafe` | pre-existing |
+| `constructible_struct_adds_field` | `StdCallableSpec.provenance` (pre-existing); `TokenRecovery.resume` (1); **`NameGroup.name`** | 1, **2b** |
+| `constructible_struct_adds_private_field` | `SpecialsSpec.provenance` | pre-existing |
+| `derive_trait_impl_removed` | `StopCause` no longer `Copy` (2a); **`EnvironmentInvocation` no longer `Copy`** | 2a, **2b** |
+| `enum_struct_variant_field_added` | `StopCause::{TokenCondition, UnexpectedGroupClose}::after` | 2a |
+| `function_parameter_count_changed` | `techy::latexlike::make_paragraph_break_node` 4 → 3 | 2a |
+| **`inherent_method_missing`** | **`StdTokenReader::{pos, move_to_pos}`** | **2b** |
+| **`method_parameter_count_changed`** | **`ParseContext::new` 5 → 4** | **2b** |
+| `struct_pub_field_missing` | `TokenRecovery::resume_pos`, `SpecialsMatch::name` (1); **`NameGroup::name_span`, `ParseContext::source`** | 1, **2b** |
+| `trait_added_supertrait` | `CallableSpec`/`SpecsProvider` gained `SerializableObject` | pre-existing |
+| `trait_associated_type_added` | `Lang::StreamPosition` | 1 |
+| `trait_method_added` | `ParseDriver::make_token_reader` | 1 |
+| **`trait_method_missing`** | **`TokenReader::{move_past, move_to_pos, pos}`** (the two-flag `move_to` keeps the name, with a new signature) | **2b** |
+| `trait_method_parameter_count_changed` | `ParseDriver::probe_token` 4 → 3 (1); `make_paragraph_break_node` 3 → 2 (2a); **`EnvironmentSyntax::from_parsed` 2 → 3** | 1, 2a, **2b** |
+| `trait_requires_more_generic_type_params` / `type_requires_more_generic_type_params` | `StopCause` 0 → 1 generic type | 2a |
+| `type_mismatched_generic_lifetimes` | `SpecialsMatch` 1 → 0 (1); `GroupParser` 1 → 2 (2a) | 1, 2a |
+
+### The sweep (§4)
+
+```
+$ grep -rn move_to_edge techy docs
+(no output; exit 1)
+```
+
+```
+$ grep -rn "move_to_pos\|\.pos()\|move_past\|cx\.source\b\|self\.source\b\|&source, " \
+    techy/src techy/tests docs
+```
+
+Every hit is on the §4 table's legitimate list. Filtering out the two classes that
+dominate it — `SourceSpan::new(&source, …)` built from a local `source` binding in
+tests and doc examples, and the S0 module's and node module's own files — leaves only:
+
+- `move_to_position` (the loose pattern `move_to_pos` matches the *new* method's name)
+  — trait declaration and impls, the delegating test readers, callers, rustdoc;
+- the readers' own `self.source` fields: `techy/src/token/reader.rs` (`StdTokenReader`)
+  and `techy/src/token/list_reader.rs` (`TokenListReader`);
+- `SourcePos::pos()`: `techy/src/source/source.rs`, `techy/src/node/tree.rs`, and two
+  new call sites — the reader suite's `at` helper (`token/reader.rs:925`) and the
+  verbatim body test's byte-offset readback (`verbatim_parser.rs:1363`);
+- `cx.source(wire.source)` at `techy/src/serialize/drivers/source.rs:382` (a
+  `DeserializeContext`, an unrelated method);
+- `SourceSpan::entire(&source)` in `techy/src/engine/language.rs` (the parse's own
+  binding);
+- `Error::source`'s `Some(&self.source)` in `techy/src/error.rs:1509` (a `#[cfg(test)]`
+  error type's std-trait impl — not on the §4 list because it is not new; it matches
+  the pattern by accident).
+
+```
+$ grep -rn "cx\.source\b\|self\.source\b" \
+    techy/src/constructs techy/src/engine techy/src/latexlike techy/src/scopes
+techy/src/latexlike/node_ref.rs:83:            Some((_escape_char, post_space)) => post_space.resolve(self.source()),
+```
+
+The single hit is `NodeRef::source()` — a node view resolving a `TextContent` against
+the node's own source, nothing to do with a parse context or a reader. `cx.source`
+itself has **zero** hits anywhere. (The delegating `#[cfg(test)]` readers reach their
+inner reader as `self.inner`, so none of them matches this pattern.)
+
+```
+$ grep -rn "fn move_to\b\|fn move_to_position\|fn move_past\|fn move_to_pos\|fn pos(" \
+    techy/src/token/reader.rs
+techy/src/token/reader.rs:186:    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
+techy/src/token/reader.rs:194:    fn move_to_position(&mut self, at: &L::StreamPosition);
+techy/src/token/reader.rs:721:    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
+techy/src/token/reader.rs:725:    fn move_to_position(&mut self, at: &L::StreamPosition) {
+```
+
+**Confirmed**: `TokenReader` now has exactly two navigation methods — `move_to(&tok,
+edge)` and `move_to_position(&pos)` — declared once each (186, 194) and implemented once
+each by `StdTokenReader` (721, 725).
+
+### Timing check (§4)
+
+`techy/examples/bt_timing.rs` generates a deterministic 5 242 901-byte LaTeX-like
+document (LCG seed `0x5eed1234`; plain words, `\emph{…}`/`\textbf{…}`, argument-less
+commands, `{groups}`, `% comments`, blank-line paragraph breaks, `\begin{itemize}…
+\end{itemize}` blocks) and parses it with `Language<Latexlike>` + `LatexlikeDriver`
+under strict recovery, with `builtin_package()` and a small definitions package so the
+parse is diagnostic-free. Both trees report the **same** 257 816 root children and 0
+diagnostics — an incidental check that the port changed no tree.
+
+- Branch `bt-2b-rest` (ms): **213.0, 214.8, 212.1, 206.6, 193.4** → median **212.1**
+- Baseline `main` at `7825789` (ms): **206.3, 189.0, 205.2, 192.2, 210.1** → median
+  **205.2**
+
+Slowdown at the median: **+3.4 %** — within the ≤ 10 % acceptance. No optimization
+was needed; the per-node `SourceSpan` clones the 2a reviewer flagged and the chars-run
+path were left as they are. (Baseline worktree
+`/Users/philippe/projects/techy/.claude/worktrees/bt-timing-main`, created detached at
+`7825789` with the same example copied in untracked, then
+`git worktree remove --force`d.)
+
+### Decisions taken under §1.16
+
+- **`RawContentEnd` shape** (§1.11 leaves it to the implementer): a struct generic in
+  `L` with three fields — `content_end: L::StreamPosition`, `terminator:
+  Option<SourceSpan>`, `end: L::StreamPosition`. The third field is new: the callers
+  need both "where the content stopped" and "where the consumed terminator ended", and
+  a `SourceSpan` cannot be turned back into a stream position.
+- **The `verbatim_parser.rs` `entry`/`move_to_pos(entry)` pairs are deleted, not
+  respelled.** `ParseContext::probe_token` never moves the stream (strict aborts,
+  tolerant reports `None` "without diagnosing or consuming"), so all three were no-ops.
+  A comment at the parser's entry states the invariant they were guarding ("each
+  'argument absent' exit consumes nothing").
+- **The node-data conversion has one spelling**: `constructs::node_text_content(fact,
+  node_span)` — `TextContent::Spanned(fact.span())` when `fact.same_source(node_span)`,
+  `TextContent::Owned(fact.content().into())` otherwise. It replaces 2a's inline form in
+  `group_parser.rs` and serves the verbatim group, the embellishment wrapper and the
+  environment record.
+- **`EnvironmentInvocation` loses `Copy`** (it holds two `SourceSpan`s now) and gains
+  the `LLL` parameter, with manual `Clone`/`Debug`. Its one double use in the
+  composition clones.
+
+### Deviations from §1/§4
+
+1. **The environment body's content end is the reader's position at the stop, not the
+   last staged node's span end.** §1.11 keeps `EnvironmentBody::end` as a stream
+   position, but the body list's span was computed from `outcome.nodes.last()`'s
+   *source* end — and a source offset cannot become a stream position. The content loop
+   leaves every stop token unconsumed at its own `Start` (`nodes_parser.rs`: the
+   `TokenCondition`, `EndOfInput` and `GroupClose` arms all `move_to(&token, Start)`
+   after flushing the token's pre-space as content), so `position_here()` right after
+   `parse_nodes` **is** the end of the last staged node under the gap-free tiling
+   contract. The whole suite passes unchanged, including the environment span
+   assertions and the byte-partition oracle, so no expected node span moved.
+2. **`EnvironmentSyntax::from_parsed` gains a `node_span: &SourceSpan` parameter.**
+   §1.11 says the composition converts the terminator facts against the node's span,
+   but the conversion happens where `TextContent` is minted, which is inside
+   `from_parsed` — a public trait method a third-party `Env` type also implements.
+   Passing the node's span in is the smallest change that lets *every* implementation
+   apply §1.12's rule; the composition computes the node span before the payload (it
+   was already computing the same range one statement later, for staging). The begin
+   side is checked too, though under a single-source reader it can never fail.
+3. **`EnvironmentBodyParser::new` / `VerbatimBodyParser::new` / their
+   `with_invocation_name_span`, and `EnvironmentInvocation`'s two span fields, take
+   `SourceSpan`s.** §1.11 does not list them (it lists their *outputs*), but they were
+   bare `Span`s handed in by a caller and paired with `cx.source` inside the parser —
+   the exact pattern this stage removes. Same reasoning as 2a's deviation 2
+   (`parse_declared_arguments`).
+4. **`latexlike/input.rs`'s `argument_text_span` answers a `SourceSpan`** (it answered a
+   bare `Span` the caller indexed into `cx.source`). It now also answers `None` when the
+   argument's content nodes lie in more than one source — there is no single extent to
+   report then. Unreachable under the std reader.
+5. **`docs/construct-parsers.md`'s `cx.tokens` paragraph and `docs/parsing-model.md`'s
+   context bullet were reworded** beyond the strictly forced minimum (they listed the
+   five inputs and the three deleted methods). Both are single sentences naming deleted
+   things; the FAQ rewrite §1.15 asks for is still Stage 4's.
+6. **Two reader-suite test helpers, `seek` and `at`** (`token/reader.rs`), stand in for
+   the deleted `move_to_pos`/`pos`. The scanner's own tests must start mid-content and
+   read the position back as a number; `StdStreamPosition::at`/`offset` are `pub(crate)`
+   and this is their own module. No non-test code mints a position from an offset.
+7. **`docs/construct-parsers.md` line 60 and `token/list_reader.rs`'s module doc link
+   `move_to_edge` for one commit** (the port commit) and become `move_to` in the rename
+   commit — `broken_intra_doc_links = deny` forbids linking a method that does not exist
+   yet.
+
+### Open questions
+
+1. **`EnvironmentSyntax::from_parsed`'s new parameter** (deviation 2) is a public trait
+   signature change §1 did not spell out. The conservative alternative — leave
+   `from_parsed` at two parameters and have the composition pre-convert — cannot work:
+   the record is what mints `TextContent`, and the composition has no way to hand it a
+   converted `EnvironmentTerminatorSyntaxData` (whose fields are `SourceSpan`s by §1.11).
+   Flagged for the reviewer, not decided beyond §1.16.
+2. **`TokenListReader::pre_space_clipped_when_peeking_mid_whitespace`** now inserts a
+   hand-built filler token so the reader can *land* mid-pre-space through a position it
+   issued. With `move_to_pos` gone there is no other way to reach that state from
+   outside the reader — which is the point of the design, but it does mean the clipping
+   behavior is only reachable in tests through a hand-built list. No action taken.
