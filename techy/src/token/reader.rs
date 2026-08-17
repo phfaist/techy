@@ -32,7 +32,7 @@ use super::error::{
 };
 use super::rules::{CommandRule, TokenRules};
 use super::specials::SpecialsScanError;
-use super::token::{Token, TokenKind, TokenKindView};
+use super::token::{StdToken, StdTokenKindData, TokenKind};
 
 /// One of the five boundaries of a token, in reading order.
 ///
@@ -178,21 +178,104 @@ impl StdStreamPosition {
 ///    equal edges give the empty span at that edge.
 ///
 /// At the end of the stream `peek` returns the terminal, idempotent
-/// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); its `pre_space`
-/// carries the final whitespace.
+/// [`EndOfStream`](TokenKind::EndOfStream) token (never an `Option`); the reader
+/// reports the input's final whitespace as that token's pre-space.
 ///
 /// # Writing a reader over standard tokens
 ///
 /// A reader that produces the same tokens as [`StdTokenReader`] but decides differently
 /// *which* token comes next (re-classifying a character, splicing in content) does not
 /// have to reimplement interpretation: keep an inner `StdTokenReader` over the same
-/// content, produce tokens with it, and delegate the position and span methods to it.
+/// content, mint tokens with the [`StdToken`] constructors (its spans are offsets into
+/// that content, which the inner reader also answers with
+/// [`source_span_between`](TokenReader::source_span_between)), and delegate every
+/// interpretive method to the inner reader. Nothing is read off a token — there is
+/// nothing readable on one.
+///
 /// Because the inner reader is generic over the language, delegation goes through a
 /// `&dyn TokenReader<'s, L>` / `&mut dyn TokenReader<'s, L>` view of it (plain method
-/// syntax on the concrete inner reader cannot infer the language).
+/// syntax on the concrete inner reader cannot infer the language):
+///
+/// ```
+/// use std::sync::Arc;
+/// use techy::core::{
+///     ParsingState, StdStreamPosition, StdToken, StdTokenReader, TokenEdge, TokenKind,
+///     TokenReader, TokenResult, TrivialLang,
+/// };
+/// use techy::source::{SourcePos, SourceSpan};
+///
+/// #[derive(Debug, Clone, Copy)]
+/// struct MyLang;
+/// impl TrivialLang for MyLang {}
+///
+/// struct MyReader<'s> {
+///     inner: StdTokenReader<'s>,
+/// }
+///
+/// impl<'s> MyReader<'s> {
+///     fn inner(&self) -> &dyn TokenReader<'s, MyLang> {
+///         &self.inner
+///     }
+///     fn inner_mut(&mut self) -> &mut dyn TokenReader<'s, MyLang> {
+///         &mut self.inner
+///     }
+/// }
+///
+/// impl<'s> TokenReader<'s, MyLang> for MyReader<'s> {
+///     /// The one method this reader decides for itself.
+///     fn peek(
+///         &mut self,
+///         state: &Arc<ParsingState<MyLang>>,
+///     ) -> TokenResult<MyLang, StdToken<MyLang>> {
+///         let token = self.inner_mut().peek(state)?;
+///         // … re-classify or replace `token`, minting with `StdToken::…` and spans
+///         // taken from `self.inner.content()` or from the inner reader's answers.
+///         Ok(token)
+///     }
+///
+///     /// Everything interpretive is the inner reader's answer.
+///     fn token_kind<'t>(&self, tok: &'t StdToken<MyLang>) -> TokenKind<'t, MyLang>
+///     where
+///         's: 't,
+///     {
+///         self.inner().token_kind(tok)
+///     }
+/// #    fn move_to(&mut self, tok: &StdToken<MyLang>, edge: TokenEdge) {
+/// #        self.inner_mut().move_to(tok, edge)
+/// #    }
+/// #    fn move_to_position(&mut self, at: &StdStreamPosition) {
+/// #        self.inner_mut().move_to_position(at)
+/// #    }
+/// #    fn source_span_between(
+/// #        &self,
+/// #        tok: &StdToken<MyLang>,
+/// #        a: TokenEdge,
+/// #        b: TokenEdge,
+/// #    ) -> SourceSpan {
+/// #        self.inner().source_span_between(tok, a, b)
+/// #    }
+/// #    fn position_here(&self) -> StdStreamPosition {
+/// #        self.inner().position_here()
+/// #    }
+/// #    fn position_at(&self, tok: &StdToken<MyLang>, edge: TokenEdge) -> StdStreamPosition {
+/// #        self.inner().position_at(tok, edge)
+/// #    }
+/// #    fn source_position_at(&self, at: &StdStreamPosition) -> SourcePos {
+/// #        self.inner().source_position_at(at)
+/// #    }
+/// #    fn source_span_within(
+/// #        &self,
+/// #        begin: &StdStreamPosition,
+/// #        end: &StdStreamPosition,
+/// #    ) -> Option<SourceSpan> {
+/// #        self.inner().source_span_within(begin, end)
+/// #    }
+///     // … the remaining position and span methods delegate the same way.
+/// }
+/// ```
 pub trait TokenReader<'s, L: Lang> {
     /// Parse the token at the current position without advancing.
-    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>>;
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token>;
 
     // --- navigation by edge and by position ------------------------------------------
 
@@ -206,7 +289,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// ([`ContentStart`](TokenEdge::ContentStart), [`End`](TokenEdge::End)) put the
     /// stream inside the token — past a leading marker, or before the syntactic
     /// post-space (the `\verb` idiom).
-    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge);
+    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge);
 
     /// Reposition the stream at a position this reader handed out earlier.
     ///
@@ -222,7 +305,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// spellings this reader resolved.
     ///
     /// This is the only way a construct parser reads a token. The returned
-    /// [`TokenKindView`] borrows from the token (and, for a reader that scans borrowed
+    /// [`TokenKind`] borrows from the token (and, for a reader that scans borrowed
     /// content, from that content) — never from the reader, so a parser may hold it
     /// while it goes on reading and moving the stream.
     ///
@@ -231,7 +314,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// [`source_span_between`](TokenReader::source_span_between) and
     /// [`position_at`](TokenReader::position_at) — a comment's delimiter span, for
     /// instance, is `source_span_between(tok, Start, ContentStart)`.
-    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
     where
         's: 't;
 
@@ -241,7 +324,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// contract clause 6).
     fn source_span_between(
         &self,
-        tok: &Token<'_, L>,
+        tok: &L::Token,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin>;
@@ -249,7 +332,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// The token's own span: from [`Start`](TokenEdge::Start) to
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace) — pre-space excluded,
     /// post-space included.
-    fn source_span_of(&self, tok: &Token<'_, L>) -> SourceSpan<L::SourceOrigin> {
+    fn source_span_of(&self, tok: &L::Token) -> SourceSpan<L::SourceOrigin> {
         self.source_span_between(tok, TokenEdge::Start, TokenEdge::EndPastPostSpace)
     }
 
@@ -259,7 +342,7 @@ pub trait TokenReader<'s, L: Lang> {
     fn position_here(&self) -> L::StreamPosition;
 
     /// The stream position at `edge` of `tok`.
-    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition;
+    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition;
 
     /// Where a stream position lies in text. An empty-span diagnostic anchor at a
     /// position is [`SourceSpan::at`] of this.
@@ -281,7 +364,7 @@ pub trait TokenReader<'s, L: Lang> {
     /// post-space): [`peek`](TokenReader::peek) +
     /// [`move_to`](TokenReader::move_to) at
     /// [`EndPastPostSpace`](TokenEdge::EndPastPostSpace).
-    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn next(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
         let token = self.peek(state)?;
         self.move_to(&token, TokenEdge::EndPastPostSpace);
         Ok(token)
@@ -400,10 +483,10 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
     // --- scanning core ------------------------------------------------------------------
 
-    fn peek_impl<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
-        &self,
-        state: &ParsingState<L>,
-    ) -> TokenResult<'s, L, Token<'s, L>> {
+    fn peek_impl<L>(&self, state: &ParsingState<L>) -> TokenResult<L, StdToken<L>>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         let s = self.content;
         let rules = state.rules();
         let start = self.pos;
@@ -441,7 +524,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 
         let pos = ws_end;
         if pos >= s.len() {
-            return Ok(Token::new(TokenKind::EndOfStream, Span::empty(pos), pre_space));
+            return Ok(StdToken::end_of_stream(pre_space));
         }
 
         // Group delimiters come before commands so that escape-char-led delimiters like
@@ -493,13 +576,11 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
                         None,
                     ));
                 }
-                return Ok(Token::new(
-                    TokenKind::Specials {
-                        callable_type: m.callable_type,
-                        // The matched text is the name (the `SpecialsMatch` contract).
-                        name: &s[pos..m.end],
-                        spec: m.spec,
-                    },
+                // The name is the matched text (the `SpecialsMatch` contract): the
+                // token records only the span, and the reader slices it on demand.
+                return Ok(StdToken::specials(
+                    m.callable_type,
+                    m.spec,
                     Span::new(pos, m.end),
                     pre_space,
                 ));
@@ -510,7 +591,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             && rules.forbidden_chars().contains(c)
         {
             let span = Span::new(pos, pos + c.len_utf8());
-            let placeholder = Token::new(TokenKind::Char(c), span, pre_space);
+            let placeholder = StdToken::char(c, span, pre_space);
             return Err(TokenError::new(
                 TokenErrorKind::ForbiddenChar(ForbiddenChar::new(c)),
                 SourceSpan::new(self.source, span),
@@ -521,7 +602,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             ));
         }
 
-        Ok(Token::new(TokenKind::Char(c), Span::new(pos, pos + c.len_utf8()), pre_space))
+        Ok(StdToken::char(c, Span::new(pos, pos + c.len_utf8()), pre_space))
     }
 
     /// Turn a `Lang::scan_specials` failure into a token error qualified by this
@@ -532,13 +613,14 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// assert. Such a span is itself a contract violation, reported the way every other
     /// extension-contract violation in this reader is — an unrecoverable implementation
     /// error, anchored where the scan was asked for ([§dd-dr:panic-policy]).
-    fn lift_specials_scan_error<
-        L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>,
-    >(
+    fn lift_specials_scan_error<L>(
         &self,
         error: SpecialsScanError,
         pos: usize,
-    ) -> TokenError<'s, L> {
+    ) -> TokenError<L>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         let span = error.span;
         let valid = span.end() <= self.content.len()
             && self.content.is_char_boundary(span.start())
@@ -566,12 +648,15 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// whitespace after the last newline is left for the next token's pre-space.
     /// Requires the paragraphs *and* whitespace features, each declared present and
     /// enabled at runtime: a language that declares either absent never yields a break.
-    fn detect_paragraph_break<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
+    fn detect_paragraph_break<L>(
         &self,
         pos: usize,
         pre_space: Span,
         rules: &TokenRules<L>,
-    ) -> Option<Token<'s, L>> {
+    ) -> Option<StdToken<L>>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         if !(<L::Features as LangFeatures>::Paragraphs::PRESENT
             && <L::Features as LangFeatures>::Whitespace::PRESENT
             && rules.paragraphs_enabled()
@@ -599,29 +684,28 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         if newlines < 2 {
             return None; // lone newline: consumable whitespace, not a break
         }
-        Some(Token::new(TokenKind::ParagraphBreak, Span::new(pos, last_nl_end), pre_space))
+        Some(StdToken::paragraph_break(Span::new(pos, last_nl_end), pre_space))
     }
 
     /// A `GroupOpen`/`GroupClose` token at `pos`, if a delimiter matches. The close
     /// delimiter expected per `rules.expecting_group_close()` takes precedence; otherwise
     /// the longest table match wins, read as an opener when the string is ambiguous.
-    fn detect_group_delimiter<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
+    fn detect_group_delimiter<L>(
         &self,
         pos: usize,
         pre_space: Span,
         state: &ParsingState<L>,
-    ) -> Option<Token<'s, L>> {
+    ) -> Option<StdToken<L>>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         let rules = state.rules();
         let rest = &self.content[pos..];
 
         if let Some(expected) = rules.expecting_group_close() {
             if !expected.close.is_empty() && rest.starts_with(expected.close.as_str()) {
                 let span = Span::new(pos, pos + expected.close.len());
-                return Some(Token::new(
-                    TokenKind::GroupClose { delim: span.slice(self.content) },
-                    span,
-                    pre_space,
-                ));
+                return Some(StdToken::group_close(span, pre_space));
             }
         }
 
@@ -629,13 +713,11 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         // exists, and no delimiter can match.
         let entry = state.prefix_table()?.match_at(rest)?;
         let span = Span::new(pos, pos + entry.delim().len());
-        let delim = span.slice(self.content);
-        let kind = match (entry.open(), entry.close()) {
-            (Some(rule), _) => TokenKind::GroupOpen { delim, rule: rule.clone() },
-            (None, Some(_)) => TokenKind::GroupClose { delim },
+        Some(match (entry.open(), entry.close()) {
+            (Some(rule), _) => StdToken::group_open(rule.clone(), span, pre_space),
+            (None, Some(_)) => StdToken::group_close(span, pre_space),
             (None, None) => unreachable!("prefix table entries always carry a direction"),
-        };
-        Some(Token::new(kind, span, pre_space))
+        })
     }
 
     /// Read a command token at `pos` (the escape character's position). The name is a
@@ -643,13 +725,16 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// is not a name character. Multi-character names consume their following whitespace
     /// as post-space — syntactic whitespace, never crossing a paragraph break (enforced
     /// by [`skip_whitespace`] itself).
-    fn read_command<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
+    fn read_command<L>(
         &self,
         pos: usize,
         pre_space: Span,
         rules: &TokenRules<L>,
         rule: &CommandRule,
-    ) -> TokenResult<'s, L, Token<'s, L>> {
+    ) -> TokenResult<L, StdToken<L>>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         let s = self.content;
         let name_start = pos + rule.escape_char.len_utf8();
 
@@ -660,7 +745,7 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             // invariant (decided July 2026, Action 02; supersedes the empty
             // `EndOfStream` placeholder, which dropped the byte from the AST).
             let span = Span::new(pos, name_start);
-            let placeholder = Token::new(TokenKind::Char(rule.escape_char), span, pre_space);
+            let placeholder = StdToken::char(rule.escape_char, span, pre_space);
             return Err(TokenError::new(
                 TokenErrorKind::EndOfStreamAfterEscape(EndOfStreamAfterEscape::new(
                     rule.escape_char,
@@ -693,14 +778,13 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
             Span::empty(name_end)
         };
 
-        Ok(Token::new(
-            TokenKind::Command {
-                name: &s[name_start..name_end],
-                escape_char: rule.escape_char,
-                post_space,
-            },
+        // The name is what lies between the escape character and the post-space; the
+        // token records the spans and the reader slices its content on demand.
+        Ok(StdToken::command(
+            rule.escape_char,
             Span::new(pos, post_space.end()),
             pre_space,
+            post_space,
         ))
     }
 
@@ -711,12 +795,15 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
     /// post-space and the break surfaces as its own token. Returns `None` when the
     /// language declares the comments feature absent (such a language stores no
     /// comment rules data at all).
-    fn read_comment<L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>>(
+    fn read_comment<L>(
         &self,
         pos: usize,
         pre_space: Span,
         rules: &TokenRules<L>,
-    ) -> Option<Token<'s, L>> {
+    ) -> Option<StdToken<L>>
+    where
+        L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
+    {
         if !<L::Features as LangFeatures>::Comments::PRESENT || !rules.comments_enabled() {
             return None;
         }
@@ -739,14 +826,11 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
         };
         let post_space = Span::new(content_end, skip_whitespace(s, content_end, rules));
 
-        Some(Token::new(
-            TokenKind::Comment {
-                start: Span::new(pos, content_start),
-                content: &s[content_start..content_end],
-                post_space,
-            },
+        Some(StdToken::comment(
+            Span::new(pos, content_start),
             Span::new(pos, post_space.end()),
             pre_space,
+            post_space,
         ))
     }
 }
@@ -754,13 +838,13 @@ impl<'s, O: SourceOrigin> StdTokenReader<'s, O> {
 impl<'s, O, L> TokenReader<'s, L> for StdTokenReader<'s, O>
 where
     O: SourceOrigin,
-    L: Lang<SourceOrigin = O, StreamPosition = StdStreamPosition>,
+    L: Lang<SourceOrigin = O, Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
-    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn peek(&mut self, state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
         self.peek_impl(state)
     }
 
-    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
+    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge) {
         self.pos = tok.edge_offset(edge);
     }
 
@@ -768,37 +852,48 @@ where
         self.pos = at.offset();
     }
 
-    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
     where
         's: 't,
     {
-        match &tok.kind {
-            TokenKind::Char(c) => TokenKindView::Char(*c),
-            TokenKind::GroupOpen { delim, rule } => TokenKindView::GroupOpen { delim, rule },
-            TokenKind::GroupClose { delim } => TokenKindView::GroupClose { delim },
-            TokenKind::Command { name, escape_char, .. } => {
-                TokenKindView::Command { name, escape_char: *escape_char }
-            }
-            TokenKind::Specials { callable_type, name, spec } => {
-                TokenKindView::Specials { callable_type: *callable_type, name, spec }
-            }
-            // The delimiter is a span into this reader's content (that is where the
-            // token's spans live, contract clause 4); the content string the token
-            // already holds. A token this reader never issued — a caller-contract
-            // violation it cannot detect — may carry a span this content does not
-            // have; the delimiter then reads as empty rather than panicking.
-            TokenKind::Comment { start, content, .. } => TokenKindView::Comment {
-                start_delim: self.content.get(start.start()..start.end()).unwrap_or(""),
-                content,
+        // Every written spelling is a run of this reader's content between two of the
+        // token's edges — that is where a token's spans live (contract clause 4). A
+        // token this reader never issued — a caller-contract violation it cannot
+        // detect — may carry offsets this content does not have; such a run reads as
+        // empty rather than panicking.
+        let text = |a: TokenEdge, b: TokenEdge| -> &'t str {
+            self.content.get(tok.edge_offset(a)..tok.edge_offset(b)).unwrap_or("")
+        };
+        match tok.kind_data() {
+            StdTokenKindData::Char(c) => TokenKind::Char(*c),
+            StdTokenKindData::GroupOpen { rule } => TokenKind::GroupOpen {
+                delim: text(TokenEdge::Start, TokenEdge::End),
+                rule,
             },
-            TokenKind::ParagraphBreak => TokenKindView::ParagraphBreak,
-            TokenKind::EndOfStream => TokenKindView::EndOfStream,
+            StdTokenKindData::GroupClose => {
+                TokenKind::GroupClose { delim: text(TokenEdge::Start, TokenEdge::End) }
+            }
+            StdTokenKindData::Command { escape_char, .. } => TokenKind::Command {
+                name: text(TokenEdge::ContentStart, TokenEdge::End),
+                escape_char: *escape_char,
+            },
+            StdTokenKindData::Specials { callable_type, spec } => TokenKind::Specials {
+                callable_type: *callable_type,
+                name: text(TokenEdge::Start, TokenEdge::End),
+                spec,
+            },
+            StdTokenKindData::Comment { .. } => TokenKind::Comment {
+                start_delim: text(TokenEdge::Start, TokenEdge::ContentStart),
+                content: text(TokenEdge::ContentStart, TokenEdge::End),
+            },
+            StdTokenKindData::ParagraphBreak => TokenKind::ParagraphBreak,
+            StdTokenKindData::EndOfStream => TokenKind::EndOfStream,
         }
     }
 
     fn source_span_between(
         &self,
-        tok: &Token<'_, L>,
+        tok: &L::Token,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -812,7 +907,7 @@ where
         StdStreamPosition::at(self.pos)
     }
 
-    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition {
         StdStreamPosition::at(tok.edge_offset(edge))
     }
 
@@ -870,6 +965,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -957,22 +1053,40 @@ mod tests {
         Span::new(start, end)
     }
 
-    fn peek<'s>(
-        tr: &mut StdTokenReader<'s>,
+    fn peek(
+        tr: &mut StdTokenReader<'_>,
         st: &Arc<ParsingState<TestLang>>,
-    ) -> Token<'s, TestLang> {
+    ) -> StdToken<TestLang> {
         TokenReader::peek(tr, st).unwrap()
     }
 
-    fn next<'s>(
-        tr: &mut StdTokenReader<'s>,
+    fn next(
+        tr: &mut StdTokenReader<'_>,
         st: &Arc<ParsingState<TestLang>>,
-    ) -> Token<'s, TestLang> {
+    ) -> StdToken<TestLang> {
         TokenReader::next(tr, st).unwrap()
     }
 
-    fn char_token(c: char, at: usize, pre_space: Span) -> Token<'static, TestLang> {
-        Token::new(TokenKind::Char(c), sp(at, at + c.len_utf8()), pre_space)
+    /// The reader's view of a token — the only way to read one, in the reader's own
+    /// tests as in a construct parser. Generic over the language, since this module
+    /// exercises several.
+    fn kind_of<'s: 't, 't, L>(
+        tr: &StdTokenReader<'s>,
+        tok: &'t StdToken<L>,
+    ) -> TokenKind<'t, L>
+    where
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
+    {
+        let reader: &dyn TokenReader<'s, L> = tr;
+        reader.token_kind(tok)
+    }
+
+    fn char_token(c: char, at: usize, pre_space: Span) -> StdToken<TestLang> {
+        StdToken::char(c, sp(at, at + c.len_utf8()), pre_space)
     }
 
     /// Put the reader at a byte offset. The scanner's own tests read from places no
@@ -980,7 +1094,11 @@ mod tests {
     /// module — the reader's own — is where positions may be minted from offsets.
     fn seek<L>(tr: &mut StdTokenReader<'_>, offset: usize)
     where
-        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
     {
         let reader: &mut dyn TokenReader<'_, L> = tr;
         reader.move_to_position(&StdStreamPosition::at(offset));
@@ -989,7 +1107,11 @@ mod tests {
     /// Where the reader stands, as a byte offset.
     fn at<L>(tr: &StdTokenReader<'_>) -> usize
     where
-        L: Lang<SourceOrigin = Option<String>, StreamPosition = StdStreamPosition>,
+        L: Lang<
+            SourceOrigin = Option<String>,
+            Token = StdToken<L>,
+            StreamPosition = StdStreamPosition,
+        >,
     {
         let reader: &dyn TokenReader<'_, L> = tr;
         reader.source_position_at(&reader.position_here()).pos()
@@ -1008,7 +1130,8 @@ mod tests {
         assert_eq!(next(&mut tr, &st), char_token('a', 0, Span::empty(0)));
         assert_eq!(next(&mut tr, &st), char_token('b', 1, Span::empty(1)));
         assert_eq!(next(&mut tr, &st), char_token('c', 3, sp(2, 3)));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::EndOfStream);
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::EndOfStream);
     }
 
     #[test]
@@ -1036,10 +1159,11 @@ mod tests {
         let source = Arc::new(Source::new(text));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('h'));
         let token = next(&mut tr, &st);
-        assert_eq!(token.kind, TokenKind::Char('é'));
-        assert_eq!(token.span.slice(text), "é");
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('h'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('é'));
+        assert_eq!(token.span().slice(text), "é");
         assert_eq!(at::<TestLang>(&tr), 1 + 'é'.len_utf8());
     }
 
@@ -1054,11 +1178,7 @@ mod tests {
         // span includes the post_space (pylatexenc: pos_end past post_space).
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
-            Token::new(
-                TokenKind::Command { name: "somemacro", escape_char: '\\', post_space: sp(10, 11) },
-                sp(0, 11),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 11), Span::empty(0), sp(10, 11)),
         );
     }
 
@@ -1071,11 +1191,7 @@ mod tests {
 
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
-            Token::new(
-                TokenKind::Command { name: "somemacro", escape_char: '\\', post_space: sp(17, 18) },
-                sp(7, 18),
-                sp(0, 7),
-            ),
+            StdToken::command('\\', sp(7, 18), sp(0, 7), sp(17, 18)),
         );
     }
 
@@ -1085,11 +1201,7 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
-            Token::new(
-                TokenKind::Command { name: "&", escape_char: '\\', post_space: Span::empty(2) },
-                sp(0, 2),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 2), Span::empty(0), Span::empty(2)),
         );
     }
 
@@ -1099,8 +1211,9 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
         let token = next(&mut tr, &st);
-        assert_eq!(token.kind, TokenKind::Command { name: "`", escape_char: '\\', post_space: Span::empty(2) });
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        assert_eq!(kind_of(&tr, &token), TokenKind::Command { name: "`", escape_char: '\\' });
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
     }
 
     #[test]
@@ -1112,16 +1225,12 @@ mod tests {
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "macroname", escape_char: '\\', post_space: Span::empty(10) },
-                sp(0, 10),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 10), Span::empty(0), Span::empty(10)),
         );
         // ... and the paragraph break follows as its own token.
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(10, 14), Span::empty(10)),
+            StdToken::paragraph_break(sp(10, 14), Span::empty(10)),
         );
     }
 
@@ -1132,15 +1241,11 @@ mod tests {
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "macroname", escape_char: '\\', post_space: sp(10, 13) },
-                sp(0, 13),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 13), Span::empty(0), sp(10, 13)),
         );
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(13, 17), Span::empty(13)),
+            StdToken::paragraph_break(sp(13, 17), Span::empty(13)),
         );
     }
 
@@ -1161,14 +1266,11 @@ mod tests {
         let name = "zzz1234567890-haha_works!";
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(
-                TokenKind::Command {
-                    name,
-                    escape_char: '\\',
-                    post_space: sp(1 + name.len(), 1 + name.len() + 1),
-                },
+            StdToken::command(
+                '\\',
                 sp(0, 1 + name.len() + 1),
                 Span::empty(0),
+                sp(1 + name.len(), 1 + name.len() + 1),
             ),
         );
     }
@@ -1188,19 +1290,11 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "foo", escape_char: '\\', post_space: sp(4, 5) },
-                sp(0, 5),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 5), Span::empty(0), sp(4, 5)),
         );
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "bar", escape_char: '@', post_space: Span::empty(9) },
-                sp(5, 9),
-                Span::empty(5),
-            ),
+            StdToken::command('@', sp(5, 9), Span::empty(5), Span::empty(9)),
         );
     }
 
@@ -1211,8 +1305,10 @@ mod tests {
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.commands.rules = Vec::new();
         let st = state(rules);
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('\\'));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('\\'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('f'));
     }
 
     #[test]
@@ -1225,8 +1321,10 @@ mod tests {
         rules.commands.enabled = false;
         let st = state(rules);
         assert!(!st.rules().command_rules().is_empty());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('\\'));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('\\'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('f'));
     }
 
     // --- \begin is NOT special at the token level ---------------------------------------
@@ -1243,17 +1341,15 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             // No post_space: '{' follows the name directly.
-            Token::new(
-                TokenKind::Command { name: "begin", escape_char: '\\', post_space: Span::empty(6) },
-                sp(0, 6),
-                Span::empty(0),
-            ),
+            StdToken::command('\\', sp(0, 6), Span::empty(0), Span::empty(6)),
         );
+        let token = next(&mut tr, &st);
         assert_eq!(
-            next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
+            kind_of(&tr, &token),
+            TokenKind::GroupOpen { delim: "{", rule: &rule_of(BRACES) },
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('e'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('e'));
     }
 
     #[test]
@@ -1261,7 +1357,7 @@ mod tests {
         let source = Arc::new(Source::new(r"\beginMacroWithConfusingName"));
         let mut tr = StdTokenReader::new(&source);
         let token = peek(&mut tr, &state(latex_rules()));
-        match token.kind {
+        match kind_of(&tr, &token) {
             TokenKind::Command { name, .. } => assert_eq!(name, "beginMacroWithConfusingName"),
             other => panic!("expected command, got {:?}", other),
         }
@@ -1277,22 +1373,14 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(
-                TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
-                sp(0, 1),
-                Span::empty(0),
-            ),
+            StdToken::group_open(rule_of(BRACES), sp(0, 1), Span::empty(0)),
         );
 
         let source = Arc::new(Source::new("} a braced group just ended here"));
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(
-                TokenKind::GroupClose { delim: "}" },
-                sp(0, 1),
-                Span::empty(0),
-            ),
+            StdToken::group_close(sp(0, 1), Span::empty(0)),
         );
     }
 
@@ -1304,11 +1392,7 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &state(latex_rules())),
-            Token::new(
-                TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
-                sp(7, 8),
-                sp(0, 7),
-            ),
+            StdToken::group_open(rule_of(BRACES), sp(7, 8), sp(0, 7)),
         );
     }
 
@@ -1317,15 +1401,20 @@ mod tests {
         let source = Arc::new(Source::new("[(i)]"));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
+        let token = next(&mut tr, &st);
         assert_eq!(
-            next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "[", rule: rule_of(BRACKETS) },
+            kind_of(&tr, &token),
+            TokenKind::GroupOpen { delim: "[", rule: &rule_of(BRACKETS) },
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('('));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('i'));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char(')'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('('));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('i'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char(')'));
+        let token = next(&mut tr, &st);
         assert_eq!(
-            next(&mut tr, &st).kind,
+            kind_of(&tr, &token),
             TokenKind::GroupClose { delim: "]" },
         );
     }
@@ -1336,9 +1425,10 @@ mod tests {
     fn ambiguous_delimiter_reads_as_open_by_default() {
         let source = Arc::new(Source::new("$x$"));
         let mut tr = StdTokenReader::new(&source);
+        let token = peek(&mut tr, &state(latex_rules()));
         assert_eq!(
-            peek(&mut tr, &state(latex_rules())).kind,
-            TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) },
+            kind_of(&tr, &token),
+            TokenKind::GroupOpen { delim: "$", rule: &rule_of(MATH_INLINE) },
         );
     }
 
@@ -1346,8 +1436,9 @@ mod tests {
     fn expected_close_wins_over_open_interpretation() {
         let source = Arc::new(Source::new("$ and more"));
         let mut tr = StdTokenReader::new(&source);
+        let token = peek(&mut tr, &expecting_close(MATH_INLINE));
         assert_eq!(
-            peek(&mut tr, &expecting_close(MATH_INLINE)).kind,
+            kind_of(&tr, &token),
             TokenKind::GroupClose { delim: "$" },
         );
     }
@@ -1358,8 +1449,9 @@ mod tests {
         // tokenizer's job to report syntax errors" (pylatexenc test suite).
         let source = Arc::new(Source::new(r"\) rest"));
         let mut tr = StdTokenReader::new(&source);
+        let token = peek(&mut tr, &state(latex_rules()));
         assert_eq!(
-            peek(&mut tr, &state(latex_rules())).kind,
+            kind_of(&tr, &token),
             TokenKind::GroupClose { delim: r"\)" },
         );
     }
@@ -1372,22 +1464,14 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::GroupOpen { delim: r"\(", rule: rule_of(MATH_INLINE_PAREN) },
-                sp(1, 3),
-                sp(0, 1),
-            ),
+            StdToken::group_open(rule_of(MATH_INLINE_PAREN), sp(1, 3), sp(0, 1)),
         );
 
         let source = Arc::new(Source::new("\n\\[ cx^2 \\]"));
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(
-                TokenKind::GroupOpen { delim: r"\[", rule: rule_of(MATH_DISPLAY_BRACKET) },
-                sp(1, 3),
-                sp(0, 1),
-            ),
+            StdToken::group_open(rule_of(MATH_DISPLAY_BRACKET), sp(1, 3), sp(0, 1)),
         );
     }
 
@@ -1401,17 +1485,21 @@ mod tests {
         let in_inline = expecting_close(MATH_INLINE);
         let in_display = expecting_close(MATH_DISPLAY);
 
+        // The views below borrow the rules they name, so the two live in bindings.
+        let inline = rule_of(MATH_INLINE);
+        let display = rule_of(MATH_DISPLAY);
+
         #[allow(clippy::type_complexity)]
         let cases: [(usize, &Arc<ParsingState<TestLang>>, TokenKind<'_, TestLang>, usize); 8] = [
             // (pos, state, expected kind, expected end)
-            (1, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 2),
+            (1, &plain, TokenKind::GroupOpen { delim: "$", rule: &inline }, 2),
             // expected close beats the longest ('$$') match:
             (9, &in_inline, TokenKind::GroupClose { delim: "$" }, 10),
-            (10, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 11),
+            (10, &plain, TokenKind::GroupOpen { delim: "$", rule: &inline }, 11),
             (18, &in_inline, TokenKind::GroupClose { delim: "$" }, 19),
             // not expecting a close: longest match wins -> display '$$':
-            (19, &plain, TokenKind::GroupOpen { delim: "$$", rule: rule_of(MATH_DISPLAY) }, 21),
-            (30, &plain, TokenKind::GroupOpen { delim: "$", rule: rule_of(MATH_INLINE) }, 31),
+            (19, &plain, TokenKind::GroupOpen { delim: "$$", rule: &display }, 21),
+            (30, &plain, TokenKind::GroupOpen { delim: "$", rule: &inline }, 31),
             (34, &in_inline, TokenKind::GroupClose { delim: "$" }, 35),
             (36, &in_display, TokenKind::GroupClose { delim: "$$" }, 38),
         ];
@@ -1421,8 +1509,8 @@ mod tests {
             let mut tr = StdTokenReader::new(&source);
             seek::<TestLang>(&mut tr, pos);
             let token = peek(&mut tr, st);
-            assert_eq!(token.kind, kind, "at pos {}", pos);
-            assert_eq!(token.span, sp(pos, end), "at pos {}", pos);
+            assert_eq!(kind_of(&tr, &token), kind, "at pos {}", pos);
+            assert_eq!(token.span(), sp(pos, end), "at pos {}", pos);
         }
     }
 
@@ -1437,17 +1525,10 @@ mod tests {
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(0, 1),
-                    content: " Comment here",
-                    post_space: sp(14, 17),
-                },
-                sp(0, 17),
-                Span::empty(0),
-            ),
+            StdToken::comment(sp(0, 1), sp(0, 17), Span::empty(0), sp(14, 17)),
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('m'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('m'));
     }
 
     #[test]
@@ -1457,15 +1538,17 @@ mod tests {
         let source = Arc::new(Source::new(&text));
         let mut tr = StdTokenReader::new(&source);
         let token = peek(&mut tr, &state(latex_rules()));
-        assert_eq!(token.pre_space, sp(0, 7));
-        assert_eq!(token.span, sp(7, 24));
+        assert_eq!(token.pre_space(), sp(0, 7));
+        assert_eq!(token.span(), sp(7, 24));
         assert_eq!(
-            token.kind,
-            TokenKind::Comment {
-                start: sp(7, 8),
-                content: " Comment here",
-                post_space: sp(21, 24),
-            },
+            kind_of(&tr, &token),
+            TokenKind::Comment { start_delim: "%", content: " Comment here" },
+        );
+        // The post-space is a reader answer, not a token field.
+        let reader: &dyn TokenReader<'_, TestLang> = &tr;
+        assert_eq!(
+            reader.source_span_between(&token, TokenEdge::End, TokenEdge::EndPastPostSpace),
+            SourceSpan::new(&source, sp(21, 24)),
         );
     }
 
@@ -1477,24 +1560,18 @@ mod tests {
         let source = Arc::new(Source::new("a% c\n\nb"));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(1, 2),
-                    content: " c",
-                    post_space: Span::empty(4),
-                },
-                sp(1, 4),
-                Span::empty(1),
-            ),
+            StdToken::comment(sp(1, 2), sp(1, 4), Span::empty(1), Span::empty(4)),
         );
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(4, 6), Span::empty(4)),
+            StdToken::paragraph_break(sp(4, 6), Span::empty(4)),
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('b'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('b'));
     }
 
     #[test]
@@ -1502,20 +1579,14 @@ mod tests {
         let source = Arc::new(Source::new("x% trailing"));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('x'));
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(1, 2),
-                    content: " trailing",
-                    post_space: Span::empty(11),
-                },
-                sp(1, 11),
-                Span::empty(1),
-            ),
+            StdToken::comment(sp(1, 2), sp(1, 11), Span::empty(1), Span::empty(11)),
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::EndOfStream);
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::EndOfStream);
     }
 
     #[test]
@@ -1530,17 +1601,10 @@ mod tests {
         let st = state(latex_rules());
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(0, 1),
-                    content: " note\r",
-                    post_space: sp(7, 10),
-                },
-                sp(0, 10),
-                Span::empty(0),
-            ),
+            StdToken::comment(sp(0, 1), sp(0, 10), Span::empty(0), sp(7, 10)),
         );
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('m'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('m'));
     }
 
     #[test]
@@ -1556,15 +1620,7 @@ mod tests {
         let st = state(rules);
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(0, 12),
-                    content: " Comment here",
-                    post_space: sp(25, 26),
-                },
-                sp(0, 26),
-                Span::empty(0),
-            ),
+            StdToken::comment(sp(0, 12), sp(0, 26), Span::empty(0), sp(25, 26)),
         );
     }
 
@@ -1575,9 +1631,11 @@ mod tests {
         let mut rules: TokenRules<TestLang> = latex_rules();
         rules.comments.rules = Vec::new();
         let st = state(rules);
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
         assert_eq!(next(&mut tr, &st), char_token('%', 2, sp(1, 2)));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('b'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('b'));
     }
 
     #[test]
@@ -1588,9 +1646,11 @@ mod tests {
         rules.comments.enabled = false;
         let st = state(rules);
         assert!(!st.rules().comment_rules().is_empty());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
         assert_eq!(next(&mut tr, &st), char_token('%', 2, sp(1, 2)));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('b'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('b'));
     }
 
     // --- paragraph breaks ---------------------------------------------------------------
@@ -1606,7 +1666,7 @@ mod tests {
 
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(7, 9), sp(3, 7)),
+            StdToken::paragraph_break(sp(7, 9), sp(3, 7)),
         );
         assert_eq!(next(&mut tr, &st), char_token('z', 11, sp(9, 11)));
     }
@@ -1619,7 +1679,7 @@ mod tests {
         seek::<TestLang>(&mut tr, 3);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(7, 13), sp(3, 7)),
+            StdToken::paragraph_break(sp(7, 13), sp(3, 7)),
         );
     }
 
@@ -1628,16 +1688,17 @@ mod tests {
         let source = Arc::new(Source::new("x  \n\n  "));
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('x'));
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(3, 5), sp(1, 3)),
+            StdToken::paragraph_break(sp(3, 5), sp(1, 3)),
         );
         // The whitespace after the break's last newline is the end-of-stream token's
         // pre_space — nothing is lost.
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::EndOfStream, Span::empty(7), sp(5, 7)),
+            StdToken::end_of_stream(sp(5, 7)),
         );
     }
 
@@ -1672,6 +1733,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1719,18 +1781,20 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
 
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
         let token = TokenReader::next(&mut tr, &st).unwrap();
-        match &token.kind {
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        match kind_of(&tr, &token) {
             TokenKind::Specials { callable_type, name, spec } => {
-                assert_eq!(*callable_type, 7);
-                assert_eq!(*name, "&");
+                assert_eq!(callable_type, 7);
+                assert_eq!(name, "&");
                 assert_eq!(format!("{:?}", spec), "StubSpec");
             }
             other => panic!("expected specials, got {:?}", other),
         }
-        assert_eq!(token.span, sp(1, 2));
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('b'));
+        assert_eq!(token.span(), sp(1, 2));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('b'));
     }
 
     #[test]
@@ -1739,11 +1803,11 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
         let token = TokenReader::peek(&mut tr, &st).unwrap();
-        match &token.kind {
-            TokenKind::Specials { name, .. } => assert_eq!(*name, "---"),
+        match kind_of(&tr, &token) {
+            TokenKind::Specials { name, .. } => assert_eq!(name, "---"),
             other => panic!("expected specials, got {:?}", other),
         }
-        assert_eq!(token.span, sp(0, 3));
+        assert_eq!(token.span(), sp(0, 3));
     }
 
     #[test]
@@ -1752,7 +1816,8 @@ mod tests {
         let source = Arc::new(Source::new("-x"));
         let mut tr = StdTokenReader::new(&source);
         let st = specials_state(latex_rules());
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('-'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('-'));
     }
 
     // --- outer-layer contract violations are reported, never panicking or hanging
@@ -1771,6 +1836,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1818,6 +1884,7 @@ mod tests {
         type Event = ();
         type SessionExt = ();
         type SourceOrigin = Option<String>;
+        type Token = crate::token::StdToken<Self>;
         type StreamPosition = crate::token::StdStreamPosition;
         type NodeExts = ();
         type InvocationSyntax = ();
@@ -1968,9 +2035,12 @@ mod tests {
             st.trigger_chars().expect("all-present test language"),
             &TriggerChars::default()
         );
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('a'));
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('&'));
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('b'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('&'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('b'));
     }
 
     #[test]
@@ -1986,6 +2056,7 @@ mod tests {
             type Event = ();
             type SessionExt = ();
             type SourceOrigin = Option<String>;
+            type Token = crate::token::StdToken<Self>;
             type StreamPosition = crate::token::StdStreamPosition;
             type NodeExts = ();
             type InvocationSyntax = ();
@@ -2017,7 +2088,8 @@ mod tests {
         }));
         let source = Arc::new(Source::new("x"));
         let mut tr = StdTokenReader::new(&source);
-        assert_eq!(TokenReader::next(&mut tr, &st).unwrap().kind, TokenKind::Char('x'));
+        let token = TokenReader::next(&mut tr, &st).unwrap();
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('x'));
     }
 
     #[test]
@@ -2128,7 +2200,7 @@ mod tests {
                 offsets.windows(2).all(|w| w[0] <= w[1]),
                 "{kind:?} edges out of order: {offsets:?}"
             );
-            if matches!(kind, TokenKindView::EndOfStream) {
+            if matches!(kind, TokenKind::EndOfStream) {
                 break;
             }
         }
@@ -2145,11 +2217,11 @@ mod tests {
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
 
         let token = reader.next(&st).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::Char('a'));
+        assert_eq!(reader.token_kind(&token), TokenKind::Char('a'));
 
         let token = reader.next(&st).unwrap();
         match reader.token_kind(&token) {
-            TokenKindView::GroupOpen { delim, rule } => {
+            TokenKind::GroupOpen { delim, rule } => {
                 assert_eq!(delim, "{");
                 assert_eq!(rule.group_type, BRACES);
             }
@@ -2159,27 +2231,27 @@ mod tests {
         let token = reader.next(&st).unwrap();
         assert_eq!(
             reader.token_kind(&token),
-            TokenKindView::Command { name: "vec", escape_char: '\\' }
+            TokenKind::Command { name: "vec", escape_char: '\\' }
         );
 
         let token = reader.next(&st).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::GroupClose { delim: "}" });
+        assert_eq!(reader.token_kind(&token), TokenKind::GroupClose { delim: "}" });
 
         // The comment's two texts, as this reader resolves them: `%` then ` note`,
         // the newline being post-space.
         let token = reader.next(&st).unwrap();
         assert_eq!(
             reader.token_kind(&token),
-            TokenKindView::Comment { start_delim: "%", content: " note" }
+            TokenKind::Comment { start_delim: "%", content: " note" }
         );
         let body = reader.source_span_between(&token, TokenEdge::Start, TokenEdge::End);
         assert_eq!(body.content(), "% note");
 
         let token = reader.next(&st).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::Char('b'));
+        assert_eq!(reader.token_kind(&token), TokenKind::Char('b'));
 
         let token = reader.next(&st).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::EndOfStream);
+        assert_eq!(reader.token_kind(&token), TokenKind::EndOfStream);
     }
 
     #[test]
@@ -2190,7 +2262,7 @@ mod tests {
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
         let _ = reader.next(&st).unwrap();
         let token = reader.next(&st).unwrap();
-        assert_eq!(reader.token_kind(&token), TokenKindView::ParagraphBreak);
+        assert_eq!(reader.token_kind(&token), TokenKind::ParagraphBreak);
         assert_eq!(reader.token_kind(&token).as_str(), "ParagraphBreak");
     }
 
@@ -2204,7 +2276,7 @@ mod tests {
         let _ = reader.next(&st).unwrap();
         let token = reader.next(&st).unwrap();
         match reader.token_kind(&token) {
-            TokenKindView::Specials { callable_type, name, spec } => {
+            TokenKind::Specials { callable_type, name, spec } => {
                 assert_eq!(callable_type, 7);
                 assert_eq!(name, "&");
                 assert_eq!(format!("{:?}", spec), "StubSpec");
@@ -2264,7 +2336,7 @@ mod tests {
         );
         // `source_span_of` is Start..EndPastPostSpace — the token's own span.
         assert_eq!(reader.source_span_of(&token), SourceSpan::new(&source, sp(2, 8)));
-        assert_eq!(reader.source_span_of(&token).span(), token.span);
+        assert_eq!(reader.source_span_of(&token).span(), token.span());
     }
 
     #[test]
@@ -2350,7 +2422,7 @@ mod tests {
         let _ = reader.next(&st).unwrap();
         let mark = reader.position_here();
         let open = reader.next(&st).unwrap();
-        assert!(matches!(open.kind, TokenKind::GroupOpen { .. }));
+        assert!(matches!(reader.token_kind(&open), TokenKind::GroupOpen { .. }));
 
         reader.move_to_position(&mark);
         assert_eq!(reader.position_here(), mark);
@@ -2381,7 +2453,8 @@ mod tests {
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
         assert_eq!(recovery.resume, StdStreamPosition::at(1));
         reader.move_to_position(&recovery.resume);
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('f'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('f'));
     }
 
     #[test]
@@ -2390,7 +2463,8 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         let st = state(latex_rules());
 
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
 
         let err = TokenReader::peek(&mut tr, &st).unwrap_err();
         assert!(matches!(
@@ -2406,12 +2480,13 @@ mod tests {
         let recovery = err.into_recovery().unwrap();
         assert_eq!(
             recovery.token,
-            Token::new(TokenKind::Char('\\'), sp(2, 3), sp(1, 2)),
+            StdToken::char('\\', sp(2, 3), sp(1, 2)),
         );
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
         assert_eq!(recovery.resume, StdStreamPosition::at(3));
         reader.move_to_position(&recovery.resume);
-        assert_eq!(peek(&mut tr, &st).kind, TokenKind::EndOfStream);
+        let token = peek(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::EndOfStream);
     }
 
     // --- end of stream --------------------------------------------------------------------
@@ -2424,15 +2499,16 @@ mod tests {
         let mut tr = StdTokenReader::new(&source);
         assert_eq!(
             peek(&mut tr, &st),
-            Token::new(TokenKind::EndOfStream, Span::empty(0), Span::empty(0)),
+            StdToken::end_of_stream(Span::empty(0)),
         );
 
         // Trailing whitespace (no paragraph break) is the end-of-stream token's
         // pre_space — reported, so it can land in the node tree.
         let source = Arc::new(Source::new("x   "));
         let mut tr = StdTokenReader::new(&source);
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('x'));
-        let eos = Token::new(TokenKind::EndOfStream, Span::empty(4), sp(1, 4));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('x'));
+        let eos = StdToken::end_of_stream(sp(1, 4));
         assert_eq!(next(&mut tr, &st), eos);
         assert_eq!(at::<TestLang>(&tr), 4);
         assert!(tr.is_at_end());
@@ -2440,7 +2516,7 @@ mod tests {
         // the earlier trailing whitespace having been consumed).
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::EndOfStream, Span::empty(4), Span::empty(4)),
+            StdToken::end_of_stream(Span::empty(4)),
         );
     }
 
@@ -2456,9 +2532,10 @@ mod tests {
         assert_eq!(next(&mut tr, &st), char_token('a', 0, Span::empty(0)));
         assert_eq!(next(&mut tr, &st), char_token(' ', 1, Span::empty(1)));
         assert_eq!(next(&mut tr, &st), char_token('b', 2, Span::empty(2)));
+        let token = next(&mut tr, &st);
         assert_eq!(
-            next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
+            kind_of(&tr, &token),
+            TokenKind::GroupOpen { delim: "{", rule: &rule_of(BRACES) },
         );
     }
 
@@ -2478,9 +2555,12 @@ mod tests {
             .expect("all-present test language")
             .match_at("{a}")
             .is_none());
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('{'));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('}'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('{'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('}'));
     }
 
     #[test]
@@ -2494,11 +2574,14 @@ mod tests {
         rules.groups.enabled = false;
         rules.groups.expecting_close = Some(rule_of(MATH_INLINE));
         let st = state(rules);
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('a'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('a'));
         // The table is off: `{` is plain content …
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::Char('{'));
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::Char('{'));
         // … but the expected `$` close still tokenizes as GroupClose.
-        assert_eq!(next(&mut tr, &st).kind, TokenKind::GroupClose { delim: "$" });
+        let token = next(&mut tr, &st);
+        assert_eq!(kind_of(&tr, &token), TokenKind::GroupClose { delim: "$" });
     }
 
     // --- movement -----------------------------------------------------------------------
@@ -2512,9 +2595,12 @@ mod tests {
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut tr;
 
         let token = reader.peek(&st).unwrap();
-        assert_eq!(token.kind, TokenKind::Command { name: "vec", escape_char: '\\', post_space: sp(6, 7) });
-        assert_eq!(token.span, sp(2, 7)); // includes post_space
-        assert_eq!(token.pre_space, sp(0, 2));
+        assert_eq!(
+            reader.token_kind(&token),
+            TokenKind::Command { name: "vec", escape_char: '\\' }
+        );
+        assert_eq!(token.span(), sp(2, 7)); // includes post_space
+        assert_eq!(token.pre_space(), sp(0, 2));
 
         // Each edge, checked through the text location the reader answers for the
         // position it lands on.
@@ -2561,11 +2647,7 @@ mod tests {
         seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "`", escape_char: '\\', post_space: Span::empty(p + 2) },
-                sp(p, p + 2),
-                Span::empty(p),
-            ),
+            StdToken::command('\\', sp(p, p + 2), Span::empty(p), Span::empty(p + 2)),
         );
 
         let p = find(r"\textbf") - 1; // pre space
@@ -2573,37 +2655,26 @@ mod tests {
         assert_eq!(
             next(&mut tr, &st),
             // '{' follows the name: no post_space.
-            Token::new(
-                TokenKind::Command { name: "textbf", escape_char: '\\', post_space: Span::empty(p + 8) },
-                sp(p + 1, p + 8),
-                sp(p, p + 1),
-            ),
+            StdToken::command('\\', sp(p + 1, p + 8), sp(p, p + 1), Span::empty(p + 8)),
         );
+        let token = next(&mut tr, &st);
         assert_eq!(
-            next(&mut tr, &st).kind,
-            TokenKind::GroupOpen { delim: "{", rule: rule_of(BRACES) },
+            kind_of(&tr, &token),
+            TokenKind::GroupOpen { delim: "{", rule: &rule_of(BRACES) },
         );
 
         let p = find(r"\vec"); // post-space present
         seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "vec", escape_char: '\\', post_space: sp(p + 4, p + 5) },
-                sp(p, p + 5),
-                Span::empty(p),
-            ),
+            StdToken::command('\\', sp(p, p + 5), Span::empty(p), sp(p + 4, p + 5)),
         );
 
         let p = find(r"\&") - 1; // pre-space and *no* post-space
         seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "&", escape_char: '\\', post_space: Span::empty(p + 3) },
-                sp(p + 1, p + 3),
-                sp(p, p + 1),
-            ),
+            StdToken::command('\\', sp(p + 1, p + 3), sp(p, p + 1), Span::empty(p + 3)),
         );
 
         // \begin is just a command token; the environment name is ordinary group+chars.
@@ -2611,19 +2682,15 @@ mod tests {
         seek::<TestLang>(&mut tr, p);
         let token = next(&mut tr, &st);
         assert_eq!(
-            token.kind,
-            TokenKind::Command { name: "begin", escape_char: '\\', post_space: Span::empty(p + 6) },
+            kind_of(&tr, &token),
+            TokenKind::Command { name: "begin", escape_char: '\\' },
         );
 
         let p = find("@@@") + 3; // pre space up to \end
         seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "end", escape_char: '\\', post_space: Span::empty(p + 10) },
-                sp(p + 6, p + 10),
-                sp(p, p + 6),
-            ),
+            StdToken::command('\\', sp(p + 6, p + 10), sp(p, p + 6), Span::empty(p + 10)),
         );
 
         // The whole comment is one token: content to end of line, newline as post_space.
@@ -2632,15 +2699,7 @@ mod tests {
         let nl = find(" % here goes a comment") + " % here goes a comment".len();
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Comment {
-                    start: sp(p + 2, p + 3),
-                    content: " here goes a comment",
-                    post_space: sp(nl, nl + 1),
-                },
-                sp(p + 2, nl + 1),
-                sp(p, p + 2),
-            ),
+            StdToken::comment(sp(p + 2, p + 3), sp(p + 2, nl + 1), sp(p, p + 2), sp(nl, nl + 1)),
         );
 
         // \mymacro directly precedes a paragraph break: no post_space.
@@ -2648,16 +2707,12 @@ mod tests {
         seek::<TestLang>(&mut tr, p);
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::Command { name: "mymacro", escape_char: '\\', post_space: Span::empty(p + 8) },
-                sp(p, p + 8),
-                Span::empty(p),
-            ),
+            StdToken::command('\\', sp(p, p + 8), Span::empty(p), Span::empty(p + 8)),
         );
         let p2 = find("\n\n");
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(TokenKind::ParagraphBreak, sp(p2, p2 + 2), Span::empty(p2)),
+            StdToken::paragraph_break(sp(p2, p2 + 2), Span::empty(p2)),
         );
 
         // ... and the file's trailing newline is the end-of-stream token's pre_space.
@@ -2665,11 +2720,7 @@ mod tests {
         seek::<TestLang>(&mut tr, p + "New paragraph".len());
         assert_eq!(
             next(&mut tr, &st),
-            Token::new(
-                TokenKind::EndOfStream,
-                Span::empty(text.len()),
-                sp(text.len() - 1, text.len()),
-            ),
+            StdToken::end_of_stream(sp(text.len() - 1, text.len())),
         );
     }
 

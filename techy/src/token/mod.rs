@@ -1,4 +1,4 @@
-//! Tokenization: zero-copy tokens, tokenization rules, and the standard token reader.
+//! Tokenization: opaque tokens, tokenization rules, and the standard token reader.
 //!
 //! The whole token topic lives in the **S1 core stratum**: tokens are
 //! generic over `L: Lang` (a `Specials` token carries its resolution), the reader reads
@@ -23,18 +23,19 @@
 //!   [`Lang::scan_specials`](crate::state::Lang::scan_specials) *hook* (recognition =
 //!   resolution: the token carries the spec, and the matched text is the name), gated by
 //!   the state's cached [`TriggerChars`] filter.
-//! - **What a token is, and where it is, are both the reader's answers**: a construct
-//!   parser reads nothing off a token. It asks the reader what the token *is*
-//!   ([`TokenReader::token_kind`] → a [`TokenKindView`]) and where it is
+//! - **What a token is, and where it is, are both the reader's answers**: a token
+//!   ([`Token`], and the standard [`StdToken`] this crate's languages use) is an
+//!   opaque value with no readable data. A construct parser asks the reader what the
+//!   token *is* ([`TokenReader::token_kind`] → a [`TokenKind`] view) and where it is
 //!   ([`TokenReader::source_span_of`], `source_span_between` at a [`TokenEdge`],
 //!   `position_here`/`position_at`); it never computes either itself.
-//! - **Syntactic vs. content whitespace**: `pre_space` (on every token) is content
+//! - **Syntactic vs. content whitespace**: pre-space (on every token) is content
 //!   whitespace belonging to the document flow; post-space (only on
 //!   [`Command`](TokenKind::Command) and [`Comment`](TokenKind::Comment)) is whitespace
 //!   consumed by the construct's syntax and ignored as content. One primitive,
 //!   [`skip_whitespace`], enforces the paragraph rule everywhere: skipped whitespace
 //!   never consumes a newline of a `\n\s*\n` sequence.
-//! - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** whose `pre_space`
+//! - **A terminal [`EndOfStream`](TokenKind::EndOfStream) token** whose pre-space
 //!   reports final whitespace; `peek` never returns an `Option`.
 //! - **Tolerant parsing hooks**: recoverable conditions yield a [`TokenError`] carrying a
 //!   [`TokenRecovery`] (placeholder token + the stream position to resume at); the
@@ -51,8 +52,8 @@ mod prefix_table;
 mod reader;
 mod rules;
 mod specials;
-// The submodule sharing the parent's name is deliberate: `Token` is this topic's anchor
-// type, and the submodule is private (everything is re-exported here).
+// The submodule sharing the parent's name is deliberate: the token is this topic's
+// anchor type, and the submodule is private (everything is re-exported here).
 #[allow(clippy::module_inception)]
 mod token;
 
@@ -73,4 +74,4 @@ pub use rules::{
     GroupRules, ParagraphRules, SpecialsRules, TokenRules, WhitespaceRules,
 };
 pub use specials::{SpecialsMatch, SpecialsScanError, TriggerChars};
-pub use token::{Token, TokenKind, TokenKindView};
+pub use token::{StdToken, Token, TokenKind};

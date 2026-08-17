@@ -16,7 +16,7 @@
 //! [`move_to`](super::TokenReader::move_to) places it at the named edge of
 //! the token,
 //! and `peek` returns the first listed token at or after the position, clipping its
-//! `pre_space` to start no earlier than that position (re-peeking mid-pre-space behaves
+//! pre-space to start no earlier than that position (re-peeking mid-pre-space behaves
 //! like a fresh scan). Past the last token, `peek` yields the terminal idempotent
 //! [`EndOfStream`](super::TokenKind::EndOfStream).
 //!
@@ -39,7 +39,7 @@ use crate::state::{Lang, ParsingState};
 
 use super::error::TokenResult;
 use super::reader::{StdStreamPosition, TokenEdge, TokenReader};
-use super::token::{Token, TokenKind, TokenKindView};
+use super::token::{StdToken, StdTokenKindData, TokenKind};
 
 /// A [`TokenReader`] serving tokens from a pre-built list (see the module docs for the
 /// fidelity contract).
@@ -58,7 +58,7 @@ use super::token::{Token, TokenKind, TokenKindView};
 ///
 /// - A **token** is accepted when a listed token has the same span and the same kind, or
 ///   when it is an end-of-stream token (which this reader synthesizes rather than serves
-///   from the list). `pre_space` is left out of the comparison because `peek` clips it
+///   from the list). Pre-space is left out of the comparison because `peek` clips it
 ///   to the current position.
 /// - A **position** is accepted when its offset is one this reader handed out: the set
 ///   starts with the initial position alone and grows with the five edge offsets of
@@ -68,7 +68,7 @@ use super::token::{Token, TokenKind, TokenKindView};
 ///   therefore rejected.
 pub struct TokenListReader<'s, L: Lang> {
     source: &'s Arc<Source<L::SourceOrigin>>,
-    tokens: Vec<Token<'s, L>>,
+    tokens: Vec<StdToken<L>>,
     pos: usize,
     /// Every offset this reader has handed out as a stream position (see
     /// [the validation rules](TokenListReader#rejecting-what-this-reader-never-issued)).
@@ -76,20 +76,20 @@ pub struct TokenListReader<'s, L: Lang> {
     issued: RefCell<BTreeSet<usize>>,
 }
 
-impl<'s, L: Lang> TokenListReader<'s, L> {
+impl<'s, L: Lang<Token = StdToken<L>>> TokenListReader<'s, L> {
     /// Create a reader positioned before the first token. The source-order contract
     /// (type docs) is the caller's; it is debug-asserted here, and an out-of-order
     /// list is not rejected — the parse's span bookkeeping reports the breakage as an
     /// implementation error where it surfaces.
     pub fn new(
         source: &'s Arc<Source<L::SourceOrigin>>,
-        tokens: Vec<Token<'s, L>>,
+        tokens: Vec<StdToken<L>>,
     ) -> TokenListReader<'s, L> {
         debug_assert!(
-            tokens.windows(2).all(|w| w[0].span.end() <= w[1].span.start()),
+            tokens.windows(2).all(|w| w[0].span().end() <= w[1].span().start()),
             "tokens must be in source order with non-overlapping spans"
         );
-        let pos = tokens.first().map(|t| t.pre_space.start()).unwrap_or(0);
+        let pos = tokens.first().map(|t| t.pre_space().start()).unwrap_or(0);
         // Seeded with the initial position alone: every other offset becomes valid only
         // by being served or answered (see the type's validation rules).
         let issued = RefCell::new(BTreeSet::from([pos]));
@@ -104,17 +104,16 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
 
     /// Panic unless `tok` is one this reader could have issued: a listed token with the
     /// same span and kind, or an end-of-stream token (which the reader synthesizes past
-    /// the end of the list rather than serving from it). `pre_space` is excluded from
+    /// the end of the list rather than serving from it). Pre-space is excluded from
     /// the comparison — `peek` clips it to the current position, so a token that came
     /// out of this very reader need not compare equal to its list entry.
-    fn check_issued(&self, tok: &Token<'_, L>, what: &str) {
-        if matches!(tok.kind, TokenKind::EndOfStream) {
+    fn check_issued(&self, tok: &StdToken<L>, what: &str) {
+        if matches!(tok.kind_data(), StdTokenKindData::EndOfStream) {
             return;
         }
-        let known = self
-            .tokens
-            .iter()
-            .any(|listed| listed.span == tok.span && listed.kind == tok.kind);
+        let known = self.tokens.iter().any(|listed| {
+            listed.span() == tok.span() && listed.kind_data() == tok.kind_data()
+        });
         assert!(
             known,
             "TokenListReader::{what} was handed a token it never issued: {:?}",
@@ -134,13 +133,13 @@ impl<'s, L: Lang> TokenListReader<'s, L> {
     // Unused since the demotion to test-only (July 2026) — it existed as public API
     // surface. Kept for now; drop it if it stays unused.
     #[allow(dead_code)]
-    pub fn tokens(&self) -> &[Token<'s, L>] {
+    pub fn tokens(&self) -> &[StdToken<L>] {
         &self.tokens
     }
 
     /// The first listed token at or after the current position (its span not yet begun).
-    fn current(&self) -> Option<&Token<'s, L>> {
-        let i = self.tokens.partition_point(|t| t.span.start() < self.pos);
+    fn current(&self) -> Option<&StdToken<L>> {
+        let i = self.tokens.partition_point(|t| t.span().start() < self.pos);
         self.tokens.get(i)
     }
 }
@@ -154,20 +153,21 @@ const EVERY_EDGE: [TokenEdge; 5] = [
     TokenEdge::EndPastPostSpace,
 ];
 
-impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
-    for TokenListReader<'s, L>
+impl<'s, L> TokenReader<'s, L> for TokenListReader<'s, L>
+where
+    L: Lang<Token = StdToken<L>, StreamPosition = StdStreamPosition>,
 {
-    fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<'s, L, Token<'s, L>> {
+    fn peek(&mut self, _state: &Arc<ParsingState<L>>) -> TokenResult<L, L::Token> {
         match self.current() {
             Some(token) => {
                 // Clip the recorded pre-space to the current position: peeking from
                 // within (or past) the original pre-space run reports only the remainder,
                 // as a fresh scan would.
-                let mut token = token.clone();
-                token.pre_space = Span::new(
-                    token.pre_space.start().max(self.pos).min(token.pre_space.end()),
-                    token.pre_space.end(),
-                );
+                let pre_space = token.pre_space();
+                let token = token.with_pre_space(Span::new(
+                    pre_space.start().max(self.pos).min(pre_space.end()),
+                    pre_space.end(),
+                ));
                 for edge in EVERY_EDGE {
                     self.issue(token.edge_offset(edge));
                 }
@@ -175,16 +175,12 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
             }
             None => {
                 self.issue(self.pos);
-                Ok(Token::new(
-                    TokenKind::EndOfStream,
-                    Span::empty(self.pos),
-                    Span::empty(self.pos),
-                ))
+                Ok(StdToken::end_of_stream(Span::empty(self.pos)))
             }
         }
     }
 
-    fn move_to(&mut self, tok: &Token<'_, L>, edge: TokenEdge) {
+    fn move_to(&mut self, tok: &L::Token, edge: TokenEdge) {
         self.check_issued(tok, "move_to");
         self.pos = self.issue(tok.edge_offset(edge));
     }
@@ -194,39 +190,49 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
         self.pos = at.offset();
     }
 
-    fn token_kind<'t>(&self, tok: &'t Token<'_, L>) -> TokenKindView<'t, L>
+    fn token_kind<'t>(&self, tok: &'t L::Token) -> TokenKind<'t, L>
     where
         's: 't,
     {
         self.check_issued(tok, "token_kind");
-        match &tok.kind {
-            TokenKind::Char(c) => TokenKindView::Char(*c),
-            TokenKind::GroupOpen { delim, rule } => TokenKindView::GroupOpen { delim, rule },
-            TokenKind::GroupClose { delim } => TokenKindView::GroupClose { delim },
-            TokenKind::Command { name, escape_char, .. } => {
-                TokenKindView::Command { name, escape_char: *escape_char }
-            }
-            TokenKind::Specials { callable_type, name, spec } => {
-                TokenKindView::Specials { callable_type: *callable_type, name, spec }
-            }
-            // Interpreted exactly as `StdTokenReader` interprets it: the delimiter is
-            // the run of this source's content the token's `start` span names.
-            TokenKind::Comment { start, content, .. } => TokenKindView::Comment {
-                start_delim: self
-                    .source
-                    .content()
-                    .get(start.start()..start.end())
-                    .unwrap_or(""),
-                content,
+        // Interpreted exactly as `StdTokenReader` interprets it: every written spelling
+        // is the run of this source's content between two of the token's edges.
+        let text = |a: TokenEdge, b: TokenEdge| -> &'t str {
+            self.source
+                .content()
+                .get(tok.edge_offset(a)..tok.edge_offset(b))
+                .unwrap_or("")
+        };
+        match tok.kind_data() {
+            StdTokenKindData::Char(c) => TokenKind::Char(*c),
+            StdTokenKindData::GroupOpen { rule } => TokenKind::GroupOpen {
+                delim: text(TokenEdge::Start, TokenEdge::End),
+                rule,
             },
-            TokenKind::ParagraphBreak => TokenKindView::ParagraphBreak,
-            TokenKind::EndOfStream => TokenKindView::EndOfStream,
+            StdTokenKindData::GroupClose => {
+                TokenKind::GroupClose { delim: text(TokenEdge::Start, TokenEdge::End) }
+            }
+            StdTokenKindData::Command { escape_char, .. } => TokenKind::Command {
+                name: text(TokenEdge::ContentStart, TokenEdge::End),
+                escape_char: *escape_char,
+            },
+            StdTokenKindData::Specials { callable_type, spec } => TokenKind::Specials {
+                callable_type: *callable_type,
+                name: text(TokenEdge::Start, TokenEdge::End),
+                spec,
+            },
+            StdTokenKindData::Comment { .. } => TokenKind::Comment {
+                start_delim: text(TokenEdge::Start, TokenEdge::ContentStart),
+                content: text(TokenEdge::ContentStart, TokenEdge::End),
+            },
+            StdTokenKindData::ParagraphBreak => TokenKind::ParagraphBreak,
+            StdTokenKindData::EndOfStream => TokenKind::EndOfStream,
         }
     }
 
     fn source_span_between(
         &self,
-        tok: &Token<'_, L>,
+        tok: &L::Token,
         a: TokenEdge,
         b: TokenEdge,
     ) -> SourceSpan<L::SourceOrigin> {
@@ -239,7 +245,7 @@ impl<'s, L: Lang<StreamPosition = StdStreamPosition>> TokenReader<'s, L>
         StdStreamPosition::at(self.issue(self.pos))
     }
 
-    fn position_at(&self, tok: &Token<'_, L>, edge: TokenEdge) -> L::StreamPosition {
+    fn position_at(&self, tok: &L::Token, edge: TokenEdge) -> L::StreamPosition {
         self.check_issued(tok, "position_at");
         StdStreamPosition::at(self.issue(tok.edge_offset(edge)))
     }
@@ -328,15 +334,23 @@ mod tests {
         }))
     }
 
+    /// The reader's view of a token — the only way to read one.
+    fn kind_of<'s: 't, 't, R: TokenReader<'s, TestLang>>(
+        reader: &R,
+        tok: &'t StdToken<TestLang>,
+    ) -> TokenKind<'t, TestLang> {
+        reader.token_kind(tok)
+    }
+
     /// Scan `source` into the full token list with `StdTokenReader` (including the
     /// terminal `EndOfStream`).
-    fn scan(source: &Arc<Source>) -> Vec<Token<'_, TestLang>> {
+    fn scan(source: &Arc<Source>) -> Vec<StdToken<TestLang>> {
         let st = state();
         let mut tr = StdTokenReader::new(source);
         let mut tokens = Vec::new();
         loop {
             let token = TokenReader::next(&mut tr, &st).unwrap();
-            let done = matches!(token.kind, TokenKind::EndOfStream);
+            let done = matches!(kind_of(&tr, &token), TokenKind::EndOfStream);
             tokens.push(token);
             if done {
                 break;
@@ -367,7 +381,7 @@ mod tests {
         let first = TokenReader::peek(&mut lr, &st).unwrap();
         assert_eq!(TokenReader::peek(&mut lr, &st).unwrap(), first);
         assert_eq!(TokenReader::position_here(&lr), start);
-        assert_eq!(first.pre_space, Span::new(0, 1));
+        assert_eq!(first.pre_space(), Span::new(0, 1));
     }
 
     #[test]
@@ -424,7 +438,7 @@ mod tests {
             let std_reader: &dyn TokenReader<'_, TestLang> = &std_r;
             let list_reader: &dyn TokenReader<'_, TestLang> = &list_r;
             assert_eq!(list_reader.token_kind(&listed), std_reader.token_kind(&token));
-            if matches!(token.kind, TokenKind::EndOfStream) {
+            if matches!(std_reader.token_kind(&token), TokenKind::EndOfStream) {
                 break;
             }
         }
@@ -440,7 +454,7 @@ mod tests {
         // The rules define `%` as the only comment start, so the second `%` is content.
         assert_eq!(
             reader.token_kind(&token),
-            TokenKindView::Comment { start_delim: "%", content: "% note" }
+            TokenKind::Comment { start_delim: "%", content: "% note" }
         );
         // The same two facts as edge answers — what the comment node records.
         assert_eq!(
@@ -484,12 +498,11 @@ mod tests {
             TokenReader::position_here(&lr),
             TokenReader::position_at(&lr, &first, TokenEdge::Start)
         );
-        assert_eq!(TokenReader::peek(&mut lr, &st).unwrap().kind, first.kind);
+        let again = TokenReader::peek(&mut lr, &st).unwrap();
+        let reader: &dyn TokenReader<'_, TestLang> = &lr;
+        assert_eq!(reader.token_kind(&again), reader.token_kind(&first));
         // pre_space was already consumed positionally: clipped to empty.
-        assert_eq!(
-            TokenReader::peek(&mut lr, &st).unwrap().pre_space,
-            Span::empty(first.span.start()),
-        );
+        assert_eq!(again.pre_space(), Span::empty(first.span().start()));
     }
 
     #[test]
@@ -500,7 +513,7 @@ mod tests {
         // leaves the reader inside `b`'s recorded pre-space run.
         scanned.insert(
             1,
-            Token::new(TokenKind::Char(' '), Span::new(1, 2), Span::empty(1)),
+            StdToken::char(' ', Span::new(1, 2), Span::empty(1)),
         );
         let mut lr = TokenListReader::new(&source, scanned);
         let st = state();
@@ -511,8 +524,9 @@ mod tests {
         let _ = TokenReader::next(&mut lr, &st).unwrap(); // `a`
         let _ = TokenReader::next(&mut lr, &st).unwrap(); // the 1..2 filler
         let token = TokenReader::peek(&mut lr, &st).unwrap();
-        assert_eq!(token.kind, TokenKind::Char('b'));
-        assert_eq!(token.pre_space, Span::new(2, 4));
+        let reader: &dyn TokenReader<'_, TestLang> = &lr;
+        assert_eq!(reader.token_kind(&token), TokenKind::Char('b'));
+        assert_eq!(token.pre_space(), Span::new(2, 4));
     }
 
     #[test]
@@ -532,7 +546,7 @@ mod tests {
         let a = TokenReader::next(&mut std_r, &st).unwrap();
         let b = TokenReader::next(&mut list_r, &st).unwrap();
         assert_eq!(a, b);
-        assert_eq!(b, Token::new(TokenKind::EndOfStream, Span::empty(3), Span::empty(3)));
+        assert_eq!(b, StdToken::end_of_stream(Span::empty(3)));
     }
 
     #[test]
@@ -598,7 +612,7 @@ mod tests {
         let reader: &mut dyn TokenReader<'_, TestLang> = &mut lr;
 
         // Not from this reader — and not from any scan of this content.
-        let forged = Token::new(TokenKind::Char('z'), Span::new(0, 1), Span::empty(0));
+        let forged = StdToken::char('z', Span::new(0, 1), Span::empty(0));
         let _ = reader.source_span_between(&forged, TokenEdge::Start, TokenEdge::End);
     }
 
@@ -608,7 +622,7 @@ mod tests {
         // The list covers only the first two characters of the source, so a position
         // taken further along is one this reader never handed out.
         let source: Arc<Source> = Arc::new(Source::new("ab cd"));
-        let prefix: Vec<Token<'_, TestLang>> =
+        let prefix: Vec<StdToken<TestLang>> =
             scan(&source).into_iter().take(2).collect();
         let mut lr = TokenListReader::new(&source, prefix);
         let mut std_r = StdTokenReader::new(&source);
@@ -631,7 +645,7 @@ mod tests {
         let st = state();
         assert_eq!(
             TokenReader::peek(&mut lr, &st).unwrap(),
-            Token::new(TokenKind::EndOfStream, Span::empty(0), Span::empty(0)),
+            StdToken::end_of_stream(Span::empty(0)),
         );
     }
 
@@ -640,13 +654,9 @@ mod tests {
         // The unit-test use case: a token list written by hand, spans made up — the
         // source only has to be long enough for the spans to be valid ranges in it.
         let source: Arc<Source> = Arc::new(Source::new(r"x\vec  "));
-        let tokens: Vec<Token<'static, TestLang>> = vec![
-            Token::new(TokenKind::Char('x'), Span::new(0, 1), Span::empty(0)),
-            Token::new(
-                TokenKind::Command { name: "vec", escape_char: '\\', post_space: Span::new(5, 6) },
-                Span::new(1, 6),
-                Span::empty(1),
-            ),
+        let tokens: Vec<StdToken<TestLang>> = vec![
+            StdToken::char('x', Span::new(0, 1), Span::empty(0)),
+            StdToken::command('\\', Span::new(1, 6), Span::empty(1), Span::new(5, 6)),
         ];
         let st = state();
         let mut lr = TokenListReader::new(&source, tokens.clone());
@@ -656,9 +666,7 @@ mod tests {
             TokenReader::source_position_at(&lr, &TokenReader::position_here(&lr)),
             SourcePos::new(&source, 6)
         );
-        assert_eq!(
-            TokenReader::peek(&mut lr, &st).unwrap().kind,
-            TokenKind::EndOfStream,
-        );
+        let token = TokenReader::peek(&mut lr, &st).unwrap();
+        assert_eq!(kind_of(&lr, &token), TokenKind::EndOfStream);
     }
 }

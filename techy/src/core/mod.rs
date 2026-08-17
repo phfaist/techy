@@ -12,7 +12,8 @@
 //!   [`ParsingState`] and its reified [`ParsingStateDelta`]s, [`StateData`],
 //!   [`TokenRulesOverrides`], the [`NodeExtTypes`] ext bundle, and the
 //!   [`TrivialLang`] test lang.
-//! - **Tokens** — zero-copy [`Token`]s, data-driven [`TokenRules`], the
+//! - **Tokens** — opaque tokens ([`Token`], the standard [`StdToken`], the
+//!   parser-facing [`TokenKind`] view), data-driven [`TokenRules`], the
 //!   [`TokenReader`] trait and standard reader ([`StdTokenReader`]), specials
 //!   scanning ([`SpecialsMatch`], [`TriggerChars`]), and the token error family.
 //! - **Engine** — the [`Language`] runtime bundle and its `parse()` entry,
@@ -61,7 +62,7 @@ pub use crate::token::{
     skip_whitespace, CommandRule, CommandRules, CommentRule, CommentRules,
     EndOfStreamAfterEscape, ForbiddenChar, ForbiddenCharsRules, GroupRule, GroupRules,
     ParagraphRules, PrefixEntry, PrefixTable, SpecialsMatch, SpecialsRules,
-    SpecialsScanError, StdStreamPosition, StdTokenReader, Token, TokenEdge, TokenError,
-    TokenErrorKind, TokenKind, TokenKindView, TokenReader, TokenRecovery, TokenResult,
+    SpecialsScanError, StdStreamPosition, StdToken, StdTokenReader, Token, TokenEdge,
+    TokenError, TokenErrorKind, TokenKind, TokenReader, TokenRecovery, TokenResult,
     TokenRules, TriggerChars, WhitespaceRules,
 };

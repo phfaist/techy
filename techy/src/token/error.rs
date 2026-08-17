@@ -8,7 +8,7 @@
 //! token (tolerant). Conversion to Arc-span diagnostics happens there too; within the token
 //! layer, errors are transient values carrying plain byte [`Span`]s, like tokens themselves.
 //!
-//! Like [`Token`], these types are generic over `L: Lang` (the recovery token rides
+//! Like the tokens themselves, these types are generic over `L: Lang` (the recovery token rides
 //! inside, and `Lang::scan_specials` implementations return them) — token machinery lives
 //! wholly in the S1 stratum, so error types are free to grow language/state context later.
 
@@ -19,10 +19,9 @@ use crate::error::{DiagnosticData, DiagnosticInfo};
 use crate::source::SourceSpan;
 use crate::state::Lang;
 
-use super::token::Token;
 
 /// Result type of tokenization operations.
-pub type TokenResult<'s, L, T> = core::result::Result<T, TokenError<'s, L>>;
+pub type TokenResult<L, T> = core::result::Result<T, TokenError<L>>;
 
 /// Condition: the input ended immediately after a command escape character, before any
 /// name (the token layer's conditions are ordinary
@@ -102,10 +101,10 @@ impl TokenErrorKind {
 /// The recovery payload is boxed: every `peek`/`next` returns a `Result` sized by its
 /// error variant, and the error path is cold by construction — boxing keeps the hot
 /// `Result` at payload-plus-tag size.
-pub struct TokenError<'s, L: Lang> {
+pub struct TokenError<L: Lang> {
     kind: TokenErrorKind,
     span: SourceSpan<L::SourceOrigin>,
-    recovery: Option<Box<TokenRecovery<'s, L>>>,
+    recovery: Option<Box<TokenRecovery<L>>>,
 }
 
 /// How to continue past a [`TokenError`] in tolerant mode: pretend `token` was read, then
@@ -126,21 +125,21 @@ pub struct TokenError<'s, L: Lang> {
 /// held before, and treats an unchanged position as a contract violation by the token
 /// source — it aborts the parse with the token error, even in tolerant mode. Stream
 /// positions compare only for equality, so the check is "different", not "greater".
-pub struct TokenRecovery<'s, L: Lang> {
+pub struct TokenRecovery<L: Lang> {
     /// The placeholder token to emit in place of the failed read.
-    pub token: Token<'s, L>,
+    pub token: L::Token,
     /// The stream position at which to resume reading — one the reader minted, and not
     /// the position the failed read started from (see the
     /// [advancement contract](TokenRecovery#contract-resume-must-move-the-stream)).
     pub resume: L::StreamPosition,
 }
 
-impl<'s, L: Lang> TokenError<'s, L> {
+impl<L: Lang> TokenError<L> {
     /// Create a token error.
     pub fn new(
         kind: TokenErrorKind,
         span: SourceSpan<L::SourceOrigin>,
-        recovery: Option<TokenRecovery<'s, L>>,
+        recovery: Option<TokenRecovery<L>>,
     ) -> Self {
         TokenError { kind, span, recovery: recovery.map(Box::new) }
     }
@@ -157,25 +156,25 @@ impl<'s, L: Lang> TokenError<'s, L> {
     }
 
     /// The recovery possibility, if the tokenizer could construct one.
-    pub fn recovery(&self) -> Option<&TokenRecovery<'s, L>> {
+    pub fn recovery(&self) -> Option<&TokenRecovery<L>> {
         self.recovery.as_deref()
     }
 
     /// Consume the error, returning its recovery possibility if any.
-    pub fn into_recovery(self) -> Option<TokenRecovery<'s, L>> {
+    pub fn into_recovery(self) -> Option<TokenRecovery<L>> {
         self.recovery.map(|boxed| *boxed)
     }
 }
 
 // Manual impls to avoid spurious `L:` bounds (see token.rs).
 
-impl<L: Lang> Clone for TokenRecovery<'_, L> {
+impl<L: Lang> Clone for TokenRecovery<L> {
     fn clone(&self) -> Self {
         TokenRecovery { token: self.token.clone(), resume: self.resume.clone() }
     }
 }
 
-impl<L: Lang> Clone for TokenError<'_, L> {
+impl<L: Lang> Clone for TokenError<L> {
     fn clone(&self) -> Self {
         TokenError {
             kind: self.kind.clone(),
@@ -185,18 +184,18 @@ impl<L: Lang> Clone for TokenError<'_, L> {
     }
 }
 
-impl<L: Lang> PartialEq for TokenRecovery<'_, L> {
+impl<L: Lang> PartialEq for TokenRecovery<L> {
     fn eq(&self, other: &Self) -> bool {
         self.token == other.token && self.resume == other.resume
     }
 }
 
-impl<L: Lang> Eq for TokenRecovery<'_, L> {}
+impl<L: Lang> Eq for TokenRecovery<L> {}
 
 // No PartialEq for TokenError: its kind may carry a dyn condition payload ([§dd-dr:errors]) —
 // consumers match the kind's variants or downcast the payload.
 
-impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
+impl<L: Lang> fmt::Debug for TokenRecovery<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRecovery")
             .field("token", &self.token)
@@ -205,7 +204,7 @@ impl<L: Lang> fmt::Debug for TokenRecovery<'_, L> {
     }
 }
 
-impl<L: Lang> fmt::Debug for TokenError<'_, L> {
+impl<L: Lang> fmt::Debug for TokenError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenError")
             .field("kind", &self.kind)
@@ -229,10 +228,10 @@ impl fmt::Display for TokenErrorKind {
     }
 }
 
-impl<L: Lang> fmt::Display for TokenError<'_, L> {
+impl<L: Lang> fmt::Display for TokenError<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.kind, f)
     }
 }
 
-impl<L: Lang> core::error::Error for TokenError<'_, L> {}
+impl<L: Lang> core::error::Error for TokenError<L> {}
